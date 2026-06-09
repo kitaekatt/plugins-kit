@@ -12,7 +12,10 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+_SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "plugins" / "cache-kit" / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
 from cache_report import find_transcript
 
 
