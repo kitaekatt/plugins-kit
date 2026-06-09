@@ -18,8 +18,9 @@ State file:
 import json
 import os
 import re
-import tempfile
 from datetime import datetime, timezone
+
+from .atomic_write import write_atomic
 
 _SCHEMA_VERSION = 1
 _STATE_FILENAME = "tool_paths.json"
@@ -77,21 +78,8 @@ def _load(data_dir):
 
 
 def _write_atomic(data_dir, payload):
-    resolved = _resolve_data_dir(data_dir)
-    os.makedirs(resolved, exist_ok=True)
     target = _state_path(data_dir)
-    fd, tmp = tempfile.mkstemp(prefix=".tool_paths.", suffix=".tmp", dir=resolved)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, sort_keys=True)
-            f.write("\n")
-        os.replace(tmp, target)
-    except Exception:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
+    write_atomic(target, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def resolve(data_dir, name):

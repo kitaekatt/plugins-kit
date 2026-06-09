@@ -100,6 +100,30 @@ class TestCheckVenv:
         assert result.passed
         assert "0 imports verified" in result.message
 
+    def test_python_nonzero_exit_code_fails(self, tmp_path):
+        """A python binary that launches but exits non-zero is not functional (B4).
+
+        The "python works" probe used to ignore returncode entirely, so a
+        broken interpreter (missing DLLs, bad shebang target) passed the check
+        and failed later in confusing ways.
+        """
+        venv_dir = tmp_path / "data" / ".venv"
+        bin_dir = venv_dir / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "python").write_text("")  # exists so _find_python returns it
+
+        class _Proc:
+            returncode = 1
+            stdout = b""
+            stderr = b""
+
+        with patch("bootstrap_lib.venv_check.subprocess.run", return_value=_Proc()):
+            result = check_venv(str(tmp_path / "data"), str(tmp_path / "plugin"), [])
+
+        assert not result.passed
+        assert "not functional" in result.message
+        assert result.remediation_cmd is not None
+
     def test_remediation_includes_plugin_root(self, tmp_path):
         """Remediation command references the plugin root for uv sync."""
         plugin_root = str(tmp_path / "my-plugin")

@@ -20,8 +20,79 @@ import stat
 import sys
 from datetime import datetime, timedelta, timezone
 
+# Single shared atomic-write implementation (mkstemp + os.replace next to the
+# destination). engine.py used to carry its own fixed-name `path + ".tmp"`
+# copy, which collided across concurrent sessions — see atomic_write.py.
+from .atomic_write import write_atomic as _write_atomic
+
 
 def main():
+    """Entry point: run the engine pass with crash containment.
+
+    The shell hook stamps the per-project cooldown BEFORE launching the
+    engine and (in background mode) only surfaces what the engine writes to
+    bootstrap_display.pending. Without containment, an unhandled exception
+    means: traceback lost to engine_stderr.log, no pending file (silent
+    failure for the user), and a stamped cooldown that throttles every
+    re-run for the rest of the window. Contain it: write a crash .pending so
+    the next prompt surfaces the failure, clear the cooldown so the next
+    SessionStart retries, then re-raise behavior via exit code 1 with the
+    traceback on stderr (still captured by engine_stderr.log).
+    """
+    try:
+        _main()
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception:
+        import traceback
+        tb = traceback.format_exc()
+        try:
+            _emit_engine_crash(tb)
+        except Exception:
+            pass  # crash reporting must never mask the original traceback
+        sys.stderr.write(tb)
+        sys.exit(1)
+
+
+def _emit_engine_crash(tb):
+    """Write a crash .pending + clear the cooldown after an engine crash.
+
+    Re-parses argv leniently (the crash may have happened before/around
+    normal arg parsing). No-op in --console mode (console writes no files
+    and the user sees the traceback directly) and when --data-dir is
+    unavailable (nowhere to write).
+    """
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--data-dir", default=None)
+    parser.add_argument("--project-dir", default=None)
+    parser.add_argument("--console", action="store_true")
+    args, _ = parser.parse_known_args()
+    if args.console or not args.data_dir:
+        return
+
+    first_line = tb.strip().splitlines()[-1] if tb.strip() else "unknown error"
+    response = {
+        "systemMessage": (
+            f"bootstrap -> engine crashed: {first_line}. "
+            "Bootstrap did not complete; it will retry on the next session start."
+        ),
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": (
+                "bootstrap -> the bootstrap engine crashed with an unhandled "
+                "exception before completing its pass. Tell the user bootstrap "
+                "failed, and offer to investigate. Traceback:\n" + tb
+            ),
+        },
+    }
+    pending = os.path.join(args.data_dir, "bootstrap_display.pending")
+    _write_atomic(pending, json.dumps(response))
+    # Roll back the shell hook's optimistic cooldown stamp so the next
+    # SessionStart re-runs instead of silently throttling on a crashed pass.
+    _clear_project_cooldown(args.data_dir, args.project_dir)
+
+
+def _main():
     start_time = datetime.now(timezone.utc)
 
     parser = argparse.ArgumentParser(description="Bootstrap engine")
@@ -385,12 +456,23 @@ def main():
         # restarts their IDE, edits config) are picked up on the next session
         # rather than waiting out the throttle window.
         _clear_project_cooldown(data_dir, args.project_dir)
-    elif display_content or action_required:
-        emit_success_response(
-            display_content, label=bootstrap_label, output_file=output_file,
-            action_required=action_required,
-        )
-    # else: nothing to show — silent exit (no file written in background mode)
+    else:
+        if display_content or action_required:
+            emit_success_response(
+                display_content, label=bootstrap_label, output_file=output_file,
+                action_required=action_required,
+            )
+        # else: nothing to show — silent exit (no file written in background mode)
+
+        # Re-stamp the cooldown after a clean pass. Bootstrap itself may have
+        # rewritten installed_plugins.json during the pass (plugin installs,
+        # ensure_registry_scope); the shell's registry-mtime bypass compares
+        # those files against the stamp written BEFORE the engine ran, so
+        # bootstrap-authored writes would re-arm a full pass on EVERY session.
+        # Refreshing the stamp keeps it newer than our own writes while leaving
+        # the bypass armed for genuine Claude-Code-authored registry changes
+        # (which land after this pass finishes).
+        _restamp_project_cooldown(data_dir, args.project_dir)
 
     # Clean up stale persistent alert file when no persistent failures remain.
     # This is what makes the alert disappear once the user fixes the underlying
@@ -423,8 +505,34 @@ def _bootstrap_single_plugin(
     )
     os.makedirs(plugin_data_dir, exist_ok=True)
 
-    with open(plugin_manifest_path, "r") as f:
-        plugin_manifest = json.load(f)
+    # One malformed plugin manifest must not kill the pass for every other
+    # plugin — emit a manifest_parse failure (same pattern as the layered
+    # manifests in _load_layered_manifests) and move on.
+    try:
+        with open(plugin_manifest_path, "r") as f:
+            plugin_manifest = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        kind = "JSON parse error" if isinstance(e, json.JSONDecodeError) else "read error"
+        error = f"{kind}: {e}"
+        all_failures.append({
+            "type": "manifest_parse",
+            "path": plugin_manifest_path,
+            "message": error,
+            "agent_msg": (
+                f"The bootstrap manifest at {plugin_manifest_path} failed to "
+                f"parse ({error}). Open the file, fix the JSON syntax, and "
+                "ask the user to type 'fix-all' to re-run bootstrap. Common "
+                "causes: missing/extra commas, unquoted keys, trailing commas."
+            ),
+            "plugin": plugin_info.name,
+            "persist_across_sessions": True,
+        })
+        entry = f"bootstrap.json: PARSE FAILED - {error}"
+        plugin_label = f"{plugin_info.name}@{plugin_info.version}" if plugin_info.version else plugin_info.name
+        deferred_plugin_logs.append((plugin_data_dir, plugin_label, [entry]))
+        plugin_display_header = f"{plugin_info.marketplace}:{plugin_info.name}@{plugin_info.version}" if plugin_info.marketplace else plugin_label
+        display_sections.append((plugin_display_header, [entry], []))
+        return
 
     # Per-plugin entry lists (written to plugin's own log)
     plugin_action_entries = []
@@ -1775,10 +1883,8 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
         elif pinned_commit:
             try:
                 import subprocess as _sp2
-                from .git_dep_check import _git_exe
-                _git = _git_exe()
-                _sp2.run([_git, "-C", target_path, "fetch"], capture_output=True, timeout=60)
-                r = _sp2.run([_git, "-C", target_path, "checkout", pinned_commit], capture_output=True, text=True, timeout=30)
+                _sp2.run(["git", "-C", target_path, "fetch"], capture_output=True, timeout=60)
+                r = _sp2.run(["git", "-C", target_path, "checkout", pinned_commit], capture_output=True, text=True, timeout=30)
                 ok = r.returncode == 0
                 msg = f"checked out {pinned_commit[:7]}" if ok else (r.stderr.strip() or "checkout failed")
             except (_sp2.SubprocessError, OSError) as e:
@@ -2451,6 +2557,35 @@ def _clear_project_cooldown(data_dir, project_dir):
         pass
 
 
+def _restamp_project_cooldown(data_dir, project_dir):
+    """Refresh this project's cooldown stamp at the end of a clean pass.
+
+    Same path construction as _clear_project_cooldown. Only refreshes an
+    EXISTING stamp — creating it is the shell hook's job (so console runs,
+    tests, and direct engine invocations never plant cooldowns), and the
+    failure path clears it instead. Content matches the shell's format: the
+    current epoch as text (the shell reads it for the age check; the
+    registry-bypass compares mtimes). Silent on I/O errors — at worst the
+    registry-mtime bypass re-arms one extra pass.
+    """
+    import hashlib
+    import time
+    key = "_global_"
+    if project_dir:
+        try:
+            key = hashlib.sha1(project_dir.encode("utf-8")).hexdigest()
+        except Exception:
+            pass
+    stamp = os.path.join(data_dir, "cooldowns", f"last_run_epoch.{key}")
+    if not os.path.isfile(stamp):
+        return
+    try:
+        with open(stamp, "w") as f:
+            f.write(str(int(time.time())))
+    except OSError:
+        pass
+
+
 def _update_display_marker(data_dir):
     """Update the display marker to the latest timestamp in the log file."""
     from .log import LOG_FILENAME
@@ -2491,14 +2626,6 @@ def _extract_timestamp(line):
             if candidate and candidate[0].isdigit() and "T" in candidate:
                 return candidate
     return ""
-
-
-def _write_atomic(path, content):
-    """Write content to path atomically via tmp+rename."""
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        f.write(content)
-    os.replace(tmp, path)
 
 
 def emit_success_response(log_content, label="bootstrap", output_file=None, action_required=None):

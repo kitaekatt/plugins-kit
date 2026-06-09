@@ -1,5 +1,6 @@
 """Integration tests for multi-plugin bootstrap engine flow."""
 
+import hashlib
 import json
 import os
 import shlex
@@ -858,6 +859,232 @@ class TestDevLayoutFilter:
         # Both user-scoped and project-scoped plugins should be bootstrapped
         assert "user-plugin" in system_msg
         assert "project-plugin" in system_msg
+
+
+class TestGitDepPinnedCommit:
+    """Engine path for an existing clone at the wrong pinned commit (B1).
+
+    This branch used to do `from .git_dep_check import _git_exe` — a function
+    deleted in commit 233fad9 — so any stale pinned clone raised an uncaught
+    ImportError that killed the entire bootstrap pass. Pins the bare-"git"
+    list-form call.
+    """
+
+    @staticmethod
+    def _git(*args, cwd):
+        return subprocess.run(
+            ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", *args],
+            cwd=cwd, check=True, capture_output=True, text=True,
+        )
+
+    def test_stale_pinned_commit_is_checked_out(self, tmp_path):
+        # Source repo with two commits; the manifest pins the FIRST one.
+        src_repo = tmp_path / "srcrepo"
+        src_repo.mkdir()
+        self._git("init", "-b", "main", cwd=src_repo)
+        (src_repo / "f.txt").write_text("one")
+        self._git("add", "f.txt", cwd=src_repo)
+        self._git("commit", "-m", "c1", cwd=src_repo)
+        pinned_sha = self._git("rev-parse", "HEAD", cwd=src_repo).stdout.strip()
+        (src_repo / "f.txt").write_text("two")
+        self._git("add", "f.txt", cwd=src_repo)
+        self._git("commit", "-m", "c2", cwd=src_repo)
+        head_sha = self._git("rev-parse", "HEAD", cwd=src_repo).stdout.strip()
+        assert pinned_sha != head_sha
+
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+        fake_root = plugins_dir / "bootstrap"
+        fake_root.mkdir()
+        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        _write_minimal_defaults(fake_root)
+        (fake_root / "bootstrap.json").write_text(json.dumps({}))
+
+        pin_plugin_dir = plugins_dir / "pin-plugin"
+        pin_plugin_dir.mkdir()
+        (pin_plugin_dir / "bootstrap.json").write_text(json.dumps({
+            "git_deps": [{"url": str(src_repo), "branch": "main", "commit": pinned_sha}],
+        }))
+
+        registry = {"plugins": {"kit:pin-plugin": [{"installPath": "./pin-plugin", "version": "1.0.0"}]}}
+        (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
+
+        data_dir = str(tmp_path / "data" / "bootstrap")
+        os.makedirs(data_dir)
+        config = {"schema_version": 3, "enabled_plugins": ["kit:pin-plugin"], "log_level": "info",
+                  "log_success_shell": False, "log_success_checks": False}
+        with open(os.path.join(data_dir, "config.json"), "w") as f:
+            json.dump(config, f)
+
+        # Pre-clone at HEAD (the WRONG commit) so the engine takes the
+        # existing-clone + pinned-commit checkout branch.
+        target = tmp_path / "data" / "pin-plugin" / "github" / "srcrepo"
+        target.parent.mkdir(parents=True)
+        subprocess.run(["git", "clone", str(src_repo), str(target)],
+                       check=True, capture_output=True)
+        assert self._git("rev-parse", "HEAD", cwd=target).stdout.strip() == head_sha
+
+        result = run_engine(data_dir, plugin_root=str(fake_root), env=_isolated_env(tmp_path))
+
+        assert result.returncode == 0, f"engine crashed: {result.stderr}"
+        assert "ImportError" not in result.stderr
+        # The clone was moved to the pinned commit...
+        assert self._git("rev-parse", "HEAD", cwd=target).stdout.strip() == pinned_sha
+        # ...and the action surfaced in the display output.
+        response = json.loads(result.stdout)
+        assert "checked out" in response["systemMessage"]
+
+
+class TestMalformedPluginManifest:
+    """One plugin's malformed bootstrap.json must not kill the pass (B2)."""
+
+    def test_malformed_manifest_does_not_kill_pass(self, tmp_path):
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+
+        fake_root = plugins_dir / "bootstrap"
+        fake_root.mkdir()
+        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        _write_minimal_defaults(fake_root)
+        (fake_root / "bootstrap.json").write_text(json.dumps({}))
+
+        # Sorts before good-plugin, so the pass must survive it to reach the next one.
+        bad_dir = plugins_dir / "bad-manifest"
+        bad_dir.mkdir()
+        (bad_dir / "bootstrap.json").write_text("{ this is not json !!!")
+
+        good_dir = plugins_dir / "good-plugin"
+        good_dir.mkdir()
+        (good_dir / "bootstrap.json").write_text(json.dumps({
+            "tools": [{"name": "fake_tool_after_bad_manifest", "install": {"macos": "brew install fake"}}],
+        }))
+
+        registry = {"plugins": {
+            "kit:bad-manifest": [{"installPath": "./bad-manifest", "version": "1.0.0"}],
+            "kit:good-plugin": [{"installPath": "./good-plugin", "version": "1.0.0"}],
+        }}
+        (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
+
+        data_dir = str(tmp_path / "data" / "bootstrap")
+        os.makedirs(data_dir)
+        config = {"schema_version": 3, "enabled_plugins": ["kit:bad-manifest", "kit:good-plugin"],
+                  "log_level": "info", "log_success_shell": False, "log_success_checks": False}
+        with open(os.path.join(data_dir, "config.json"), "w") as f:
+            json.dump(config, f)
+
+        result = run_engine(data_dir, plugin_root=str(fake_root), env=_isolated_env(tmp_path))
+
+        assert result.returncode == 0, f"engine crashed on malformed manifest: {result.stderr}"
+        response = json.loads(result.stdout)
+        ctx = response["hookSpecificOutput"]["additionalContext"]
+        # The parse failure is surfaced as a remediable item...
+        assert "bad-manifest" in ctx
+        assert "parse" in ctx.lower()
+        # ...and the pass continued to the next plugin.
+        assert "fake_tool_after_bad_manifest" in ctx, (
+            f"pass did not continue past the malformed manifest: {ctx}"
+        )
+
+
+class TestCooldownRestamp:
+    """End-of-pass cooldown handling (B3).
+
+    The shell stamps the cooldown before launching the engine; the engine may
+    then rewrite installed_plugins.json itself (plugin installs,
+    ensure_registry_scope). Since the shell's registry-mtime bypass compares
+    against the stamp, a clean pass must RE-stamp it so bootstrap-authored
+    registry writes don't re-arm a full pass every session. A failing pass
+    clears the stamp (pre-existing behavior); the engine never CREATES one.
+    """
+
+    def _seed_stamp(self, data_dir, project_dir):
+        key = hashlib.sha1(str(project_dir).encode("utf-8")).hexdigest()
+        cooldowns = os.path.join(data_dir, "cooldowns")
+        os.makedirs(cooldowns, exist_ok=True)
+        stamp = os.path.join(cooldowns, f"last_run_epoch.{key}")
+        with open(stamp, "w") as f:
+            f.write("123")
+        os.utime(stamp, (1_000_000_000, 1_000_000_000))
+        return stamp
+
+    def test_clean_pass_restamps_existing_cooldown(self, tmp_path):
+        fake_root = make_fake_bootstrap_root(tmp_path)
+        data_dir = str(tmp_path / "data")
+        os.makedirs(data_dir)
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        stamp = self._seed_stamp(data_dir, project_dir)
+
+        result = run_engine(data_dir, plugin_root=fake_root,
+                            env=_isolated_env(tmp_path), project_dir=str(project_dir))
+
+        assert result.returncode == 0, result.stderr
+        assert os.path.isfile(stamp), "clean pass must keep the cooldown stamp"
+        with open(stamp) as f:
+            content = f.read().strip()
+        assert content.isdigit() and int(content) > 1_000_000_000, (
+            "stamp must be refreshed to the current epoch at end of pass"
+        )
+        assert os.stat(stamp).st_mtime > 1_000_000_001, (
+            "stamp mtime must be newer than bootstrap's own registry writes"
+        )
+
+    def test_clean_pass_does_not_create_missing_stamp(self, tmp_path):
+        """Stamp creation is the shell hook's job; direct/console/test runs of
+        the engine must not plant cooldowns."""
+        fake_root = make_fake_bootstrap_root(tmp_path)
+        data_dir = str(tmp_path / "data")
+        os.makedirs(data_dir)
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+
+        result = run_engine(data_dir, plugin_root=fake_root,
+                            env=_isolated_env(tmp_path), project_dir=str(project_dir))
+
+        assert result.returncode == 0, result.stderr
+        key = hashlib.sha1(str(project_dir).encode("utf-8")).hexdigest()
+        assert not os.path.exists(
+            os.path.join(data_dir, "cooldowns", f"last_run_epoch.{key}")
+        )
+
+    def test_failing_pass_clears_stamp(self, tmp_path):
+        """Failure path keeps the pre-existing rollback (clear, not restamp)."""
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+        fake_root = plugins_dir / "bootstrap"
+        fake_root.mkdir()
+        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        _write_minimal_defaults(fake_root)
+        (fake_root / "bootstrap.json").write_text(json.dumps({}))
+
+        bad_tool_dir = plugins_dir / "fail-plugin"
+        bad_tool_dir.mkdir()
+        (bad_tool_dir / "bootstrap.json").write_text(json.dumps({
+            "tools": [{"name": "fake_tool_for_cooldown_clear", "install": {"macos": "brew install fake"}}],
+        }))
+        registry = {"plugins": {"kit:fail-plugin": [{"installPath": "./fail-plugin", "version": "1.0.0"}]}}
+        (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
+
+        data_dir = str(tmp_path / "data" / "bootstrap")
+        os.makedirs(data_dir)
+        config = {"schema_version": 3, "enabled_plugins": ["kit:fail-plugin"], "log_level": "info",
+                  "log_success_shell": False, "log_success_checks": False}
+        with open(os.path.join(data_dir, "config.json"), "w") as f:
+            json.dump(config, f)
+
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        stamp = self._seed_stamp(data_dir, project_dir)
+
+        result = run_engine(data_dir, plugin_root=str(fake_root),
+                            env=_isolated_env(tmp_path), project_dir=str(project_dir))
+
+        assert result.returncode == 0
+        assert "fake_tool_for_cooldown_clear" in result.stdout
+        assert not os.path.exists(stamp), "failing pass must clear the stamp, not restamp it"
 
 
 class TestScriptContextProjectDir:

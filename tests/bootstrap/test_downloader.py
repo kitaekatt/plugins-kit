@@ -245,6 +245,91 @@ class TestArchiveTypeDetection:
         assert downloader._detect_archive_type("https://example.com/x.exe", "tar.gz") == "tar.gz"
 
 
+class TestFetchTimeout:
+    def test_fetch_passes_timeout_to_urlopen(self, tmp_path, monkeypatch):
+        """_fetch must give urlopen a socket timeout (B11) — without one, a
+        stalled connection hangs the background engine forever."""
+        captured = {}
+
+        class _FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, n=-1):
+                return b""
+
+        def fake_urlopen(url, timeout=None):
+            captured["timeout"] = timeout
+            return _FakeResp()
+
+        monkeypatch.setattr(downloader, "urlopen", fake_urlopen)
+        downloader._fetch("https://example.invalid/x", str(tmp_path / "out"))
+        assert captured.get("timeout"), "urlopen must be called with a positive timeout"
+        assert captured["timeout"] > 0
+
+
+class TestStagingLocation:
+    def test_staged_file_lives_in_target_dir(self, tmp_path, monkeypatch):
+        """The pre-replace staging file must be created in bin_dir itself, so
+        os.replace is a same-filesystem rename (B11) — staging in the system
+        temp dir raises EXDEV when /tmp is tmpfs on Linux."""
+        src = tmp_path / "payload"
+        src.write_bytes(b"binary payload")
+        sha = _sha256_of(src)
+        target_dir = tmp_path / "bin"
+
+        moves = []
+        real_replace = os.replace
+
+        def spy(s, d):
+            moves.append((str(s), str(d)))
+            return real_replace(s, d)
+
+        monkeypatch.setattr("bootstrap_lib.downloader.os.replace", spy)
+        result = downloader.download_and_install(
+            "jq", _file_uri(src), sha, target_dir=str(target_dir),
+        )
+        assert result.ok, result.message
+        final_moves = [m for m in moves if m[1] == result.path]
+        assert final_moves, "expected an os.replace into the final path"
+        staged_src = final_moves[-1][0]
+        assert os.path.dirname(staged_src) == str(target_dir), (
+            f"staging must happen in the destination dir, got {staged_src}"
+        )
+
+    def test_success_leaves_only_final_binary_in_target_dir(self, tmp_path):
+        src = tmp_path / "payload"
+        src.write_bytes(b"binary payload")
+        sha = _sha256_of(src)
+        target_dir = tmp_path / "bin"
+
+        result = downloader.download_and_install(
+            "jq", _file_uri(src), sha, target_dir=str(target_dir),
+        )
+        assert result.ok
+        assert sorted(os.listdir(target_dir)) == [os.path.basename(result.path)]
+
+    def test_extract_failure_leaves_no_staged_file(self, tmp_path):
+        """A failed extract must clean up its staged temp file in bin_dir."""
+        archive = tmp_path / "x.zip"
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("present/file", b"x")
+        sha = _sha256_of(archive)
+        target_dir = tmp_path / "bin"
+
+        result = downloader.download_and_install(
+            "x", _file_uri(archive), sha,
+            archive_path="missing/inner/path",
+            target_dir=str(target_dir),
+        )
+        assert not result.ok
+        assert "extract failed" in result.message
+        assert list(target_dir.iterdir()) == []
+
+
 class TestAtomicReplace:
     def test_replaces_existing_file(self, tmp_path):
         target_dir = tmp_path / "bin"

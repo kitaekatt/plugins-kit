@@ -104,10 +104,12 @@ def check_venv(plugin_data_dir: str, plugin_root: str, check_imports: List[str])
 
     # Check python works
     try:
-        subprocess.run(
+        proc = subprocess.run(
             [python_bin, "-c", "import sys; sys.exit(0)"],
             capture_output=True, timeout=10,
         )
+        if proc.returncode != 0:
+            raise subprocess.SubprocessError(f"exit code {proc.returncode}")
     except (subprocess.SubprocessError, OSError):
         return VenvCheckResult(
             passed=False,
