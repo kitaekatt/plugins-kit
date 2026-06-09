@@ -22,7 +22,7 @@
     {
       "name": "cache-kit",
       "description": "Cache usage reporting - per-request and session-level cache hit analysis from Claude Code transcripts",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "author": {
         "name": "Christina"
       },
@@ -45,7 +45,7 @@
     {
       "name": "bootstrap",
       "description": "Centralized bootstrap engine for Claude Code plugins",
-      "version": "0.15.2",
+      "version": "0.16.0",
       "author": {
         "name": "Christina"
       },
@@ -68,7 +68,7 @@
     {
       "name": "git-kit",
       "description": "Git + GitHub multi-agent code review (/git-code-review) plus gh CLI bootstrap (auth + optional org membership). Shares chunking + CLAUDE.md primitives with p4-kit via bootstrap_lib.code_review.",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "author": {
         "name": "Christina"
       },
@@ -81,7 +81,7 @@
     {
       "name": "skills-kit",
       "description": "Authoring and auditing skills + CLAUDE.md files, organized as a verb x artifact matrix: md-authoring (/md-authoring) and md-audit (/md-audit) union domains over the md artifact, the cohesion-principles placement spine, and the canonical audit-framework (primitives, compositions, audit-kinds, viewer-kinds) that other plugins' audits and viewers ride on.",
-      "version": "0.19.0",
+      "version": "0.19.1",
       "author": {
         "name": "Christina"
       },
@@ -94,7 +94,7 @@
     {
       "name": "claude-ui-kit",
       "description": "Claude Code status line with context-window and rate-limit threshold colors, plus the /statusline skill to inspect and customize it.",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "author": {
         "name": "Christina"
       },
@@ -134,7 +134,7 @@
     {
       "name": "openrouter-kit",
       "description": "OpenRouter API key management and account validation: shared library, CLI, and bootstrap-time credential check that other plugins/projects depend on for OpenRouter access",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "author": {
         "name": "Christina"
       },
