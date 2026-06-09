@@ -110,3 +110,18 @@ class TestLoadModelConfig:
         load_model_config(project_root=str(proj))
         # the module constant must be unchanged by the merge
         assert "custom" not in DEFAULT_MODEL_CONFIG["models"]
+
+    def test_bootstrap_lib_fallback_warns_on_stderr(self, monkeypatch, capsys):
+        """When bootstrap_lib is unavailable the baseline fallback must not be
+        silent -- the silence is what made the missing shared_lib_imports
+        declaration in consumers (workflow-kit) latent."""
+        import sys as _sys
+
+        # None in sys.modules makes `from bootstrap_lib.config_resolve import ...`
+        # raise ImportError, simulating an unprovisioned venv.
+        monkeypatch.setitem(_sys.modules, "bootstrap_lib.config_resolve", None)
+        cfg = load_model_config()
+        assert cfg == DEFAULT_MODEL_CONFIG
+        captured = capsys.readouterr()
+        assert "bootstrap_lib unavailable" in captured.err
+        assert captured.out == ""
