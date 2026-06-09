@@ -1,9 +1,0 @@
-[project]
-name = "test-plugin"
-version = "0.1.0"
-description = "Host-side dependencies for test-plugin"
-requires-python = ">=3.10"
-
-dependencies = [
-    "pyyaml",
-]

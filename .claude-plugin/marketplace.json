@@ -30,19 +30,6 @@
       "category": "development"
     },
     {
-      "name": "test-plugin",
-      "description": "Test plugin exercising all 5 bootstrap steps including Claude-driven config setup",
-      "version": "0.1.5",
-      "author": {
-        "name": "Christina"
-      },
-      "source": "./plugins/test-plugin",
-      "category": "development",
-      "dependencies": [
-        "bootstrap"
-      ]
-    },
-    {
       "name": "bootstrap",
       "description": "Centralized bootstrap engine for Claude Code plugins",
       "version": "0.16.0",
