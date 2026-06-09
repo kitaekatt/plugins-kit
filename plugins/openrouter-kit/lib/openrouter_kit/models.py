@@ -21,6 +21,7 @@ project override changes the model for all of them at once.
 from __future__ import annotations
 
 import copy
+import sys
 from typing import Optional
 
 # Authoritative shipped baseline. Mirrored by default_config.yaml (which bootstrap
@@ -56,6 +57,11 @@ def load_model_config(*, project_root: Optional[str] = None) -> dict:
         from bootstrap_lib.config_resolve import resolve_config, standard_config_layers
         from bootstrap_lib.manifest_merge import _deep_merge_dicts
     except ImportError:
+        print(
+            "openrouter-kit: bootstrap_lib unavailable; using the shipped model "
+            "baseline (user/project config.yaml layers ignored)",
+            file=sys.stderr,
+        )
         return base
 
     layers = standard_config_layers(

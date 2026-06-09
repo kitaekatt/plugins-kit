@@ -114,6 +114,24 @@ class TestPartitionSectionsIntoChunks:
         assert len(chunks) == 1
         assert chunks[0]["text"].startswith("preamble line\n")
 
+    def test_preamble_only_input_emits_preamble_chunk(self, capsys):
+        """A diff that parsed into zero sections but has preamble text must
+        NOT be silently dropped (G9) -- the unattributed text is surfaced as
+        a single preamble-only chunk plus a stderr warning, so a downstream
+        review can't become a confident no-op on unparsed diff output."""
+        preamble = "diff --cc f.txt\nindex a29bdeb,e8a99e0..0000000\n@@@ -1,1 -1,1 +1,1 @@@\n"
+        chunks = partition_sections_into_chunks([], max_bytes=1024, preamble=preamble)
+        assert len(chunks) == 1
+        assert chunks[0]["files"] == []
+        assert chunks[0]["text"] == preamble
+        assert chunks[0]["bytes"] == len(preamble.encode("utf-8"))
+        assert "0 sections" in capsys.readouterr().err
+
+    def test_empty_sections_and_empty_preamble_returns_empty(self):
+        """A genuinely empty diff (no sections, no preamble) still yields no
+        chunks -- the preamble-only path applies only when there IS text."""
+        assert partition_sections_into_chunks([], max_bytes=1024, preamble="") == []
+
     def test_custom_group_by_callable(self):
         """Caller can override the natural-boundary group key."""
         sections = [

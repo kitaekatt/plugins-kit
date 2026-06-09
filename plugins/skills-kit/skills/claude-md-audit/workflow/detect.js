@@ -24,8 +24,13 @@
 //   files[i].dimension: "code-directory" | "classic"  (from discover.py; when
 //            "code-directory" the lane also loads refs.codeDirFilter and runs the
 //            CD-* insight-validation criteria. Absent/"classic" -> classic only.)
+//   density: boolean  (opt-in density lens. When true, every lane also loads
+//            refs.densityCriteria and runs the DD-1..DD-4 lens, emitting findings
+//            under group "Density" -- all JUDGMENT/DISCUSS, never FAIL/AUTO.
+//            Absent/false -> the lens does not run and the doc is not loaded.)
 //   refs:  { criteria: <abs path to references/audit-criteria.md>,
 //            codeDirFilter: <abs path to references/code-dir-insight-filter.md>,
+//            densityCriteria: <abs path to references/density-criteria.md>  (only used when density is true),
 //            pluginRoot: <abs path to plugins/skills-kit (parent of skills_kit_lib)>,
 //            venvPython: <abs path to skills-kit venv python> }
 // NOTE: contentAllocation is no longer consumed by lanes (dropped for cache
@@ -56,7 +61,7 @@ const FILE_FINDINGS_SCHEMA = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          group: { type: 'string', enum: ['CCP', 'CRP', 'ADP', 'Hygiene', 'Schema', 'CodeDir'] },
+          group: { type: 'string', enum: ['CCP', 'CRP', 'ADP', 'Hygiene', 'Schema', 'CodeDir', 'Density'] },
           severity: { type: 'string', enum: ['PASS', 'FAIL', 'INFO', 'JUDGMENT'] },
           criterion: { type: 'string', description: 'criterion id or short name, e.g. ccp_cross_file_duplication' },
           message: { type: 'string' },
@@ -83,8 +88,13 @@ if (!input || !Array.isArray(input.files) || input.files.length === 0) {
   throw new Error('detect.js requires args.files = [{path, role, parentPath}]')
 }
 const refs = input.refs || {}
+const density = input.density === true
 
 function lanePrompt(f) {
+  const densityClause = density
+    ? `The OPT-IN density lens is requested. After the checks above, ALSO read the density criteria at ${refs.densityCriteria} and run the DD-1..DD-4 lens. Overriding rule: density != deletion — every finding must route the tokens somewhere (tighten in place / extract to a named reference / merge a duplicate); if you cannot name the destination, do not raise the finding. DD-1 density_in_place (over-worded but correctly-placed section -> taxonomy L_verbose_in_place, tighten IN PLACE, honor carve-outs for teaching examples / load-bearing nuance / labeled safety rails); DD-2 extract_to_reference (self-contained on-demand block taxing every reader -> taxonomy M_extract_to_reference, move to a reference + leave a one-line pointer; distinct from A wrong-scope and finer than C whole-file split); DD-3 intra_file_redundancy (same fact repeated within THIS file -> taxonomy N_intra_file_redundancy; NOT B, which is across the role chain); DD-4 value_earns_tokens (classic-file generalization of the CD-5 value filter -> taxonomy O_low_value_verbose; do NOT run on a code-directory file, where CD-5/J already owns value). Emit ALL density findings under group "Density", severity JUDGMENT, bucket DISCUSS — the lens NEVER produces FAIL or AUTO and never changes the verdict. Each remediation names the destination (tighten | extract->ref | merge) and an approximate token-savings figure.`
+    : `The density lens was not requested; do NOT load or apply the density criteria, and emit no Density-group findings.`
+
   const parentClause = f.role === 'child' && f.parentPath
     ? `This is a CHILD file. Also Read its parent CLAUDE.md at ${f.parentPath} so you can run the CCP cross-file duplication check (a rule restated from the parent is a FAIL, taxonomy B, bucket AUTO).`
     : `No parent read is required for role=${f.role}.`
@@ -110,14 +120,15 @@ Steps:
 4. Apply the criteria that the role-to-criteria map says apply to role=${f.role}. Produce findings tagged with group (CCP / CRP / ADP / Hygiene) and severity (PASS / FAIL / INFO / JUDGMENT). For role=local, only the D-group / local criteria apply (skip Hygiene and ADP per the map).
 5. ${schemaClause}
 6. ${codeDirClause}
-7. Classify EVERY non-PASS finding into a taxonomy id and a remediation bucket:
+7. ${densityClause}
+8. Classify EVERY non-PASS finding into a taxonomy id and a remediation bucket:
      - AUTO    = mechanical, safe to auto-apply (e.g. B: delete restated parent rule; I2: drop a drifted line number)
-     - DISCUSS = needs a user decision (A, C, D, E-authorial, F, G; CodeDir H, H2, I, J)
+     - DISCUSS = needs a user decision (A, C, D, E-authorial, F, G; CodeDir H, H2, I, J; Density L, M, N, O)
      - SPECIAL = K, unclassified
-   Classic-dimension findings use taxonomy A-G/K; CodeDir-group findings use H_stale_anchor / H2_inverted_absence / I_claim_drift / I2_line_drift / J_low_value_insight (or K).
+   Classic-dimension findings use taxonomy A-G/K; CodeDir-group findings use H_stale_anchor / H2_inverted_absence / I_claim_drift / I2_line_drift / J_low_value_insight (or K); Density-group findings use L_verbose_in_place / M_extract_to_reference / N_intra_file_redundancy / O_low_value_verbose.
    PASS / INFO / JUDGMENT findings that need no remediation get taxonomy "none" and bucket "NONE".
    For each AUTO/DISCUSS/SPECIAL finding write a concrete \`remediation\` (what edit you propose, with line refs).
-8. Verdict: NON-COMPLIANT if ANY finding has severity FAIL; otherwise COMPLIANT. INFO/JUDGMENT never gate. (A CodeDir CD-2 H/H2 FAIL gates exactly like a classic FAIL.)
+9. Verdict: NON-COMPLIANT if ANY finding has severity FAIL; otherwise COMPLIANT. INFO/JUDGMENT never gate. (A CodeDir CD-2 H/H2 FAIL gates exactly like a classic FAIL. Density findings are JUDGMENT only and never affect the verdict.)
 
 Idempotency matters: apply the fixed criteria and taxonomy deterministically. Do not invent findings; report only what the criteria actually surface. Return the structured object.`
 }

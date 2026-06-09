@@ -20,5 +20,5 @@
   "venv": {
     "check_imports": ["workflow_kit_lib.loader", "openai"]
   },
-  "shared_lib_imports": ["openrouter_kit"]
+  "shared_lib_imports": ["openrouter_kit", "bootstrap_lib"]
 }

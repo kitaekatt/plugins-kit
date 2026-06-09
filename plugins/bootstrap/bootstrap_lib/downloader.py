@@ -53,10 +53,15 @@ def _detect_archive_type(url: str, explicit: Optional[str]) -> Optional[str]:
     return None  # treat as a raw single-file download
 
 
-def _fetch(url: str, dest_path: str) -> str:
-    """Stream `url` to `dest_path`, returning the hex sha256 of the bytes."""
+def _fetch(url: str, dest_path: str, timeout: float = 120) -> str:
+    """Stream `url` to `dest_path`, returning the hex sha256 of the bytes.
+
+    `timeout` is the socket timeout (connect + per-read). Without it a
+    stalled connection hangs the background engine forever; 120s matches
+    pypi_check's download timeout.
+    """
     h = hashlib.sha256()
-    with urlopen(url) as resp, open(dest_path, "wb") as out:
+    with urlopen(url, timeout=timeout) as resp, open(dest_path, "wb") as out:
         while True:
             chunk = resp.read(64 * 1024)
             if not chunk:
@@ -88,6 +93,13 @@ def _extract_from_archive(archive_path: str, archive_type: str, inner_path: str,
                 shutil.copyfileobj(src, out)
         return
     raise ValueError(f"unsupported archive type: {archive_type!r}")
+
+
+def _remove_quiet(path: str):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def _make_executable(path: str):
@@ -142,32 +154,37 @@ def download_and_install(
                 f"sha256 mismatch: expected {sha256}, got {actual_hash}",
             )
 
-        # Stage to a temp path next to the final destination so the rename
-        # into place is atomic.
-        staged = os.path.join(tmp, final_name)
+        if is_archive:
+            if not archive_path:
+                return DownloadResult(
+                    False, None,
+                    "download is an archive but no archive_path supplied",
+                )
+            if detected_type is None:
+                return DownloadResult(
+                    False, None,
+                    "archive_path supplied but archive_type couldn't be detected from URL",
+                )
+
+        # Stage IN bin_dir itself (not the system temp dir) so the rename
+        # into place is an atomic same-filesystem replace — on Linux /tmp is
+        # often tmpfs, and a cross-device os.replace raises EXDEV.
+        fd, staged = tempfile.mkstemp(prefix=f".{final_name}.", suffix=".staged", dir=bin_dir)
+        os.close(fd)
         try:
             if is_archive:
-                if not archive_path:
-                    return DownloadResult(
-                        False, None,
-                        "download is an archive but no archive_path supplied",
-                    )
-                if detected_type is None:
-                    return DownloadResult(
-                        False, None,
-                        "archive_path supplied but archive_type couldn't be detected from URL",
-                    )
                 _extract_from_archive(download_path, detected_type, archive_path, staged)
             else:
                 shutil.copyfile(download_path, staged)
+            _make_executable(staged)
         except Exception as e:
+            _remove_quiet(staged)
             return DownloadResult(False, None, f"extract failed: {e}")
-
-        _make_executable(staged)
 
         try:
             os.replace(staged, final_path)
         except OSError as e:
+            _remove_quiet(staged)
             return DownloadResult(False, None, f"install to {final_path} failed: {e}")
 
     return DownloadResult(True, final_path, f"installed at {final_path}")

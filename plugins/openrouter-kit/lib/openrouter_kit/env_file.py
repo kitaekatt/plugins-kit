@@ -9,7 +9,6 @@ syntax -- the .env files this plugin manages contain a single API key.
 """
 
 import os
-import sys
 from pathlib import Path
 from typing import Dict
 
@@ -43,10 +42,12 @@ def read_env_file(path: Path) -> Dict[str, str]:
 def write_env_file(path: Path, values: Dict[str, str]) -> None:
     """Write KEY=VALUE pairs to a .env file with restricted permissions.
 
-    Creates parent directories as needed. On POSIX, sets mode 0600 (owner
-    read/write only). On Windows, the default ACL of paths under the user
-    profile already restricts access to the current user, so we do not add
-    explicit ACL manipulation.
+    Creates parent directories as needed. On POSIX, the file is created with
+    mode 0600 (owner read/write only) at creation time -- never a post-hoc
+    chmod, so the key is never world-readable, even briefly. On Windows, the
+    mode argument is largely ignored and the default ACL of paths under the
+    user profile already restricts access to the current user, so we do not
+    add explicit ACL manipulation.
 
     Existing keys not in ``values`` are dropped -- this is for a small,
     plugin-managed credential file, not a general-purpose .env editor.
@@ -58,12 +59,7 @@ def write_env_file(path: Path, values: Dict[str, str]) -> None:
     # Write atomically: write to a temp file in the same directory, then
     # rename. Prevents a half-written credential file if the process dies.
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(body)
     os.replace(tmp, path)
-
-    if sys.platform != "win32":
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass

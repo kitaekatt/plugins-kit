@@ -779,6 +779,41 @@ class TestEnsureRegistryScope:
         result = ensure_registry_scope("plugins-kit:bootstrap", "user")
         assert result is False
 
+    def test_no_op_leaves_registry_file_untouched(self, tmp_path, monkeypatch):
+        """Scope already correct → NO write at all (B3).
+
+        The registry's mtime arms the SessionStart cooldown's registry-change
+        bypass. ensure_registry_scope runs every pass, so an unconditional
+        rewrite would make the registry permanently newer than the cooldown
+        stamp and re-arm a full bootstrap pass every session.
+        """
+        ip = self._write_registry(tmp_path, monkeypatch, {
+            "bootstrap@plugins-kit": [{"scope": "user", "version": "0.8.4"}]
+        })
+        os.utime(ip, (1_000_000_000, 1_000_000_000))
+        before = ip.stat().st_mtime_ns
+
+        result = ensure_registry_scope("plugins-kit:bootstrap", "user")
+
+        assert result is True
+        assert ip.stat().st_mtime_ns == before, (
+            "no-op pass must not rewrite installed_plugins.json"
+        )
+
+    def test_changed_write_is_atomic_with_no_temp_leftovers(self, tmp_path, monkeypatch):
+        """A real scope fix rewrites via tmp+os.replace (no fixed-name temp
+        files left behind, valid JSON afterwards)."""
+        ip = self._write_registry(tmp_path, monkeypatch, {
+            "bootstrap@plugins-kit": [{"scope": "project", "version": "0.8.4"}]
+        })
+        result = ensure_registry_scope("plugins-kit:bootstrap", "user")
+        assert result is True
+        data = json.loads(ip.read_text())
+        assert data["plugins"]["bootstrap@plugins-kit"][0]["scope"] == "user"
+        assert sorted(os.listdir(ip.parent)) == ["installed_plugins.json"], (
+            "atomic write must not leave temp files next to the registry"
+        )
+
 
 class TestCheckPluginMinVersion:
     """Tests for check_plugin_min_version — constraint satisfaction against installed version."""

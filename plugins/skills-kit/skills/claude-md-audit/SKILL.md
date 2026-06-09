@@ -31,6 +31,7 @@ audit_skill:
       - "applying the role-to-criteria map (root / ancestor / child / local roles have different applicable rules)"
       - "schema validation when a `claude_md:` YAML contract block is present in the file"
       - "the code-directory insight-validation dimension (CD-1..CD-6) for files flagged `dimension: code-directory` by discover.py -- anchor-modality classification, fidelity-to-code, and the what-we-care-about value filter (self-contained in references/code-dir-insight-filter.md)"
+      - "the opt-in density lens (DD-1..DD-4) -- verbosity-in-place, extract-to-reference, intra-file redundancy, value-earns-tokens; advisory only (JUDGMENT/DISCUSS, never FAIL/AUTO); self-contained in references/density-criteria.md; runs only when the `density` argument or equivalent intent is given"
       - "categorizing findings into remediation buckets (AUTO / DISCUSS / SPECIAL)"
       - "listing CLAUDE.md files visible from cwd (the cwd-relative discover.py helper for index-based selection)"
     excludes:
@@ -119,6 +120,30 @@ audit_skill:
       summary: "Positive check: if the file has been reduced to only structural description with no tier-1/tier-2 silent-failure or blast-radius claim, emit an erosion INFO -- the highest-value content may have been edited out."
       severity: "INFO"
       detail: "Advisory only; never gates. Surfaces value erosion across edits."
+    - id: "dd_density_in_place"
+      name: "Density -- correctly-placed, valuable section is over-worded"
+      keywords: ["density", "verbosity", "tighten", "ceremony", "over-explanation", "token reduction"]
+      summary: "A section that is correctly placed and carries real value but says in N words what materially fewer would carry (redundant restatement, hedging/ceremony preamble, over-explanation of the obvious). Remediation tightens IN PLACE; never moves or deletes. Honors carve-outs (load-bearing nuance, teaching examples, labeled safety-rail repetition)."
+      severity: "JUDGMENT"
+      detail: "Opt-in density lens, loaded only on the `density` request. Advisory: never FAIL, never AUTO. Self-contained in references/density-criteria.md (DD-1). Bucket DISCUSS; remediation must route tokens (tighten in place)."
+    - id: "dd_extract_to_reference"
+      name: "Density -- self-contained block should be disclosed to a reference"
+      keywords: ["density", "disclosure", "extract to reference", "progressive disclosure", "L1 to L3", "on-demand block"]
+      summary: "A self-contained block serving an on-demand/narrow reading task, large enough that inlining taxes every reader, should move to a references/*.md (or SKILL.md for on-task procedure) leaving a one-line pointer. Disclosure-level move, not scope-level -- distinct from crp_role_appropriate (wrong file) and finer than C_crp_split_candidate (whole-file split)."
+      severity: "JUDGMENT"
+      detail: "Opt-in density lens (DD-2). Advisory: never FAIL, never AUTO. Bucket DISCUSS; remediation names the destination reference and the pointer left behind."
+    - id: "dd_intra_file_redundancy"
+      name: "Density -- same fact stated more than once within one file"
+      keywords: ["density", "intra-file duplication", "redundancy", "state once", "cross-reference"]
+      summary: "The same fact stated multiple times within THIS file (distinct from ccp_cross_file_duplication, which is across the role chain and FAIL/AUTO). Keep the single best statement; replace the others with a cross-reference."
+      severity: "JUDGMENT"
+      detail: "Opt-in density lens (DD-3). Advisory: never FAIL, never AUTO. Bucket DISCUSS; remediation names which statement survives."
+    - id: "dd_value_earns_tokens"
+      name: "Density -- section does not earn its tokens (classic-file value filter)"
+      keywords: ["density", "value filter", "earns tokens", "low value verbose", "downgrade"]
+      summary: "The classic-file generalization of the code-directory value filter: a section that does not earn its tokens under the value lattice AND is verbose about it. Defers the ranking + carve-outs to code-dir-insight-filter.md Step 4 (SSOT). Does NOT double-count with CD-5/J -- on a code-directory file, value findings stay in CD-5."
+      severity: "JUDGMENT"
+      detail: "Opt-in density lens (DD-4). Advisory: never FAIL, never AUTO. Bucket DISCUSS; remediation proposes downgrade-to-a-line or confirmed deletion of a contentless section."
   taxonomy:
     - id: "A_wrong_role_content"
       name: "Content sits at the wrong role in the CLAUDE.md hierarchy"
@@ -192,6 +217,30 @@ audit_skill:
       detection_signal: "A section is linter-caught / a language default / a bare un-annotated inventory / a pure schema restatement -- AND not protected by a carve-out (annotated Files/Schema, SSOT-pointing catalog, safety-rail cheatsheet, topology table)."
       default_remediation: "Propose deletion (bare inventory) or downgrade. User confirms; bare-inventory deletion may be AUTO."
       bucket: "DISCUSS"
+    - id: "L_verbose_in_place"
+      name: "Density: correctly-placed section is over-worded"
+      keywords: ["density", "verbose", "tighten in place", "ceremony", "token reduction"]
+      detection_signal: "Density lens (DD-1): a valuable, correctly-scoped section uses materially more words than its information content requires, and is not protected by a carve-out (teaching example, load-bearing nuance, labeled safety-rail repetition)."
+      default_remediation: "Propose a tightened rewrite (or the specific sentences to compress) IN PLACE, with an approximate token-savings figure. Never move or delete. User confirms."
+      bucket: "DISCUSS"
+    - id: "M_extract_to_reference"
+      name: "Density: self-contained block should move to a reference"
+      keywords: ["density", "disclosure", "extract to reference", "pointer", "progressive disclosure"]
+      detection_signal: "Density lens (DD-2): a self-contained on-demand block is large enough to tax every reader who does not need it; it belongs one disclosure level deeper (references/*.md or a SKILL.md) within the same scope."
+      default_remediation: "Propose moving the block to a named reference doc and leaving a one-line pointer behind, with an approximate token-savings figure. User confirms before extracting."
+      bucket: "DISCUSS"
+    - id: "N_intra_file_redundancy"
+      name: "Density: same fact stated more than once within one file"
+      keywords: ["density", "intra-file duplication", "redundancy", "state once"]
+      detection_signal: "Density lens (DD-3): a fact is restated in multiple sections of THIS file (not across the role chain -- that is B)."
+      default_remediation: "Propose keeping the single best statement and replacing the others with a cross-reference. User confirms which survives."
+      bucket: "DISCUSS"
+    - id: "O_low_value_verbose"
+      name: "Density: section does not earn its tokens (classic-file value filter)"
+      keywords: ["density", "low value", "value filter", "downgrade", "earns tokens"]
+      detection_signal: "Density lens (DD-4): a classic-file section fails the value lattice (code-dir-insight-filter.md Step 4) AND is verbose. Not run on code-directory files (CD-5/J owns value there)."
+      default_remediation: "Propose downgrade (compress to a line) or, for a contentless section, deletion. User confirms; this lens never auto-deletes."
+      bucket: "DISCUSS"
     - id: "K_unclassified"
       name: "Unclassified / special case"
       keywords: ["unclassified", "special case", "escape hatch", "K bucket"]
@@ -207,19 +256,20 @@ audit_skill:
         - "audit.py is reachable (mechanical schema validator -- only needed if a claude_md: YAML block is present)."
         - "references/audit-criteria.md is loadable (the self-contained classic criteria doc; the upstream cohesion-principles is its derivation and is NOT loaded by the audit path)."
         - "references/code-dir-insight-filter.md is loadable -- needed only when a target is flagged dimension=code-directory; the self-contained CD-1..CD-6 criteria, anchor-modality table, and value filter."
+        - "references/density-criteria.md is loadable -- needed only when the density lens was requested (the `density` arg or equivalent intent); the self-contained DD-1..DD-4 criteria and the density-not-deletion rule."
         - "The user is in a project directory so role classification works."
       steps:
         - n: 1
-          action: "Resolve the audit target set from $ARGUMENTS. Empty -> cwd/CLAUDE.md. 'list' -> emit numbered list via discover.py and stop. Integers -> map to paths from last list. Path -> use directly. Strip any non-interactive token ('fast', '--fast', '--yes', '-y') from the args first and set non_interactive accordingly (also set it if the user's prose expresses non-interactive intent, e.g. 'just apply everything, don't ask'). For each target capture (path, role, dimension, parentPath) where role is root / ancestor / child / local, dimension is the `code-directory`|`classic` flag discover.py emits (Level-1 trigger), and parentPath is the nearest ancestor CLAUDE.md for a child (else null)."
+          action: "Resolve the audit target set from $ARGUMENTS. Empty -> cwd/CLAUDE.md. 'list' -> emit numbered list via discover.py and stop. Integers -> map to paths from last list. Path -> use directly. Strip any non-interactive token ('fast', '--fast', '--yes', '-y') from the args first and set non_interactive accordingly (also set it if the user's prose expresses non-interactive intent, e.g. 'just apply everything, don't ask'). Strip the density-lens token ('density', '--density') and set density_lens=true (also set it if the user's prose expresses the intent, e.g. 'is this too verbose', 'can anything move to a reference', 'audit for token efficiency'); density_lens is FALSE by default and the lens never runs unless requested. For each target capture (path, role, dimension, parentPath) where role is root / ancestor / child / local, dimension is the `code-directory`|`classic` flag discover.py emits (Level-1 trigger), and parentPath is the nearest ancestor CLAUDE.md for a child (else null)."
           tool: "discover.py"
           input: "uv run python ${CLAUDE_PLUGIN_ROOT}/skills/claude-md-audit/scripts/discover.py [--json]"
           expected: "Resolved (path, role, dimension, parentPath) tuples + non_interactive flag."
           on_failure: "If no CLAUDE.md resolves, surface cwd and stop. If a path is given directly (not via discover.py), classify its dimension by reading scripts/discover.py::classify_dimension semantics or default to `code-directory` when the file has code/yaml/csv siblings or review-claim markers and no `claude_md:` block."
         - n: 2
-          action: "DETECT phase (before-Q&A). Choose execution mode by file count -- this threshold equalizes the Workflow tool's per-run overhead. ONE file: audit inline in the main loop (read the file + its parent if child; Read references/audit-criteria.md -- the single self-contained criteria doc, which states each testable rule with its CCP/CRP/ADP derivation inline; do NOT also load cohesion-principles; apply the role-to-criteria map; if a `claude_md:` block is present run the schema validator; if dimension=code-directory ALSO Read references/code-dir-insight-filter.md and run the CD-1..CD-6 insight-validation dimension -- classify each anchor's modality first, then fidelity/line/claim/value; for dimension=classic do NOT load the filter; classify each finding into taxonomy + bucket). TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/claude-md-audit/workflow/detect.js and args = { files:[{path,role,dimension,parentPath}], refs:{criteria, codeDirFilter, pluginRoot, venvPython} }. The workflow fans one lane out per file and returns { perFile:[...], totals }. Detection only -- no file is edited in this phase."
+          action: "DETECT phase (before-Q&A). Choose execution mode by file count -- this threshold equalizes the Workflow tool's per-run overhead. ONE file: audit inline in the main loop (read the file + its parent if child; Read references/audit-criteria.md -- the single self-contained criteria doc, which states each testable rule with its CCP/CRP/ADP derivation inline; do NOT also load cohesion-principles; apply the role-to-criteria map; if a `claude_md:` block is present run the schema validator; if dimension=code-directory ALSO Read references/code-dir-insight-filter.md and run the CD-1..CD-6 insight-validation dimension -- classify each anchor's modality first, then fidelity/line/claim/value; for dimension=classic do NOT load the filter; if density_lens is TRUE ALSO Read references/density-criteria.md and run the DD-1..DD-4 density lens -- emit findings under group Density, all JUDGMENT/DISCUSS, never FAIL/AUTO, each remediation naming where the tokens go; if density_lens is FALSE do NOT load that doc; classify each finding into taxonomy + bucket). TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/claude-md-audit/workflow/detect.js and args = { files:[{path,role,dimension,parentPath}], density:<density_lens bool>, refs:{criteria, codeDirFilter, densityCriteria, pluginRoot, venvPython} }. The workflow fans one lane out per file and returns { perFile:[...], totals }. Detection only -- no file is edited in this phase."
           tool: "Workflow | inline"
-          input: "detect.js args.refs: criteria=${CLAUDE_PLUGIN_ROOT}/skills/claude-md-audit/references/audit-criteria.md; codeDirFilter=${CLAUDE_PLUGIN_ROOT}/skills/claude-md-audit/references/code-dir-insight-filter.md; pluginRoot=${CLAUDE_PLUGIN_ROOT}; venvPython=<plugin venv python>. Each file carries its dimension; the lane loads the code-dir filter only for dimension=code-directory. (cohesion-principles is intentionally NOT passed -- lanes load only the self-contained criteria doc(s) for cache efficiency.) Schema validator is run as: (cd ${CLAUDE_PLUGIN_ROOT} && <venvPython> -m skills_kit_lib.audit <path> --json)."
-          expected: "Structured per-file findings (group incl. CodeDir, severity, criterion, message, line, taxonomy, bucket, remediation) + per-file verdict."
+          input: "detect.js args.refs: criteria=${CLAUDE_PLUGIN_ROOT}/skills/claude-md-audit/references/audit-criteria.md; codeDirFilter=${CLAUDE_PLUGIN_ROOT}/skills/claude-md-audit/references/code-dir-insight-filter.md; densityCriteria=${CLAUDE_PLUGIN_ROOT}/skills/claude-md-audit/references/density-criteria.md (passed only when args.density is true); pluginRoot=${CLAUDE_PLUGIN_ROOT}; venvPython=<plugin venv python>. Each file carries its dimension; the lane loads the code-dir filter only for dimension=code-directory and the density criteria only when args.density is true. (cohesion-principles is intentionally NOT passed -- lanes load only the self-contained criteria doc(s) for cache efficiency.) Schema validator is run as: (cd ${CLAUDE_PLUGIN_ROOT} && <venvPython> -m skills_kit_lib.audit <path> --json)."
+          expected: "Structured per-file findings (group incl. CodeDir and Density, severity, criterion, message, line, taxonomy, bucket, remediation) + per-file verdict."
           on_failure: "If the schema validator is unavailable, the lane marks the Schema group JUDGMENT ('validator unavailable') and continues -- never fail a file for that. If an anchor cannot be classified or resolved cheaply, mark it external-unverifiable/INFO rather than FAIL."
         - n: 3
           action: "Render the per-file report (output_template) from the collected findings: per-file verdict blocks followed by an overall summary with bucket counts. This is the before-Q&A surface the user reads."
@@ -257,6 +307,9 @@ audit_skill:
         ### CodeDir (when dimension = code-directory)
         [PASS|FAIL|JUDGMENT|INFO] <CD-criterion> <taxonomy>: <message>
 
+        ### Density (when the density lens was requested)
+        [JUDGMENT] <DD-criterion> <taxonomy>: <message> (routes: tighten | extract->ref | merge; ~<N> tokens)
+
         ### Compliance verdict
 
         <P> PASS / <F> FAIL / <I> INFO / <J> JUDGMENT-REQUIRED
@@ -267,6 +320,8 @@ audit_skill:
         - "INFO findings are advisory (size signals, migration opportunities). They do NOT escalate to FAIL on subsequent runs even if unaddressed."
         - "When auditing a child CLAUDE.md, the parent must be read for CCP duplication checks. If the parent cannot be located (e.g. standalone file with no project context), report 'parent unavailable' for parent-relative criteria rather than failing them silently."
         - "For role=local (CLAUDE.local.md), only D-group criteria apply (see role-to-criteria map). Hygiene and ADP rules are skipped because the file is by design personal-scoped."
+        - "The density lens (DD-1..DD-4, group Density) is OPT-IN and ADVISORY: it loads references/density-criteria.md only when density_lens is true, every finding is JUDGMENT/DISCUSS, and it never produces FAIL or AUTO. A density-only run is always COMPLIANT -- the lens surfaces token-efficiency opportunities, it never gates. Density findings do not change the verdict and do not escalate on re-runs."
+        - "Density vs the classic criteria -- do not double-count: O_low_value_verbose (DD-4) is the CLASSIC-file value filter and must not fire on a code-directory file (CD-5/J owns value there); M_extract_to_reference (DD-2) is a disclosure-level move within one scope, distinct from A_wrong_role_content (different file) and finer than C_crp_split_candidate (whole-file split); N_intra_file_redundancy (DD-3) is within one file, distinct from B (across the role chain, FAIL/AUTO)."
   remediations:
     auto:
       - category: "B_ccp_cross_file_duplication"
@@ -296,6 +351,14 @@ audit_skill:
         procedure: "Run the CRP test (do body sections serve different reading tasks?). If yes, escalate to C. If no, INFO stays; the larger CLAUDE.md is correct."
       - category: "G_descendant_role_mismatch"
         procedure: "Propose moving project-conventional content from .local file into the checked-in CLAUDE.md (so all collaborators see it). User confirms before applying."
+      - category: "L_verbose_in_place"
+        procedure: "Show the over-worded section and a tightened rewrite (or the sentences to compress) with an approximate token-savings figure. Tighten IN PLACE only -- never move or delete. User confirms; honor carve-outs (teaching examples, load-bearing nuance, labeled safety-rail repetition)."
+      - category: "M_extract_to_reference"
+        procedure: "Propose moving the self-contained on-demand block to a named reference doc (or a SKILL.md for on-task procedure), leaving a one-line pointer behind, with an approximate token-savings figure. Disclosure-level move within the same scope; user confirms before extracting."
+      - category: "N_intra_file_redundancy"
+        procedure: "Show the repeated statements; propose keeping the single best one and cross-referencing the others. User confirms which survives."
+      - category: "O_low_value_verbose"
+        procedure: "Show the section and why it fails the value lattice (code-dir-insight-filter.md Step 4) after carve-outs. Propose downgrade-to-a-line or, for a contentless section, deletion. User confirms; this lens never auto-deletes."
     special:
       procedure: "Surface the finding with the audit row that fired, attempted categories, and reasons none fit. User proposes strategy. Generalizable strategies become new taxonomy categories in references/audit-criteria.md."
   enforcement:
@@ -329,8 +392,9 @@ audit_skill:
 - `<path>` -- audit a specific CLAUDE.md or CLAUDE.local.md.
 - `<numbers>` -- audit files by index from the most recent `list` output (e.g. `3 7 9`).
 - `fast` / `--fast` / `--yes` / `-y` -- non-interactive: skip the Q&A round and infer every DISCUSS/SPECIAL decision (see Non-interactive mode). Combine with any selector, e.g. `/claude-md-audit 3 7 fast`. Prose intent ("audit these and just apply everything, don't ask me") sets the same flag.
+- `density` / `--density` -- add the opt-in density lens (DD-1..DD-4: verbosity-in-place, extract-to-reference, intra-file redundancy, value-earns-tokens). Advisory only -- all findings are JUDGMENT/DISCUSS, never FAIL/AUTO, so a density-only run is always COMPLIANT. Combine with any selector, e.g. `/claude-md-audit 3 density`. Prose intent ("is this CLAUDE.md too verbose", "can anything move to a reference", "audit for token efficiency") sets the same flag. Off by default; the lens never runs unless requested.
 
-Typical workflow: `/claude-md-audit list` to see what's available, then `/claude-md-audit 3 7` to audit specific files.
+Typical workflow: `/claude-md-audit list` to see what's available, then `/claude-md-audit 3 7` to audit specific files. Add `density` to also surface token-efficiency opportunities: `/claude-md-audit 3 density`.
 
 ## Workflow orchestration
 
@@ -369,5 +433,6 @@ When the non-interactive flag is set (argument token or expressed intent), the Q
 - Canonical placement framework: `cohesion-principles (in skills-kit)`. The criteria in this skill's `references/audit-criteria.md` derive directly from that skill's content_allocation framework; when the two diverge, the canonical framework wins.
 - Schema validation tooling: `plugins/skills-kit/skills/skill-authoring/scripts/audit.py` (validates `claude_md:` YAML blocks against `CLAUDE_MD_SCHEMA` in schemas.py).
 - Code-directory insight-validation criteria: `references/code-dir-insight-filter.md` (the self-contained CD-1..CD-6 dimension, loaded only for dimension=code-directory files). The Level-1 trigger that flags the dimension lives in `scripts/discover.py::classify_dimension`.
+- Density lens criteria: `references/density-criteria.md` (the self-contained DD-1..DD-4 opt-in lens for verbosity/disclosure, loaded only when the `density` arg or equivalent intent is given). It reuses the value lattice in `references/code-dir-insight-filter.md` Step 4 rather than restating it. Advisory only -- never gates compliance.
 - Authoring counterpart: `claude-md-authoring:references/code-directory-claude-md.md` -- authoring code-directory CLAUDE.md files to that doc is what keeps this audit green (same four shapes, observation taxonomy, anchoring + path discipline).
 - Sibling audit skills: `/skill-audit` for SKILL.md files; `/references-audit` for broken cross-references across markdown.

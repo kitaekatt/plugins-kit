@@ -6,12 +6,12 @@ from unittest.mock import patch
 
 import pytest
 
-# Add bin/ and lib/ to path
+# Add scripts/ and lib/ to path
 _SKILL_DIR = Path(__file__).resolve().parent.parent.parent / "plugins" / "unreal-kit" / "skills" / "ue-python-api"
 _PLUGIN_DIR = _SKILL_DIR.parent.parent
-_BIN_DIR = _SKILL_DIR / "bin"
+_SCRIPTS_DIR = _SKILL_DIR / "scripts"
 _LIB_DIR = _PLUGIN_DIR / "lib"
-for p in (_BIN_DIR, _LIB_DIR):
+for p in (_SCRIPTS_DIR, _LIB_DIR):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 

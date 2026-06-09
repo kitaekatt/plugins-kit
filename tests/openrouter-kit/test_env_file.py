@@ -64,6 +64,38 @@ class TestWriteEnvFile:
         mode = env.stat().st_mode & 0o777
         assert mode == 0o600
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions only")
+    def test_permissions_0600_even_under_permissive_umask(self, tmp_path):
+        """The mode comes from os.open's 0600 at creation, not from the umask."""
+        env = tmp_path / ".env"
+        old_umask = os.umask(0o000)
+        try:
+            write_env_file(env, {"K": "v"})
+        finally:
+            os.umask(old_umask)
+        assert env.stat().st_mode & 0o777 == 0o600
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions only")
+    def test_temp_file_never_world_readable(self, tmp_path, monkeypatch):
+        """Regression for the world-readable window: the temp file the key is
+        written to must already be 0600 when it is renamed into place (the old
+        code created it umask-default and only chmod'ed after os.replace)."""
+        env = tmp_path / ".env"
+        seen = {}
+        real_replace = os.replace
+
+        def spy(src, dst):
+            seen["tmp_mode"] = os.stat(src).st_mode & 0o777
+            return real_replace(src, dst)
+
+        monkeypatch.setattr("openrouter_kit.env_file.os.replace", spy)
+        old_umask = os.umask(0o000)
+        try:
+            write_env_file(env, {"K": "v"})
+        finally:
+            os.umask(old_umask)
+        assert seen["tmp_mode"] == 0o600
+
     def test_atomic_no_partial_file_on_io_error(self, tmp_path, monkeypatch):
         env = tmp_path / ".env"
         env.write_text("ORIGINAL=keep\n")

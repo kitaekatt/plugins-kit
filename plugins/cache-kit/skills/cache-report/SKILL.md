@@ -43,16 +43,16 @@ technique_skill:
           description: Include per-request breakdown.
       steps:
         - n: 1
-          action: Resolve the cache_report.py path from installed_plugins.json under the plugins-kit:cache-kit entry, then invoke it with $ARGUMENTS.
-          tool: python3
+          action: Invoke ${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py with $ARGUMENTS.
+          tool: uv run python
           expected: stdout containing the cache hit-rate, token usage, and (if --detailed) per-request breakdown.
-          on_failure: If installed_plugins.json is missing or the plugin id is not present, surface the error to the user verbatim. Do not improvise the script path.
+          on_failure: If the script is missing at ${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py, surface the error to the user verbatim. Do not improvise the script path.
         - n: 2
           action: Display the script's stdout verbatim in the user's chat. Do not summarize, paraphrase, or omit any lines.
       output_template: |
         Display the script's stdout verbatim. Do not summarize, paraphrase, or omit any lines.
       gotchas:
-        - The slash command resolves the script path via installed_plugins.json. If installed_plugins.json is missing or the plugin id changes, the invocation fails -- surface the error to the user, do not improvise the path.
+        - The slash command resolves the script via ${CLAUDE_PLUGIN_ROOT}, which Claude Code expands to the plugin's install path at runtime. If the script is missing there, the invocation fails -- surface the error to the user, do not improvise the path.
 ```
 
 ## Instructions
@@ -61,12 +61,12 @@ Display the report output below verbatim. Do not summarize, paraphrase, or omit 
 
 ## Cache Usage Report
 
-!`python3 $(python3 -c "import json;from pathlib import Path;d=json.loads((Path.home()/'.claude/plugins/installed_plugins.json').read_text());print(str(Path(d['plugins']['plugins-kit:cache-kit'][0]['installPath'])/'scripts/cache_report.py'))") $ARGUMENTS`
+!`uv run python "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" $ARGUMENTS`
 
 ---
 
-To see all sessions: run `python3 <install-path>/scripts/cache_report.py --all`
+To see all sessions: run `uv run python "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" --all`
 
-To see a specific session: run `python3 <install-path>/scripts/cache_report.py SESSION_ID`
+To see a specific session: run `uv run python "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" SESSION_ID`
 
-To include per-request breakdown: run `python3 <install-path>/scripts/cache_report.py --detailed`
+To include per-request breakdown: run `uv run python "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" --detailed`

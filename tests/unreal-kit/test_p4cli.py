@@ -28,7 +28,7 @@ class TestGetP4User:
 
     def test_falls_back_to_p4_info(self, monkeypatch):
         monkeypatch.delenv("P4USER", raising=False)
-        monkeypatch.setattr(p4cli, "run_p4", lambda *a, **kw: (0, "carol\n", ""))
+        monkeypatch.setattr(p4cli, "run_p4", lambda *a, **kw: (0, "User name: carol\n", ""))
         assert p4cli.get_p4_user() == "carol"
 
     def test_returns_empty_when_p4_fails(self, monkeypatch):
@@ -43,7 +43,7 @@ class TestGetP4User:
     def test_empty_env_falls_through_to_p4_info(self, monkeypatch):
         # P4USER set but blank should not short-circuit.
         monkeypatch.setenv("P4USER", "   ")
-        monkeypatch.setattr(p4cli, "run_p4", lambda *a, **kw: (0, "dan\n", ""))
+        monkeypatch.setattr(p4cli, "run_p4", lambda *a, **kw: (0, "User name: dan\n", ""))
         assert p4cli.get_p4_user() == "dan"
 
 

@@ -1,6 +1,7 @@
 """Python venv validation and remediation."""
 
 import os
+import re
 import shlex
 import subprocess
 from typing import List, NamedTuple, Optional
@@ -16,16 +17,18 @@ class VenvCheckResult(NamedTuple):
 def venv_env_var_name(plugin_name: str) -> str:
     """Compute the env var name exposing a plugin's venv python.
 
-    Uppercases the name and swaps hyphens for underscores, then suffixes
-    ``_VENV``. Consumers re-exec themselves under this interpreter so they
-    don't have to reconstruct bootstrap's data-dir path layout.
+    Uppercases the name and replaces every character that is not a valid
+    POSIX shell identifier character (anything other than A-Z, 0-9, or
+    underscore) with an underscore, then suffixes ``_VENV``. Consumers
+    re-exec themselves under this interpreter so they don't have to
+    reconstruct bootstrap's data-dir path layout.
 
     >>> venv_env_var_name("unreal-kit")
     'UNREAL_KIT_VENV'
     >>> venv_env_var_name("bootstrap")
     'BOOTSTRAP_VENV'
     """
-    return plugin_name.upper().replace("-", "_") + "_VENV"
+    return re.sub(r"[^A-Z0-9_]", "_", plugin_name.upper()) + "_VENV"
 
 
 def export_venv_env_var(plugin_name: str, plugin_data_dir: str) -> Optional[str]:
@@ -101,10 +104,12 @@ def check_venv(plugin_data_dir: str, plugin_root: str, check_imports: List[str])
 
     # Check python works
     try:
-        subprocess.run(
+        proc = subprocess.run(
             [python_bin, "-c", "import sys; sys.exit(0)"],
             capture_output=True, timeout=10,
         )
+        if proc.returncode != 0:
+            raise subprocess.SubprocessError(f"exit code {proc.returncode}")
     except (subprocess.SubprocessError, OSError):
         return VenvCheckResult(
             passed=False,

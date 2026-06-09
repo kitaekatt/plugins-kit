@@ -384,6 +384,13 @@ def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> bool:
     at 'user' scope), CLI commands fail. This fixes the data before we run them.
 
     Returns True if the scope was already correct or was updated.
+
+    Write discipline: the registry is shared with Claude Code itself and its
+    mtime arms the SessionStart cooldown's registry-change bypass, so we only
+    write when an entry actually changed (a no-op rewrite every pass would
+    re-arm a full bootstrap pass every session), and we write atomically
+    (tmp + os.replace) so a crash mid-write can't truncate the file every
+    plugin depends on.
     """
     cli_ref = _to_cli_ref(plugin_ref)
     ip_path = os.path.expanduser("~/.claude/plugins/installed_plugins.json")
@@ -394,12 +401,15 @@ def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> bool:
         entries = plugins.get(cli_ref) or plugins.get(plugin_ref)
         if not entries:
             return True  # not in registry, nothing to fix
+        changed = False
         for entry in entries:
             if entry.get("scope") != desired_scope:
                 entry["scope"] = desired_scope
-        with open(ip_path, "w") as f:
-            json.dump(data, f, indent=2)
-            f.write("\n")
+                changed = True
+        if not changed:
+            return True  # already correct, leave the file (and its mtime) alone
+        from .atomic_write import write_atomic
+        write_atomic(ip_path, json.dumps(data, indent=2) + "\n")
         return True
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return False

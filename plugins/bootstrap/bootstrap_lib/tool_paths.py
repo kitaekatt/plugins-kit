@@ -17,8 +17,10 @@ State file:
 
 import json
 import os
-import tempfile
+import re
 from datetime import datetime, timezone
+
+from .atomic_write import write_atomic
 
 _SCHEMA_VERSION = 1
 _STATE_FILENAME = "tool_paths.json"
@@ -76,21 +78,8 @@ def _load(data_dir):
 
 
 def _write_atomic(data_dir, payload):
-    resolved = _resolve_data_dir(data_dir)
-    os.makedirs(resolved, exist_ok=True)
     target = _state_path(data_dir)
-    fd, tmp = tempfile.mkstemp(prefix=".tool_paths.", suffix=".tmp", dir=resolved)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, sort_keys=True)
-            f.write("\n")
-        os.replace(tmp, target)
-    except Exception:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
+    write_atomic(target, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def resolve(data_dir, name):
@@ -142,15 +131,22 @@ def all_paths(data_dir):
 def tool_env_var_name(name):
     """Compute the env var name for a recorded tool.
 
-    Uppercases the tool name and swaps hyphens for underscores. Mirrors
-    the convention used by bootstrap_lib.venv_check.venv_env_var_name.
+    Uppercases the tool name and replaces every character that is not a
+    valid POSIX shell identifier character (anything other than A-Z, 0-9,
+    or underscore) with an underscore. Tool names are derived from binary
+    filenames, which can contain dots (e.g. ``draw.io``); a bare dot would
+    produce ``BOOTSTRAP_BIN_DRAW.IO``, which is not a valid identifier and
+    fails to ``export`` in the shell. Mirrors the convention used by
+    bootstrap_lib.venv_check.venv_env_var_name.
 
     >>> tool_env_var_name("git")
     'BOOTSTRAP_BIN_GIT'
     >>> tool_env_var_name("github-cli")
     'BOOTSTRAP_BIN_GITHUB_CLI'
+    >>> tool_env_var_name("draw.io")
+    'BOOTSTRAP_BIN_DRAW_IO'
     """
-    return "BOOTSTRAP_BIN_" + name.upper().replace("-", "_")
+    return "BOOTSTRAP_BIN_" + re.sub(r"[^A-Z0-9_]", "_", name.upper())
 
 
 def export_tool_env_vars(data_dir):

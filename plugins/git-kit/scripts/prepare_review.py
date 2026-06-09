@@ -120,10 +120,15 @@ DEFAULT_BUNDLE_ROOT = (
     / "plugins-kit" / "git-kit" / "reviews"
 )
 
-# git diff section header: `diff --git a/path/to/file b/path/to/file`
-# For renames the a-side and b-side differ; the b-side is the post-image
-# and is the canonical identifier for the changed file.
-_GIT_FILE_HEADER = re.compile(r"^diff --git a/(\S+) b/(\S+)\s*$")
+# git diff section header prefix: `diff --git a/<path> b/<path>`.
+# Paths may contain spaces (emitted unquoted) or non-ASCII characters
+# (C-quoted with octal escapes under core.quotepath's default). Header
+# parsing therefore cannot be a simple \S+ regex -- see
+# _parse_git_header_path for the quote-aware extraction.
+_GIT_HEADER_PREFIX = "diff --git "
+
+# Single-character C escapes git uses when quoting paths (core.quotepath).
+_C_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13}
 
 # Status letters in `git diff --name-status` and `git status --porcelain`.
 _STATUS_CHARS = set("AMDRCT")
@@ -216,9 +221,11 @@ def detect_default_range() -> tuple[str, str]:
         upstream = out.strip()
         return (f"{upstream}..HEAD", f"@{{upstream}} = {upstream}")
 
-    # Fallback chain. Skip a fallback if it IS the current branch (no-op diff).
+    # Fallback chain. Skip a fallback if it IS the current branch (no-op
+    # diff). Exact match only: on branch "main", "origin/main" must remain
+    # a valid fallback (it is the unpushed-commits base, not a no-op).
     for fb in ["origin/main", "origin/master", "main", "master"]:
-        if fb.endswith(branch):
+        if fb == branch:
             continue
         if ref_exists(fb):
             return (f"{fb}..HEAD", f"no @{{upstream}} set; falling back to {fb}..HEAD")
@@ -240,18 +247,24 @@ def fetch_diff(range_spec: str) -> str:
     Sentinels:
     - __working_tree__: `git diff` (worktree vs HEAD, including unstaged)
     - __staged__:       `git diff --cached`
-    - __merge_in_progress__: `git diff --cc HEAD` (combined diff for merge)
+    - __merge_in_progress__: `git diff HEAD` (merge result vs HEAD)
     - __rebase_in_progress__: `git diff HEAD` (current state vs HEAD)
 
     Otherwise: `git diff <range_spec>`.
+
+    Merge mode deliberately uses a plain (non-combined) diff, NOT
+    `git diff --cc HEAD`: combined output emits `diff --cc` headers the
+    splitter doesn't parse, and once a conflict is resolved and staged
+    `--cc` omits the resolution hunks entirely. `git diff HEAD` shows the
+    full merge result (incoming files + conflict resolutions, with any
+    unresolved conflict markers inline) in plain format, and matches the
+    `--name-status HEAD` used by fetch_changed_files.
     """
     if range_spec == "__working_tree__":
         cmd = ["diff", "HEAD"]
     elif range_spec == "__staged__":
         cmd = ["diff", "--cached"]
-    elif range_spec == "__merge_in_progress__":
-        cmd = ["diff", "--cc", "HEAD"]
-    elif range_spec == "__rebase_in_progress__":
+    elif range_spec in ("__merge_in_progress__", "__rebase_in_progress__"):
         cmd = ["diff", "HEAD"]
     else:
         cmd = ["diff", range_spec]
@@ -266,29 +279,43 @@ def fetch_changed_files(range_spec: str) -> list[tuple[str, str]]:
 
     `status` is a single letter (A/M/D/R/C/T). For renames the path is
     the post-rename b-side. Empty list if no changes.
+
+    Uses `-z` (NUL-separated) output so paths come through raw -- without
+    -z, git C-quotes non-ASCII paths (core.quotepath default), and the
+    quoted escape string would never match a real file or diff section.
     """
     if range_spec == "__working_tree__":
-        cmd = ["diff", "--name-status", "HEAD"]
+        cmd = ["diff", "--name-status", "-z", "HEAD"]
     elif range_spec == "__staged__":
-        cmd = ["diff", "--name-status", "--cached"]
+        cmd = ["diff", "--name-status", "-z", "--cached"]
     elif range_spec in ("__merge_in_progress__", "__rebase_in_progress__"):
-        cmd = ["diff", "--name-status", "HEAD"]
+        cmd = ["diff", "--name-status", "-z", "HEAD"]
     else:
-        cmd = ["diff", "--name-status", range_spec]
+        cmd = ["diff", "--name-status", "-z", range_spec]
     rc, out, _ = run_git(cmd)
     if rc != 0:
         return []
     files: list[tuple[str, str]] = []
-    for line in out.splitlines():
-        if not line.strip():
+    tokens = out.split("\0")
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if not token:
+            i += 1
             continue
-        parts = line.split("\t")
-        status = parts[0][:1]
-        if status in _STATUS_CHARS:
-            # For R / C, parts is [status, old, new]; take new (b-side).
-            path = parts[-1].strip()
-            if path:
-                files.append((status, path))
+        status = token[:1]
+        if status not in _STATUS_CHARS:
+            i += 1
+            continue
+        # R / C carry a similarity score and two paths (old, new); other
+        # statuses carry one path. Take the last path (the b-side).
+        n_paths = 2 if status in "RC" else 1
+        if i + n_paths >= len(tokens):
+            break
+        path = tokens[i + n_paths]
+        if path:
+            files.append((status, path))
+        i += n_paths + 1
     return files
 
 
@@ -318,18 +345,105 @@ def fetch_description(range_spec: str) -> str:
     return "; ".join(subjects)
 
 
+def _unquote_c_path(token: str) -> str:
+    """Undo git's C-style path quoting: '"r\\303\\251sum\\303\\251.txt"' -> 'résumé.txt'.
+
+    Octal escapes encode raw bytes; the byte sequence is decoded as UTF-8.
+    Tokens that are not quoted pass through unchanged.
+    """
+    if len(token) < 2 or not (token.startswith('"') and token.endswith('"')):
+        return token
+    body = token[1:-1]
+    out = bytearray()
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch == "\\" and i + 1 < len(body):
+            nxt = body[i + 1]
+            if nxt in ('"', "\\"):
+                out.extend(nxt.encode("utf-8"))
+                i += 2
+            elif nxt in _C_ESCAPES:
+                out.append(_C_ESCAPES[nxt])
+                i += 2
+            elif nxt.isdigit():
+                out.append(int(body[i + 1 : i + 4], 8))
+                i += 4
+            else:
+                out.extend(nxt.encode("utf-8"))
+                i += 2
+        else:
+            out.extend(ch.encode("utf-8"))
+            i += 1
+    return out.decode("utf-8", errors="replace")
+
+
+def _scan_quoted(s: str) -> int:
+    """Index just past the closing quote of a leading C-quoted token."""
+    i = 1
+    while i < len(s):
+        if s[i] == "\\":
+            i += 2
+        elif s[i] == '"':
+            return i + 1
+        else:
+            i += 1
+    return len(s)
+
+
+def _parse_git_header_path(line: str) -> Optional[str]:
+    """Extract the b-side (post-image) path from a `diff --git` header line.
+
+    Handles the header shapes git actually emits:
+    - plain:   diff --git a/foo.py b/foo.py
+    - spaced:  diff --git a/has space.txt b/has space.txt    (unquoted!)
+    - quoted:  diff --git "a/r\\303\\251sum\\303\\251.txt" "b/r\\303\\251sum\\303\\251.txt"
+    (either side may be quoted independently)
+
+    Returns None when the line is not a diff --git header.
+    """
+    if not line.startswith(_GIT_HEADER_PREFIX):
+        return None
+    rest = line[len(_GIT_HEADER_PREFIX):]
+    if rest.startswith('"'):
+        # Quoted a-side: skip it; the remainder is the b-side token
+        # (quoted or not -- even unquoted-with-spaces it runs to EOL).
+        b_token = rest[_scan_quoted(rest):].lstrip(" ")
+        b_path = _unquote_c_path(b_token)
+        return b_path[2:] if b_path.startswith("b/") else None
+    if rest.endswith('"'):
+        # Unquoted a-side, quoted b-side: the first quote starts the b
+        # token (an a-path containing a literal quote would itself be
+        # quoted by git, landing in the branch above).
+        b_path = _unquote_c_path(rest[rest.index('"'):])
+        return b_path[2:] if b_path.startswith("b/") else None
+    # Both sides unquoted. For non-renames a == b, so try each ` b/`
+    # split point and prefer one where the two sides match; renames (or
+    # pathological paths containing ` b/`) fall back to the last split
+    # point as best effort.
+    candidates = [m.start() for m in re.finditer(" b/", rest)]
+    if not candidates:
+        return None
+    for i in candidates:
+        a_part, b_part = rest[:i], rest[i + 1:]
+        if a_part.startswith("a/") and a_part[2:] == b_part[2:]:
+            return b_part[2:]
+    return rest[candidates[-1] + 1:][2:]
+
+
 def split_git_diff_sections(diff_text: str) -> tuple[str, list[dict]]:
     """Split git-diff output into (preamble, [{path, header, body}, ...])."""
     preamble_lines: list[str] = []
     sections: list[dict] = []
     current: Optional[dict] = None
     for line in diff_text.splitlines(keepends=True):
-        m = _GIT_FILE_HEADER.match(line.rstrip("\n"))
-        if m:
+        # Use b-side (post-image) path as the identifier; for renames the
+        # a-side and b-side differ and the b-side is the canonical one.
+        path = _parse_git_header_path(line.rstrip("\n"))
+        if path is not None:
             if current is not None:
                 sections.append(current)
-            # Use b-side (post-image) path as the identifier.
-            current = {"path": m.group(2), "header": line, "body": ""}
+            current = {"path": path, "header": line, "body": ""}
         elif current is None:
             preamble_lines.append(line)
         else:

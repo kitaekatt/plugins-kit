@@ -41,7 +41,7 @@ Route by the artifact under audit, then load that member's SKILL.md and run its 
 | You want to audit… | Dispatch | Member (loaded by md-audit) | What it does |
 |---|---|---|---|
 | a **SKILL.md** (contract + cohesion) | `/md-audit skill <path>` | `skill-audit` | per-skill contract + CCP/CRP/ADP; fans multi-file runs via the Workflow tool; also `roster` / `hierarchy` corpus inventory |
-| a **CLAUDE.md** (multi-file capable) | `/md-audit claude-md <path>` | `claude-md-audit` | CCP/CRP/ADP + hygiene + optional `claude_md:` schema; fans multi-file runs via the Workflow tool |
+| a **CLAUDE.md** (multi-file capable) | `/md-audit claude-md <path>` | `claude-md-audit` | CCP/CRP/ADP + hygiene + optional `claude_md:` schema + opt-in `density` lens (verbosity / extract-to-reference); fans multi-file runs via the Workflow tool |
 | **broken skill cross-references** | `/md-audit references [flags]` | `references-audit` | scans markdown for dangling `/skill` refs and unresolved `skill:` hard deps; fans multi-file classify/remediate via the Workflow tool |
 
 To dispatch: read the member skill's `SKILL.md` (e.g. `skills/skill-audit/SKILL.md`) and follow its procedure, including running its scaffolding script via the plugin venv. The member keeps its full contract, taxonomy, and scripts; md-audit only chooses which one and feeds it the target.

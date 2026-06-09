@@ -17,6 +17,7 @@ caller's group_by callable says.
 
 import math
 import shutil
+import sys
 from pathlib import Path
 from typing import Callable, Optional, TypedDict
 
@@ -61,7 +62,23 @@ def partition_sections_into_chunks(
     chunk; callers stitch a chunk-index back onto their per-file records.
     """
     if not sections:
-        return []
+        if not preamble:
+            return []
+        # Diff text that parsed into zero sections must not be silently
+        # dropped -- a caller's splitter may have failed to recognize the
+        # format (e.g. combined-diff headers). Surface the unattributed
+        # text as one preamble-only chunk so reviewers still see it.
+        print(
+            "warning: diff parsed into 0 sections; emitting preamble-only chunk",
+            file=sys.stderr,
+        )
+        return [
+            {
+                "text": preamble,
+                "files": [],
+                "bytes": len(preamble.encode("utf-8")),
+            }
+        ]
     if group_by is None:
         group_by = _section_parent
 

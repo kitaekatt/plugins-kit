@@ -103,6 +103,19 @@ class TestNamingConvention:
     def test_tool_env_var_name_already_uppercase(self):
         assert tool_paths.tool_env_var_name("UV") == "BOOTSTRAP_BIN_UV"
 
+    def test_tool_env_var_name_dot_to_underscore(self):
+        # Binary filenames can contain dots (e.g. draw.io). A bare dot in
+        # the var name produces an invalid shell identifier that fails to
+        # export, so it must be sanitized to an underscore.
+        assert tool_paths.tool_env_var_name("draw.io") == "BOOTSTRAP_BIN_DRAW_IO"
+
+    def test_tool_env_var_name_is_valid_shell_identifier(self):
+        import re
+
+        for raw in ("draw.io", "github-cli", "foo.bar.baz", "a+b", "x y"):
+            var = tool_paths.tool_env_var_name(raw)
+            assert re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", var), var
+
 
 class TestExportToolEnvVars:
     def test_noop_when_claude_env_file_unset(self, tmp_path, monkeypatch):
