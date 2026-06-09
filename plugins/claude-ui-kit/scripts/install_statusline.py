@@ -68,6 +68,8 @@ def install(ctx) -> None:
 
     if existing is None:
         target = Path.home() / ".claude" / "settings.json"
+        if _refuse_unparseable(ctx, target):
+            return
         _write_statusline(target, expected_command)
         ctx.log(f"statusline: installed to {_posix(target)}")
         return
@@ -80,6 +82,8 @@ def install(ctx) -> None:
 
     if _is_ours(current_command):
         # Plugin path moved (upgrade, version bump, scope change). Refresh.
+        if _refuse_unparseable(ctx, settings_path):
+            return
         _write_statusline(settings_path, expected_command)
         ctx.log(f"statusline: refreshed path in {_posix(settings_path)}")
         return
@@ -128,6 +132,35 @@ def _find_existing_statusline(paths) -> Optional[Tuple[Path, str]]:
 
 def _is_ours(command: str) -> bool:
     return f"/{PLUGIN_NAME}/" in command.replace("\\", "/")
+
+
+def _refuse_unparseable(ctx, settings_path: Path) -> bool:
+    """Refuse to write over a settings file that exists but cannot be parsed.
+
+    _load_json returns None for both "missing" and "malformed"; writing in the
+    malformed case would replace the user's entire settings file with just our
+    statusLine block, destroying every other setting. Surface a fix-all
+    failure instead and leave the file untouched.
+    """
+    if not settings_path.is_file() or _load_json(settings_path) is not None:
+        return False
+    ctx.add_failure(
+        "statusline_settings_unparseable",
+        settings_path=_posix(settings_path),
+        user_msg=(
+            f"claude-ui-kit could not parse {_posix(settings_path)} (invalid "
+            f"JSON) and will not modify it. Fix the file's JSON syntax, then "
+            f"re-run bootstrap to install the status line."
+        ),
+        agent_msg=(
+            f"{_posix(settings_path)} exists but is not valid JSON. DO NOT "
+            f"overwrite or truncate it -- it may contain settings the user "
+            f"wants to keep. Help the user repair the JSON syntax; once it "
+            f"parses, the statusLine install proceeds on the next bootstrap "
+            f"run."
+        ),
+    )
+    return True
 
 
 def _write_statusline(settings_path: Path, command: str) -> None:
