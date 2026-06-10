@@ -418,11 +418,15 @@ def crawl(project_root: pathlib.Path | None) -> dict:
 # Serve
 # ----------------------------------------------------------------------------
 
-ALLOWED_ROOTS: list[pathlib.Path] = []
-
-
 class Handler(http.server.SimpleHTTPRequestHandler):
+    """Request handler. make_server() binds the per-server state below onto a
+    subclass, so allowed roots/hosts are instance state of one server -- they
+    do not accumulate across serve() calls (they used to live in a module
+    global that only ever grew)."""
+
     project_root: pathlib.Path | None = None
+    allowed_roots: tuple[pathlib.Path, ...] = ()
+    allowed_hosts: frozenset[str] = frozenset()
 
     def log_message(self, format, *args):
         pass  # quiet
@@ -436,6 +440,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        # DNS-rebinding guard: a hostile page can point its own hostname at
+        # 127.0.0.1 and read responses same-origin. Only honor requests whose
+        # Host header names this server directly.
+        host = (self.headers.get("Host") or "").strip()
+        if host not in self.allowed_hosts:
+            self._send(403, b'{"error":"forbidden host"}', "application/json")
+            return
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/":
             self._send(200, HTML.encode("utf-8"))
@@ -461,9 +472,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send(400, b'{"error":"missing path"}', "application/json")
             return
         requested = pathlib.Path(paths[0]).resolve()
-        # path-traversal guard: requested must be within ALLOWED_ROOTS
+        # path-traversal guard: requested must be within allowed_roots
         ok = False
-        for root in ALLOWED_ROOTS:
+        for root in self.allowed_roots:
             try:
                 requested.relative_to(root.resolve())
                 ok = True
@@ -490,13 +501,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._send(200, body, ct)
 
 
-def serve(project_root: pathlib.Path, port: int = DEFAULT_PORT, open_browser: bool = True):
-    Handler.project_root = project_root
-    ALLOWED_ROOTS.append(CLAUDE_DIR)
+def make_server(project_root: pathlib.Path | None, port: int = DEFAULT_PORT) -> socketserver.TCPServer:
+    """Build a localhost-bound server with per-server allowed roots/hosts."""
+    roots = [CLAUDE_DIR]
     if project_root:
-        ALLOWED_ROOTS.append(project_root)
-    with socketserver.TCPServer(("127.0.0.1", port), Handler) as httpd:
-        url = f"http://127.0.0.1:{port}/"
+        roots.append(project_root)
+    handler = type("BoundHandler", (Handler,), {
+        "project_root": project_root,
+        "allowed_roots": tuple(r.resolve() for r in roots),
+    })
+    httpd = socketserver.TCPServer(("127.0.0.1", port), handler)
+    actual_port = httpd.server_address[1]  # resolves port=0 (tests) to the real one
+    handler.allowed_hosts = frozenset({f"127.0.0.1:{actual_port}", f"localhost:{actual_port}"})
+    return httpd
+
+
+def serve(project_root: pathlib.Path, port: int = DEFAULT_PORT, open_browser: bool = True):
+    with make_server(project_root, port) as httpd:
+        url = f"http://127.0.0.1:{httpd.server_address[1]}/"
         print(f"claude-explorer serving at {url}")
         if open_browser:
             threading.Thread(target=lambda: (time.sleep(0.4), webbrowser.open(url)), daemon=True).start()
