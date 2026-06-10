@@ -33,9 +33,12 @@ def _section_parent(identifier: str) -> str:
     """Default group key: everything before the last '/'.
 
     Works for both `//depot/foo/bar.cpp` (p4) and `src/foo/bar.py` (git).
+    `idx > 0` (not `> 1`): a single-character top-level dir (`a/file.py`,
+    idx == 1) must still group as "a"; idx <= 0 means no parent (no slash,
+    or only a leading slash), so the identifier is its own group.
     """
     idx = identifier.rfind("/")
-    return identifier[:idx] if idx > 1 else identifier
+    return identifier[:idx] if idx > 0 else identifier
 
 
 def partition_sections_into_chunks(

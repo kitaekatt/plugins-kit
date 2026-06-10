@@ -43,18 +43,17 @@ from bootstrap_lib.code_review.chunking import ...      # now resolvable
 
 **Why:** a script must not trust the interpreter that launched it. Skills name a
 script as `tool: ${CLAUDE_PLUGIN_ROOT}/scripts/foo.py` with no interpreter, so an
-agent reaches for `python` or `uv run python` -- neither carries the shared-lib
+agent runs it under `python` / `uv run python` -- neither carries the shared-lib
 `.pth`. Without the re-exec the import fails and the except-handler emits a
 MISLEADING "bootstrap has not provisioned ... (missing: bootstrap_lib)" message
-even though bootstrap provisioned the venv correctly; the venv just was not the
-one running. `reexec_under_plugin_venv` re-execs into the provisioned venv (a
-no-op when already there), making the script invocation-method-agnostic. This
-was the actual `p4-kit` / `git-kit` `prepare_review.py` failure mode (fixed
-2026-06-02).
+*even though provisioning succeeded* -- the venv just was not the one running.
+`reexec_under_plugin_venv` re-execs into the provisioned venv (a no-op when
+already there), making the script invocation-method-agnostic. This was the
+actual `p4-kit` / `git-kit` `prepare_review.py` failure mode (fixed 2026-06-02).
 
-`bootstrap_guard` is stdlib-only and vendored next to the script, so importing
-it can never itself trip the missing-shared-lib failure -- that is the whole
-point of keeping the guard separate from the shared lib it guards.
+`bootstrap_guard` is stdlib-only, so importing it can never itself trip the
+missing-shared-lib failure (the vendoring discipline that keeps it that way is
+the next section).
 
 The SKILL.md-side companion (write the explicit venv path in skill examples
 rather than `uv run python`) is documented in the root CLAUDE.md insight

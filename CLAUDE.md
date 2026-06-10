@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Currently ships (published): **awesome-kit** (cross-domain skills: shared comms framework, /plugin-ecosystem, /html-pdf), **bootstrap** (dependency management), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **openrouter-kit** (OpenRouter key management + shared model registry), **p4-kit** (Perforce multi-agent code review), **prototypes** (experimental skills awaiting graduation), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md: /md-authoring, /md-audit, cohesion-principles, knowledge-encoding, update-documentation), **test-plugin** (bootstrap exerciser), and **unreal-kit** (Unreal Engine Python API automation). Dev-only (not published, `published: false`): **agent-glue**, **workflow-kit**.
+**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Currently ships (published): **awesome-kit** (cross-domain skills: shared comms framework, /plugin-ecosystem, /html-pdf), **bootstrap** (dependency management), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **openrouter-kit** (OpenRouter key management + shared model registry), **p4-kit** (Perforce multi-agent code review), **prototypes** (experimental skills awaiting graduation), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md: /md-authoring, /md-audit, cohesion-principles, knowledge-encoding, update-documentation), and **unreal-kit** (Unreal Engine Python API automation). Dev-only (not published, `published: false`): **agent-glue**, **workflow-kit**.
 
 This repo is a **Claude Code plugin marketplace** — it extends Claude Code with skills, commands, and hooks via the `.claude-plugin/marketplace.json` manifest. Plugins are loaded either via `--plugin-dir` (local development) or `enabledPlugins` in settings (production installs from the remote repo).
 
@@ -19,10 +19,6 @@ plugins-kit/                          # Marketplace root
       bootstrap_lib/                  # Shared libraries (cache, tool_check, etc.) — installable Python package
       hooks/sessionstart/             # SessionStart hook (bash wrapper)
       defaults/                       # Default config files
-    test-plugin/                      # Test plugin (exercises bootstrap system)
-      .claude-plugin/plugin.json      # Plugin manifest
-      bootstrap.json                  # Test plugin's bootstrap manifest
-      scripts/                        # Config setup
     p4-kit/                           # P4 multi-agent code review plugin (Claude subagents)
       .claude-plugin/plugin.json      # Plugin manifest
       bootstrap.json                  # Bootstrap manifest (tools)
@@ -34,8 +30,7 @@ plugins-kit/                          # Marketplace root
       skills/
         ue-python-api/                # The main skill
           SKILL.md                    # Skill definition (loaded by Claude Code)
-          bin/                        # Entry points (runner + setup)
-          scripts/                    # Utility scripts
+          scripts/                    # Entry points (ue_runner.py + ue-runner.cmd) + utility scripts
           stubs/                      # UE Python API stubs (generated, gitignored)
           references/                 # Detailed docs loaded conditionally by SKILL.md
 ```
@@ -59,7 +54,6 @@ plugins-kit/                          # Marketplace root
 | `plugins/bootstrap/bootstrap.json` | Bootstrap plugin's own manifest |
 | `plugins/bootstrap/skills/bootstrap/references/engine-internals.md` | Bootstrap engine internals |
 | `docs/planning/bootstrap/MILESTONES.md` | Development milestones and progress |
-| `plugins/test-plugin/bootstrap.json` | Test plugin's bootstrap manifest (includes config section) |
 | `tests/bootstrap/` | All bootstrap tests (mirrors bootstrap_lib/ structure) |
 
 ### Key Design Decisions
@@ -80,7 +74,7 @@ The **bootstrap** plugin is the dependency-management layer every other plugin i
 
 **Per-project cooldown.** After bootstrap finishes for a project, it writes a per-project timestamp at `~/.claude/plugins/data/plugins-kit/bootstrap/cooldowns/last_run_epoch.<sha1-of-cwd>`. Subsequent SessionStart hooks within the cooldown window are skipped entirely -- bootstrap does NOT re-check anything, no logs are written, no remediation runs. After a `bootstrap.json` change, after publishing a plugin update you want pulled in immediately, or any time bootstrap appears to be ignoring you, clear the cooldown:
 
-> **Auto-bypass on plugin/marketplace change.** The cooldown is automatically bypassed when `~/.claude/plugins/installed_plugins.json` or `known_marketplaces.json` is newer (mtime) than the cooldown stamp. Claude Code rewrites those whenever it installs/updates/rescopes a plugin or adds/refreshes a marketplace, so a published version bump now re-arms a real bootstrap pass on the **next** session without a manual reset -- and stays armed across restarts until a pass actually re-provisions (a cooldown skip never refreshes the stamp). This is what keeps a shared-lib-owner publish from leaving consumers' `_shared_libs` stale. You still need a manual reset (below) only when nothing in the plugin registry changed -- e.g. you edited a *layered* `bootstrap.json` (`~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`), which doesn't touch either registry file.
+> **Auto-bypass on plugin/marketplace change.** The cooldown is automatically bypassed when `installed_plugins.json` or `known_marketplaces.json` is newer than the cooldown stamp, so a published plugin update re-arms a real bootstrap pass on the next session without a manual reset. You still need a manual reset (below) only when nothing in the plugin registry changed -- e.g. you edited a *layered* `bootstrap.json` (`~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`), which touches neither registry file. Full mechanism (mtime gate, why a cooldown skip never refreshes the stamp, the `_shared_libs`-stale failure it fixes): the `cooldown_registry_invalidation` insight below.
 
 ```bash
 bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh             # current project (CWD)
@@ -91,7 +85,7 @@ bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh --clear-alerts  # als
 
 The reset script's `--help` is the canonical doc; the usage block lives inline at `plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh:2-18`.
 
-**Two caches, do not confuse them.** The cooldown above short-circuits the entire bootstrap run for a project. Separately, the engine content-hashes individual *checks* via `bootstrap_cache.sha256` in the same data dir -- that cache skips one specific check when its input manifest hasn't changed. The cooldown is the bigger hammer; clearing it is the right tool ~99% of the time. Don't reach for `bootstrap_cache.sha256` unless you've ruled out the cooldown.
+**The cooldown is the only run throttle.** (A per-check `bootstrap_cache.sha256` content-hash cache used to exist alongside it; that module was dead code and was deleted in bootstrap 0.17.0 -- if you see it referenced, the doc is stale.) The two narrow caches that DO still exist are unrelated to run throttling: the plugin-discovery `bootstrap_cache` list in bootstrap's config.json, and the shared-lib sync hash. When bootstrap appears to be ignoring you, the cooldown is the answer ~99% of the time.
 
 For deeper material -- manifest schema, condition categories, fix-all flow, engine internals -- invoke `/bootstrap`.
 
@@ -125,7 +119,7 @@ claude --plugin-dir ~/Dev/plugins-kit/plugins/my-plugin
 
 **Reload vs restart (measured — see [plugin-reload-lifecycle.md](plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md)).** Three layers, not one rule: (1) a hook/engine/skill's **script content** is read fresh from disk on every invocation, so editing it is live with no reload/restart; (2) **registration** (`hooks.json` command map, which skills/commands exist) is reloaded **in-session by `/reload-plugins`** — including a changed hook command (the old "hooks require a full restart" claim is wrong as a blanket rule); (3) a **`SessionStart`** hook's registration reloads but it only **re-fires on a new session**, so re-running bootstrap's pass needs a restart. For a **real version update** (cache version dir moves), restart Claude / your IDE — it re-resolves install paths and re-fires SessionStart reliably.
 
-**Publishing changes** — the plugin cache syncs from the remote repository's default branch, not the local working copy. Develop on the `dev` branch; merge to `master` only when releasing a version bump. This prevents silent divergence (fresh installs between releases getting HEAD code cached under the old version string).
+**Publishing changes** — the plugin cache syncs from the remote repository's default branch, not the local working copy. Develop on the `dev` branch; merge to `master` only when releasing a version bump. This prevents the silent divergence explained under **The cache keys on version** below.
 
 **Definition.** "Publish" in this repo means **all three** of:
 
@@ -306,51 +300,11 @@ Every plugin in this marketplace rides on **bootstrap** (venv, `bootstrap_lib`, 
 
 2. **Runtime guard (provision-time).** A declared dependency guarantees bootstrap is *installed*, not that it has *run* — on first install bootstrap provisions each plugin's venv at the next SessionStart (and the cooldown can defer it). For that "installed-but-not-yet-provisioned" window, plugins that would otherwise crash with a raw `ModuleNotFoundError`/missing-interpreter error use the vendored **`bootstrap_guard.py`** (canonical: `plugins/bootstrap/bootstrap_lib/bootstrap_guard.py`). It is **stdlib-only** and **must never import `bootstrap_lib`** (that's the thing that may be missing); it detects absence via the per-plugin `~/.claude/plugins/data/<marketplace>/<plugin>/bootstrap.log` and exits with one actionable "install/enable plugins-kit:bootstrap" message instead of a raw traceback. It is **vendored** per plugin (copied next to the entry script and imported as a plain module), exactly like `path_repair.py`, with a drift test asserting copies match the canonical.
 
-### Hook JSON Format
+### Hook JSON Format & Plugin Cache Layout
 
-**Official docs**: https://code.claude.com/docs/en/hooks (canonical reference). When in doubt, fetch this URL — it is the source of truth.
+The Claude Code hook-JSON output contract (exit-code semantics, universal fields, the per-event decision table, the `hookSpecificOutput` rule) and the on-disk plugin cache/registry layout (`~/.claude/plugins/` paths) are static CC platform reference — see [docs/reference/claude-code-plugin-platform.md](docs/reference/claude-code-plugin-platform.md). Canonical upstream: https://code.claude.com/docs/en/hooks.
 
-On exit 0, stdout is parsed as JSON. Exit 2 = blocking error (stderr fed to Claude). Other exits = non-blocking error. JSON is only processed on exit 0.
-
-**Universal fields** (all events):
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `continue` | `true` | If `false`, Claude stops entirely. Takes precedence over other decisions |
-| `stopReason` | none | Message shown to user when `continue` is `false`. Not shown to Claude |
-| `suppressOutput` | `false` | If `true`, hides stdout from verbose mode |
-| `systemMessage` | none | Shown to user only — Claude never sees it |
-
-**Event-specific decision control**:
-
-| Event | Decision pattern | To Claude |
-|-------|-----------------|-----------|
-| SessionStart | None | `hookSpecificOutput.additionalContext` or plain text stdout |
-| UserPromptSubmit | `decision: "block"` + `reason` | `hookSpecificOutput.additionalContext` or plain text stdout |
-| PreToolUse | `hookSpecificOutput.permissionDecision` (allow/deny/ask) | `hookSpecificOutput.additionalContext` |
-| PostToolUse | `decision: "block"` + `reason` | `hookSpecificOutput.additionalContext` |
-| PostToolUseFailure | None | `hookSpecificOutput.additionalContext` |
-| Stop / SubagentStop | `decision: "block"` + `reason` | `reason` only (no `hookSpecificOutput`) |
-| SubagentStart | None | `hookSpecificOutput.additionalContext` |
-| Notification | None | `hookSpecificOutput.additionalContext` |
-| PermissionRequest | `hookSpecificOutput.decision.behavior` (allow/deny) | — |
-| ConfigChange | `decision: "block"` + `reason` | — |
-
-`hookSpecificOutput` always requires `hookEventName` set to the event name.
-
-**Background mode** (bootstrap-specific): The engine writes output to a pending file, which the UserPromptSubmit hook reads and outputs as its own stdout. Stop hooks do not support `hookSpecificOutput`, so UserPromptSubmit is used to inject `additionalContext` for Claude.
-
-### Plugin Cache and Registry Layout
-
-Claude Code stores plugin data under `~/.claude/plugins/`:
-
-| Path | Purpose |
-|------|---------|
-| `cache/{marketplace}/{plugin}/{version}/` | Cached plugin files (copied from marketplace clone) |
-| `marketplaces/{marketplace}/` | Git clone of marketplace repo |
-| `installed_plugins.json` | Registry of installed plugins (version, gitCommitSha, installPath, scope) |
-| `known_marketplaces.json` | Registry of known marketplaces (source, installLocation, lastUpdated, autoUpdate) |
-| `data/{plugin}/` | Per-plugin runtime data (config, logs, venv) |
+The one plugins-kit-specific wrinkle to keep in mind: bootstrap runs in a **background mode** — the engine writes output to a pending file that the UserPromptSubmit hook re-emits as its own stdout, because Stop hooks don't support `hookSpecificOutput` (so UserPromptSubmit carries the `additionalContext` for Claude).
 
 ### Debugging
 
@@ -418,9 +372,9 @@ claude_md:
         effect, a bootstrap.json change isn't applied, or a plugin's bootstrap.log is stale.
         Reset with `bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh` (current
         project), `--all` (every project), or `--status` (list cooldowns + ages, no writes).
-        Do not confuse with bootstrap_cache.sha256 (the per-check content-hash cache); the
-        cooldown is the bigger hammer and the right tool 99% of the time. See the "Bootstrap"
-        section above for full context.
+        The cooldown is the only run throttle (the old per-check bootstrap_cache.sha256
+        cache was deleted in 0.17.0) and the right tool 99% of the time. See the
+        "Bootstrap" section above for full context.
       origin: User directive 2026-05-05 -- documentation gap surfaced when a unreal-kit publish appeared not to apply.
       added: "2026-05-05"
     - id: cooldown_registry_invalidation

@@ -261,6 +261,292 @@ def update_marketplace(name: str = "") -> LifecycleResult:
     return LifecycleResult(passed=False, ref=ref, message=f"update failed: {stderr.strip()}")
 
 
+# --- Marketplace pin operations ---
+#
+# A `pin` on a bootstrap.json marketplaces entry snapshots the ENTIRE
+# marketplace clone at a git committish (SHA or tag). Pinning the whole repo
+# (rather than per-plugin versions) keeps shared libraries and inter-plugin
+# dependencies mutually consistent by construction.
+#
+# Semantics worth stating once:
+# - A pin freezes FUTURE drift but never downgrades plugins already past the
+#   snapshot (check_plugin_version is directional and never downgrades).
+# - The first session after pinning can race Claude Code's own marketplace
+#   auto-update once (CC may refresh the clone before the engine forces
+#   autoUpdate=false); the pin re-checkout self-heals on the next pass.
+# - Pin state is recorded in a marker file (default:
+#   ~/.claude/plugins/data/plugins-kit/bootstrap/marketplace_pins.json), one
+#   JSON object keyed by marketplace name:
+#     {"<name>": {"pin": "<as-declared>", "resolved_sha": "...",
+#                 "prior_auto_update": <bool|null>}}
+#   prior_auto_update is recorded only the FIRST time a pin is applied (the
+#   pre-pin known_marketplaces.json autoUpdate value) and restored on unpin.
+
+
+class PinResult(NamedTuple):
+    passed: bool
+    ref: str      # marketplace name (or the pin committish for clone-level checks)
+    status: str   # "pinned" | "already_pinned" | "pin_mismatch" | "unpinned" | "error"
+    sha: str      # resolved commit SHA (empty when resolution failed)
+    message: str
+
+
+def _git(args: list, cwd: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    """Run a git command in `cwd`. Never raises; failures come back as returncode != 0.
+
+    GIT_TERMINAL_PROMPT=0 suppresses credential prompts so fetches don't block
+    non-interactive sessions (same discipline as _run_claude).
+    """
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    try:
+        return subprocess.run(
+            ["git"] + args,
+            cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        return subprocess.CompletedProcess(args=["git"] + args, returncode=1, stdout="", stderr=str(e))
+
+
+def default_pins_path() -> str:
+    """Default location of the marketplace pin marker file."""
+    return os.path.expanduser("~/.claude/plugins/data/plugins-kit/bootstrap/marketplace_pins.json")
+
+
+def load_pin_markers(pins_path: Optional[str] = None) -> dict:
+    """Load the pin marker file. Missing or invalid file reads as no pins."""
+    path = pins_path or default_pins_path()
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_pin_markers(markers: dict, pins_path: Optional[str] = None) -> None:
+    """Write the pin marker file atomically (parent dirs created as needed)."""
+    from .atomic_write import write_atomic
+    path = pins_path or default_pins_path()
+    write_atomic(path, json.dumps(markers, indent=2) + "\n")
+
+
+def marketplace_install_location(name: str, km_path: Optional[str] = None) -> str:
+    """Return the marketplace clone directory recorded in known_marketplaces.json."""
+    path = km_path or os.path.expanduser("~/.claude/plugins/known_marketplaces.json")
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        return data.get(name, {}).get("installLocation", "")
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return ""
+
+
+def resolve_pin(clone_dir: str, pin: str) -> tuple:
+    """Resolve a committish to a full commit SHA in the clone. Returns (sha, error).
+
+    An unknown committish triggers a `git fetch` and one retry — the pin may
+    name a commit/tag published after the clone's last fetch.
+    """
+    proc = _git(["rev-parse", "--verify", f"{pin}^{{commit}}"], clone_dir, timeout=10)
+    if proc.returncode == 0:
+        return proc.stdout.strip(), ""
+    _git(["fetch", "--quiet"], clone_dir, timeout=60)
+    proc = _git(["rev-parse", "--verify", f"{pin}^{{commit}}"], clone_dir, timeout=10)
+    if proc.returncode == 0:
+        return proc.stdout.strip(), ""
+    return "", (
+        f"cannot resolve pin '{pin}' in {clone_dir} (even after git fetch) - "
+        "check the SHA/tag, or remove the pin from bootstrap.json"
+    )
+
+
+def check_marketplace_pin(clone_dir: str, pin: str) -> PinResult:
+    """Check whether the clone's HEAD is at the resolved pin SHA."""
+    sha, err = resolve_pin(clone_dir, pin)
+    if not sha:
+        return PinResult(passed=False, ref=pin, status="error", sha="", message=err)
+    head_proc = _git(["rev-parse", "HEAD"], clone_dir, timeout=10)
+    if head_proc.returncode != 0:
+        return PinResult(
+            passed=False, ref=pin, status="error", sha=sha,
+            message=f"cannot read HEAD in {clone_dir}: {head_proc.stderr.strip()}",
+        )
+    if head_proc.stdout.strip() == sha:
+        return PinResult(passed=True, ref=pin, status="already_pinned", sha=sha,
+                         message=f"already at {sha[:8]}")
+    return PinResult(passed=False, ref=pin, status="pin_mismatch", sha=sha,
+                     message=f"HEAD {head_proc.stdout.strip()[:8]} != pin {sha[:8]}")
+
+
+def _force_auto_update_false(km_path: str, name: str):
+    """Set autoUpdate=false for `name` in known_marketplaces.json.
+
+    Returns the PRIOR autoUpdate value (True/False, or None when the key or
+    entry was absent). Writes only when the value actually changes — the
+    registry's mtime arms the SessionStart cooldown's registry-change bypass,
+    so a no-op rewrite every pinned session would re-arm a full bootstrap pass
+    every session (same discipline as ensure_registry_scope). Atomic write.
+    """
+    try:
+        with open(km_path, "r") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    entry = data.get(name)
+    if not isinstance(entry, dict):
+        return None
+    prior = entry.get("autoUpdate") if "autoUpdate" in entry else None
+    if entry.get("autoUpdate") is not False:
+        entry["autoUpdate"] = False
+        from .atomic_write import write_atomic
+        write_atomic(km_path, json.dumps(data, indent=2) + "\n")
+    return prior
+
+
+def _restore_auto_update(km_path: str, name: str, value: bool) -> None:
+    """Restore autoUpdate for `name` to `value`. Change-gated + atomic (see above)."""
+    try:
+        with open(km_path, "r") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return
+    entry = data.get(name)
+    if not isinstance(entry, dict):
+        return
+    if entry.get("autoUpdate") != value:
+        entry["autoUpdate"] = value
+        from .atomic_write import write_atomic
+        write_atomic(km_path, json.dumps(data, indent=2) + "\n")
+
+
+def apply_marketplace_pin(name: str, pin: str, clone_dir: Optional[str] = None,
+                          pins_path: Optional[str] = None,
+                          km_path: Optional[str] = None) -> PinResult:
+    """Ensure the marketplace clone is checked out at `pin` and record the marker.
+
+    Steps: resolve the pin (fetch + retry on a miss) -> `git checkout --detach`
+    when HEAD differs (already-at-pin is a no-op) -> force autoUpdate=false in
+    known_marketplaces.json -> upsert the marker entry. prior_auto_update is
+    captured only on the FIRST pin application; re-pins update pin/resolved_sha
+    but never overwrite the recorded prior value.
+    """
+    km_path = km_path or os.path.expanduser("~/.claude/plugins/known_marketplaces.json")
+    if clone_dir is None:
+        clone_dir = marketplace_install_location(name, km_path)
+    if not clone_dir or not os.path.isdir(clone_dir):
+        return PinResult(
+            passed=False, ref=name, status="error", sha="",
+            message=(
+                f"marketplace clone not found at '{clone_dir or '<unregistered>'}' - "
+                "register the marketplace first (claude plugin marketplace add <source>) "
+                "or remove the pin"
+            ),
+        )
+
+    check = check_marketplace_pin(clone_dir, pin)
+    if check.status == "error":
+        return PinResult(passed=False, ref=name, status="error", sha=check.sha, message=check.message)
+    sha = check.sha
+    status = "already_pinned"
+    if not check.passed:
+        co = _git(["checkout", "--detach", sha], clone_dir, timeout=30)
+        if co.returncode != 0:
+            return PinResult(
+                passed=False, ref=name, status="error", sha=sha,
+                message=f"git checkout --detach {sha[:8]} failed: {co.stderr.strip()}",
+            )
+        status = "pinned"
+
+    # Keep Claude Code's own marketplace refresh from pulling the clone off
+    # the pin. Capture the pre-pin value for restoration on unpin.
+    prior = _force_auto_update_false(km_path, name)
+
+    markers = load_pin_markers(pins_path)
+    entry = markers.get(name)
+    if not isinstance(entry, dict):
+        markers[name] = {"pin": pin, "resolved_sha": sha, "prior_auto_update": prior}
+        save_pin_markers(markers, pins_path)
+    elif entry.get("pin") != pin or entry.get("resolved_sha") != sha:
+        entry["pin"] = pin
+        entry["resolved_sha"] = sha
+        save_pin_markers(markers, pins_path)
+
+    return PinResult(passed=True, ref=name, status=status, sha=sha, message=f"pinned at {sha[:8]}")
+
+
+def _default_branch(clone_dir: str) -> str:
+    """Resolve the clone's default branch: origin/HEAD, else probe master/main."""
+    proc = _git(["symbolic-ref", "refs/remotes/origin/HEAD"], clone_dir, timeout=10)
+    if proc.returncode == 0:
+        branch = proc.stdout.strip().rsplit("/", 1)[-1]
+        if branch:
+            return branch
+    for candidate in ("master", "main"):
+        if _git(["rev-parse", "--verify", f"refs/heads/{candidate}"], clone_dir, timeout=10).returncode == 0:
+            return candidate
+    return ""
+
+
+def release_marketplace_pin(name: str, clone_dir: Optional[str] = None,
+                            pins_path: Optional[str] = None,
+                            km_path: Optional[str] = None) -> PinResult:
+    """Release a recorded pin: restore the default branch, autoUpdate, and marker.
+
+    The caller (engine) runs the normal update path afterwards; this function
+    only puts the clone back on its branch and unwinds the pin's bookkeeping.
+    A recorded prior_auto_update of null/absent leaves the current autoUpdate
+    value alone. The marker entry is removed only on success, so a failed
+    release retries on the next pass.
+    """
+    km_path = km_path or os.path.expanduser("~/.claude/plugins/known_marketplaces.json")
+    if clone_dir is None:
+        clone_dir = marketplace_install_location(name, km_path)
+
+    markers = load_pin_markers(pins_path)
+    entry = markers.get(name)
+    if not isinstance(entry, dict):
+        return PinResult(passed=True, ref=name, status="unpinned", sha="",
+                         message="no pin recorded (nothing to release)")
+
+    if not clone_dir or not os.path.isdir(clone_dir):
+        return PinResult(
+            passed=False, ref=name, status="error", sha="",
+            message=f"marketplace clone not found at '{clone_dir or '<unregistered>'}' - cannot restore branch",
+        )
+
+    branch = _default_branch(clone_dir)
+    if not branch:
+        return PinResult(
+            passed=False, ref=name, status="error", sha="",
+            message=(
+                "cannot determine default branch (origin/HEAD unset, no master/main) - "
+                "check out the branch manually in the clone and re-run bootstrap"
+            ),
+        )
+    co = _git(["checkout", branch], clone_dir, timeout=30)
+    if co.returncode != 0:
+        return PinResult(
+            passed=False, ref=name, status="error", sha="",
+            message=f"git checkout {branch} failed: {co.stderr.strip()}",
+        )
+
+    prior = entry.get("prior_auto_update")
+    if prior is not None:
+        _restore_auto_update(km_path, name, prior)
+
+    del markers[name]
+    save_pin_markers(markers, pins_path)
+    return PinResult(passed=True, ref=name, status="unpinned", sha="", message=f"restored {branch}")
+
+
+def pinned_marketplace_sha(name: str, pins_path: Optional[str] = None) -> str:
+    """Short resolved SHA a marketplace is pinned at, or '' when not pinned."""
+    entry = load_pin_markers(pins_path).get(name)
+    if not isinstance(entry, dict):
+        return ""
+    return (entry.get("resolved_sha") or "")[:8]
+
+
 # --- Plugin operations ---
 
 def check_plugin_installed(plugin_ref: str) -> LifecycleResult:

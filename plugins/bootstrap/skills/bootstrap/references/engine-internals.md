@@ -254,3 +254,4 @@ All bootstrap modules have automated tests at the repo level in `tests/bootstrap
 
 - [update01/bootstrap](../../../../docs/bootstrap/reference/case-studies/update01-bootstrap.md) — Marketplace sync and plugin cache refresh
 - [unreal-kit](../../../../docs/bootstrap/reference/case-studies/unreal-kit.md) — Game development plugin with system tools, venv, config discovery, and external app dependencies
+- [p4-kit](../../../../docs/bootstrap/reference/case-studies/p4-kit.md) — Code review plugin consuming bootstrap two ways: as a SessionStart manifest target and as a runtime library dependency (`bootstrap_lib.code_review`)

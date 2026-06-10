@@ -606,14 +606,38 @@ class TestParseRangeArg:
 
 
 class TestSafeDirName:
-    def test_slashes_replaced(self):
-        assert pr._safe_dir_name("origin/main..HEAD") == "origin-main..HEAD"
+    def test_slashes_replaced_with_disambiguating_suffix(self):
+        """G13: a sanitizer-altered spec carries a hash suffix of the
+        original so distinct specs cannot share a bundle dir."""
+        assert pr._safe_dir_name("origin/main..HEAD") == "origin-main..HEAD-7d83249d"
 
     def test_sentinels_unchanged(self):
         assert pr._safe_dir_name("__staged__") == "__staged__"
 
+    def test_already_safe_spec_gets_no_suffix(self):
+        assert pr._safe_dir_name("main..HEAD") == "main..HEAD"
+
     def test_unsafe_chars_collapsed_and_trimmed(self):
-        assert pr._safe_dir_name("@{upstream}..HEAD") == "upstream-..HEAD"
+        assert pr._safe_dir_name("@{upstream}..HEAD") == "upstream-..HEAD-0d4922a4"
+
+    def test_colliding_sanitizations_get_distinct_names(self):
+        """G13: `feature/x..HEAD` used to sanitize to the same name as the
+        literal branch `feature-x..HEAD`."""
+        slashed = pr._safe_dir_name("feature/x..HEAD")
+        literal = pr._safe_dir_name("feature-x..HEAD")
+        assert literal == "feature-x..HEAD"
+        assert slashed != literal
+        assert slashed.startswith("feature-x..HEAD-")
+
+    def test_deterministic_across_calls(self):
+        assert pr._safe_dir_name("feature/x..HEAD") == pr._safe_dir_name(
+            "feature/x..HEAD"
+        )
+
+    def test_fully_unsafe_spec_reduces_to_hash_only(self):
+        name = pr._safe_dir_name("@{}")
+        assert name
+        assert not name.startswith("-")
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 [project]
 name = "unreal-kit"
-version = "0.10.0"
+version = "0.10.1"
 description = "Host-side dependencies for unreal-kit plugin"
 requires-python = ">=3.12,!=3.14.*"
 

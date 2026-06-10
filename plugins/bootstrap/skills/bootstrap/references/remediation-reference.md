@@ -31,6 +31,11 @@ Detailed check methods and remediation actions for all condition categories the 
 |-----------|-------------|-------------|
 | Marketplace not registered | Check `known_marketplaces.json` for `installLocation` | `claude plugin marketplace add <url>` |
 | Marketplace stale (`alwaysUpdate`) | Always (no check — unconditional on every session) | `claude plugin marketplace update <name>` |
+| Marketplace pinned but clone at wrong commit | Resolve `pin` via `git rev-parse` (with `git fetch` + retry on a miss); compare resolved SHA to clone HEAD | `git checkout --detach <sha>`; force `autoUpdate: false` in `known_marketplaces.json`; record pin + prior `autoUpdate` in `marketplace_pins.json` |
+| Pin removed from manifest but marker recorded | Compare manifest `pin` fields against `marketplace_pins.json` | `git checkout <default branch>` (origin/HEAD, falling back to master/main probing), then the normal marketplace update; restore recorded `autoUpdate`; remove the marker entry |
+| Pin unresolvable (bad SHA/tag, clone missing) | `git rev-parse` still fails after fetch, or `installLocation` dir absent | Fix-all failure with guidance: check the SHA/tag, register the marketplace, or remove the pin |
+
+While a marketplace is pinned, `alwaysUpdate` is skipped (a one-line "alwaysUpdate ignored while pinned" warning is emitted instead). See the `pin` section in [manifest-reference.md](./manifest-reference.md) for full semantics.
 
 ## Plugin Conditions
 

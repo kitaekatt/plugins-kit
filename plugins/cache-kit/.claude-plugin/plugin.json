@@ -1,6 +1,6 @@
 {
   "name": "cache-kit",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Cache usage reporting - per-request and session-level cache hit analysis from Claude Code transcripts",
   "author": {
     "name": "Christina"

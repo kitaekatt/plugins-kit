@@ -60,10 +60,9 @@ claude_md:
         framework.md (Content-form choice section).
       origin: |
         Audit-prep work unit 2026-04-29. Surface: review of plugins-kit's advocated
-        principles against its own canonical content. Finding: the framework advocated
-        bias-toward-structure but its own glossary defaulted to prose. Decision recorded
-        as Dec-1 in the project's lessons-learned log; PR #12 (mergeCommit 5d11b93)
-        landed the contract change.
+        principles against its own canonical content (framework advocated
+        bias-toward-structure but its glossary defaulted to prose). PR #12
+        (mergeCommit 5d11b93) landed the contract change.
       added: "2026-04-29"
     - id: dec_2_ordered_steps_universal
       keywords:
@@ -94,10 +93,7 @@ claude_md:
         blocks during the audit-prep work unit.
       origin: |
         Audit-prep work unit 2026-04-29. Surface: F-4-2-2 / F-4-2-3 paired finding from
-        Phase 4.2 audit of plugins-kit skills. Finding: every audited user-only technique
-        decomposed into 1-2 explicit steps, so the carveout protected nothing real.
-        Decision recorded as Dec-2 in the project's lessons-learned log; PR #12 landed
-        the schema tightening.
+        Phase 4.2 audit of plugins-kit skills. PR #12 landed the schema tightening.
       added: "2026-04-29"
     - id: dec_3_schemas_are_floors
       keywords:
@@ -129,11 +125,7 @@ claude_md:
         Q3 marked resolved.
       origin: |
         Audit-prep work unit 2026-04-29. Surface: yaml-refactor-design-spec Open
-        Questions section 3. Finding: the validator already permitted unknown keys
-        (extra_keys_allowed insight in skills_kit_lib/CLAUDE.md); the framework documents
-        needed to make this an explicit principle rather than an implementation
-        accident. Decision recorded as Dec-3 in the project's lessons-learned log;
-        PR #12 landed the documentation.
+        Questions section 3. PR #12 landed the documentation.
       added: "2026-04-29"
     - id: dec_4_anti_patterns_promoted_field
       keywords:
@@ -168,10 +160,7 @@ claude_md:
       origin: |
         Phase 4.6 P4 work (2026-04-30). Surface: the session dialog that named four new
         value propositions on top of the embodiment-closure gap fixes; anti_patterns:
-        as a first-class field was one of the four. Finding: anti-patterns lists were
-        already a documented schemas-are-floors example (in framework.md and
-        skills_kit_lib/CLAUDE.md), but unstandardized; promoting to a typed shape benefits
-        consistency across plugins-kit skills.
+        as a first-class field was one of the four.
       added: "2026-04-30"
     - id: dec_5_hook_killed_keyword_surface_retained
       keywords:
@@ -185,23 +174,14 @@ claude_md:
       origin: |
         Phase 4.6 P7 framing review 2026-04-30. Surface: explanation of the proposed
         hook mechanic to the user against worked examples from real records, followed
-        by the user's "is this a simplified RAG?" framing question. Finding: the
-        sparse-keyword agentic-RAG framing made the cost/benefit visible -- failure
-        modes (suggestion-when-not-relevant, spam, ignored hints) are real, retrieval
-        quality is bounded by keyword authoring quality, and hand-curated sparse
-        indexes have known precision/recall limits. The higher-value runtime is
-        Claude learning to navigate the YAML structure intelligently rather than a
-        hook injecting hand-tagged keyword matches. Decision: kill Y7 / P7 before
-        implementation; defer retrieval optimization to post-rollout.
+        by the user's "is this a simplified RAG?" framing question.
       added: "2026-04-30"
       summary: "Y7 hook killed before implementation. The YAML keyword clusters remain on every record as documentation and as a navigation aid for direct reads; the hook that consumes them does not ship. Post-rollout optimization will revisit teaching Claude to search the YAML structure intelligently rather than inject hand-tagged keyword matches."
       detail: |
-        The proposed Y7 hook was a sparse-keyword agentic RAG: walk a registered set
-        of YAML files, tokenize the user prompt, score keyword overlap per record,
-        inject top-N matches as additionalContext on UserPromptSubmit. Three named
-        failure modes (suggestion-ignored, suggestion-when-not-relevant, spam) plus
-        a 50/50 net-harm risk had been documented in the design spec; a 50-prompt
-        validation test plan was drafted before implementation.
+        The proposed Y7 hook was a sparse-keyword agentic RAG (walk registered YAML
+        files, score prompt/record keyword overlap, inject top-N as additionalContext
+        on UserPromptSubmit), with three documented failure modes and a 50/50 net-harm
+        risk.
 
         User reasoning for killing it (verbatim summary):
         1. RAG-as-such is not necessary for the current workflow; injecting a
@@ -321,12 +301,7 @@ claude_md:
       origin: |
         Surface: a tool-wrapper skill layering audit (April 2026) found 5
         of 7 SKILL.md gotchas should have been in CLAUDE.md (frequency
-        criterion fired). The user clarified the rubric mid-audit; the
-        rubric works at the example/anti-pattern grain, not just the
-        major-content grain.
-        Finding: framework named the levels but did not articulate the
-        visibility-decision criterion at the example/anti-pattern grain.
-        Follow-up: framework.md sub-section added; this Dec-7 codification.
+        criterion fired). The user clarified the rubric mid-audit.
       added: "2026-04-30"
     - id: dec_8_step_tracker_or_checklist_for_explicit_step_tracking
       keywords:
@@ -375,11 +350,6 @@ claude_md:
       origin: |
         Surface: user question on workflow-checklist purpose during a
         tool-wrapper bundle session (2026-04-30).
-        Finding: the markdown syntax is incidental to the underlying step-
-        tracking discipline; the original "checklist required" rule is over-
-        strict because it conflates the syntax with the goal.
-        Follow-up: framework.md condition restated as OR; audit.py and
-        _shared.py updated correspondingly; pytest case added.
       added: "2026-04-30"
     - id: dec_9_yaml_steps_canonical_for_yaml_contract_skills
       keywords:
@@ -428,14 +398,6 @@ claude_md:
         `## Workflow Checklist` sections to technique-skills. The question
         surfaced the unresolved hierarchy: which form is canonical when
         a skill is on the YAML contract?
-        Finding: a YAML `steps:` block already satisfies Dec-8 step-
-        tracking; pairing it with a parallel markdown checklist creates
-        a two-source-of-truth drift hazard. Dec-8 was syntactically
-        correct but did not name the canonical-form hierarchy.
-        Follow-up: framework.md canonical_form_when_on_yaml_contract
-        sub-clause added under the existing Dec-8 note; technique-skill
-        table row extended to name the YAML-canonical preference; this
-        Dec-9 insight added.
       added: "2026-04-30"
     - id: dec_10_harness_targeted_capability_skill_eligibility
       keywords:
@@ -492,13 +454,6 @@ claude_md:
         permissions-audit skills, the question remained whether
         harness-targeted skills with capability-wrapping content shape
         qualify as capability-skills.
-        Finding: yes -- the harness IS just another external-capability
-        provider; nothing in Dec-6's framing excludes it. The original
-        kind list omitted harness only because the framing examples
-        were drawn from non-harness wrappers; the inclusion is a
-        documentation gap, not a type-system constraint.
-        Follow-up: schema kind note extended; framework.md kind list +
-        Examples row extended; this Dec-10 insight added.
       added: "2026-04-30"
     - id: dec_11_size_threshold_is_signal_crp_is_the_test
       keywords:
@@ -512,19 +467,11 @@ claude_md:
         - decomposition test
       summary: "The 500-line / 3000-token threshold is a SIGNAL that a SKILL.md deserves evaluation for splitting; it is NOT a verdict that splitting is correct. CRP is the test that decides whether the split is legitimate. A split that creates a stub-plus-always-co-loaded-reference is a tool-call doubling, not a context-efficiency win, and should be reverted."
       detail: |
-        Three principles operate in tension on the L2/L3 boundary:
-        1. Loading context the agent does not need is bad (context efficiency).
-        2. Two tool calls where one would suffice is bad (tool-call efficiency).
-        3. There is a size threshold beyond which a SKILL.md is too large to
-           keep monolithic.
-
-        The size threshold (>500 lines / >3000 tokens) prompts the question
-        "should this split?" but does not answer it. The answer comes from
-        CRP (Common Reuse Principle): if a reader loads one section, they
-        should plausibly need the rest. Sections that serve different reading
-        tasks are split-legitimate. Sections that always co-load are
-        split-illegitimate -- the split manufactures a second tool call for
-        content that already had a single reading task.
+        The three-principle tension (context efficiency vs tool-call efficiency vs
+        size threshold) and the worked CRP-pass / CRP-fail split shapes are owned by
+        framework.md -- see "CRP is the test for L2 -> L3 splits". The decision-specific
+        delta: the >500-line / >3000-token threshold is a SIGNAL that triggers
+        evaluation, not a verdict that mandates a split; CRP gates the split.
 
         Operationally:
         - Threshold breach triggers evaluation, not auto-split.
@@ -535,25 +482,8 @@ claude_md:
           that case.
         - When no decomposition passes CRP, keep the larger SKILL.md. An
           over-threshold SKILL.md that costs one tool call is preferable
-          to a stub-plus-always-co-loaded reference that costs two.
-
-        The CRP-fail anti-pattern shape:
-        - SKILL.md trimmed to ~30-100 lines, primarily Conditional Loading
-          entries.
-        - Every reference is loaded on every invocation; no sub-trigger
-          selects between them.
-        - Reading task is unitary; the split was driven by the size signal
-          alone.
-        - Revert by inlining the reference back into SKILL.md and
-          accepting the over-threshold size.
-
-        The CRP-pass shape (worked example: a domain-skill with N member
-        sub-domains):
-        - Each sub-domain reference fires on a different sub-task within
-          the domain.
-        - Typical invocation loads SKILL.md plus one sub-domain reference.
-        - Average load shrinks; the second tool call is paid only when
-          actually navigating into the sub-domain.
+          to a stub-plus-always-co-loaded reference that costs two -- revert
+          a CRP-fail split by inlining the reference back into SKILL.md.
 
         Codified in: framework.md conditional_requirements row (rule restated
         as CONSIDERED-when-over-threshold + REQUIRED-only-if-CRP-passes, with
@@ -570,14 +500,6 @@ claude_md:
         e.g. a discipline-skill went from 423 lines to a 37-line stub
         pointing at one always-co-loaded reference. Tool-call doubling
         without context-efficiency win.
-        Finding: the framework's progressive-disclosure conditional
-        requirement was over-eager. The size threshold was being treated
-        as a verdict rather than a signal; CRP was already in the glossary
-        but not wired into the conditional-requirement gate.
-        Follow-up: framework.md conditional_requirements row restated
-        with CRP gate; new "CRP is the test for L2 -> L3 splits"
-        sub-section codifying the three-principle tension and the
-        operational rule; this Dec-11 insight added.
       added: "2026-05-01"
     - id: dec_12_subdomain_config_schema_extension
       keywords:
@@ -626,15 +548,7 @@ claude_md:
         per-field definitions, two worked examples, and audit hooks.
       origin: |
         Surface: dialog-domain extraction audit (2026-05-01) flagged the
-        sub-area config schema as a generalizable pattern. The audit
-        identified a per-sub-area structural shape that recurs whenever a
-        capability-skill decomposes into multiple sub-areas with distinct
-        state vocabularies and operation surfaces.
-        Finding: capability_skill schema lacked the floor for sub-area
-        config; the structural fields existed in practice as ad-hoc YAML.
-        Follow-up: schema extended with the optional list field; new
-        reference doc; new pytest cases (6 covering omitted, minimal,
-        full, multi-sub-area, missing-name, wrong-type validations).
+        sub-area config schema as a generalizable pattern.
       added: "2026-05-01"
     - id: dec_13_domain_consolidation_criterion
       keywords:
@@ -698,12 +612,8 @@ claude_md:
         references). The user supplied the two load-bearing constraints --
         "a domain makes sense only when you can group multiple skills" and
         "only certain skill types make sense to merge into domains."
-        Finding: the framework named the split and bottom-up-authoring
-        directions but not the retroactive merge heuristic, so the
-        consolidation decision was being re-derived per conversation.
-        Follow-up: framework.md section added; this Dec-13 insight records
-        the provenance; scope held to documentation (the /skill-audit
-        detector and the concrete repo redesign deferred).
+        Scope held to documentation (the /skill-audit detector and the
+        concrete repo redesign deferred).
       added: "2026-05-30"
     - id: dec_14_shared_reference_across_sibling_domains
       keywords:
@@ -737,13 +647,9 @@ claude_md:
         Codified in: framework.md new section "Shared references across sibling
         domains stay standalone" under the merge-direction block.
       origin: |
-        Surface: the skills-kit verb x artifact reorg design session (2026-05-31).
-        Finding: P1 re-read of the framework merge table (lines ~269-291) confirmed
-        it covers pattern-stays-standalone and reference-folds-in, but NOT a
-        reference shared by two sibling domains -- the exact shape of
-        cohesion-principles in the target md-authoring / md-audit tree.
-        Follow-up: framework.md section added; this Dec-14 insight records the
-        provenance.
+        Surface: the skills-kit verb x artifact reorg design session (2026-05-31);
+        P1 re-read of the framework merge table (lines ~269-291) found it did not
+        cover a reference shared by two sibling domains.
       added: "2026-05-31"
     - id: dec_15_specialization_by_artifact_merge_axis
       keywords:
@@ -781,12 +687,8 @@ claude_md:
         Codified in: framework.md new section "Specialization by artifact (a second
         merge axis)" under the merge-direction block.
       origin: |
-        Surface: the skills-kit verb x artifact reorg design session (2026-05-31).
-        Finding: the whole target tree (md-authoring/md-audit over skill + claude-md
-        specializations) is a specialization hierarchy the merge table did not name;
-        it only covered merge-by-shared-subject.
-        Follow-up: framework.md section added; this Dec-15 insight records the
-        provenance.
+        Surface: the skills-kit verb x artifact reorg design session (2026-05-31) --
+        the target tree was a specialization hierarchy the merge table did not name.
       added: "2026-05-31"
     - id: dec_16_broader_union_domain_vs_nest
       keywords:
@@ -840,11 +742,6 @@ claude_md:
         can have a broader domain so it's a union not a nest" + "domains can have
         sub-domains as well see .../dialog-domain/SKILL.md" + "you may need to update
         the docs so they enable navigating this type of situation better in the future."
-        Finding: dec_13's absolute "Never nest" cell did not encode the
-        union-vs-nest distinction the domain-layering pattern already embodies, so an
-        agent hit a false block.
-        Follow-up: framework.md + domain-layering.md updated; this Dec-16 insight
-        records the provenance.
       added: "2026-05-31"
     - id: ssot_canonical_split
       keywords:

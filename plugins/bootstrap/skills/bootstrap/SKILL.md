@@ -62,7 +62,7 @@ reference_skill:
         | JSON config    | File lacks expected entries           | Merge missing entries into target JSON   |
         | INI settings   | Application config setting not set    | Write setting to config/ini file         |
         | PyPI package   | Extracted file missing locally        | Download from PyPI and extract           |
-        | Marketplace    | Not registered or stale               | claude plugin marketplace add/update     |
+        | Marketplace    | Not registered, stale, or pinned at wrong commit | claude plugin marketplace add/update; pinned: checkout pin SHA |
         | Plugin         | Not installed, out of date, wrong scope | Install / update / reinstall            |
         | User config    | API keys, paths missing               | Ask user via fix-all flow                |
     - id: config_layers
@@ -79,6 +79,31 @@ reference_skill:
       gotchas:
         - bootstrap.local.json files are gitignored; per-machine overrides do not propagate to teammates.
         - Layer order matters. Higher-priority layers win on conflict; arrays union by identity key, objects deep-merge, scalars override. A user-level entry can be silently shadowed by a project-level entry with the same identity.
+    - id: marketplace_pinning
+      summary: A marketplace entry's pin field freezes the ENTIRE marketplace repo at a git committish -- one pin holds every plugin, shared lib, and dependency edge at a tested snapshot until the pin is dropped.
+      keywords: [pin, version pin, pin plugins, pin marketplace, freeze versions, stop updates, snapshot, unpin, drop the pin, re-pin, autoUpdate, marketplace_pins.json, detached HEAD, known-good versions]
+      detail: |
+        Declare in a layered manifest (recommended: ~/.claude/bootstrap.json, or
+        bootstrap.local.json for per-machine):
+
+          { "marketplaces": [ { "name": "plugins-kit", "pin": "f7f6276a" } ] }
+
+        While pinned: the clone at ~/.claude/plugins/marketplaces/<name> is checked out
+        (detached) at the pin, autoUpdate is forced false in known_marketplaces.json (prior
+        value recorded in ~/.claude/plugins/data/plugins-kit/bootstrap/marketplace_pins.json),
+        and stale-update paths are skipped. Because `claude plugin update` and Claude Code's
+        auto-updater both read versions from that clone, the one pin freezes every plugin --
+        shared-lib owners and consumers can never skew (the reason repo-level pinning was
+        chosen over per-plugin pins).
+
+        Workflow: pin to a known-good SHA -> work undisturbed -> delete the pin field ->
+        bootstrap restores the default branch + recorded autoUpdate and updates the
+        marketplace -> test -> re-pin at the new SHA.
+      gotchas:
+        - Editing a layered bootstrap.json does NOT auto-bypass the per-project cooldown; after changing a pin, run bootstrap-reset-cooldown.sh (or wait out the window) for it to take effect.
+        - A pin freezes FUTURE drift but never downgrades a plugin already past the snapshot (the version check is directional); you get a verbose ahead-of-pin notice, not a rollback.
+        - pin takes precedence over alwaysUpdate (a one-line warning is emitted when both are set), and a min_version constraint the pinned snapshot cannot satisfy fails with a message naming the pin.
+        - The first session after setting a pin can race Claude Code's auto-updater once (it may pull before bootstrap re-pins); self-heals on the next pass.
     - id: merge_semantics
       summary: Layered configs merge by identity key for arrays, deep-merge for objects, override for scalars.
       keywords: [merge semantics, union, identity key, deep merge, path entries, scalar override]
@@ -93,8 +118,8 @@ reference_skill:
       keywords: [engine, session start, processing order, messages, remediation flow]
       fact_ids: [message_outcomes, remediation_phases]
     - name: config_files
-      keywords: [bootstrap.json, manifest, layers, merge, override]
-      fact_ids: [config_layers, merge_semantics]
+      keywords: [bootstrap.json, manifest, layers, merge, override, pin]
+      fact_ids: [config_layers, marketplace_pinning, merge_semantics]
     - name: catalogues
       keywords: [conditions, categories, remediation table]
       fact_ids: [condition_categories]
@@ -105,12 +130,12 @@ reference_skill:
       summary: Engine internals deep-dive.
     - id: manifest_reference
       path: references/manifest-reference.md
-      keywords: [bootstrap.json, manifest, schema, fields, variable expansion, layered config, merge semantics, identity keys, example]
-      summary: bootstrap.json manifest field reference.
+      keywords: [bootstrap.json, manifest, schema, fields, variable expansion, layered config, merge semantics, identity keys, example, marketplace pin, pin field, unpin workflow]
+      summary: bootstrap.json manifest field reference (incl. the marketplace pin field and the unpin workflow).
     - id: remediation_reference
       path: references/remediation-reference.md
-      keywords: [condition, remediation, check method, tool missing, venv broken, marketplace, plugin scope, fix-all, blocking, manual operation]
-      summary: Per-condition remediation reference.
+      keywords: [condition, remediation, check method, tool missing, venv broken, marketplace, plugin scope, fix-all, blocking, manual operation, pinned wrong commit, pin removed, unresolvable pin]
+      summary: Per-condition remediation reference (incl. the marketplace pin conditions).
     - id: plugin_setup_pattern
       path: references/plugin-setup-pattern.md
       keywords: [setup pattern, config setup, setup.py, interactive setup, --check, --describe, --apply, --init-defaults, missing config, API keys]

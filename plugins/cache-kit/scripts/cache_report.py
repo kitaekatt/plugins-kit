@@ -19,16 +19,49 @@ from pathlib import Path
 from datetime import datetime
 
 
+def _cli_hash_suffix(cwd: str) -> str:
+    """Mirror the CLI's overflow hash suffix for long encoded cwds.
+
+    Verified against the CLI bundle (claude 2.1.170):
+
+        function OYH(H){let _=0;for(let A=0;A<H.length;A++)
+            _=(_<<5)-_+H.charCodeAt(A)|0;return _}
+        function hI4(H){return Math.abs(OYH(H)).toString(36)}
+
+    i.e. the signed-32-bit JS string hash (h = 31*h + codeunit, over UTF-16
+    code units of the ORIGINAL un-encoded cwd), absolute value, base 36.
+    """
+    h = 0
+    units = cwd.encode("utf-16-le")
+    for i in range(0, len(units), 2):
+        h = (31 * h + int.from_bytes(units[i:i + 2], "little")) & 0xFFFFFFFF
+    if h >= 1 << 31:
+        h -= 1 << 32
+    n = abs(h)
+    if n == 0:
+        return "0"
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    out = []
+    while n:
+        n, r = divmod(n, 36)
+        out.append(digits[r])
+    return "".join(reversed(out))
+
+
 def find_project_dir(cwd: str) -> Path:
     """Find the ~/.claude/projects/ directory for the given working directory.
 
     Claude Code encodes the cwd by replacing EVERY non-alphanumeric character
     with '-' (verified against the CLI bundle: path.replace(/[^a-zA-Z0-9]/g,
     "-")), so dots and underscores encode too -- e.g. /Users/x/.claude ->
-    -Users-x--claude. Encoded names longer than 200 chars are additionally
-    truncated with a hash suffix; that edge is not handled here.
+    -Users-x--claude. Encoded names longer than 200 chars are truncated to
+    200 and suffixed with a hash of the original cwd (CLI bundle:
+    `if(_.length<=DQH)return _;return\\`${_.slice(0,DQH)}-${hI4(H)}\\``
+    with DQH=200); `_cli_hash_suffix` mirrors hI4.
     """
     encoded = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    if len(encoded) > 200:
+        encoded = f"{encoded[:200]}-{_cli_hash_suffix(cwd)}"
     return Path.home() / ".claude" / "projects" / encoded
 
 
