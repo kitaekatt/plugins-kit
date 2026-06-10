@@ -80,6 +80,17 @@ def _deep_merge_dicts(base, override):
     return result
 
 
+def deep_merge(base, override):
+    """Recursively merge two plain dicts; override wins for scalar conflicts.
+
+    The supported public entry point for generic dict deep-merging (other
+    plugins import this — e.g. openrouter-kit's model-config layering). For
+    bootstrap *manifest* dicts use merge_manifests, which adds the
+    identity-keyed array semantics.
+    """
+    return _deep_merge_dicts(base, override)
+
+
 def merge_manifests(base, override):
     """Deep-merge two bootstrap manifest dicts. Override wins for conflicts.
 
@@ -87,6 +98,10 @@ def merge_manifests(base, override):
     entries with the same identity are merged, new entries are appended.
     path_entries are unioned as simple string lists (deduplicated).
     Objects are deep-merged. Scalars from override win.
+
+    Note: an explicit JSON ``null`` is treated as ABSENT, not as a value —
+    a higher-priority layer cannot null-out a key declared by a lower layer
+    (it can only override it with a non-null value).
 
     Args:
         base: Lower-priority manifest dict.

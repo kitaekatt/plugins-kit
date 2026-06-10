@@ -137,7 +137,7 @@ technique_skill:
         - The untracked/unstaged check must happen BEFORE reviewers spawn. Folding in forgotten files after agents have already reviewed the diff wastes their work and produces a stale review.
         - On the post-fold re-run, do NOT prompt again about untracked_or_unstaged files. The user already chose. Re-prompting on the same list is annoying; re-prompting on a smaller list (because they only added some) implies the rest were forgotten when they were declined.
         - Submit gates are reminders, not findings -- they do NOT go through reviewer or validator subagents. They are parsed deterministically by prepare_review.py and rendered verbatim in a separate output section. Do not try to validate, score, or filter them.
-        - The submit-gates AskUserQuestion fires once, regardless of gate count. multiSelect bundles all gates into one prompt.
+        - The submit-gates AskUserQuestion fires once, regardless of gate count. multiSelect bundles all gates into one prompt. Re-prompting per gate is rude and adds no value -- the author's response is final either way.
         - Unconfirmed submit gates are NOT errors. Render them with ✗ so they're visible, but do not block the review or refuse to render the rest.
         - Merge conflicts are NOT findings -- they do NOT go through reviewer subagents. They are detected deterministically by prepare_review.py (`git ls-files -u`). The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the merge-conflicts section is a separate informational warning to the user.
         - Auto-detect is convenient, not authoritative. Always restate the chosen range in the step-1 narration line; a user reviewing the wrong branch will catch it there before subagents spawn.
@@ -184,7 +184,7 @@ technique_skill:
       "<R>": "count of reviewers in the selected profile"
       "<K>": "len(bundle.diff_chunks)"
       "<RK>": "<R> * <K>"
-      "<reviewer_summary>": "comma-separated '<model> <reviewer short name>' for each reviewer in the profile -- each is fanned out across all K chunks"
+      "<reviewer_summary>": "comma-separated '<model> <reviewer short name>' for each reviewer in the profile (e.g. 'sonnet CLAUDE.md compliance, opus diff-only bugs, opus introduced-code') -- each is fanned out across all K chunks"
       "<G>": "len(bundle.submit_gates)"
       "<V>": "len(bundle.merge_conflicts)"
   review_profiles:
@@ -204,7 +204,7 @@ technique_skill:
                   3D/animation assets -- whose presence wouldn't change what a code-grade
                   review would find. These files aren't reviewable for logic anyway, so
                   including them in a diff shouldn't force the heavier `code` profile.
-            Use judgment: the question is "is there any file in this range that needs Opus-level
+            Use judgment: the question is "is there any file in this diff that needs Opus-level
             semantic reasoning to review?" -- not "is every extension on a fixed list?"
 
             Pick `code` instead the moment any changed file contains executable logic
@@ -215,7 +215,9 @@ technique_skill:
           (concurrency, lifetime, deep semantic reasoning). Bugs in these files are
           surface-level: malformed syntax, duplicate keys, column-count mismatches, broken
           cross-file references, schema violations -- pattern-matching tasks where Sonnet is
-          at near-parity with Opus.
+          at near-parity with Opus. `reviewer_c_introduced_code`'s scope is essentially empty
+          for data/doc files; running it just burns tokens and generates hallucinations the
+          validator must reject.
         reviewers:
           - { name: reviewer_a_claude_md_compliance, model: sonnet }
           - { name: reviewer_b_diff_only_bugs,       model: sonnet }

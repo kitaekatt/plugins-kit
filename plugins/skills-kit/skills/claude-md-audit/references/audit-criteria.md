@@ -1,6 +1,6 @@
 # CLAUDE.md Audit Criteria
 
-The full criteria for `/claude-md-audit`. Organized by cohesion principle (CCP / CRP / ADP) plus universal hygiene. Each criterion has a testable rule and a severity (FAIL / INFO / PASS); decision rules at the bottom.
+The full criteria for the claude-md-audit member (reached via `/md-audit claude-md`). Organized by cohesion principle (CCP / CRP / ADP) plus universal hygiene. Each criterion has a testable rule and a severity (FAIL / INFO / PASS); decision rules at the bottom.
 
 The placement principles these criteria derive from live in the `cohesion-principles` skill (`plugins/skills-kit/skills/cohesion-principles/SKILL.md`). When the two diverge, cohesion-principles wins; this file gets updated to match.
 

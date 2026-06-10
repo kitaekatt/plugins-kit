@@ -23,3 +23,8 @@ if ! uv run python "$REPO_ROOT/scripts/regen_marketplace.py" --check; then
     echo "run \`python scripts/regen_marketplace.py\`, stage the result, and commit."
     exit 1
 fi
+
+# Staged-diff gate: plugin code/manifest changes need a staged version bump
+# (escape hatch: PLUGINS_KIT_SKIP_BUMP_CHECK=1, or --no-verify). Details and
+# rationale in the script header.
+"$REPO_ROOT/scripts/check-staged-version-bump.sh"

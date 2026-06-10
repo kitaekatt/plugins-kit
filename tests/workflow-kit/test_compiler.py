@@ -1,8 +1,11 @@
 """Compiler tests: structural assertions on the emitted Workflow JS."""
 
-from conftest import EXAMPLES, FIXTURES
+import pytest
+
+from wk_testlib import EXAMPLES, FIXTURES
 
 from workflow_kit_lib import compile_doc, load_workflow
+from workflow_kit_lib.errors import WorkflowError
 
 
 def _compile(path):
@@ -151,15 +154,55 @@ def test_no_preamble_when_no_node_steps():
     assert "const inputs = typeof args" in js
 
 
-def test_node_out_paths_are_shell_quoted(write_workflow):
-    # The inlined preamble must quote the path args it builds into the bash -c
-    # command, so a path with spaces (e.g. from runId) does not split. Guards the
-    # 1a fix in preamble.js (wkScript redirect target + wkOpenRouter path flags).
+def test_node_args_are_single_quote_shell_escaped(write_workflow):
+    # The inlined preamble must shq()-quote every value it splices into the shell
+    # command: double quotes do not stop $(), backticks, or $var expansion, and
+    # JSON.stringify is a JS escaper, not a shell escaper. Guards the W4 fix in
+    # preamble.js (shq + wkScript redirect target + every wkOpenRouter flag).
     js = _compile_text(_SCRIPT_WF, write_workflow)
-    assert '} > "' in js                       # wkScript redirect target quoted
+    assert "function shq(" in js
+    assert "; } > ' + shq(out)" in js                      # wkScript redirect target
     js2 = _compile_text(_OPENROUTER_WF, write_workflow)
-    assert "' --prompt-file \"' +" in js2      # wkOpenRouter --prompt-file quoted
-    assert "' --out \"' +" in js2              # wkOpenRouter --out quoted
+    assert "' --model ' + shq(spec.model)" in js2
+    assert "' --system ' + shq(spec.system)" in js2
+    assert "' --status ' + shq(spec.status)" in js2
+    assert "' --prompt-file ' + shq(spec.promptFile)" in js2
+    assert "' --out ' + shq(spec.out)" in js2
+    assert "JSON.stringify(spec.system)" not in js2        # the wrong escaper is gone
+
+
+# --------------------------------------------------------------------------- #
+# inputs cross-check (W3): unknown {{ inputs.* }} heads are compile errors
+# --------------------------------------------------------------------------- #
+def test_undeclared_input_is_a_compile_error():
+    with pytest.raises(WorkflowError, match="unknown input 'dif'"):
+        _compile(FIXTURES / "broken" / "undeclared_input.workflow.yaml")
+
+
+def test_reserved_inputs_require_node_steps(write_workflow):
+    # The reserved trio (runId/pluginRoot/workflowKitVenvPython) is injected by
+    # the skill only when node steps exist; an agent-only workflow referencing
+    # one is a typo, not a reserved arg.
+    agent_only = """
+name: a
+description: x
+steps:
+  - id: s
+    agent: { prompt: "run {{ inputs.runId }}" }
+"""
+    with pytest.raises(WorkflowError, match="unknown input 'runId'"):
+        _compile_text(agent_only, write_workflow)
+
+    with_node = """
+name: a
+description: x
+steps:
+  - id: n
+    script: { command: "echo hi" }
+  - id: s
+    agent: { prompt: "run {{ inputs.runId }}" }
+"""
+    assert "${inputs.runId}" in _compile_text(with_node, write_workflow)
 
 
 def test_shipped_node_strategies_example_compiles():

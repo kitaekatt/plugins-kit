@@ -2,40 +2,45 @@
 
 import os
 import sys
-from typing import NamedTuple, Tuple
+from typing import Tuple
+
+from .result import Result
 
 
-class CheckResult(NamedTuple):
-    path: str
-    passed: bool
-    message: str
+def normalize_path_for_compare(path: str) -> str:
+    """Canonical form for PATH-entry equality: normcase + normpath.
+
+    normcase matters on Windows, where case-differing spellings of the same
+    directory must compare equal (comparing with normpath alone re-prepended
+    entries every phase).
+    """
+    return os.path.normcase(os.path.normpath(path))
 
 
-def check_path_entry(path_entry: str) -> CheckResult:
+def check_path_entry(path_entry: str) -> Result:
     """Check if a directory is present in PATH.
 
     Args:
         path_entry: Directory path to check (supports ~ expansion)
 
     Returns:
-        CheckResult with pass/fail
+        Result with pass/fail; subject is the (unexpanded) path entry.
     """
     expanded = os.path.expanduser(path_entry)
     path_dirs = os.environ.get("PATH", "").split(os.pathsep)
 
-    # Normalize for comparison
-    expanded_norm = os.path.normpath(expanded)
+    expanded_norm = normalize_path_for_compare(expanded)
     for d in path_dirs:
-        if os.path.normpath(d) == expanded_norm:
-            return CheckResult(
-                path=path_entry,
+        if normalize_path_for_compare(d) == expanded_norm:
+            return Result(
                 passed=True,
+                subject=path_entry,
                 message=f"{path_entry} is in PATH",
             )
 
-    return CheckResult(
-        path=path_entry,
+    return Result(
         passed=False,
+        subject=path_entry,
         message=f"{path_entry} ({expanded}) is not in PATH",
     )
 

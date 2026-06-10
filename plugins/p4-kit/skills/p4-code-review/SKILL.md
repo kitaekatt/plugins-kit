@@ -128,7 +128,7 @@ technique_skill:
         - Unreconciled files surfaced (and either folded in via `p4 reconcile -c <CL>` with a re-run, or explicitly declined)
         - All CLAUDE.md files read
         - Submit gates surfaced (if any) and author confirmation collected via a single AskUserQuestion
-        - Review profile selected from review_profiles (first match)
+        - Review profile selected from review_profiles
         - Reviewers launched in parallel (single message, R × K Agent calls -- one per (reviewer × chunk) pair, where K = len(bundle.diff_chunks))
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
@@ -281,7 +281,7 @@ technique_skill:
     - name: validator
       subagent_type: general-purpose
       scope: confirm or reject one candidate issue with high confidence
-      input: "the issue (JSON), the full diff, [if claude_md: relevant CLAUDE.md contents]"
+      input: "the issue (JSON), the chunk diff, [if claude_md: relevant CLAUDE.md contents]"
       output_format: "exactly one line: 'CONFIRMED: <one-sentence reason>' or 'REJECTED: <one-sentence reason>'"
       restrictions:
         - "Validator does not see who flagged the issue. Independence is the value."

@@ -6,8 +6,9 @@ Provides:
 - rule_fragments: shared schema rule fragments (KEYWORDS_RULE, SCOPE_RULE, ...)
 - schema_registry: registry of typed-unit roots and their schemas
 - schemas/: lib-owned schema definitions (skill-type schemas, portable units, claude_md)
-- markdown_heuristics: structural-shape detectors for SKILL.md bodies
+- markdown_heuristics: structural-shape detectors + the one frontmatter parser
 - corpus: SKILL.md corpus discovery across user/project/plugin tiers
+- dirwalk: depth-limited cwd-downward walk shared by the audit discover scripts
 - checks: corpus-level audit checks (owner-doc validation)
 - audit, classify, tag: per-skill CLI utilities
 

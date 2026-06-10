@@ -197,16 +197,24 @@ def check_marketplace_current(name: str) -> LifecycleResult:
             ["git", "fetch", "--quiet"],
             cwd=install_loc, capture_output=True, text=True, timeout=60,
         )
-        # Compare local HEAD to upstream
-        local = subprocess.run(
+        # Compare local HEAD to upstream. Check returncodes (B17): a repo
+        # without an upstream tracking branch makes `rev-parse @{u}` fail,
+        # which used to read as remote="" != local -> "updates available" ->
+        # a doomed update attempt every pass. Treat "can't determine" as
+        # current rather than stale.
+        local_proc = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=install_loc, capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-        remote = subprocess.run(
+        )
+        remote_proc = subprocess.run(
             ["git", "rev-parse", "@{u}"],
             cwd=install_loc, capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-        if local == remote:
+        )
+        if local_proc.returncode != 0:
+            return LifecycleResult(passed=True, ref=name, message="cannot read local HEAD; skipping update check")
+        if remote_proc.returncode != 0:
+            return LifecycleResult(passed=True, ref=name, message="no upstream tracking branch; skipping update check")
+        if local_proc.stdout.strip() == remote_proc.stdout.strip():
             return LifecycleResult(passed=True, ref=name, message="up to date")
         return LifecycleResult(passed=False, ref=name, message="updates available")
     except (subprocess.SubprocessError, OSError) as e:
@@ -336,12 +344,7 @@ def install_plugin(plugin_ref: str, scope: str = "user") -> LifecycleResult:
         scope: Installation scope (user, project, local)
     """
     # Claude CLI uses plugin@marketplace format
-    if ":" in plugin_ref:
-        marketplace, plugin_name = plugin_ref.split(":", 1)
-        cli_ref = f"{plugin_name}@{marketplace}"
-    else:
-        cli_ref = plugin_ref
-
+    cli_ref = _to_cli_ref(plugin_ref)
     ok, stdout, stderr = _run_claude(["plugin", "install", cli_ref, "--scope", scope])
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="installed")
@@ -350,12 +353,7 @@ def install_plugin(plugin_ref: str, scope: str = "user") -> LifecycleResult:
 
 def uninstall_plugin(plugin_ref: str, scope: str = "user") -> LifecycleResult:
     """Uninstall a plugin via `claude plugin uninstall`."""
-    if ":" in plugin_ref:
-        marketplace, plugin_name = plugin_ref.split(":", 1)
-        cli_ref = f"{plugin_name}@{marketplace}"
-    else:
-        cli_ref = plugin_ref
-
+    cli_ref = _to_cli_ref(plugin_ref)
     ok, stdout, stderr = _run_claude(["plugin", "uninstall", cli_ref, "--scope", scope])
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="uninstalled")
@@ -364,12 +362,7 @@ def uninstall_plugin(plugin_ref: str, scope: str = "user") -> LifecycleResult:
 
 def update_plugin(plugin_ref: str, scope: str = "user") -> LifecycleResult:
     """Update a plugin via `claude plugin update`."""
-    if ":" in plugin_ref:
-        marketplace, plugin_name = plugin_ref.split(":", 1)
-        cli_ref = f"{plugin_name}@{marketplace}"
-    else:
-        cli_ref = plugin_ref
-
+    cli_ref = _to_cli_ref(plugin_ref)
     ok, stdout, stderr = _run_claude(["plugin", "update", cli_ref, "--scope", scope])
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="updated")

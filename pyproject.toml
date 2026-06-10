@@ -8,10 +8,16 @@ dev = ["pytest>=8.0", "pyyaml", "websocket-client>=1.6"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# pythonpath is reserved for genuine package roots (plus the engine dir, whose
+# modules tests import as bare names). Do NOT add per-skill script dirs here:
+# they share one flat namespace and risk shadowing. Single-file skill scripts
+# are loaded in tests via importlib.util.spec_from_file_location instead (see
+# tests/awesome-kit/test_html_pdf.py for the pattern).
 pythonpath = [
     "plugins/bootstrap",
     "plugins/bootstrap/engine",
     "plugins/skills-kit",
-    "plugins/skills-kit/skills/skill-authoring/scripts",
+    # Exception (grandfathered): tests/skills-kit/test_discover.py imports
+    # `discover` as a bare module from this per-skill script dir.
     "plugins/skills-kit/skills/claude-md-audit/scripts",
 ]

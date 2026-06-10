@@ -318,10 +318,10 @@ In delete-only mode: skips steps 2-4 (no referencer load/save needed), opens red
 If the apply script reports lock failures (UE held Windows handles even after `delete_asset` returned), it writes a retry list to `<project>/Saved/PythonOutput/redirectors_lock_retry_<CL>.txt`. After the commandlet exits (UE's process is gone, file handles released), run:
 
 ```bash
-p4 -x - reconcile -c <CL> < <project>/Saved/PythonOutput/redirectors_lock_retry_<CL>.txt
+p4 -x - delete -c <CL> < <project>/Saved/PythonOutput/redirectors_lock_retry_<CL>.txt
 ```
 
-`reconcile` notices the locally-deleted files and opens them for delete in the same CL. The script prints the exact command at the end of its run.
+The locked files are still ON DISK when the commandlet exits (UE held the handle long enough that the in-process disk delete never finished), so the retry must be `p4 delete` -- it marks the depot delete and removes the local file in one step. `p4 reconcile` would see an unchanged local file and do nothing. The script prints the exact command at the end of its run. Fallback: if a future UE version finishes the on-disk delete before exiting, `p4 delete` errors per-file with "file not found" -- only then use `p4 -x - reconcile -c <CL>` against the same list (see Edge Cases).
 
 ## Phase 5 - Final report
 

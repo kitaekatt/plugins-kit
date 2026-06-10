@@ -46,4 +46,6 @@ with upyre.PythonRemoteConnection(config) as conn:
 The terminal runner (`scripts/ue_runner.py`) uses upyrc as its primary execution path.
 If the editor isn't responding, it falls back to the headless commandlet.
 
-Install host-side: `pip install -r host-requirements.txt`
+Host-side install: the bootstrap plugin provisions upyrc (with pyyaml) into the
+unreal-kit plugin venv at session start -- no manual pip install. The runner
+re-execs into that venv, so any invoking interpreter works.

@@ -11,8 +11,10 @@ Contract:
     all_paths()         -> dict[name, path] for diagnostics.
 
 State file:
-    <data_dir>/tool_paths.json, where <data_dir> is bootstrap's plugin
-    data dir (~/.claude/plugins/data/plugins-kit/bootstrap).
+    <data_dir>/tool_paths.json. Every function takes ``data_dir`` first:
+    pass ``None`` for the canonical centralized location (bootstrap's plugin
+    data dir, ~/.claude/plugins/data/plugins-kit/bootstrap — what the engine
+    does), or an explicit dir to read/write exactly there (tests).
 """
 
 import json
@@ -41,19 +43,16 @@ def canonical_data_dir():
 
 
 def _resolve_data_dir(data_dir):
-    # Accept either the canonical bootstrap data dir or any caller-supplied
-    # one; if a caller passes a per-plugin dir we still write to the
-    # bootstrap-canonical location so state stays centralized. Tests pass
-    # an explicit data_dir to scope writes to a temp dir.
+    # Explicit contract (no basename sniffing — B15): ``None`` means "the
+    # canonical centralized location"; any explicit dir is used exactly as
+    # given. The engine passes None so per-plugin passes all record to the
+    # same central file; tests pass a temp dir and stay fully isolated.
+    # (The old heuristic silently redirected any dir whose basename wasn't
+    # "bootstrap" to the real production file — a test using a generic tmp
+    # dir would have polluted the user's actual tool_paths.json.)
     if data_dir is None:
         return canonical_data_dir()
-    # Heuristic: if the caller's data_dir ends in "/bootstrap" or matches
-    # the canonical, use it directly. Otherwise redirect to canonical.
-    # This keeps tests honest (they pass a temp data_dir) while ensuring
-    # production calls all land in the same place.
-    if os.path.basename(os.path.normpath(data_dir)) == "bootstrap":
-        return data_dir
-    return canonical_data_dir()
+    return data_dir
 
 
 def _state_path(data_dir):

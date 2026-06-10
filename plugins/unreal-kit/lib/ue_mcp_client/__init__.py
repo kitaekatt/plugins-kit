@@ -38,20 +38,20 @@ Configuration (environment variables):
 
 from .client import (
     ActionError,
-    ConnectionError,
     HandshakeError,
     McpClient,
+    McpConnectionError,
     McpError,
     McpResponse,
-    TimeoutError,
+    McpTimeoutError,
 )
 
 __all__ = [
     "McpClient",
     "McpResponse",
     "McpError",
-    "ConnectionError",
+    "McpConnectionError",
     "HandshakeError",
-    "TimeoutError",
+    "McpTimeoutError",
     "ActionError",
 ]

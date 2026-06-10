@@ -35,9 +35,9 @@ audit_skill:
       - "categorizing findings into remediation buckets (AUTO / DISCUSS / SPECIAL)"
       - "listing CLAUDE.md files visible from cwd (the cwd-relative discover.py helper for index-based selection)"
     excludes:
-      - "auditing SKILL.md files (use /skill-audit)"
+      - "auditing SKILL.md files (use /md-audit skill)"
       - "auditing reference docs (audited transitively via the SKILL.md they belong to)"
-      - "auditing cross-references between skills or docs (use /references-audit)"
+      - "auditing cross-references between skills or docs (use /md-audit references)"
   subject:
     what: "Claude Code CLAUDE.md / CLAUDE.local.md files (root, ancestor, child, or local roles), evaluated against the cohesion-principles content-allocation framework."
     subject_type: "corpus"
@@ -283,7 +283,7 @@ audit_skill:
           expected: "Edits applied to the target files; per-file applied/skipped/failed summary."
         - n: 6
           action: "Render the final summary: what was applied per file, what was skipped, any failures, and the bucket totals. Remind the user that re-running the audit should now reproduce a clean (or reduced-FAIL) verdict -- detection and remediation are separate passes, so the re-run is the verification step."
-          expected: "Closing summary; user can re-run /claude-md-audit to verify FAILs cleared."
+          expected: "Closing summary; user can re-run /md-audit claude-md to verify FAILs cleared."
       output_template: |
         ## <file path> (<role>)
 
@@ -391,10 +391,10 @@ audit_skill:
 - `list` -- show numbered list of CLAUDE.md files visible from cwd; do not audit.
 - `<path>` -- audit a specific CLAUDE.md or CLAUDE.local.md.
 - `<numbers>` -- audit files by index from the most recent `list` output (e.g. `3 7 9`).
-- `fast` / `--fast` / `--yes` / `-y` -- non-interactive: skip the Q&A round and infer every DISCUSS/SPECIAL decision (see Non-interactive mode). Combine with any selector, e.g. `/claude-md-audit 3 7 fast`. Prose intent ("audit these and just apply everything, don't ask me") sets the same flag.
-- `density` / `--density` -- add the opt-in density lens (DD-1..DD-4: verbosity-in-place, extract-to-reference, intra-file redundancy, value-earns-tokens). Advisory only -- all findings are JUDGMENT/DISCUSS, never FAIL/AUTO, so a density-only run is always COMPLIANT. Combine with any selector, e.g. `/claude-md-audit 3 density`. Prose intent ("is this CLAUDE.md too verbose", "can anything move to a reference", "audit for token efficiency") sets the same flag. Off by default; the lens never runs unless requested.
+- `fast` / `--fast` / `--yes` / `-y` -- non-interactive: skip the Q&A round and infer every DISCUSS/SPECIAL decision (see Non-interactive mode). Combine with any selector, e.g. `/md-audit claude-md 3 7 fast`. Prose intent ("audit these and just apply everything, don't ask me") sets the same flag.
+- `density` / `--density` -- add the opt-in density lens (DD-1..DD-4: verbosity-in-place, extract-to-reference, intra-file redundancy, value-earns-tokens). Advisory only -- all findings are JUDGMENT/DISCUSS, never FAIL/AUTO, so a density-only run is always COMPLIANT. Combine with any selector, e.g. `/md-audit claude-md 3 density`. Prose intent ("is this CLAUDE.md too verbose", "can anything move to a reference", "audit for token efficiency") sets the same flag. Off by default; the lens never runs unless requested.
 
-Typical workflow: `/claude-md-audit list` to see what's available, then `/claude-md-audit 3 7` to audit specific files. Add `density` to also surface token-efficiency opportunities: `/claude-md-audit 3 density`.
+Typical workflow: `/md-audit claude-md list` to see what's available, then `/md-audit claude-md 3 7` to audit specific files. Add `density` to also surface token-efficiency opportunities: `/md-audit claude-md 3 density`.
 
 ## Workflow orchestration
 
@@ -431,8 +431,8 @@ When the non-interactive flag is set (argument token or expressed intent), the Q
 ## Cross-references
 
 - Canonical placement framework: `cohesion-principles (in skills-kit)`. The criteria in this skill's `references/audit-criteria.md` derive directly from that skill's content_allocation framework; when the two diverge, the canonical framework wins.
-- Schema validation tooling: `plugins/skills-kit/skills/skill-authoring/scripts/audit.py` (validates `claude_md:` YAML blocks against `CLAUDE_MD_SCHEMA` in schemas.py).
+- Schema validation tooling: `plugins/skills-kit/skills_kit_lib/audit.py` (run as `python -m skills_kit_lib.audit` from the plugin root; validates `claude_md:` YAML blocks against `CLAUDE_MD_SCHEMA` in `skills_kit_lib/schemas/claude_md.py`).
 - Code-directory insight-validation criteria: `references/code-dir-insight-filter.md` (the self-contained CD-1..CD-6 dimension, loaded only for dimension=code-directory files). The Level-1 trigger that flags the dimension lives in `scripts/discover.py::classify_dimension`.
 - Density lens criteria: `references/density-criteria.md` (the self-contained DD-1..DD-4 opt-in lens for verbosity/disclosure, loaded only when the `density` arg or equivalent intent is given). It reuses the value lattice in `references/code-dir-insight-filter.md` Step 4 rather than restating it. Advisory only -- never gates compliance.
 - Authoring counterpart: `claude-md-authoring:references/code-directory-claude-md.md` -- authoring code-directory CLAUDE.md files to that doc is what keeps this audit green (same four shapes, observation taxonomy, anchoring + path discipline).
-- Sibling audit skills: `/skill-audit` for SKILL.md files; `/references-audit` for broken cross-references across markdown.
+- Sibling audit skills: `skill-audit` (via `/md-audit skill`) for SKILL.md files; `references-audit` (via `/md-audit references`) for broken cross-references across markdown.

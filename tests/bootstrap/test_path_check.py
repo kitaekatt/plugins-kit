@@ -21,7 +21,7 @@ class TestCheckPathEntry:
         known_dir = path_dirs[0]
         result = check_path_entry(known_dir)
         assert result.passed is True
-        assert result.path == known_dir
+        assert result.subject == known_dir
 
     def test_missing_path_fails(self):
         result = check_path_entry("/nonexistent/path/xyz")
@@ -214,11 +214,18 @@ class TestAddPathToShellConfigIdempotency:
             f"Expected exactly one export line, got:\n{content}"
         )
 
-    def test_idempotent_with_forward_slash_form_already_present(self, tmp_path):
+    def test_idempotent_with_forward_slash_form_already_present(self, tmp_path, monkeypatch):
         """Existing $HOME/forward/slash line should suppress further writes
-        even when expanduser returns backslashes (native Windows Python)."""
+        even when expanduser returns backslashes (native Windows Python).
+
+        chdir to tmp_path first: on POSIX the simulated backslash path is a
+        RELATIVE filename (backslash is not a separator), so any file the
+        function creates from it must land in the temp dir — without the
+        chdir, a literal backslash-named file leaked into the repo root.
+        """
         from bootstrap_lib.path_check import add_path_to_shell_config
 
+        monkeypatch.chdir(tmp_path)
         bashrc = tmp_path / ".bashrc"
         bashrc.write_text(
             '# existing config\n'

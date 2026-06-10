@@ -7,8 +7,10 @@ skill carries its own deep procedures.
 ## Shared substrate (all three skills)
 
 - **The unreal-kit venv** — bootstrap provisions `~/.claude/plugins/data/plugins-kit/unreal-kit/.venv`. Every
-  skill's host-side Python runs there. `bootstrap.py` / `bootstrap_guard.py` / `path_repair.py` (vendored from
-  `bootstrap_lib`) handle provisioning and PATH repair.
+  skill's host-side Python runs there (host scripts re-exec into it via `bootstrap_guard.reexec_under_plugin_venv`).
+  `bootstrap_guard.py` / `path_repair.py` are vendored byte-for-byte from `bootstrap_lib` (guard + PATH repair);
+  `bootstrap.py` is unreal-kit's own UE-side dependency bootstrapper (not vendored — it installs packages into
+  UE's embedded Python via unreal-pip).
 - **UE project/engine discovery** — `lib/ue_discovery.py`, `lib/ue_env.py`, `lib/ue_ini.py` locate the project
   root, the engine install, and read `.ini` config. All three skills resolve "which UE / which project" through
   these.

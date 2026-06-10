@@ -74,9 +74,7 @@ def is_mcp_ready(
     is listening on the port.
     """
     try:
-        from ue_mcp_client import McpClient
-        from ue_mcp_client import ConnectionError as McpConnectionError
-        from ue_mcp_client import HandshakeError
+        from ue_mcp_client import HandshakeError, McpClient, McpConnectionError
     except ImportError:
         return _tcp_probe(host, port, probe_timeout_s)
 

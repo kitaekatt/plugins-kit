@@ -11,6 +11,8 @@ ancestor CLAUDE.md files, and emits a JSON bundle on stdout.
 reviewers see the full introduced/removed code, this script synthesizes
 new-file / deleted-file hunks for those actions by fetching content via
 `p4 print`. Supports both shelved (`@=<CL>`) and submitted (`#<rev>`) forms.
+Non-text filetypes (binary, apple, resource, ...) are never content-inlined;
+they get a one-line `(binary file added: N bytes)` placeholder instead.
 
 Also runs `p4 reconcile -n` recursively over the minimal covering set of
 directories containing CL files, and reports any unreconciled files
@@ -108,7 +110,6 @@ Stderr-only diagnostics. Non-zero exit on hard failure.
 
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -137,15 +138,14 @@ reexec_under_plugin_venv("p4-kit")
 try:
     from bootstrap_lib.path_repair import repair_path  # noqa: E402
 
-    # Shared code-review primitives -- VCS-neutral chunking, CLAUDE.md walk,
-    # submit-gate parsing/matching. See bootstrap_lib/code_review/.
-    from bootstrap_lib.code_review.chunking import (  # noqa: E402
-        partition_sections_into_chunks,
-        write_chunks,
-    )
-    from bootstrap_lib.code_review.claude_mds import (  # noqa: E402
-        collect_claude_mds,
-        collect_submit_gates,
+    # Shared VCS-neutral review pipeline -- subprocess wrapper, section
+    # splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
+    # emission. See bootstrap_lib/code_review/pipeline.py.
+    from bootstrap_lib.code_review.pipeline import (  # noqa: E402
+        assemble_bundle,
+        emit_bundle,
+        run_vcs,
+        split_sections,
     )
 except ImportError:
     # Belt-and-suspenders: _ensure_bootstrap_lib_importable() should already
@@ -160,7 +160,9 @@ except ImportError:
 repair_path()
 
 
-_FILE_HEADER = re.compile(r"^==== (//[^#]+)#(\d+) \([^)]*\) ====\s*$")
+# Captures (depot, rev, filetype). The filetype (e.g. `text`, `binary`,
+# `binary+l`) drives the binary guard in extract_diff's hunk synthesis.
+_FILE_HEADER = re.compile(r"^==== (//[^#]+)#(\d+) \(([^)]*)\) ====\s*$")
 _AFFECTED_LINE = re.compile(r"^\.\.\. (//[^#]+)#(\d+) ([\w/]+)\s*$")
 _RECONCILE_ACTIONS = {"add", "edit", "delete"}
 
@@ -192,17 +194,12 @@ DEFAULT_BUNDLE_ROOT = (
 def run_p4(args: list[str]) -> tuple[int, str, str]:
     """Run a p4 command, return (returncode, stdout, stderr).
 
-    Forces UTF-8 decoding so non-Latin-1 content (CJK, emoji) in diffs doesn't
-    abort the subprocess reader thread on Windows, whose default text decoder
-    is the system ANSI codepage (cp1252 on en-US/en-GB).
+    Thin wrapper over the shared run_vcs, which forces UTF-8 decoding so
+    non-Latin-1 content (CJK, emoji) in diffs doesn't abort the subprocess
+    reader thread on Windows, whose default text decoder is the system
+    ANSI codepage (cp1252 on en-US/en-GB).
     """
-    proc = subprocess.run(
-        ["p4", *args],
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    return proc.returncode, proc.stdout or "", proc.stderr or ""
+    return run_vcs("p4", args)
 
 
 def has_describe_content(output: str) -> bool:
@@ -372,60 +369,127 @@ def parse_file_actions(describe_output: str) -> dict[str, tuple[str, str]]:
     return actions
 
 
+def _parse_p4_header(line: str) -> Optional[dict]:
+    """Header matcher for the shared splitter."""
+    m = _FILE_HEADER.match(line)
+    if not m:
+        return None
+    return {"depot": m.group(1), "rev": m.group(2), "type": m.group(3)}
+
+
 def split_diff_sections(diff_text: str) -> tuple[str, list[dict]]:
-    """Split diff text into (preamble, [{depot, rev, header, body}, ...]) by file header."""
-    preamble_lines: list[str] = []
-    sections: list[dict] = []
-    current: Optional[dict] = None
-
-    for line in diff_text.splitlines(keepends=True):
-        m = _FILE_HEADER.match(line.rstrip("\n"))
-        if m:
-            if current is not None:
-                sections.append(current)
-            current = {
-                "depot": m.group(1),
-                "rev": m.group(2),
-                "header": line,
-                "body": "",
-            }
-        elif current is None:
-            preamble_lines.append(line)
-        else:
-            current["body"] += line
-    if current is not None:
-        sections.append(current)
-
-    return "".join(preamble_lines), sections
+    """Split diff text into (preamble, [{depot, rev, type, header, body}, ...]) by file header."""
+    return split_sections(diff_text, _parse_p4_header)
 
 
-def fetch_file_content(
+def _content_spec(
     depot_path: str, rev: str, cl: str, is_shelved: bool, is_delete: bool
 ) -> Optional[str]:
-    """Fetch file content via `p4 print -q`.
+    """File spec addressing the content a synthesized hunk should show.
 
     - Shelved add/edit: `//depot/path@=<CL>` (shelved content at this CL)
     - Shelved delete:   `//depot/path#head` (head rev is the content about to be deleted)
     - Submitted add:    `//depot/path#<rev>` (content at the submitted rev)
     - Submitted delete: `//depot/path#<rev-1>` (content prior to deletion)
+
+    Returns None when no addressable content exists (delete at rev 1).
     """
     if is_shelved:
-        spec = f"{depot_path}#head" if is_delete else f"{depot_path}@={cl}"
-    elif is_delete:
+        return f"{depot_path}#head" if is_delete else f"{depot_path}@={cl}"
+    if is_delete:
         try:
             rev_num = int(rev)
         except ValueError:
             return None
         if rev_num <= 1:
             return None
-        spec = f"{depot_path}#{rev_num - 1}"
-    else:
-        spec = f"{depot_path}#{rev}"
+        return f"{depot_path}#{rev_num - 1}"
+    return f"{depot_path}#{rev}"
 
+
+def fetch_file_content(
+    depot_path: str, rev: str, cl: str, is_shelved: bool, is_delete: bool
+) -> Optional[str]:
+    """Fetch file content via `p4 print -q` (see _content_spec for addressing)."""
+    spec = _content_spec(depot_path, rev, cl, is_shelved, is_delete)
+    if spec is None:
+        return None
     rc, out, _ = run_p4(["print", "-q", spec])
     if rc != 0:
         return None
     return out
+
+
+def fetch_filetype(
+    depot_path: str, rev: str, cl: str, is_shelved: bool, is_delete: bool
+) -> Optional[str]:
+    """Look up the p4 filetype for a file omitted from the Differences section.
+
+    Files with a ==== header carry their type inline; omitted files (e.g.
+    pure adds in mixed shelved CLs) need an fstat. `type` is the open/shelved
+    filetype; `headType` covers submitted revisions -- prefer `type`, fall
+    back to `headType`. Returns None on any failure (caller defaults to text,
+    the historical behavior).
+    """
+    spec = _content_spec(depot_path, rev, cl, is_shelved, is_delete)
+    if spec is None:
+        return None
+    rc, out, _ = run_p4(["fstat", "-T", "type,headType", spec])
+    if rc != 0:
+        return None
+    found: dict[str, str] = {}
+    for line in out.splitlines():
+        for field in ("type", "headType"):
+            prefix = f"... {field} "
+            if line.startswith(prefix):
+                found[field] = line[len(prefix):].strip()
+    return found.get("type") or found.get("headType")
+
+
+def fetch_file_size(
+    depot_path: str, rev: str, cl: str, is_shelved: bool, is_delete: bool
+) -> Optional[int]:
+    """Byte size of the content a synthesized hunk would have shown.
+
+    Uses `p4 fstat -Ol -T fileSize` (per-revision field; no content
+    download). Returns None when the size is unavailable.
+    """
+    spec = _content_spec(depot_path, rev, cl, is_shelved, is_delete)
+    if spec is None:
+        return None
+    rc, out, _ = run_p4(["fstat", "-Ol", "-T", "fileSize", spec])
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        if line.startswith("... fileSize "):
+            try:
+                return int(line[len("... fileSize "):].strip())
+            except ValueError:
+                return None
+    return None
+
+
+# p4 base filetypes whose content must not be inlined into a text diff.
+# Substring "binary" covers binary/xbinary/ubinary/...; the named set covers
+# the remaining non-text bases. Unknown or empty types default to text
+# (the historical behavior before the binary guard existed).
+_NON_TEXT_BASE_TYPES = {"apple", "resource", "tempobj", "ctempobj", "uresource"}
+
+
+def _is_text_filetype(filetype: Optional[str]) -> bool:
+    """True when a p4 filetype's base (before `+modifiers`) is text-like."""
+    if not filetype:
+        return True
+    base = filetype.split("+", 1)[0].strip().lower()
+    if "binary" in base:
+        return False
+    return base not in _NON_TEXT_BASE_TYPES
+
+
+def _binary_placeholder(action_word: str, size: Optional[int]) -> str:
+    """One-line stand-in for binary content we refuse to inline."""
+    detail = f"{size} bytes" if size is not None else "size unknown"
+    return f"(binary file {action_word}: {detail})\n"
 
 
 def synthesize_add_hunk(content: str) -> str:
@@ -458,6 +522,12 @@ def extract_diff(
     synthesized new-file (for add-style actions) or deleted-file (for delete-style actions)
     hunk, by fetching content via `p4 print`. A warning is emitted to stderr naming any
     files we could not synthesize.
+
+    Binary guard: non-text filetypes (binary, apple, resource, ...) are never
+    content-inlined -- a shelved .uasset would mojibake-bloat the chunks. The
+    type comes from the ==== header's `(type)` field, or `p4 fstat` for files
+    omitted from Differences. Binary add/delete sections get a one-line
+    `(binary file added: N bytes)` placeholder instead.
     """
     if "Differences ..." not in describe_output:
         return ""
@@ -469,6 +539,7 @@ def extract_diff(
     result_parts: list[str] = [preamble] if preamble else []
     synthesized_adds: list[str] = []
     synthesized_deletes: list[str] = []
+    skipped_binaries: list[str] = []
     unhandled: list[tuple[str, str]] = []
     seen_depots: set[str] = set()
 
@@ -489,7 +560,17 @@ def extract_diff(
             continue
 
         _, action = action_info
-        if action in _ADD_ACTIONS:
+        is_add = action in _ADD_ACTIONS
+        is_delete = action in _DELETE_ACTIONS
+        if (is_add or is_delete) and not _is_text_filetype(sec.get("type")):
+            size = fetch_file_size(depot, rev, cl, is_shelved, is_delete)
+            placeholder = _binary_placeholder(
+                "deleted" if is_delete else "added", size
+            )
+            result_parts.append(header + body + placeholder)
+            skipped_binaries.append(depot)
+            continue
+        if is_add:
             content = fetch_file_content(depot, rev, cl, is_shelved, is_delete=False)
             if content is not None:
                 hunk = synthesize_add_hunk(content)
@@ -497,7 +578,7 @@ def extract_diff(
                 synthesized_adds.append(depot)
                 continue
             unhandled.append((depot, action))
-        elif action in _DELETE_ACTIONS:
+        elif is_delete:
             content = fetch_file_content(depot, rev, cl, is_shelved, is_delete=True)
             if content is not None:
                 hunk = synthesize_delete_hunk(content)
@@ -514,15 +595,30 @@ def extract_diff(
     for depot, (rev, action) in actions.items():
         if depot in seen_depots:
             continue
-        synthesized_header = f"==== {depot}#{rev} (text) ====\n"
-        if action in _ADD_ACTIONS:
+        is_add = action in _ADD_ACTIONS
+        is_delete = action in _DELETE_ACTIONS
+        if not (is_add or is_delete):
+            continue
+        # No ==== header to read the type from; ask fstat. Unknown -> text
+        # (the historical hardcoded default).
+        filetype = fetch_filetype(depot, rev, cl, is_shelved, is_delete) or "text"
+        synthesized_header = f"==== {depot}#{rev} ({filetype}) ====\n"
+        if not _is_text_filetype(filetype):
+            size = fetch_file_size(depot, rev, cl, is_shelved, is_delete)
+            placeholder = _binary_placeholder(
+                "deleted" if is_delete else "added", size
+            )
+            result_parts.append(synthesized_header + placeholder)
+            skipped_binaries.append(depot)
+            continue
+        if is_add:
             content = fetch_file_content(depot, rev, cl, is_shelved, is_delete=False)
             if content is not None:
                 result_parts.append(synthesized_header + synthesize_add_hunk(content))
                 synthesized_adds.append(depot)
                 continue
             unhandled.append((depot, action))
-        elif action in _DELETE_ACTIONS:
+        else:
             content = fetch_file_content(depot, rev, cl, is_shelved, is_delete=True)
             if content is not None:
                 result_parts.append(synthesized_header + synthesize_delete_hunk(content))
@@ -530,6 +626,12 @@ def extract_diff(
                 continue
             unhandled.append((depot, action))
 
+    if skipped_binaries:
+        print(
+            f"prepare_review: skipped binary content for {len(skipped_binaries)} file(s) "
+            "(placeholder emitted): " + ", ".join(skipped_binaries),
+            file=sys.stderr,
+        )
     if synthesized_adds:
         print(
             f"prepare_review: synthesized add hunks for {len(synthesized_adds)} file(s): "
@@ -820,39 +922,20 @@ def build_bundle(cl: str, bundle_dir: Path) -> dict:
     local_map = resolve_local_paths(depot_files)
     workspace_root = get_workspace_root()
 
-    bundle_dir.mkdir(parents=True, exist_ok=True)
     preamble, sections = _p4_diff_to_sections(diff)
-    chunks = partition_sections_into_chunks(
-        sections, MAX_CHUNK_BYTES, preamble=preamble
+    files = [
+        {"identifier": depot, "depot": depot, "local": local_map.get(depot)}
+        for depot in depot_files
+    ]
+    core = assemble_bundle(
+        preamble=preamble,
+        sections=sections,
+        files=files,
+        bundle_dir=bundle_dir,
+        max_chunk_bytes=MAX_CHUNK_BYTES,
+        workspace_root=workspace_root,
     )
-    diff_chunks = write_chunks(chunks, bundle_dir)
-
-    # depot -> chunk index, for tagging changed_files entries.
-    depot_to_chunk: dict[str, int] = {}
-    for entry in diff_chunks:
-        for d in entry["files"]:
-            depot_to_chunk[d] = entry["index"]
-
-    changed_files: list[dict] = []
-    unique: list[str] = []
-    seen: set[str] = set()
-    for depot in depot_files:
-        local = local_map.get(depot)
-        claude_mds: list[str] = []
-        if local:
-            claude_mds = collect_claude_mds(Path(local), workspace_root)
-            for cm in claude_mds:
-                if cm not in seen:
-                    unique.append(cm)
-                    seen.add(cm)
-        changed_files.append(
-            {
-                "depot": depot,
-                "local": local,
-                "chunk_index": depot_to_chunk.get(depot),
-                "claude_mds": claude_mds,
-            }
-        )
+    changed_files = core["changed_files"]
 
     minimal_dirs = compute_minimal_dirs(
         [f["local"] for f in changed_files], workspace_root
@@ -860,20 +943,16 @@ def build_bundle(cl: str, bundle_dir: Path) -> dict:
     unreconciled = find_unreconciled(minimal_dirs)
     unresolved = find_unresolved(cl)
 
-    submit_gates = collect_submit_gates(
-        unique, [f["local"] for f in changed_files if f["local"]], workspace_root
-    )
-
     return {
         "cl": cl,
         "description": description,
-        "bundle_dir": str(bundle_dir),
-        "diff_chunks": diff_chunks,
+        "bundle_dir": core["bundle_dir"],
+        "diff_chunks": core["diff_chunks"],
         "changed_files": changed_files,
-        "unique_claude_mds": unique,
+        "unique_claude_mds": core["unique_claude_mds"],
         "unreconciled": unreconciled,
         "unresolved": unresolved,
-        "submit_gates": submit_gates,
+        "submit_gates": core["submit_gates"],
         "auto_shelved": auto_shelved,
         "shelf_fingerprint": shelf_fingerprint,
     }
@@ -950,14 +1029,7 @@ def main(argv: list[str]) -> int:
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
-    # Persist alongside the chunks so the skill (or a human) can re-read
-    # without re-running prepare_review.
-    (bundle_dir / "bundle.json").write_text(
-        json.dumps(bundle, indent=2) + "\n", encoding="utf-8"
-    )
-    json.dump(bundle, sys.stdout, indent=2)
-    sys.stdout.write("\n")
-    return 0
+    return emit_bundle(bundle, bundle_dir)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ _schema_version: 1
 name: skill-authoring
 author: christina
 skill-type: domain-skill
-description: Use when authoring, auditing, or refining a Claude Code skill. Do NOT use for invoking existing skills or for general writing tasks.
+description: Use when authoring or refining a Claude Code skill -- types, contracts, authoring-time validation. Do NOT use to audit skills (use md-audit) or invoke them.
 ---
 
 # Skill Authoring
@@ -26,10 +26,11 @@ domain_skill:
   scope:
     covers:
       - authoring a new skill of any of the five canonical types
-      - auditing an existing skill against its declared type contract
+      - validating a skill against its declared type contract at authoring time
       - tagging a skill's frontmatter with a skill-type value
       - validating a skill's YAML contract block against the type schema
     excludes:
+      - auditing existing skills as a standalone operation (use /md-audit skill)
       - invoking existing skills (use the skill itself)
       - general writing tasks unrelated to skill design
   orientation:
@@ -63,8 +64,8 @@ domain_skill:
         summary: Worked audit of a real skill, with the friction the framework surfaces about itself.
       - id: scripts
         path: references/scripts.md
-        keywords: [audit.py, classify.py, tag.py, schemas.py, skill_hierarchy_report.py, _corpus.py, _shared.py, scripts, deterministic checks, heuristic detectors, type inference, frontmatter tagging, mixed-type detection, judgment-required, idempotent, calibration, smoke-test, friction, hierarchy report, HTML report, shared discovery, skill enumeration, marketplace grouping, available-skills surface, installed_plugins.json, skill-type tooltip]
-        summary: Audit, classify, tag, and hierarchy-report script reference -- usage, output verdicts, gotchas, calibration history, plus the plugin-level _corpus.py shared discovery module.
+        keywords: [audit, classify, tag, skills_kit_lib, schema_registry.py, skill_hierarchy_report.py, corpus.py, markdown_heuristics.py, scripts, deterministic checks, heuristic detectors, type inference, frontmatter tagging, mixed-type detection, judgment-required, idempotent, calibration, smoke-test, friction, hierarchy report, HTML report, shared discovery, skill enumeration, marketplace grouping, available-skills surface, installed_plugins.json, skill-type tooltip]
+        summary: Audit, classify, tag, and hierarchy-report script reference -- usage, output verdicts, gotchas, calibration history, plus the skills_kit_lib.corpus shared discovery module.
       - id: patterns_actions
         path: references/patterns-actions.md
         keywords: [actions pattern, multi-step recipe, YAML steps, capture, tell_user, facade script, narration, deterministic execution, ordered sequence, sub-domain action, capability action]
@@ -84,35 +85,35 @@ domain_skill:
   capabilities:
     - id: audit
       keywords: [audit, contract check, validate skill, run audit, schema validation]
-      description: Run deterministic contract checks against a SKILL.md.
-      operation: python scripts/audit.py <path>
-      tool: scripts/audit.py
+      description: Run deterministic contract checks against a SKILL.md (authoring-time validation).
+      operation: python -m skills_kit_lib.audit <path>
+      tool: skills_kit_lib/audit.py
       scope_axes: [single-skill]
-      reference_section: scripts.md (audit.py)
+      reference_section: scripts.md (audit)
     - id: classify
       keywords: [classify, infer type, type detection, mixed-type detection, suggest type]
       description: Infer a SKILL.md's type from content shape and YAML root.
-      operation: python scripts/classify.py <path>
-      tool: scripts/classify.py
+      operation: python -m skills_kit_lib.classify <path>
+      tool: skills_kit_lib/classify.py
       scope_axes: [single-skill]
-      reference_section: scripts.md (classify.py)
+      reference_section: scripts.md (classify)
     - id: tag
       keywords: [tag, write skill-type, frontmatter tagging, idempotent skill-type write]
       description: Write a skill-type value into a SKILL.md's frontmatter idempotently.
-      operation: python scripts/tag.py <path> <skill-type>
-      tool: scripts/tag.py
+      operation: python -m skills_kit_lib.tag <path> <skill-type>
+      tool: skills_kit_lib/tag.py
       scope_axes: [single-skill]
-      reference_section: scripts.md (tag.py)
+      reference_section: scripts.md (tag)
   tools:
     - name: audit
-      command: python scripts/audit.py
-      description: YAML-first schema validator with markdown-heuristic fallback for legacy skills.
+      command: python -m skills_kit_lib.audit
+      description: YAML-first schema validator with markdown-heuristic fallback for legacy skills. Run from the plugin root (the -m form needs skills_kit_lib importable; see scripts.md).
     - name: classify
-      command: python scripts/classify.py
+      command: python -m skills_kit_lib.classify
       description: Type inference across the five canonical skill types.
     - name: tag
-      command: python scripts/tag.py
+      command: python -m skills_kit_lib.tag
       description: Idempotent frontmatter tagger; refuses to invent or overwrite without --force.
 ```
 
-The corpus-wide hierarchy report lives in the sibling `/skill-audit` skill: invoke `/skill-audit hierarchy` for the interactive HTML browser, `/skill-audit roster` for the markdown roster.
+The corpus-wide hierarchy report lives in the sibling `skill-audit` skill (reached through the md-audit front door): invoke `/md-audit skill hierarchy` for the interactive HTML browser, `/md-audit skill roster` for the markdown roster.

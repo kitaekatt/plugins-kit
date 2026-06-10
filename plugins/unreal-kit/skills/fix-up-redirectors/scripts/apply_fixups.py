@@ -400,7 +400,7 @@ if redirector_files:
         if not_opened:
             print(f"Attempted p4 delete on {len(not_opened)} file(s); "
                   f"{len(not_opened) - len(lock_failures) - len(delete_failures)} succeeded, "
-                  f"{len(lock_failures)} locked (will retry via reconcile post-exit).")
+                  f"{len(lock_failures)} locked (will retry via p4 delete post-exit).")
 
 # 6) Lock-failure retry pass.
 #    UE has been observed to keep Windows file handles open on referencer
@@ -459,5 +459,5 @@ print(f"Done. CL {cl_num}: deleted {manifest['redirectors_deleted']} redirectors
       + ".")
 if lock_failures:
     print(f"  ({len(lock_failures)} file(s) locked by UE — retry via the "
-          f"reconcile command above after UE exits.)")
+          f"p4 delete command above after UE exits.)")
 print(f"Manifest: {manifest_path}")

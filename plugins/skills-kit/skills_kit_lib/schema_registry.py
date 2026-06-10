@@ -74,10 +74,6 @@ def resolve_schema(yaml_data: dict) -> tuple[str, dict] | tuple[None, None]:
     """Return (root_key, schema) for the YAML data, or (None, None) if no
     recognized root is present.
 
-    Dispatches technique-skill via trigger_model. Callers that need the variant
-    explicitly should call resolve_technique_schema themselves; this function
-    returns whichever technique-skill variant matches the trigger_model value.
-
     When a block carries both a skill-type root AND a portable root at the same
     top level (e.g. `reference_skill:` + top-level `references:` in a single
     fenced block -- a valid layout per content-authoring's typed-unit composition),
@@ -86,11 +82,6 @@ def resolve_schema(yaml_data: dict) -> tuple[str, dict] | tuple[None, None]:
     """
     if not isinstance(yaml_data, dict):
         return None, None
-
-    # Late import to avoid circular dependency at module load time.
-    if "technique_skill" in yaml_data:
-        from .schemas.skill_types import resolve_technique_schema  # noqa: PLC0415
-        return "technique_skill", resolve_technique_schema(yaml_data)
 
     # Prefer skill-type roots over portable roots when both are present.
     for root in SKILL_TYPE_ROOTS:

@@ -1,0 +1,11 @@
+# The prompt references {{ inputs.dif }} (a typo of the declared `diff`).
+# Without the inputs cross-check this compiles and interpolates the string
+# "undefined" into the agent prompt at runtime. Errors at COMPILE time, not
+# load time -- exercised via compile_doc.
+name: undeclared-input
+description: Prompt references an input that is not declared.
+inputs:
+  diff: string
+steps:
+  - id: review
+    agent: { prompt: "Review this {{ inputs.dif }}" }

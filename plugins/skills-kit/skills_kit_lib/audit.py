@@ -599,10 +599,18 @@ def audit(skill_md_path: Path) -> dict[str, Any]:
 
     type_specific: list[CheckResult] = []
     if not contract_staged and declared_type in TYPE_RUNNERS:
+        # Legacy heuristics run on the NARRATIVE body -- code fences stripped,
+        # like mixed_type_signal (strip_code_fences_before_heuristics insight):
+        # numbered lists / markers inside fenced examples must not count.
+        narrative_body = Body(
+            text=strip_code_fences(body.text),
+            lines=body.lines,
+            tokens_approx=body.tokens_approx,
+        )
         if declared_type == "technique-skill":
-            type_specific = check_technique_skill(body, skill_dir, fm)
+            type_specific = check_technique_skill(narrative_body, skill_dir, fm)
         else:
-            type_specific = TYPE_RUNNERS[declared_type](body, skill_dir)
+            type_specific = TYPE_RUNNERS[declared_type](narrative_body, skill_dir)
 
     if not contract_staged:
         score, signals = mixed_type_signal(body.text)

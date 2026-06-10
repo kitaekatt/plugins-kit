@@ -13,15 +13,22 @@ Usage:
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from datetime import datetime
 
 
 def find_project_dir(cwd: str) -> Path:
-    """Find the ~/.claude/projects/ directory for the given working directory."""
-    # Claude Code encodes path by replacing '/' with '-'
-    encoded = cwd.replace("/", "-")
+    """Find the ~/.claude/projects/ directory for the given working directory.
+
+    Claude Code encodes the cwd by replacing EVERY non-alphanumeric character
+    with '-' (verified against the CLI bundle: path.replace(/[^a-zA-Z0-9]/g,
+    "-")), so dots and underscores encode too -- e.g. /Users/x/.claude ->
+    -Users-x--claude. Encoded names longer than 200 chars are additionally
+    truncated with a hash suffix; that edge is not handled here.
+    """
+    encoded = re.sub(r"[^A-Za-z0-9]", "-", cwd)
     return Path.home() / ".claude" / "projects" / encoded
 
 

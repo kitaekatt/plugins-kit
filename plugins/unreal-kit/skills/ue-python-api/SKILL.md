@@ -61,7 +61,7 @@ capability_skill:
       reference_section: architecture.md (execution modes)
       gotchas:
         - Output via unreal.log() is NOT captured by the terminal runner -- write YAML to <Project>/Saved/PythonOutput/ to return results to the agent.
-        - Invoke the runner with the plugin venv Python so upyrc is available; system Python misses upyrc and falls back to commandlet-only mode.
+        - ue_runner.py re-execs itself under the plugin venv (~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/) so upyrc/pyyaml resolve from any invoking Python -- but only if bootstrap has provisioned that venv (see the Precondition section).
     - id: search_stubs
       keywords: [search stubs, find class, find method, API lookup, autocomplete equivalent]
       user_objective: Look up class names, method signatures, or property names in the bundled unreal.py stub file before authoring a script.
@@ -70,7 +70,7 @@ capability_skill:
       scope_axes: [classes, methods]
       reference_section: architecture.md (stubs)
   gotchas:
-    - Always invoke ue_runner.py with the plugin venv Python (~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/) so upyrc is available; system Python misses upyrc and degrades to slower commandlet-only mode.
+    - ue_runner.py re-execs itself under the plugin venv (~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/), so `python ue_runner.py` works from any interpreter -- provided bootstrap has provisioned the venv (see Precondition). If the venv is missing, the runner exits with the bootstrap-absence message instead of degrading to commandlet-only mode.
     - The Editor prefix in class names like EditorAssetLibrary is a UE C++ naming convention -- it does NOT mean those classes need the Editor running. They work in commandlet mode. Exception EditorUtilityLibrary, which queries the user's active selection and does require a running Editor.
     - Output via unreal.log() is NOT captured by the terminal runner. To get results back, write YAML to <Project>/Saved/PythonOutput/ -- the runner auto-detects these.
     - Never add project-specific asset paths, class names, workflows, or code patterns. This plugin is engine-generic and MIT-licensed; project-specific content goes in a project-side skill.

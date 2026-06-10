@@ -39,6 +39,22 @@ def iter_yaml_blocks(body_text: str):
         yield m.group(1)
 
 
+def safe_load_block(block_text: str) -> dict | None:
+    """Parse one fenced block's text as YAML; return the dict or None.
+
+    None means: pyyaml unavailable, the YAML failed to parse, or the payload
+    is not a mapping. Callers that need to distinguish "no parser" check
+    HAVE_YAML themselves.
+    """
+    if not HAVE_YAML:
+        return None
+    try:
+        data = _pyyaml.safe_load(block_text)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def collect_yaml_units(body_text: str) -> tuple[list[tuple[str, dict]], str | None]:
     """Walk all fenced yaml blocks; collect (unit_root, block_data) for every
     recognized root key across all blocks.

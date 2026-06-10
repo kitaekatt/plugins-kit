@@ -9,9 +9,10 @@ from unittest.mock import patch
 import pytest
 
 from bootstrap_lib.venv_check import (
-    VenvCheckResult,
     check_venv,
+    ensure_venv,
     export_venv_env_var,
+    find_uv,
     venv_env_var_name,
 )
 
@@ -262,3 +263,139 @@ class TestExportVenvEnvVar:
         assert value is not None
         assert "has space" in value
         assert os.path.isfile(value)
+
+
+class TestFindUv:
+    def test_finds_uv_on_path(self):
+        # uv is a hard prerequisite of this repo's test environment.
+        assert find_uv() is not None
+
+    def test_falls_back_to_local_bin(self, tmp_path, monkeypatch):
+        local_bin = tmp_path / ".local" / "bin"
+        local_bin.mkdir(parents=True)
+        fake_uv = local_bin / "uv"
+        fake_uv.write_text("#!/bin/sh\n")
+        monkeypatch.setattr("bootstrap_lib.venv_check.shutil.which", lambda name: None)
+        monkeypatch.setattr(
+            "bootstrap_lib.venv_check.os.path.expanduser",
+            lambda p: str(tmp_path / p[2:]) if p.startswith("~/") else p,
+        )
+        assert find_uv() == str(fake_uv)
+
+    def test_none_when_absent(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("bootstrap_lib.venv_check.shutil.which", lambda name: None)
+        monkeypatch.setattr(
+            "bootstrap_lib.venv_check.os.path.expanduser",
+            lambda p: str(tmp_path / p[2:]) if p.startswith("~/") else p,
+        )
+        assert find_uv() is None
+
+
+class TestEnsureVenv:
+    """The single shared venv remediation path (B9)."""
+
+    def _passing_result(self, venv_path):
+        from bootstrap_lib.result import Result
+        return Result(passed=True, subject=venv_path, message="venv ok (0 imports verified)")
+
+    def _failing_result(self, venv_path):
+        from bootstrap_lib.result import Result
+        return Result(passed=False, subject=venv_path, message="venv not found",
+                      remediation_cmd="uv sync --project p")
+
+    def test_passing_no_sync_no_entries(self, tmp_path, monkeypatch):
+        """When the check passes and always_sync is off, nothing runs."""
+        venv_path = str(tmp_path / ".venv")
+        monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
+                            lambda d, r, i: self._passing_result(venv_path))
+        ran = []
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run",
+                            lambda *a, **k: ran.append(a))
+        result, entries = ensure_venv(str(tmp_path), venv_path)
+        assert result.passed
+        assert entries == []
+        assert ran == []
+
+    def test_failing_check_runs_sync_and_logs(self, tmp_path, monkeypatch):
+        """A failing check triggers uv sync; remediation is logged."""
+        venv_path = str(tmp_path / ".venv")
+        states = [self._failing_result(venv_path), self._passing_result(venv_path)]
+        monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
+                            lambda d, r, i: states.pop(0))
+        monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
+
+        class _Proc:
+            returncode = 0
+            stderr = b""
+        calls = []
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run",
+                            lambda cmd, **k: calls.append((cmd, k)) or _Proc())
+
+        result, entries = ensure_venv(str(tmp_path / "proj"), venv_path, extras=["dev"])
+        assert result.passed
+        assert any("not ready, running" in e for e in entries)
+        assert any(e == "created" for e in entries)
+        cmd, kwargs = calls[0]
+        assert cmd[:2] == ["/fake/uv", "sync"]
+        assert "--extra" in cmd and "dev" in cmd
+        assert kwargs["env"]["UV_PROJECT_ENVIRONMENT"] == venv_path
+
+    def test_sync_failure_surfaces_stderr(self, tmp_path, monkeypatch):
+        """uv sync errors are logged with exit code + stderr (B8: never swallowed)."""
+        venv_path = str(tmp_path / ".venv")
+        monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
+                            lambda d, r, i: self._failing_result(venv_path))
+        monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
+
+        class _Proc:
+            returncode = 2
+            stderr = b"No pyproject.toml found"
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run",
+                            lambda cmd, **k: _Proc())
+
+        result, entries = ensure_venv(str(tmp_path / "proj"), venv_path)
+        assert not result.passed
+        assert any("uv sync failed (exit 2)" in e and "No pyproject.toml" in e for e in entries)
+
+    def test_sync_exception_surfaces(self, tmp_path, monkeypatch):
+        """A subprocess exception is logged, not swallowed (B8)."""
+        venv_path = str(tmp_path / ".venv")
+        monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
+                            lambda d, r, i: self._failing_result(venv_path))
+        monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
+
+        def _boom(cmd, **k):
+            raise OSError("exec failed")
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run", _boom)
+
+        result, entries = ensure_venv(str(tmp_path / "proj"), venv_path)
+        assert not result.passed
+        assert any("uv sync error" in e and "exec failed" in e for e in entries)
+
+    def test_uv_missing_logged(self, tmp_path, monkeypatch):
+        venv_path = str(tmp_path / ".venv")
+        monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
+                            lambda d, r, i: self._failing_result(venv_path))
+        monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: None)
+        result, entries = ensure_venv(str(tmp_path / "proj"), venv_path)
+        assert not result.passed
+        assert any("uv not found" in e for e in entries)
+
+    def test_always_sync_runs_even_when_passing(self, tmp_path, monkeypatch):
+        """Self-setup mode: sync runs on a passing check, silently when clean."""
+        venv_path = str(tmp_path / ".venv")
+        monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
+                            lambda d, r, i: self._passing_result(venv_path))
+        monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
+
+        class _Proc:
+            returncode = 0
+            stderr = b""
+        ran = []
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run",
+                            lambda cmd, **k: ran.append(cmd) or _Proc())
+
+        result, entries = ensure_venv(str(tmp_path / "proj"), venv_path, always_sync=True)
+        assert result.passed
+        assert entries == []  # clean no-op sync stays silent
+        assert ran  # but the sync did run

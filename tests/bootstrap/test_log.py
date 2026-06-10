@@ -85,3 +85,19 @@ class TestWriteLogBlock:
         with open(log_path) as f:
             content = f.read()
         assert "done in" not in content
+
+
+class TestTrimBlockBoundary:
+    """B20: trimming must not decapitate a block — the kept tail starts at a header."""
+
+    def test_trim_starts_at_block_header(self, data_dir):
+        # Many small blocks, then trigger a trim
+        for i in range(0, MAX_LOG_LINES + 60, 3):
+            write_log_block(data_dir, f"Block{i}", [f"entry-a-{i}", f"entry-b-{i}"])
+        log_path = os.path.join(data_dir, LOG_FILENAME)
+        with open(log_path) as f:
+            lines = f.readlines()
+        assert len(lines) <= MAX_LOG_LINES
+        # First kept line is a block header (not an orphaned entry or footer)
+        assert lines[0].startswith("--- Block")
+        assert " done in " not in lines[0]

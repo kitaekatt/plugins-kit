@@ -85,6 +85,8 @@ def run_autodetect(
         Tuple of (changed, action_messages, ok_messages).
         Autodetect functions may return bool (backward compat) or a dict with
         keys: changed (bool), actions (list[str]), ok (list[str]).
+        If the autodetect script raises, the error is surfaced as an action
+        message (never swallowed — the logging contract, B8).
     """
     _empty = (False, [], [])
     parts = autodetect_spec.split()
@@ -119,11 +121,17 @@ def run_autodetect(
 
         # Backward compat: plain bool
         return (bool(result), [], [])
-    except Exception:
-        return _empty
+    except Exception as e:
+        # Non-fatal but never silent: route the error to the action entries
+        # via the actions channel so the user sees the autodetect broke.
+        return (False, [f"config autodetect FAILED - {e}"], [])
 
 
-def run_project_autodetect(plugin_root: str, autodetect_spec: str) -> Optional[Dict[str, str]]:
+def run_project_autodetect(
+    plugin_root: str,
+    autodetect_spec: str,
+    errors: Optional[List[str]] = None,
+) -> Optional[Dict[str, str]]:
     """Run a project_config autodetect. Returns dict of discovered field values, or None.
 
     Unlike run_autodetect, this calls the function with no arguments and expects
@@ -132,6 +140,9 @@ def run_project_autodetect(plugin_root: str, autodetect_spec: str) -> Optional[D
     Args:
         plugin_root: Plugin root directory
         autodetect_spec: "<script_path> <function_name>" from manifest
+        errors: Optional list; when the autodetect script raises, an error
+            message is appended here so the caller can log it (B8 — a crashed
+            autodetect must not silently read as "no project detected").
 
     Returns:
         Dict of discovered field values, or None if nothing detected.
@@ -162,7 +173,9 @@ def run_project_autodetect(plugin_root: str, autodetect_spec: str) -> Optional[D
         if isinstance(result, dict):
             return result
         return None
-    except Exception:
+    except Exception as e:
+        if errors is not None:
+            errors.append(f"project autodetect FAILED - {e}")
         return None
 
 

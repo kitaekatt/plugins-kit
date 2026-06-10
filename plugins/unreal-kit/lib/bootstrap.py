@@ -37,11 +37,16 @@ def ensure_dependencies():
     if not packages:
         return
 
-    # Check what's already installed
+    # Check what's already installed. importlib.metadata is the stdlib
+    # replacement for pkg_resources (removed from modern setuptools).
     try:
-        import pkg_resources
-        installed = {pkg.key for pkg in pkg_resources.working_set}
-    except ImportError:
+        from importlib import metadata as _metadata
+        installed = {
+            (dist.metadata["Name"] or "").lower()
+            for dist in _metadata.distributions()
+        }
+        installed.discard("")
+    except Exception:
         installed = set()
 
     missing = [p for p in packages if p.lower() not in installed]
@@ -53,12 +58,11 @@ def ensure_dependencies():
     import unreal_pip
     unreal_pip.install(missing)
 
-    # Refresh pkg_resources so newly installed packages are importable
+    # Refresh import machinery so newly installed packages are importable
     try:
         import importlib
         importlib.invalidate_caches()
-        pkg_resources._initialize_master_working_set()
-    except:
+    except Exception:
         pass
 
     unreal.log("Dependencies installed. You may need to restart the script if imports still fail.")

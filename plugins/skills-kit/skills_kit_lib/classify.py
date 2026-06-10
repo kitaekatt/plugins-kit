@@ -22,54 +22,34 @@ import re
 import sys
 from pathlib import Path
 
+from .document_walker import HAVE_YAML, iter_yaml_blocks, safe_load_block
 from .markdown_heuristics import parse_body, parse_frontmatter, type_signals
-
-try:
-    import yaml as _pyyaml
-    HAVE_YAML = True
-except ImportError:
-    _pyyaml = None
-    HAVE_YAML = False
+from .schema_registry import SKILL_TYPE_ROOTS
 
 
 MIXED_THRESHOLD = 2
 
-CONTRACT_ROOT_TO_TYPE = {
-    "reference_skill": "reference-skill",
-    "pattern_skill": "pattern-skill",
-    "technique_skill": "technique-skill",
-    "discipline_skill": "discipline-skill",
-    "domain_skill": "domain-skill",
-    "capability_skill": "capability-skill",
-    "audit_skill": "audit-skill",
-}
-
-_YAML_BLOCK_RE = re.compile(r"^```ya?ml\s*\n(.*?)^```", re.MULTILINE | re.DOTALL)
+# Contract-root -> dashed type name, derived from the registry's skill-type
+# roots (single source of truth; do not restate the type list here).
+CONTRACT_ROOT_TO_TYPE = {root: root.replace("_", "-") for root in SKILL_TYPE_ROOTS}
 
 
 def extract_yaml_roots(body_text: str) -> list[str]:
     """Return the list of canonical contract root keys present in any fenced
-    YAML block in the body.
+    YAML block in the body. Block recognition is document_walker's (the one
+    canonical fence regex); without pyyaml the roots are regex-detected
+    inside each block.
     """
-    if not HAVE_YAML:
-        roots: list[str] = []
-        for m in _YAML_BLOCK_RE.finditer(body_text):
-            text = m.group(1)
-            for root in CONTRACT_ROOT_TO_TYPE:
-                if re.search(rf"^{root}\s*:", text, re.MULTILINE) and root not in roots:
-                    roots.append(root)
-        return roots
-
-    roots = []
-    for m in _YAML_BLOCK_RE.finditer(body_text):
-        text = m.group(1)
-        try:
-            data = _pyyaml.safe_load(text)
-        except Exception:
-            continue
-        if isinstance(data, dict):
+    roots: list[str] = []
+    for text in iter_yaml_blocks(body_text):
+        data = safe_load_block(text)
+        if data is not None:
             for root in CONTRACT_ROOT_TO_TYPE:
                 if root in data and root not in roots:
+                    roots.append(root)
+        elif not HAVE_YAML:
+            for root in CONTRACT_ROOT_TO_TYPE:
+                if re.search(rf"^{root}\s*:", text, re.MULTILINE) and root not in roots:
                     roots.append(root)
     return roots
 

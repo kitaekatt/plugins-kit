@@ -37,13 +37,17 @@ ABSOLUTE_MAX_TIMEOUT_S = 300.0
 
 # ---------------------------------------------------------------------------
 # Exceptions
+#
+# Named with the Mcp prefix so they never shadow Python's builtin
+# ConnectionError / TimeoutError (shadowing forced importers to rename at
+# every import site and made `except ConnectionError` ambiguous).
 # ---------------------------------------------------------------------------
 
 class McpError(Exception):
     """Base exception for all MCP client errors."""
 
 
-class ConnectionError(McpError):
+class McpConnectionError(McpError):
     """Failed to connect or lost connection to the Automation Bridge.
 
     Common causes:
@@ -61,7 +65,7 @@ class HandshakeError(McpError):
     """
 
 
-class TimeoutError(McpError):
+class McpTimeoutError(McpError):
     """The server did not respond within the allowed time.
 
     The timeout may have been extended by progress_update messages.
@@ -192,7 +196,7 @@ class McpClient:
                 subprotocols=[SUBPROTOCOL],
             )
         except (OSError, websocket.WebSocketException) as exc:
-            raise ConnectionError(
+            raise McpConnectionError(
                 f"Cannot connect to Unreal Editor at {self.url}. "
                 f"Is the Editor running with the McpAutomationBridge plugin? ({exc})"
             ) from exc
@@ -237,7 +241,7 @@ class McpClient:
             except websocket.WebSocketTimeoutException:
                 break
             except websocket.WebSocketException as exc:
-                raise ConnectionError(
+                raise McpConnectionError(
                     f"Connection lost during handshake: {exc}"
                 ) from exc
 
@@ -286,11 +290,11 @@ class McpClient:
 
         Raises:
             ActionError: Server reported ``success: false``.
-            TimeoutError: No response within the timeout window.
-            ConnectionError: Socket closed unexpectedly.
+            McpTimeoutError: No response within the timeout window.
+            McpConnectionError: Socket closed unexpectedly.
         """
         if not self.connected:
-            raise ConnectionError("Not connected. Call connect() or use a context manager.")
+            raise McpConnectionError("Not connected. Call connect() or use a context manager.")
 
         request_id = str(uuid.uuid4())
         message = {
@@ -302,7 +306,7 @@ class McpClient:
         try:
             self._ws.send(json.dumps(message))
         except websocket.WebSocketException as exc:
-            raise ConnectionError(f"Failed to send request: {exc}") from exc
+            raise McpConnectionError(f"Failed to send request: {exc}") from exc
 
         base_timeout = timeout_s if timeout_s is not None else self._timeout_s
         return self._recv_response(request_id, tool, base_timeout)
@@ -323,7 +327,7 @@ class McpClient:
             now = time.monotonic()
             remaining = min(deadline, absolute_deadline) - now
             if remaining <= 0:
-                raise TimeoutError(
+                raise McpTimeoutError(
                     f"Request '{action}' timed out after {base_timeout}s "
                     f"(extensions={extension_count}). The Editor may be busy "
                     f"or the action may not exist."
@@ -333,13 +337,13 @@ class McpClient:
             try:
                 raw = self._ws.recv()
             except websocket.WebSocketTimeoutException:
-                raise TimeoutError(
+                raise McpTimeoutError(
                     f"Request '{action}' timed out after {base_timeout}s "
                     f"(extensions={extension_count}). The Editor may be busy "
                     f"or the action may not exist."
                 )
             except websocket.WebSocketException as exc:
-                raise ConnectionError(
+                raise McpConnectionError(
                     f"Connection lost while waiting for response: {exc}"
                 ) from exc
 
@@ -363,7 +367,7 @@ class McpClient:
 
                 # Safeguard 1: max extensions
                 if extension_count >= MAX_PROGRESS_EXTENSIONS:
-                    raise TimeoutError(
+                    raise McpTimeoutError(
                         f"Request '{action}' exceeded max progress extensions "
                         f"({MAX_PROGRESS_EXTENSIONS}) -- possible deadlock."
                     )
@@ -372,7 +376,7 @@ class McpClient:
                 if percent is not None and percent == last_progress_percent:
                     stale_count += 1
                     if stale_count >= PROGRESS_STALE_THRESHOLD:
-                        raise TimeoutError(
+                        raise McpTimeoutError(
                             f"Request '{action}' stalled at {percent}% for "
                             f"{PROGRESS_STALE_THRESHOLD} updates -- possible deadlock."
                         )

@@ -1074,3 +1074,34 @@ class TestEngineMinVersionFlow:
             mock_update.assert_not_called()
 
         assert not any("< required" in e for e in action_entries)
+
+
+class TestCheckMarketplaceCurrentNoUpstream:
+    """B17: a clone without an upstream tracking branch must read as current,
+    not as "updates available" (which triggered a doomed update every pass)."""
+
+    def test_no_upstream_reads_as_current(self, tmp_path, monkeypatch):
+        import subprocess
+
+        # A real repo with one commit and no remote/upstream.
+        repo = tmp_path / "mkt_clone"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
+        (repo / "f.txt").write_text("x")
+        env = {**os.environ,
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True, capture_output=True, env=env)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True, capture_output=True, env=env)
+
+        home = tmp_path / "home"
+        plugins_dir = home / ".claude" / "plugins"
+        plugins_dir.mkdir(parents=True)
+        (plugins_dir / "known_marketplaces.json").write_text(json.dumps({
+            "test-mkt": {"installLocation": str(repo)},
+        }))
+        monkeypatch.setenv("HOME", str(home))
+
+        result = check_marketplace_current("test-mkt")
+        assert result.passed is True
+        assert "no upstream" in result.message

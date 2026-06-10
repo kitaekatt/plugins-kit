@@ -16,11 +16,11 @@ if str(_LIB_DIR) not in sys.path:
 
 from ue_mcp_client import (
     ActionError,
-    ConnectionError,
     HandshakeError,
     McpClient,
+    McpConnectionError,
     McpResponse,
-    TimeoutError,
+    McpTimeoutError,
 )
 from ue_mcp_client.client import (
     ABSOLUTE_MAX_TIMEOUT_S,
@@ -297,7 +297,7 @@ class TestSendRequest:
 
     def test_not_connected_raises(self):
         client = McpClient()
-        with pytest.raises(ConnectionError, match="Not connected"):
+        with pytest.raises(McpConnectionError, match="Not connected"):
             client.send_request("spawn", {})
 
     def test_skips_unrelated_response(self, client_with_ws):
@@ -403,7 +403,7 @@ class TestProgressUpdates:
 
         ws.send = capturing_send
 
-        with pytest.raises(TimeoutError, match="stalled at 42%"):
+        with pytest.raises(McpTimeoutError, match="stalled at 42%"):
             client.send_request("stuck_action", {}, timeout_s=1)
 
     def test_max_extensions_raises(self, client_with_ws):
@@ -422,7 +422,7 @@ class TestProgressUpdates:
 
         ws.send = capturing_send
 
-        with pytest.raises(TimeoutError, match="max progress extensions"):
+        with pytest.raises(McpTimeoutError, match="max progress extensions"):
             client.send_request("endless_action", {}, timeout_s=1)
 
     def test_ignores_progress_for_other_request(self, client_with_ws):
@@ -650,7 +650,15 @@ class TestContextManager:
 
 class TestErrorHierarchy:
     def test_connection_error_is_mcp_error(self):
-        assert issubclass(ConnectionError, Exception)
+        from ue_mcp_client.client import McpError
+        assert issubclass(McpConnectionError, McpError)
+
+    def test_exceptions_do_not_shadow_builtins(self):
+        """Regression (U14): the client must not export classes named after
+        Python builtins ConnectionError/TimeoutError."""
+        import ue_mcp_client
+        assert "ConnectionError" not in ue_mcp_client.__all__
+        assert "TimeoutError" not in ue_mcp_client.__all__
 
     def test_handshake_error_is_mcp_error(self):
         from ue_mcp_client.client import McpError
@@ -658,7 +666,7 @@ class TestErrorHierarchy:
 
     def test_timeout_error_is_mcp_error(self):
         from ue_mcp_client.client import McpError
-        assert issubclass(TimeoutError, McpError)
+        assert issubclass(McpTimeoutError, McpError)
 
     def test_action_error_attributes(self):
         err = ActionError("spawn", "not found", error_code="E404", result={"x": 1})

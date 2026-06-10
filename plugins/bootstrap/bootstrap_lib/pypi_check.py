@@ -1,10 +1,13 @@
 """PyPI package download and extraction for bootstrap manifests.
 
 Downloads a wheel from PyPI and extracts a specific file. Uses stdlib only
-(urllib + zipfile). No pip required.
+(urllib + zipfile). No pip required. Downloads are verified against the
+sha256 digest published by the PyPI JSON API (same integrity posture as the
+tool/font `download:` recipes — B18).
 """
 
 import fnmatch
+import hashlib
 import io
 import json
 import zipfile
@@ -61,8 +64,8 @@ def download_and_extract(
     Returns:
         PypiCheckResult with pass/fail and descriptive message
     """
-    # Query PyPI for latest wheel URL
-    url = _get_wheel_url(package)
+    # Query PyPI for latest wheel URL + its published sha256 digest
+    url, expected_sha256 = _get_wheel_url(package)
     if url is None:
         return PypiCheckResult(
             passed=False, package=package,
@@ -79,6 +82,15 @@ def download_and_extract(
             passed=False, package=package,
             message=f"download failed: {e}",
         )
+
+    # Verify integrity against the digest the PyPI JSON API published (B18).
+    if expected_sha256:
+        actual = hashlib.sha256(wheel_bytes).hexdigest()
+        if actual.lower() != expected_sha256.lower():
+            return PypiCheckResult(
+                passed=False, package=package,
+                message=f"sha256 mismatch: expected {expected_sha256}, got {actual}",
+            )
 
     # Extract file from wheel
     try:
@@ -116,8 +128,13 @@ def download_and_extract(
         )
 
 
-def _get_wheel_url(package: str) -> Optional[str]:
-    """Query PyPI JSON API for the latest wheel URL."""
+def _get_wheel_url(package: str) -> tuple:
+    """Query PyPI JSON API for the latest wheel URL and its sha256 digest.
+
+    Returns (url, sha256) — sha256 may be empty when the API omits digests
+    (verification is then skipped). Returns (None, "") when no artifact is
+    found.
+    """
     pypi_url = f"https://pypi.org/pypi/{package}/json"
     try:
         req = Request(pypi_url, headers={"Accept": "application/json"})
@@ -125,12 +142,11 @@ def _get_wheel_url(package: str) -> Optional[str]:
             data = json.loads(resp.read().decode())
 
         # Prefer wheel over sdist
-        for entry in data.get("urls", []):
-            if entry.get("packagetype") == "bdist_wheel":
-                return entry["url"]
-        for entry in data.get("urls", []):
-            if entry.get("packagetype") == "sdist":
-                return entry["url"]
+        for packagetype in ("bdist_wheel", "sdist"):
+            for entry in data.get("urls", []):
+                if entry.get("packagetype") == packagetype:
+                    digest = (entry.get("digests") or {}).get("sha256", "")
+                    return entry["url"], digest
     except Exception:
         pass
-    return None
+    return None, ""

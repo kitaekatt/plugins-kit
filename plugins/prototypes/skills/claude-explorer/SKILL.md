@@ -42,10 +42,19 @@ In framework terms:
 
 ## Invocation
 
+Use prototypes' own bootstrap-provisioned venv (stable path, resolves from any cwd):
+
 ```bash
-~/.claude/plugins/data/plugins-kit/skills-kit/.venv/Scripts/python.exe \
-  plugins/prototypes/skills/claude-explorer/scripts/claude_explorer.py run
+# macOS / Linux
+~/.claude/plugins/data/plugins-kit/prototypes/.venv/bin/python \
+  "${CLAUDE_PLUGIN_ROOT}/skills/claude-explorer/scripts/claude_explorer.py" run
+
+# Windows
+~/.claude/plugins/data/plugins-kit/prototypes/.venv/Scripts/python.exe \
+  "${CLAUDE_PLUGIN_ROOT}/skills/claude-explorer/scripts/claude_explorer.py" run
 ```
+
+Degraded mode: the script is stdlib-only except for PyYAML, and falls back to regex frontmatter parsing when `yaml` is missing -- so if the prototypes venv has not been provisioned yet, plain `python3` (or `uv run python`) still works with slightly coarser YAML summaries.
 
 Subcommands:
 
@@ -66,14 +75,18 @@ Cache and output paths:
 
 ## Security
 
-The `/file?path=...` endpoint guards against path traversal: requested paths must resolve under `~/.claude/` or the project root (the only `ALLOWED_ROOTS`). The server binds to `127.0.0.1` only. Files over 5 MB are rejected. Run only on a trusted local machine.
+The `/file?path=...` endpoint guards against path traversal: requested paths must resolve under `~/.claude/` or the project root (the server's `allowed_roots`, bound per server instance). The server binds to `127.0.0.1` only and rejects any request whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>` (DNS-rebinding guard -- without it a hostile web page could point its own hostname at 127.0.0.1 and read `~/.claude/` same-origin). Files over 5 MB are rejected. Run only on a trusted local machine.
+
+### Graduation gates
+
+Security properties that must hold (and stay tested in `tests/prototypes/`) before this skill graduates to its own plugin: 127.0.0.1-only bind; Host-header allowlist; path-traversal guard on `/file`; allowed roots scoped to the server instance (never module-global accumulation); no new endpoints that write to disk without a fresh security review.
 
 ## Workflow
 
 Run as a single response.
 
 1. Resolve project root (`--project` or CWD).
-2. PRECONDITION: confirm `~/.claude/plugins/data/plugins-kit/skills-kit/bootstrap.log` exists before invoking the skills-kit venv interpreter; if it is missing, tell the user "the bootstrap plugin hasn't provisioned skills-kit (which claude-explorer relies on) — install/enable plugins-kit:bootstrap and start a new session" and STOP. Then run `claude_explorer.py run` (crawl + serve). The server blocks; the agent should invoke it via `run_in_background` so control returns to the user once the browser opens.
+2. Pick the interpreter: use the prototypes venv (`~/.claude/plugins/data/plugins-kit/prototypes/.venv/bin/python`, `Scripts\python.exe` on Windows) when it exists; otherwise fall back to `uv run python` (degraded mode -- regex frontmatter parsing, see Invocation). Then run `claude_explorer.py run` (crawl + serve). The server blocks; the agent should invoke it via `run_in_background` so control returns to the user once the browser opens.
 3. Report the URL (`http://127.0.0.1:8923/`), the index location, and one-line counts (roots, compositions, primitives).
 
 ## Anti-patterns
@@ -81,7 +94,7 @@ Run as a single response.
 - **Loading source into the summary projection.** Summaries are short; source belongs behind a click in the deep renderer.
 - **Putting plugin-author overrides in the operator config.** Per-plugin display copy belongs in that plugin's `claude-explorer.yaml`, not the user-level config.
 - **Running the server unbound.** Always bind `127.0.0.1`; never `0.0.0.0`. The `/file` endpoint reads local files.
-- **Skipping the path-traversal guard.** Any extension to the file endpoint must preserve the `ALLOWED_ROOTS` containment check.
+- **Skipping the path-traversal guard.** Any extension to the file endpoint must preserve the `allowed_roots` containment check and the Host-header allowlist.
 
 ## Contract
 
@@ -113,17 +126,17 @@ technique_skill:
       goal: "Start the local server, crawl the filesystem, render the SPA, and open the browser. The user browses; clicks open containers and deep-render leaves."
       preconditions:
         - "~/.claude/ exists (the user has run Claude Code at least once)."
-        - "Python with PyYAML available via skills-kit venv (PyYAML is optional; falls back to regex frontmatter parsing)."
+        - "Python available; PyYAML via prototypes' own venv (optional -- falls back to regex frontmatter parsing without it)."
       steps:
         - n: 1
           action: "Resolve project root (--project PATH, defaults to CWD)."
         - n: 2
-          action: "PRECONDITION: confirm ~/.claude/plugins/data/plugins-kit/skills-kit/bootstrap.log exists before invoking the skills-kit venv interpreter; if it is missing, tell the user 'the bootstrap plugin hasn't provisioned skills-kit (which claude-explorer relies on) — install/enable plugins-kit:bootstrap and start a new session' and STOP. Then invoke claude_explorer.py run via run_in_background. The script crawls, then binds 127.0.0.1:8923, then auto-opens the browser."
+          action: "Pick the interpreter: prototypes' own venv python (~/.claude/plugins/data/plugins-kit/prototypes/.venv/bin/python; Scripts/python.exe on Windows) when provisioned, else `uv run python` in degraded mode. Invoke claude_explorer.py run via run_in_background. The script crawls, then binds 127.0.0.1:8923, then auto-opens the browser."
         - n: 3
           action: "Report URL + index path + counts back to the user. Hand control to them."
       gotchas:
         - "The server is blocking; the agent must run it in the background or the agent's turn will not return."
-        - "/file?path=... is path-traversal guarded; any extension must preserve the ALLOWED_ROOTS containment check."
+        - "/file?path=... is path-traversal guarded and every request is Host-header checked; any extension must preserve the allowed_roots containment check and the host allowlist."
         - "Refresh re-runs crawl synchronously; large filesystems take a few seconds."
         - "LLM summaries via claude -p are reserved but not wired in v1. Deterministic projections only."
   anti_patterns:

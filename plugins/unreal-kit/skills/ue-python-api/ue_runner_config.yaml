@@ -9,6 +9,5 @@
 # Resolution order: CLI args → per-project config → global config → this file → hardcoded defaults
 
 remote_execution:
-  timeout_seconds: 5
   multicast_group: "239.0.0.1"
   multicast_port: 6766

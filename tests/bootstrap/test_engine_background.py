@@ -27,10 +27,18 @@ def _isolated_env(tmp_path):
     Without this the engine reads the developer's real installed-plugin registry
     and bootstraps their actual plugins, polluting stdout / the display file that
     the silence-expecting tests assert on.
+
+    The isolated home's ~/.local/bin is pre-seeded onto PATH: the minimal
+    self_setup declares path_entries ["~/.local/bin"], which expands under the
+    fake HOME to a dir that is never on the inherited PATH — without the seed,
+    every run emits a "PATH added" action entry and the silence-expecting
+    tests fail on any machine.
     """
     home = str(tmp_path / "_home")
-    os.makedirs(home, exist_ok=True)
-    return {**os.environ, "HOME": home}
+    local_bin = os.path.join(home, ".local", "bin")
+    os.makedirs(local_bin, exist_ok=True)
+    path = local_bin + os.pathsep + os.environ.get("PATH", "")
+    return {**os.environ, "HOME": home, "PATH": path}
 
 
 def _make_minimal_root(tmp_path, config_overrides=None, with_version=False):
@@ -129,6 +137,9 @@ class TestEngineBackground:
         assert os.path.isfile(display_file)
         with open(display_file) as f:
             response = json.load(f)
+        # Failure JSON carries the same universal fields as success (B21)
+        assert response["continue"] is True
+        assert response["suppressOutput"] is False
         # User sees log + fix instructions in systemMessage
         assert "nonexistent_tool_xyz_abc" in response["systemMessage"]
         # hookSpecificOutput with hookEventName for UserPromptSubmit validation

@@ -58,7 +58,7 @@ reference_skill:
         | Tool           | uv, git, gh CLI not installed         | Platform-specific install + re-check     |
         | PATH           | ~/.local/bin not in PATH              | Modify persistent PATH config            |
         | Venv           | Python venv missing or broken         | uv sync from pyproject.toml              |
-        | Git dependency | Repo not cloned or out of date        | git clone or git pull                    |
+        | Git dependency | Repo not cloned, wrong branch/commit  | clone once; pinned commits re-checkout; no steady-state pull |
         | JSON config    | File lacks expected entries           | Merge missing entries into target JSON   |
         | INI settings   | Application config setting not set    | Write setting to config/ini file         |
         | PyPI package   | Extracted file missing locally        | Download from PyPI and extract           |

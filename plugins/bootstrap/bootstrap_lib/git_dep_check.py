@@ -2,19 +2,24 @@
 
 import os
 import subprocess
-from typing import List, NamedTuple, Optional
+from typing import List, Optional
+
+from .result import Result
 
 # Suppress interactive credential prompts for HTTPS remotes.
 # Public repos work anonymously; prompting would block non-interactive sessions.
 _GIT_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 
 
-class GitDepCheckResult(NamedTuple):
-    passed: bool
-    message: str
-    repo_name: str
-    target_path: str
-    remediation_cmd: Optional[str] = None
+def _git_dep_result(passed, message, repo_name, target_path, remediation_cmd=None):
+    """Result for git-dep checks: subject is the repo name; target_path rides in extras."""
+    return Result(
+        passed=passed,
+        subject=repo_name,
+        message=message,
+        remediation_cmd=remediation_cmd,
+        extras={"target_path": target_path},
+    )
 
 
 def check_git_dep(
@@ -23,7 +28,7 @@ def check_git_dep(
     branch: str,
     sparse_paths: Optional[List[str]] = None,
     commit: Optional[str] = None,
-) -> GitDepCheckResult:
+) -> Result:
     """Check if a git dependency is cloned correctly.
 
     Args:
@@ -34,7 +39,7 @@ def check_git_dep(
         commit: Optional commit SHA to pin to (checked out after clone)
 
     Returns:
-        GitDepCheckResult with pass/fail and optional remediation command
+        Result with pass/fail and optional remediation command
     """
     repo_name = _extract_repo_name(url)
     target_path = os.path.join(data_dir, "github", repo_name)
@@ -44,7 +49,7 @@ def check_git_dep(
 
     # Check directory exists
     if not os.path.isdir(target_path):
-        return GitDepCheckResult(
+        return _git_dep_result(
             passed=False,
             message=f"{repo_name} not cloned",
             repo_name=repo_name,
@@ -55,7 +60,7 @@ def check_git_dep(
     # Check it's a git repo
     git_dir = os.path.join(target_path, ".git")
     if not os.path.exists(git_dir):
-        return GitDepCheckResult(
+        return _git_dep_result(
             passed=False,
             message=f"{repo_name} exists but is not a git repo",
             repo_name=repo_name,
@@ -72,7 +77,7 @@ def check_git_dep(
             )
             current_sha = result.stdout.strip()
             if not current_sha.startswith(commit[:7]):
-                return GitDepCheckResult(
+                return _git_dep_result(
                     passed=False,
                     message=f"{repo_name} at {current_sha[:7]}, expected {commit[:7]}",
                     repo_name=repo_name,
@@ -80,7 +85,7 @@ def check_git_dep(
                     remediation_cmd=f"git -C {target_path} fetch && git -C {target_path} checkout {commit}",
                 )
         except (subprocess.SubprocessError, OSError):
-            return GitDepCheckResult(
+            return _git_dep_result(
                 passed=False,
                 message=f"could not check commit for {repo_name}",
                 repo_name=repo_name,
@@ -96,7 +101,7 @@ def check_git_dep(
             )
             current_branch = result.stdout.strip()
             if current_branch != branch:
-                return GitDepCheckResult(
+                return _git_dep_result(
                     passed=False,
                     message=f"{repo_name} on branch {current_branch}, expected {branch}",
                     repo_name=repo_name,
@@ -104,7 +109,7 @@ def check_git_dep(
                     remediation_cmd=f"git -C {target_path} checkout {branch}",
                 )
         except (subprocess.SubprocessError, OSError):
-            return GitDepCheckResult(
+            return _git_dep_result(
                 passed=False,
                 message=f"could not check branch for {repo_name}",
                 repo_name=repo_name,
@@ -112,7 +117,7 @@ def check_git_dep(
                 remediation_cmd=remediation,
             )
 
-    return GitDepCheckResult(
+    return _git_dep_result(
         passed=True,
         message=f"{repo_name} cloned on {branch}" + (f" at {commit[:7]}" if commit else ""),
         repo_name=repo_name,

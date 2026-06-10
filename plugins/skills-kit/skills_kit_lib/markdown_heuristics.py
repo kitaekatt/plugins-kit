@@ -8,19 +8,15 @@ in skills that haven't adopted the YAML-contract layer.
 import re
 from dataclasses import dataclass, field
 
+from .schema_registry import SKILL_TYPE_ROOTS
+
 
 FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 FIELD_RE = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.+?)\s*$", re.MULTILINE)
 
-CANONICAL_TYPES = {
-    "reference-skill",
-    "pattern-skill",
-    "technique-skill",
-    "discipline-skill",
-    "domain-skill",
-    "capability-skill",
-    "audit-skill",
-}
+# Canonical dashed type names, derived from the registry's skill-type roots
+# (single source of truth; do not restate the type list here).
+CANONICAL_TYPES = {root.replace("_", "-") for root in SKILL_TYPE_ROOTS}
 
 
 @dataclass
@@ -36,12 +32,33 @@ class Body:
     tokens_approx: int
 
 
-def parse_frontmatter(content: str):
+def parse_frontmatter(content: str, mode: str = "light"):
+    """Parse YAML frontmatter into a Frontmatter record. The ONE frontmatter
+    parser for the plugin (consumers must not re-implement it).
+
+    mode="light" (default): stdlib regex field extraction -- flat `key: value`
+        pairs, quote-stripped string values. Always available.
+    mode="full": pyyaml parse of the frontmatter block -- typed values (bools,
+        lists, nested maps). Degrades to EMPTY fields when pyyaml is
+        unavailable or the YAML is invalid/non-dict (the contract-staged
+        degradation corpus discovery relies on).
+
+    Returns None when the document has no leading --- block.
+    """
     m = FRONTMATTER_RE.match(content)
     if not m:
         return None
     raw = m.group(1)
     fm = Frontmatter(raw=raw)
+    if mode == "full":
+        try:
+            import yaml as _pyyaml  # guarded; pyyaml is optional
+            parsed = _pyyaml.safe_load(raw)
+            if isinstance(parsed, dict):
+                fm.fields = parsed
+        except Exception:
+            pass
+        return fm
     for name, val in FIELD_RE.findall(raw):
         val = val.strip()
         if (val.startswith('"') and val.endswith('"')) or (
@@ -108,9 +125,23 @@ def has_step_tracker_invocation(body_text: str) -> bool:
 
 
 def has_excuse_reality_table(body_text: str) -> bool:
-    if re.search(r"\|\s*excuse\s*\|.*\|\s*reality\s*\|", body_text, re.IGNORECASE):
-        return True
-    if "rationalization" in body_text.lower():
+    """Detect an excuse -> reality rule/counter structure.
+
+    Matches a table or record SHAPE, not vocabulary: a markdown table row
+    carrying both an `excuse` and a `reality` column, or a record-style pair
+    of `excuse:` / `reality:` fields. A skill merely *discussing*
+    rationalization in prose must not trip this discipline-content signal.
+    """
+    for line in body_text.splitlines():
+        if "|" not in line:
+            continue
+        if re.search(r"\|\s*excuses?\s*\|", line, re.IGNORECASE) and re.search(
+            r"\|\s*reality\s*\|", line, re.IGNORECASE
+        ):
+            return True
+    if re.search(r"^\s*[-*]?\s*\*{0,2}excuse\*{0,2}\s*:", body_text, re.IGNORECASE | re.MULTILINE) and re.search(
+        r"^\s*[-*]?\s*\*{0,2}reality\*{0,2}\s*:", body_text, re.IGNORECASE | re.MULTILINE
+    ):
         return True
     return False
 

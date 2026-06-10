@@ -1,6 +1,6 @@
 # Audit framework
 
-How skills-kit audits things. This is the canonical glossary for audit-related skills; the operational skills that consume it -- `/skill-audit` (skill-shape audits over the User + Project + Plugins corpus) and `/references-audit` (cross-reference and orphan audits over markdown corpora) -- both reference it. When a term defined here appears in either skill, the definition lives here; the skill describes only how the audit applies the term.
+How skills-kit audits things. This is the canonical glossary for audit-related skills; the operational skills that consume it -- `skill-audit` (skill-shape audits over the User + Project + Plugins corpus; via `/md-audit skill`) and `references-audit` (cross-reference and orphan audits over markdown corpora; via `/md-audit references`) -- both reference it. When a term defined here appears in either skill, the definition lives here; the skill describes only how the audit applies the term.
 
 ## Composition with `skills-kit:skill-authoring`
 
@@ -20,7 +20,7 @@ The thing being audited. A subject is either a primitive (a single file) or a co
 
 ### subject_type
 
-The cardinality axis of an audit-skill's subject, declared in the SKILL.md's `audit_skill.subject.subject_type` field. Two values today: `single-file` (the audit evaluates one subject per invocation, like `/claude-md-audit` on one CLAUDE.md) and `corpus` (the audit operates over a discovered set, like `/skill-audit` over the User + Project + Plugins skill pool). `subject` (kind) and `subject_type` (cardinality) are orthogonal: skill-md-audit has `subject_type: corpus` but each rule application targets one `skill_md` primitive at a time inside a `skill` composition.
+The cardinality axis of an audit-skill's subject, declared in the SKILL.md's `audit_skill.subject.subject_type` field. Two values today: `single-file` (the audit evaluates one subject per invocation, like claude-md-audit on one CLAUDE.md) and `corpus` (the audit operates over a discovered set, like skill-audit over the User + Project + Plugins skill pool). `subject` (kind) and `subject_type` (cardinality) are orthogonal: skill-md-audit has `subject_type: corpus` but each rule application targets one `skill_md` primitive at a time inside a `skill` composition.
 
 ### procedure
 
@@ -58,9 +58,9 @@ Compositions nest. A plugin contains skills; a project contains plugins. The fra
 The act of finding subjects in scope. Two sub-shapes:
 
 - **Tree-walk discovery** -- walking a scan tree and toggling rule sets per discovered composition. When the walker enters a directory, it checks markers in priority order (plugin > skill > directory) and activates that composition's rules for the subtree. Rules layer rather than override.
-- **Corpus discovery** -- enumerating a known namespace (the User + Project + installed-Plugin skill pool, via `_corpus.py`). Returns a flat list of subjects without rule toggling.
+- **Corpus discovery** -- enumerating a known namespace (the User + Project + installed-Plugin skill pool, via `skills_kit_lib.corpus`). Returns a flat list of subjects without rule toggling.
 
-Discovery is its own scaffolding (e.g. `discover.py`, `_corpus.py`) -- separate from the evaluator scaffolding that applies rules. Discovery answers "what subjects?"; the evaluator answers "what findings on this subject?".
+Discovery is its own scaffolding (e.g. `discover.py`, `skills_kit_lib.corpus`) -- separate from the evaluator scaffolding that applies rules. Discovery answers "what subjects?"; the evaluator answers "what findings on this subject?".
 
 ### audit-kind
 
@@ -112,13 +112,13 @@ AUTO and DISCUSS dispatch in parallel. The user's foreground answers do not gate
 
 ### corpus
 
-The User + Project + installed-Plugin skill pool used as a resolution namespace. The corpus is what makes a reference like `/some-skill` resolvable -- the auditor looks the name up in the corpus and reports MISSING when it does not resolve. The corpus is discovered via the shared `_corpus.py` module and is the same for every audit-kind that needs name resolution.
+The User + Project + installed-Plugin skill pool used as a resolution namespace. The corpus is what makes a reference like `/some-skill` resolvable -- the auditor looks the name up in the corpus and reports MISSING when it does not resolve. The corpus is discovered via the shared `skills_kit_lib.corpus` module and is the same for every audit-kind that needs name resolution.
 
 ### scaffolding
 
 A Python (or other) script that replaces inference-based decisioning or multi-tool-call orchestration with deterministic code. Every audit-kind has two scaffolding shapes:
 
-- **Discovery scaffolding** -- finds subjects (e.g. `_corpus.py` for the skill pool, `discover.py` for cwd-relative SKILL.md enumeration).
+- **Discovery scaffolding** -- finds subjects (e.g. `skills_kit_lib.corpus` for the skill pool, `discover.py` for cwd-relative SKILL.md enumeration).
 - **Evaluator scaffolding** -- applies rules to a subject and emits findings (e.g. `audit.py` for skill-md schema validation, `references_audit.py` for cross-reference resolution).
 
 The skill describes when to run each scaffolding and how to interpret its output; the scaffolding is what makes the audit repeatable, idempotent, and cheap. A purely inferential audit (every rule re-derived per file from agent reading) is slower, more expensive, and non-idempotent -- the same SKILL.md scored against the same rules might return different findings on different runs.
@@ -138,7 +138,7 @@ Scaffolding is the load-bearing convention this framework rests on. Any operatio
 
 ## How the skills use this framework
 
-### `/references-audit`
+### `references-audit` (via `/md-audit references`)
 
 Operationalizes the **references-audit** audit-kind. The skill:
 
@@ -148,14 +148,14 @@ Operationalizes the **references-audit** audit-kind. The skill:
 4. Each finding is a `(rule, subject_path, severity, message)` tuple. Severities are FAIL (broken hard-dep), JUDGMENT (none today), INFO (broken soft ref, name mismatch, shadowed skill).
 5. Classifies findings into its **taxonomy** (A renamed, B retired, ... K unclassified) and dispatches AUTO / DISCUSS / SPECIAL **buckets** in parallel.
 
-In framework terms: `/references-audit`'s subject is one of `directory | skill | plugin | project`; the primitive it parses is `md`; the rules per composition come from the audit-kind's bindings table in `audit-framework.yaml`. The skill's body documents the operational steps; the rule set is canonical in the YAML.
+In framework terms: references-audit's subject is one of `directory | skill | plugin | project`; the primitive it parses is `md`; the rules per composition come from the audit-kind's bindings table in `audit-framework.yaml`. The skill's body documents the operational steps; the rule set is canonical in the YAML.
 
-### `/skill-audit`
+### `skill-audit` (via `/md-audit skill`)
 
 Operationalizes the **skill-md-audit** audit-kind (plus two corpus-wide inventory procedures, roster and hierarchy, that share the same subject but do not exercise findings/remediation). The skill:
 
 1. Picks one or more **subjects** of type `skill_md` (one `SKILL.md` per file).
-2. Runs the **scaffolding** (`skill-authoring/scripts/audit.py`) for mechanical schema validation, plus agent-judgment passes for CCP / CRP / ADP placement.
+2. Runs the **scaffolding** (`python -m skills_kit_lib.audit`, from the plugin root) for mechanical schema validation, plus agent-judgment passes for CCP / CRP / ADP placement.
 3. Classifies findings into its **taxonomy** (A missing required, B description quality, ... K unclassified) and dispatches AUTO / DISCUSS / SPECIAL **buckets** in parallel.
 4. Renders a per-file COMPLIANT / NON-COMPLIANT verdict from the FAIL findings.
 

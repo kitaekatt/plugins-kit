@@ -1,6 +1,6 @@
 [project]
 name = "awesome-kit"
-version = "0.6.6"
+version = "0.8.1"
 description = "Runtime dependencies for awesome-kit skills. html-pdf renders HTML to PDF via headless Chromium (Playwright)."
 requires-python = ">=3.10"
 dependencies = [

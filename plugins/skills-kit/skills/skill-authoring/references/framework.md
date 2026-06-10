@@ -8,7 +8,8 @@ first; this document references entries by name without redefining them.
 ## Canonical contract surface (schema v1, locked 2026-04-28)
 
 The **canonical** contract per skill type is the YAML schema declared in
-`plugins/skills-kit/skills/skill-authoring/scripts/schemas.py`. Each
+`plugins/skills-kit/skills_kit_lib/schema_registry.py` (with the schema
+literals in `skills_kit_lib/schemas/`). Each
 skill carries a `<type>:` YAML block in its SKILL.md body; the audit
 script validates that block against the schema. A skill is well-formed
 when its YAML contract block parses successfully against its type's
@@ -18,7 +19,7 @@ Schema v1 was locked after all six existing plugins-kit skills converted
 cleanly. Future schema changes ship as v2 alongside v1; the validator dispatches by `_schema_version:` in each
 skill's YAML root.
 
-The structurally-repetitive framework content below is captured as YAML records. The "Type contracts" section retains markdown tables for human review; schemas.py is authoritative on divergence.
+The structurally-repetitive framework content below is captured as YAML records. The "Type contracts" section retains markdown tables for human review; skills_kit_lib/schema_registry.py is authoritative on divergence.
 
 ```yaml
 framework:
@@ -32,7 +33,7 @@ framework:
       - open questions awaiting real-world friction signal
     excludes:
       - vocabulary (lives in glossary.md)
-      - the 5 per-type contracts (kept as markdown tables below; canonical machine form in scripts/schemas.py)
+      - the 5 per-type contracts (kept as markdown tables below; canonical machine form in skills_kit_lib/schema_registry.py)
 
   schemas_are_floors:
     keywords: [floors not ceilings, extras allowed, forbidden_keys, mixed-type drift, structure-friendly]
@@ -288,7 +289,7 @@ Consequences:
 
 The merge passes CRP for the same reason an L2 -> L3 split does: each member fires on a distinct sub-trigger, so a typical invocation loads the container plus one member, not all of them. If every candidate member would load on every invocation, it is a CRP-fail merge -- keep them as separate skills (or as one skill), exactly as you would revert a CRP-fail split.
 
-**Audit hook:** in a corpus inventory (`/skill-audit hierarchy`), cluster skills by subject and flag any subject owning 2+ doer-type skills as a domain-consolidation candidate; flag any domain-skill whose members all co-load as a CRP-fail to revert.
+**Audit hook:** in a corpus inventory (`/md-audit skill hierarchy`), cluster skills by subject and flag any subject owning 2+ doer-type skills as a domain-consolidation candidate; flag any domain-skill whose members all co-load as a CRP-fail to revert.
 
 ### Shared references across sibling domains stay standalone
 
@@ -366,7 +367,7 @@ A skill claiming a type must satisfy the **required** rows and the
 **conditionally required** rows whose conditions hold. Glossary terms are
 referenced by name; consult `glossary.md` for definitions.
 
-Tables are kept for human review; the canonical machine-readable contract is in `plugins/skills-kit/skills/skill-authoring/scripts/schemas.py`. When the two diverge, schemas.py wins; the table gets updated to match.
+Tables are kept for human review; the canonical machine-readable contract is in `plugins/skills-kit/skills_kit_lib/schema_registry.py` (schema literals in `skills_kit_lib/schemas/`). When the two diverge, the registry wins; the table gets updated to match.
 
 ### reference-skill
 
@@ -450,7 +451,7 @@ Audit-skill SKILL.md files routinely embed inline-code syntax in taxonomy entrie
 
 The composition story: an audit-skill's per-artifact criterion-check loop -- "load criteria, check each, emit verdict for this artifact" -- is structurally a validation. Validation-as-shape lives inside audit-skills as a procedure-level pattern, not as a separate top-level skill type. When you see a skill that validates a single artifact against criteria, ask whether the natural scope is one artifact (audit-skill with subject_type single-file and a one-procedure body) or many (audit-skill with subject_type corpus and a scan procedure that runs the validation per artifact, classifies findings into the taxonomy, and dispatches remediations).
 
-Examples: `/references-audit` -- audits markdown corpus for broken skill cross-references; A--K taxonomy with detection signals per scanner output kind; AUTO/DISCUSS/SPECIAL dispatch routes findings to background-agent fixes or foreground user conversation. `/skill-audit` and `/claude-md-audit` -- single-artifact subject (or list-of-artifacts via the cwd-relative selection helper); taxonomy maps the framework's required-blocks / cohesion / hygiene check failures to remediation buckets.
+Examples: `references-audit` (via `/md-audit references`) -- audits markdown corpus for broken skill cross-references; A--K taxonomy with detection signals per scanner output kind; AUTO/DISCUSS/SPECIAL dispatch routes findings to background-agent fixes or foreground user conversation. `skill-audit` and `claude-md-audit` (via `/md-audit skill` / `/md-audit claude-md`) -- single-artifact subject (or list-of-artifacts via the cwd-relative selection helper); taxonomy maps the framework's required-blocks / cohesion / hygiene check failures to remediation buckets.
 
 ### domain-skill (container)
 

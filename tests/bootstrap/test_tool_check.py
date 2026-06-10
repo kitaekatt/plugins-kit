@@ -11,13 +11,13 @@ class TestCheckTool:
     def test_installed_tool_passes(self):
         result = check_tool("python3")
         assert result.passed is True
-        assert result.name == "python3"
+        assert result.subject == "python3"
         assert "found at" in result.message
 
     def test_missing_tool_fails(self):
         result = check_tool("nonexistent_xyz_tool_abc")
         assert result.passed is False
-        assert result.name == "nonexistent_xyz_tool_abc"
+        assert result.subject == "nonexistent_xyz_tool_abc"
         assert result.install_cmd is None
 
     def test_missing_tool_includes_install_cmd(self):

@@ -11,6 +11,7 @@ contains a valid instance of its schema.
 
 from ..rule_fragments import (
     ANTI_PATTERNS_RULE,
+    FACT_ITEM_RULE,
     IDENTITY_RULE,
     KEYWORDS_RULE,
     SCOPE_RULE,
@@ -30,18 +31,7 @@ REFERENCE_SKILL_SCHEMA = {
             "type": "list",
             "required": False,
             "min_len": 1,
-            "items": {"keys": {
-                "id": {"type": "string", "required": True},
-                "category": {"type": "string", "required": False},
-                "summary": {"type": "string", "required": True},
-                "keywords": KEYWORDS_RULE,
-                "detail": {"required": True},
-                "gotchas": {"type": "list", "required": False, "min_len": 1},
-                "example": {"type": "dict", "required": False, "keys": {
-                    "input": {"type": "string", "required": True},
-                    "output": {"type": "string", "required": True},
-                }},
-            }},
+            "items": FACT_ITEM_RULE,
             "note": "facts may live nested here OR as a top-level facts: portable unit; "
                     "the document must contain at least one fact source somewhere "
                     "(audit-time cross-source rule)",
@@ -149,19 +139,6 @@ TECHNIQUE_SKILL_SCHEMA = {
     "forbidden_keys": ["rules", "counters", "facts", "patterns",
                        "apply_when", "do_not_apply_when", "members", "index"],
 }
-
-# Backwards-compat aliases (the old variant names still resolve)
-TECHNIQUE_SKILL_SCHEMA_AUTO = TECHNIQUE_SKILL_SCHEMA
-TECHNIQUE_SKILL_SCHEMA_USER_ONLY = TECHNIQUE_SKILL_SCHEMA
-
-
-def resolve_technique_schema(yaml_data: dict) -> dict:
-    """technique_skill has two variants by trigger_model (currently unified)."""
-    block = yaml_data.get("technique_skill", {})
-    if isinstance(block, dict) and block.get("trigger_model") == "user-only":
-        return TECHNIQUE_SKILL_SCHEMA_USER_ONLY
-    return TECHNIQUE_SKILL_SCHEMA_AUTO
-
 
 DISCIPLINE_SKILL_SCHEMA = {
     "root": "discipline_skill",

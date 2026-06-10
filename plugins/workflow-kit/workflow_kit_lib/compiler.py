@@ -39,6 +39,11 @@ _GENERATED_HEADER = (
 
 PREV_VAR = "prev"  # name of the first param of every pipeline stage callback
 
+# Runtime values the skill injects into `args` for node steps (never declared in
+# `inputs:` -- see references/workflow-yaml.md "Reserved inputs"). They are valid
+# `{{ inputs.* }}` heads only when the document actually has node steps.
+RESERVED_NODE_INPUTS = {"runId", "pluginRoot", "workflowKitVenvPython"}
+
 # The Workflow tool delivers the `args` global as a JSON string in this runtime,
 # so the compiled script normalizes it once into a real object named `inputs`
 # (what every {{ inputs.X }} expression compiles against). Harmless if a future
@@ -142,13 +147,13 @@ def _node_opts(label, phase_id, phase_titles, status_js=None) -> str:
     return "{ " + ", ".join(parts) + " }" if parts else "{}"
 
 
-def _node_scope(step: Step, defined: dict):
+def _node_scope(step: Step, defined: dict, inputs: set):
     """(scope, over_js|None) for a node step, honoring an optional flat for_each."""
-    base = Scope(step_vars=defined)
+    base = Scope(step_vars=defined, inputs=inputs)
     if step.for_each is None:
         return base, None
     over_js = _over_js(step.for_each, base)
-    return Scope(step_vars=defined, locals={"item": "item"}), over_js
+    return Scope(step_vars=defined, locals={"item": "item"}, inputs=inputs), over_js
 
 
 def _wrap_node(var: str, call: str, over_js) -> str:
@@ -158,9 +163,9 @@ def _wrap_node(var: str, call: str, over_js) -> str:
     return f"const {var} = await parallel({over_js}.map((item, i) => () => {call}));"
 
 
-def _emit_script_node(step: Step, defined: dict, phase_titles: dict) -> str:
+def _emit_script_node(step: Step, defined: dict, phase_titles: dict, inputs: set) -> str:
     sp = step.script
-    scope, over_js = _node_scope(step, defined)
+    scope, over_js = _node_scope(step, defined, inputs)
     fan = over_js is not None
     cmd_js = compile_template(sp.command, scope)
     out_js = compile_template(sp.out, scope) if sp.out else _default_out_js(step.id, ".out", fan)
@@ -170,9 +175,9 @@ def _emit_script_node(step: Step, defined: dict, phase_titles: dict) -> str:
     return _wrap_node(_var(step.id), call, over_js)
 
 
-def _emit_openrouter_node(step: Step, defined: dict, phase_titles: dict) -> str:
+def _emit_openrouter_node(step: Step, defined: dict, phase_titles: dict, inputs: set) -> str:
     op = step.openrouter
-    scope, over_js = _node_scope(step, defined)
+    scope, over_js = _node_scope(step, defined, inputs)
     fan = over_js is not None
     runner_js = (
         '`"${inputs.workflowKitVenvPython}" '
@@ -196,58 +201,64 @@ def _emit_openrouter_node(step: Step, defined: dict, phase_titles: dict) -> str:
     return _wrap_node(_var(step.id), call, over_js)
 
 
-def _emit_flat_step(step: Step, defined: dict, phase_titles: dict) -> str:
+def _emit_flat_step(step: Step, defined: dict, phase_titles: dict, inputs: set) -> str:
     var = _var(step.id)
     if step.for_each is None:
-        scope = Scope(step_vars=defined)
+        scope = Scope(step_vars=defined, inputs=inputs)
         call = _agent_call(step.agent, step.phase, scope, phase_titles)
         return f"const {var} = await {call};"
     # fan-out: parallel over a list, item bound to `item`
-    over_js = _over_js(step.for_each, Scope(step_vars=defined))
-    inner = Scope(step_vars=defined, locals={"item": "item"})
+    over_js = _over_js(step.for_each, Scope(step_vars=defined, inputs=inputs))
+    inner = Scope(step_vars=defined, locals={"item": "item"}, inputs=inputs)
     call = _agent_call(step.agent, step.phase, inner, phase_titles)
     return f"const {var} = await parallel({over_js}.map((item) => () => {call}));"
 
 
 def _emit_stage_callback(
-    stage: Stage, as_name: str, prev_stage_id, defined: dict, phase_titles: dict
+    stage: Stage, as_name: str, prev_stage_id, defined: dict, phase_titles: dict,
+    inputs: set,
 ) -> str:
     prev = (prev_stage_id, PREV_VAR) if prev_stage_id else None
     if stage.fan_out is not None:
         fan = stage.fan_out
-        over_scope = Scope(step_vars=defined, locals={as_name: as_name}, prev_stage=prev)
+        over_scope = Scope(
+            step_vars=defined, locals={as_name: as_name}, prev_stage=prev, inputs=inputs
+        )
         over_js = _over_js(fan.over, over_scope)
         body_scope = Scope(
             step_vars=defined,
             locals={as_name: as_name, fan.as_: fan.as_},
             prev_stage=prev,
+            inputs=inputs,
         )
         call = _agent_call(stage.agent, stage.phase, body_scope, phase_titles)
         body = f"parallel({over_js}.map(({fan.as_}) => () => {call}))"
     else:
-        scope = Scope(step_vars=defined, locals={as_name: as_name}, prev_stage=prev)
+        scope = Scope(
+            step_vars=defined, locals={as_name: as_name}, prev_stage=prev, inputs=inputs
+        )
         body = _agent_call(stage.agent, stage.phase, scope, phase_titles)
     return f"({PREV_VAR}, {as_name}, i) => {body}"
 
 
-def _emit_pipeline_step(step: Step, defined: dict, phase_titles: dict) -> str:
+def _emit_pipeline_step(step: Step, defined: dict, phase_titles: dict, inputs: set) -> str:
     var = _var(step.id)
     pipe = step.pipeline
-    over_js = _over_js(pipe.over, Scope(step_vars=defined))
+    over_js = _over_js(pipe.over, Scope(step_vars=defined, inputs=inputs))
     callbacks = []
     prev_id = None
     for stage in pipe.stages:
         callbacks.append(
-            _emit_stage_callback(stage, pipe.as_, prev_id, defined, phase_titles)
+            _emit_stage_callback(stage, pipe.as_, prev_id, defined, phase_titles, inputs)
         )
         prev_id = stage.id
     cb_block = ",\n  ".join(callbacks)
     return f"const {var} = await pipeline(\n  {over_js},\n  {cb_block},\n);"
 
 
-def _emit_output(doc: WorkflowDoc, defined: dict) -> str:
+def _emit_output(doc: WorkflowDoc, defined: dict, inputs: set) -> str:
     if doc.output:
-        expr = compile_single(doc.output, Scope(step_vars=defined))
+        expr = compile_single(doc.output, Scope(step_vars=defined, inputs=inputs))
         return f"return {expr};"
     parts = ", ".join(f"{json.dumps(s.id)}: {_var(s.id)}" for s in doc.steps)
     return f"return {{ {parts} }};"
@@ -256,6 +267,10 @@ def _emit_output(doc: WorkflowDoc, defined: dict) -> str:
 def compile_doc(doc: WorkflowDoc) -> str:
     """Compile a validated WorkflowDoc to a native Workflow tool JS script."""
     ordered_phases, phase_titles = _phase_table(doc)
+    has_nodes = any(s.kind in ("script", "openrouter") for s in doc.steps)
+    # `inputs.*` heads every Scope checks against: the declared `inputs:` names,
+    # plus the skill-injected reserved args -- but only when node steps exist.
+    allowed_inputs = set(doc.inputs) | (RESERVED_NODE_INPUTS if has_nodes else set())
 
     lines = [_GENERATED_HEADER]
 
@@ -292,7 +307,7 @@ def compile_doc(doc: WorkflowDoc) -> str:
     lines.append(_ARGS_NORMALIZE)
 
     # inline the node-strategy preamble when any script/openrouter node is present
-    if any(s.kind in ("script", "openrouter") for s in doc.steps):
+    if has_nodes:
         lines.append(_load_preamble())
 
     # body
@@ -301,15 +316,15 @@ def compile_doc(doc: WorkflowDoc) -> str:
     for step in doc.steps:
         kind = step.kind
         if kind == "pipeline":
-            body.append(_emit_pipeline_step(step, defined, phase_titles))
+            body.append(_emit_pipeline_step(step, defined, phase_titles, allowed_inputs))
         elif kind == "script":
-            body.append(_emit_script_node(step, defined, phase_titles))
+            body.append(_emit_script_node(step, defined, phase_titles, allowed_inputs))
         elif kind == "openrouter":
-            body.append(_emit_openrouter_node(step, defined, phase_titles))
+            body.append(_emit_openrouter_node(step, defined, phase_titles, allowed_inputs))
         else:
-            body.append(_emit_flat_step(step, defined, phase_titles))
+            body.append(_emit_flat_step(step, defined, phase_titles, allowed_inputs))
         defined[step.id] = _var(step.id)
-    body.append(_emit_output(doc, defined))
+    body.append(_emit_output(doc, defined, allowed_inputs))
     lines.append("\n".join(body))
 
     return "\n\n".join(lines) + "\n"

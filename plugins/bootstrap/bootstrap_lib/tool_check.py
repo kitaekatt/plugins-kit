@@ -4,16 +4,23 @@ import os
 import shutil
 import subprocess
 import sys
-from typing import NamedTuple, Optional, Union
+from typing import Optional, Union
+
+from .result import Result
+
+# Extras carried on tool-check Results:
+#   install_cmd -- platform install command when the tool is missing (or None)
+#   path        -- absolute path to the resolved binary, when passed=True
+#   on_path     -- True when the tool is reachable by bare name on PATH
 
 
-class CheckResult(NamedTuple):
-    name: str
-    passed: bool
-    message: str
-    install_cmd: Optional[str] = None
-    path: Optional[str] = None  # absolute path to the resolved binary, when passed=True
-    on_path: bool = False       # True when the tool is reachable by bare name on PATH
+def _tool_result(name, passed, message, install_cmd=None, path=None, on_path=False):
+    return Result(
+        passed=passed,
+        subject=name,
+        message=message,
+        extras={"install_cmd": install_cmd, "path": path, "on_path": on_path},
+    )
 
 
 def _dir_on_path(directory: str) -> bool:
@@ -51,7 +58,7 @@ def check_tool(
     current_os: Optional[str] = None,
     install_path: Optional[Union[str, list]] = None,
     check_cmd: Optional[str] = None,
-) -> CheckResult:
+) -> Result:
     """Check if a CLI tool is installed.
 
     Resolution order: installPath candidates (file exists) -> check command
@@ -70,8 +77,8 @@ def check_tool(
                    concrete binary path.
 
     Returns:
-        CheckResult. `on_path` reports whether the tool is reachable by bare name
-        on the current PATH — a tool can be `passed=True` (found on disk) yet
+        Result. The `on_path` extra reports whether the tool is reachable by bare
+        name on the current PATH — a tool can be `passed=True` (found on disk) yet
         `on_path=False` (its directory isn't on PATH), which the engine treats as
         an actionable "link this dir onto PATH" rather than a pass-and-forget.
     """
@@ -87,10 +94,8 @@ def check_tool(
                 candidates.append(os.path.join(expanded_dir, name + ".exe"))
             for candidate in candidates:
                 if os.path.isfile(candidate):
-                    return CheckResult(
-                        name=name,
-                        passed=True,
-                        message=f"found at {candidate}",
+                    return _tool_result(
+                        name, True, f"found at {candidate}",
                         path=candidate,
                         on_path=_dir_on_path(expanded_dir),
                     )
@@ -98,35 +103,18 @@ def check_tool(
     # 2. check command (exit 0 => present). No concrete binary path is known, so
     # on_path is reported True — the engine has no directory to link onto PATH.
     if check_cmd and _run_check_cmd(check_cmd):
-        return CheckResult(
-            name=name,
-            passed=True,
-            message="check command passed",
-            path=None,
-            on_path=True,
-        )
+        return _tool_result(name, True, "check command passed", on_path=True)
 
     # 3. PATH lookup — by definition reachable by name when found here.
     path = shutil.which(name)
     if path:
-        return CheckResult(
-            name=name,
-            passed=True,
-            message=f"found at {path}",
-            path=path,
-            on_path=True,
-        )
+        return _tool_result(name, True, f"found at {path}", path=path, on_path=True)
 
     install_cmd = None
     if install_cmds and current_os:
         install_cmd = install_cmds.get(current_os)
 
-    return CheckResult(
-        name=name,
-        passed=False,
-        message="not found in PATH",
-        install_cmd=install_cmd,
-    )
+    return _tool_result(name, False, "not found in PATH", install_cmd=install_cmd)
 
 
 def run_install(install_cmd: str) -> tuple[bool, str]:

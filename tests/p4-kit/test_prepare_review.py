@@ -1759,3 +1759,262 @@ class TestMain:
         rc = pr.main(["prepare_review.py", "--cleanup"])
         assert rc == 2
         assert "Usage" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Binary/filetype guard in add/delete hunk synthesis (G5)
+# ---------------------------------------------------------------------------
+
+
+class TestIsTextFiletype:
+    @pytest.mark.parametrize(
+        "filetype",
+        [
+            "text", "text+x", "text+ko", "ktext", "xtext", "ltext",
+            "unicode", "utf8", "utf16", "symlink",
+            # Unknown/missing types default to text (historical behavior).
+            "", None, "weirdtype",
+        ],
+    )
+    def test_text_like(self, filetype):
+        assert pr._is_text_filetype(filetype) is True
+
+    @pytest.mark.parametrize(
+        "filetype",
+        [
+            "binary", "binary+l", "binary+lFS64", "xbinary", "ubinary",
+            "apple", "resource", "uresource", "tempobj", "ctempobj",
+            "Binary",  # case-insensitive
+        ],
+    )
+    def test_binary_like(self, filetype):
+        assert pr._is_text_filetype(filetype) is False
+
+
+class TestSplitDiffSectionsCapturesType:
+    def test_type_field_captured_from_header(self):
+        diff = (
+            "==== //depot/a.cpp#1 (text) ====\n"
+            "@@ -1 +1 @@\n"
+            "==== //depot/b.uasset#2 (binary+l) ====\n"
+            "\n"
+        )
+        _, sections = pr.split_diff_sections(diff)
+        assert sections[0]["type"] == "text"
+        assert sections[1]["type"] == "binary+l"
+
+
+class TestExtractDiffBinaryGuard:
+    def test_binary_add_in_differences_gets_placeholder_not_content(self):
+        """A shelved binary add with a ==== header must NOT be content-inlined."""
+        describe = (
+            "Shelved files ...\n"
+            "... //depot/Content/big.uasset#1 add\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/Content/big.uasset#1 (binary+l) ====\n"
+            "\n"
+        )
+        actions = pr.parse_file_actions(describe)
+        calls: list[list[str]] = []
+
+        def fake_run_p4(args):
+            calls.append(args)
+            if args[:1] == ["fstat"] and "fileSize" in args:
+                return (0, "... fileSize 123456\n", "")
+            return (1, "", f"unexpected: {args}")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            diff = pr.extract_diff(describe, actions, cl="99", is_shelved=True)
+
+        assert "==== //depot/Content/big.uasset#1 (binary+l)" in diff
+        assert "(binary file added: 123456 bytes)" in diff
+        # Content was never fetched -- no mojibake inlining.
+        assert not any(args[:1] == ["print"] for args in calls)
+        assert "@@ -0,0" not in diff
+
+    def test_binary_delete_in_differences_gets_placeholder(self):
+        describe = (
+            "Affected files ...\n"
+            "... //depot/old.bin#5 delete\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/old.bin#5 (binary) ====\n"
+            "\n"
+        )
+        actions = pr.parse_file_actions(describe)
+
+        def fake_run_p4(args):
+            if args[:1] == ["fstat"] and "fileSize" in args:
+                # Size of the prior rev (#4).
+                assert args[-1] == "//depot/old.bin#4"
+                return (0, "... fileSize 2048\n", "")
+            return (1, "", f"unexpected: {args}")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            diff = pr.extract_diff(describe, actions, cl="100", is_shelved=False)
+
+        assert "(binary file deleted: 2048 bytes)" in diff
+        assert "@@ -1," not in diff
+
+    def test_binary_add_size_unavailable_says_size_unknown(self):
+        describe = (
+            "Shelved files ...\n"
+            "... //depot/x.uasset#1 add\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/x.uasset#1 (binary) ====\n"
+            "\n"
+        )
+        actions = pr.parse_file_actions(describe)
+        with patch.object(pr, "run_p4", return_value=(1, "", "fstat failed")):
+            diff = pr.extract_diff(describe, actions, cl="7", is_shelved=True)
+        assert "(binary file added: size unknown)" in diff
+
+    def test_binary_add_omitted_from_differences_uses_fstat_type(self):
+        """Files with no ==== header have no inline type; fstat supplies it."""
+        describe = (
+            "Shelved files ...\n"
+            "... //depot/edit.cpp#3 edit\n"
+            "... //depot/asset.uasset#1 add\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/edit.cpp#3 (text) ====\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+        actions = pr.parse_file_actions(describe)
+        calls: list[list[str]] = []
+
+        def fake_run_p4(args):
+            calls.append(args)
+            if args[:1] == ["fstat"] and "type,headType" in args:
+                return (0, "... type binary+l\n", "")
+            if args[:1] == ["fstat"] and "fileSize" in args:
+                return (0, "... fileSize 99\n", "")
+            return (1, "", f"unexpected: {args}")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            diff = pr.extract_diff(describe, actions, cl="50", is_shelved=True)
+
+        # Synthesized header carries the discovered type, not hardcoded (text).
+        assert "==== //depot/asset.uasset#1 (binary+l) ====" in diff
+        assert "(binary file added: 99 bytes)" in diff
+        assert not any(args[:1] == ["print"] for args in calls)
+        # The text edit is untouched.
+        assert "+new" in diff
+
+    def test_text_add_omitted_from_differences_still_inlined(self):
+        """fstat says text -> the historical synthesis path still runs."""
+        describe = (
+            "Shelved files ...\n"
+            "... //depot/new.py#1 add\n"
+            "Differences ...\n"
+            "\n"
+        )
+        actions = pr.parse_file_actions(describe)
+
+        def fake_run_p4(args):
+            if args[:1] == ["fstat"] and "type,headType" in args:
+                return (0, "... type text\n", "")
+            if args == ["print", "-q", "//depot/new.py@=5"]:
+                return (0, "x = 1\n", "")
+            return (1, "", f"unexpected: {args}")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            diff = pr.extract_diff(describe, actions, cl="5", is_shelved=True)
+
+        assert "==== //depot/new.py#1 (text) ====" in diff
+        assert "+x = 1" in diff
+
+    def test_fstat_failure_defaults_to_text_synthesis(self):
+        """fstat unavailable -> behave exactly as before the guard existed."""
+        describe = (
+            "Shelved files ...\n"
+            "... //depot/new.py#1 add\n"
+            "Differences ...\n"
+            "\n"
+        )
+        actions = pr.parse_file_actions(describe)
+
+        def fake_run_p4(args):
+            if args == ["print", "-q", "//depot/new.py@=5"]:
+                return (0, "y = 2\n", "")
+            return (1, "", f"unexpected: {args}")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            diff = pr.extract_diff(describe, actions, cl="5", is_shelved=True)
+
+        assert "==== //depot/new.py#1 (text) ====" in diff
+        assert "+y = 2" in diff
+
+    def test_stderr_notes_skipped_binaries(self, capsys):
+        describe = (
+            "Shelved files ...\n"
+            "... //depot/x.uasset#1 add\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/x.uasset#1 (binary) ====\n"
+            "\n"
+        )
+        actions = pr.parse_file_actions(describe)
+        with patch.object(pr, "run_p4", return_value=(1, "", "")):
+            pr.extract_diff(describe, actions, cl="7", is_shelved=True)
+        err = capsys.readouterr().err
+        assert "skipped binary content" in err
+        assert "//depot/x.uasset" in err
+
+    def test_binary_edit_with_real_hunks_untouched(self):
+        """The guard only applies to add/delete synthesis; sections that
+        already carry @@ hunks pass through regardless of type."""
+        describe = (
+            "Affected files ...\n"
+            "... //depot/a.bin#2 edit\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/a.bin#2 (binary) ====\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+        actions = pr.parse_file_actions(describe)
+        with patch.object(pr, "run_p4", return_value=(1, "", "")):
+            diff = pr.extract_diff(describe, actions, cl="1", is_shelved=False)
+        assert "+new" in diff
+        assert "binary file" not in diff
+
+
+class TestFetchFiletypeAndSize:
+    def test_fetch_filetype_prefers_type_over_headtype(self):
+        out = "... headType text\n... type binary\n"
+        with patch.object(pr, "run_p4", return_value=(0, out, "")) as mock:
+            ft = pr.fetch_filetype("//d/x", "1", "9", is_shelved=True, is_delete=False)
+        assert ft == "binary"
+        assert mock.call_args[0][0] == ["fstat", "-T", "type,headType", "//d/x@=9"]
+
+    def test_fetch_filetype_falls_back_to_headtype(self):
+        out = "... headType binary+l\n"
+        with patch.object(pr, "run_p4", return_value=(0, out, "")):
+            ft = pr.fetch_filetype("//d/x", "3", "9", is_shelved=False, is_delete=False)
+        assert ft == "binary+l"
+
+    def test_fetch_filetype_returns_none_on_failure(self):
+        with patch.object(pr, "run_p4", return_value=(1, "", "err")):
+            assert pr.fetch_filetype("//d/x", "1", "9", True, False) is None
+
+    def test_fetch_file_size_parses_filesize(self):
+        with patch.object(pr, "run_p4", return_value=(0, "... fileSize 777\n", "")) as mock:
+            size = pr.fetch_file_size("//d/x", "2", "9", is_shelved=False, is_delete=False)
+        assert size == 777
+        assert mock.call_args[0][0] == ["fstat", "-Ol", "-T", "fileSize", "//d/x#2"]
+
+    def test_fetch_file_size_none_when_missing(self):
+        with patch.object(pr, "run_p4", return_value=(0, "... depotFile //d/x\n", "")):
+            assert pr.fetch_file_size("//d/x", "2", "9", False, False) is None
+
+    def test_delete_at_rev_1_has_no_spec(self):
+        with patch.object(pr, "run_p4") as mock:
+            assert pr.fetch_filetype("//d/x", "1", "9", False, True) is None
+            assert pr.fetch_file_size("//d/x", "1", "9", False, True) is None
+        assert mock.call_count == 0

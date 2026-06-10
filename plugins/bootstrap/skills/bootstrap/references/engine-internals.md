@@ -10,7 +10,7 @@ Bootstrap uses a fire-and-forget model to avoid blocking session start:
 
 2. **Engine (background)**: Runs all checks (tools, venv, marketplace, plugins, etc.), writes results to `bootstrap.log`, and — if there's anything to display — writes display JSON atomically to `bootstrap_display.pending` in the data directory. When everything passes silently, no pending file is created.
 
-3. **Stop hook** (every turn, ~0ms when idle): Checks for `bootstrap_display.pending`. If present, emits its contents and renames it to `bootstrap_display.displayed`. If absent, exits immediately with no output. The `.displayed` file is preserved for debugging and as a handshake signal — the engine can overwrite it with a new `.pending` file when fresh results are available. **Important**: Stop hooks only support top-level fields (`continue`, `suppressOutput`, `systemMessage`, `decision`, `reason`) — `hookSpecificOutput` is not valid for Stop hooks and will be rejected. All content (log + remediation instructions) is merged into `systemMessage`.
+3. **UserPromptSubmit hook** (`hooks/userpromptsubmit/bootstrap-display.sh`, every prompt, ~0ms when idle): Checks for `bootstrap_display.pending`. If present, emits its contents and renames it to `bootstrap_display.displayed`. If absent, exits immediately with no output. The `.displayed` file is preserved for debugging and as a handshake signal — the engine can overwrite it with a new `.pending` file when fresh results are available. **Why UserPromptSubmit (not Stop)**: UserPromptSubmit supports `hookSpecificOutput.additionalContext`, which injects the log + remediation directives into Claude's context; Stop hooks reject `hookSpecificOutput` via schema validation. The pending JSON therefore carries `systemMessage` (user-facing) plus `hookSpecificOutput` with `hookEventName: "UserPromptSubmit"` and `additionalContext` (Claude-facing). There is no `decision`/`reason` field.
 
 This means users see bootstrap results on the first turn after the engine completes, rather than waiting for the engine before the session starts. Console mode (`--console`) bypasses this entirely and runs synchronously with plain text output.
 
@@ -21,7 +21,7 @@ The bootstrap engine has two distinct setup phases:
 1. **Self-setup** (step 3): Engine prerequisites — tools, PATH entries, an optional Windows Python-stub check, and venv — declared in `config.json` under `self_setup`. These make the engine itself runnable (e.g. uv, git, PyYAML). Processed before any `bootstrap.json`. The Python-stub check is Windows-only and fires only when a `python.exe` matching one of the configured `stub_markers` (default: `WindowsApps`) is the first hit on PATH ahead of the bootstrap-installed standalone Python; on failure it writes a self-elevating `fix_python_path.bat` to the user's Desktop and adds a fix-all entry asking the user to run it as administrator. On non-Windows machines and on Windows machines without the problem, it's silent.
 2. **Plugin bootstrap** (step 4): Ecosystem management — marketplaces and plugins — declared in each plugin's `bootstrap.json`. The engine auto-discovers which installed plugins need bootstrapping by scanning for `bootstrap.json` in each plugin's install path (resolved from `plugins/installed_plugins.json`).
 
-   **Dev layout note**: When running the engine directly against the source tree (e.g. `python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap ...`), `plugins/installed_plugins.json` does not exist. `list_enabled_plugins()` returns `[], False` and sibling plugins (unreal-kit, test-plugin, p4-kit) are not auto-discovered. This is expected and not part of any real dev workflow — the engine runs cleanly with no plugin output.
+   **Dev layout note**: When running the engine directly against the source tree (e.g. `python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap ...`), `plugins/installed_plugins.json` does not exist. `list_enabled_plugins()` returns `[], False` and sibling plugins (unreal-kit, p4-kit, ...) are not auto-discovered. This is expected and not part of any real dev workflow — the engine runs cleanly with no plugin output.
 
 Discovery results are cached in `plugins/data/plugins-kit/bootstrap/config.json` under `bootstrap_cache` to avoid repeated filesystem scans — entries are added on first discovery and removed if `bootstrap.json` disappears (e.g. after a plugin update). Users can permanently opt out a plugin by adding its ref to `no_bootstrap` in that config file.
 
@@ -63,7 +63,7 @@ This is the engine-side half of "provision everything in one pass." The shell-si
 
 The two fixes above let bootstrap provision a plugin's deps/libs/venv in a single pass. The one thing bootstrap **cannot** do in-session is make Claude Code load plugin *code & hooks* — Claude Code loads plugins at session start, before this SessionStart hook runs. So when a pass can **prove** the running session is missing a plugin's code, it nags the user.
 
-The provable case: a plugin that **entered the registry during this pass** — a layered `plugins:` install (Step 3c), a per-plugin install, or a bootstrap script's `install_plugin` (Step 4b). Claude Code loaded plugins *before* this hook installed those, so they aren't active yet. The engine detects them by **diffing the installed-plugins registry** (snapshot before Step 3c vs after Step 4b: `_read_installed_refs` + `_resolve_newly_installed`) — **not** Step 4b's `new_plugins`, which silently misses a layered `plugins:` install (that lands in the registry *before* Step 4's scan, so Step 4 absorbs it and it never appears in `new_plugins` — the gap the cache-kit end-to-end test surfaced). `_reload_advice(newly_installed)` then builds a one-line, user-facing advisory, branching on whether the new plugin registers a **`SessionStart`** hook (`_plugin_ships_sessionstart_hook`):
+The provable case: a plugin that **entered the registry during this pass** — a layered `plugins:` install (Step 3c), a per-plugin install, or a bootstrap script's `install_plugin` (Step 4b). Claude Code loaded plugins *before* this hook installed those, so they aren't active yet. The engine detects them by **diffing the installed-plugins registry** (snapshot before Step 3c vs after Step 4b: `_read_installed_plugins` + `_resolve_newly_installed`) — **not** Step 4b's `new_plugins`, which silently misses a layered `plugins:` install (that lands in the registry *before* Step 4's scan, so Step 4 absorbs it and it never appears in `new_plugins` — the gap the cache-kit end-to-end test surfaced). `_reload_advice(newly_installed)` then builds a one-line, user-facing advisory, branching on whether the new plugin registers a **`SessionStart`** hook (`_plugin_ships_sessionstart_hook`):
 
 - **Registers a `SessionStart` hook** → *restart Claude (or restart your IDE if Claude runs inside one)* — only a fresh session re-fires `SessionStart`; `/reload-plugins` reloads its registration but won't re-run it.
 - **otherwise** (skills/commands/event-hooks only) → *run `/reload-plugins`* to load it in-session.
@@ -128,14 +128,14 @@ plugins/installed_plugins.json               <- plugins-kit:bootstrap entry
 
 An optional protocol that bootstrap scripts can use to communicate with the engine. Scripts that use the protocol get structured features (fix-all aggregation, user messaging, re-run triggers). Scripts that don't use the protocol just run and return.
 
-The engine collects messages from all plugin scripts and emits a unified response. The output format depends on the hook type:
+The engine collects messages from all plugin scripts and emits a unified response. The output format depends on the consuming hook:
 
-- **SessionStart** (foreground): `hookSpecificOutput.additionalContext` injects instructions into Claude's context. `systemMessage` shows a summary to the user.
-- **Stop** (background): `decision: "block"` + `reason` injects instructions into Claude's context and prevents Claude from stopping so it can act on them. `systemMessage` shows a summary to the user. Note: `systemMessage` alone is user-facing only — Claude never sees it.
+- **SessionStart** (foreground, stdout): `hookSpecificOutput` with `hookEventName: "SessionStart"` and `additionalContext` injects instructions into Claude's context. `systemMessage` shows a summary to the user.
+- **UserPromptSubmit** (background, via `bootstrap_display.pending`): the same shape with `hookEventName: "UserPromptSubmit"` — `additionalContext` carries the log + fix-all directives to Claude; `systemMessage` shows the summary to the user. Note: `systemMessage` alone is user-facing only — Claude never sees it, which is why the directives always ride in `additionalContext`.
 
 ## Execution Flow
 
-The engine accepts a `--background` flag. When set, output is written atomically to `bootstrap_display.pending` in the data directory instead of stdout. The Stop hook renames `.pending` to `.displayed` after emitting (handshake protocol). Background output uses Stop hook fields (`decision`, `reason`, `systemMessage`) — `hookSpecificOutput` is not valid for Stop hooks. On failure, `decision: "block"` + `reason` ensures Claude receives the fix-all instructions and continues working. On success, only `systemMessage` is emitted (user-facing log). Non-background output (stdout, consumed by SessionStart hook) includes `hookSpecificOutput` with `hookEventName: "SessionStart"`. When there's nothing to display (silent success with `log_success_checks` off), no file is written.
+The engine accepts a `--background` flag. When set, output is written atomically to `bootstrap_display.pending` in the data directory instead of stdout. The UserPromptSubmit display hook renames `.pending` to `.displayed` after emitting (handshake protocol). Background output uses UserPromptSubmit fields: `systemMessage` (user-facing) plus `hookSpecificOutput` with `hookEventName: "UserPromptSubmit"` and `additionalContext` (Claude-facing) — on failure, `additionalContext` carries the fix-all instructions so Claude can act on them. Non-background output (stdout, consumed by the SessionStart hook itself) is identical except `hookEventName: "SessionStart"`. When there's nothing to display (silent success with `log_success_checks` off), no file is written.
 
 1. **Auto-run phase**: Bootstrap runs on session start. For each tool check, the engine runs check -> remediate -> re-check:
    - Tool present -> log `<name>: passed`, continue
@@ -156,18 +156,15 @@ The engine accepts a `--background` flag. When set, output is written atomically
 
 ## Throttling
 
-Checks can be throttled to avoid redundant work.
-
-- **Content-hash throttling** computes a hash of input manifests and skips re-execution when the hash matches a stored value — re-runs only when declarations change.
-- **Time-based throttling** records a timestamp and skips checks within a cooldown window — useful for network operations (e.g., `git ls-remote`) where the cost is latency rather than correctness.
-
-Both can be combined: time-throttle the remote check, content-hash the local setup.
+The one real throttle is the **per-project session cooldown** applied by the shell hook (below). There is no generic per-check content-hash or time-based throttle in the engine — every pass re-runs every declared check. The two narrow caches that do exist are unrelated to throttling passes: the **plugin-discovery cache** (`bootstrap_cache` in `config.json`, see "Engine Phases" above — remembers which installed plugins have a `bootstrap.json` so discovery skips filesystem scans) and the **shared-lib sync hash** (`sync_shared_lib` content-hashes the package source and skips the copy when unchanged).
 
 ### Per-project session cooldown (shell hook)
 
-Above the engine, `session-bootstrap.sh` applies a coarser **per-project cooldown**: after a pass runs it stamps `data/<marketplace>/bootstrap/cooldowns/last_run_epoch.<sha1-of-cwd>`, and subsequent SessionStart hooks within the 3600s window skip the entire engine invocation. A skip is silent and **does not refresh the stamp** — the stamp records when bootstrap last *actually ran*.
+Above the engine, `session-bootstrap.sh` applies a coarse **per-project cooldown**: the shell stamps `data/<marketplace>/bootstrap/cooldowns/last_run_epoch.<sha1-of-cwd>` before launching the engine, and subsequent SessionStart hooks within the 3600s window skip the entire engine invocation. A skip is silent and **does not refresh the stamp** — the stamp records when bootstrap last *actually ran*.
 
 **Registry-change bypass.** The cooldown is bypassed (a real pass runs) when either `installed_plugins.json` or `known_marketplaces.json` is **newer** (mtime) than the cooldown stamp. Claude Code rewrites those files whenever it installs/updates/rescopes a plugin or adds/refreshes a marketplace, so a version bump always re-arms a bootstrap pass on the next session instead of being throttled out. Because skips don't refresh the stamp, the bypass stays armed across *every* restart until a pass actually re-provisions — this is what stops a freshly-published shared-lib owner from leaving consumers importing a stale `_shared_libs` copy (the version looked current while the lib stayed old). The bypass uses `-nt`, which is false when the registry file is absent, so the cooldown is honored by default. Force a pass out-of-band with `bootstrap-reset-cooldown`.
+
+**End-of-pass restamp.** After a *clean* pass the engine refreshes the stamp itself (`_restamp_project_cooldown`). The pass may have rewritten `installed_plugins.json` (plugin installs, `ensure_registry_scope`), and the shell's mtime bypass compares those files against the stamp written *before* the engine ran — without the restamp, bootstrap's own registry writes would re-arm a full pass on every session. The restamp only refreshes an existing stamp (creating it stays the shell hook's job, so console runs and tests never plant cooldowns). On a **failed** pass the engine instead *clears* the stamp (`_clear_project_cooldown`, also done by the crash handler), so the next SessionStart retries instead of throttling on a broken state.
 
 ## Design Principles
 
@@ -255,6 +252,5 @@ All bootstrap modules have automated tests at the repo level in `tests/bootstrap
 
 ## Case Studies
 
-- [test-plugin](../../../../docs/bootstrap/reference/case-studies/test-plugin.md) — Minimal reference implementation exercising core bootstrap operations
 - [update01/bootstrap](../../../../docs/bootstrap/reference/case-studies/update01-bootstrap.md) — Marketplace sync and plugin cache refresh
 - [unreal-kit](../../../../docs/bootstrap/reference/case-studies/unreal-kit.md) — Game development plugin with system tools, venv, config discovery, and external app dependencies

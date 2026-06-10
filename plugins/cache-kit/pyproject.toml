@@ -1,6 +1,6 @@
 [project]
 name = "cache-kit"
-version = "0.3.0"
+version = "0.5.3"
 requires-python = ">=3.11"
 
 [project.optional-dependencies]

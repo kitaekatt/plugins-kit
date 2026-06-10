@@ -23,6 +23,11 @@ import re
 import yaml
 
 
+def _utc_now() -> "_dt.datetime":
+    """Timezone-aware UTC now (datetime.utcnow() is deprecated since 3.12)."""
+    return _dt.datetime.now(_dt.timezone.utc)
+
+
 # Candidate finder: anything `/CapitalSegment/...`-shaped. Narrowed
 # downstream by mount point and on-disk existence.
 _PATH_RE = re.compile(r'/[A-Z][A-Za-z0-9_]*(?:/[A-Za-z0-9_.\-]+)+')
@@ -200,7 +205,7 @@ def save(path, refs, root, file_count, scanned_count, extensions,
          mounts=None, verify_on_disk=True):
     """Write the cache YAML."""
     out = {
-        'generated_at': _dt.datetime.utcnow().replace(microsecond=0).isoformat() + 'Z',
+        'generated_at': _utc_now().replace(microsecond=0).isoformat().replace('+00:00', '') + 'Z',
         'root': os.path.abspath(root).replace('\\', '/'),
         'extensions': list(extensions),
         'mounts': sorted(mounts.keys()) if mounts else [],
@@ -230,15 +235,16 @@ def get_age_hours(path):
         data = load(path)
         ts = data.get('generated_at') if isinstance(data, dict) else None
         if ts:
-            ts = ts.rstrip('Z')
-            generated = _dt.datetime.fromisoformat(ts)
-            delta = _dt.datetime.utcnow() - generated
+            generated = _dt.datetime.fromisoformat(ts.rstrip('Z'))
+            if generated.tzinfo is None:
+                generated = generated.replace(tzinfo=_dt.timezone.utc)
+            delta = _utc_now() - generated
             return delta.total_seconds() / 3600.0
     except Exception:
         pass
     try:
         mtime = os.path.getmtime(path)
-        delta = _dt.datetime.utcnow().timestamp() - mtime
+        delta = _utc_now().timestamp() - mtime
         return delta / 3600.0
     except OSError:
         return None

@@ -17,7 +17,7 @@ argument-hint: "[ (none) | list | <path> | <numbers> [fast] | roster [path|-] | 
 
 The first line of your response MUST be the `Running ...` line printed above. This gives the user immediate confirmation of which plugin version actually executed (the slash registry can lag the on-disk cache; this is the only reliable signal).
 
-`/skill-audit` is the umbrella for **skill analysis tooling** in skills-kit. It hosts three procedures over the same skill corpus (User skills + Project skills + installed Plugin skills, discovered via the shared `_corpus.py` module):
+skill-audit (reached via `/md-audit skill`) is the umbrella for **skill analysis tooling** in skills-kit. It hosts three procedures over the same skill corpus (User skills + Project skills + installed Plugin skills, discovered via the shared `skills_kit_lib.corpus` module):
 
 - **Per-skill audit** -- the namesake operation; checks one SKILL.md against the framework's required blocks, cohesion principles, and hygiene rules; classifies findings into a taxonomy and dispatches remediation.
 - **Roster** -- corpus-wide markdown inventory grouped by location and type.
@@ -25,13 +25,13 @@ The first line of your response MUST be the `Running ...` line printed above. Th
 
 ## Framework
 
-The per-skill audit operationalizes the **skill-md-audit** audit-kind under the shared audit framework. The canonical glossary -- `subject`, `primitive`, `composition`, `discovery`, `audit-kind`, `rule`, `finding`, `severity`, `taxonomy`, `bucket`, `corpus`, `scaffolding` -- lives at `skills-kit:md-audit/references/audit-framework.md`, with the data model at `skills-kit:md-audit/references/audit-framework.yaml`. The sibling skill `/references-audit` operationalizes the other audit-kind defined in the same framework. Definitions live in the framework; this file describes only how the audit applies them.
+The per-skill audit operationalizes the **skill-md-audit** audit-kind under the shared audit framework. The canonical glossary -- `subject`, `primitive`, `composition`, `discovery`, `audit-kind`, `rule`, `finding`, `severity`, `taxonomy`, `bucket`, `corpus`, `scaffolding` -- lives at `skills-kit:md-audit/references/audit-framework.md`, with the data model at `skills-kit:md-audit/references/audit-framework.yaml`. The sibling skill `references-audit` (via `/md-audit references`) operationalizes the other audit-kind defined in the same framework. Definitions live in the framework; this file describes only how the audit applies them.
 
 In framework terms, the per-skill audit procedure is:
 
 - **Subject:** a `skill_md` primitive inside a `skill` composition (one `SKILL.md` per pass).
 - **Primitives consumed:** `skill_md` and `yaml` (the embedded contract block).
-- **Scaffolding:** `skill-authoring/scripts/audit.py` for mechanical schema validation; agent judgment for CCP / CRP / ADP placement.
+- **Scaffolding:** `python -m skills_kit_lib.audit` (run from the plugin root) for mechanical schema validation; agent judgment for CCP / CRP / ADP placement.
 - **Rules:** canonical definitions live in this skill's own `criteria:` block below (single source of truth per rule). The framework registry at `audit-framework.yaml::audit_kinds.skill_md_audit.rules_per_composition.skill` catalogs the bindings by id only.
 - **Taxonomy + buckets:** the A-K categories below; AUTO / DISCUSS / SPECIAL dispatch in parallel.
 
@@ -51,9 +51,9 @@ audit_skill:
       - "generating a corpus-wide markdown roster grouped by location and skill-type (the roster procedure)"
       - "generating an interactive HTML hierarchy of the corpus with frontmatter columns and skill-type tooltips (the hierarchy procedure)"
     excludes:
-      - "auditing CLAUDE.md files (use /claude-md-audit)"
+      - "auditing CLAUDE.md files (use /md-audit claude-md)"
       - "auditing reference docs in isolation (audited transitively via the SKILL.md they belong to)"
-      - "auditing cross-references between skills (use /references-audit)"
+      - "auditing cross-references between skills (use /md-audit references)"
   subject:
     what: "Claude Code SKILL.md files from the User / Project / installed-Plugin corpus, evaluated against the skill-authoring framework's required-blocks / cohesion / hygiene contract."
     subject_type: "corpus"
@@ -360,9 +360,9 @@ Corpus-wide reports:
 
 Typical workflows:
 
-- *Audit one skill*: `/skill-audit list` to see what's nearby, then `/skill-audit 3` to audit by index.
-- *Inventory all skills*: `/skill-audit roster` -- scan the markdown to spot odd entries.
-- *Browse with detail*: `/skill-audit hierarchy` -- open the HTML to see every frontmatter key per skill.
+- *Audit one skill*: `/md-audit skill list` to see what's nearby, then `/md-audit skill 3` to audit by index.
+- *Inventory all skills*: `/md-audit skill roster` -- scan the markdown to spot odd entries.
+- *Browse with detail*: `/md-audit skill hierarchy` -- open the HTML to see every frontmatter key per skill.
 
 ## Workflow orchestration
 
@@ -399,11 +399,11 @@ When the non-interactive flag is set (argument token or expressed intent), the Q
 
 ## Cross-references
 
-- Canonical audit framework (shared with `/references-audit`): `skills-kit:md-audit/references/audit-framework.md` and `skills-kit:md-audit/references/audit-framework.yaml`.
+- Canonical audit framework (shared with `references-audit`): `skills-kit:md-audit/references/audit-framework.md` and `skills-kit:md-audit/references/audit-framework.yaml`.
 - Canonical placement framework: `cohesion-principles (in skills-kit)`.
-- Canonical type contracts: `framework.md (in skills-kit:skill-authoring)` and `plugins/skills-kit/skills/skill-authoring/scripts/schemas.py`.
-- Mechanical validator: `plugins/skills-kit/skills/skill-authoring/scripts/audit.py`.
-- Type classifier (for category C remediation): `plugins/skills-kit/skills/skill-authoring/scripts/classify.py`.
-- Shared corpus discovery: `plugins/skills-kit/scripts/_corpus.py` (used by the roster and hierarchy procedures).
-- Sibling audit skill: `/claude-md-audit` for CLAUDE.md files.
-- Sibling reference scanner: `/references-audit` for broken skill cross-references across markdown.
+- Canonical type contracts: `framework.md (in skills-kit:skill-authoring)` and `plugins/skills-kit/skills_kit_lib/schema_registry.py`.
+- Mechanical validator: `plugins/skills-kit/skills_kit_lib/audit.py` (run as `python -m skills_kit_lib.audit` from the plugin root).
+- Type classifier (for category C remediation): `plugins/skills-kit/skills_kit_lib/classify.py` (run as `python -m skills_kit_lib.classify`).
+- Shared corpus discovery: `plugins/skills-kit/skills_kit_lib/corpus.py` (used by the roster and hierarchy procedures).
+- Sibling audit skill: `claude-md-audit` (via `/md-audit claude-md`) for CLAUDE.md files.
+- Sibling reference scanner: `references-audit` (via `/md-audit references`) for broken skill cross-references across markdown.

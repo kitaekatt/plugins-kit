@@ -7,6 +7,14 @@
 // inside Workflow scripts -- they break resume). Vary per-node behavior by index
 // or by values passed in via `args`, not by random.
 
+// Shell-quote one argument for POSIX sh: wrap in single quotes, escaping any
+// embedded single quote with the '\'' dance. Single quotes stop EVERY expansion
+// ($var, $(cmd), backticks); double quotes do not, and JSON.stringify is a JS
+// escaper, not a shell escaper. Use this for every value spliced into a command.
+function shq(s) {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'"
+}
+
 const WORKFLOW_KIT_NODE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -44,10 +52,11 @@ function wkNode(cmd, out, opts) {
 // script strategy: run any shell command, redirecting its stdout to `out`.
 // stderr is left to surface via the exit code. `command` is passed through as-is
 // (it may contain its own shell syntax -- pipes, redirects); only the `out` path
-// is quoted, so a path with spaces does not split the redirect. Example:
+// is shq-quoted, so a path with spaces, `$`, or backticks cannot split or expand
+// inside the redirect. Example:
 //   await wkScript('uv run python -m mypkg.transform in.json', outPath, { label: 'transform' })
 function wkScript(command, out, opts) {
-  return wkNode('{ ' + command + ' ; } > "' + out + '"', out, opts)
+  return wkNode('{ ' + command + ' ; } > ' + shq(out), out, opts)
 }
 
 // openrouter strategy: one non-Claude model call via openrouter-kit's openai
@@ -66,16 +75,17 @@ function wkScript(command, out, opts) {
 // config.yaml instead of hardcoding a slug here.
 function wkOpenRouter(runner, spec, opts) {
   opts = opts || {}
-  // model is a registry alias / slug (no spaces); path args are quoted so a
-  // path containing a space does not split into extra shell words.
-  const model = spec.model ? ' --model ' + spec.model : ''
+  // every spec value is shq-quoted: paths may contain spaces, and only single
+  // quotes stop $(), backtick, and $var expansion (--system in particular is
+  // arbitrary multi-line prose).
+  const model = spec.model ? ' --model ' + shq(spec.model) : ''
   const cheap = spec.cheap ? ' --cheap' : ''
-  const sys = spec.system ? ' --system ' + JSON.stringify(spec.system) : ''
-  const st = spec.status ? ' --status "' + spec.status + '"' : ''
+  const sys = spec.system ? ' --system ' + shq(spec.system) : ''
+  const st = spec.status ? ' --status ' + shq(spec.status) : ''
   const cmd =
     runner + model + cheap +
-    ' --prompt-file "' + spec.promptFile + '"' +
-    ' --out "' + spec.out + '"' + sys + st
+    ' --prompt-file ' + shq(spec.promptFile) +
+    ' --out ' + shq(spec.out) + sys + st
   const merged = { status: spec.status }
   if (opts.label) merged.label = opts.label
   if (opts.phase) merged.phase = opts.phase

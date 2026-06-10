@@ -11,6 +11,19 @@ def test_inputs_reference():
     assert compile_expr("inputs.a.b", Scope()) == "inputs.a.b"
 
 
+def test_inputs_head_checked_against_declared():
+    scope = Scope(inputs={"diff"})
+    assert compile_expr("inputs.diff", scope) == "inputs.diff"
+    assert compile_expr("inputs.diff.lines", scope) == "inputs.diff.lines"
+    with pytest.raises(WorkflowError, match="unknown input 'dif'"):
+        compile_expr("inputs.dif", scope)
+
+
+def test_inputs_unchecked_when_scope_declares_none():
+    # inputs=None (the default) skips the check -- back-compat for direct Scope use.
+    assert compile_expr("inputs.anything", Scope()) == "inputs.anything"
+
+
 def test_step_reference():
     scope = Scope(step_vars={"gather": "step_gather"})
     assert compile_expr("steps.gather", scope) == "step_gather"

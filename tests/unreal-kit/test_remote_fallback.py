@@ -37,15 +37,22 @@ def _make_valid_config(tmp_path):
 
 
 class TestRemoteFallbackOnScriptError:
-    """When remote connects but script errors, auto-mode should retry via commandlet."""
+    """Remote SCRIPT errors must NOT auto-retry via commandlet (U2): the script
+    already ran remotely, so a fallback re-executes its side effects. Fallback
+    on script error is opt-in via fallback_on_error; connection failures
+    (_try_remote -> None) always fall back."""
 
     @patch("ue_runner._run_commandlet")
     @patch("ue_runner._try_remote")
     @patch("ue_runner._resolve_project")
-    def test_auto_mode_falls_back_on_script_error(
+    def test_auto_mode_does_not_fall_back_on_script_error(
         self, mock_resolve, mock_remote, mock_commandlet, tmp_path
     ):
-        """Auto-detect mode: remote script error -> falls back to commandlet."""
+        """Auto-detect mode: remote script error -> NO commandlet retry (U2).
+
+        The remote run already executed the script's side effects; a silent
+        commandlet retry would re-execute them.
+        """
         script = tmp_path / "test.py"
         script.write_text("import unreal")
         cfg = _make_valid_config(tmp_path)
@@ -56,13 +63,39 @@ class TestRemoteFallbackOnScriptError:
             success=False, mode="remote", elapsed=5.4,
             error="Remote execution error: 'NoneType' object has no attribute 'get'",
         )
-        # Commandlet succeeds
+
+        result = run_ue_script(str(script), force_mode=None, config=cfg)
+
+        assert result.success is False
+        assert result.mode == "remote"
+        # The error should tell the user how to opt into a retry
+        assert "--fallback-on-error" in result.error
+        mock_commandlet.assert_not_called()
+
+    @patch("ue_runner._run_commandlet")
+    @patch("ue_runner._try_remote")
+    @patch("ue_runner._resolve_project")
+    def test_fallback_on_error_opts_into_commandlet_retry(
+        self, mock_resolve, mock_remote, mock_commandlet, tmp_path
+    ):
+        """fallback_on_error=True: remote script error -> retries via commandlet."""
+        script = tmp_path / "test.py"
+        script.write_text("import unreal")
+        cfg = _make_valid_config(tmp_path)
+        mock_resolve.return_value = cfg
+
+        mock_remote.return_value = RunResult(
+            success=False, mode="remote", elapsed=5.4,
+            error="Remote execution error: 'NoneType' object has no attribute 'get'",
+        )
         mock_commandlet.return_value = RunResult(
             success=True, mode="commandlet", elapsed=45.0,
             output_file="/fake/output.yaml",
         )
 
-        result = run_ue_script(str(script), force_mode=None, config=cfg)
+        result = run_ue_script(
+            str(script), force_mode=None, config=cfg, fallback_on_error=True
+        )
 
         assert result.success is True
         assert result.mode == "commandlet"

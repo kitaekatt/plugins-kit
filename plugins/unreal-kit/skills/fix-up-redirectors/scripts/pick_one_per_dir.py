@@ -24,6 +24,14 @@ import os
 import sys
 
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'lib')))
+# Plugin-level lib (for bootstrap_guard) — scripts/ -> skill/ -> skills/ -> unreal-kit/lib
+sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'lib')))
+
+# Re-exec under the bootstrap-provisioned plugin venv (no-op when already
+# there) so pyyaml resolves regardless of the invoking interpreter.
+from bootstrap_guard import reexec_under_plugin_venv
+reexec_under_plugin_venv("unreal-kit")
+
 from redirector_record import load_safe_set, save_safe_set
 
 
