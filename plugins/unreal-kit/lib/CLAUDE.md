@@ -1,10 +1,6 @@
 # Vendored files in this directory
 
-`path_repair.py` here is a **byte-identical vendored copy** of the canonical at `plugins/bootstrap/bootstrap_lib/path_repair.py`. It is vendored (not imported) so this plugin can call `repair_path()` without depending on `bootstrap_lib` being importable from the current venv.
-
-**If you edit `path_repair.py` in this directory, you must mirror the same change to the canonical** — and vice versa. `tests/bootstrap/test_path_repair.py::test_vendored_copies_match_canonical` enforces this and will fail loudly if the copies drift.
-
-When adding or removing vendored copies elsewhere in the repo, update the `_VENDORED` list in that test so the byte-identity check covers them.
+`path_repair.py` here is a **byte-identical vendored copy** of the canonical at `plugins/bootstrap/bootstrap_lib/path_repair.py` (vendored, not imported, so unreal-kit can call `repair_path()` without `bootstrap_lib` on the active venv). The mirror-edit and `_VENDORED` drift-test rules live in the `claude_md:` insights and conventions below.
 
 ## Insights
 
@@ -31,7 +27,7 @@ claude_md:
         file is vendored (copied byte-for-byte) into this directory. Treat
         the local copy as read-only mirror state -- any change must be
         mirrored to the canonical in the same commit, and vice versa.
-      origin: Documented in this file's prose; enforced by tests/bootstrap/test_path_repair.py::test_vendored_copies_match_canonical.
+      origin: Enforced by tests/bootstrap/test_path_repair.py::test_vendored_copies_match_canonical.
       added: "2026-05-19"
     - id: vendored_copy_drift_test
       keywords: [test_vendored_copies_match_canonical, _VENDORED, drift, byte-identity, test coverage]
@@ -43,7 +39,7 @@ claude_md:
         repo, update the _VENDORED list in that test so the byte-identity
         check covers the new (or no-longer-present) file. Skipping this step
         leaves the new copy unprotected against silent drift.
-      origin: Documented in this file's prose; the test file is the enforcement mechanism.
+      origin: Enforced by tests/bootstrap/test_path_repair.py (the _VENDORED byte-identity check).
       added: "2026-05-19"
   conventions:
     - rule: When editing path_repair.py in this directory, mirror the same change to plugins/bootstrap/bootstrap_lib/path_repair.py in the same commit (and vice versa).
