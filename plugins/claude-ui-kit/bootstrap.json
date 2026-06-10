@@ -1,4 +1,8 @@
 {
+  "$comment": "statusline.sh depends on jq at runtime (declared here so the dependency is explicit, not satisfied transitively). The download recipe + install commands live in the bootstrap plugin's own manifest; this entry just makes the engine check/resolve jq for this plugin too (BOOTSTRAP_BIN_JQ).",
+  "tools": [
+    {"name": "jq"}
+  ],
   "sync_to_data": [
     {"src": "scripts", "dst": "scripts"}
   ],

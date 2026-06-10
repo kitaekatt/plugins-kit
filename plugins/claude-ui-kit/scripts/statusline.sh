@@ -7,6 +7,14 @@ DATA=$(cat)
 # See docs/planning/bootstrap/tool-resolution-redesign.md.
 JQ="${BOOTSTRAP_BIN_JQ:-jq}"
 
+# Fallback: with set -euo pipefail, malformed stdin (or a missing jq) used to
+# kill the script and render a blank statusline indistinguishable from "not
+# installed". Emit a minimal line instead.
+if ! printf '%s' "$DATA" | "$JQ" -e . >/dev/null 2>&1; then
+    printf '\xf0\x9f\x93\x81 %s\n' "$(basename "${PWD:-?}")"
+    exit 0
+fi
+
 # Extract fields via single jq call
 IFS=$'\t' read -r MODEL MODEL_ID DIR PCT SESS WEEK SESS_RESET WEEK_RESET < <(
     echo "$DATA" | "$JQ" -r '[
