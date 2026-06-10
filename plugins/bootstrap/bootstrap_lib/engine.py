@@ -1909,7 +1909,25 @@ def _phase_sync_to_data(ctx):
             continue
         os.makedirs(dst, exist_ok=True)
         shutil.copytree(src, dst, dirs_exist_ok=True)
+        _ensure_shell_scripts_executable(dst)
         ctx.ok(f"sync {src_rel} -> {dst_rel}: ok")
+
+
+def _ensure_shell_scripts_executable(root):
+    """Grant exec on synced *.sh files wherever read is granted.
+
+    Marketplace clones can lose the exec bit (mode committed as 100644,
+    core.fileMode=false, Windows checkouts), and copytree preserves the
+    stripped mode — leaving e.g. a synced statusline.sh that the harness
+    cannot execute (EACCES, silent blank statusline).
+    """
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            if not name.endswith(".sh"):
+                continue
+            path = os.path.join(dirpath, name)
+            mode = os.stat(path).st_mode
+            os.chmod(path, mode | ((mode & 0o444) >> 2))
 
 
 # Marketplaces for which a `pin` was declared by a manifest processed earlier

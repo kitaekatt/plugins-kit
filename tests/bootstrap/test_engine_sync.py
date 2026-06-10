@@ -83,6 +83,33 @@ class TestSyncToData:
         assert failures[0]["type"] == "sync_to_data"
         assert any("FAILED" in e for e in action_entries)
 
+    def test_sync_grants_exec_bit_on_shell_scripts(self, tmp_path):
+        """Synced *.sh files are executable even when the source is not."""
+        plugin_root = tmp_path / "plugin"
+        data_dir = tmp_path / "data"
+        plugin_root.mkdir()
+        data_dir.mkdir()
+
+        src_scripts = plugin_root / "scripts"
+        src_scripts.mkdir()
+        script = src_scripts / "statusline.sh"
+        script.write_text("#!/usr/bin/env bash\necho ok\n")
+        script.chmod(0o644)
+        (src_scripts / "helper.py").write_text("# not a shell script")
+        (src_scripts / "helper.py").chmod(0o644)
+
+        manifest = {"sync_to_data": [{"src": "scripts", "dst": "scripts"}]}
+        action_entries = []
+        ok_entries = []
+        failures = _process_manifest(
+            manifest, "windows", str(data_dir), str(plugin_root),
+            action_entries, ok_entries,
+        )
+
+        assert failures == []
+        assert os.access(data_dir / "scripts" / "statusline.sh", os.X_OK)
+        assert not os.access(data_dir / "scripts" / "helper.py", os.X_OK)
+
     def test_sync_custom_dst(self, tmp_path):
         """Custom dst mapping places files at the correct location."""
         plugin_root = tmp_path / "plugin"
