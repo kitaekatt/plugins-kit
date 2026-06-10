@@ -183,3 +183,31 @@ class TestScan:
         root, _ = _make_project(tmp_path)
         _, _, _, mounts = scan(str(root))
         assert set(mounts) >= {"/Game", "/Engine", "/MyPlugin"}
+
+
+class TestCacheAge:
+    """U14 regression: save()/get_age_hours() must work without the deprecated
+    datetime.utcnow() and agree on the timestamp format (trailing-Z UTC)."""
+
+    def test_fresh_cache_age_is_near_zero(self, tmp_path):
+        import warnings
+
+        from code_refs import get_age_hours, load, save
+
+        cache = tmp_path / "code_references.yaml"
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            save(str(cache), {"/Game/UI/WBP_X"}, str(tmp_path), 1, 1, (".cpp",))
+            age = get_age_hours(str(cache))
+
+        assert age is not None
+        assert 0 <= age < 0.1
+
+        doc = load(str(cache))
+        assert doc["generated_at"].endswith("Z")
+        assert "+00:00" not in doc["generated_at"]
+
+    def test_missing_cache_age_is_none(self, tmp_path):
+        from code_refs import get_age_hours
+
+        assert get_age_hours(str(tmp_path / "nope.yaml")) is None

@@ -20,7 +20,8 @@ These issues should be rare since bootstrap runs automatically. Check if somethi
 
 If `ue_runner.py` reports "uproject path not configured":
 - Bootstrap may have failed to auto-detect the project. Check bootstrap output at session start.
-- Manually create `<project_root>/.local-data/plugins-kit/unreal-kit/config.yaml` with `uproject` and `engine_dir` fields. (The legacy `.local-data/unreal-kit/config.yaml` and `.claude/unreal-kit.yaml` paths are still read if present, but new files should use the new location.)
+- Run `python ue_runner.py --setup` to interactively pick the `.uproject` and write the per-project config. That is `--setup`'s only job — ini settings and host deps stay bootstrap's (it does not duplicate the rows above).
+- Or manually create `<project_root>/.local-data/plugins-kit/unreal-kit/config.yaml` with `uproject` and `engine_dir` fields. (The legacy `.local-data/unreal-kit/config.yaml` and `.claude/unreal-kit.yaml` paths are still read if present, but new files should use the new location.)
 - Legacy fallback: `~/.claude/plugins/data/plugins-kit/unreal-kit/config.yaml` is still checked if no per-project config is found.
 
 ### Remote execution not working

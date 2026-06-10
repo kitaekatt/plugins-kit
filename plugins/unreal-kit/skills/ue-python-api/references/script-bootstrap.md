@@ -29,7 +29,7 @@ import yaml  # now available
 
 The function:
 1. Reads `requirements.yaml` using a **hand-rolled YAML parser** (not pyyaml — since pyyaml is itself a dependency being installed)
-2. Checks installed packages via `pkg_resources.working_set`
+2. Checks installed packages via `importlib.metadata.distributions()`
 3. Installs missing packages via `unreal_pip.install()`, which shells out to pip using UE's embedded Python interpreter
 4. Targets UE's own site-packages: `Engine/Binaries/ThirdParty/Python3/Win64/Lib/site-packages`
 5. Invalidates import caches so new packages are immediately importable
@@ -38,7 +38,7 @@ The function:
 
 The `.cmd` entry points handle host-side dependencies:
 
-- **`ue-runner.cmd`**: Uses `uv run --with upyrc --with pyyaml` for an ephemeral environment (legacy path, before session bootstrap existed)
+- **`ue-runner.cmd`**: Execs `ue_runner.py` under the bootstrap-provisioned plugin venv (`~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/Scripts/python.exe`), which carries upyrc + pyyaml; exits with the bootstrap-absence message when the venv is not provisioned. `ue_runner.py` itself also re-execs into that venv via `bootstrap_guard.reexec_under_plugin_venv`, so a bare `python ue_runner.py` lands in the same interpreter.
 
 ## Stdlib-Only Constraint
 

@@ -15,11 +15,14 @@ Subcommands:
                    accepts a handshake.
 
 Usage:
-    python ue_env.py status
-    python ue_env.py launch-editor
-    python ue_env.py launch-editor --map /Game/Maps/Foo
-    python ue_env.py launch-editor --wait-for-mcp --timeout 180
-    python ue_env.py launch-editor --force   # spawn even if one is running
+    python ue_env_cli.py status
+    python ue_env_cli.py launch-editor
+    python ue_env_cli.py launch-editor --map /Game/Maps/Foo
+    python ue_env_cli.py launch-editor --wait-for-mcp --timeout 180
+    python ue_env_cli.py launch-editor --force   # spawn even if one is running
+
+(The file is named ue_env_cli.py, not ue_env.py, so this CLI module can never
+shadow lib/ue_env.py -- the library it imports primitives from.)
 
 The script reads the same per-project config as ue_runner.py
 (<project_root>/.local-data/plugins-kit/unreal-kit/config.yaml) for engine_dir and
@@ -41,10 +44,13 @@ from path_repair import repair_path  # noqa: E402
 
 repair_path()
 
-# Fail fast with an actionable message if the bootstrap plugin never provisioned
-# this plugin (e.g. a stray system Python is running this script).
-from bootstrap_guard import require_bootstrap  # noqa: E402
+# Re-exec under the bootstrap-provisioned plugin venv (no-op when already
+# there) so plugin deps resolve regardless of which interpreter launched the
+# script; then fail fast with an actionable message if the bootstrap plugin
+# never provisioned this plugin at all (e.g. a stray system Python, no venv).
+from bootstrap_guard import reexec_under_plugin_venv, require_bootstrap  # noqa: E402
 
+reexec_under_plugin_venv("unreal-kit")
 require_bootstrap("unreal-kit", feature="Unreal Python automation")
 
 from ue_env import (  # noqa: E402
@@ -199,7 +205,7 @@ def _do_wait(args: argparse.Namespace) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="ue_env",
+        prog="ue_env_cli",
         description=(
             "Describe and drive the Unreal Editor host environment: detect "
             "running editors (interactive vs zombie), spawn one if needed, "

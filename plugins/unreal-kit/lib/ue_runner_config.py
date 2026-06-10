@@ -41,7 +41,6 @@ _GLOBAL_CONFIG_PATH = Path.home() / ".claude" / "plugins" / "data" / "plugins-ki
 # Hardcoded defaults for global settings (last resort)
 _DEFAULTS = {
     "remote_execution": {
-        "timeout_seconds": 5,
         "multicast_group": "239.0.0.1",
         "multicast_port": 6766,
         "multicast_bind_address": "127.0.0.1",
@@ -51,7 +50,6 @@ _DEFAULTS = {
 
 @dataclass
 class RemoteConfig:
-    timeout_seconds: int = 5
     multicast_group: str = "239.0.0.1"
     multicast_port: int = 6766
     multicast_bind_address: str = "127.0.0.1"
@@ -166,7 +164,6 @@ def load_config(config_path: str | Path | None = None) -> RunnerConfig:
         engine_dir=merged.get("engine_dir", ""),
         uproject=merged.get("uproject", ""),
         remote=RemoteConfig(
-            timeout_seconds=int(remote_data.get("timeout_seconds", 5)),
             multicast_group=str(remote_data.get("multicast_group", "239.0.0.1")),
             multicast_port=int(remote_data.get("multicast_port", 6766)),
             multicast_bind_address=str(remote_data.get("multicast_bind_address", "127.0.0.1")),
@@ -185,14 +182,22 @@ def _load_yaml(path: str | Path) -> dict:
             data = yaml.safe_load(f)
         return data if isinstance(data, dict) else {}
     except ImportError:
-        # Fall back to simple line parser if pyyaml not installed
+        # Fall back to simple line parser if pyyaml is not installed. This is
+        # load-bearing for callers OUTSIDE the plugin venv -- in particular the
+        # detect-editor-stale PreToolUse hook, which runs under
+        # `uv run --no-project python` (a bare interpreter with no pyyaml).
         return _parse_yaml_simple(path)
     except Exception:
         return {}
 
 
 def _parse_yaml_simple(path: Path) -> dict:
-    """Minimal YAML parser for flat key: value and one level of nesting."""
+    """Minimal YAML parser for flat key: value and one level of nesting.
+
+    The single shared fallback parser for pyyaml-absent contexts (see the
+    ImportError branch in _load_yaml). Do not re-implement per-consumer
+    one-key parsers; import this module instead.
+    """
     result = {}
     current_section = None
     with open(path, "r") as f:

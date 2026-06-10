@@ -10,8 +10,16 @@ import sys
 from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'lib')))
-# Plugin-level lib (for path_repair) — scripts/ -> skill/ -> skills/ -> unreal-kit/lib
+# Plugin-level lib (for bootstrap_guard/path_repair) — scripts/ -> skill/ -> skills/ -> unreal-kit/lib
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'lib')))
+
+# Re-exec under the bootstrap-provisioned plugin venv (no-op when already
+# there) so pyyaml resolves regardless of which interpreter launched the
+# script — a bare `python` or `uv run` from a project root dies with
+# ModuleNotFoundError: yaml otherwise.
+from bootstrap_guard import reexec_under_plugin_venv
+reexec_under_plugin_venv("unreal-kit")
+
 from path_repair import repair_path
 repair_path()
 
@@ -63,7 +71,7 @@ def main():
     blocked_changes_by_user = defaultdict(set)
 
     def _check_blockers(local_paths):
-        """Return (blockers_list, contributing_user_counts).
+        """Return the list of blocker dicts for the given local paths.
         Mirrors the original inline logic; centralized so both code paths
         (fix-up and orphaned) charge the same tally.
         """

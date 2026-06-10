@@ -171,4 +171,4 @@ class TestLoadConfig:
         assert config.uproject == ""
         assert config.engine_dir == ""
         # Remote config defaults should still be present
-        assert config.remote.timeout_seconds == 5
+        assert config.remote.multicast_port == 6766

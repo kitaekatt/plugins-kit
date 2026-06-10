@@ -1,18 +1,29 @@
 #!/usr/bin/env python3
 """Background detector for unreal-kit editor staleness.
 
-Reads the PreToolUse hook JSON from stdin (for cwd), reads
-${cwd}/.local-data/plugins-kit/unreal-kit/config.yaml (or the legacy
-${cwd}/.local-data/unreal-kit/config.yaml / ${cwd}/.claude/unreal-kit.yaml)
-for engine_dir, compares UnrealEditor-BuildSettings.dll mtime vs
+Reads the PreToolUse hook JSON from stdin (for cwd), resolves the per-project
+config through the canonical resolver in lib/ue_runner_config.py (current path
+plus legacy fallbacks, walking up from cwd -- the same resolution ue_runner.py
+uses), compares UnrealEditor-BuildSettings.dll mtime vs
 Engine/Build/Build.version mtime, and writes or removes the per-project marker
 plus the claude-ui-kit system message.
+
+Source-build gate: the dll-vs-Build.version mtime comparison is only
+meaningful for SOURCE builds, where a sync updates Build.version and the
+developer must rebuild. Launcher/binary engine installs ship
+Engine/Build/InstalledBuild.txt; for those the staleness check is skipped
+(and any leftover marker cleared) -- otherwise an installed engine could
+warn on every MCP call forever.
 
 Marker path:  <cwd>/.local-data/plugins-kit/unreal-kit/editor-stale.flag
 System msg:   <cwd>/.local-data/claude-ui-kit/systemmessage.unreal-kit.txt
 
 Cleans up after the path move: any stale marker at the old
 <cwd>/.local-data/unreal-kit/ location (and its empty directory) is removed.
+
+Runs under `uv run --no-project python` (see check-editor-build-fresh.sh), a
+bare interpreter with no pyyaml -- ue_runner_config falls back to its simple
+line parser in that case.
 
 Latency is not foreground-critical: this runs detached after the PreToolUse
 hook has already returned. The marker it writes is consumed by subsequent
@@ -24,22 +35,35 @@ no-op (preserves prior marker state). The hook is advisory, not safety-critical.
 import json
 import os
 import sys
+from pathlib import Path
+
+# hooks/pretooluse/ -> unreal-kit/lib (the plugin's shared config resolver)
+_LIB_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib")
+)
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
 
 SYSMSG_TEXT = "Editor needs rebuild"
 
 
-def read_engine_dir(config_path: str) -> str | None:
+def read_engine_dir(cwd: str) -> str | None:
+    """Resolve engine_dir via the canonical per-project config resolver.
+
+    Delegates path resolution (current config name + legacy fallbacks +
+    walk-up) and YAML parsing to lib/ue_runner_config.py so the hook can
+    never drift from the runner's resolution order.
+    """
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("engine_dir:"):
-                    value = line[len("engine_dir:"):].strip()
-                    if value.startswith('"') and value.endswith('"'):
-                        value = value[1:-1]
-                    return value or None
-    except OSError:
+        from ue_runner_config import _load_yaml, find_project_config
+
+        config_path = find_project_config(Path(cwd))
+        if not config_path:
+            return None
+        value = _load_yaml(config_path).get("engine_dir")
+        return str(value) if value else None
+    except Exception:
         return None
-    return None
 
 
 def _touch(path: str, content: str | None = None) -> None:
@@ -83,14 +107,7 @@ def main() -> int:
     old_marker = os.path.join(cwd, ".local-data", "unreal-kit", "editor-stale.flag")
     sysmsg = os.path.join(cwd, ".local-data", "claude-ui-kit", "systemmessage.unreal-kit.txt")
 
-    config_path = os.path.join(cwd, ".local-data", "plugins-kit", "unreal-kit", "config.yaml")
-    for legacy in (
-        os.path.join(cwd, ".local-data", "unreal-kit", "config.yaml"),
-        os.path.join(cwd, ".claude", "unreal-kit.yaml"),
-    ):
-        if not os.path.isfile(config_path):
-            config_path = legacy
-    engine_dir = read_engine_dir(config_path)
+    engine_dir = read_engine_dir(cwd)
 
     # Clean up after the path move: drop any stale marker at the old location
     # (and its now-empty directory) regardless of the staleness outcome.
@@ -98,6 +115,14 @@ def main() -> int:
     _rmdir_if_empty(os.path.dirname(old_marker))
 
     if not engine_dir:
+        return 0
+
+    # Launcher/binary engine installs (Engine/Build/InstalledBuild.txt) are
+    # never rebuilt locally; the mtime heuristic below would flag them stale
+    # forever. Skip the check and clear any leftover marker.
+    if os.path.isfile(os.path.join(engine_dir, "Build", "InstalledBuild.txt")):
+        _remove(marker)
+        _remove(sysmsg)
         return 0
 
     dll = os.path.join(engine_dir, "Binaries", "Win64", "UnrealEditor-BuildSettings.dll")

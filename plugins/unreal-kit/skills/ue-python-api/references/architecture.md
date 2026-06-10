@@ -18,6 +18,8 @@ The terminal runner (`ue_runner.py`) supports two execution modes and auto-detec
 
 Remote execution is faster since the Editor is already loaded. The commandlet must load the engine from scratch but has access to the same asset APIs — loading, saving, registry queries, property access, and reference graph traversal all work. Only operations that require a live UI context (active selection, open viewport, progress dialogs) need the Editor. See `references/script-execution.md` §4 for the full capability breakdown.
 
+Fallback rule: only CONNECTION failures (editor not reachable) auto-fall back to the commandlet. A remote *script* error does not — the script already ran in the Editor, so a silent commandlet retry would re-execute its side effects. Pass `--fallback-on-error` (for idempotent scripts) or `--mode commandlet` to retry headless after a remote script error.
+
 ### Manual execution methods
 
 These bypass the terminal runner:

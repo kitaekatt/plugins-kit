@@ -60,7 +60,12 @@
     }
   ],
   "plugins": [
-    {"ref": "plugins-kit:unreal-kit", "enabled": true, "scope": "user"}
+    {
+      "_comment": "Self-referential on purpose: the engine enforces that unreal-kit itself stays installed and enabled at user scope (re-installs on scope drift). Unknown keys like this one are ignored by the engine.",
+      "ref": "plugins-kit:unreal-kit",
+      "enabled": true,
+      "scope": "user"
+    }
   ],
   "script": {
     "path": "custom_bootstrap.py",

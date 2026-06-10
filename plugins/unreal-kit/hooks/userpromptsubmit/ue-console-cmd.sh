@@ -4,8 +4,8 @@
 # Intercepts user prompts beginning with ">" and instructs Claude to execute
 # the remainder as an Unreal Engine console command via the MCP server.
 #
-# Self-disabling: exits immediately if the unreal-engine MCP server is not
-# configured in .mcp.json or not enabled in settings.json.
+# Self-disabling: exits 0 silently (prompt passes through untouched) when the
+# unreal-engine MCP server is not configured in the project's .mcp.json.
 
 set -euo pipefail
 
@@ -18,18 +18,19 @@ if [[ "$PROMPT" != ">"* ]]; then
     exit 0
 fi
 
-# --- Check that the unreal-engine MCP server is available ---
+# --- Self-disable when the unreal-engine MCP server is not configured ---
+# Exit 0 with no output so the prompt passes through untouched. Emitting
+# decision:"block" here would eat ANY prompt starting with ">" in every
+# non-UE project that has this plugin enabled at user scope.
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null) || true
 MCP_JSON="${CWD:-.}/.mcp.json"
 
 if [ ! -f "$MCP_JSON" ]; then
-    echo '{"decision":"block","reason":"Unreal MCP server is not configured (.mcp.json not found). Cannot execute console commands."}'
     exit 0
 fi
 
 HAS_UE=$(jq -r '.mcpServers["unreal-engine"] // empty' "$MCP_JSON" 2>/dev/null) || true
 if [ -z "$HAS_UE" ]; then
-    echo '{"decision":"block","reason":"unreal-engine MCP server is not defined in .mcp.json. Cannot execute console commands."}'
     exit 0
 fi
 

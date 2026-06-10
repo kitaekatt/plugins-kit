@@ -33,9 +33,12 @@ if str(_LIB_DIR) not in sys.path:
 from path_repair import repair_path  # noqa: E402
 repair_path()
 
-# Fail fast with an actionable message if the bootstrap plugin never provisioned
-# this plugin (e.g. a stray system Python is running this script).
-from bootstrap_guard import require_bootstrap  # noqa: E402
+# Re-exec under the bootstrap-provisioned plugin venv (no-op when already
+# there) so upyrc/pyyaml resolve regardless of which interpreter launched the
+# script; then fail fast with an actionable message if the bootstrap plugin
+# never provisioned this plugin at all (e.g. a stray system Python and no venv).
+from bootstrap_guard import reexec_under_plugin_venv, require_bootstrap  # noqa: E402
+reexec_under_plugin_venv("unreal-kit")
 require_bootstrap("unreal-kit", feature="Unreal Python automation")
 
 from ue_discovery import find_engine_dir as _find_engine_dir, find_uproject_from_cwd, find_uproject_from_path
@@ -59,6 +62,7 @@ def run_ue_script(
     config: RunnerConfig | None = None,
     copy_output_to: str | None = None,
     project: str | None = None,
+    fallback_on_error: bool = False,
 ) -> RunResult:
     """
     Execute a UE Python script, auto-selecting the best execution path.
@@ -70,6 +74,12 @@ def run_ue_script(
         copy_output_to: If set, copy any output YAML to this directory.
         project: Explicit path to a .uproject file. Overrides config and
                  auto-discovery.
+        fallback_on_error: If True, a remote SCRIPT error (editor reachable,
+                 script ran and failed) retries via commandlet. Off by
+                 default because the failed remote run may already have
+                 executed side effects; re-running a non-idempotent script
+                 doubles them. Connection-level failures (editor not
+                 reachable) always fall back regardless of this flag.
 
     Returns:
         RunResult with execution details.
@@ -93,17 +103,33 @@ def run_ue_script(
     if force_mode != "commandlet":
         result = _try_remote(script_path, config)
         if result is not None:
-            # Remote connected but script errored — fall back to commandlet
-            # unless the user explicitly forced remote mode.
-            # Common cause: assets not loaded in Editor memory (e.g. TMap
-            # properties returning None) that commandlet handles because it
-            # loads all assets from disk.
-            if not result.success and force_mode != "remote" and not errors:
+            # Remote connected and the script actually RAN. A failure here is
+            # a script-level error, not a connection problem: falling back to
+            # commandlet would RE-EXECUTE the script, repeating any side
+            # effects the failed remote run already performed. Auto-fallback
+            # is therefore opt-in via --fallback-on-error (useful for
+            # idempotent scripts hitting editor-memory quirks, e.g. TMap
+            # properties returning None because assets aren't loaded in the
+            # Editor -- commandlet loads them from disk).
+            if (
+                not result.success
+                and fallback_on_error
+                and force_mode != "remote"
+                and not errors
+            ):
                 _warn(
-                    f"Remote script error, retrying via commandlet...\n"
+                    f"Remote script error, retrying via commandlet (--fallback-on-error)...\n"
                     f"  Remote error: {result.error}"
                 )
             else:
+                if not result.success and force_mode != "remote":
+                    result.error = (
+                        f"{result.error}\n"
+                        "  Not retrying via commandlet: the script already ran "
+                        "remotely, so a retry would re-execute its side effects. "
+                        "Pass --fallback-on-error or --mode commandlet to run it "
+                        "headless."
+                    )
                 if copy_output_to and result.output_file:
                     result.output_file = _copy_output(result.output_file, copy_output_to)
                 return result
@@ -135,7 +161,8 @@ def _try_remote(script_path: str, config: RunnerConfig) -> RunResult | None:
     except ImportError:
         _warn(
             "upyrc not installed — skipping remote execution.\n"
-            "  Install with: pip install upyrc\n"
+            "  upyrc lives in the bootstrap-provisioned plugin venv; start a new\n"
+            "  session so the bootstrap plugin can (re)provision unreal-kit.\n"
             "  Falling back to commandlet..."
         )
         return None
@@ -274,30 +301,29 @@ def _get_output_dir(config: RunnerConfig) -> Path | None:
 def _detect_script_error(stdout: str, script_path: str) -> bool:
     """Check UE commandlet stdout for Python errors from our script.
 
-    UE auto-runs startup scripts (Content/Python/) which commonly fail in
-    commandlet mode (no UI, missing debug modules). We only flag errors that
-    reference the script we actually ran.
+    UE emits Python errors -- including full multi-line tracebacks -- as
+    contiguous "LogPython: Error:" lines. UE also auto-runs startup scripts
+    (Content/Python/) which commonly fail in commandlet mode (no UI, missing
+    debug modules), so an error block only counts when at least one of its
+    lines references the script we actually ran (a traceback frame line
+    carries the script's file name). Matching whole blocks instead of a
+    hand-picked exception-type whitelist means KeyError, RuntimeError, and
+    every other exception type are detected equally.
     """
     # Normalize path for matching (UE logs use mixed separators)
     script_name = os.path.basename(script_path)
 
-    in_our_traceback = False
+    block: list[str] = []
     for line in stdout.split("\n"):
-        if "Traceback (most recent call last)" in line:
-            in_our_traceback = False  # reset — new traceback starting
-        if script_name in line and "LogPython: Error:" in line:
-            # Error line that references our script
+        if "LogPython: Error:" in line:
+            block.append(line)
+            continue
+        # Block ended -- flag it if any line referenced our script.
+        if any(script_name in b for b in block):
             return True
-        if script_name in line and "Traceback" not in line:
-            # Our script appeared in a traceback frame
-            in_our_traceback = True
-        if in_our_traceback and any(err in line for err in (
-            "SyntaxError:", "ModuleNotFoundError:", "ImportError:",
-            "NameError:", "TypeError:", "AttributeError:", "ValueError:",
-        )):
-            return True
+        block = []
 
-    return False
+    return any(script_name in b for b in block)
 
 
 def _snapshot_output_dir(output_dir: Path | None) -> dict[str, float]:
@@ -411,22 +437,28 @@ def _resolve_project(
 
 
 # ---------------------------------------------------------------------------
-# Setup — check project settings (delegates to shared libs)
+# Setup — interactive .uproject disambiguation + per-project config write
 # ---------------------------------------------------------------------------
 
-from ue_discovery import find_engine_dir, find_uproject_files, is_game_project
-from ue_ini import read_ini_bool, write_ini_setting
-
-_INI_SECTION = "[/Script/PythonScriptPlugin.PythonScriptPluginSettings]"
+from ue_discovery import find_engine_dir, find_uproject_files  # noqa: E402
 
 
 def run_setup(config: RunnerConfig) -> bool:
-    """Interactive setup: discover UE project, check settings, prompt before fixes."""
-    from ue_runner_config import write_project_config as _write_project_config
+    """Interactive setup: pick the .uproject and write the per-project config.
 
-    all_ok = True
+    Everything else the runner needs is provisioned by the bootstrap plugin's
+    manifest (bootstrap.json), not duplicated here: the UserEngine.ini settings
+    (bRemoteExecution, bIsDeveloperMode) via its ini_settings section, and the
+    host-side Python deps (upyrc, pyyaml) via its venv section. Setup's only
+    job is the part that genuinely needs a human: choosing which .uproject
+    this project uses.
+    """
+    from ue_runner_config import (
+        PROJECT_CONFIG_NAME,
+        write_project_config as _write_project_config,
+    )
 
-    # 1. Always prompt for .uproject path (show current value as default)
+    # Always prompt for .uproject path (show current value as default)
     current_uproject = Path(config.uproject) if config.uproject else None
     uproject = _ask_uproject_path(current=current_uproject)
     if not uproject:
@@ -440,7 +472,7 @@ def run_setup(config: RunnerConfig) -> bool:
 
     # Write per-project config
     project_root = uproject.parent
-    config_path = project_root / ".claude" / "unreal-kit.yaml"
+    config_path = project_root / PROJECT_CONFIG_NAME
     print(f"\n  Project:")
     print(f"    uproject:   {uproject}")
     print(f"    engine_dir: {engine_dir}")
@@ -462,51 +494,13 @@ def run_setup(config: RunnerConfig) -> bool:
     config = _reload()
     print(f"\n  OK    uproject: {config.uproject}")
     print(f"  OK    engine:   {config.engine_dir}")
+    print(
+        "\n  Editor ini settings (bRemoteExecution, bIsDeveloperMode) and host\n"
+        "  Python deps (upyrc, pyyaml) are provisioned by the bootstrap plugin\n"
+        "  at session start -- start a new session to apply them."
+    )
 
-    # 2. Check editor settings (bRemoteExecution + bIsDeveloperMode)
-    project_dir = Path(config.uproject).parent
-    default_ini = project_dir / "Config" / "DefaultEngine.ini"
-    user_ini = project_dir / "Config" / "UserEngine.ini"
-
-    settings_to_check = [
-        ("bRemoteExecution", "Enables remote script execution from terminal"),
-        ("bIsDeveloperMode", "Enables Python API stub generation"),
-    ]
-
-    for key, description in settings_to_check:
-        default_value = read_ini_bool(default_ini, _INI_SECTION, key)
-        user_value = read_ini_bool(user_ini, _INI_SECTION, key)
-        effective = user_value if user_value is not None else default_value
-
-        if effective is True:
-            source = "UserEngine.ini" if user_value is True else "DefaultEngine.ini"
-            print(f"  OK    {key}=True (from {source})")
-        else:
-            print(f"\n  {key} is not enabled ({description}).")
-            print(f"    File: {user_ini}")
-            print(f"    Setting: {key}=True")
-            if _confirm(f"  Write this setting?", default_yes=True):
-                write_ini_setting(user_ini, _INI_SECTION, key, "True")
-                print(f"  WROTE {user_ini}")
-                print(f"  NOTE: Restart the editor for this to take effect.")
-            else:
-                print(f"  Skipped.")
-                all_ok = False
-
-    # 3. Check host deps
-    print()
-    for pkg_name, import_name, install_name in [
-        ("upyrc", "upyrc", "upyrc"),
-        ("pyyaml", "yaml", "pyyaml"),
-    ]:
-        try:
-            __import__(import_name)
-            print(f"  OK    Python package: {pkg_name}")
-        except ImportError:
-            print(f"  MISS  Python package: {pkg_name} — install with: pip install {install_name}")
-            all_ok = False
-
-    return all_ok
+    return True
 
 
 def _confirm(prompt: str, default_yes: bool = False) -> bool:
@@ -608,6 +602,13 @@ def main():
         help="Force execution mode (default: auto-detect)",
     )
     parser.add_argument(
+        "--fallback-on-error", action="store_true",
+        help="Retry via commandlet when a remote run reaches the editor but the "
+             "script errors. Off by default: the failed remote run may already "
+             "have executed side effects, and a commandlet retry re-executes "
+             "them. (Connection failures always fall back.)",
+    )
+    parser.add_argument(
         "--project", metavar="UPROJECT",
         help="Path to the .uproject file (overrides auto-detection and config)",
     )
@@ -636,6 +637,7 @@ def main():
         config=config,
         copy_output_to=getattr(args, "copy_output", None),
         project=args.project,
+        fallback_on_error=args.fallback_on_error,
     )
 
     # Print results
