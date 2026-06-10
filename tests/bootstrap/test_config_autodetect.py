@@ -59,6 +59,8 @@ def autodetect(config, config_path):
         config = {"P4PORT": ""}
         changed, actions, ok = run_autodetect(plugin_root, "custom_bootstrap.py autodetect", config, "/path/c.yaml")
         assert changed is False
+        # B8: the error must surface as an action message, never be swallowed.
+        assert any("autodetect FAILED" in a and "boom" in a for a in actions)
 
     def test_returns_false_no_changes(self, tmp_path):
         """Script that returns False means no changes."""
@@ -188,3 +190,32 @@ def discover():
 """)
         result = run_project_autodetect(plugin_root, "custom_bootstrap.py discover")
         assert result is None
+
+
+class TestAutodetectErrorSurfacing:
+    """B8: a crashed autodetect script is logged, not silently swallowed."""
+
+    def test_run_project_autodetect_appends_error(self, tmp_path):
+        plugin_root = str(tmp_path / "plugin")
+        os.makedirs(plugin_root)
+        _write_autodetect_script(plugin_root, body="""\
+def discover():
+    raise RuntimeError("kaboom")
+""")
+        errors = []
+        result = run_project_autodetect(plugin_root, "custom_bootstrap.py discover", errors=errors)
+        assert result is None
+        assert errors and "kaboom" in errors[0]
+        assert "project autodetect FAILED" in errors[0]
+
+    def test_run_project_autodetect_no_error_for_clean_none(self, tmp_path):
+        plugin_root = str(tmp_path / "plugin")
+        os.makedirs(plugin_root)
+        _write_autodetect_script(plugin_root, body="""\
+def discover():
+    return None
+""")
+        errors = []
+        result = run_project_autodetect(plugin_root, "custom_bootstrap.py discover", errors=errors)
+        assert result is None
+        assert errors == []

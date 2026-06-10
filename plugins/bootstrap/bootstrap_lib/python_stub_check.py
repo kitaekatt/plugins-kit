@@ -11,14 +11,22 @@ fresh shells will see.
 
 import os
 import sys
-from typing import List, NamedTuple, Optional, Tuple
+from typing import List, Optional, Tuple
+
+from .result import Result
+
+# Extras carried on python-stub Results:
+#   bad_python      -- path to the shadowing python.exe (or None)
+#   good_python_dir -- expanded absolute path to standalone python dir
 
 
-class CheckResult(NamedTuple):
-    passed: bool
-    message: str
-    bad_python: Optional[str]   # path to the shadowing python.exe (or None)
-    good_python_dir: str        # expanded absolute path to standalone python dir
+def _stub_result(passed: bool, message: str, bad_python: Optional[str], good_python_dir: str) -> Result:
+    return Result(
+        passed=passed,
+        subject="python_stub",
+        message=message,
+        extras={"bad_python": bad_python, "good_python_dir": good_python_dir},
+    )
 
 
 def _get_persistent_path_dirs() -> List[str]:
@@ -73,7 +81,7 @@ def _find_first_python_in_dirs(dirs: List[str]) -> Optional[str]:
     return None
 
 
-def check_python_stub(good_python_dir: str, stub_markers) -> CheckResult:
+def check_python_stub(good_python_dir: str, stub_markers) -> Result:
     """Detect if a Python stub (e.g. WindowsApps) shadows the standalone Python.
 
     On non-Windows, always passes.
@@ -88,34 +96,34 @@ def check_python_stub(good_python_dir: str, stub_markers) -> CheckResult:
     expanded_good = os.path.abspath(os.path.expanduser(good_python_dir))
     is_windows = sys.platform == "win32" or "MSYSTEM" in os.environ
     if not is_windows:
-        return CheckResult(True, "not windows, skipped", None, expanded_good)
+        return _stub_result(True, "not windows, skipped", None, expanded_good)
 
     persistent_dirs = _get_persistent_path_dirs()
     if not persistent_dirs:
-        return CheckResult(True, "no persistent PATH found in registry", None, expanded_good)
+        return _stub_result(True, "no persistent PATH found in registry", None, expanded_good)
 
     found = _find_first_python_in_dirs(persistent_dirs)
     if not found:
-        return CheckResult(True, "no python.exe on persistent PATH", None, expanded_good)
+        return _stub_result(True, "no python.exe on persistent PATH", None, expanded_good)
 
     found_norm = os.path.normcase(os.path.normpath(found))
     good_norm = os.path.normcase(expanded_good)
     found_dir = os.path.dirname(found_norm)
     if found_dir == good_norm or found_norm.startswith(good_norm + os.sep):
-        return CheckResult(
+        return _stub_result(
             True, f"good python first on persistent PATH ({found})",
             None, expanded_good,
         )
 
     for marker in stub_markers:
         if marker.lower() in found_norm.lower():
-            return CheckResult(
+            return _stub_result(
                 False,
                 f"stub python ({marker}) shadows standalone python on persistent PATH: {found}",
                 found, expanded_good,
             )
 
-    return CheckResult(
+    return _stub_result(
         True, f"non-stub python first on persistent PATH: {found}",
         None, expanded_good,
     )

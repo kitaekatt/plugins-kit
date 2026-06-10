@@ -10,11 +10,10 @@ from bootstrap_lib import tool_paths
 
 
 def _bootstrap_dir(tmp_path):
-    """Return a path that satisfies tool_paths' canonical-dir heuristic.
+    """Return an isolated data dir for tool_paths state.
 
-    The module redirects writes to its canonical dir unless the supplied
-    path's basename is ``bootstrap`` (so tests can scope writes to a
-    temp dir).
+    An explicit data_dir is used exactly as given (only ``None`` resolves to
+    the canonical production location), so any temp dir is fully isolated.
     """
     d = tmp_path / "bootstrap"
     d.mkdir()
@@ -155,21 +154,34 @@ class TestExportToolEnvVars:
         assert env_file.read_text() == ""
 
 
-class TestCanonicalRedirect:
-    def test_non_bootstrap_data_dir_redirects_to_canonical(self, tmp_path, monkeypatch):
-        """A caller passing a per-plugin data dir should still write to the
-        canonical bootstrap data dir, not to the caller's dir."""
-        plugin_dir = tmp_path / "some-plugin"
-        plugin_dir.mkdir()
+class TestDataDirContract:
+    """data_dir=None -> canonical location; explicit dir -> exactly that dir (B15).
 
+    The old basename-sniffing redirect ("anything not named bootstrap goes to
+    the canonical production file") is gone — a test passing a generic tmp dir
+    must never pollute the user's real tool_paths.json.
+    """
+
+    def test_none_resolves_to_canonical(self, tmp_path, monkeypatch):
         canonical = tmp_path / "fake_canonical" / "bootstrap"
         monkeypatch.setattr(tool_paths, "canonical_data_dir", lambda: str(canonical))
 
+        tool_paths.record(None, "git", "/usr/bin/git")
+
+        assert (canonical / "tool_paths.json").exists()
+        assert tool_paths.resolve(None, "git") == "/usr/bin/git"
+
+    def test_explicit_dir_writes_in_place_regardless_of_basename(self, tmp_path, monkeypatch):
+        canonical = tmp_path / "fake_canonical" / "bootstrap"
+        monkeypatch.setattr(tool_paths, "canonical_data_dir", lambda: str(canonical))
+
+        plugin_dir = tmp_path / "some-plugin"
+        plugin_dir.mkdir()
         tool_paths.record(str(plugin_dir), "git", "/usr/bin/git")
 
-        # Plugin dir should remain empty; canonical should hold the file.
-        assert "tool_paths.json" not in os.listdir(plugin_dir)
-        assert (canonical / "tool_paths.json").exists()
+        # The explicit dir holds the file; canonical is untouched.
+        assert (plugin_dir / "tool_paths.json").exists()
+        assert not canonical.exists()
 
     def test_bootstrap_basename_writes_in_place(self, tmp_path):
         d = tmp_path / "bootstrap"

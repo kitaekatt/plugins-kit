@@ -8,7 +8,7 @@ A declarative configuration file covering automatable operations. The engine rea
 {
   "tools": [
     {"name": "git"},
-    {"name": "uv", "install": {"darwin": "curl -LsSf https://astral.sh/uv/install.sh | sh", "linux": "curl -LsSf https://astral.sh/uv/install.sh | sh", "windows": "powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\""}},
+    {"name": "uv", "install": {"macos": "curl -LsSf https://astral.sh/uv/install.sh | sh", "ubuntu": "curl -LsSf https://astral.sh/uv/install.sh | sh", "windows": "powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\""}},
     {"name": "node", "installPath": "~/.local/share/node", "install": {"macos": "brew install node"}}
   ],
   "fonts": [
@@ -23,11 +23,6 @@ A declarative configuration file covering automatable operations. The engine rea
     }
   ],
   "path_entries": ["~/.local/bin"],
-  "python_stub_check": {
-    "good_python_dir": "~/.local/share/python-standalone/python",
-    "stub_markers": ["WindowsApps"],
-    "script_output_dir": "~/Desktop"
-  },
   "venv": {
     "check_imports": ["yaml", "upyrc"]
   },
@@ -95,7 +90,7 @@ A declarative configuration file covering automatable operations. The engine rea
     "required_fields": {
       "uproject_path": {"user_msg": "Set path to your .uproject file", "agent_msg": "Ask user for .uproject path and write it to config.yaml as uproject_path"}
     },
-    "autodetect": {"script": "scripts/autodetect.py", "entry_point": "detect"}
+    "autodetect": "scripts/autodetect.py detect"
   },
   "script": {
     "path": "scripts/bootstrap.py",
@@ -105,6 +100,12 @@ A declarative configuration file covering automatable operations. The engine rea
 ```
 
 Every field is optional — include only what the plugin needs.
+
+Three schema gotchas worth calling out:
+
+- **`install` keys are exactly the `detect_os()` values** — `macos`, `windows`, `ubuntu`. The lookup is exact: a `darwin` or `linux` key silently never matches.
+- **`autodetect` is a string**, `"<script_path> <function_name>"` (e.g. `"scripts/autodetect.py detect"`), for both `config` and `project_config`. A dict form is not understood.
+- **`python_stub_check` is not a manifest field** — it lives only under `self_setup` in bootstrap's own `config.json` (see its section below).
 
 ## `venv` — Per-Plugin Python Environment
 
@@ -473,6 +474,7 @@ The engine supports a 4-layer `bootstrap.json` model — following the same patt
 - **Objects** (venv, config, project_venv, etc.): Deep-merged, higher priority wins for conflicting keys.
 - **path_entries**: Simple string list union (deduplicated, order preserved).
 - **Scalars**: Higher priority wins.
+- **Explicit `null` is treated as absent**, not as a value — a higher-priority layer cannot null-out a key declared by a lower layer; it can only override it with a non-null value.
 
 ### Identity Keys
 

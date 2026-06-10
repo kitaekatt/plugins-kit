@@ -201,11 +201,11 @@ class TestPythonStubIntegration:
         good_dir = str(tmp_path / "standalone" / "python")
 
         def fake_check(good_python_dir, stub_markers):
-            return psc.CheckResult(
-                passed=False,
-                message=f"stub python (WindowsApps) shadows standalone python: {bad_python}",
-                bad_python=bad_python,
-                good_python_dir=good_dir,
+            return psc._stub_result(
+                False,
+                f"stub python (WindowsApps) shadows standalone python: {bad_python}",
+                bad_python,
+                good_dir,
             )
 
         monkeypatch.setattr(
@@ -343,11 +343,11 @@ class TestPythonStubIntegration:
 
         # Patch the check to fail, then run engine
         def fake_fail(good_python_dir, stub_markers):
-            return psc.CheckResult(
-                passed=False,
-                message="stub python (WindowsApps) shadows standalone python",
-                bad_python=bad_python,
-                good_python_dir=good_dir,
+            return psc._stub_result(
+                False,
+                "stub python (WindowsApps) shadows standalone python",
+                bad_python,
+                good_dir,
             )
 
         monkeypatch.setenv("PYTHONPATH", os.pathsep.join(sys.path))
@@ -381,11 +381,11 @@ class TestPythonStubIntegration:
 
         # Now patch to PASS and re-run; alert should be cleared
         def fake_pass(good_python_dir, stub_markers):
-            return psc.CheckResult(
-                passed=True,
-                message="good python first on persistent PATH",
-                bad_python=None,
-                good_python_dir=good_dir,
+            return psc._stub_result(
+                True,
+                "good python first on persistent PATH",
+                None,
+                good_dir,
             )
 
         monkeypatch.setattr(

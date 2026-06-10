@@ -14,7 +14,7 @@ import bootstrap_lib.tool_check as tool_check
 import bootstrap_lib.path_check as path_check
 import bootstrap_lib.path_repair as path_repair
 import bootstrap_lib.tool_paths as tool_paths
-from bootstrap_lib.tool_check import CheckResult
+from bootstrap_lib.tool_check import _tool_result
 
 
 class TestLinkToolDirToPath:
@@ -24,8 +24,8 @@ class TestLinkToolDirToPath:
                             lambda d: calls.append(d) or (True, "added to .bashrc"))
         monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin"]))
         actions = []
-        result = CheckResult(name="draw.io", passed=True, message="found",
-                             path="/c/Program Files/draw.io/draw.io.exe", on_path=False)
+        result = _tool_result("draw.io", True, "found",
+                              path="/c/Program Files/draw.io/draw.io.exe", on_path=False)
         engine._link_tool_dir_to_path(result, "", actions)
         assert calls == ["/c/Program Files/draw.io"]
         assert any("on disk but not on PATH" in a for a in actions)
@@ -37,8 +37,8 @@ class TestLinkToolDirToPath:
         monkeypatch.setattr(path_check, "add_path_to_shell_config",
                             lambda d: calls.append(d) or (True, "x"))
         actions = []
-        result = CheckResult(name="git", passed=True, message="found",
-                             path="/usr/bin/git", on_path=True)
+        result = _tool_result("git", True, "found",
+                              path="/usr/bin/git", on_path=True)
         engine._link_tool_dir_to_path(result, "", actions)
         assert calls == []
         assert actions == []
@@ -49,8 +49,8 @@ class TestLinkToolDirToPath:
                             lambda d: calls.append(d) or (True, "x"))
         actions = []
         # check-cmd resolution: passed, on_path True, no concrete path
-        result = CheckResult(name="appy", passed=True, message="check passed",
-                             path=None, on_path=True)
+        result = _tool_result("appy", True, "check passed",
+                              path=None, on_path=True)
         engine._link_tool_dir_to_path(result, "", actions)
         assert calls == []
         assert actions == []

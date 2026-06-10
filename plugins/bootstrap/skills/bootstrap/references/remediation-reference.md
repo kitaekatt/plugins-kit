@@ -23,7 +23,7 @@ Detailed check methods and remediation actions for all condition categories the 
 | Python venv missing or broken | Check dir -> binary -> interpreter runs -> packages importable | `uv sync` from `pyproject.toml` |
 | Project venv missing or broken | Same checks against `<project_dir>/.venv` | `uv sync --project <project_dir> [--extra ...]` |
 | PyPI package missing | Check extracted file exists locally | Download from PyPI and extract |
-| Git dependency not cloned or out of date | Check dir exists + `git ls-remote` vs local `rev-parse HEAD` | `git clone` or `git pull` |
+| Git dependency not cloned / wrong branch / wrong pinned commit | Check dir exists + is a git repo + `rev-parse` matches the declared branch (or pinned `commit`) | Clone once; pinned commits are fetched + re-checked-out. No steady-state pull — an existing clone on the right branch is never updated against its remote |
 
 ## Marketplace Conditions
 
@@ -53,7 +53,7 @@ All manual operations represent a blocking condition where auto-configuration ca
 
 ## Display Timing
 
-Bootstrap results (including remediation instructions) surface on the **first Stop after the engine completes**, not at session start. The SessionStart hook emits suppressed JSON immediately and forks the engine to the background. A Stop hook checks for `bootstrap_display.pending` on each turn; if found, it emits the contents and renames the file to `bootstrap_display.displayed`.
+Bootstrap results (including remediation instructions) surface on the **first user prompt after the engine completes**, not at session start. The SessionStart hook emits suppressed JSON immediately and forks the engine to the background. A UserPromptSubmit hook (`bootstrap-display.sh`) checks for `bootstrap_display.pending` on each prompt; if found, it emits the contents and renames the file to `bootstrap_display.displayed`.
 
 This means the user can start typing immediately. If the engine finishes before the first turn completes, results appear on that turn. If the engine is still running (e.g. slow marketplace fetch), results appear on the next turn after completion.
 

@@ -55,7 +55,7 @@ def load_model_config(*, project_root: Optional[str] = None) -> dict:
     base = copy.deepcopy(DEFAULT_MODEL_CONFIG)
     try:
         from bootstrap_lib.config_resolve import resolve_config, standard_config_layers
-        from bootstrap_lib.manifest_merge import _deep_merge_dicts
+        from bootstrap_lib.manifest_merge import deep_merge
     except ImportError:
         print(
             "openrouter-kit: bootstrap_lib unavailable; using the shipped model "
@@ -71,7 +71,7 @@ def load_model_config(*, project_root: Optional[str] = None) -> dict:
         project_root=project_root,
     )
     file_cfg = resolve_config(layers)
-    return _deep_merge_dicts(base, file_cfg)
+    return deep_merge(base, file_cfg)
 
 
 def resolve_model(

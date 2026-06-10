@@ -37,7 +37,8 @@ PLUGIN_DATA="${HOME}/.claude/plugins/data/${MARKETPLACE_NAME}/bootstrap"
 # Set trap after BOOTSTRAP_LABEL is defined so variable expands correctly
 # In console mode, no JSON safety net needed — plain text output.
 # In normal mode, JSON is emitted immediately below, so the trap only needs
-# to write failure info to the display file for the Stop hook to surface.
+# to write failure info to the display file for the UserPromptSubmit
+# display hook to surface.
 if [ -z "$FLAG_CONSOLE" ]; then
     trap '[ -z "$HOOK_OUTPUT_EMITTED" ] && mkdir -p "$PLUGIN_DATA" && printf "{\"continue\": true, \"suppressOutput\": false, \"systemMessage\": \"%s: shell error\"}" "'"${BOOTSTRAP_LABEL}"'" > "$PLUGIN_DATA/bootstrap_display.pending"' EXIT
 fi
@@ -144,7 +145,8 @@ printf '%s' "$HOOK_START_EPOCH" > "$_COOLDOWN_FILE"
 
 # --- Emit hook JSON immediately (fire-and-forget) ---
 # In normal mode, emit JSON now so Claude Code doesn't block waiting for engine output.
-# The engine will write its display JSON to bootstrap_display.json for the Stop hook.
+# The engine writes its display JSON to bootstrap_display.pending for the
+# UserPromptSubmit display hook.
 if [ -z "$FLAG_CONSOLE" ]; then
     echo '{"continue": true, "suppressOutput": true}'
     HOOK_OUTPUT_EMITTED=1
@@ -386,16 +388,16 @@ fi
 # --- Invoke Engine ---
 
 if [ -z "$FLAG_CONSOLE" ]; then
-    # Background mode: engine writes display JSON to file. Stderr is captured
-    # to a debug log so silent engine failures (which would otherwise vanish
-    # into /dev/null) can be inspected after the fact.
+    # Background mode: engine writes display JSON to file. Stdout+stderr are
+    # captured to a debug log so silent engine failures (which would otherwise
+    # vanish into /dev/null) can be inspected after the fact.
     "$PYTHON" "${PLUGIN_ROOT}/engine/bootstrap_engine.py" \
         --plugin-root "$PLUGIN_ROOT" \
         --data-dir "$PLUGIN_DATA" \
         --hook-start-epoch "$HOOK_START_EPOCH" \
         --project-dir "$PWD" \
         --background \
-        "${ENGINE_FLAGS[@]}" > "$PLUGIN_DATA/engine_stderr.log" 2>&1 &
+        "${ENGINE_FLAGS[@]}" > "$PLUGIN_DATA/engine_output.log" 2>&1 &
 else
     # Console mode: synchronous, plain text to stdout
     exec "$PYTHON" "${PLUGIN_ROOT}/engine/bootstrap_engine.py" \

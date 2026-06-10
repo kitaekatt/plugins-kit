@@ -3,7 +3,7 @@
 The shell hook stamps the per-project cooldown BEFORE launching the engine
 and (in background mode) only surfaces what the engine writes to
 bootstrap_display.pending. An unhandled engine exception therefore used to
-mean: no pending file (silent failure), traceback only in engine_stderr.log,
+mean: no pending file (silent failure), traceback only in engine_output.log,
 and a stamped cooldown throttling every retry for the rest of the window.
 main() must contain the crash: write a crash .pending, clear the cooldown,
 and exit 1 with the traceback on stderr.
@@ -65,7 +65,7 @@ class TestEngineCrashContainment:
         # SessionStart retries instead of silently throttling.
         assert not stamp.exists(), "crash must clear the cooldown stamp"
 
-        # Traceback still lands on stderr (captured by engine_stderr.log).
+        # Traceback still lands on stderr (captured by engine_output.log).
         assert "boom xyz 12345" in capsys.readouterr().err
 
     def test_crash_without_project_dir_uses_global_stamp(self, tmp_path, monkeypatch):

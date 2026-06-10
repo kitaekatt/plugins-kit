@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from bootstrap_lib.git_dep_check import GitDepCheckResult, check_git_dep, _extract_repo_name, _build_clone_cmd
+from bootstrap_lib.git_dep_check import check_git_dep, _extract_repo_name, _build_clone_cmd
 
 
 class TestExtractRepoName:
@@ -28,7 +28,7 @@ class TestCheckGitDep:
 
         assert not result.passed
         assert "not cloned" in result.message
-        assert result.repo_name == "Hello-World"
+        assert result.subject == "Hello-World"
         assert "git clone" in result.remediation_cmd
 
     def test_directory_not_git_repo(self, tmp_path):

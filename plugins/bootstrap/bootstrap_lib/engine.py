@@ -32,12 +32,12 @@ def main():
     The shell hook stamps the per-project cooldown BEFORE launching the
     engine and (in background mode) only surfaces what the engine writes to
     bootstrap_display.pending. Without containment, an unhandled exception
-    means: traceback lost to engine_stderr.log, no pending file (silent
+    means: traceback lost to engine_output.log, no pending file (silent
     failure for the user), and a stamped cooldown that throttles every
     re-run for the rest of the window. Contain it: write a crash .pending so
     the next prompt surfaces the failure, clear the cooldown so the next
     SessionStart retries, then re-raise behavior via exit code 1 with the
-    traceback on stderr (still captured by engine_stderr.log).
+    traceback on stderr (still captured by engine_output.log).
     """
     try:
         _main()
@@ -72,6 +72,8 @@ def _emit_engine_crash(tb):
 
     first_line = tb.strip().splitlines()[-1] if tb.strip() else "unknown error"
     response = {
+        "continue": True,
+        "suppressOutput": False,
         "systemMessage": (
             f"bootstrap -> engine crashed: {first_line}. "
             "Bootstrap did not complete; it will retry on the next session start."
@@ -538,8 +540,15 @@ def _bootstrap_single_plugin(
     plugin_action_entries = []
     plugin_ok_entries = []
 
-    # Version change detection
-    if plugin_info.version:
+    # Version change detection. Skipped for bootstrap itself: its plugin_data_dir
+    # IS the engine data_dir, and Step 2b already wrote last_version there with
+    # the RUNNING engine's version. When a dev tree runs against a cached
+    # registry the two versions differ, and writing the registry version here
+    # produced a flip-flopping "updated: X -> Y" entry every pass (B14).
+    if plugin_info.version and (
+        os.path.normcase(os.path.normpath(plugin_data_dir))
+        != os.path.normcase(os.path.normpath(data_dir))
+    ):
         last_version_file = os.path.join(plugin_data_dir, "last_version")
         try:
             with open(last_version_file, "r") as f:
@@ -980,14 +989,14 @@ def _link_tool_dir_to_path(result, prefix, action_entries):
     tool_dir = os.path.dirname(result.path)
     if not tool_dir:
         return
-    from .path_check import add_path_to_shell_config
+    from .path_check import add_path_to_shell_config, normalize_path_for_compare
     _ok, msg = add_path_to_shell_config(tool_dir)
     current_path = os.environ.get("PATH", "")
-    norm = [os.path.normcase(os.path.normpath(d)) for d in current_path.split(os.pathsep)]
-    if os.path.normcase(os.path.normpath(tool_dir)) not in norm:
+    norm = [normalize_path_for_compare(d) for d in current_path.split(os.pathsep)]
+    if normalize_path_for_compare(tool_dir) not in norm:
         os.environ["PATH"] = tool_dir + os.pathsep + current_path
     action_entries.append(
-        f"{prefix}{result.name}: on disk but not on PATH — added {tool_dir} ({msg})"
+        f"{prefix}{result.subject}: on disk but not on PATH — added {tool_dir} ({msg})"
     )
 
 
@@ -1023,9 +1032,11 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
 
     if result.passed:
         if result.path:
-            tool_paths.record(data_dir, result.name, result.path)
+            # data_dir=None -> the canonical bootstrap data dir; tool paths are
+            # recorded centrally regardless of which plugin's pass found them.
+            tool_paths.record(None, result.subject, result.path)
         _link_tool_dir_to_path(result, prefix, action_entries)
-        ok_entries.append(f"{prefix}{result.name}: ok - {result.message}")
+        ok_entries.append(f"{prefix}{result.subject}: ok - {result.message}")
         return None
 
     # Phase-2 path: prefer downloading our own copy to ~/.local/bin over shelling
@@ -1041,7 +1052,7 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
             archive_type=download_def.get("archive_type"),
         )
         if dl.ok:
-            tool_paths.record(data_dir, name, dl.path)
+            tool_paths.record(None, name, dl.path)
             tools_installed.append((name, f"downloaded to {dl.path}"))
             return None
         action_entries.append(f"{prefix}{name}: download failed - {dl.message}")
@@ -1062,10 +1073,10 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
                              install_path=tool_install_path, check_cmd=check_cmd)
         if recheck.passed:
             if recheck.path:
-                tool_paths.record(data_dir, recheck.name, recheck.path)
+                tool_paths.record(None, recheck.subject, recheck.path)
             _link_tool_dir_to_path(recheck, prefix, action_entries)
             verb = "via" if ok else "already present after"
-            tools_installed.append((result.name, f"{verb} `{result.install_cmd}`"))
+            tools_installed.append((result.subject, f"{verb} `{result.install_cmd}`"))
             return None
         # Re-check failed: distinguish "installer ran but we still can't find it"
         # from "installer itself errored".
@@ -1073,22 +1084,87 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
 
     if install_state == "installed_but_path_stale":
         action_entries.append(
-            f"{prefix}{result.name}: install succeeded but binary not findable afterward "
+            f"{prefix}{result.subject}: install succeeded but binary not findable afterward "
             f"(add an installPath hint, or a download recipe to fetch our own copy)"
         )
     elif install_state == "install_failed":
-        action_entries.append(f"{prefix}{result.name}: install command failed - `{result.install_cmd}`")
+        action_entries.append(f"{prefix}{result.subject}: install command failed - `{result.install_cmd}`")
     else:
-        action_entries.append(f"{prefix}{result.name}: FAILED - {result.message}")
+        action_entries.append(f"{prefix}{result.subject}: FAILED - {result.message}")
 
     return {
         "type": "tool",
-        "name": result.name,
+        "name": result.subject,
         "message": result.message,
         "install_state": install_state,
         "install_cmd": result.install_cmd,
         "plugin": plugin_name,
     }
+
+
+def _process_path_entries(path_entries, prefix, action_entries, ok_entries):
+    """Check/remediate PATH entries (consolidate adds into one line).
+
+    Shared by _process_self_setup and the manifest path_entries phase
+    (previously two near-identical copies). Also prepends each entry to the
+    current process PATH so subsequent phases this run can find tools there.
+    Comparison uses normcase+normpath — on Windows, case-differing spellings
+    of an already-present entry must not re-prepend every phase (B16).
+    """
+    from .path_check import add_path_to_shell_config, check_path_entry, normalize_path_for_compare
+
+    paths_added = []
+    for path_entry in path_entries:
+        expanded = os.path.expanduser(path_entry)
+        result = check_path_entry(path_entry)
+        if result.passed:
+            ok_entries.append(f"{prefix}PATH {result.subject}: ok - {result.message}")
+        else:
+            # Attempt persistent remediation: add to shell RC files
+            _ok, msg = add_path_to_shell_config(path_entry)
+            paths_added.append((result.subject, msg))
+        current_path = os.environ.get("PATH", "")
+        norm = [normalize_path_for_compare(d) for d in current_path.split(os.pathsep)]
+        if normalize_path_for_compare(expanded) not in norm:
+            os.environ["PATH"] = expanded + os.pathsep + current_path
+
+    if paths_added:
+        action_entries.append(f"{prefix}PATH added: {_join_items(paths_added)}")
+
+
+def _process_venv_def(venv_def, data_dir, plugin_root, prefix, label, action_entries,
+                      ok_entries, failures, plugin_name, failure_type="venv",
+                      failure_plugin=None, always_sync=False, extras=(),
+                      export_env_var=True):
+    """Run the shared ensure_venv flow and route its outcome to the entry lists.
+
+    One wrapper for all three venv call sites (self-setup, manifest, project
+    venv); `label` is the log-entry noun ("venv" / "project_venv").
+    """
+    from .venv_check import ensure_venv, export_venv_env_var
+
+    result, venv_entries = ensure_venv(
+        plugin_root, os.path.join(data_dir, ".venv"),
+        extras=extras,
+        check_imports=venv_def.get("check_imports", []),
+        always_sync=always_sync,
+    )
+    action_entries.extend(f"{prefix}{label}: {e}" for e in venv_entries)
+    if result.passed:
+        ok_entries.append(f"{prefix}{label}: ok - {result.message}")
+        if export_env_var:
+            exported = export_venv_env_var(plugin_name, data_dir)
+            if exported:
+                ok_entries.append(f"{prefix}{label}: exported {exported} to CLAUDE_ENV_FILE")
+    else:
+        action_entries.append(f"{prefix}{label}: FAILED - {result.message}")
+        failures.append({
+            "type": failure_type,
+            "message": result.message,
+            "remediation_cmd": result.remediation_cmd,
+            "plugin": failure_plugin or plugin_name,
+        })
+    return result
 
 
 def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_entries, ok_entries, plugin_name="bootstrap"):
@@ -1098,11 +1174,6 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
     Always runs `uv sync` to keep the venv current (~100ms no-op when up to date).
     Returns list of failures.
     """
-    from .tool_check import check_tool
-    from .path_check import check_path_entry
-    from .venv_check import check_venv, export_venv_env_var
-    from . import tool_paths
-
     failures = []
     p = "[bootstrap-setup] "
 
@@ -1120,22 +1191,7 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
         action_entries.append(f"{p}tools installed: {_join_items(tools_installed)}")
 
     # Check path entries (consolidate adds into one line)
-    paths_added = []
-    for path_entry in self_setup.get("path_entries", []):
-        expanded = os.path.expanduser(path_entry)
-        result = check_path_entry(path_entry)
-        if result.passed:
-            ok_entries.append(f"{p}PATH {result.path}: ok - {result.message}")
-        else:
-            from .path_check import add_path_to_shell_config
-            ok, msg = add_path_to_shell_config(path_entry)
-            paths_added.append((result.path, msg))
-        current_path = os.environ.get("PATH", "")
-        if os.path.normpath(expanded) not in [os.path.normpath(d) for d in current_path.split(os.pathsep)]:
-            os.environ["PATH"] = expanded + os.pathsep + current_path
-
-    if paths_added:
-        action_entries.append(f"{p}PATH added: {_join_items(paths_added)}")
+    _process_path_entries(self_setup.get("path_entries", []), p, action_entries, ok_entries)
 
     # Check for Python stubs shadowing the standalone python (Windows-only check)
     stub_def = self_setup.get("python_stub_check")
@@ -1220,58 +1276,11 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
     # Check venv — always run uv sync to keep deps current (~100ms no-op when up to date)
     venv_def = self_setup.get("venv")
     if venv_def:
-        check_imports = venv_def.get("check_imports", [])
-        result = check_venv(data_dir, plugin_root, check_imports)
-
-        # Run uv sync unconditionally — the import check is for diagnostics/logging only
-        import shutil
-        import subprocess as _sp
-        venv_path = os.path.join(data_dir, ".venv")
-
-        local_bin = os.path.expanduser("~/.local/bin")
-        uv_bin = shutil.which("uv")
-        if not uv_bin:
-            for name in ("uv", "uv.exe", "uv.EXE"):
-                candidate = os.path.join(local_bin, name)
-                if os.path.isfile(candidate):
-                    uv_bin = candidate
-                    break
-
-        if uv_bin:
-            uv_cmd = f"uv sync --project {plugin_root}"
-            env = dict(os.environ, UV_PROJECT_ENVIRONMENT=venv_path)
-            if local_bin not in env.get("PATH", ""):
-                env["PATH"] = local_bin + os.pathsep + env.get("PATH", "")
-            try:
-                proc = _sp.run(
-                    [uv_bin, "sync", "--project", plugin_root],
-                    env=env, capture_output=True, timeout=120,
-                )
-                if proc.returncode != 0:
-                    stderr_text = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
-                    action_entries.append(f"{p}venv: uv sync failed (exit {proc.returncode}): {stderr_text[:200]}")
-                elif not result.passed:
-                    action_entries.append(f"{p}venv: synced via `{uv_cmd}`")
-                # Re-check after sync
-                result = check_venv(data_dir, plugin_root, check_imports)
-            except (_sp.SubprocessError, OSError) as exc:
-                action_entries.append(f"{p}venv: uv sync error: {exc}")
-        else:
-            action_entries.append(f"{p}venv: uv not found on PATH or in ~/.local/bin")
-
-        if result.passed:
-            ok_entries.append(f"{p}venv: ok - {result.message}")
-            exported = export_venv_env_var(plugin_name, data_dir)
-            if exported:
-                ok_entries.append(f"{p}venv: exported {exported} to CLAUDE_ENV_FILE")
-        else:
-            action_entries.append(f"{p}venv: FAILED - {result.message}")
-            failures.append({
-                "type": "venv",
-                "message": result.message,
-                "remediation_cmd": result.remediation_cmd,
-                "plugin": "bootstrap",
-            })
+        _process_venv_def(
+            venv_def, data_dir, plugin_root, p, "venv",
+            action_entries, ok_entries, failures,
+            plugin_name=plugin_name, failure_plugin="bootstrap", always_sync=True,
+        )
 
     return failures
 
@@ -1289,62 +1298,19 @@ def _process_project_venv(venv_def, project_dir):
     Returns:
         (action_entries, ok_entries, failures) tuple.
     """
-    from .venv_check import check_venv
-
     action_entries = []
     ok_entries = []
     failures = []
 
-    extras = venv_def.get("extras", [])
-    check_imports = venv_def.get("check_imports", [])
-
-    # project_dir serves as both data_dir (.venv location) and plugin_root (pyproject.toml location)
-    result = check_venv(project_dir, project_dir, check_imports)
-
-    if not result.passed:
-        extra_flags = " ".join(f"--extra {e}" for e in extras)
-        uv_cmd = f"uv sync --project {project_dir}"
-        if extra_flags:
-            uv_cmd += f" {extra_flags}"
-        action_entries.append(f"project_venv: not ready, running `{uv_cmd}`")
-
-        import shutil
-        import subprocess as _sp
-
-        local_bin = os.path.expanduser("~/.local/bin")
-        uv_bin = shutil.which("uv")
-        if not uv_bin:
-            for name in ("uv", "uv.exe", "uv.EXE"):
-                candidate = os.path.join(local_bin, name)
-                if os.path.isfile(candidate):
-                    uv_bin = candidate
-                    break
-
-        if uv_bin:
-            cmd = [uv_bin, "sync", "--project", project_dir]
-            for e in extras:
-                cmd.extend(["--extra", e])
-            env = dict(os.environ)
-            if local_bin not in env.get("PATH", ""):
-                env["PATH"] = local_bin + os.pathsep + env.get("PATH", "")
-            try:
-                _sp.run(cmd, env=env, capture_output=True, timeout=120)
-                result = check_venv(project_dir, project_dir, check_imports)
-                if result.passed:
-                    action_entries.append("project_venv: created")
-            except (_sp.SubprocessError, OSError):
-                pass
-
-    if result.passed:
-        ok_entries.append(f"project_venv: ok - {result.message}")
-    else:
-        action_entries.append(f"project_venv: FAILED - {result.message}")
-        failures.append({
-            "type": "project_venv",
-            "message": result.message,
-            "remediation_cmd": result.remediation_cmd,
-            "plugin": "config",
-        })
+    # project_dir serves as both data_dir (.venv location) and plugin_root
+    # (pyproject.toml location). No env-var export: the project venv belongs
+    # to the project, not a plugin.
+    _process_venv_def(
+        venv_def, project_dir, project_dir, "", "project_venv",
+        action_entries, ok_entries, failures,
+        plugin_name="config", failure_type="project_venv", failure_plugin="config",
+        extras=venv_def.get("extras", []), export_env_var=False,
+    )
 
     return action_entries, ok_entries, failures
 
@@ -1391,8 +1357,10 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
                 save_yaml_config(config_path, config)
                 if not ad_actions:
                     action_entries.append("config autodetect updated values")
-        except Exception:
-            pass  # Autodetect errors are non-fatal
+        except Exception as e:
+            # Autodetect errors are non-fatal, but never silent: every check
+            # logs its outcome (B8).
+            action_entries.append(f"config autodetect FAILED - {e}")
 
     # 4. Validate required fields (apply defaults, collect missing)
     # Skip validation when no project detected — required fields are project-scoped
@@ -1582,7 +1550,7 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
 
         if missing_fields and autodetect_spec:
             # Some fields missing — try autodetect to fill gaps
-            detected = run_project_autodetect(plugin_root, autodetect_spec)
+            detected = run_project_autodetect(plugin_root, autodetect_spec, errors=action_entries)
             if detected:
                 for field in missing_fields:
                     if detected.get(field):
@@ -1606,7 +1574,7 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
     else:
         # File doesn't exist — try autodetect
         if autodetect_spec:
-            detected = run_project_autodetect(plugin_root, autodetect_spec)
+            detected = run_project_autodetect(plugin_root, autodetect_spec, errors=action_entries)
             if detected:
                 os.makedirs(os.path.dirname(project_config_path), exist_ok=True)
                 project_data = dict(detected)
@@ -1699,66 +1667,121 @@ def _apply_project_defaults(project_data, required_fields_spec):
     return applied
 
 
-def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entries, ok_entries, plugin_name="bootstrap", project_dir=None, project_detected=True):
-    """Process a single plugin's bootstrap manifest. Returns list of failures.
+class _ManifestContext:
+    """Shared state for the manifest phase handlers (B12).
 
-    Entries are split into two lists:
-    - action_entries: actions performed, failures, conditions not met (always displayed)
-    - ok_entries: checks that passed (never displayed; written to log file when log_success is true)
+    Wraps the two entry lists with routing helpers that make the
+    "every check must log its outcome" contract structural:
 
-    When project_detected is False, project-scoped primitives (ini_settings) are skipped.
+    - ``ok(msg)``     -> ok_entries (verbose-only)
+    - ``action(msg)`` -> action_entries (always shown)
+    - ``fail(msg, **failure)`` -> action entry AND fix-all failure dict in a
+      single call, so a registered failure can never be invisible to the user.
+
+    ``config`` / ``variables`` load lazily on first use; phases before
+    ini_settings don't need them.
     """
-    from .tool_check import check_tool
-    from .path_check import check_path_entry
-    from .venv_check import check_venv, export_venv_env_var
-    from .git_dep_check import check_git_dep
-    from . import tool_paths
 
-    failures = []
-    prefix = ""
+    _UNSET = object()
 
-    # Check tools (consolidate installs into one line; failures stay per-line)
+    def __init__(self, manifest, current_os, data_dir, plugin_root,
+                 action_entries, ok_entries, plugin_name, project_dir,
+                 project_detected):
+        self.manifest = manifest
+        self.current_os = current_os
+        self.data_dir = data_dir
+        self.plugin_root = plugin_root
+        self.action_entries = action_entries
+        self.ok_entries = ok_entries
+        self.plugin_name = plugin_name
+        self.project_dir = project_dir
+        self.project_detected = project_detected
+        self.failures = []
+        self.prefix = ""
+        self._config = self._UNSET
+        self._variables = None
+
+    @property
+    def config(self):
+        if self._config is self._UNSET:
+            self._config = _load_plugin_config(self.data_dir, self.action_entries)
+        return self._config
+
+    @property
+    def variables(self):
+        if self._variables is None:
+            from .var_resolve import build_variables
+            self._variables = build_variables(self.plugin_root, self.data_dir, self.config)
+        return self._variables
+
+    def ok(self, message):
+        self.ok_entries.append(f"{self.prefix}{message}")
+
+    def action(self, message):
+        self.action_entries.append(f"{self.prefix}{message}")
+
+    def fail(self, entry, **failure):
+        """Append `entry` as an action line AND register `failure` for fix-all.
+
+        (`entry` deliberately doesn't collide with the failure-dict `message`
+        kwarg most callers pass.)
+        """
+        self.action(entry)
+        failure.setdefault("plugin", self.plugin_name)
+        self.failures.append(failure)
+
+
+def _phase_tools(ctx):
+    """tools: resolve -> link-to-PATH -> download -> install.
+
+    Consolidates successful installs into one line; failures stay per-line.
+    """
     tools_installed = []
-    for tool_def in manifest.get("tools", []):
+    for tool_def in ctx.manifest.get("tools", []):
         failure = _process_tool_entry(
-            tool_def, current_os, data_dir, prefix,
-            action_entries, ok_entries, tools_installed, plugin_name=plugin_name,
+            tool_def, ctx.current_os, ctx.data_dir, ctx.prefix,
+            ctx.action_entries, ctx.ok_entries, tools_installed,
+            plugin_name=ctx.plugin_name,
         )
         if failure:
-            failures.append(failure)
+            ctx.failures.append(failure)
 
     if tools_installed:
-        action_entries.append(f"{prefix}tools installed: {_join_items(tools_installed)}")
+        ctx.action(f"tools installed: {_join_items(tools_installed)}")
 
-    # Check fonts (download + per-user install when missing). Fonts are
-    # OS-agnostic, so the `download` block is normally flat ({url, sha256});
-    # a per-OS nesting is still honored for the rare case it's needed. Install
-    # is unprivileged on every platform, so it runs silently here; a missing
-    # font is cosmetic (glyphs fall back to ASCII/emoji), so a failed download
-    # logs an action line and retries next session rather than blocking.
+
+def _phase_fonts(ctx):
+    """fonts: download + per-user install when missing.
+
+    Fonts are OS-agnostic, so the `download` block is normally flat
+    ({url, sha256}); a per-OS nesting is still honored for the rare case it's
+    needed. Install is unprivileged on every platform, so it runs silently
+    here; a missing font is cosmetic (glyphs fall back to ASCII/emoji), so a
+    failed download logs an action line and retries next session rather than
+    blocking.
+    """
+    from .font_check import check_font, install_font
+
     fonts_installed = []
-    for font_def in manifest.get("fonts", []):
-        from .font_check import check_font, install_font
+    for font_def in ctx.manifest.get("fonts", []):
         # `fonts` is a layered-mergeable section (user/project bootstrap.json),
         # so a hand-authored entry could omit `name`. Skip it with a logged
         # action rather than letting a KeyError abort the whole bootstrap run.
         name = font_def.get("name") if isinstance(font_def, dict) else None
         if not name:
-            action_entries.append(f"{prefix}font: skipped malformed entry (missing 'name')")
+            ctx.action("font: skipped malformed entry (missing 'name')")
             continue
         match = font_def.get("match") or name
         res = check_font(match)
         if res.passed:
-            ok_entries.append(f"{prefix}font {name}: ok - {res.message}")
+            ctx.ok(f"font {name}: ok - {res.message}")
             continue
 
         dl_def = font_def.get("download", {})
         if isinstance(dl_def, dict) and "url" not in dl_def:
-            dl_def = _resolve_download_def(dl_def, current_os) or {}
+            dl_def = _resolve_download_def(dl_def, ctx.current_os) or {}
         if not (isinstance(dl_def, dict) and dl_def.get("url") and dl_def.get("sha256")):
-            action_entries.append(
-                f"{prefix}font {name}: not installed and no download declared for {current_os}"
-            )
+            ctx.action(f"font {name}: not installed and no download declared for {ctx.current_os}")
             continue
 
         inst = install_font(dl_def["url"], dl_def["sha256"], archive_type=dl_def.get("archive_type"))
@@ -1767,122 +1790,64 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
             detail = f"{len(inst.files)} files" + ("" if recheck.passed else " (not yet detected)")
             fonts_installed.append((name, detail))
         else:
-            action_entries.append(f"{prefix}font {name}: install failed - {inst.message}")
+            ctx.action(f"font {name}: install failed - {inst.message}")
 
     if fonts_installed:
-        action_entries.append(f"{prefix}fonts installed: {_join_items(fonts_installed)}")
+        ctx.action(f"fonts installed: {_join_items(fonts_installed)}")
 
-    # Check path entries (consolidate adds into one line)
-    paths_added = []
-    for path_entry in manifest.get("path_entries", []):
-        expanded = os.path.expanduser(path_entry)
-        result = check_path_entry(path_entry)
-        if result.passed:
-            ok_entries.append(f"{prefix}PATH {result.path}: ok - {result.message}")
-        else:
-            # Attempt persistent remediation: add to shell RC files
-            from .path_check import add_path_to_shell_config
-            ok, msg = add_path_to_shell_config(path_entry)
-            paths_added.append((result.path, msg))
-        # Add to current process PATH so subsequent phases can find tools there
-        current_path = os.environ.get("PATH", "")
-        if os.path.normpath(expanded) not in [os.path.normpath(d) for d in current_path.split(os.pathsep)]:
-            os.environ["PATH"] = expanded + os.pathsep + current_path
 
-    if paths_added:
-        action_entries.append(f"{prefix}PATH added: {_join_items(paths_added)}")
+def _phase_path_entries(ctx):
+    """path_entries: persistent PATH remediation (shared with self-setup)."""
+    _process_path_entries(
+        ctx.manifest.get("path_entries", []), ctx.prefix,
+        ctx.action_entries, ctx.ok_entries,
+    )
 
-    # Check venv
-    venv_def = manifest.get("venv")
-    if venv_def:
-        check_imports = venv_def.get("check_imports", [])
-        result = check_venv(data_dir, plugin_root, check_imports)
 
-        if not result.passed:
-            # Attempt auto-remediation — run uv sync with venv in data dir
-            uv_cmd = f"uv sync --project {plugin_root}"
-            action_entries.append(f"{prefix}venv: not ready, running `{uv_cmd}`")
-            import shutil
-            import subprocess as _sp
-            venv_path = os.path.join(data_dir, ".venv")
+def _phase_venv(ctx):
+    """venv: the shared check -> uv sync -> re-check flow (ensure_venv)."""
+    _process_venv_def(
+        ctx.manifest["venv"], ctx.data_dir, ctx.plugin_root, ctx.prefix, "venv",
+        ctx.action_entries, ctx.ok_entries, ctx.failures,
+        plugin_name=ctx.plugin_name,
+    )
 
-            # Find uv — may have just been installed to ~/.local/bin
-            local_bin = os.path.expanduser("~/.local/bin")
-            uv_bin = shutil.which("uv")
-            if not uv_bin:
-                # Check ~/.local/bin directly (not yet in PATH)
-                for name in ("uv", "uv.exe", "uv.EXE"):
-                    candidate = os.path.join(local_bin, name)
-                    if os.path.isfile(candidate):
-                        uv_bin = candidate
-                        break
 
-            if uv_bin:
-                env = dict(os.environ, UV_PROJECT_ENVIRONMENT=venv_path)
-                # Ensure ~/.local/bin in PATH for uv's own child processes
-                if local_bin not in env.get("PATH", ""):
-                    env["PATH"] = local_bin + os.pathsep + env.get("PATH", "")
-                try:
-                    proc = _sp.run(
-                        [uv_bin, "sync", "--project", plugin_root],
-                        env=env, capture_output=True, timeout=120,
-                    )
-                    # Re-check after remediation
-                    result = check_venv(data_dir, plugin_root, check_imports)
-                    if result.passed:
-                        action_entries.append(f"{prefix}venv: created")
-                    elif proc.returncode != 0:
-                        stderr_text = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
-                        action_entries.append(f"{prefix}venv: uv sync failed (exit {proc.returncode}): {stderr_text[:200]}")
-                    else:
-                        action_entries.append(f"{prefix}venv: uv sync completed but re-check failed: {result.message}")
-                except (_sp.SubprocessError, OSError) as exc:
-                    action_entries.append(f"{prefix}venv: uv sync error: {exc}")
-            else:
-                action_entries.append(f"{prefix}venv: uv not found on PATH or in ~/.local/bin")
+def _phase_git_deps(ctx):
+    """git_deps: clone-once + pinned-commit re-checkout.
 
-        if result.passed:
-            ok_entries.append(f"{prefix}venv: ok - {result.message}")
-            exported = export_venv_env_var(plugin_name, data_dir)
-            if exported:
-                ok_entries.append(f"{prefix}venv: exported {exported} to CLAUDE_ENV_FILE")
-        else:
-            action_entries.append(f"{prefix}venv: FAILED - {result.message}")
-            failures.append({
-                "type": "venv",
-                "message": result.message,
-                "remediation_cmd": result.remediation_cmd,
-                "plugin": plugin_name,
-            })
+    A clone that exists on the right branch passes and is never pulled in
+    steady state ("clone once"); only pinned commits are re-checked-out.
+    Successes consolidate by verb (cloned/pulled/checked-out); failures stay
+    per-line.
+    """
+    import subprocess as _sp2
 
-    # Check git deps (consolidate by verb: cloned/pulled/checked-out; failures per-line)
+    from .git_dep_check import check_git_dep, clone_git_dep, pull_git_dep
+
     git_cloned = []
     git_pulled = []
     git_checked_out = []
-    for dep_def in manifest.get("git_deps", []):
+    for dep_def in ctx.manifest.get("git_deps", []):
         result = check_git_dep(
-            data_dir,
+            ctx.data_dir,
             dep_def["url"],
             dep_def["branch"],
             dep_def.get("sparse_paths"),
             dep_def.get("commit"),
         )
         if result.passed:
-            ok_entries.append(f"{prefix}git {result.repo_name}: ok - {result.message}")
+            ctx.ok(f"git {result.subject}: ok - {result.message}")
             continue
 
-        from .git_dep_check import clone_git_dep, pull_git_dep
-        import os as _os
         target_path = result.target_path
         pinned_commit = dep_def.get("commit")
-        verb = ""
-        if not _os.path.isdir(target_path):
+        if not os.path.isdir(target_path):
             ok, msg = clone_git_dep(dep_def["url"], dep_def["branch"], target_path, dep_def.get("sparse_paths"), pinned_commit)
             verb = "cloned"
             detail = dep_def["url"]
         elif pinned_commit:
             try:
-                import subprocess as _sp2
                 _sp2.run(["git", "-C", target_path, "fetch"], capture_output=True, timeout=60)
                 r = _sp2.run(["git", "-C", target_path, "checkout", pinned_commit], capture_output=True, text=True, timeout=30)
                 ok = r.returncode == 0
@@ -1898,59 +1863,68 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
 
         if ok:
             if verb == "cloned":
-                git_cloned.append((result.repo_name, detail))
+                git_cloned.append((result.subject, detail))
             elif verb == "pulled":
-                git_pulled.append((result.repo_name, detail))
+                git_pulled.append((result.subject, detail))
             else:
-                git_checked_out.append((result.repo_name, detail))
+                git_checked_out.append((result.subject, detail))
         else:
-            action_entries.append(f"{prefix}git {result.repo_name}: FAILED - {msg}")
-            failures.append({
-                "type": "git_dep",
-                "name": result.repo_name,
-                "message": msg,
-                "remediation_cmd": result.remediation_cmd,
-                "plugin": plugin_name,
-            })
+            ctx.fail(
+                f"git {result.subject}: FAILED - {msg}",
+                type="git_dep",
+                name=result.subject,
+                message=msg,
+                remediation_cmd=result.remediation_cmd,
+            )
 
     if git_cloned:
-        action_entries.append(f"{prefix}git cloned: {_join_items(git_cloned)}")
+        ctx.action(f"git cloned: {_join_items(git_cloned)}")
     if git_pulled:
-        action_entries.append(f"{prefix}git pulled: {_join_items(git_pulled)}")
+        ctx.action(f"git pulled: {_join_items(git_pulled)}")
     if git_checked_out:
-        action_entries.append(f"{prefix}git checked out: {_join_items(git_checked_out)}")
+        ctx.action(f"git checked out: {_join_items(git_checked_out)}")
 
-    # Sync files to data directory
-    # Rule: successful outcomes -> ok_entries (verbose-only); failures/actions -> action_entries (always shown)
-    for sync_def in manifest.get("sync_to_data", []):
+
+def _phase_sync_to_data(ctx):
+    """sync_to_data: copy plugin source dirs to the stable data dir.
+
+    Rule: successful outcomes -> ok_entries (verbose-only); failures/actions ->
+    action_entries (always shown).
+    """
+    import shutil
+
+    for sync_def in ctx.manifest.get("sync_to_data", []):
         src_rel = sync_def["src"]
         dst_rel = sync_def["dst"]
-        src = os.path.join(plugin_root, src_rel)
-        dst = os.path.join(data_dir, dst_rel)
+        src = os.path.join(ctx.plugin_root, src_rel)
+        dst = os.path.join(ctx.data_dir, dst_rel)
         if not os.path.isdir(src):
-            action_entries.append(f"{prefix}sync {src_rel} -> {dst_rel}: FAILED - source not found")
-            failures.append({
-                "type": "sync_to_data",
-                "src": src_rel,
-                "dst": dst_rel,
-                "message": f"source directory not found: {src}",
-                "plugin": plugin_name,
-            })
+            ctx.fail(
+                f"sync {src_rel} -> {dst_rel}: FAILED - source not found",
+                type="sync_to_data",
+                src=src_rel,
+                dst=dst_rel,
+                message=f"source directory not found: {src}",
+            )
             continue
-        import shutil
         os.makedirs(dst, exist_ok=True)
         shutil.copytree(src, dst, dirs_exist_ok=True)
-        ok_entries.append(f"{prefix}sync {src_rel} -> {dst_rel}: ok")
+        ctx.ok(f"sync {src_rel} -> {dst_rel}: ok")
 
-    # Check marketplace entries (before json_entries — marketplaces must be cloned
-    # before we merge fields like autoUpdate into known_marketplaces.json)
-    for mkt_def in manifest.get("marketplaces", []):
+
+def _phase_marketplaces(ctx):
+    """marketplaces: register + (alwaysUpdate) refresh.
+
+    Runs before json_entries — marketplaces must be cloned before we merge
+    fields like autoUpdate into known_marketplaces.json.
+    """
+    from .marketplace_lifecycle import check_marketplace_exists, check_marketplace_current, add_marketplace, update_marketplace
+
+    for mkt_def in ctx.manifest.get("marketplaces", []):
         mkt_name = mkt_def.get("name", "")
         source_url = mkt_def.get("source", "")
         if not mkt_name or not source_url:
             continue
-
-        from .marketplace_lifecycle import check_marketplace_exists, check_marketplace_current, add_marketplace, update_marketplace
 
         mkt_result = check_marketplace_exists(mkt_name)
         if mkt_result.passed:
@@ -1958,42 +1932,48 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
             if mkt_def.get("alwaysUpdate"):
                 current_result = check_marketplace_current(mkt_name)
                 if current_result.passed:
-                    ok_entries.append(f"{prefix}marketplace {mkt_name}: up to date")
+                    ctx.ok(f"marketplace {mkt_name}: up to date")
                 else:
                     upd_result = update_marketplace(mkt_name)
                     if upd_result.passed:
                         # Marketplace refresh is the *mechanism* by which plugin
                         # updates happen; the plugin updates themselves are the
                         # user-visible outcome. Demote to verbose-only.
-                        ok_entries.append(f"{prefix}marketplace {mkt_name}: updated (alwaysUpdate)")
+                        ctx.ok(f"marketplace {mkt_name}: updated (alwaysUpdate)")
                     else:
-                        action_entries.append(f"{prefix}marketplace {mkt_name}: update failed - {upd_result.message}")
-                        failures.append({
-                            "type": "marketplace",
-                            "name": mkt_name,
-                            "message": upd_result.message,
-                            "plugin": plugin_name,
-                        })
+                        ctx.fail(
+                            f"marketplace {mkt_name}: update failed - {upd_result.message}",
+                            type="marketplace", name=mkt_name, message=upd_result.message,
+                        )
             else:
-                ok_entries.append(f"{prefix}marketplace {mkt_name}: ok")
+                ctx.ok(f"marketplace {mkt_name}: ok")
         else:
             # Auto-add marketplace via CLI
             add_result = add_marketplace(source_url, mkt_name)
             if add_result.passed:
-                action_entries.append(f"{prefix}marketplace {mkt_name}: added ({source_url})")
+                ctx.action(f"marketplace {mkt_name}: added ({source_url})")
             else:
-                action_entries.append(f"{prefix}marketplace {mkt_name}: add failed - {add_result.message}")
-                failures.append({
-                    "type": "marketplace",
-                    "name": mkt_name,
-                    "message": add_result.message,
-                    "plugin": plugin_name,
-                })
+                ctx.fail(
+                    f"marketplace {mkt_name}: add failed - {add_result.message}",
+                    type="marketplace", name=mkt_name, message=add_result.message,
+                )
 
-    # Check plugin entries.
-    # Successful actions are accumulated per (marketplace, verb) and emitted as
-    # consolidated lines after the loop: "<mkt>: updated <name> [old -> new], ...".
-    # Failures and one-off warnings stay per-line to preserve detail.
+
+def _phase_plugins(ctx):
+    """plugins: install / scope / enable / update declared plugin refs.
+
+    Successful actions accumulate per (marketplace, verb) and are emitted as
+    consolidated lines after the loop: "<mkt>: updated <name> [old -> new], ...".
+    Failures and one-off warnings stay per-line to preserve detail.
+    """
+    from .marketplace_lifecycle import (
+        check_plugin_installed, install_plugin,
+        enable_plugin_in_claude, disable_plugin_in_claude,
+        check_plugin_enabled, check_plugin_enabled_at_scope,
+        check_plugin_version, check_plugin_min_version,
+        update_plugin, ensure_registry_scope,
+    )
+
     plugins_installed = {}      # mkt -> [(name, detail)]
     plugins_re_installed = {}   # mkt -> [(name, detail)]
     plugins_updated = {}        # mkt -> [(name, detail)]
@@ -2004,7 +1984,7 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
         mkt, name = (plugin_ref.split(":", 1) if ":" in plugin_ref else ("", plugin_ref))
         d.setdefault(mkt, []).append((name, detail))
 
-    for plugin_def in manifest.get("plugins", []):
+    for plugin_def in ctx.manifest.get("plugins", []):
         plugin_ref = plugin_def.get("ref", "")
         enabled = plugin_def.get("enabled", True)
         desired_scope = plugin_def.get("scope", "user")
@@ -2013,12 +1993,10 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
         if not plugin_ref:
             continue
         if install_mode not in ("auto", "manual"):
-            action_entries.append(f"{prefix}plugin {plugin_ref}: unknown install mode '{install_mode}' (expected 'auto' or 'manual'); treating as 'auto'")
+            ctx.action(f"plugin {plugin_ref}: unknown install mode '{install_mode}' (expected 'auto' or 'manual'); treating as 'auto'")
             install_mode = "auto"
 
-        from .marketplace_lifecycle import check_plugin_installed, install_plugin
-
-        # Compute CLI ref for logging (marketplace:plugin → plugin@marketplace)
+        # Compute CLI ref for logging (marketplace:plugin -> plugin@marketplace)
         cli_ref = f"{plugin_ref.split(':', 1)[1]}@{plugin_ref.split(':', 1)[0]}" if ":" in plugin_ref else plugin_ref
 
         # Check if plugin is installed (global registry, handles both ref formats)
@@ -2027,45 +2005,38 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
             if install_mode == "manual":
                 # User is expected to install via `claude plugin install ...`;
                 # we only manage updates once they do. Don't surface a failure.
-                ok_entries.append(f"{prefix}plugin {plugin_ref}: not installed (install: manual; run `claude plugin install {cli_ref}` to enable)")
+                ctx.ok(f"plugin {plugin_ref}: not installed (install: manual; run `claude plugin install {cli_ref}` to enable)")
                 continue
             # Auto-install via CLI
             inst = install_plugin(plugin_ref, scope=desired_scope)
             if inst.passed:
                 _bucket(plugins_installed, plugin_ref, f"at {desired_scope} scope")
             else:
-                action_entries.append(f"{prefix}plugin {plugin_ref}: install failed - {inst.message}")
-                failures.append({
-                    "type": "plugin",
-                    "ref": plugin_ref,
-                    "message": inst.message,
-                    "plugin": plugin_name,
-                })
+                ctx.fail(
+                    f"plugin {plugin_ref}: install failed - {inst.message}",
+                    type="plugin", ref=plugin_ref, message=inst.message,
+                )
                 continue
-
-        from .marketplace_lifecycle import enable_plugin_in_claude, disable_plugin_in_claude, check_plugin_enabled, check_plugin_enabled_at_scope, check_plugin_version, update_plugin, ensure_registry_scope
 
         # Ensure plugin is enabled at desired scope (reads settings file directly,
         # not installed_plugins.json which can have stale scope metadata). Skip
         # for install: manual -- the user owns scope and enable state; we just
         # manage version updates.
         if install_result.passed and install_mode != "manual":
-            scope_check = check_plugin_enabled_at_scope(plugin_ref, desired_scope, project_dir)
+            scope_check = check_plugin_enabled_at_scope(plugin_ref, desired_scope, ctx.project_dir)
             if not scope_check.passed:
                 # Keep the scope-mismatch note as its own line so the user sees
                 # *why* the re-install happened; consolidate the action.
-                action_entries.append(f"{prefix}plugin {plugin_ref}: {scope_check.message}")
+                ctx.action(f"plugin {plugin_ref}: {scope_check.message}")
                 reinst = install_plugin(plugin_ref, scope=desired_scope)
                 if reinst.passed:
                     _bucket(plugins_re_installed, plugin_ref, f"at {desired_scope} scope")
                 else:
-                    action_entries.append(f"{prefix}plugin {plugin_ref}: scope install failed - {reinst.message}")
-                    failures.append({
-                        "type": "plugin",
-                        "ref": plugin_ref,
-                        "message": f"scope install failed: {reinst.message}",
-                        "plugin": plugin_name,
-                    })
+                    ctx.fail(
+                        f"plugin {plugin_ref}: scope install failed - {reinst.message}",
+                        type="plugin", ref=plugin_ref,
+                        message=f"scope install failed: {reinst.message}",
+                    )
                     continue
 
             # Sync installed_plugins.json scope to match desired scope.
@@ -2083,9 +2054,9 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
                     if upd_result.passed:
                         _bucket(plugins_updated, plugin_ref, f"{ver_result.installed_version} -> {ver_result.latest_version}, manual")
                     else:
-                        action_entries.append(f"{prefix}plugin {plugin_ref}: update failed ({ver_result.message}) - {upd_result.message}")
+                        ctx.action(f"plugin {plugin_ref}: update failed ({ver_result.message}) - {upd_result.message}")
                 else:
-                    ok_entries.append(f"{prefix}plugin {plugin_ref}: up to date (install: manual)")
+                    ctx.ok(f"plugin {plugin_ref}: up to date (install: manual)")
         elif enabled:
             # Check if version is up to date (only for already-installed plugins)
             if install_result.passed:
@@ -2095,11 +2066,10 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
                     if upd_result.passed:
                         _bucket(plugins_updated, plugin_ref, f"{ver_result.installed_version} -> {ver_result.latest_version}")
                     else:
-                        action_entries.append(f"{prefix}plugin {plugin_ref}: update failed ({ver_result.message}) - {upd_result.message}")
+                        ctx.action(f"plugin {plugin_ref}: update failed ({ver_result.message}) - {upd_result.message}")
 
             # Check min_version constraint (auto-update, then fail if still unsatisfied)
             if install_result.passed and min_version:
-                from .marketplace_lifecycle import check_plugin_min_version
                 min_result = check_plugin_min_version(plugin_ref, min_version)
                 if not min_result.up_to_date:
                     upd_result = update_plugin(plugin_ref, scope=desired_scope)
@@ -2108,55 +2078,45 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
                         if recheck.up_to_date:
                             _bucket(plugins_updated, plugin_ref, f"{min_result.installed_version} -> {recheck.installed_version}, satisfies >= {min_version}")
                         else:
-                            action_entries.append(f"{prefix}plugin {plugin_ref}: installed {recheck.installed_version} < required {min_version}, update failed to satisfy constraint")
-                            failures.append({
-                                "type": "plugin",
-                                "ref": plugin_ref,
-                                "message": f"min_version {min_version} not satisfied (installed {recheck.installed_version})",
-                                "plugin": plugin_name,
-                            })
+                            ctx.fail(
+                                f"plugin {plugin_ref}: installed {recheck.installed_version} < required {min_version}, update failed to satisfy constraint",
+                                type="plugin", ref=plugin_ref,
+                                message=f"min_version {min_version} not satisfied (installed {recheck.installed_version})",
+                            )
                     else:
-                        action_entries.append(f"{prefix}plugin {plugin_ref}: installed {min_result.installed_version} < required {min_version}, update failed - {upd_result.message}")
-                        failures.append({
-                            "type": "plugin",
-                            "ref": plugin_ref,
-                            "message": f"min_version {min_version} not satisfied: {upd_result.message}",
-                            "plugin": plugin_name,
-                        })
+                        ctx.fail(
+                            f"plugin {plugin_ref}: installed {min_result.installed_version} < required {min_version}, update failed - {upd_result.message}",
+                            type="plugin", ref=plugin_ref,
+                            message=f"min_version {min_version} not satisfied: {upd_result.message}",
+                        )
 
             # Check enabled state at desired scope
-            enabled_result = check_plugin_enabled_at_scope(plugin_ref, desired_scope, project_dir)
+            enabled_result = check_plugin_enabled_at_scope(plugin_ref, desired_scope, ctx.project_dir)
             if enabled_result.passed:
-                ok_entries.append(f"{prefix}plugin {plugin_ref}: ok")
+                ctx.ok(f"plugin {plugin_ref}: ok")
             else:
                 en_result = enable_plugin_in_claude(plugin_ref)
                 if en_result.passed:
                     _bucket(plugins_enabled, plugin_ref, f"at {desired_scope} scope")
                 else:
-                    action_entries.append(f"{prefix}plugin {plugin_ref}: enable failed - {en_result.message}")
-                    failures.append({
-                        "type": "plugin",
-                        "ref": plugin_ref,
-                        "message": en_result.message,
-                        "plugin": plugin_name,
-                    })
+                    ctx.fail(
+                        f"plugin {plugin_ref}: enable failed - {en_result.message}",
+                        type="plugin", ref=plugin_ref, message=en_result.message,
+                    )
         else:
             # Only disable if currently enabled (check before acting)
             enabled_result = check_plugin_enabled(plugin_ref)
             if not enabled_result.passed:
-                ok_entries.append(f"{prefix}plugin {plugin_ref}: already disabled")
+                ctx.ok(f"plugin {plugin_ref}: already disabled")
             else:
                 dis_result = disable_plugin_in_claude(plugin_ref)
                 if dis_result.passed:
                     _bucket(plugins_disabled, plugin_ref, "")
                 else:
-                    action_entries.append(f"{prefix}plugin {plugin_ref}: disable failed - {dis_result.message}")
-                    failures.append({
-                        "type": "plugin",
-                        "ref": plugin_ref,
-                        "message": dis_result.message,
-                        "plugin": plugin_name,
-                    })
+                    ctx.fail(
+                        f"plugin {plugin_ref}: disable failed - {dis_result.message}",
+                        type="plugin", ref=plugin_ref, message=dis_result.message,
+                    )
 
     # Flush plugin-action accumulators as consolidated per-marketplace lines.
     def _emit_plugin_verb(verb, buckets):
@@ -2164,180 +2124,231 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
             if not items:
                 continue
             if mkt:
-                action_entries.append(f"{prefix}{mkt}: {verb} {_join_items(items)}")
+                ctx.action(f"{mkt}: {verb} {_join_items(items)}")
             else:
-                action_entries.append(f"{prefix}{verb}: {_join_items(items)}")
+                ctx.action(f"{verb}: {_join_items(items)}")
     _emit_plugin_verb("installed", plugins_installed)
     _emit_plugin_verb("re-installed", plugins_re_installed)
     _emit_plugin_verb("updated", plugins_updated)
     _emit_plugin_verb("enabled", plugins_enabled)
     _emit_plugin_verb("disabled", plugins_disabled)
 
-    # Variable resolution for subsequent phases
-    from .var_resolve import build_variables, resolve_vars
-    config = _load_plugin_config(data_dir)
-    variables = build_variables(plugin_root, data_dir, config)
 
-    # Check INI settings (project-scoped — skip when no project detected)
-    if not project_detected and manifest.get("ini_settings"):
-        ok_entries.append(f"{prefix}ini_settings: skipped (no project detected)")
-    for ini_def in (manifest.get("ini_settings", []) if project_detected else []):
-        ini_file = resolve_vars(ini_def["file"], variables)
+def _phase_ini_settings(ctx):
+    """ini_settings: project-scoped — skipped when no project detected."""
+    from .ini_check import check_ini_setting, write_ini_setting
+    from .var_resolve import resolve_vars
+
+    if not ctx.project_detected:
+        ctx.ok("ini_settings: skipped (no project detected)")
+        return
+
+    for ini_def in ctx.manifest.get("ini_settings", []):
+        ini_file = resolve_vars(ini_def["file"], ctx.variables)
         if ini_file is None:
-            ok_entries.append(f"{prefix}ini {ini_def['file']}: skipped (unresolved vars)")
+            ctx.ok(f"ini {ini_def['file']}: skipped (unresolved vars)")
             continue
 
         section = ini_def["section"]
         # Ensure section has brackets for check/write
         section_header = section if section.startswith("[") else f"[{section}]"
 
-        from .ini_check import check_ini_setting, write_ini_setting
         for key, expected in ini_def.get("settings", {}).items():
             result = check_ini_setting(ini_file, section_header, key, expected)
             if result.passed:
-                ok_entries.append(f"{prefix}ini {key}: ok")
+                ctx.ok(f"ini {key}: ok")
             else:
                 try:
                     write_ini_setting(ini_file, section_header, key, expected)
-                    action_entries.append(f"{prefix}ini {key}: set to {expected}")
+                    ctx.action(f"ini {key}: set to {expected}")
                 except OSError as e:
-                    action_entries.append(f"{prefix}ini {key}: FAILED - {e}")
-                    failures.append({
-                        "type": "ini",
-                        "file": ini_file,
-                        "key": key,
-                        "message": str(e),
-                        "plugin": plugin_name,
-                    })
+                    ctx.fail(
+                        f"ini {key}: FAILED - {e}",
+                        type="ini", file=ini_file, key=key, message=str(e),
+                    )
 
-    # Check JSON entries (after marketplaces — so known_marketplaces.json has valid entries)
-    for json_def in manifest.get("json_entries", []):
-        ref_path = resolve_vars(json_def.get("reference", ""), variables)
-        target_path = resolve_vars(json_def.get("target", ""), variables)
+
+def _phase_json_entries(ctx):
+    """json_entries: merge reference entries into target JSON files.
+
+    Runs after marketplaces — so known_marketplaces.json has valid entries.
+    """
+    from .json_check import check_json_entries, merge_json_entries
+    from .var_resolve import resolve_vars
+
+    for json_def in ctx.manifest.get("json_entries", []):
+        ref_path = resolve_vars(json_def.get("reference", ""), ctx.variables)
+        target_path = resolve_vars(json_def.get("target", ""), ctx.variables)
         if ref_path is None or target_path is None:
-            ok_entries.append(f"{prefix}json: skipped (unresolved vars)")
+            ctx.ok("json: skipped (unresolved vars)")
             continue
 
         # Resolve reference relative to plugin root if not absolute
         if not os.path.isabs(ref_path):
-            ref_path = os.path.join(plugin_root, ref_path)
+            ref_path = os.path.join(ctx.plugin_root, ref_path)
         # Expand ~ in target path
         target_path = os.path.expanduser(target_path)
 
         merge_fields = json_def.get("merge_fields", [])
         preserve_fields = json_def.get("preserve_fields", [])
 
-        from .json_check import check_json_entries, merge_json_entries
         result = check_json_entries(ref_path, target_path, merge_fields, preserve_fields)
         if result.passed:
-            ok_entries.append(f"{prefix}json {os.path.basename(target_path)}: ok")
+            ctx.ok(f"json {os.path.basename(target_path)}: ok")
         else:
             result = merge_json_entries(ref_path, target_path, merge_fields, preserve_fields)
             if result.passed:
-                action_entries.append(f"{prefix}json {os.path.basename(target_path)}: merged")
+                ctx.action(f"json {os.path.basename(target_path)}: merged")
             else:
-                action_entries.append(f"{prefix}json {os.path.basename(target_path)}: FAILED - {result.message}")
-                failures.append({
-                    "type": "json",
-                    "target": target_path,
-                    "message": result.message,
-                    "plugin": plugin_name,
-                })
+                ctx.fail(
+                    f"json {os.path.basename(target_path)}: FAILED - {result.message}",
+                    type="json", target=target_path, message=result.message,
+                )
 
-    # Check PyPI packages (consolidate successful installs; failures per-line)
+
+def _phase_pypi_packages(ctx):
+    """pypi_packages: download + extract (consolidate installs; failures per-line)."""
+    from .pypi_check import check_pypi_package, download_and_extract
+    from .var_resolve import resolve_vars
+
     pypi_installed = []
-    for pypi_def in manifest.get("pypi_packages", []):
-        extract_to = resolve_vars(pypi_def["extract_to"], variables)
+    for pypi_def in ctx.manifest.get("pypi_packages", []):
+        extract_to = resolve_vars(pypi_def["extract_to"], ctx.variables)
         if extract_to is None:
-            ok_entries.append(f"{prefix}pypi {pypi_def['package']}: skipped (unresolved vars)")
+            ctx.ok(f"pypi {pypi_def['package']}: skipped (unresolved vars)")
             continue
 
-        from .pypi_check import check_pypi_package, download_and_extract
         result = check_pypi_package(pypi_def["package"], extract_to)
         if result.passed:
-            ok_entries.append(f"{prefix}pypi {result.package}: ok")
+            ctx.ok(f"pypi {result.package}: ok")
         else:
             extract_pattern = pypi_def.get("extract_pattern")
             result = download_and_extract(pypi_def["package"], extract_to, extract_pattern)
             if result.passed:
                 pypi_installed.append((result.package, result.message))
             else:
-                action_entries.append(f"{prefix}pypi {result.package}: FAILED - {result.message}")
-                failures.append({
-                    "type": "pypi",
-                    "package": pypi_def["package"],
-                    "message": result.message,
-                    "plugin": plugin_name,
-                })
+                ctx.fail(
+                    f"pypi {result.package}: FAILED - {result.message}",
+                    type="pypi", package=pypi_def["package"], message=result.message,
+                )
 
     if pypi_installed:
-        action_entries.append(f"{prefix}pypi: {_join_items(pypi_installed)}")
+        ctx.action(f"pypi: {_join_items(pypi_installed)}")
 
-    # Shared libraries: owner publish (shared_libs) + consumer link (shared_lib_imports).
-    # Rule: cached/skipped -> ok_entries (verbose-only); published/linked -> action_entries;
-    # failed -> action_entries + failures. Runs after the venv handler so a consumer's
-    # own .venv already exists as the .pth target.
-    shared_root = os.path.join(os.path.dirname(data_dir), "_shared_libs")
+
+def _phase_shared_libs(ctx):
+    """shared_libs / shared_lib_imports: owner publish + consumer link.
+
+    Rule: cached/skipped -> ok_entries (verbose-only); published/linked ->
+    action_entries; failed -> action_entries + failures. Runs after the venv
+    handler so a consumer's own .venv already exists as the .pth target.
+    """
+    from .shared_lib import sync_shared_lib, link_shared_lib, find_standalone_python
+    from .venv_check import _find_python
+
+    shared_root = os.path.join(os.path.dirname(ctx.data_dir), "_shared_libs")
 
     def _log_shared(result):
         if result.status in ("cached", "skipped"):
-            ok_entries.append(f"{prefix}shared-lib {result.name}: {result.message}")
+            ctx.ok(f"shared-lib {result.name}: {result.message}")
         elif result.status in ("published", "linked"):
-            action_entries.append(f"{prefix}shared-lib {result.name}: {result.message}")
+            ctx.action(f"shared-lib {result.name}: {result.message}")
         else:  # failed
-            action_entries.append(f"{prefix}shared-lib {result.name}: FAILED - {result.message}")
-            failures.append({
-                "type": "shared_lib",
-                "name": result.name,
-                "message": result.message,
-                "plugin": plugin_name,
-            })
+            ctx.fail(
+                f"shared-lib {result.name}: FAILED - {result.message}",
+                type="shared_lib", name=result.name, message=result.message,
+            )
 
-    shared_libs = manifest.get("shared_libs", [])
-    shared_lib_imports = manifest.get("shared_lib_imports", [])
-    if shared_libs or shared_lib_imports:
-        from .shared_lib import sync_shared_lib, link_shared_lib, find_standalone_python
-        from .venv_check import _find_python
+    # Owner phase: publish source, then broadcast to the standalone Python.
+    for lib_def in ctx.manifest.get("shared_libs", []):
+        lib_name = lib_def.get("name", "")
+        lib_src = lib_def.get("src", ".")
+        if not lib_name:
+            continue
+        sync_result = sync_shared_lib(lib_name, lib_src, ctx.plugin_root, shared_root)
+        _log_shared(sync_result)
+        if sync_result.status != "failed":
+            _log_shared(link_shared_lib(lib_name, find_standalone_python(), shared_root))
 
-        # Owner phase: publish source, then broadcast to the standalone Python.
-        for lib_def in shared_libs:
-            lib_name = lib_def.get("name", "")
-            lib_src = lib_def.get("src", ".")
-            if not lib_name:
-                continue
-            sync_result = sync_shared_lib(lib_name, lib_src, plugin_root, shared_root)
-            _log_shared(sync_result)
-            if sync_result.status != "failed":
-                _log_shared(link_shared_lib(lib_name, find_standalone_python(), shared_root))
-
-        # Consumer phase: link into this plugin's own venv.
-        if shared_lib_imports:
-            venv_python = _find_python(os.path.join(data_dir, ".venv"))
-            for lib_name in shared_lib_imports:
-                _log_shared(link_shared_lib(lib_name, venv_python, shared_root))
-
-    # Script phase
-    script_def = manifest.get("script")
-    if script_def:
-        script_failures = _run_script_phase(
-            script_def, plugin_root, data_dir, config, action_entries, ok_entries,
-            prefix=prefix, plugin_name=plugin_name, project_dir=project_dir,
-        )
-        failures.extend(script_failures)
-
-    return failures
+    # Consumer phase: link into this plugin's own venv.
+    shared_lib_imports = ctx.manifest.get("shared_lib_imports", [])
+    if shared_lib_imports:
+        venv_python = _find_python(os.path.join(ctx.data_dir, ".venv"))
+        for lib_name in shared_lib_imports:
+            _log_shared(link_shared_lib(lib_name, venv_python, shared_root))
 
 
-def _load_plugin_config(data_dir):
-    """Load plugin config from data_dir if it exists. Returns dict or empty."""
+def _phase_script(ctx):
+    """script: run the plugin's custom bootstrap module in-process."""
+    script_failures = _run_script_phase(
+        ctx.manifest["script"], ctx.plugin_root, ctx.data_dir, ctx.config,
+        ctx.action_entries, ctx.ok_entries,
+        prefix=ctx.prefix, plugin_name=ctx.plugin_name, project_dir=ctx.project_dir,
+    )
+    ctx.failures.extend(script_failures)
+
+
+# The manifest phase table (B12): each phase runs when any of its manifest
+# keys is present (truthy). ORDER IS LOAD-BEARING:
+#   - tools before venv: uv may be installed by the tools phase.
+#   - venv before shared_libs: a consumer link targets this plugin's .venv.
+#   - marketplaces before json_entries: the marketplace must be cloned before
+#     fields like autoUpdate are merged into known_marketplaces.json.
+#   - plugins before ini/json: installs rewrite the plugin registry first.
+#   - script last: it may build on everything the manifest set up.
+_MANIFEST_PHASES = (
+    (("tools",), _phase_tools),
+    (("fonts",), _phase_fonts),
+    (("path_entries",), _phase_path_entries),
+    (("venv",), _phase_venv),
+    (("git_deps",), _phase_git_deps),
+    (("sync_to_data",), _phase_sync_to_data),
+    (("marketplaces",), _phase_marketplaces),
+    (("plugins",), _phase_plugins),
+    (("ini_settings",), _phase_ini_settings),
+    (("json_entries",), _phase_json_entries),
+    (("pypi_packages",), _phase_pypi_packages),
+    (("shared_libs", "shared_lib_imports"), _phase_shared_libs),
+    (("script",), _phase_script),
+)
+
+
+def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entries, ok_entries, plugin_name="bootstrap", project_dir=None, project_detected=True):
+    """Process a single plugin's bootstrap manifest. Returns list of failures.
+
+    Dispatches to one handler per manifest key via _MANIFEST_PHASES. Entries
+    are split into two lists:
+    - action_entries: actions performed, failures, conditions not met (always displayed)
+    - ok_entries: checks that passed (never displayed; written to log file when log_success is true)
+
+    When project_detected is False, project-scoped primitives (ini_settings) are skipped.
+    """
+    ctx = _ManifestContext(
+        manifest, current_os, data_dir, plugin_root,
+        action_entries, ok_entries, plugin_name, project_dir, project_detected,
+    )
+    for keys, handler in _MANIFEST_PHASES:
+        if any(manifest.get(k) for k in keys):
+            handler(ctx)
+    return ctx.failures
+
+
+def _load_plugin_config(data_dir, action_entries=None):
+    """Load plugin config.yaml from data_dir if it exists. Returns dict or empty.
+
+    A load failure is appended to ``action_entries`` when provided — the
+    "every check must log its outcome" contract (B8). (Parse errors inside
+    load_yaml_config still degrade to an empty dict by design; this guards
+    the unexpected: import failures, permission errors, ...)
+    """
+    config_path = os.path.join(data_dir, "config.yaml")
     try:
         from .config_check import load_yaml_config
-        import os
-        config_path = os.path.join(data_dir, "config.yaml")
         if os.path.isfile(config_path):
             return load_yaml_config(config_path)
-    except Exception:
-        pass
+    except Exception as e:
+        if action_entries is not None:
+            action_entries.append(f"config load FAILED - {config_path}: {e}")
     return {}
 
 
@@ -2497,6 +2508,11 @@ def _read_new_log_entries(data_dir, start_time=None):
     # Timestamps are only on header lines (--- label timestamp ---).
     # Untimestamped headers (or content before any header) start excluded —
     # they only get included if a subsequent timestamped header lets them in.
+    # Known limitation (B20): timestamps are second-resolution and the
+    # comparison is strict, so a block a concurrent session writes within the
+    # SAME second as the marker is never displayed. Accepted: the window is
+    # one second, the entries still land in bootstrap.log, and an inclusive
+    # comparison would re-display every already-shown block instead.
     new_lines = []
     include_block = False
     for line in lines:
@@ -2812,6 +2828,8 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
         focused_agent_msg = ps.get("agent_msg", ps.get("message", ""))
         if output_file:
             response = {
+                "continue": True,
+                "suppressOutput": False,
                 "systemMessage": f"{label}: {focused_user_msg}",
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
@@ -2841,6 +2859,8 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
         # `systemMessage` is user-facing only. `user_msg` was selected above
         # based on the auto/manual partition.
         response = {
+            "continue": True,
+            "suppressOutput": False,
             "systemMessage": f"{label} -> Setup issues found. Fix in order:\n{log_content}\n\n{user_msg}",
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",

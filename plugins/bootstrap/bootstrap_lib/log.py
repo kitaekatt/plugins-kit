@@ -47,19 +47,42 @@ def write_log_block(
         elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
         lines.append(f"--- {header_label} done in {elapsed:.1f}s ---\n")
 
+    # One write() call in append mode: on POSIX, O_APPEND makes a single
+    # write land contiguously even when a concurrent session appends too,
+    # so blocks don't interleave line-by-line (B20).
     with open(log_file, "a") as f:
-        f.writelines(lines)
+        f.write("".join(lines))
 
     _trim_log(log_file)
 
 
 def _trim_log(log_file: str) -> None:
-    """Keep only the last MAX_LOG_LINES lines."""
+    """Keep roughly the last MAX_LOG_LINES lines, trimming at a block boundary.
+
+    The cut point advances to the next block header (``--- label ... ---``)
+    so a trim never decapitates a block — a headless block has no timestamp
+    and would be mis-attributed by the display reader (B20). Note the
+    read-modify-write here can still drop a block another session appends
+    between the read and the write; the trim only runs after this session's
+    own append, so the loss window is small and the cost is a missing
+    historical block, never a corrupt current one.
+    """
     try:
         with open(log_file, "r") as f:
             all_lines = f.readlines()
-        if len(all_lines) > MAX_LOG_LINES:
-            with open(log_file, "w") as f:
-                f.writelines(all_lines[-MAX_LOG_LINES:])
+        if len(all_lines) <= MAX_LOG_LINES:
+            return
+        cut = len(all_lines) - MAX_LOG_LINES
+        # Advance the cut to the next block header so the kept tail starts
+        # clean. Worst case (no header found) keeps the plain tail as before.
+        for i in range(cut, len(all_lines)):
+            line = all_lines[i]
+            # Headers, not footers ("--- label done in X.Xs ---"): the tail
+            # must start at a timestamped header for the display reader.
+            if line.startswith("--- ") and " done in " not in line:
+                cut = i
+                break
+        with open(log_file, "w") as f:
+            f.writelines(all_lines[cut:])
     except (FileNotFoundError, PermissionError):
         pass
