@@ -89,6 +89,17 @@ class TestVendoredCopies:
     def test_at_least_one_vendored_copy_exists(self):
         assert _vendored_copies(), "no vendored bootstrap_guard.py copies found"
 
+    def test_awesome_kit_task_system_copy_present(self):
+        # The task-system CLI (task skill) re-execs via its own vendored
+        # guard; assert the copy exists and is picked up by the glob so a
+        # rename/move can't silently drop it from the drift check.
+        vendored = (
+            _REPO_ROOT / "plugins" / "awesome-kit" / "skills" / "task"
+            / "scripts" / "bootstrap_guard.py"
+        )
+        assert vendored.is_file(), f"missing vendored copy: {vendored}"
+        assert vendored in _vendored_copies()
+
     def test_vendored_copies_match_canon(self):
         diffs = []
         for vendored in _vendored_copies():

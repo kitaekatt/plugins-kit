@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "work Operation Sequence",
+    "subtitle": "work <ref>: resolve by path, auto-init if absent, validate gate, set the global current pointer, dispatch",
+    "output": "task-work-sequence.html",
+    "viewBox": [760, 740]
+  },
+  "participants": [
+    { "id": "user", "type": "external", "label": "User", "sublabel": "invokes work" },
+    { "id": "work", "type": "backend", "label": "work", "sublabel": "the operation" },
+    { "id": "folder", "type": "database", "label": "Task Folder", "sublabel": "task.yaml = SoT" },
+    { "id": "validate", "type": "security", "label": "validate", "sublabel": "the gate" },
+    { "id": "current", "type": "cloud", "label": "current", "sublabel": "one global pointer" },
+    { "id": "agent", "type": "frontend", "label": "sub-agent", "sublabel": "from agent_hint" }
+  ],
+  "segments": [
+    { "from": 150, "to": 350, "label": "Resolve + auto-init" },
+    { "from": 358, "to": 500, "label": "Validate gate" },
+    { "from": 508, "to": 690, "label": "Set current + dispatch" }
+  ],
+  "messages": [
+    { "from": "user", "to": "work", "y": 180, "label": "work <ref>", "variant": "emphasis" },
+    { "from": "work", "to": "folder", "y": 218, "label": "resolve (path)", "variant": "default" },
+    { "from": "folder", "to": "work", "y": 256, "label": "absent?", "variant": "return" },
+    { "from": "work", "to": "folder", "y": 294, "label": "init (if absent)", "variant": "emphasis" },
+    { "from": "folder", "to": "work", "y": 332, "label": "valid", "variant": "return" },
+    { "from": "work", "to": "validate", "y": 370, "label": "validate", "variant": "security" },
+    { "from": "validate", "to": "folder", "y": 408, "label": "read yaml", "variant": "default" },
+    { "from": "folder", "to": "validate", "y": 446, "label": "classify", "variant": "return" },
+    { "from": "validate", "to": "work", "y": 484, "label": "pass / BLOCK", "variant": "security" },
+    { "from": "work", "to": "current", "y": 522, "label": "set current", "variant": "emphasis" },
+    { "from": "work", "to": "folder", "y": 560, "label": "read hints", "variant": "default" },
+    { "from": "folder", "to": "work", "y": 598, "label": "skills + hint", "variant": "return" },
+    { "from": "work", "to": "agent", "y": 636, "label": "dispatch", "variant": "emphasis" },
+    { "from": "agent", "to": "user", "y": 674, "label": "working / result", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "work", "from": 200, "to": 660, "type": "backend" },
+    { "participant": "folder", "from": 213, "to": 340, "type": "database" },
+    { "participant": "validate", "from": 365, "to": 490, "type": "security" },
+    { "participant": "folder", "from": 403, "to": 452, "type": "database" },
+    { "participant": "current", "from": 517, "to": 548, "type": "cloud" },
+    { "participant": "folder", "from": 555, "to": 604, "type": "database" },
+    { "participant": "agent", "from": 631, "to": 688, "type": "frontend" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Resolve + promote",
+      "items": [
+        "work resolves the reference by path (the id)",
+        "If no folder exists (Abstract), work auto-inits one -- promotion",
+        "init always yields a valid task; it cannot produce an Invalid one"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "The gate is mandatory",
+      "items": [
+        "validate classifies via task.yaml: Active / Invalid / Remote",
+        "Both errors AND warnings block work -- fix forward, no recovery",
+        "A Remote task (tmp + host mismatch) cannot be worked locally"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Activate + dispatch",
+      "items": [
+        "Only after passing does work set the single global current pointer",
+        "work loads the task's skills_to_invoke and dispatches to agent_hint",
+        "The self-documenting task carries its own context to the sub-agent"
+      ]
+    }
+  ]
+}

@@ -10,9 +10,9 @@ disable-model-invocation: true
 
 When the user invokes this skill, they are signaling that they are context-switching, not paying close attention to every turn, or otherwise unable to carry conversation state in their head. Following the communication protocol below is what keeps progress moving in that state. Failure to follow it produces slow progress, wasted tokens, and user frustration -- the user has to re-orient on every reply, push back on under-specified hand-offs, and re-teach the agent what it should already be doing.
 
-The base assumption is that the user only reads end-of-turn messages -- they are the auto-loaded surface for turn-level communication (see `../hand-off/references/communication-framework.md`). Mid-turn narration and intermediate tool calls are on-demand at best; nothing important may live exclusively there.
+The base assumption is that the user only reads end-of-turn messages -- they are the auto-loaded surface for turn-level communication (see `../task/references/communication-framework.md`). Mid-turn narration and intermediate tool calls are on-demand at best; nothing important may live exclusively there.
 
-This skill operationalizes the turn-level side of the communication framework. The shared glossary -- `work-unit`, `auto-loaded vs on-demand context`, `three-part end-of-turn template`, `State A / State B`, `orientation moment`, `self-contained briefs`, `provenance triad`, `argument-based invocation modes` -- is canonical at `../hand-off/references/communication-framework.md`. Definitions live there; this file describes only how the protocol applies them.
+This skill operationalizes the turn-level side of the communication framework. The shared glossary -- `work-unit`, `auto-loaded vs on-demand context`, `three-part end-of-turn template`, `State A / State B`, `orientation moment`, `self-contained briefs`, `provenance triad`, `argument-based invocation modes` -- is canonical at `../task/references/communication-framework.md`. Definitions live there; this file describes only how the protocol applies them.
 
 The protocol is built around one central rule: every end-of-turn reply uses the framework's three-part template. The other rules support that template by specifying what each of its parts must contain.
 

@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "playwright>=1.40",
     "pypdf>=4.0",
+    "pyyaml>=6.0",
 ]
 
 # awesome-kit is not an importable package -- this pyproject exists only to

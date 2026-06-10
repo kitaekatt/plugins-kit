@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "switch Operation Sequence",
+    "subtitle": "switch <new> = update the current task (it becomes a plain Active task), then work the new one; with no current, switch == work",
+    "output": "task-switch-sequence.html",
+    "viewBox": [620, 740]
+  },
+  "participants": [
+    { "id": "user", "type": "external", "label": "User", "sublabel": "invokes switch" },
+    { "id": "switch", "type": "backend", "label": "switch", "sublabel": "update + work" },
+    { "id": "current", "type": "cloud", "label": "current", "sublabel": "one global pointer" },
+    { "id": "prev", "type": "database", "label": "prev task", "sublabel": "the outgoing folder" },
+    { "id": "new", "type": "frontend", "label": "new task", "sublabel": "the incoming folder" }
+  ],
+  "segments": [
+    { "from": 210, "to": 312, "label": "Read current" },
+    { "from": 320, "to": 430, "label": "Update outgoing" },
+    { "from": 438, "to": 650, "label": "Work incoming" }
+  ],
+  "messages": [
+    { "from": "user", "to": "switch", "y": 180, "label": "switch <new>", "variant": "emphasis" },
+    { "from": "switch", "to": "current", "y": 235, "label": "read current", "variant": "default" },
+    { "from": "current", "to": "switch", "y": 290, "label": "prev / none", "variant": "return" },
+    { "from": "switch", "to": "prev", "y": 345, "label": "update (capture + rotate)", "variant": "emphasis" },
+    { "from": "prev", "to": "switch", "y": 400, "label": "now plain Active", "variant": "return" },
+    { "from": "switch", "to": "new", "y": 455, "label": "work (validate + activate)", "variant": "emphasis" },
+    { "from": "new", "to": "switch", "y": 510, "label": "valid -> active", "variant": "return" },
+    { "from": "switch", "to": "current", "y": 565, "label": "set = new", "variant": "emphasis" },
+    { "from": "switch", "to": "user", "y": 620, "label": "working <new>", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "switch", "from": 195, "to": 635, "type": "backend" },
+    { "participant": "current", "from": 230, "to": 298, "type": "cloud" },
+    { "participant": "prev", "from": 340, "to": 405, "type": "database" },
+    { "participant": "new", "from": 450, "to": 515, "type": "frontend" },
+    { "participant": "current", "from": 560, "to": 600, "type": "cloud" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "switch = update then work",
+      "items": [
+        "switch reads the single global current pointer",
+        "It updates the outgoing task, capturing its state and rotating plan/log",
+        "After the update the outgoing task is a plain Active task -- no lingering claim"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Then work the new one",
+      "items": [
+        "work runs its full path: validate gate, then set current = new",
+        "Only one task is current at a time, globally",
+        "See the work sequence diagram for the gate + auto-init detail"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "No current => switch == work",
+      "items": [
+        "If nothing is current, the read returns none",
+        "The update step is skipped entirely",
+        "switch then behaves exactly like work on the new task"
+      ]
+    }
+  ]
+}

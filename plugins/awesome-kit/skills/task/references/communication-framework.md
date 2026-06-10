@@ -1,6 +1,6 @@
 # Communication framework
 
-How the human and the agent communicate across turns and sessions. This is the canonical glossary; the two skills that operationalize it -- `/verbose-updates` (turn-level) and `/hand-off` (session-level) -- both reference it. When a term defined here appears in either skill, the definition lives here; the skill describes only how the protocol applies the term.
+How the human and the agent communicate across turns and sessions. This is the canonical glossary; the two skills that operationalize it -- `/verbose-updates` (turn-level) and the `task` skill (session-level, via hand-off folders; the evolved `/hand-off`) -- both reference it. When a term defined here appears in either skill, the definition lives here; the skill describes only how the protocol applies the term.
 
 The framework references `/knowledge-encoding` (in plugins-kit:skills-kit), which is the meta-skill for evolving the framework itself.
 
@@ -10,7 +10,7 @@ The framework references `/knowledge-encoding` (in plugins-kit:skills-kit), whic
 
 The current goal, project phase, or task the user and agent are jointly working through. The work-unit is the durable anchor every communication artifact references -- *what changed* expresses progress against it, *where it sits* anchors changes to it, *required user action* surfaces the next step within it or the question of whether it is complete.
 
-A work-unit has natural scope (phase or project), not session scope. Sessions come and go; the work-unit outlives them. The `/hand-off` folder slug names the work-unit, not the session.
+A work-unit has natural scope (phase or project), not session scope. Sessions come and go; the work-unit outlives them. The hand-off (task) folder slug names the work-unit, not the session.
 
 If the work-unit is unnamed, no template can be written; ask the user to clarify before continuing.
 
@@ -50,7 +50,7 @@ If the agent has more work to do, it is in State A. "Required action: none. Cont
 A turn where the agent re-anchors against work that already happened, rather than performing new work. Two instances in this framework:
 
 - **First update after `/verbose-updates` invocation** -- *what changed* summarizes the substantive work of the preceding 1-3 turns, not the trivial fact of the skill invocation.
-- **Turn 1 of a fresh session resumed from a `/hand-off` folder** -- per the opening-response protocol in `CLAUDE.md`, the agent restates the current goal, names the first concrete action, and flags blockers before picking up tools.
+- **Turn 1 of a fresh session resumed from a hand-off (task) folder** -- per the opening-response protocol in `CLAUDE.md`, the agent restates the current goal, names the first concrete action, and flags blockers before picking up tools.
 
 Both share the same shape: orient first, then act. The opening-response protocol is the explicit text the agent must produce on session resume; the framework's general rule is *do not silently jump to tool use after a context jump*.
 
@@ -62,7 +62,7 @@ Corollary: if a system-reminder describes resumed state ("queued next concrete a
 
 ### hand-off baton
 
-The explicit transfer signal at the end of a `/hand-off` reply -- a two-line block ending the response:
+The explicit transfer signal at the end of a hand-off reply (the turn that packages a task folder for a fresh session) -- a two-line block ending the response:
 
 ```
 Paste into a new session to continue:
@@ -98,7 +98,7 @@ Modes must be orthogonal -- the user should never have to decide which of two ov
 ## How the skills use this framework
 
 - **`/verbose-updates`** operationalizes the three-part template, State A/B, and orientation-moment-after-invocation for end-of-turn communication. It is the per-turn protocol.
-- **`/hand-off`** operationalizes auto-loaded vs on-demand, the hand-off baton, and orientation-moment-on-resume for cross-session communication. It is the per-session-boundary protocol; its `CLAUDE.md` template's *Communication protocol* section sets `/verbose-updates` as the default for the next agent's turns.
+- **The `task` skill** (the evolved `/hand-off`) operationalizes auto-loaded vs on-demand, the hand-off baton, and orientation-moment-on-resume for cross-session communication via hand-off task folders (see its `references/handoff-template.md`). It is the per-session-boundary protocol; the template's *Communication protocol* section sets `/verbose-updates` as the default for the next agent's turns.
 - **`/knowledge-encoding`** is the meta-skill: when an insight emerges that should evolve the framework itself (a new term, a new principle, a new anti-pattern), it directs the encoding back into this document or its referencing skills.
 
 ## Extending the framework
