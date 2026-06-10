@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Currently ships (published): **awesome-kit** (cross-domain skills: shared comms framework, /plugin-ecosystem, /html-pdf), **bootstrap** (dependency management), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **openrouter-kit** (OpenRouter key management + shared model registry), **p4-kit** (Perforce multi-agent code review), **prototypes** (experimental skills awaiting graduation), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md: /md-authoring, /md-audit, cohesion-principles, knowledge-encoding, update-documentation), **test-plugin** (bootstrap exerciser), and **unreal-kit** (Unreal Engine Python API automation). Dev-only (not published, `published: false`): **agent-glue**, **workflow-kit**.
+**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Currently ships (published): **awesome-kit** (cross-domain skills: shared comms framework, /plugin-ecosystem, /html-pdf), **bootstrap** (dependency management), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **openrouter-kit** (OpenRouter key management + shared model registry), **p4-kit** (Perforce multi-agent code review), **prototypes** (experimental skills awaiting graduation), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md: /md-authoring, /md-audit, cohesion-principles, knowledge-encoding, update-documentation), and **unreal-kit** (Unreal Engine Python API automation). Dev-only (not published, `published: false`): **agent-glue**, **workflow-kit**.
 
 This repo is a **Claude Code plugin marketplace** — it extends Claude Code with skills, commands, and hooks via the `.claude-plugin/marketplace.json` manifest. Plugins are loaded either via `--plugin-dir` (local development) or `enabledPlugins` in settings (production installs from the remote repo).
 
@@ -19,10 +19,6 @@ plugins-kit/                          # Marketplace root
       bootstrap_lib/                  # Shared libraries (cache, tool_check, etc.) — installable Python package
       hooks/sessionstart/             # SessionStart hook (bash wrapper)
       defaults/                       # Default config files
-    test-plugin/                      # Test plugin (exercises bootstrap system)
-      .claude-plugin/plugin.json      # Plugin manifest
-      bootstrap.json                  # Test plugin's bootstrap manifest
-      scripts/                        # Config setup
     p4-kit/                           # P4 multi-agent code review plugin (Claude subagents)
       .claude-plugin/plugin.json      # Plugin manifest
       bootstrap.json                  # Bootstrap manifest (tools)
@@ -34,8 +30,7 @@ plugins-kit/                          # Marketplace root
       skills/
         ue-python-api/                # The main skill
           SKILL.md                    # Skill definition (loaded by Claude Code)
-          bin/                        # Entry points (runner + setup)
-          scripts/                    # Utility scripts
+          scripts/                    # Entry points (ue_runner.py + ue-runner.cmd) + utility scripts
           stubs/                      # UE Python API stubs (generated, gitignored)
           references/                 # Detailed docs loaded conditionally by SKILL.md
 ```
@@ -59,7 +54,6 @@ plugins-kit/                          # Marketplace root
 | `plugins/bootstrap/bootstrap.json` | Bootstrap plugin's own manifest |
 | `plugins/bootstrap/skills/bootstrap/references/engine-internals.md` | Bootstrap engine internals |
 | `docs/planning/bootstrap/MILESTONES.md` | Development milestones and progress |
-| `plugins/test-plugin/bootstrap.json` | Test plugin's bootstrap manifest (includes config section) |
 | `tests/bootstrap/` | All bootstrap tests (mirrors bootstrap_lib/ structure) |
 
 ### Key Design Decisions
@@ -91,7 +85,7 @@ bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh --clear-alerts  # als
 
 The reset script's `--help` is the canonical doc; the usage block lives inline at `plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh:2-18`.
 
-**Two caches, do not confuse them.** The cooldown above short-circuits the entire bootstrap run for a project. Separately, the engine content-hashes individual *checks* via `bootstrap_cache.sha256` in the same data dir -- that cache skips one specific check when its input manifest hasn't changed. The cooldown is the bigger hammer; clearing it is the right tool ~99% of the time. Don't reach for `bootstrap_cache.sha256` unless you've ruled out the cooldown.
+**The cooldown is the only run throttle.** (A per-check `bootstrap_cache.sha256` content-hash cache used to exist alongside it; that module was dead code and was deleted in bootstrap 0.17.0 -- if you see it referenced, the doc is stale.) The two narrow caches that DO still exist are unrelated to run throttling: the plugin-discovery `bootstrap_cache` list in bootstrap's config.json, and the shared-lib sync hash. When bootstrap appears to be ignoring you, the cooldown is the answer ~99% of the time.
 
 For deeper material -- manifest schema, condition categories, fix-all flow, engine internals -- invoke `/bootstrap`.
 
@@ -378,9 +372,9 @@ claude_md:
         effect, a bootstrap.json change isn't applied, or a plugin's bootstrap.log is stale.
         Reset with `bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh` (current
         project), `--all` (every project), or `--status` (list cooldowns + ages, no writes).
-        Do not confuse with bootstrap_cache.sha256 (the per-check content-hash cache); the
-        cooldown is the bigger hammer and the right tool 99% of the time. See the "Bootstrap"
-        section above for full context.
+        The cooldown is the only run throttle (the old per-check bootstrap_cache.sha256
+        cache was deleted in 0.17.0) and the right tool 99% of the time. See the
+        "Bootstrap" section above for full context.
       origin: User directive 2026-05-05 -- documentation gap surfaced when a unreal-kit publish appeared not to apply.
       added: "2026-05-05"
     - id: cooldown_registry_invalidation

@@ -97,7 +97,7 @@ claude_md:
         - zero fails
       origin: P1 convention (skill-authoring/CLAUDE.md) generalized to plugin level during P5 (2026-04-30).
       added: "2026-04-30"
-      summary: Any change touching schema_registry.py, glossary.md, or framework.md must re-audit all six plugins-kit SKILL.md files plus the three CLAUDE.md files (skill-authoring, skills_kit_lib, plugins-kit root) to zero FAILs before shipping.
+      summary: Any change touching schema_registry.py, glossary.md, or framework.md must re-audit every plugins-kit SKILL.md (the plugins/*/skills/*/SKILL.md glob -- the count grows; do not hardcode it) plus the three CLAUDE.md files (skill-authoring, skills_kit_lib, plugins-kit root) to zero FAILs before shipping.
       detail: |
         The plugin advocates schema validation as the audit substrate. Shipping a
         contract change that breaks the plugin's own skills would violate the
@@ -165,6 +165,21 @@ claude_md:
         - Outside the venv (bare system Python): audit.py runs but reports
           judgment-required on the YAML contract row. classify.py and tag.py operate
           on frontmatter and a regex-detected YAML root key; they do not need pyyaml.
+    - id: audit_framework_paths_are_cross_plugin_api
+      keywords: [audit-framework.md, audit-framework.yaml, cross-plugin consumers, breaking rename, md-audit references, awesome-kit, prototypes, path contract]
+      summary: skills/md-audit/references/audit-framework.{md,yaml} are consumed BY PATH from awesome-kit and prototypes -- renaming or moving them is a breaking cross-plugin change requiring consumer version bumps.
+      detail: |
+        awesome-kit and prototypes reference
+        plugins/skills-kit/skills/md-audit/references/audit-framework.md and
+        audit-framework.yaml by literal path (the shared audit framework is a
+        cross-plugin API surface, not a private reference). Treat any
+        rename/move/restructure of those two files like a breaking library
+        change: update every consumer in the same release and bump the
+        consumers' plugin versions, or do not move the files. Grep
+        plugins/awesome-kit and plugins/prototypes for "audit-framework"
+        before touching them.
+      origin: Arch-review finding S19 (2026-06-09).
+      added: "2026-06-10"
   conventions:
     - rule: Surface a framework decision as a lessons-learned entry with surface / finding / follow-up provenance before the contract change ships. Land it in skill-authoring/CLAUDE.md (framework decisions) or skills_kit_lib/CLAUDE.md (validator-side decisions).
       keywords:
