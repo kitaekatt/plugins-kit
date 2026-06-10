@@ -7,7 +7,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-PLUGIN_ROOT = Path(__file__).resolve().parents[2]
+PLUGIN_ROOT = Path(__file__).resolve().parents[3] / "plugins" / "agent-glue"
 HOOK = PLUGIN_ROOT / "scripts" / "precommit_consistency.py"
 
 

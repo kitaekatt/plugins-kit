@@ -18,8 +18,8 @@ from agent_glue_lib.core import (
     validate_all,
 )
 
-PLUGIN_ROOT = Path(__file__).resolve().parents[2]
-FIXTURES_ROOT = PLUGIN_ROOT / "tests" / "fixtures"
+PLUGIN_ROOT = Path(__file__).resolve().parents[3] / "plugins" / "agent-glue"
+FIXTURES_ROOT = Path(__file__).resolve().parents[1] / "fixtures"
 SAMPLE = FIXTURES_ROOT / "sample"
 BROKEN = FIXTURES_ROOT / "broken"
 HOOK = PLUGIN_ROOT / "scripts" / "precommit_consistency.py"

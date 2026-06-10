@@ -6,7 +6,7 @@ from pathlib import Path
 
 from agent_glue_lib.core import load_catalog, validate_kit
 
-PLUGIN_ROOT = Path(__file__).resolve().parents[2]
+PLUGIN_ROOT = Path(__file__).resolve().parents[3] / "plugins" / "agent-glue"
 SUBSYSTEMS = ("core", "claude-work-queue", "work-system", "graph-system")
 
 
