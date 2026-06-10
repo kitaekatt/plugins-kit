@@ -64,7 +64,8 @@ A declarative configuration file covering automatable operations. The engine rea
     }
   ],
   "marketplaces": [
-    {"name": "plugins-kit", "source": "https://github.com/user/plugins-kit.git", "alwaysUpdate": true}
+    {"name": "plugins-kit", "source": "https://github.com/user/plugins-kit.git", "alwaysUpdate": true},
+    {"name": "team-plugins", "pin": "f7f6276a"}
   ],
   "plugins": [
     {"ref": "plugins-kit:unreal-kit", "enabled": true},
@@ -374,6 +375,50 @@ Both forms are supported; the dict form is preferred for new plugins.
 - The razor: if it should be checked into source control, it goes in `<project>/.claude/`. If it shouldn't, it goes in `<project>/.local-data/<plugin>/` (project-scoped) or `~/.claude/plugins/data/<plugin>/` (user-scoped).
 
 Values set in `project_config` are automatically mirrored into the data-dir config after the project_config phase, so downstream code that reads the data-dir config (e.g. for simple getenv-style lookups) works unchanged.
+
+## `marketplaces` Entry Fields
+
+Each entry in the `marketplaces` array declares a marketplace the engine should ensure is registered (and optionally kept fresh or pinned).
+
+| Field | Required? | Description |
+|-------|-----------|-------------|
+| `name` | Yes | Marketplace name; also the merge identity key |
+| `source` | For registration | Git URL passed to `claude plugin marketplace add` when the marketplace is not yet registered. Optional when it is already registered — the common case for a pin-only override in a user layer |
+| `alwaysUpdate` | No | Refresh the clone against its remote every session. **Ignored while `pin` is set** (a one-line warning action is emitted) |
+| `pin` | No | Git committish (SHA or tag) that snapshots the ENTIRE marketplace repo at a moment in time — see below |
+
+### `pin`
+
+A `pin` checks the marketplace clone out at a fixed commit, so routine publishes stop trickling in. Pinning the whole repo (rather than per-plugin versions) keeps shared libraries and inter-plugin dependencies mutually consistent by construction — every plugin version the engine sees comes from one coherent snapshot of `marketplace.json`.
+
+```json
+{
+  "marketplaces": [
+    {"name": "plugins-kit", "pin": "f7f6276a"}
+  ]
+}
+```
+
+**Behavior**: the engine resolves the committish in the clone (`git rev-parse`, with a `git fetch` + retry when the commit/tag postdates the clone's last fetch), then `git checkout --detach`s the resolved SHA when HEAD differs. It also forces `autoUpdate: false` in `known_marketplaces.json` (so Claude Code's own refresh doesn't pull the clone off the pin) and records the pin — including the pre-pin `autoUpdate` value — in `~/.claude/plugins/data/plugins-kit/bootstrap/marketplace_pins.json`. An unresolvable pin (bad SHA, missing clone) surfaces as a fix-all failure.
+
+**Unpin**: remove the `pin` field. On the next bootstrap pass the engine restores the clone's default branch, runs the normal marketplace update, restores the recorded `autoUpdate` value, and removes the marker entry.
+
+**Recommended placement**: the user layer, `~/.claude/bootstrap.json`. Marketplaces merge by `name` across layers, so a pin-only entry (no `source`) is a one-line override on top of whatever plugin manifest registered the marketplace. A pin declared by any layer wins for the whole engine run — an unpinned entry for the same marketplace in a plugin's own `bootstrap.json` (e.g. bootstrap's `alwaysUpdate` entry) will not unpin or update past it.
+
+**The pin workflow**:
+
+1. Pin to a known-good snapshot (`"pin": "<sha-or-tag>"` in `~/.claude/bootstrap.json`).
+2. When ready to take updates, drop the `pin` field — the next pass restores the branch and updates everything.
+3. Test the updated state.
+4. Re-pin to the new HEAD SHA.
+
+**Cooldown note**: editing a *layered* `bootstrap.json` does not auto-bypass the per-project cooldown (it touches neither plugin registry file), so after changing a pin run `bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh` (or wait out the cooldown) for the change to apply.
+
+**Semantics worth knowing**:
+
+- A pin freezes FUTURE drift but **never downgrades** plugins already past the snapshot (the version check is directional). A plugin ahead of the pinned marketplace logs a verbose-only "ahead of the pinned marketplace" notice and is left alone.
+- A `min_version` constraint that the pinned snapshot cannot satisfy fails with a message saying so and suggesting you drop the pin.
+- The first session after pinning can race Claude Code's own marketplace auto-update once (CC may refresh the clone before the engine forces `autoUpdate: false`); the pin re-checkout self-heals on the next pass.
 
 ## `plugins` Entry Fields
 

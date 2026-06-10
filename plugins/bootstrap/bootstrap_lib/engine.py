@@ -1912,18 +1912,112 @@ def _phase_sync_to_data(ctx):
         ctx.ok(f"sync {src_rel} -> {dst_rel}: ok")
 
 
+# Marketplaces for which a `pin` was declared by a manifest processed earlier
+# in THIS engine run. The layered user manifest (the recommended pin home) is
+# processed in Step 3c, BEFORE plugin bootstrap.json files in Step 4 — without
+# this guard, a plugin manifest's unpinned entry for the same marketplace
+# (e.g. bootstrap's own plugins-kit entry) would unpin/update it right after
+# the layered pin was applied. One engine process == one run, so no reset is
+# needed outside tests.
+_pinned_marketplaces_this_run = set()
+
+
 def _phase_marketplaces(ctx):
-    """marketplaces: register + (alwaysUpdate) refresh.
+    """marketplaces: register + pin/unpin + (alwaysUpdate) refresh.
 
     Runs before json_entries — marketplaces must be cloned before we merge
     fields like autoUpdate into known_marketplaces.json.
+
+    Pin semantics: a `pin` (git committish) snapshots the entire marketplace
+    clone — it freezes FUTURE drift but never downgrades plugins already past
+    the snapshot. `pin` takes precedence over `alwaysUpdate`. A pin-only entry
+    (no `source`) works when the marketplace is already registered — the
+    common case for a pin declared in a layered user manifest. When `pin` is
+    absent but the marker file records one, the pin is released (branch
+    restored + marketplace updated).
     """
-    from .marketplace_lifecycle import check_marketplace_exists, check_marketplace_current, add_marketplace, update_marketplace
+    from .marketplace_lifecycle import (
+        check_marketplace_exists, check_marketplace_current,
+        add_marketplace, update_marketplace,
+        apply_marketplace_pin, release_marketplace_pin, load_pin_markers,
+    )
 
     for mkt_def in ctx.manifest.get("marketplaces", []):
         mkt_name = mkt_def.get("name", "")
         source_url = mkt_def.get("source", "")
-        if not mkt_name or not source_url:
+        pin = mkt_def.get("pin", "")
+        if not mkt_name:
+            continue
+
+        if pin:
+            # Record pin intent even if applying fails below — a later
+            # manifest's unpinned entry must never unpin a declared pin.
+            _pinned_marketplaces_this_run.add(mkt_name)
+
+            mkt_result = check_marketplace_exists(mkt_name)
+            if not mkt_result.passed:
+                if not source_url:
+                    ctx.fail(
+                        f"marketplace {mkt_name}: pin '{pin}' declared but the marketplace is not registered and no source is declared to add it",
+                        type="marketplace", name=mkt_name,
+                        message="pin declared for an unregistered marketplace with no source",
+                    )
+                    continue
+                add_result = add_marketplace(source_url, mkt_name)
+                if add_result.passed:
+                    ctx.action(f"marketplace {mkt_name}: added ({source_url})")
+                else:
+                    ctx.fail(
+                        f"marketplace {mkt_name}: add failed - {add_result.message}",
+                        type="marketplace", name=mkt_name, message=add_result.message,
+                    )
+                    continue
+
+            if mkt_def.get("alwaysUpdate"):
+                # pin takes precedence: skip the stale-check/update path.
+                ctx.action(f"marketplace {mkt_name}: alwaysUpdate ignored while pinned")
+
+            pin_result = apply_marketplace_pin(mkt_name, pin)
+            if pin_result.passed:
+                if pin_result.status == "pinned":
+                    ctx.action(f"marketplace {mkt_name}: pinned at {pin_result.sha[:8]}")
+                else:
+                    ctx.ok(f"marketplace {mkt_name}: pinned at {pin_result.sha[:8]}")
+            else:
+                ctx.fail(
+                    f"marketplace {mkt_name}: pin failed - {pin_result.message}",
+                    type="marketplace", name=mkt_name, message=pin_result.message,
+                )
+            continue
+
+        if mkt_name in _pinned_marketplaces_this_run:
+            # A pin for this marketplace was declared by an earlier manifest
+            # this run; this unpinned entry must not unpin it or update past it.
+            ctx.ok(f"marketplace {mkt_name}: pinned earlier this run (skipping update checks)")
+            continue
+
+        if mkt_name in load_pin_markers():
+            # Pin was removed from the manifest but the marker remains: release
+            # it (restore default branch + recorded autoUpdate), then run the
+            # normal update path so the clone catches up with its remote.
+            rel = release_marketplace_pin(mkt_name)
+            if rel.passed:
+                upd = update_marketplace(mkt_name)
+                if upd.passed:
+                    ctx.action(f"marketplace {mkt_name}: unpinned, {rel.message} + updated")
+                else:
+                    ctx.fail(
+                        f"marketplace {mkt_name}: unpinned, {rel.message}; update failed - {upd.message}",
+                        type="marketplace", name=mkt_name, message=upd.message,
+                    )
+            else:
+                ctx.fail(
+                    f"marketplace {mkt_name}: unpin failed - {rel.message}",
+                    type="marketplace", name=mkt_name, message=rel.message,
+                )
+            continue
+
+        if not source_url:
             continue
 
         mkt_result = check_marketplace_exists(mkt_name)
@@ -1972,6 +2066,7 @@ def _phase_plugins(ctx):
         check_plugin_enabled, check_plugin_enabled_at_scope,
         check_plugin_version, check_plugin_min_version,
         update_plugin, ensure_registry_scope,
+        pinned_marketplace_sha,
     )
 
     plugins_installed = {}      # mkt -> [(name, detail)]
@@ -2058,6 +2153,8 @@ def _phase_plugins(ctx):
                 else:
                     ctx.ok(f"plugin {plugin_ref}: up to date (install: manual)")
         elif enabled:
+            mkt_for_ref = plugin_ref.split(":", 1)[0] if ":" in plugin_ref else ""
+
             # Check if version is up to date (only for already-installed plugins)
             if install_result.passed:
                 ver_result = check_plugin_version(plugin_ref)
@@ -2067,11 +2164,34 @@ def _phase_plugins(ctx):
                         _bucket(plugins_updated, plugin_ref, f"{ver_result.installed_version} -> {ver_result.latest_version}")
                     else:
                         ctx.action(f"plugin {plugin_ref}: update failed ({ver_result.message}) - {upd_result.message}")
+                else:
+                    # up_to_date with a known, *different* marketplace version
+                    # means installed is AHEAD (the check never downgrades).
+                    # When the marketplace is pinned, surface that as a notice
+                    # — expected after pinning to an older snapshot. getattr:
+                    # some tests stub check_plugin_version with up_to_date only.
+                    _installed = getattr(ver_result, "installed_version", "")
+                    _latest = getattr(ver_result, "latest_version", "")
+                    if _installed and _latest and _installed != _latest:
+                        pin_sha = pinned_marketplace_sha(mkt_for_ref) if mkt_for_ref else ""
+                        if pin_sha:
+                            ctx.ok(
+                                f"plugin {plugin_ref}: installed {_installed} is ahead of the "
+                                f"pinned marketplace latest {_latest} (pinned at {pin_sha}); not downgrading"
+                            )
 
             # Check min_version constraint (auto-update, then fail if still unsatisfied)
             if install_result.passed and min_version:
                 min_result = check_plugin_min_version(plugin_ref, min_version)
                 if not min_result.up_to_date:
+                    # While the marketplace is pinned, its marketplace.json caps
+                    # available versions at the snapshot — an unsatisfied
+                    # min_version cannot be fixed by updating.
+                    pin_sha = pinned_marketplace_sha(mkt_for_ref) if mkt_for_ref else ""
+                    pin_note = (
+                        f"; marketplace {mkt_for_ref} is pinned at {pin_sha}, so the constraint "
+                        "cannot be satisfied while pinned - drop the pin to update"
+                    ) if pin_sha else ""
                     upd_result = update_plugin(plugin_ref, scope=desired_scope)
                     if upd_result.passed:
                         recheck = check_plugin_min_version(plugin_ref, min_version)
@@ -2079,15 +2199,15 @@ def _phase_plugins(ctx):
                             _bucket(plugins_updated, plugin_ref, f"{min_result.installed_version} -> {recheck.installed_version}, satisfies >= {min_version}")
                         else:
                             ctx.fail(
-                                f"plugin {plugin_ref}: installed {recheck.installed_version} < required {min_version}, update failed to satisfy constraint",
+                                f"plugin {plugin_ref}: installed {recheck.installed_version} < required {min_version}, update failed to satisfy constraint{pin_note}",
                                 type="plugin", ref=plugin_ref,
-                                message=f"min_version {min_version} not satisfied (installed {recheck.installed_version})",
+                                message=f"min_version {min_version} not satisfied (installed {recheck.installed_version}){pin_note}",
                             )
                     else:
                         ctx.fail(
-                            f"plugin {plugin_ref}: installed {min_result.installed_version} < required {min_version}, update failed - {upd_result.message}",
+                            f"plugin {plugin_ref}: installed {min_result.installed_version} < required {min_version}, update failed - {upd_result.message}{pin_note}",
                             type="plugin", ref=plugin_ref,
-                            message=f"min_version {min_version} not satisfied: {upd_result.message}",
+                            message=f"min_version {min_version} not satisfied: {upd_result.message}{pin_note}",
                         )
 
             # Check enabled state at desired scope
