@@ -68,6 +68,7 @@ Output schema:
 Stderr-only diagnostics. Non-zero exit on hard failure.
 """
 
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -542,10 +543,18 @@ def find_merge_conflicts(repo_root: Path) -> list[dict]:
 def _safe_dir_name(range_spec: str) -> str:
     """Filesystem-safe directory name for a range spec.
 
-    e.g. `origin/main..HEAD` -> `origin-main..HEAD`; `__working_tree__`
-    stays as-is (underscore is safe).
+    Sanitization alone is lossy (`feature/x..HEAD` and `feature-x..HEAD`
+    both sanitize to `feature-x..HEAD`), so any spec the sanitizer altered
+    gets a short deterministic hash suffix to keep distinct specs in
+    distinct bundle dirs -- e.g. `origin/main..HEAD` ->
+    `origin-main..HEAD-<sha1[:8]>`. Already-safe specs like
+    `__working_tree__` stay as-is (underscore is safe).
     """
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", range_spec).strip("-")
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", range_spec).strip("-")
+    if safe == range_spec:
+        return safe
+    digest = hashlib.sha1(range_spec.encode("utf-8")).hexdigest()[:8]
+    return f"{safe}-{digest}" if safe else digest
 
 
 def parse_range_arg(arg: str) -> str:

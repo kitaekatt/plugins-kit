@@ -651,17 +651,13 @@ def analyze(
             if expected is not None:
                 break
         if expected is not None and expected != s.name:
-            _emit_name_mismatch = True
-        else:
-            _emit_name_mismatch = False
-        if _emit_name_mismatch:
-                add_finding(
-                    "WARNING", "name-mismatch",
-                    f"WARNING: {s.name} ({s.source}) -- directory "
-                    f'suggests "{expected}" but frontmatter says "{s.name}"',
-                    file=_fwd(s.path), owner=s.name, source=s.source,
-                    ref=expected, kind="skill",
-                )
+            add_finding(
+                "WARNING", "name-mismatch",
+                f"WARNING: {s.name} ({s.source}) -- directory "
+                f'suggests "{expected}" but frontmatter says "{s.name}"',
+                file=_fwd(s.path), owner=s.name, source=s.source,
+                ref=expected, kind="skill",
+            )
 
     errors = [f for f in findings if f["severity"] == "ERROR"]
     warnings = [f for f in findings if f["severity"] == "WARNING"]

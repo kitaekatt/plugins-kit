@@ -6,6 +6,7 @@ own plugins.
 """
 
 from bootstrap_lib.code_review.chunking import (
+    _section_parent,
     partition_sections_into_chunks,
     write_chunks,
 )
@@ -21,6 +22,26 @@ def _section(identifier: str, body_bytes: int) -> dict:
     n = max(1, body_bytes // len(line))
     body = "@@ -0,0 +1,{n} @@\n".format(n=n) + (line * n)
     return {"identifier": identifier, "text": header + body}
+
+
+class TestSectionParent:
+    def test_single_char_top_level_dir(self):
+        """G12: `a/file.py` (rfind == 1) must group as "a" -- the old
+        `idx > 1` guard returned the whole identifier, so files in a
+        one-char top dir each became their own group."""
+        assert _section_parent("a/file.py") == "a"
+
+    def test_multi_level_path(self):
+        assert _section_parent("src/foo/bar.py") == "src/foo"
+
+    def test_depot_path(self):
+        assert _section_parent("//depot/foo/bar.cpp") == "//depot/foo"
+
+    def test_no_slash_is_own_group(self):
+        assert _section_parent("file.py") == "file.py"
+
+    def test_leading_slash_only_is_own_group(self):
+        assert _section_parent("/file.py") == "/file.py"
 
 
 class TestPartitionSectionsIntoChunks:
@@ -89,6 +110,21 @@ class TestPartitionSectionsIntoChunks:
         assert len(chunks) == 2
         assert all("/dirA/" in f for f in chunks[0]["files"])
         assert all("/dirB/" in f for f in chunks[1]["files"])
+        assert len(chunks[0]["files"]) == 20
+        assert len(chunks[1]["files"]) == 10
+
+    def test_single_char_top_dir_groups_hold_together(self):
+        """G12 behavioral companion: same shape as the hold-off test above
+        but with one-char top-level dirs (`a/`, `b/`). Under the old
+        `idx > 1` guard every section was its own group, so the close
+        fired mid-`a/` instead of at the a -> b transition."""
+        sections = [_section(f"a/f{i}.cpp", 80) for i in range(20)] + [
+            _section(f"b/g{i}.cpp", 80) for i in range(10)
+        ]
+        chunks = partition_sections_into_chunks(sections, max_bytes=3000)
+        assert len(chunks) == 2
+        assert all(f.startswith("a/") for f in chunks[0]["files"])
+        assert all(f.startswith("b/") for f in chunks[1]["files"])
         assert len(chunks[0]["files"]) == 20
         assert len(chunks[1]["files"]) == 10
 

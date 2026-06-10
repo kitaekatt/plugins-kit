@@ -403,7 +403,7 @@ Examples: `flatten-with-flags`, `test-invariants`, `reducing-complexity` (from t
 | **Prohibited patterns** | adversarial pressure testing |
 | **Audit** | Can the agent apply the method to a novel scenario? Try variation and missing-information tests. |
 
-Examples: `condition-based-waiting`, `root-cause-tracing` (from obra/superpowers); `/test-greeting`, `/cache-report`, `/p4-code-review`, `/git-code-review` (plugins-kit, all `trigger: user-only`).
+Examples: `condition-based-waiting`, `root-cause-tracing` (from obra/superpowers); `/cache-report`, `/p4-code-review`, `/git-code-review` (plugins-kit, all `trigger: user-only`).
 
 ### capability-skill
 

@@ -112,7 +112,7 @@ AUTO and DISCUSS dispatch in parallel. The user's foreground answers do not gate
 
 ### corpus
 
-The User + Project + installed-Plugin skill pool used as a resolution namespace. The corpus is what makes a reference like `/some-skill` resolvable -- the auditor looks the name up in the corpus and reports MISSING when it does not resolve. The corpus is discovered via the shared `skills_kit_lib.corpus` module and is the same for every audit-kind that needs name resolution.
+The User + Project + installed-Plugin skill pool used as a resolution namespace. The corpus is what makes a reference like `/example:some-skill` resolvable -- the auditor looks the name up in the corpus and reports MISSING when it does not resolve. The corpus is discovered via the shared `skills_kit_lib.corpus` module and is the same for every audit-kind that needs name resolution.
 
 ### scaffolding
 

@@ -89,7 +89,7 @@ CCP says: content that changes for the same reason belongs in the same file. A C
 
 **Why CCP/SSOT:** when a skill exists for a topic, the skill's references/ folder is the SSOT. A CLAUDE.md that duplicates skill content (inline or via a parallel project reference doc) creates two copies that drift independently.
 
-**Test:** for each substantial block of CLAUDE.md content (or each project-reference doc cited from CLAUDE.md), check whether a skill exists for the same topic. If yes, the content should collapse to a pointer (`for X, invoke /skill-name`) or, where the harness supports it, a `required-skills:` declaration.
+**Test:** for each substantial block of CLAUDE.md content (or each project-reference doc cited from CLAUDE.md), check whether a skill exists for the same topic. If yes, the content should collapse to a pointer (`for X, invoke /example:skill-name`) or, where the harness supports it, a `required-skills:` declaration.
 
 **Severity:** FAIL on duplicated skill content. INFO when the project-reference predates the skill and graduation work is in progress.
 
@@ -137,7 +137,7 @@ CRP says: a fact lives in the smallest scope whose readers all need it. Readers 
 **Rule:** When a file exceeds size ideals, identify content that could legitimately move to one of four destinations, in order of preference:
 
 1. **A skill** (SKILL.md + structured contract) -- if the content fits a skill type (procedure -> technique-skill; rule + counter -> discipline-skill; lookup table -> reference-skill; tool/MCP/API wrapper -> capability-skill). This is the highest-leverage destination: discoverable trigger, audit surface, typed contract.
-2. **A skill's references/ folder** -- if the content already belongs to an existing skill but lives inline in CLAUDE.md by accident. Cite via `for X, invoke /skill-name`.
+2. **A skill's references/ folder** -- if the content already belongs to an existing skill but lives inline in CLAUDE.md by accident. Cite via `for X, invoke /example:skill-name`.
 3. **A project reference doc** (a markdown file outside any skill, e.g. `<project>/docs/<topic>.md` or `.claude/docs/<topic>.md`) -- the escape hatch when the content does not yet fit a skill type but is too large for inline. Useful for emerging concepts that may eventually graduate into a skill (see "Skill-maturation pipeline" in `cohesion-principles`).
 4. **A child CLAUDE.md** (loaded lazily when agent enters that directory) -- if the content is directory-specific and serves the in-directory editor reader.
 

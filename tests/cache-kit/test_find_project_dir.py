@@ -30,3 +30,31 @@ class TestEncoding:
     def test_returns_projects_subdir(self):
         p = find_project_dir("/a/b")
         assert p.parent == Path.home() / ".claude" / "projects"
+
+
+class TestLongPathEncoding:
+    """X12: encoded names > 200 chars are truncated to 200 plus a hash
+    suffix of the original cwd. Expected values below were produced by
+    running the CLI bundle's own functions (PY/OYH, claude 2.1.170)
+    under Node.
+    """
+
+    def test_exactly_200_chars_stays_plain(self):
+        cwd = "/" + "x" * 199  # encodes to exactly 200 chars
+        assert find_project_dir(cwd).name == "-" + "x" * 199
+
+    def test_201_chars_truncates_and_hashes(self):
+        cwd = "/" + "x" * 200  # encodes to 201 chars
+        assert find_project_dir(cwd).name == "-" + "x" * 199 + "-d0i18x"
+
+    def test_long_path_matches_cli_scheme(self):
+        cwd = "/Users/someone/" + "a" * 250
+        expected = "-Users-someone-" + "a" * 185 + "-cnjskt"
+        assert find_project_dir(cwd).name == expected
+
+    def test_long_path_with_separators_matches_cli_scheme(self):
+        cwd = "/tmp/" + "very/deep/" * 30 + "project"
+        name = find_project_dir(cwd).name
+        assert name.startswith("-tmp-very-deep-")
+        assert name.endswith("-u1ickm")
+        assert len(name) == 200 + 1 + 6  # slice(0,200) + "-" + suffix
