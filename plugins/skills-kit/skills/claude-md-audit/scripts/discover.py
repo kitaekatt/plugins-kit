@@ -25,16 +25,21 @@ Stdlib-only.
 
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
 
+# The shared walk lives in skills_kit_lib; make the plugin root importable
+# regardless of which interpreter/venv launched this script (stdlib-only:
+# skills_kit_lib degrades gracefully without pyyaml).
+_PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+if str(_PLUGIN_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_ROOT))
+
+from skills_kit_lib.dirwalk import iter_dirs  # noqa: E402
+
 
 DESCEND_MAX_DEPTH = 6
-SKIP_DIR_NAMES = {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache",
-                  "Intermediate", "Saved", "Binaries", "DerivedDataCache", "Build",
-                  ".claude/plugins", "tmp"}
 
 # --- Code-directory dimension trigger (Level 1) -------------------------------
 # A CLAUDE.md gets the code-directory insight-validation dimension (fidelity +
@@ -114,15 +119,6 @@ def classify_dimension(claude_md_path: Path) -> str:
         return "classic"
 
 
-def is_skipped(path: Path, cwd: Path) -> bool:
-    rel_parts = path.relative_to(cwd).parts if path.is_relative_to(cwd) else path.parts
-    for part in rel_parts:
-        if part in SKIP_DIR_NAMES or part.startswith("."):
-            if part not in (".claude",):  # .claude is the one dotdir we descend into
-                return True
-    return False
-
-
 def find_project_root(cwd: Path) -> Path | None:
     """Return the project root: the nearest directory at or above cwd that holds
     a .git entry (directory or file). None when cwd is not inside a git repo --
@@ -177,20 +173,7 @@ def collect_at_cwd(cwd: Path, has_ancestor_root: bool = False) -> list[tuple[Pat
 
 def collect_descendants(cwd: Path) -> list[tuple[Path, str]]:
     out: list[tuple[Path, str]] = []
-    for current_root, dirs, files in os.walk(cwd):
-        current_path = Path(current_root)
-        # in-place filter to skip noise dirs
-        dirs[:] = [d for d in dirs if d not in SKIP_DIR_NAMES and not d.startswith(".")
-                   or d == ".claude"]
-        # depth check
-        try:
-            rel = current_path.relative_to(cwd)
-            depth = len(rel.parts)
-        except ValueError:
-            depth = DESCEND_MAX_DEPTH + 1
-        if depth > DESCEND_MAX_DEPTH:
-            dirs[:] = []
-            continue
+    for current_path, files in iter_dirs(cwd, DESCEND_MAX_DEPTH):
         if current_path == cwd:
             continue
         for name, role in (("CLAUDE.md", "child"), ("CLAUDE.local.md", "local")):

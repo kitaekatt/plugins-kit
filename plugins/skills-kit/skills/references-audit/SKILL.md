@@ -21,7 +21,7 @@ The first line of your response MUST be the `Running ...` line printed above. Th
 
 This skill operationalizes the **references-audit** audit-kind under the shared audit framework. The shared glossary -- `subject`, `primitive`, `composition`, `discovery`, `audit-kind`, `rule`, `finding`, `severity`, `taxonomy`, `bucket`, `corpus`, `scaffolding` -- is canonical at `skills-kit:md-audit/references/audit-framework.md`, with the data side (primitives + compositions + audit-kind registry) at `audit-framework.yaml` alongside. Definitions live there; this file describes only how the audit applies the framework.
 
-In framework terms, `/references-audit` is:
+In framework terms, references-audit (reached via `/md-audit references`) is:
 
 - **Subject:** a `directory` composition (the default), or one of `skill | plugin | project` when discovery hits that marker, or a single primitive `md` file when `--path` names one.
 - **Primitive consumed:** `md` (today's only scanner input; `script` and `code` are listed as future stubs in `audit-framework.yaml`).
@@ -41,8 +41,8 @@ audit_skill:
       - "bucketing findings into AUTO (mechanical fix via background agent), DISCUSS (foreground Q&A on options), or SPECIAL (escape hatch for unanticipated cases)"
       - "re-running the audit after remediation to verify no new findings surfaced from the fixes"
     excludes:
-      - "single-skill contract validation (use /skill-audit)"
-      - "CLAUDE.md cohesion auditing (use /claude-md-audit)"
+      - "single-skill contract validation (use /md-audit skill)"
+      - "CLAUDE.md cohesion auditing (use /md-audit claude-md)"
       - "non-markdown files (settings.json, *.py, etc.) -- not scanned at any scope"
       - "runtime resolution of references during skill execution (this is static-analysis only)"
   subject:
@@ -294,13 +294,12 @@ Plugin skills are discovered from `~/.claude/plugins/installed_plugins.json` and
 
 ## Invocation
 
-This skill can be invoked three ways:
+This skill is a non-user-invocable member of the md-audit union domain (its standalone slash command was collapsed into the `/md-audit` front door). Two ways in:
 
-- **Slash command (project-scoped):** `/references-audit [args]`
-- **Slash command (plugin-qualified):** `/skills-kit:references-audit [args]`
+- **md-audit dispatch:** `/md-audit references [args]` -- md-audit routes here and feeds the flags through.
 - **Skill tool (from another skill):** `Skill: "references-audit"` with `args` containing the desired flags. Pass scope decisions through `args` rather than hardcoding them at the call site so the caller stays generic.
 
-All three resolve to the same SKILL.md and run the same `references_audit.py` script.
+Both resolve to the same SKILL.md and run the same `references_audit.py` script.
 
 ## Documentation Convention
 

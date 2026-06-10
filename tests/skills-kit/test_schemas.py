@@ -202,7 +202,7 @@ class TestTechniqueSkill:
         data = {"technique_skill": {"trigger_model": "user-only"}}
         root, schema = resolve_schema(data)
         assert root == "technique_skill"
-        # Both variants alias to the same unified schema; just verify it resolves.
+        # trigger_model is metadata; user-only resolves to the one unified schema.
         assert schema["root"] == "technique_skill"
 
     def test_missing_gotchas_fails(self, minimal_technique_skill, make_invalid):
@@ -393,11 +393,11 @@ class TestMixedType:
 
 class TestSchemaRegistry:
     def test_all_canonical_roots_registered(self):
-        # technique_skill is dispatched separately (resolve_technique_schema)
-        # but should still appear via SCHEMAS_BY_ROOT not (only) for explicit
-        # canonical-root checks. The known set:
-        for root in ("reference_skill", "pattern_skill", "discipline_skill",
-                     "domain_skill", "claude_md"):
+        # Every canonical root resolves through SCHEMAS_BY_ROOT; technique_skill
+        # included (the per-variant resolver and its aliases were deleted -- the
+        # unified schema is the only technique schema). The known set:
+        for root in ("reference_skill", "pattern_skill", "technique_skill",
+                     "discipline_skill", "domain_skill", "claude_md"):
             assert root in SCHEMAS_BY_ROOT, f"{root} missing from SCHEMAS_BY_ROOT"
 
     def test_each_schema_declares_root(self):

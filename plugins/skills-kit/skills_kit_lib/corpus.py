@@ -13,7 +13,6 @@ The corpus has three tiers:
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -24,15 +23,14 @@ except ImportError:
     _pyyaml = None
     HAVE_YAML = False
 
+from .document_walker import collect_yaml_units
+from .markdown_heuristics import FRONTMATTER_RE, parse_frontmatter
 from .schema_registry import SKILL_TYPE_ROOTS
 
 
-# Contract roots for body-type detection -- excludes audit_skill historically
-# (older callers expected this slimmer set); align with skill registry now.
+# Contract roots for body-type detection: alias of the registry's skill-type
+# roots (single source of truth lives in schema_registry).
 CONTRACT_ROOTS = SKILL_TYPE_ROOTS
-
-FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?\n)^---\s*\n", re.DOTALL | re.MULTILINE)
-YAML_FENCE_RE = re.compile(r"```yaml\s*\n(.*?)```", re.DOTALL)
 
 
 @dataclass
@@ -74,7 +72,15 @@ class SkillCorpus:
 
 
 def parse_skill_md(path: Path) -> SkillRecord | None:
-    """Read and parse one SKILL.md. Returns None on read failure."""
+    """Read and parse one SKILL.md. Returns None on read failure.
+
+    Body-contract extraction goes through document_walker (the canonical
+    fenced-yaml walker): ALL ```yaml/```yml blocks are walked, and the
+    contract is the first unit carrying a skill-type root -- so a document
+    whose first fence is an example no longer shadows the real contract.
+    Falls back to the first recognized (portable-unit) block when no
+    skill-type root is present anywhere.
+    """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -84,24 +90,21 @@ def parse_skill_md(path: Path) -> SkillRecord | None:
     body_text = text
     m = FRONTMATTER_RE.match(text)
     if m:
-        if HAVE_YAML:
-            try:
-                parsed = _pyyaml.safe_load(m.group(1))
-                if isinstance(parsed, dict):
-                    fm = parsed
-            except _pyyaml.YAMLError:
-                fm = {}
         body_text = text[m.end():]
+        if HAVE_YAML:
+            rec = parse_frontmatter(text, mode="full")
+            if rec is not None:
+                fm = rec.fields
 
     body_contract: dict | None = None
-    bm = YAML_FENCE_RE.search(body_text)
-    if bm and HAVE_YAML:
-        try:
-            parsed_body = _pyyaml.safe_load(bm.group(1))
-            if isinstance(parsed_body, dict):
-                body_contract = parsed_body
-        except _pyyaml.YAMLError:
-            body_contract = None
+    if HAVE_YAML:
+        units, _ = collect_yaml_units(body_text)
+        for root, data in units:
+            if root in CONTRACT_ROOTS:
+                body_contract = data
+                break
+        if body_contract is None and units:
+            body_contract = units[0][1]
 
     return SkillRecord(
         path=path,

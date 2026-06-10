@@ -1,6 +1,6 @@
 # Code-Directory Insight-Validation Criteria
 
-The criteria for the **code-directory dimension** of `/claude-md-audit` — the validation that fires *in addition to* CCP/CRP/ADP/Hygiene when a CLAUDE.md sits inside (or describes) a directory of code / YAML / CSV. Loaded by a detect lane only when `discover.py` flagged the file `dimension: code-directory` (the Level-1 trigger; see `scripts/discover.py::classify_dimension`). For a `classic` file this doc is not loaded and none of these criteria run.
+The criteria for the **code-directory dimension** of the claude-md-audit member (`/md-audit claude-md`) — the validation that fires *in addition to* CCP/CRP/ADP/Hygiene when a CLAUDE.md sits inside (or describes) a directory of code / YAML / CSV. Loaded by a detect lane only when `discover.py` flagged the file `dimension: code-directory` (the Level-1 trigger; see `scripts/discover.py::classify_dimension`). For a `classic` file this doc is not loaded and none of these criteria run.
 
 These files are not librarian artifacts — they are **distilled review intelligence about one directory**. Their failure mode is not misplacement; it is **the claims rotted** (the god-object got decomposed, the sibling config was renamed, the line anchor drifted) or **the insight stopped earning its place**. This dimension validates fidelity-to-code and value. It is a **validator over existing claims, not a gotcha crawler** — it does not scan the directory for *new* gotchas to add (that is the authoring pipeline; doing it here would be non-idempotent and expensive).
 

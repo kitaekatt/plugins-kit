@@ -33,8 +33,6 @@
 //            densityCriteria: <abs path to references/density-criteria.md>  (only used when density is true),
 //            pluginRoot: <abs path to plugins/skills-kit (parent of skills_kit_lib)>,
 //            venvPython: <abs path to skills-kit venv python> }
-// NOTE: contentAllocation is no longer consumed by lanes (dropped for cache
-// efficiency); SKILL.md need not pass it. A stale ref is harmless (unused).
 // }
 // The schema validator is invoked as a module:
 //   (cd <pluginRoot> && <venvPython> -m skills_kit_lib.audit <file> --json)

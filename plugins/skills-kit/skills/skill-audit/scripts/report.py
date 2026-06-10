@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""report.py -- dispatch entry point for /skill-audit.
+"""report.py -- dispatch entry point for the skill-audit reports (/md-audit skill).
 
 Two reports are available; the user picks one by positional argument:
 
-  /skill-audit roster      Markdown roster grouped by location -> type. Per-type
-                            implied frontmatter declared once so per-skill rows
-                            don't repeat it. Default: <project-root>/tmp/skill-roster.md.
+  /md-audit skill roster      Markdown roster grouped by location -> type. Per-type
+                               implied frontmatter declared once so per-skill rows
+                               don't repeat it. Default: <project-root>/tmp/skill-roster.md.
 
-  /skill-audit hierarchy   Interactive HTML hierarchy. Collapsible <details>
-                            sections, one column per frontmatter key, skill-type
-                            hover tooltips. Default: <project-root>/tmp/skill-hierarchy.html.
+  /md-audit skill hierarchy   Interactive HTML hierarchy. Collapsible <details>
+                               sections, one column per frontmatter key, skill-type
+                               hover tooltips. Default: <project-root>/tmp/skill-hierarchy.html.
 
 With no arguments, prints this usage block and exits.
 
 A trailing path or `-` selects the output destination:
 
-  /skill-audit roster                       -> default tmp/ path
-  /skill-audit roster path/to/file.md       -> that path
-  /skill-audit roster -                     -> stdout
+  /md-audit skill roster                       -> default tmp/ path
+  /md-audit skill roster path/to/file.md       -> that path
+  /md-audit skill roster -                     -> stdout
 
 Discovery is shared via the plugin-level `skills_kit_lib.corpus` module so both
 reports enumerate the corpus the same way.
@@ -150,7 +150,8 @@ def render_roster(corpus: SkillCorpus) -> str:
 
 
 USAGE = """\
-report.py -- corpus-wide report dispatcher for /skill-audit. Pick a subcommand:
+report.py -- corpus-wide report dispatcher for the skill-audit skill
+(reached via /md-audit skill). Pick a subcommand:
 
   roster [path|-]      Markdown roster grouped by location and type.
                        Per-type implied frontmatter is declared once
@@ -164,10 +165,10 @@ report.py -- corpus-wide report dispatcher for /skill-audit. Pick a subcommand:
 
 Trailing `-` writes the report body to stdout instead of a file.
 
-This script is normally invoked by the /skill-audit slash command. For
-single-skill contract audits, see the audit_skill_md technique in the
-/skill-audit SKILL.md (different code path: scripts/discover.py + the
-skill-authoring/audit.py validator).
+This script is normally invoked by the skill-audit skill (via /md-audit
+skill). For single-skill contract audits, see the audit_skill_md technique
+in the skill-audit SKILL.md (different code path: scripts/discover.py + the
+skills_kit_lib.audit validator).
 """
 
 

@@ -1,20 +1,20 @@
 # skill-audit usage: report subcommands
 
-Full usage reference for the `roster` and `hierarchy` subcommands of `/skill-audit`, and their underlying script `scripts/report.py`. Loaded when the agent needs the precise argument set, location semantics, output-shape contract, or implied-frontmatter rules.
+Full usage reference for the `roster` and `hierarchy` subcommands of the skill-audit member (reached via `/md-audit skill`), and their underlying script `scripts/report.py`. Loaded when the agent needs the precise argument set, location semantics, output-shape contract, or implied-frontmatter rules.
 
-For the single-file audit operation (the namesake `/skill-audit <path>` / `list` / `<numbers>` flows), see the audit_skill_md technique in SKILL.md and the placement framework at `cohesion-principles (in skills-kit)`.
+For the single-file audit operation (the namesake `/md-audit skill <path>` / `list` / `<numbers>` flows), see the audit_skill_md technique in SKILL.md and the placement framework at `cohesion-principles (in skills-kit)`.
 
 ## Invocation
 
-User-only slash command. The first positional after `/skill-audit` selects which operation to run; the two report subcommands are:
+Reached through the `/md-audit skill` front door (the member's standalone slash command was collapsed). The first argument after `/md-audit skill` selects which operation to run; the two report subcommands are:
 
 ```
-/skill-audit roster                     # markdown to <project-root>/tmp/skill-roster.md (default)
-/skill-audit roster tmp/skills.md       # markdown to that path
-/skill-audit roster -                   # markdown body printed to stdout (rendered in chat)
-/skill-audit hierarchy                  # interactive HTML to <project-root>/tmp/skill-hierarchy.html
-/skill-audit hierarchy tmp/x.html       # HTML to that path
-/skill-audit hierarchy -                # HTML printed to stdout
+/md-audit skill roster                     # markdown to <project-root>/tmp/skill-roster.md (default)
+/md-audit skill roster tmp/skills.md       # markdown to that path
+/md-audit skill roster -                   # markdown body printed to stdout (rendered in chat)
+/md-audit skill hierarchy                  # interactive HTML to <project-root>/tmp/skill-hierarchy.html
+/md-audit skill hierarchy tmp/x.html       # HTML to that path
+/md-audit skill hierarchy -                # HTML printed to stdout
 ```
 
 Direct script invocation (under the plugin's uv venv):
@@ -24,7 +24,7 @@ uv run python "${CLAUDE_PLUGIN_ROOT}/skills/skill-audit/scripts/report.py" \
     [roster|hierarchy] [out|-] [--cwd <dir>]
 ```
 
-The HTML renderer (also runnable directly for dev iteration; supplies the backend for `/skill-audit hierarchy`):
+The HTML renderer (also runnable directly for dev iteration; supplies the backend for `/md-audit skill hierarchy`):
 
 ```
 uv run python "${CLAUDE_PLUGIN_ROOT}/skills/skill-audit/scripts/skill_hierarchy_report.py" \
@@ -43,7 +43,7 @@ Exit codes: `0` on success (including the no-args usage block); non-zero on argu
 
 ## Hierarchy report
 
-`/skill-audit hierarchy` delegates to the `render_html(corpus)` function in the sibling `skill_hierarchy_report.py` module. Output is a single self-contained HTML file (no external assets, no JavaScript):
+`/md-audit skill hierarchy` delegates to the `render_html(corpus)` function in the sibling `skill_hierarchy_report.py` module. Output is a single self-contained HTML file (no external assets, no JavaScript):
 
 - A three-level `<details>`/`<summary>` hierarchy: All -> User/Project/Plugins -> per-marketplace plugin tables. The top-level `All` is open by default; everything below collapses.
 - Each table's columns are the union of every frontmatter key in that section's skills, with `name` first and `description` last; ultra-wide-monitor friendly (no width cap).
@@ -129,8 +129,8 @@ A user-only technique-skill group with a clean contract:
 
 _Implied frontmatter: `disable-model-invocation: true`, `user-invocable: true`_
 
-- **skill-audit** [author: christina] -- Use when the user invokes /skill-audit ...
-- **claude-md-audit** [author: christina] -- Use when the user invokes /claude-md-audit ...
+- **skill-audit** [author: christina] -- Use when md-audit dispatches a SKILL.md audit ...
+- **claude-md-audit** [author: christina] -- Use when md-audit dispatches a CLAUDE.md audit ...
 ```
 
 Same group with one skill that is unusually NOT user-invocable:
@@ -145,6 +145,6 @@ The flag is surfaced because it differs from the implied `user-invocable: true`.
 ## Gotchas
 
 - The script reports based on `installed_plugins.json`. If a plugin was just edited on disk but the manifest has not been refreshed, the new version's SKILL.md may not appear under the Plugin tier. The plugin-version banner echoed before the report is the authoritative signal of which skills-kit version actually ran.
-- `(unknown)` skill-type usually means the SKILL.md is missing both a frontmatter `skill-type:` line and a recognized contract root in its body YAML. Treat it as a hint to inspect the file with `/skill-audit <path>`.
+- `(unknown)` skill-type usually means the SKILL.md is missing both a frontmatter `skill-type:` line and a recognized contract root in its body YAML. Treat it as a hint to inspect the file with `/md-audit skill <path>`.
 - Project tier honours `--cwd`. When this skill is invoked from a different working directory the report will reflect that directory's `.claude/skills/`, not the directory the agent typically runs in.
 - The scripts read files only. They do not edit SKILL.md frontmatter, do not call P4 or git, and do not write outside the resolved `out` path.

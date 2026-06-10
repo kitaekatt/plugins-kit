@@ -58,3 +58,42 @@ class TestParseSkillMd:
     def test_read_failure_returns_none(self, tmp_path):
         rec = corpus.parse_skill_md(tmp_path / "missing" / "SKILL.md")
         assert rec is None
+
+
+class TestBodyContractViaWalker:
+    """parse_skill_md routes contract extraction through document_walker
+    (arch-review S3): all fences are walked, skill-type roots win, ```yml is
+    recognized -- the old first-```yaml-fence-only regex is gone."""
+
+    def _parse(self, tmp_path, body: str):
+        if not corpus.HAVE_YAML:
+            pytest.skip("pyyaml not installed in this env")
+        d = tmp_path / "s"
+        d.mkdir()
+        p = d / "SKILL.md"
+        p.write_text("---\nname: s\n---\n# T\n\n" + body, encoding="utf-8")
+        return corpus.parse_skill_md(p)
+
+    def test_example_first_fence_does_not_shadow_contract(self, tmp_path):
+        rec = self._parse(tmp_path, (
+            "```yaml\nexample_config:\n  a: 1\n```\n\n"
+            "```yaml\ntechnique_skill:\n  identity: i\n```\n"
+        ))
+        assert rec.body_contract is not None
+        assert "technique_skill" in rec.body_contract
+        assert corpus.detect_skill_type(rec)[0] == "technique-skill"
+
+    def test_yml_fence_recognized(self, tmp_path):
+        rec = self._parse(tmp_path, "```yml\nreference_skill:\n  identity: i\n```\n")
+        assert rec.body_contract is not None
+        assert "reference_skill" in rec.body_contract
+
+    def test_portable_only_block_still_recorded(self, tmp_path):
+        rec = self._parse(tmp_path, "```yaml\nfacts:\n  - id: f1\n```\n")
+        assert rec.body_contract is not None
+        assert "facts" in rec.body_contract
+        assert corpus.detect_skill_type(rec)[0] == "(unknown)"
+
+    def test_unrecognized_fence_yields_no_contract(self, tmp_path):
+        rec = self._parse(tmp_path, "```yaml\nrandom_stuff:\n  a: 1\n```\n")
+        assert rec.body_contract is None

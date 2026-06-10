@@ -9,66 +9,41 @@ Walks downward from cwd up to a depth limit, collecting all SKILL.md files.
 Outputs a numbered list (or JSON) with the skill name and declared type when
 visible from frontmatter.
 
-Stdlib-only.
+No third-party dependencies (the shared walk + frontmatter parser come from
+the plugin's own skills_kit_lib).
 """
 
 import argparse
 import json
-import os
-import re
 import sys
 from pathlib import Path
 
+# The shared walk + frontmatter parser live in skills_kit_lib; make the plugin
+# root importable regardless of which interpreter/venv launched this script.
+_PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+if str(_PLUGIN_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_ROOT))
+
+from skills_kit_lib.dirwalk import iter_dirs  # noqa: E402
+from skills_kit_lib.markdown_heuristics import parse_frontmatter  # noqa: E402
+
 
 DESCEND_MAX_DEPTH = 8
-SKIP_DIR_NAMES = {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache",
-                  "Intermediate", "Saved", "Binaries", "DerivedDataCache", "Build", "tmp"}
-
-
-_NAME_RE = re.compile(r"^name:\s*(.+?)\s*$", re.MULTILINE)
-_TYPE_RE = re.compile(r"^skill-type:\s*(.+?)\s*$", re.MULTILINE)
-
-
-def parse_frontmatter_basic(content: str) -> dict[str, str]:
-    if not content.startswith("---"):
-        return {}
-    end_idx = content.find("\n---", 3)
-    if end_idx < 0:
-        return {}
-    fm_text = content[3:end_idx]
-    out: dict[str, str] = {}
-    name_m = _NAME_RE.search(fm_text)
-    type_m = _TYPE_RE.search(fm_text)
-    if name_m:
-        out["name"] = name_m.group(1)
-    if type_m:
-        out["skill-type"] = type_m.group(1)
-    return out
 
 
 def collect_skill_md(cwd: Path) -> list[tuple[Path, str, str]]:
     """Walk cwd downward; return (path, name, skill_type) tuples."""
     out: list[tuple[Path, str, str]] = []
-    for current_root, dirs, files in os.walk(cwd):
-        current_path = Path(current_root)
-        dirs[:] = [d for d in dirs if d not in SKIP_DIR_NAMES and not d.startswith(".")
-                   or d == ".claude"]
-        try:
-            rel = current_path.relative_to(cwd)
-            depth = len(rel.parts)
-        except ValueError:
-            depth = DESCEND_MAX_DEPTH + 1
-        if depth > DESCEND_MAX_DEPTH:
-            dirs[:] = []
-            continue
+    for current_path, files in iter_dirs(cwd, DESCEND_MAX_DEPTH):
         if "SKILL.md" in files:
             path = current_path / "SKILL.md"
             try:
                 content = path.read_text(encoding="utf-8")
             except Exception:
                 content = ""
-            fm = parse_frontmatter_basic(content)
-            out.append((path, fm.get("name", "?"), fm.get("skill-type", "?")))
+            fm = parse_frontmatter(content)
+            fields = fm.fields if fm is not None else {}
+            out.append((path, fields.get("name", "?"), fields.get("skill-type", "?")))
     out.sort(key=lambda x: str(x[0]))
     return out
 

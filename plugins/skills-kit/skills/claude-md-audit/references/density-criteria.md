@@ -1,6 +1,6 @@
 # Density / Disclosure Lens Criteria
 
-The criteria for the **density lens** of `/claude-md-audit` — an *opt-in* dimension that fires *in addition to* CCP/CRP/ADP/Hygiene when the user asks for it (the `density` argument, or prose intent like "is this CLAUDE.md too verbose / can anything move to a reference"). Loaded by a detect lane only when the run requested the lens. For a normal audit this doc is not loaded and none of these criteria run — default audits are byte-for-byte unchanged.
+The criteria for the **density lens** of the claude-md-audit member (`/md-audit claude-md`) — an *opt-in* dimension that fires *in addition to* CCP/CRP/ADP/Hygiene when the user asks for it (the `density` argument, or prose intent like "is this CLAUDE.md too verbose / can anything move to a reference"). Loaded by a detect lane only when the run requested the lens. For a normal audit this doc is not loaded and none of these criteria run — default audits are byte-for-byte unchanged.
 
 The classic CCP/CRP/ADP criteria answer **where a fact lives** (which file, which scope). This lens answers the orthogonal question the classic criteria only gesture at: **does a correctly-placed file carry more tokens than its information content needs, and should some of it be disclosed to a reference rather than inlined?** It is the operational form of CRP's "don't make a reader load what they don't need" — applied at the section/block level, not the file level.
 

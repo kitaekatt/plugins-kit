@@ -53,6 +53,19 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Shared substrate (frontmatter parsing + plugin-tier discovery) lives in
+# skills_kit_lib; make the plugin root importable regardless of which
+# interpreter/venv launched this script. No third-party dependencies are
+# required (skills_kit_lib degrades gracefully without pyyaml).
+_PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+if str(_PLUGIN_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_ROOT))
+
+from skills_kit_lib.corpus import PluginEntry, discover_corpus  # noqa: E402
+from skills_kit_lib.markdown_heuristics import (  # noqa: E402
+    parse_frontmatter as _lib_parse_frontmatter,
+)
+
 
 @dataclass
 class SkillInfo:
@@ -100,23 +113,9 @@ PLACEHOLDER_REF_PREFIXES = {"example", "proposed"}
 
 
 def parse_frontmatter(text: str) -> dict:
-    """Extract YAML frontmatter between first two --- lines."""
-    lines = text.split("\n")
-    if not lines or lines[0].strip() != "---":
-        return {}
-    end = -1
-    for i, line in enumerate(lines[1:], 1):
-        if line.strip() == "---":
-            end = i
-            break
-    if end == -1:
-        return {}
-    fm = {}
-    for line in lines[1:end]:
-        if ":" in line:
-            key, _, val = line.partition(":")
-            fm[key.strip()] = val.strip().strip('"').strip("'")
-    return fm
+    """Extract YAML frontmatter fields via the shared light (regex) parser."""
+    fm = _lib_parse_frontmatter(text)
+    return dict(fm.fields) if fm is not None else {}
 
 
 def find_hard_deps(body: str) -> list[tuple[str, int]]:
@@ -129,13 +128,13 @@ def find_hard_deps(body: str) -> list[tuple[str, int]]:
     return out
 
 
-# Common path segments and API endpoints that appear in skill documentation but
-# are not skill references. Derived empirically from the current skill set.
+# Generic path segments and conjunctions that appear in documentation but are
+# not skill references. Keep this list GENERIC -- project-specific vocabulary
+# belongs in the per-file `references-audit-allow-stale` frontmatter mechanism
+# (or --ignore-dir/--ignore-file), never hardcoded here: a hardcoded foreign
+# vocabulary masks real findings in every other project and rots.
 NON_SKILL_WORDS = {
     "build", "dev", "tmp", "path", "c", "var", "usr", "etc", "home", "opt", "bin",
-    "health", "players", "entities", "scenarios", "configs", "meta", "cheat",
-    "session", "instances", "attributes", "human", "investigations", "summary",
-    "spawn-rules", "results", "backend",
     "if", "or", "and", "no", "not",
 }
 
@@ -264,46 +263,55 @@ def discover_skills(base_dir: Path, source: str) -> list[SkillInfo]:
     return skills
 
 
-def discover_plugin_skills(plugins_dir: Path) -> list[SkillInfo]:
-    """Discover skill identities from installed Claude Code plugins."""
-    skills: list[SkillInfo] = []
+def discover_plugin_entries(plugins_dir: Path | None) -> list[PluginEntry]:
+    """ONE installed_plugins.json parse, via skills_kit_lib.corpus (the shared
+    discovery substrate). The returned PluginEntry list feeds the skill pool,
+    the skill-dir classification set, and the scan roots -- the three former
+    per-call-site manifest walks collapsed to this single discovery."""
+    if not plugins_dir or not plugins_dir.exists():
+        return []
     manifest = plugins_dir / "installed_plugins.json"
     if not manifest.exists():
-        return skills
-    try:
-        data = json.loads(manifest.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return skills
-    for plugin_id, instances in data.get("plugins", {}).items():
-        if not isinstance(instances, list):
-            continue
-        for inst in instances:
-            install_path = inst.get("installPath")
-            if not install_path:
+        return []
+    corpus = discover_corpus(
+        # Plugin tier only: point the user tier at a non-existent root (this
+        # script handles project/user discovery itself, with nested
+        # .claude/skills semantics corpus does not implement).
+        user_skills_root=manifest / "__no_user_tier__",
+        installed_plugins_json=manifest,
+    )
+    # Drop registry entries without an installPath (corpus records them with
+    # an empty path; scanning a relative "skills" dir would be wrong).
+    return [p for p in corpus.plugins if str(p.install_path) not in ("", ".")]
+
+
+def plugin_id_of(entry: PluginEntry) -> str:
+    """Reconstruct the installed_plugins.json manifest key for an entry."""
+    if entry.marketplace and entry.marketplace != "(unknown)":
+        return f"{entry.name}@{entry.marketplace}"
+    return entry.name
+
+
+def plugin_skill_infos(entries: list[PluginEntry]) -> list[SkillInfo]:
+    """Skill identities from installed plugins (pool entries need a name)."""
+    skills: list[SkillInfo] = []
+    for entry in entries:
+        for rec in entry.skills:
+            name = rec.frontmatter.get("name")
+            if not name or not isinstance(name, str):
                 continue
-            skills_dir = Path(install_path) / "skills"
-            if not skills_dir.exists():
-                continue
-            for skill_file in sorted(
-                skills_dir.rglob("[Ss][Kk][Ii][Ll][Ll].[Mm][Dd]")
-            ):
-                text = skill_file.read_text(encoding="utf-8", errors="replace")
-                fm = parse_frontmatter(text)
-                name = fm.get("name", "")
-                if not name:
-                    continue
-                skills.append(SkillInfo(
-                    name=name,
-                    path=skill_file,
-                    source=f"plugin:{plugin_id}",
-                ))
+            skills.append(SkillInfo(
+                name=name,
+                path=rec.path,
+                source=f"plugin:{plugin_id_of(entry)}",
+            ))
     return skills
 
 
 def collect_skill_dirs(
     project_dir: Path,
     user_dir: Path | None,
-    plugins_dir: Path | None,
+    plugin_entries: list[PluginEntry],
 ) -> set[Path]:
     """Return every directory that directly contains a SKILL.md across all
     scan roots. Used to classify non-SKILL .md files as 'reference' kind."""
@@ -316,24 +324,9 @@ def collect_skill_dirs(
     for root in project_roots:
         for sm in root.rglob("[Ss][Kk][Ii][Ll][Ll].[Mm][Dd]"):
             skill_dirs.add(sm.parent)
-    if plugins_dir and plugins_dir.exists():
-        manifest = plugins_dir / "installed_plugins.json"
-        if manifest.exists():
-            try:
-                data = json.loads(manifest.read_text(encoding="utf-8"))
-                for _pid, instances in data.get("plugins", {}).items():
-                    for inst in instances or []:
-                        ip = inst.get("installPath")
-                        if not ip:
-                            continue
-                        sd = Path(ip) / "skills"
-                        if sd.exists():
-                            for sm in sd.rglob(
-                                "[Ss][Kk][Ii][Ll][Ll].[Mm][Dd]"
-                            ):
-                                skill_dirs.add(sm.parent)
-            except (json.JSONDecodeError, OSError):
-                pass
+    for entry in plugin_entries:
+        for rec in entry.skills:
+            skill_dirs.add(rec.path.parent)
     return skill_dirs
 
 
@@ -534,6 +527,11 @@ def analyze(
     verbose: bool = False,
     json_output: bool = False,
 ) -> int:
+    # 0. ONE plugin-tier discovery (installed_plugins.json parsed exactly once,
+    #    via skills_kit_lib.corpus); the pool, the skill-dir set, and the scan
+    #    roots below all derive from it.
+    plugin_entries = discover_plugin_entries(plugins_dir)
+
     # 1. Build the skill pool (always from SKILL.md files across all roots,
     #    regardless of scope, so refs resolve correctly).
     all_skills: list[SkillInfo] = []
@@ -541,12 +539,11 @@ def analyze(
         all_skills.extend(discover_skills(project_dir, "project"))
     if user_dir and user_dir.exists():
         all_skills.extend(discover_skills(user_dir, "user"))
-    if plugins_dir and plugins_dir.exists():
-        all_skills.extend(discover_plugin_skills(plugins_dir))
+    all_skills.extend(plugin_skill_infos(plugin_entries))
 
     name_map = build_name_map(all_skills)
     all_names = set(name_map.keys())
-    skill_dirs = collect_skill_dirs(project_dir, user_dir, plugins_dir)
+    skill_dirs = collect_skill_dirs(project_dir, user_dir, plugin_entries)
 
     # 2. Build the source-file set (which files we scan for refs). Explicit
     #    --path entries override the scope walk.
@@ -562,21 +559,10 @@ def analyze(
         if user_dir and user_dir.exists():
             for root in find_project_skill_roots(user_dir):
                 base_dirs.append((root, "user"))
-        if plugins_dir and plugins_dir.exists():
-            manifest = plugins_dir / "installed_plugins.json"
-            if manifest.exists():
-                try:
-                    data = json.loads(manifest.read_text(encoding="utf-8"))
-                    for plugin_id, instances in data.get("plugins", {}).items():
-                        for inst in instances or []:
-                            ip = inst.get("installPath")
-                            if not ip:
-                                continue
-                            base_dirs.append(
-                                (Path(ip) / "skills", f"plugin:{plugin_id}")
-                            )
-                except (json.JSONDecodeError, OSError):
-                    pass
+        for entry in plugin_entries:
+            base_dirs.append(
+                (entry.install_path / "skills", f"plugin:{plugin_id_of(entry)}")
+            )
         sources = discover_source_files(
             base_dirs, scopes, skill_dirs, ignore_dirs, ignore_files
         )

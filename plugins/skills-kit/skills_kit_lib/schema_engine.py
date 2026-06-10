@@ -39,10 +39,36 @@ def _typecheck(value, expected_type: str) -> bool:
     return True
 
 
+def _check_keys(container: dict, keys_rule: dict, base_path: str, fails: list, ok_paths: list):
+    """Walk a {<key>: <rule>} map against a dict container: required keys must
+    be present; present keys recurse into _validate_value."""
+    for sub_key, sub_rule in keys_rule.items():
+        sub_path = f"{base_path}.{sub_key}"
+        present = sub_key in container
+        if sub_rule.get("required") and not present:
+            fails.append((sub_path, "required key missing"))
+        elif present:
+            _validate_value(container[sub_key], sub_rule, sub_path, fails, ok_paths)
+
+
+def _check_value_schema(container: dict, value_schema: dict, base_path: str,
+                        fails: list, ok_paths: list):
+    """value_schema: dict of arbitrary keys, each value matches subschema.
+    Used by ACTIONS_SCHEMA where keys are user-defined action names."""
+    for k, v in container.items():
+        sub_path = f"{base_path}.{k}"
+        if not isinstance(v, dict):
+            fails.append((sub_path, f"expected dict value, got {type(v).__name__}"))
+            continue
+        _check_keys(v, value_schema.get("keys", {}), sub_path, fails, ok_paths)
+
+
 def _validate_value(value, rule: dict, path: str, fails: list, ok_paths: list):
     """Walk a single value against a rule. Append failure descriptors to fails;
-    record successfully-checked paths in ok_paths.
+    record paths checked without failure in ok_paths.
     """
+    fails_before = len(fails)
+
     expected_type = rule.get("type")
     if expected_type and not _typecheck(value, expected_type):
         fails.append((path, f"expected {expected_type}, got {type(value).__name__}"))
@@ -67,47 +93,21 @@ def _validate_value(value, rule: dict, path: str, fails: list, ok_paths: list):
     if items_rule and isinstance(value, list):
         for i, item in enumerate(value):
             sub_path = f"{path}[{i}]"
-            keys_rule = items_rule.get("keys", {})
             if not isinstance(item, dict):
                 fails.append((sub_path, f"expected dict in list item, got {type(item).__name__}"))
                 continue
-            for sub_key, sub_rule in keys_rule.items():
-                sub_sub_path = f"{sub_path}.{sub_key}"
-                present = sub_key in item
-                if sub_rule.get("required") and not present:
-                    fails.append((sub_sub_path, "required key missing"))
-                elif present:
-                    _validate_value(item[sub_key], sub_rule, sub_sub_path, fails, ok_paths)
+            _check_keys(item, items_rule.get("keys", {}), sub_path, fails, ok_paths)
 
     keys_rule = rule.get("keys")
     if keys_rule and isinstance(value, dict):
-        for sub_key, sub_rule in keys_rule.items():
-            sub_path = f"{path}.{sub_key}"
-            present = sub_key in value
-            if sub_rule.get("required") and not present:
-                fails.append((sub_path, "required key missing"))
-            elif present:
-                _validate_value(value[sub_key], sub_rule, sub_path, fails, ok_paths)
+        _check_keys(value, keys_rule, path, fails, ok_paths)
 
-    # value_schema: dict of arbitrary keys, each value matches subschema.
-    # Used by ACTIONS_SCHEMA where keys are user-defined action names.
     value_schema = rule.get("value_schema")
     if value_schema and isinstance(value, dict):
-        for k, v in value.items():
-            sub_path = f"{path}.{k}"
-            if not isinstance(v, dict):
-                fails.append((sub_path, f"expected dict value, got {type(v).__name__}"))
-                continue
-            vs_keys = value_schema.get("keys", {})
-            for sub_key, sub_rule in vs_keys.items():
-                sub_sub_path = f"{sub_path}.{sub_key}"
-                present = sub_key in v
-                if sub_rule.get("required") and not present:
-                    fails.append((sub_sub_path, "required key missing"))
-                elif present:
-                    _validate_value(v[sub_key], sub_rule, sub_sub_path, fails, ok_paths)
+        _check_value_schema(value, value_schema, path, fails, ok_paths)
 
-    ok_paths.append(path)
+    if len(fails) == fails_before:
+        ok_paths.append(path)
 
 
 def validate(yaml_data: dict, schema: dict) -> tuple[list, list]:
@@ -144,33 +144,15 @@ def validate(yaml_data: dict, schema: dict) -> tuple[list, list]:
         fails.append((root, f"root must be a dict, got {type(block).__name__}"))
         return fails, checked
 
-    schema_keys = schema.get("keys", {})
-    for key, rule in schema_keys.items():
-        path = f"{root}.{key}"
-        present = key in block
-        if rule.get("required") and not present:
-            fails.append((path, "required key missing"))
-        elif present:
-            _validate_value(block[key], rule, path, fails, checked)
-
-    # Root-level value_schema: dict-rooted unit where every top-level key in
-    # the root block maps to a value of the given subschema shape. Used by
-    # ACTIONS_SCHEMA where keys are user-defined action names.
-    root_value_schema = schema.get("value_schema")
-    if root_value_schema:
-        for k, v in block.items():
-            sub_path = f"{root}.{k}"
-            if not isinstance(v, dict):
-                fails.append((sub_path, f"expected dict value, got {type(v).__name__}"))
-                continue
-            vs_keys = root_value_schema.get("keys", {})
-            for sub_key, sub_rule in vs_keys.items():
-                sub_sub_path = f"{sub_path}.{sub_key}"
-                present = sub_key in v
-                if sub_rule.get("required") and not present:
-                    fails.append((sub_sub_path, "required key missing"))
-                elif present:
-                    _validate_value(v[sub_key], sub_rule, sub_sub_path, fails, checked)
+    # Delegate the dict-rooted walk: keys + (root-level) value_schema are the
+    # same shapes _validate_value already handles.
+    _validate_value(
+        block,
+        {"keys": schema.get("keys", {}), "value_schema": schema.get("value_schema")},
+        root,
+        fails,
+        checked,
+    )
 
     forbidden = schema.get("forbidden_keys", [])
     for f_key in forbidden:
