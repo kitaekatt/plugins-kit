@@ -1,6 +1,6 @@
 [project]
 name = "workflow-kit"
-version = "0.2.1"
+version = "0.2.2"
 description = "Host-side library for the workflow-kit plugin: validate + compile .workflow.yaml to native Workflow tool scripts."
 requires-python = ">=3.10"
 

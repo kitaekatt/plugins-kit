@@ -14,11 +14,7 @@ from pathlib import Path
 
 _PLUGINS_DIR = Path(__file__).resolve().parents[2] / "plugins"
 
-# TEMPORARY exclusion: plugins/skills-kit/ is owned by another in-flight
-# session (arch-review step 7). Its pyproject says 0.15.0 vs plugin.json
-# 0.20.0; the deferred edit is recorded in tmp/arch-review-fixes/log.md.
-# Remove this exclusion once that session's work lands.
-_EXCLUDED = {"skills-kit"}
+_EXCLUDED: set[str] = set()
 
 
 def _plugins_with_both_files():

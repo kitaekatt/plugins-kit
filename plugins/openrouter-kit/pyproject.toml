@@ -1,6 +1,6 @@
 [project]
 name = "openrouter-kit"
-version = "0.2.2"
+version = "0.2.3"
 description = "OpenRouter API key resolution and account validation for Claude Code plugins"
 requires-python = ">=3.10"
 
