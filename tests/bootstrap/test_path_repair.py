@@ -11,11 +11,22 @@ from bootstrap_lib.path_repair import PathRepairResult, repair_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CANON = _REPO_ROOT / "plugins" / "bootstrap" / "bootstrap_lib" / "path_repair.py"
-_VENDORED = [
-    # p4-kit used to vendor a copy here; it now imports bootstrap_lib.path_repair
-    # directly via its venv (0.10.0 +).
-    _REPO_ROOT / "plugins" / "unreal-kit" / "lib" / "path_repair.py",
-]
+
+
+def _vendored_copies():
+    """Every path_repair.py under plugins/ except the canonical and any that
+    live inside a virtualenv / site-packages / cache dir. Glob discovery (the
+    test_bootstrap_guard.py pattern) so a new vendored copy is auto-covered
+    instead of silently escaping a hardcoded list."""
+    skip = {".venv", "site-packages", "__pycache__", "node_modules"}
+    out = []
+    for p in _REPO_ROOT.glob("plugins/**/path_repair.py"):
+        if p.resolve() == _CANON.resolve():
+            continue
+        if any(part in skip for part in p.parts):
+            continue
+        out.append(p)
+    return out
 
 
 class TestRepairPath:
@@ -84,15 +95,21 @@ class TestVendoredCopiesInSync:
     def test_canon_exists(self):
         assert _CANON.is_file(), f"Canonical path_repair missing: {_CANON}"
 
+    def test_at_least_one_vendored_copy_discovered(self):
+        # Guards the glob itself: unreal-kit vendors a copy; if discovery ever
+        # returns nothing, the sync assertion below would pass vacuously.
+        assert _vendored_copies(), "glob discovered no vendored path_repair.py copies"
+
     def test_vendored_copies_match_canon(self):
         diffs = []
-        for vendored in _VENDORED:
-            if not vendored.is_file():
-                diffs.append(f"missing: {vendored}")
-                continue
+        for vendored in _vendored_copies():
             if not filecmp.cmp(_CANON, vendored, shallow=False):
-                diffs.append(f"diverged: {vendored}")
+                diffs.append(
+                    f"diverged: {vendored}\n"
+                    f"  fix: cp {_CANON} {vendored}"
+                )
         assert not diffs, (
             "Vendored path_repair.py copies must match "
-            f"{_CANON.relative_to(_REPO_ROOT)}: {diffs}"
+            f"{_CANON.relative_to(_REPO_ROOT)} (edit the canonical, then run "
+            "the cp command(s) below):\n" + "\n".join(diffs)
         )
