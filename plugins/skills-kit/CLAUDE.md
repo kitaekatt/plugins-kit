@@ -1,6 +1,6 @@
 # skills-kit plugin orientation
 
-Plugin-level orientation for `plugins-kit:skills-kit`. The plugin is organized around a **verb x artifact matrix** over the `md` artifact (and its specializations `skill` = SKILL.md, `claude-md` = CLAUDE.md): two broader **union domains** -- `md-authoring` (`/md-authoring`) and `md-audit` (`/md-audit`) -- each argument-dispatching into per-artifact sub-domains. `md-authoring` unions `skill-authoring` (a full domain-skill kept whole, with its `audit.py` / `classify.py` / `tag.py` / `schema_registry` tooling) and `claude-md-authoring`, and owns the `content-authoring` content-shape references. `md-audit` unions `skill-audit`, `claude-md-audit`, and `references-audit` (all three fan multi-file runs out via the Workflow tool), and owns the `audit-framework`. Standalone alongside the matrix: `cohesion-principles` (the cross-verb placement spine both domains defer to), `knowledge-encoding` (encode an insight into an artifact), `materialized-output` (the materialized-insight pattern), and `update-documentation` (end-of-session doc sweep). A fresh agent landing here should read this file before any of the references; this file points at the right surface for the task at hand.
+Plugin-level orientation for `plugins-kit:skills-kit`. The plugin is organized around a **verb x artifact matrix** over the `md` artifact (specializations `skill` = SKILL.md, `claude-md` = CLAUDE.md): two **union domains** -- `md-authoring` (`/md-authoring`) and `md-audit` (`/md-audit`) -- plus standalones `cohesion-principles`, `knowledge-encoding`, `materialized-output`, and `update-documentation`. A fresh agent landing here should read this file first; the `plugin_surface_overview` insight below is the canonical per-skill / per-surface map (what each domain unions, what tooling and references it owns), and this file points at the right surface for the task at hand.
 
 The framework the plugin advocates:
 
@@ -49,7 +49,7 @@ claude_md:
           tables for human review) plus structured framework records (description
           requirements, content-form choice, audit procedure, schemas-as-floors,
           conditional-requirement grammar) embedded as YAML under root key framework:.
-          schemas.py is authoritative on divergence with the markdown tables.
+          schema_registry.py is authoritative on divergence with the markdown tables.
         - skills/skill-authoring/references/scripts.md -- script reference (purpose,
           usage, output verdicts, gotchas).
         - skills/skill-authoring/references/example-audit.md -- worked audit example.
@@ -74,14 +74,14 @@ claude_md:
         - tag operation
       origin: Phase 4.6 P5 plugin-level orientation surface (2026-04-30).
       added: "2026-04-30"
-      summary: Vocabulary -> glossary.md. Contract floor -> schemas.py (or framework.md tables for human review). Audit-driven decisions and provenance -> skill-authoring/CLAUDE.md. Validator internals -> skills_kit_lib/CLAUDE.md.
+      summary: Vocabulary -> glossary.md. Contract floor -> schema_registry.py (or framework.md tables for human review). Audit-driven decisions and provenance -> skill-authoring/CLAUDE.md. Validator internals -> skills_kit_lib/CLAUDE.md.
       detail: |
         - "What does <term> mean?" -> glossary.md, search the appropriate sub-grouping
           (files / conventions / external_binding / principles / patterns / skill_types
           / attributes / sources). Every record has a keywords cluster for routing.
         - "Does this skill satisfy its type contract?" -> run audit.py against the
           SKILL.md path. Zero FAILs is well-formed.
-        - "What are the required keys for type X?" -> schemas.py (canonical) or
+        - "What are the required keys for type X?" -> schema_registry.py (canonical) or
           framework.md type contract tables (human-review surface; schemas wins on
           divergence).
         - "Why does the framework forbid Y / require Z?" -> skill-authoring/CLAUDE.md
@@ -97,7 +97,7 @@ claude_md:
         - zero fails
       origin: P1 convention (skill-authoring/CLAUDE.md) generalized to plugin level during P5 (2026-04-30).
       added: "2026-04-30"
-      summary: Any change touching schemas.py, glossary.md, or framework.md must re-audit all six plugins-kit SKILL.md files plus the three CLAUDE.md files (skill-authoring, skills_kit_lib, plugins-kit root) to zero FAILs before shipping.
+      summary: Any change touching schema_registry.py, glossary.md, or framework.md must re-audit all six plugins-kit SKILL.md files plus the three CLAUDE.md files (skill-authoring, skills_kit_lib, plugins-kit root) to zero FAILs before shipping.
       detail: |
         The plugin advocates schema validation as the audit substrate. Shipping a
         contract change that breaks the plugin's own skills would violate the
@@ -166,13 +166,6 @@ claude_md:
           judgment-required on the YAML contract row. classify.py and tag.py operate
           on frontmatter and a regex-detected YAML root key; they do not need pyyaml.
   conventions:
-    - rule: When changing schemas.py or framework.md or glossary.md, re-audit all 6 plugins-kit SKILL.md + 3 CLAUDE.md files in the same change. Zero FAILs is the merge gate.
-      keywords:
-        - merge gate
-        - re-audit discipline
-        - paired update
-        - second-order effects
-      why: The plugin advocates schema validation as the audit substrate; shipping a contract change that breaks the plugin's own skills would violate the principle. The re-audit also catches second-order effects across SKILL.md files.
     - rule: Surface a framework decision as a lessons-learned entry with surface / finding / follow-up provenance before the contract change ships. Land it in skill-authoring/CLAUDE.md (framework decisions) or skills_kit_lib/CLAUDE.md (validator-side decisions).
       keywords:
         - provenance

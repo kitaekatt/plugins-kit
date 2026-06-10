@@ -74,7 +74,7 @@ claude_md:
       keywords: [pyyaml, dependency, stdlib, plugin venv, bootstrap, optional]
       summary: pyyaml is a runtime dependency declared in plugins/skills-kit/pyproject.toml; the audit runs without it via the contract-staged state.
       detail: |
-        plugins/skills-kit/pyproject.toml declares pyyaml under dependencies. The bootstrap engine sets up a plugin venv at ~/.claude/plugins/data/plugins-kit/skills-kit/.venv/ where the audit script can be invoked with pyyaml available. Outside that venv (e.g. running with bare system Python), audit.py degrades gracefully: HAVE_YAML False, contract-staged state, JUDGMENT row noting parser unavailable. Do not add stdlib-only YAML parsing -- the multi-step YAML sequence pattern uses real YAML (lists, nested mappings) that a hand-rolled subset parser cannot cover.
+        plugins/skills-kit/pyproject.toml declares pyyaml under dependencies. The bootstrap engine sets up a plugin venv at ~/.claude/plugins/data/plugins-kit/skills-kit/.venv/ where the audit script can be invoked with pyyaml available. Outside that venv (e.g. running with bare system Python), audit.py degrades gracefully to the contract-staged state (see three_audit_states). Do not add stdlib-only YAML parsing -- the multi-step YAML sequence pattern uses real YAML (lists, nested mappings) that a hand-rolled subset parser cannot cover.
       origin: Phase Y1.1 dependency decision; proposal section E.6.
       added: "2026-04-28"
     - id: extra_keys_allowed
@@ -116,27 +116,16 @@ claude_md:
       summary: checks.check_domain_members_resolve asserts every domain-skill (index.members[]) and capability-skill (members[]) member ref/name resolves to a real skill on disk; checks._cli runs it alongside the owner-doc check (python -m skills_kit_lib.checks [repo_root]).
       detail: |
         Companion corpus check to check_schema_owner_docs_validate. Globs
-        plugins/*/skills/*/SKILL.md (the flat-skill layout), builds the resolvable
-        name pool from each skill's directory name + frontmatter name, then for
-        every skill whose body contract declares members -- domain_skill.index.members[]
-        OR capability_skill.members[] -- resolves each member's ref/name. The ref is
-        normalized by stripping a leading '/' and any 'plugin:' qualifier
-        (/claude-md-audit and skills-kit:references-audit both reduce to the bare
-        name). A member resolving via either its ref or its name passes; otherwise it
-        is reported unresolved.
-        - Scope: resolves against the union of ALL on-disk skill names across every
-          plugin, so same-plugin and (rare) cross-plugin refs both resolve. The guard
-          catches the common reorg failure -- a ref left pointing at a renamed/moved/
-          never-created skill.
-        - Roots differ per check: owner-doc paths are plugin-root-relative (plugins/
-          skills-kit); member resolution scans the repo root. checks._cli passes each
-          the root it expects (repo arg -> plug = repo/plugins/skills-kit).
-        - Degradation: parse_skill_md needs pyyaml to populate body_contract; without
-          it, member-declaring skills are silently skipped (consistent with the
-          audit's contract-staged state).
-        Codified in: checks.py (check_domain_members_resolve, render_member_results,
-        repo_root, _cli, __main__); tests/skills-kit/test_domain_members_resolve.py
-        (8 cases incl. a live-corpus integration assertion).
+        plugins/*/skills/*/SKILL.md, builds the resolvable name pool from each
+        skill's directory name + frontmatter name, then for every skill declaring
+        members (domain_skill.index.members[] or capability_skill.members[])
+        resolves each member's ref/name -- normalized by stripping a leading '/'
+        and any 'plugin:' qualifier -- against the union of ALL on-disk skill names
+        repo-wide, so same-plugin and cross-plugin refs both resolve. Catches the
+        common reorg failure: a ref left pointing at a renamed/moved/never-created
+        skill. Degrades silently without pyyaml (parse_skill_md can't populate
+        body_contract), consistent with the contract-staged state (see
+        three_audit_states). Codified in checks.py + tests/skills-kit/test_domain_members_resolve.py.
       origin: |
         skills-kit verb x artifact reorg, P3 make-testable step (2026-05-31). The
         reorg re-wires md-authoring / md-audit members; a script guard makes a

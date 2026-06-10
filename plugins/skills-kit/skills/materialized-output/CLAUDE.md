@@ -1,18 +1,6 @@
 # materialized-output
 
-Pattern-skill teaching the *materialized insights* model and the *insight engineering* discipline.
-
-## Origin
-
-Authored as a port of project-glossary content (originally drafted in a different repo's `Docs/Glossary.md.html`). The framework portion was generic, so it moved here; project-specific examples were stripped and replaced with cross-domain generic examples (search index over docs, pre-expanded config graph, codebase reference map, model-derived summary cache, pricing lookup).
-
-## Type rationale
-
-Pattern-skill rather than discipline-skill: the primary value is teaching recognition of when this pattern applies. The "practices" and "anti-patterns" reinforce the model rather than enforcing rules under pressure. If a future audit finds developers repeatedly violating the practices despite knowing the model, that's the signal to graduate this into a paired discipline-skill.
-
-## Future composition
-
-If a sibling skill emerges around tool/script design more broadly (e.g., "tool-design" covering CLI shape, exit-code discipline, scriptability), this skill could become a member of a domain-skill that bundles the family.
+Pattern-skill teaching the *materialized insights* model and the *insight engineering* discipline. Per-directory meta about this skill -- type rationale (pattern- vs discipline-skill), content origin/provenance, and future composition -- lives in the `claude_md:` insights below.
 
 ## Insights
 
@@ -40,7 +28,7 @@ claude_md:
         signal to graduate this into a paired discipline-skill. Until then, keep it
         as a pattern-skill -- discipline-skill type would imply enforcement scaffolding
         that doesn't fit how this content is consumed.
-      origin: Type rationale captured at skill creation; documented in this file's "Type rationale" section.
+      origin: Type rationale captured at skill creation (2026-05-19).
       added: "2026-05-19"
     - id: ported_from_project_glossary
       keywords: [origin, port, project-glossary, generic examples, cross-domain, stripped]
@@ -52,7 +40,7 @@ claude_md:
         docs, pre-expanded config graph, codebase reference map, model-derived summary
         cache, pricing lookup). When updating examples, prefer cross-domain generics
         over project-specific cases so the skill stays portable.
-      origin: Authored as a port; documented in this file's "Origin" section.
+      origin: Authored as a port of project-glossary content from a different repo's Docs/Glossary.md.html.
       added: "2026-05-19"
     - id: future_tool_design_domain_skill
       keywords: [future composition, tool-design, domain-skill, sibling skill, bundling]
@@ -62,7 +50,7 @@ claude_md:
         scriptability) would be a natural sibling. At that point, a domain-skill
         could bundle the family. Until that sibling exists, keep this skill
         standalone -- premature bundling adds indirection without payoff.
-      origin: Forward-looking composition note in this file's "Future composition" section.
+      origin: Forward-looking composition note captured at skill creation (2026-05-19).
       added: "2026-05-19"
 ```
 
