@@ -7,15 +7,23 @@ Reads installed_plugins.json to discover all installed plugins and their
 cache paths, then compares against local development directories.
 
 Compares two locations per plugin:
-  1. Source:       Local dev directory (hardcoded mapping below)
+  1. Source:       Local dev directory (plugins-kit auto-derived from this
+                   script's repo; other marketplaces via --source NAME=PATH)
   2. Plugin cache: ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/
 
+Scope vs scripts/plugin-versions.sh: that script compares VERSION STRINGS
+across local/marketplace/installed/cache; this one diffs FILE CONTENT between
+the local source tree and the cache. A content diff while on the dev branch is
+expected (the cache tracks published master), so the summary says "differs",
+not "broken".
+
 Usage:
-    python scripts/cache_status.py                    # Summary (fresh/stale)
+    python scripts/cache_status.py                    # Summary (in sync / differs)
     python scripts/cache_status.py unreal-kit          # Specific plugin
     python scripts/cache_status.py --marketplace plugins-kit  # Filter by marketplace
     python scripts/cache_status.py --detailed          # Per-plugin file-level diffs
     python scripts/cache_status.py --json              # Machine-readable output
+    python scripts/cache_status.py --source other-mkt=~/Dev/other-mkt
 """
 
 import argparse
@@ -27,12 +35,17 @@ from pathlib import Path
 from typing import Optional
 
 # ==============================================================================
-# Configuration — hardcoded local dev directories per marketplace
+# Configuration — local dev directories per marketplace
 # ==============================================================================
+# plugins-kit's source tree is derived from this script's own location (it
+# lives in <repo>/scripts/), so the mapping works on every machine. Other
+# marketplaces are not hardcoded; map them per-invocation with
+# --source NAME=PATH.
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 MARKETPLACE_SOURCE_DIRS: dict[str, Path] = {
-    "kitaekatt-plugins": Path.home() / "Dev" / "kitaekatt-plugins",
-    "plugins-kit": Path.home() / "Dev" / "plugins-kit",
+    "plugins-kit": _REPO_ROOT,
 }
 
 CLAUDE_HOME = Path.home() / ".claude"
@@ -207,11 +220,15 @@ def print_summary_output(statuses: list[PluginStatus]) -> None:
     no_source = [s for s in statuses if s.comparison.status == "NO_SOURCE"]
 
     if stale:
-        print(f"Plugin cache: STALE ({len(stale)} plugin(s) out of sync)")
+        print(f"Plugin cache: differs from local source ({len(stale)} plugin(s))")
         for s in stale:
             print(f"  - {s.name}@{s.marketplace} [{s.comparison.status}]")
+        print("Note: OUT_OF_SYNC is EXPECTED when the local source tree (e.g. the dev")
+        print("branch) is ahead of the latest published version -- the cache tracks the")
+        print("published master, not the working copy. It signals a problem only when")
+        print("you believe this exact source state has been published.")
     else:
-        print("Plugin cache: fresh")
+        print("Plugin cache: matches local source")
 
     if no_source:
         print(f"No local source: {len(no_source)} plugin(s) (marketplace not in MARKETPLACE_SOURCE_DIRS)")
@@ -303,7 +320,22 @@ def main() -> None:
         action="store_true",
         help="Show per-plugin file-level diffs instead of summary",
     )
+    parser.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help="Map a marketplace name to a local source tree (repeatable). "
+             "plugins-kit is mapped automatically to this script's repo.",
+    )
     args = parser.parse_args()
+
+    for mapping in args.source:
+        name, sep, path = mapping.partition("=")
+        if not sep or not name or not path:
+            print(f"Error: --source expects NAME=PATH, got '{mapping}'", file=sys.stderr)
+            sys.exit(2)
+        MARKETPLACE_SOURCE_DIRS[name] = Path(path).expanduser()
 
     entries = load_installed_plugins()
     if not entries:
