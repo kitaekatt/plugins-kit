@@ -1,0 +1,12 @@
+# `as: prev` would shadow the reserved first param of every pipeline stage
+# callback: the emitted `(prev, prev, i) =>` is broken JS.
+name: bad-as-prev
+description: Pipeline `as` name collides with the reserved stage-callback param.
+steps:
+  - id: p
+    pipeline:
+      over: [x]
+      as: prev
+      stages:
+        - id: s1
+          agent: { prompt: hi }

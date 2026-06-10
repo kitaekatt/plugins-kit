@@ -1,0 +1,14 @@
+# Two stages in one pipeline share an id; the second prev-stage reference would
+# be ambiguous.
+name: dup-stages
+description: Duplicate stage ids within one pipeline.
+steps:
+  - id: p
+    pipeline:
+      over: [x]
+      as: thing
+      stages:
+        - id: s
+          agent: { prompt: one }
+        - id: s
+          agent: { prompt: two }

@@ -11,8 +11,10 @@ Single entry point ``bootstrap(ctx)`` runs at session start and:
    to obtain a key from openrouter.ai/keys and run ``openrouter-kit set-key``.
 4. If present, validates the key against ``GET /auth/key``. Failures (401,
    402) become fix-all entries with specific remediation. Successful checks
-   are content-hashed into ``last_validated.sha256`` so subsequent sessions
-   skip the network round-trip when the key has not changed.
+   are content-hashed into ``last_validated.sha256`` (hash + validation
+   timestamp) so subsequent sessions skip the network round-trip when the
+   key has not changed -- but only for ~7 days, so revocation or credit
+   exhaustion is re-detected without a key change.
 
 The script is stdlib-only -- it imports ``openrouter_kit`` from ``lib/``
 beside this file. No venv required.
@@ -21,8 +23,9 @@ beside this file. No venv required.
 import hashlib
 import os
 import sys
+import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 # Make the bundled lib/ importable. Mirrors the unreal-kit and p4-kit pattern.
 _LIB_DIR = os.path.join(os.path.dirname(__file__), "lib")
@@ -39,6 +42,11 @@ from openrouter_kit.env_file import read_env_file, write_env_file  # noqa: E402
 # at autodetect time, so existing developers do not have to re-enter the key
 # after installing openrouter-kit.
 _LEGACY_LOC_OPS_RELATIVE = Path(".local-data") / "loc" / ".env"
+
+# A successful /auth/key validation is cached against the key's hash, but never
+# forever: past this age the key is re-validated so revocation or credit
+# exhaustion is detected even when the key text has not changed.
+_REVALIDATE_AFTER_SECONDS = 7 * 24 * 60 * 60  # ~7 days
 
 
 def bootstrap(ctx: Any) -> None:
@@ -94,11 +102,18 @@ def bootstrap(ctx: Any) -> None:
         return
 
     # 4. Have a key. Validate against /auth/key, with content-hash caching.
+    # The cache is honored only while fresh (< _REVALIDATE_AFTER_SECONDS); a
+    # matching hash with a missing/old timestamp (incl. the legacy hash-only
+    # format) re-validates so revocation / credit exhaustion is re-detected.
     cache_file = Path(ctx.data_dir) / "last_validated.sha256"
     key_hash = hashlib.sha256(lookup.key.encode("utf-8")).hexdigest()
-    cached = _read_cache(cache_file)
+    cached_hash, cached_epoch = _read_cache(cache_file)
 
-    if cached == key_hash:
+    if (
+        cached_hash == key_hash
+        and cached_epoch is not None
+        and (time.time() - cached_epoch) < _REVALIDATE_AFTER_SECONDS
+    ):
         ctx.log_ok(f"openrouter: key validated (cached, source={lookup.source})")
         return
 
@@ -197,18 +212,30 @@ def _try_legacy_migration(ctx: Any, project_root: Path) -> bool:
     return True
 
 
-def _read_cache(path: Path) -> Optional[str]:
+def _read_cache(path: Path) -> Tuple[Optional[str], Optional[float]]:
+    """Return (key_hash, validated_epoch) from the cache file.
+
+    File format: hash on line 1, epoch seconds on line 2. The legacy hash-only
+    format yields (hash, None), which callers treat as stale.
+    """
     try:
-        return path.read_text(encoding="utf-8").strip() or None
-    except FileNotFoundError:
-        return None
+        lines = path.read_text(encoding="utf-8").split()
     except OSError:
-        return None
+        return (None, None)
+    if not lines:
+        return (None, None)
+    epoch: Optional[float] = None
+    if len(lines) > 1:
+        try:
+            epoch = float(lines[1])
+        except ValueError:
+            epoch = None
+    return (lines[0], epoch)
 
 
 def _write_cache(path: Path, value: str) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(value + "\n", encoding="utf-8")
+        path.write_text(f"{value}\n{int(time.time())}\n", encoding="utf-8")
     except OSError:
         pass

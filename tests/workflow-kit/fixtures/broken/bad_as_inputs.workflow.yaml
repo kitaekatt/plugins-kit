@@ -1,0 +1,13 @@
+# `as: inputs` would silently shadow the normalized-inputs const inside the
+# fan-out lambda: every {{ inputs.* }} there reads the wrong data, no error.
+name: bad-as-inputs
+description: fan_out `as` name shadows the inputs const.
+steps:
+  - id: p
+    pipeline:
+      over: [x]
+      as: thing
+      stages:
+        - id: s1
+          fan_out: { over: "{{ thing }}", as: inputs }
+          agent: { prompt: hi }

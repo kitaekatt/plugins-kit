@@ -1,0 +1,10 @@
+# Step ids `a-b` and `a_b` would both sanitize to the JS variable `step_a_b`
+# (two `const step_a_b` declarations = runtime SyntaxError). The identifier rule
+# rejects `a-b` at parse time.
+name: colliding-ids
+description: Two step ids that collide after JS-variable sanitization.
+steps:
+  - id: a-b
+    agent: { prompt: one }
+  - id: a_b
+    agent: { prompt: two }

@@ -84,6 +84,18 @@ class TestBootstrapMissingKey:
         assert "openrouter.ai/keys" in f["agent_msg"]
 
 
+def _write_cache_file(data_dir, key, epoch=None):
+    """Write the validation cache: hash line + optional epoch line (legacy = hash only)."""
+    import hashlib
+
+    cache_file = data_dir / "last_validated.sha256"
+    content = hashlib.sha256(key.encode("utf-8")).hexdigest() + "\n"
+    if epoch is not None:
+        content += f"{int(epoch)}\n"
+    cache_file.write_text(content)
+    return cache_file
+
+
 class TestBootstrapValidationOk:
     def test_valid_key_logs_success_and_writes_cache(self, env_setup):
         write_env_file(env_setup["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-good"})
@@ -96,14 +108,16 @@ class TestBootstrapValidationOk:
         assert any("my-key" in m for m in ctx.actions)
         cache_file = env_setup["data_dir"] / "last_validated.sha256"
         assert cache_file.is_file()
-        # Hash is non-empty hex
-        assert len(cache_file.read_text().strip()) == 64
+        # Hash (64-char hex) on line 1, validation epoch on line 2
+        lines = cache_file.read_text().split()
+        assert len(lines) == 2
+        assert len(lines[0]) == 64
+        assert lines[1].isdigit()
 
-    def test_cached_key_skips_network_call(self, env_setup):
-        import hashlib
+    def test_fresh_cached_key_skips_network_call(self, env_setup):
+        import time
         write_env_file(env_setup["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-cached"})
-        cache_file = env_setup["data_dir"] / "last_validated.sha256"
-        cache_file.write_text(hashlib.sha256(b"sk-or-v1-cached").hexdigest() + "\n")
+        _write_cache_file(env_setup["data_dir"], "sk-or-v1-cached", epoch=time.time())
         ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
 
         with patch.object(cb, "check_account") as mock_check:
@@ -112,6 +126,51 @@ class TestBootstrapValidationOk:
         mock_check.assert_not_called()
         assert ctx.failures == []
         assert any("cached" in m for m in ctx.oks)
+
+
+class TestValidationCacheExpiry:
+    """W8: a hash-matching cache only skips /auth/key while fresh (~7 days)."""
+
+    def test_stale_cache_revalidates_and_refreshes_timestamp(self, env_setup):
+        import time
+        write_env_file(env_setup["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-old"})
+        stale_epoch = time.time() - (cb._REVALIDATE_AFTER_SECONDS + 60)
+        cache_file = _write_cache_file(env_setup["data_dir"], "sk-or-v1-old", epoch=stale_epoch)
+        ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
+
+        with patch.object(cb, "check_account", return_value=_ok_status()) as mock_check:
+            cb.bootstrap(ctx)
+
+        mock_check.assert_called_once()
+        assert ctx.failures == []
+        # cache rewritten with a fresh timestamp
+        new_epoch = int(cache_file.read_text().split()[1])
+        assert new_epoch > stale_epoch + cb._REVALIDATE_AFTER_SECONDS - 120
+
+    def test_stale_cache_redetects_revocation(self, env_setup):
+        import time
+        write_env_file(env_setup["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-revoked"})
+        stale_epoch = time.time() - (cb._REVALIDATE_AFTER_SECONDS + 60)
+        _write_cache_file(env_setup["data_dir"], "sk-or-v1-revoked", epoch=stale_epoch)
+        ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
+
+        with patch.object(cb, "check_account", return_value=_fail_status("auth")) as mock_check:
+            cb.bootstrap(ctx)
+
+        mock_check.assert_called_once()
+        assert len(ctx.failures) == 1
+
+    def test_legacy_hash_only_cache_revalidates(self, env_setup):
+        # Pre-W8 cache files carry no timestamp; treat them as stale, not fresh.
+        write_env_file(env_setup["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-legacyfmt"})
+        _write_cache_file(env_setup["data_dir"], "sk-or-v1-legacyfmt", epoch=None)
+        ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
+
+        with patch.object(cb, "check_account", return_value=_ok_status()) as mock_check:
+            cb.bootstrap(ctx)
+
+        mock_check.assert_called_once()
+        assert ctx.failures == []
 
 
 class TestBootstrapValidationFailures:

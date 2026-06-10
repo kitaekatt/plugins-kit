@@ -20,3 +20,13 @@ class TestSharedLibImports:
         shared = manifest.get("shared_lib_imports", [])
         assert "openrouter_kit" in shared
         assert "bootstrap_lib" in shared
+
+
+class TestTools:
+    def test_no_dead_claude_tool_entry(self):
+        # W10: bootstrap cannot install `claude` (every platform said "manual"),
+        # so the entry was dead weight that could only ever produce a useless
+        # fix-all. Pin its removal.
+        manifest = json.loads((PLUGIN_ROOT / "bootstrap.json").read_text(encoding="utf-8"))
+        names = [t["name"] for t in manifest.get("tools", [])]
+        assert "claude" not in names

@@ -32,3 +32,18 @@ def test_build_messages_with_system():
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "hi"},
     ]
+
+
+def test_missing_openrouter_kit_exits_2_via_single_guard(monkeypatch, capsys, tmp_path):
+    # W11: the two duplicated import guards are merged into one. Force the
+    # import to fail (None in sys.modules raises ImportError) and check the
+    # single actionable message; pin the dedup structurally.
+    import sys
+
+    monkeypatch.setitem(sys.modules, "openrouter_kit", None)
+    rc = orr.main(["--prompt", "hi", "--out", str(tmp_path / "o.txt")])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "openrouter_kit not importable" in err
+    assert "shared-libs .pth" in err
+    assert _SCRIPT.read_text(encoding="utf-8").count("from openrouter_kit import") == 1

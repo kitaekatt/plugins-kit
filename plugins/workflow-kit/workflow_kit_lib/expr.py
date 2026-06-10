@@ -45,12 +45,17 @@ class Scope:
                  of an enclosing pipeline/fan_out, or "item" for a flat for_each).
     prev_stage : (stage_id, js_var) for the immediately preceding pipeline stage,
                  or None.
+    inputs     : set of input names `inputs.X` heads may use, or None to skip the
+                 check. The compiler passes the declared `inputs:` names (plus the
+                 reserved node args when node steps exist); an unknown head is a
+                 compile error instead of a silent runtime `undefined`.
     """
 
-    def __init__(self, step_vars=None, locals=None, prev_stage=None):
+    def __init__(self, step_vars=None, locals=None, prev_stage=None, inputs=None):
         self.step_vars = dict(step_vars or {})
         self.locals = dict(locals or {})
         self.prev_stage = prev_stage
+        self.inputs = set(inputs) if inputs is not None else None
 
     def available(self) -> str:
         names = (
@@ -101,7 +106,13 @@ def compile_expr(expr: str, scope: Scope) -> str:
 
     m = _INPUTS_RE.match(e)
     if m:
-        return "inputs" + _member(_split_idents(m.group(1), e))
+        parts = _split_idents(m.group(1), e)
+        if scope.inputs is not None and parts[0] not in scope.inputs:
+            raise WorkflowError(
+                f"unknown input {parts[0]!r} in {{{{ {e} }}}}; "
+                f"declared inputs: {sorted(scope.inputs)}"
+            )
+        return "inputs" + _member(parts)
 
     parts = _split_idents(e, e)
     head, tail = parts[0], parts[1:]

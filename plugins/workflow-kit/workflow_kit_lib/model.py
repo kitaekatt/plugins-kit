@@ -27,6 +27,7 @@ The grammar, mirroring the steps-wrap-pipelines format:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional, Union
 
@@ -35,6 +36,18 @@ from .errors import WorkflowError
 VALID_MODELS = {"sonnet", "opus", "haiku"}
 VALID_ISOLATION = {"worktree"}
 VALID_MODE = {"parallel"}  # v1 exposes only parallel fan-out for flat steps / nested fan_out
+
+# Step ids, stage ids, and `as` names become JS identifiers in the compiled
+# script (step vars, stage-callback params, fan-out lambda params). Anything
+# outside this set either breaks the emitted JS (`a-b` and `a_b` both sanitize
+# to `step_a_b`) or can never be referenced from a {{ }} expression.
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# Names with a fixed meaning in the compiled script: `prev`/`i` are the stage
+# callback params, `item` is the implicit for_each binding, `inputs`/`args` are
+# the normalized-inputs consts, and `steps` is the expression-grammar namespace.
+# Using one as an id/`as` name would shadow or collide with them silently.
+_RESERVED_IDS = {"prev", "i", "item", "inputs", "args", "steps"}
 
 
 # --------------------------------------------------------------------------- #
@@ -76,6 +89,20 @@ def _enum(val: Optional[str], allowed: set, key: str, where: str) -> Optional[st
     if val is not None and val not in allowed:
         raise WorkflowError(f"{where}: {key!r} must be one of {sorted(allowed)}, got {val!r}")
     return val
+
+
+def _ident(val: Any, key: str, where: str) -> str:
+    """Validate a step/stage/`as` id: a JS-safe identifier, not a reserved name."""
+    s = _str(val, key, where)
+    if not _IDENT_RE.match(s):
+        raise WorkflowError(
+            f"{where}: {key!r} must be an identifier ([A-Za-z_][A-Za-z0-9_]*), got {s!r}"
+        )
+    if s in _RESERVED_IDS:
+        raise WorkflowError(
+            f"{where}: {key!r} must not be a reserved name {sorted(_RESERVED_IDS)}, got {s!r}"
+        )
+    return s
 
 
 # --------------------------------------------------------------------------- #
@@ -204,7 +231,6 @@ class OpenRouterSpec:
 class FanOut:
     over: Union[str, list]
     as_: str
-    mode: str = "parallel"
 
     @classmethod
     def parse(cls, raw: Any, where: str) -> "FanOut":
@@ -213,11 +239,10 @@ class FanOut:
         over = _req(d, "over", where)
         if not isinstance(over, (str, list)):
             raise WorkflowError(f"{where}: 'over' must be a string expression or a list")
-        return cls(
-            over=over,
-            as_=_str(_req(d, "as", where), "as", where),
-            mode=_enum(_opt_str(d, "mode", where) or "parallel", VALID_MODE, "mode", where),
-        )
+        # `mode` is accepted and validated (typo protection) but not stored:
+        # v1 has only parallel fan-out, so nothing reads it.
+        _enum(_opt_str(d, "mode", where) or "parallel", VALID_MODE, "mode", where)
+        return cls(over=over, as_=_ident(_req(d, "as", where), "as", where))
 
 
 @dataclass
@@ -231,7 +256,7 @@ class Stage:
     def parse(cls, raw: Any, where: str) -> "Stage":
         d = _as_dict(raw, where)
         _forbid_extra(d, {"id", "phase", "agent", "fan_out"}, where)
-        sid = _str(_req(d, "id", where), "id", where)
+        sid = _ident(_req(d, "id", where), "id", where)
         loc = f"{where}.stage[{sid!r}]"
         agent = AgentSpec.parse(_req(d, "agent", loc), f"{loc}.agent")
         fan = d.get("fan_out")
@@ -264,7 +289,7 @@ class PipelineSpec:
         dupes = sorted({i for i in ids if ids.count(i) > 1})
         if dupes:
             raise WorkflowError(f"{where}: duplicate stage id(s) {dupes}")
-        return cls(over=over, as_=_str(_req(d, "as", where), "as", where), stages=stages)
+        return cls(over=over, as_=_ident(_req(d, "as", where), "as", where), stages=stages)
 
 
 @dataclass
@@ -273,7 +298,6 @@ class Step:
     phase: Optional[str] = None
     agent: Optional[AgentSpec] = None
     for_each: Optional[str] = None
-    mode: str = "parallel"
     pipeline: Optional[PipelineSpec] = None
     script: Optional[ScriptSpec] = None
     openrouter: Optional[OpenRouterSpec] = None
@@ -295,7 +319,7 @@ class Step:
     @classmethod
     def parse(cls, raw: Any, where: str) -> "Step":
         d = _as_dict(raw, where)
-        sid = _str(_req(d, "id", where), "id", where)
+        sid = _ident(_req(d, "id", where), "id", where)
         loc = f"step {sid!r}"
         _forbid_extra(
             d,
@@ -325,10 +349,12 @@ class Step:
             else None
         )
         for_each = _opt_str(d, "for_each", loc)
-        mode = _enum(_opt_str(d, "mode", loc) or "parallel", VALID_MODE, "mode", loc)
+        # `mode` is accepted and validated (typo protection) but not stored:
+        # v1 has only parallel fan-out, so nothing reads it.
+        _enum(_opt_str(d, "mode", loc) or "parallel", VALID_MODE, "mode", loc)
         return cls(
             id=sid, phase=_opt_str(d, "phase", loc), agent=agent,
-            for_each=for_each, mode=mode, pipeline=pipeline,
+            for_each=for_each, pipeline=pipeline,
             script=script, openrouter=openrouter,
         )
 
@@ -376,7 +402,7 @@ class WorkflowDoc:
         raw_steps = _req(d, "steps", "<workflow>")
         if not isinstance(raw_steps, list) or not raw_steps:
             raise WorkflowError("<workflow>: 'steps' must be a non-empty list")
-        steps = [Step.parse(s, "steps[]") for s in raw_steps]
+        steps = [Step.parse(s, f"steps[{i}]") for i, s in enumerate(raw_steps)]
 
         doc = cls(
             name=name, description=description, steps=steps,

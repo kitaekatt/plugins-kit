@@ -73,28 +73,12 @@ def main(argv=None):
     ap.add_argument("--status", help="optional path for a small JSON status object ($STATUS)")
     args = ap.parse_args(argv)
 
-    # Resolve the model via openrouter-kit's registry (alias / slug / default /
-    # defaultCheap). openrouter-kit owns the model config; workflow-kit does not
-    # reimplement it.
-    try:
-        from openrouter_kit import resolve_model, ModelResolveError
-    except ImportError:
-        print(
-            "openrouter_kit not importable. Enable the openrouter-kit plugin and run this "
-            "with a Python that has openrouter_kit on its path (the shared-libs .pth).",
-            file=sys.stderr,
-        )
-        return 2
-    try:
-        args.model = resolve_model(args.model, cheap=args.cheap, project_root=os.getcwd())
-    except ModelResolveError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-
     # openrouter_kit is linked onto workflow-kit's venv by the bootstrap shared-libs
-    # .pth (workflow-kit declares shared_lib_imports). No path discovery -- just import.
+    # .pth (workflow-kit declares shared_lib_imports). No path discovery -- just
+    # import. It owns model resolution (alias / slug / default / defaultCheap) and
+    # the openai client factory; workflow-kit does not reimplement either.
     try:
-        from openrouter_kit import make_openai_client
+        from openrouter_kit import ModelResolveError, make_openai_client, resolve_model
     except ImportError:
         print(
             "openrouter_kit not importable. Enable the openrouter-kit plugin and run this "
@@ -102,6 +86,11 @@ def main(argv=None):
             "the shared-libs .pth).",
             file=sys.stderr,
         )
+        return 2
+    try:
+        args.model = resolve_model(args.model, cheap=args.cheap, project_root=os.getcwd())
+    except ModelResolveError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
 
     prompt = args.prompt if args.prompt is not None else Path(args.prompt_file).read_text(encoding="utf-8")
