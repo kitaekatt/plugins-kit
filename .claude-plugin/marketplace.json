@@ -81,7 +81,7 @@
     {
       "name": "skills-kit",
       "description": "Authoring and auditing skills + CLAUDE.md files, organized as a verb x artifact matrix: md-authoring (/md-authoring) and md-audit (/md-audit) union domains over the md artifact, the cohesion-principles placement spine, and the canonical audit-framework (primitives, compositions, audit-kinds, viewer-kinds) that other plugins' audits and viewers ride on.",
-      "version": "0.19.1",
+      "version": "0.20.0",
       "author": {
         "name": "Christina"
       },
@@ -106,8 +106,8 @@
     },
     {
       "name": "awesome-kit",
-      "description": "Christina's cross-domain skills: a shared communication framework (hand-off + verbose-updates), /plugin-ecosystem (interactive 16:9 HTML poster of marketplaces and plugins), and /html-pdf (convert an HTML file to PDF via headless Chromium and open it). Depends on plugins-kit:skills-kit for the shared audit framework, knowledge-encoding, and update-documentation. /claude-explorer moved to plugins-kit:prototypes in 0.5.0; update-documentation moved to plugins-kit:skills-kit.",
-      "version": "0.7.0",
+      "description": "Christina's cross-domain skills: the task system (file-backed task/issue tracking -- folders as source of truth, embedded task_list references, 14 verbs; evolved from the hand-off skill in 0.8.0, which it replaces), a shared communication framework (task + verbose-updates), /plugin-ecosystem (interactive 16:9 HTML poster of marketplaces and plugins), and /html-pdf (convert an HTML file to PDF via headless Chromium and open it). Depends on plugins-kit:skills-kit for the shared audit framework and the skills_kit_lib shared library (schema validation + document walking).",
+      "version": "0.8.0",
       "author": {
         "name": "Christina"
       },
