@@ -78,7 +78,8 @@ def parse_submit_gates(text: str, source: str) -> tuple[list[dict], list[str]]:
       notice silently-dropped gates.
 
     Forgiving structure: a block ends at the next marker, the next markdown
-    heading, two consecutive blank lines, or EOF. Continuation lines between
+    heading, the first blank line after the rationale has begun (the
+    rationale is a single paragraph), or EOF. Continuation lines between
     the marker and 'Applies to:' fold into the summary.
     """
     gates: list[dict] = []
@@ -149,7 +150,8 @@ def parse_submit_gates(text: str, source: str) -> tuple[list[dict], list[str]]:
             continue
 
         # Collect optional rationale: text after one blank line, until the
-        # next block boundary (marker, heading, two blanks, EOF).
+        # next block boundary (marker, heading, first blank line once the
+        # rationale has begun, EOF). One paragraph, per the format spec.
         while i < len(lines) and not lines[i].strip():
             i += 1
         rationale_lines: list[str] = []

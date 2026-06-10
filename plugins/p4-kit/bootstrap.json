@@ -15,14 +15,6 @@
         "windows": "powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"",
         "ubuntu": "curl -LsSf https://astral.sh/uv/install.sh | sh"
       }
-    },
-    {
-      "name": "claude",
-      "install": {
-        "macos": "manual",
-        "windows": "manual",
-        "ubuntu": "manual"
-      }
     }
   ],
   "venv": {

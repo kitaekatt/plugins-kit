@@ -68,9 +68,7 @@ Output schema:
 Stderr-only diagnostics. Non-zero exit on hard failure.
 """
 
-import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -88,13 +86,14 @@ reexec_under_plugin_venv("git-kit")
 try:
     from bootstrap_lib.path_repair import repair_path  # noqa: E402
 
-    from bootstrap_lib.code_review.chunking import (  # noqa: E402
-        partition_sections_into_chunks,
-        write_chunks,
-    )
-    from bootstrap_lib.code_review.claude_mds import (  # noqa: E402
-        collect_claude_mds,
-        collect_submit_gates,
+    # Shared VCS-neutral review pipeline -- subprocess wrapper, section
+    # splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
+    # emission. See bootstrap_lib/code_review/pipeline.py.
+    from bootstrap_lib.code_review.pipeline import (  # noqa: E402
+        assemble_bundle,
+        emit_bundle,
+        run_vcs,
+        split_sections,
     )
 except ImportError:
     # bootstrap_lib is absent -> the bootstrap plugin never provisioned this
@@ -137,18 +136,11 @@ _STATUS_CHARS = set("AMDRCT")
 def run_git(args: list[str], cwd: Optional[Path] = None) -> tuple[int, str, str]:
     """Run a git command, return (returncode, stdout, stderr).
 
-    Forces UTF-8 decoding for the same reasons p4-kit does -- non-Latin-1
-    file content (CJK, emoji) in diffs would abort the subprocess reader
-    on Windows under cp1252.
+    Thin wrapper over the shared run_vcs, which forces UTF-8 decoding --
+    non-Latin-1 file content (CJK, emoji) in diffs would abort the
+    subprocess reader on Windows under cp1252.
     """
-    proc = subprocess.run(
-        ["git", *args],
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        cwd=str(cwd) if cwd else None,
-    )
-    return proc.returncode, proc.stdout or "", proc.stderr or ""
+    return run_vcs("git", args, cwd=cwd)
 
 
 # ---------------------------------------------------------------------------
@@ -431,26 +423,19 @@ def _parse_git_header_path(line: str) -> Optional[str]:
     return rest[candidates[-1] + 1:][2:]
 
 
+def _parse_git_header(line: str) -> Optional[dict]:
+    """Header matcher for the shared splitter.
+
+    Uses the b-side (post-image) path as the identifier; for renames the
+    a-side and b-side differ and the b-side is the canonical one.
+    """
+    path = _parse_git_header_path(line)
+    return None if path is None else {"path": path}
+
+
 def split_git_diff_sections(diff_text: str) -> tuple[str, list[dict]]:
     """Split git-diff output into (preamble, [{path, header, body}, ...])."""
-    preamble_lines: list[str] = []
-    sections: list[dict] = []
-    current: Optional[dict] = None
-    for line in diff_text.splitlines(keepends=True):
-        # Use b-side (post-image) path as the identifier; for renames the
-        # a-side and b-side differ and the b-side is the canonical one.
-        path = _parse_git_header_path(line.rstrip("\n"))
-        if path is not None:
-            if current is not None:
-                sections.append(current)
-            current = {"path": path, "header": line, "body": ""}
-        elif current is None:
-            preamble_lines.append(line)
-        else:
-            current["body"] += line
-    if current is not None:
-        sections.append(current)
-    return "".join(preamble_lines), sections
+    return split_sections(diff_text, _parse_git_header)
 
 
 def _git_diff_to_sections(diff_text: str) -> tuple[str, list[dict]]:
@@ -592,37 +577,25 @@ def build_bundle(range_spec: str, bundle_dir: Path, auto_reason: Optional[str] =
     head_sha = head_out.strip() if rc == 0 else ""
     branch = get_current_branch() or "DETACHED"
 
-    bundle_dir.mkdir(parents=True, exist_ok=True)
     preamble, sections = _git_diff_to_sections(diff)
-    chunks = partition_sections_into_chunks(
-        sections, MAX_CHUNK_BYTES, preamble=preamble
+    files = [
+        {
+            "identifier": path,
+            "path": path,
+            "local": str((repo_root / path).resolve()),
+            "status": status,
+        }
+        for status, path in changed
+    ]
+    core = assemble_bundle(
+        preamble=preamble,
+        sections=sections,
+        files=files,
+        bundle_dir=bundle_dir,
+        max_chunk_bytes=MAX_CHUNK_BYTES,
+        workspace_root=repo_root,
     )
-    diff_chunks = write_chunks(chunks, bundle_dir)
-
-    path_to_chunk: dict[str, int] = {}
-    for entry in diff_chunks:
-        for p in entry["files"]:
-            path_to_chunk[p] = entry["index"]
-
-    changed_files: list[dict] = []
-    unique: list[str] = []
-    seen: set[str] = set()
-    for status, path in changed:
-        local = (repo_root / path).resolve()
-        claude_mds = collect_claude_mds(local, repo_root)
-        for cm in claude_mds:
-            if cm not in seen:
-                unique.append(cm)
-                seen.add(cm)
-        changed_files.append(
-            {
-                "path": path,
-                "local": str(local),
-                "status": status,
-                "chunk_index": path_to_chunk.get(path),
-                "claude_mds": claude_mds,
-            }
-        )
+    changed_files = core["changed_files"]
 
     # Touched parent dirs for the untracked/unstaged scan.
     touched_dirs: list[Path] = []
@@ -635,9 +608,6 @@ def build_bundle(range_spec: str, bundle_dir: Path, auto_reason: Optional[str] =
 
     untracked_or_unstaged = find_untracked_or_unstaged(repo_root, touched_dirs)
     merge_conflicts = find_merge_conflicts(repo_root)
-    submit_gates = collect_submit_gates(
-        unique, [cf["local"] for cf in changed_files], repo_root
-    )
 
     bundle: dict = {
         "vcs": "git",
@@ -645,13 +615,13 @@ def build_bundle(range_spec: str, bundle_dir: Path, auto_reason: Optional[str] =
         "head_sha": head_sha,
         "branch": branch,
         "description": description,
-        "bundle_dir": str(bundle_dir),
-        "diff_chunks": diff_chunks,
+        "bundle_dir": core["bundle_dir"],
+        "diff_chunks": core["diff_chunks"],
         "changed_files": changed_files,
-        "unique_claude_mds": unique,
+        "unique_claude_mds": core["unique_claude_mds"],
         "untracked_or_unstaged": untracked_or_unstaged,
         "merge_conflicts": merge_conflicts,
-        "submit_gates": submit_gates,
+        "submit_gates": core["submit_gates"],
     }
     if auto_reason:
         bundle["auto_detected_reason"] = auto_reason
@@ -683,12 +653,7 @@ def main(argv: list[str]) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    (bundle_dir / "bundle.json").write_text(
-        json.dumps(bundle, indent=2) + "\n", encoding="utf-8"
-    )
-    json.dump(bundle, sys.stdout, indent=2)
-    sys.stdout.write("\n")
-    return 0
+    return emit_bundle(bundle, bundle_dir)
 
 
 if __name__ == "__main__":
