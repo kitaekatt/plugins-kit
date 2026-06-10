@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Discovery / Scoped-List Data Flow",
+    "subtitle": "list --scope: crawl task.yaml (primary) + scan references, resolve by path, validate-classify, dedupe, project fields",
+    "output": "task-discovery.html",
+    "viewBox": [1120, 700]
+  },
+  "stages": [
+    { "label": "Scope" },
+    { "label": "Discover" },
+    { "label": "Resolve + classify" },
+    { "label": "Dedupe" },
+    { "label": "Project" }
+  ],
+  "nodes": [
+    { "id": "scope", "type": "external", "label": "Query scope", "sublabel": "user/project/skill/file", "stage": 0, "row": 1, "width": 132, "tag": "where you point" },
+    { "id": "crawl", "type": "database", "label": "task.yaml crawl", "sublabel": "dev/tasks + tmp", "stage": 1, "row": 0, "width": 158, "tag": "primary" },
+    { "id": "scan", "type": "messagebus", "label": "reference scan", "sublabel": "task_list in docs", "stage": 1, "row": 2, "width": 158, "tag": "association" },
+    { "id": "resolve", "type": "backend", "label": "resolve by path", "sublabel": "ref -> folder", "stage": 2, "row": 1, "width": 158, "tag": "id = path" },
+    { "id": "validate", "type": "security", "label": "validate", "sublabel": "classify each", "stage": 2, "row": 3, "width": 158, "tag": "active/invalid/remote" },
+    { "id": "dedupe", "type": "cloud", "label": "dedupe", "sublabel": "by canonical path", "stage": 3, "row": 1, "width": 158, "tag": "one per task" },
+    { "id": "project", "type": "backend", "label": "project fields", "sublabel": "selected fields", "stage": 4, "row": 0, "width": 158, "tag": "scripted" },
+    { "id": "output", "type": "frontend", "label": "Computed list", "sublabel": "never stored", "stage": 4, "row": 2, "width": 158, "tag": "result" }
+  ],
+  "flows": [
+    { "from": "scope", "to": "crawl", "label": "roots", "classification": "primary crawl", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "from": "scope", "to": "scan", "label": "scoped docs", "classification": "association", "variant": "default", "fromSide": "right", "toSide": "left" },
+    { "from": "crawl", "to": "resolve", "label": "task.yaml found", "classification": "folders", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "from": "scan", "to": "resolve", "label": "references", "classification": "paths", "variant": "default", "fromSide": "right", "toSide": "left" },
+    { "from": "resolve", "to": "validate", "label": "each task", "classification": "read task.yaml", "variant": "security", "fromSide": "bottom", "toSide": "top", "route": "straight" },
+    { "from": "validate", "to": "dedupe", "label": "classified", "classification": "with state", "variant": "security", "fromSide": "right", "toSide": "left" },
+    { "from": "dedupe", "to": "project", "label": "unique tasks", "classification": "by path = id", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "from": "project", "to": "output", "label": "fields", "classification": "projection", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "straight" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Two crawl modes",
+      "items": [
+        "Primary: discover task.yaml files under dev/tasks + tmp (the folders ARE the registry)",
+        "Association: scan the scoped documents' task_list references",
+        "Scope = where you point it: user / project / skill (incl. references) / file"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Resolve, classify, dedupe",
+      "items": [
+        "References resolve to folders by path (the id)",
+        "validate classifies each task: Active / Invalid / Remote",
+        "A task referenced in many docs dedupes to one, keyed by canonical path"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "The list is computed",
+      "items": [
+        "Output projects selected task.yaml fields (script-driven, no inference)",
+        "The project-scope list is a computed view, never a stored master file",
+        "Remote tasks appear but cannot be locally resolved (status unknown)"
+      ]
+    }
+  ]
+}

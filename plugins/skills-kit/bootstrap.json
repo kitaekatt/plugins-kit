@@ -1,4 +1,7 @@
 {
+  "shared_libs": [
+    { "name": "skills_kit_lib", "src": "." }
+  ],
   "venv": {
     "check_imports": ["yaml"]
   },

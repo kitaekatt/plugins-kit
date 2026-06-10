@@ -73,6 +73,6 @@ to the script that imports them (e.g. `plugins/p4-kit/scripts/bootstrap_guard.py
 location. `tests/bootstrap/test_bootstrap_guard.py` asserts every copy matches
 the canonical, and the guard must never `import bootstrap_lib`. Current vendored
 copies: `git-kit/scripts`, `p4-kit/scripts`, `skills-kit/scripts`,
-`unreal-kit/lib`.
+`unreal-kit/lib`, `awesome-kit/skills/task/scripts`.
 
 `path_repair.py` follows the same vendoring discipline.

@@ -10,8 +10,9 @@
     }
   ],
   "venv": {
-    "check_imports": ["playwright", "pypdf"]
+    "check_imports": ["playwright", "pypdf", "yaml"]
   },
+  "shared_lib_imports": ["skills_kit_lib"],
   "script": {
     "path": "custom_bootstrap.py",
     "entry_point": "bootstrap"

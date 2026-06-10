@@ -1,8 +1,8 @@
 # Example: a produced CLAUDE.md
 
-This is a worked example of the CLAUDE.md the `/hand-off` skill produces. It is generalized from a real project hand-off; the structural skeleton (eight `##` sections under `# Project Overview`, the `###` and `####` subsections, and the seam between them) is verbatim. Project-specific bullets have been replaced with generic placeholders so this reads as a *template*, not as one project's snapshot.
+This is a worked example of the CLAUDE.md a filled-in task folder carries (the hand-off template that `task init` scaffolds; see `handoff-template.md`). It is generalized from a real project hand-off; the structural skeleton (eight `##` sections under `# Project Overview`, the `###` and `####` subsections, and the seam between them) is verbatim. Project-specific bullets have been replaced with generic placeholders so this reads as a *template*, not as one project's snapshot.
 
-Read this when the template in `SKILL.md` feels abstract. The shape below is the contract; substitute the substance.
+Read this when the template in `handoff-template.md` feels abstract. The shape below is the contract; substitute the substance.
 
 ----
 

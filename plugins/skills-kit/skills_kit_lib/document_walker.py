@@ -19,6 +19,12 @@ except ImportError:
 
 _YAML_BLOCK_RE = re.compile(r"^```ya?ml\s*\n(.*?)^```", re.MULTILINE | re.DOTALL)
 
+# Public alias: consumers that need block SPANS (match.start/end of group 1),
+# not just block text, may finditer this directly. Same compiled object the
+# iter_yaml_blocks generator uses, so span semantics can never diverge from
+# the canonical block recognition.
+YAML_BLOCK_RE = _YAML_BLOCK_RE
+
 
 CONTRACT_ROOT_KEYS = SKILL_TYPE_ROOTS + ("claude_md",)
 
