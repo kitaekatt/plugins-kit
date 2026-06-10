@@ -101,7 +101,8 @@
       "source": "./plugins/awesome-kit",
       "category": "development",
       "dependencies": [
-        "bootstrap"
+        "bootstrap",
+        "skills-kit"
       ]
     },
     {

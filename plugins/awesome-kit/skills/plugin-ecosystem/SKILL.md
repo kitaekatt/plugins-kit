@@ -53,9 +53,10 @@ generate.py --marketplace plugins-kit --title "plugins-kit marketplace" \
 ## How to Invoke
 
 ```bash
-powershell -NoProfile -Command "& SpiritCrossing\Scripts\python.bat \
-  D:/dev/plugins-kit/plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py"
+uv run python "${CLAUDE_PLUGIN_ROOT}/skills/plugin-ecosystem/scripts/generate.py"
 ```
+
+The script is stdlib-only; `uv run python` is the repo-standard cross-platform invocation (resolves a working interpreter on macOS, Windows, and Linux).
 
 Optional flags:
 - `--project PATH` -- project root (defaults to cwd). Determines which `bootstrap.json` and `settings.json` are read for live state.

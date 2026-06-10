@@ -1,0 +1,167 @@
+"""Tests for the plugin-ecosystem generator's pure core (publish-flow load-bearing).
+
+generate.py is imported by file path (the test_html_pdf.py pattern) so the test
+does not depend on the plugin being on sys.path. Covered here: the minimal YAML
+reader (the single parser shared by poster.yaml and SKILL.md frontmatter),
+normalize_state, the compute_state 5-level precedence, and collect_plugins'
+phantom-install filtering. HTML rendering and the browser-open path are not
+unit-tested.
+"""
+
+import importlib.util
+import json
+from pathlib import Path
+
+_SCRIPT = (
+    Path(__file__).resolve().parents[2]
+    / "plugins" / "awesome-kit" / "skills" / "plugin-ecosystem" / "scripts" / "generate.py"
+)
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location("plugin_ecosystem_generate", _SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+generate = _load_module()
+
+
+class TestParseYaml:
+    def test_scalar_keys(self):
+        out = generate.parse_yaml("title: My Poster\nurl: https://x.example\n")
+        assert out == {"title": "My Poster", "url": "https://x.example"}
+
+    def test_quotes_stripped(self):
+        out = generate.parse_yaml('a: "double"\nb: \'single\'\n')
+        assert out == {"a": "double", "b": "single"}
+
+    def test_one_level_nested_map(self):
+        out = generate.parse_yaml("states:\n  bootstrap: required\n  git-kit: on\n")
+        assert out == {"states": {"bootstrap": "required", "git-kit": "on"}}
+
+    def test_comments_and_blank_lines_skipped(self):
+        out = generate.parse_yaml("# header\n\ntitle: T\n")
+        assert out == {"title": "T"}
+
+    def test_value_with_colon_preserved(self):
+        out = generate.parse_yaml("desc: Use when X: do Y\n")
+        assert out["desc"] == "Use when X: do Y"
+
+    def test_booleans_kept_as_strings(self):
+        out = generate.parse_yaml("flag: true\n")
+        assert out["flag"] == "true"
+
+
+class TestParseFrontmatter:
+    def test_extracts_block(self):
+        text = "---\nname: my-skill\ndescription: Does things\n---\n\n# Body\n"
+        out = generate.parse_frontmatter(text)
+        assert out["name"] == "my-skill"
+        assert out["description"] == "Does things"
+
+    def test_no_frontmatter_returns_empty(self):
+        assert generate.parse_frontmatter("# Just a heading\n") == {}
+
+    def test_unterminated_frontmatter_returns_empty(self):
+        assert generate.parse_frontmatter("---\nname: x\n") == {}
+
+    def test_parse_skill_frontmatter_reads_file(self, tmp_path):
+        md = tmp_path / "SKILL.md"
+        md.write_text("---\nname: s\nauthor: christina\n---\nbody\n", encoding="utf-8")
+        out = generate.parse_skill_frontmatter(md)
+        assert out == {"name": "s", "author": "christina"}
+
+    def test_parse_skill_frontmatter_missing_file(self, tmp_path):
+        assert generate.parse_skill_frontmatter(tmp_path / "nope.md") == {}
+
+
+class TestNormalizeState:
+    def test_mappings(self):
+        ns = generate.normalize_state
+        assert ns("on") == ns("true") == ns("enabled") == ns("yes") == "on"
+        assert ns("off") == ns("false") == ns("disabled") == ns("no") == "off"
+        assert ns("opt-in") == ns("optin") == ns("manual") == "opt-in"
+        assert ns("required") == ns("mandatory") == "required"
+        assert ns(" ON ") == "on"  # trim + case-fold
+        assert ns("weird") == "weird"  # passthrough
+
+
+class TestComputeStatePrecedence:
+    REF = "mkt:plug"
+
+    def _state(self, settings=None, bs=None, overrides=None, m_states=None,
+               defaults_mode=False):
+        return generate.compute_state(
+            self.REF, settings or {}, bs or {}, overrides or {},
+            m_states or {}, defaults_mode)
+
+    def test_level1_user_override_wins_over_everything(self):
+        state = self._state(
+            settings={"plug@mkt": True},
+            bs={self.REF: {"enabled": True}},
+            overrides={self.REF: "off"},
+            m_states={"mkt": {"plug": "required"}})
+        assert state == "off"
+
+    def test_level1_short_name_override(self):
+        assert self._state(overrides={"plug": "opt-in"}) == "opt-in"
+
+    def test_level2_marketplace_states_beat_settings(self):
+        state = self._state(
+            settings={"plug@mkt": False},
+            m_states={"mkt": {"plug": "required"}})
+        assert state == "required"
+
+    def test_level3_settings_enabled_plugins(self):
+        assert self._state(settings={"plug@mkt": True}) == "on"
+        assert self._state(settings={"plug@mkt": False}) == "off"
+
+    def test_level4_bootstrap_declaration(self):
+        assert self._state(bs={self.REF: {"install": "manual"}}) == "opt-in"
+        assert self._state(bs={self.REF: {"enabled": True}}) == "on"
+        assert self._state(bs={self.REF: {"enabled": False}}) == "off"
+
+    def test_level5_default(self):
+        assert self._state() == "unmanaged"
+        assert self._state(defaults_mode=True) == "opt-in"
+
+
+class TestCollectPluginsPhantomFiltering:
+    def _make_install(self, tmp_path, name, description="desc"):
+        root = tmp_path / name
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": name, "description": description}), encoding="utf-8")
+        return root
+
+    def test_filters_phantoms_and_non_opted_in(self, tmp_path):
+        real = self._make_install(tmp_path, "real")
+        ghost = self._make_install(tmp_path, "ghost")
+        other = self._make_install(tmp_path, "other")
+        installed = {"plugins": {
+            "real@mkt": [{"installPath": str(real), "version": "1.0.0"}],
+            # phantom: still installed locally, removed from marketplace.json
+            "ghost@mkt": [{"installPath": str(ghost), "version": "1.0.0"}],
+            # marketplace that did not opt in (no poster.yaml)
+            "other@silent": [{"installPath": str(other), "version": "1.0.0"}],
+            # malformed key: no @
+            "noatsign": [{"installPath": str(real), "version": "1.0.0"}],
+            # empty entries list
+            "empty@mkt": [],
+        }}
+        marketplaces = {"mkt": {"poster": {}, "plugin_names": {"real", "empty"}}}
+        out = generate.collect_plugins(installed, marketplaces, {}, {}, {}, {})
+        assert [p["name"] for p in out] == ["real"]
+        assert out[0]["marketplace"] == "mkt"
+        assert out[0]["version"] == "1.0.0"
+
+    def test_poster_yaml_overrides_card_copy(self, tmp_path):
+        root = self._make_install(tmp_path, "p", description="from plugin.json")
+        (root / ".claude-plugin" / "poster.yaml").write_text(
+            "description: from poster\n", encoding="utf-8")
+        installed = {"plugins": {"p@mkt": [{"installPath": str(root), "version": "0.1"}]}}
+        marketplaces = {"mkt": {"poster": {}, "plugin_names": {"p"}}}
+        out = generate.collect_plugins(installed, marketplaces, {}, {}, {}, {})
+        assert out[0]["description"] == "from poster"

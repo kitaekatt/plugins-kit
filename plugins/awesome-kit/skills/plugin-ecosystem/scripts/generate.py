@@ -98,27 +98,23 @@ def load_json(path: Path) -> dict:
         return {}
 
 
-def parse_skill_frontmatter(skill_md: Path) -> dict:
-    try:
-        text = skill_md.read_text(encoding="utf-8")
-    except OSError:
-        return {}
+def parse_frontmatter(text: str) -> dict:
+    """Extract the YAML frontmatter block from SKILL.md text and parse it with
+    the same minimal YAML reader used for poster.yaml files (single parser)."""
     if not text.startswith("---"):
         return {}
     end = text.find("\n---", 3)
     if end == -1:
         return {}
-    block = text[3:end]
-    out = {}
-    for line in block.splitlines():
-        line = line.rstrip()
-        if not line or line.startswith("#"):
-            continue
-        m = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$", line)
-        if not m:
-            continue
-        out[m.group(1)] = _strip_quotes(m.group(2).strip())
-    return out
+    return parse_yaml(text[3:end])
+
+
+def parse_skill_frontmatter(skill_md: Path) -> dict:
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    return parse_frontmatter(text)
 
 
 def collect_skills(plugin_root: Path, poster_overrides: dict) -> list[dict]:

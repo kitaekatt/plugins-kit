@@ -6,7 +6,8 @@
     "name": "Christina"
   },
   "dependencies": [
-    "bootstrap"
+    "bootstrap",
+    "skills-kit"
   ],
   "keywords": [
     "documentation",
