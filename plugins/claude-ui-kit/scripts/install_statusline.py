@@ -15,6 +15,27 @@ Behavior:
 
 The script is idempotent: re-running on every SessionStart is a no-op once
 installed.
+
+Windows interpreter wrapping + self-heal
+----------------------------------------
+On Windows, Claude Code spawns the statusLine command through `cmd.exe /c`. A
+bare `.sh` path has no interpreter, so cmd opens it via Windows file
+association (`sh_auto_file`) instead of executing it -> empty stdout, exit 0,
+blank status line. (macOS/Linux are unaffected: the script's shebang makes a
+bare `.sh` directly executable.)
+
+So on Windows we emit the command as an explicit Git Bash invocation:
+
+    "<bash.exe>" "<.../statusline.sh>"
+
+bash.exe is resolved from CLAUDE_CODE_GIT_BASH_PATH, falling back to the common
+Git-for-Windows install locations. The build is idempotent and self-recognizing
+(`_expected_command` is exactly what `_is_ours` + the equality check expect), so
+re-runs are no-ops. And because a *previously installed* bare-path command (from
+an older version of this installer) is still recognized as ours via the
+`/claude-ui-kit/` substring, the refresh branch in install() rewrites it to the
+wrapped form automatically -- existing broken installs self-heal on the next
+SessionStart without a reinstall.
 """
 
 import json
@@ -27,6 +48,15 @@ from typing import Optional, Tuple
 PLUGIN_NAME = "claude-ui-kit"
 INSTALLED_SCRIPT_RELPATH = "scripts/statusline.sh"
 CUSTOMIZED_FLAG = "customized.flag"
+
+# Common Git-for-Windows bash.exe locations, tried in order when
+# CLAUDE_CODE_GIT_BASH_PATH is unset. First existing wins; if none exist we
+# fall back to the first entry so the emitted command is still well-formed
+# (and fixable once Git is on PATH / the env var is set).
+_GIT_BASH_FALLBACKS = (
+    r"C:\Program Files\Git\bin\bash.exe",
+    r"C:\Program Files (x86)\Git\bin\bash.exe",
+)
 
 
 def install(ctx) -> None:
@@ -43,7 +73,7 @@ def install(ctx) -> None:
                 f"{Path(ctx.data_dir) / INSTALLED_SCRIPT_RELPATH}")
         return
 
-    expected_command = _posix(installed_script)
+    expected_command = _build_command(installed_script)
 
     # Use the engine's canonical project_dir (Claude Code's launch CWD).
     # Never walk up looking for .claude/ — Claude Code itself does not, so any
@@ -81,11 +111,23 @@ def install(ctx) -> None:
         return
 
     if _is_ours(current_command):
-        # Plugin path moved (upgrade, version bump, scope change). Refresh.
+        # Our statusLine, but the stored command differs from what we'd emit
+        # now. Two causes, both remediated by rewriting to expected_command:
+        #   1. Plugin path moved (upgrade, version bump, scope change).
+        #   2. The command is BROKEN on Windows -- a bare `.sh` path with no
+        #      interpreter, written by an older version of this installer, which
+        #      renders a blank status line (see module docstring). This is the
+        #      detect-and-remediate path that self-heals existing installs.
         if _refuse_unparseable(ctx, settings_path):
             return
         _write_statusline(settings_path, expected_command)
-        ctx.log(f"statusline: refreshed path in {_posix(settings_path)}")
+        if _is_broken_command(current_command):
+            ctx.log(
+                f"statusline: remediated broken (un-wrapped) command in "
+                f"{_posix(settings_path)} -- wrapped with Git Bash interpreter"
+            )
+        else:
+            ctx.log(f"statusline: refreshed path in {_posix(settings_path)}")
         return
 
     # User has a custom statusLine. Don't touch it without explicit consent.
@@ -116,6 +158,64 @@ def install(ctx) -> None:
 def _resolve_installed_script(data_dir: str) -> Optional[Path]:
     p = Path(data_dir) / INSTALLED_SCRIPT_RELPATH
     return p if p.is_file() else None
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _git_bash_path() -> str:
+    """Resolve the Git Bash interpreter to wrap the .sh with on Windows.
+
+    Prefers CLAUDE_CODE_GIT_BASH_PATH (Claude Code's own env var for this),
+    then the common Git-for-Windows install locations. Always returns a
+    forward-slash path so the emitted command is uniform and quote-safe.
+    """
+    env = os.environ.get("CLAUDE_CODE_GIT_BASH_PATH")
+    if env:
+        return env.replace("\\", "/")
+    for candidate in _GIT_BASH_FALLBACKS:
+        if os.path.isfile(candidate):
+            return candidate.replace("\\", "/")
+    return _GIT_BASH_FALLBACKS[0].replace("\\", "/")
+
+
+def _build_command(installed_script: Path) -> str:
+    """The statusLine command string to write into settings.
+
+    POSIX: the bare script path (shebang makes it executable).
+    Windows: the script path wrapped in an explicit Git Bash invocation, since
+    cmd.exe would otherwise file-associate a bare `.sh` and produce no output.
+    Both forms are quoted so paths with spaces survive.
+    """
+    script = _posix(installed_script)
+    if _is_windows():
+        return f'"{_git_bash_path()}" "{script}"'
+    return script
+
+
+def _is_broken_command(command: str) -> bool:
+    """True if `command` is a bare `.sh` path that Windows cannot execute.
+
+    A broken command is one that ends in `.sh` (optionally quoted/whitespace)
+    with no interpreter token in front -- i.e. cmd.exe would file-associate it.
+    A correctly wrapped command starts with a `bash`/`sh` interpreter, so it has
+    a token before the `.sh`. Only meaningful on Windows; on POSIX a bare `.sh`
+    is correct, so this always returns False there.
+    """
+    if not _is_windows():
+        return False
+    stripped = command.strip().strip('"').strip()
+    if not stripped.lower().endswith(".sh"):
+        return False  # not a plain script path (already wrapped, or non-.sh)
+    # A wrapped command ("<bash>" "<script>.sh") still ends in .sh after the
+    # outer strip only if there is exactly one quoted token; detect a leading
+    # interpreter by checking for an unquoted/quoted token before the path.
+    # The simplest robust signal: a correctly wrapped command contains a
+    # bash/sh executable reference; a bare path does not.
+    lowered = command.lower()
+    return ("bash" not in lowered) and ("/sh " not in lowered) \
+        and ("\\sh " not in lowered)
 
 
 def _find_existing_statusline(paths) -> Optional[Tuple[Path, str]]:

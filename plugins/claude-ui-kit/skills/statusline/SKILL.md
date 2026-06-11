@@ -44,6 +44,7 @@ When the user requests a change:
   - `settings.local.json` is the one exception: machine-specific but lives in `.claude/` because the Claude Code harness reads it from there.
   - Do not write to `/tmp` or other ad-hoc paths.
 - After any edit, verify by piping a small fake JSON payload through the script and showing the user the rendered output.
+- **Windows: wrap the `.sh` in a Git Bash invocation when writing `statusLine.command`.** Claude Code spawns the status-line command through `cmd.exe /c`, which file-associates a bare `.sh` instead of executing it -> blank line. On Windows, set `statusLine.command` to `"<bash.exe>" "<path>/statusline.sh"`, resolving `<bash.exe>` from `CLAUDE_CODE_GIT_BASH_PATH` (fallback `C:/Program Files/Git/bin/bash.exe`). On macOS/Linux keep the bare path (the shebang executes it). This is the same rule the installer (`scripts/install_statusline.py`) and its self-heal apply; mirror it for any manual `statusLine.command` write.
 
 ## Stay grounded
 
