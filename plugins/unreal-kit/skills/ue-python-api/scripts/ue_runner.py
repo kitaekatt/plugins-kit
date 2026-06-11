@@ -167,10 +167,61 @@ def _try_remote(script_path: str, config: RunnerConfig) -> RunResult | None:
         )
         return None
 
+    from ue_identity import ExpectedProjectMismatch, compare_project_paths
+
     remote_cfg = upyre.RemoteExecutionConfig(
         multicast_group=(config.remote.multicast_group, config.remote.multicast_port),
         multicast_bind_address=config.remote.multicast_bind_address,
     )
+
+    # The editor for THIS workspace is identified by its absolute project dir.
+    # Multiple editors on one host share the multicast group and the uproject
+    # basename ("SpiritCrossing"), so the only safe disambiguator is the dir.
+    expected_root = os.path.dirname(os.path.abspath(config.uproject)) if config.uproject else ""
+
+    class _ProjectFilteredConnection(upyre.PythonRemoteConnection):
+        """Connect only to the editor whose advertised ``project_root`` matches
+        ``expected_root``. Other editors see one multicast ping/pong and nothing
+        more — they never get an OpenConnectionMessage or a Python statement.
+
+        Raises ``upyre.ConnectionError`` when no editor answers at all (caller
+        falls back to commandlet silently), and ``ExpectedProjectMismatch`` when
+        editor(s) answered but none belong to this workspace (caller warns, then
+        falls back).
+        """
+
+        def open_connection(self):
+            ping = upyre.PingMessage(self.config)
+            ping.send(self.mcastsock)
+
+            pongs = list(ping.raw_receive(self.mcastsock))
+            if not pongs:
+                raise upyre.ConnectionError("Connection failed.")
+
+            match = None
+            seen_roots = []
+            for pong in pongs:
+                data = pong.get("data", {}) or {}
+                actual_root = data.get("project_root", "")
+                seen_roots.append(actual_root or "<no project_root>")
+                if compare_project_paths(expected_root, actual_root) is None:
+                    match = pong
+                    break
+
+            if match is None:
+                raise ExpectedProjectMismatch(
+                    "No running editor matches this workspace "
+                    f"('{expected_root}'). Editors that answered: "
+                    f"{', '.join(seen_roots)}."
+                )
+
+            self.unreal_node_id = match["source"]
+            self.connection_infos = match["data"]
+            upyre.OpenConnectionMessage(self.unreal_node_id, self.config).send(self.mcastsock)
+            self.connection_created = True
+            self.remote_command_connection = upyre.PythonRemoteCommandConnection(
+                self.unreal_node_id, self.config
+            )
 
     # Snapshot output dir before execution
     output_dir = _get_output_dir(config)
@@ -178,7 +229,7 @@ def _try_remote(script_path: str, config: RunnerConfig) -> RunResult | None:
 
     start = time.time()
     try:
-        with upyre.PythonRemoteConnection(remote_cfg) as conn:
+        with _ProjectFilteredConnection(remote_cfg) as conn:
             # EXECUTE_FILE tells UE to load and run a .py file by path.
             # EXECUTE_STATEMENT would exec() inline code instead.
             cmd_result = conn.execute_python_command(
@@ -186,6 +237,11 @@ def _try_remote(script_path: str, config: RunnerConfig) -> RunResult | None:
                 exec_type=upyre.ExecTypes.EXECUTE_FILE,
                 raise_exc=False,
             )
+    except ExpectedProjectMismatch as e:
+        # An editor is running, but not for this workspace. Do NOT execute in it
+        # — fall back to the (workspace-correct) commandlet path.
+        _warn(f"{e} Falling back to commandlet...")
+        return None
     except Exception as e:
         err_str = str(e)
         # Connection refused / timeout / failed = editor not running
