@@ -11,11 +11,17 @@ unattended at SessionStart.
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 import install_statusline
+
+
+WINDOWS = os.name == "nt"
+windows_only = pytest.mark.skipif(not WINDOWS, reason="Windows-specific behavior")
+posix_only = pytest.mark.skipif(WINDOWS, reason="POSIX-specific behavior")
 
 
 class FakeCtx:
@@ -51,8 +57,14 @@ def fake_home(tmp_path, monkeypatch):
 
 @pytest.fixture
 def ctx(tmp_path):
-    """FakeCtx with a data_dir containing the synced statusline script."""
-    data_dir = tmp_path / "data"
+    """FakeCtx with a data_dir containing the synced statusline script.
+
+    The data_dir includes a `claude-ui-kit` path segment to mirror the real
+    install layout (~/.claude/plugins/data/<mkt>/claude-ui-kit/), so that
+    _is_ours() recognizes commands pointing into it -- which is what drives the
+    refresh / self-heal branch.
+    """
+    data_dir = tmp_path / "data" / "claude-ui-kit"
     script = data_dir / "scripts" / "statusline.sh"
     script.parent.mkdir(parents=True)
     script.write_text("#!/bin/sh\necho hi\n")
@@ -62,6 +74,17 @@ def ctx(tmp_path):
 
 
 def _expected_command(ctx):
+    """The command install() should emit -- platform-aware.
+
+    Mirrors install_statusline._build_command: bare posix path off Windows,
+    Git-Bash-wrapped on Windows.
+    """
+    return install_statusline._build_command(
+        Path(ctx.data_dir) / "scripts" / "statusline.sh"
+    )
+
+
+def _bare_command(ctx):
     return str(Path(ctx.data_dir) / "scripts" / "statusline.sh").replace("\\", "/")
 
 
@@ -94,7 +117,10 @@ class TestRefresh:
         assert data["statusLine"]["command"] == _expected_command(ctx)
         assert data["model"] == "opus"
         assert ctx.failures == []
-        assert any("refreshed path" in m for m in ctx.logs)
+        # On posix this is a plain path refresh; on Windows a stale bare path is
+        # also un-wrapped, so it takes the remediation branch. Either way the
+        # command is rewritten to expected.
+        assert any(("refreshed path" in m) or ("remediated broken" in m) for m in ctx.logs)
 
 
 class TestConflict:
@@ -133,3 +159,84 @@ class TestMalformedSettings:
         assert len(ctx.failures) == 1
         assert ctx.failures[0]["type"] == "statusline_settings_unparseable"
         assert "will not modify" in ctx.failures[0]["user_msg"]
+
+
+class TestCommandBuilder:
+    """_build_command is the platform-conditional core of both the installer
+    fix and the self-heal: posix -> bare path, Windows -> Git-Bash-wrapped."""
+
+    @posix_only
+    def test_posix_emits_bare_path(self):
+        cmd = install_statusline._build_command(Path("/x/claude-ui-kit/scripts/statusline.sh"))
+        assert cmd == "/x/claude-ui-kit/scripts/statusline.sh"
+        assert "bash" not in cmd
+
+    @windows_only
+    def test_windows_wraps_with_git_bash(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_GIT_BASH_PATH", r"C:\Program Files\Git\bin\bash.exe")
+        cmd = install_statusline._build_command(Path("C:/x/claude-ui-kit/scripts/statusline.sh"))
+        assert cmd == '"C:/Program Files/Git/bin/bash.exe" "C:/x/claude-ui-kit/scripts/statusline.sh"'
+
+    @windows_only
+    def test_windows_is_idempotent_not_double_wrapped(self, monkeypatch):
+        """Building twice yields the same string; building from an already-built
+        command's script path never nests a second interpreter."""
+        monkeypatch.setenv("CLAUDE_CODE_GIT_BASH_PATH", r"C:\Program Files\Git\bin\bash.exe")
+        script = Path("C:/x/claude-ui-kit/scripts/statusline.sh")
+        once = install_statusline._build_command(script)
+        twice = install_statusline._build_command(script)
+        assert once == twice
+        assert once.count("bash.exe") == 1
+
+
+class TestBrokenDetection:
+    @windows_only
+    def test_bare_sh_path_is_broken(self):
+        assert install_statusline._is_broken_command("C:/x/claude-ui-kit/scripts/statusline.sh")
+        assert install_statusline._is_broken_command('"C:/x/claude-ui-kit/scripts/statusline.sh"')
+
+    @windows_only
+    def test_wrapped_command_is_not_broken(self):
+        wrapped = '"C:/Program Files/Git/bin/bash.exe" "C:/x/claude-ui-kit/scripts/statusline.sh"'
+        assert not install_statusline._is_broken_command(wrapped)
+
+    @posix_only
+    def test_never_broken_on_posix(self):
+        assert not install_statusline._is_broken_command("/x/claude-ui-kit/scripts/statusline.sh")
+
+
+@windows_only
+class TestWindowsRemediation:
+    """The detect-and-remediate self-heal: a previously installed bare-path
+    (broken) command for OUR plugin is rewritten to the wrapped form, and an
+    already-wrapped command is a no-op."""
+
+    def test_broken_bare_path_is_remediated(self, ctx, fake_home, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_GIT_BASH_PATH", r"C:\Program Files\Git\bin\bash.exe")
+        broken = {
+            "statusLine": {"type": "command", "command": _bare_command(ctx)},
+            "model": "opus",
+        }
+        _user_settings(fake_home).write_text(json.dumps(broken))
+
+        install_statusline.install(ctx)
+
+        data = json.loads(_user_settings(fake_home).read_text())
+        assert data["statusLine"]["command"] == _expected_command(ctx)
+        assert "bash.exe" in data["statusLine"]["command"]
+        assert data["model"] == "opus"  # other keys preserved
+        assert ctx.failures == []
+        assert any("remediated broken" in m for m in ctx.logs)
+
+    def test_already_wrapped_is_noop(self, ctx, fake_home, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_GIT_BASH_PATH", r"C:\Program Files\Git\bin\bash.exe")
+        wrapped = {"statusLine": {"type": "command", "command": _expected_command(ctx)}}
+        _user_settings(fake_home).write_text(json.dumps(wrapped))
+
+        install_statusline.install(ctx)
+
+        data = json.loads(_user_settings(fake_home).read_text())
+        assert data["statusLine"]["command"] == _expected_command(ctx)
+        assert data["statusLine"]["command"].count("bash.exe") == 1  # not double-wrapped
+        assert ctx.failures == []
+        assert any("no-op" in m for m in ctx.ok_logs)
