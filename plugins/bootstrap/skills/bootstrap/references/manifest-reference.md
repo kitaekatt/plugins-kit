@@ -384,7 +384,7 @@ Each entry in the `marketplaces` array declares a marketplace the engine should 
 |-------|-----------|-------------|
 | `name` | Yes | Marketplace name; also the merge identity key |
 | `source` | For registration | Git URL passed to `claude plugin marketplace add` when the marketplace is not yet registered. Optional when it is already registered — the common case for a pin-only override in a user layer |
-| `alwaysUpdate` | No | Refresh the clone against its remote every session. **Ignored while `pin` is set** (a one-line warning action is emitted) |
+| `alwaysUpdate` | No | Refresh the marketplace **clone/listing** against its remote every session. NOTE: this does **not** bump *installed plugin versions* — for that the marketplace needs Claude Code's `autoUpdate: true` (set via an `extraKnownMarketplaces` block in a settings.json). Declaring a marketplace here with only `alwaysUpdate` keeps the listing fresh while installed plugins stay pinned — see the `plugin_autoupdate_propagation` fact in SKILL.md. **Ignored while `pin` is set** (a one-line warning action is emitted) |
 | `pin` | No | Git committish (SHA or tag) that snapshots the ENTIRE marketplace repo at a moment in time — see below |
 
 ### `pin`
