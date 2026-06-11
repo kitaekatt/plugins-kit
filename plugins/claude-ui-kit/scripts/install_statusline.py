@@ -91,7 +91,13 @@ def install(ctx) -> None:
     if project_root is not None:
         candidate_paths.append(project_root / ".claude" / "settings.local.json")
         candidate_paths.append(project_root / ".claude" / "settings.json")
-    candidate_paths.append(Path.home() / ".claude" / "settings.local.json")
+    # Do NOT target the user-level ~/.claude/settings.local.json: Claude Code
+    # does not read a *user-level* settings.local.json for statusLine (only the
+    # project-level one). A command written there is silently ignored and the
+    # bar stays blank no matter how many times we refresh it. Target the
+    # user-level settings.json, which CC does read. (Confirmed 2026-06: a
+    # command stuck in ~/.claude/settings.local.json rendered nothing until it
+    # was moved to ~/.claude/settings.json.)
     candidate_paths.append(Path.home() / ".claude" / "settings.json")
 
     existing = _find_existing_statusline(candidate_paths)
