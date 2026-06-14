@@ -83,6 +83,13 @@ class TestSyncToData:
         assert failures[0]["type"] == "sync_to_data"
         assert any("FAILED" in e for e in action_entries)
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="exec bits are a POSIX concept; os.access(X_OK) is unreliable on "
+        "Windows (returns True for every file), so neither the positive nor the "
+        "negative assertion is meaningful. The chmod the engine performs is a "
+        "no-op on Windows anyway.",
+    )
     def test_sync_grants_exec_bit_on_shell_scripts(self, tmp_path):
         """Synced *.sh files are executable even when the source is not."""
         plugin_root = tmp_path / "plugin"

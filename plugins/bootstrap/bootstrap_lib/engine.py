@@ -488,6 +488,28 @@ def _main():
             pass
 
 
+def _plugin_data_dir(data_dir, plugin_info):
+    """Per-plugin data dir keyed by the plugin's OWN marketplace, not the engine's.
+
+    ``data_dir`` is the engine's own data dir (``<root>/data/<engine-mkt>/bootstrap``),
+    so its grandparent is the shared data root. Earlier code keyed by
+    ``<root>/data/<engine-mkt>/<plugin-name>`` -- the ENGINE's marketplace plus the
+    bare plugin name. That collides when two marketplaces ship same-named plugins
+    (e.g. a fork alongside upstream both having ``bootstrap`` / ``p4-kit``): each
+    engine iterates ALL installed plugins and writes the foreign-marketplace plugin
+    into its own tree, so the per-plugin data dir AND the derived ``_shared_libs``
+    sync target last-writer-win between the two copies. Keying by
+    ``plugin_info.marketplace`` (already distinct per marketplace) namespaces them
+    apart. Falls back to the engine's marketplace for plugins with no recorded
+    marketplace (e.g. ``--plugin-dir`` installs). No-op for single-marketplace
+    setups, where a plugin's own marketplace equals the engine's.
+    """
+    data_root = os.path.dirname(os.path.dirname(data_dir))
+    engine_mkt = os.path.basename(os.path.dirname(data_dir))
+    mkt = getattr(plugin_info, "marketplace", "") or engine_mkt
+    return os.path.join(data_root, mkt, plugin_info.name)
+
+
 def _bootstrap_single_plugin(
     plugin_info, current_os, data_dir, all_failures,
     log_success, display_sections, deferred_plugin_logs, args,
@@ -501,10 +523,9 @@ def _bootstrap_single_plugin(
     if not os.path.isfile(plugin_manifest_path):
         return
 
-    # Per-plugin data dir and cache
-    plugin_data_dir = os.path.join(
-        os.path.dirname(data_dir), plugin_info.name
-    )
+    # Per-plugin data dir and cache -- keyed by the plugin's OWN marketplace so a
+    # fork installed alongside upstream doesn't collide on same-named plugins.
+    plugin_data_dir = _plugin_data_dir(data_dir, plugin_info)
     os.makedirs(plugin_data_dir, exist_ok=True)
 
     # One malformed plugin manifest must not kill the pass for every other
@@ -632,7 +653,6 @@ def _shared_lib_convergence_sweep(plugins, data_dir):
     from .shared_lib import link_shared_lib
     from .venv_check import _find_python
 
-    shared_root = os.path.join(os.path.dirname(data_dir), "_shared_libs")
     actions, oks, failures = [], [], []
     seen = set()
     for plugin_info in plugins:
@@ -646,10 +666,16 @@ def _shared_lib_convergence_sweep(plugins, data_dir):
             continue
         if not imports:
             continue
-        plugin_data_dir = os.path.join(os.path.dirname(data_dir), plugin_info.name)
+        # Key by the plugin's own marketplace (see _plugin_data_dir): the consumer
+        # must link against the _shared_libs its owner synced into the SAME
+        # marketplace tree, so shared_root is per-plugin, not per-engine.
+        plugin_data_dir = _plugin_data_dir(data_dir, plugin_info)
+        shared_root = os.path.join(os.path.dirname(plugin_data_dir), "_shared_libs")
         venv_python = _find_python(os.path.join(plugin_data_dir, ".venv"))
         for lib_name in imports:
-            key = (plugin_info.name, lib_name)
+            # Include marketplace in the dedup key: same-named plugins from two
+            # marketplaces link into their own trees and must not skip each other.
+            key = (getattr(plugin_info, "marketplace", ""), plugin_info.name, lib_name)
             if key in seen:
                 continue
             seen.add(key)

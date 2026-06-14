@@ -130,7 +130,7 @@ class TestMultiPluginEngine:
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
         # Create data dir with config enabling the plugin
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:my-test"], "log_level": "info", "log_success_shell": False, "log_success_checks": False}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -168,7 +168,7 @@ class TestMultiPluginEngine:
         registry = {"plugins": {"kit:good-plugin": [{"installPath": "./good-plugin", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:good-plugin"], "log_level": "info", "log_success_shell": False, "log_success_checks": True}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -202,7 +202,7 @@ class TestMultiPluginEngine:
         registry = {"plugins": {"kit:logged-plugin": [{"installPath": "./logged-plugin", "version": "2.3.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:logged-plugin"], "log_level": "info", "log_success_shell": False, "log_success_checks": True}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -212,7 +212,7 @@ class TestMultiPluginEngine:
         assert result.returncode == 0
 
         # Plugin log should be in plugin's own data dir with version in header
-        plugin_data_dir = os.path.join(str(tmp_path / "data"), "logged-plugin")
+        plugin_data_dir = os.path.join(str(tmp_path / "data" / "kit"), "logged-plugin")
         plugin_log = os.path.join(plugin_data_dir, "bootstrap.log")
         assert os.path.exists(plugin_log)
         with open(plugin_log) as f:
@@ -252,7 +252,7 @@ class TestMultiPluginEngine:
         registry = {"plugins": {"kit:rerun-plugin": [{"installPath": "./rerun-plugin", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:rerun-plugin"], "log_level": "info", "log_success_shell": False, "log_success_checks": True}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -265,7 +265,7 @@ class TestMultiPluginEngine:
         # plugin's own log file records the re-run since log_success_checks=True.
         result = run_engine(data_dir, plugin_root=str(fake_root), env=_isolated_env(tmp_path))
         assert result.returncode == 0
-        plugin_log = os.path.join(str(tmp_path / "data"), "rerun-plugin", "bootstrap.log")
+        plugin_log = os.path.join(str(tmp_path / "data" / "kit"), "rerun-plugin", "bootstrap.log")
         with open(plugin_log) as f:
             content = f.read()
         # Two timestamped headers = two runs recorded
@@ -290,7 +290,7 @@ class TestMultiPluginEngine:
         registry = {"plugins": {"kit:no-manifest": [{"installPath": "./no-manifest", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:no-manifest"], "log_level": "info", "log_success_shell": False, "log_success_checks": False}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -324,7 +324,7 @@ class TestMultiPluginEngine:
         registry = {"plugins": {"kit:venv-plugin": [{"installPath": "./venv-plugin", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:venv-plugin"], "log_level": "info", "log_success_shell": False, "log_success_checks": False}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -363,7 +363,7 @@ class TestMultiPluginEngine:
             "venv": {"check_imports": ["os", "sys"]},
         }))
 
-        plugin_data_dir = tmp_path / "data" / plugin_name
+        plugin_data_dir = tmp_path / "data" / "kit" / plugin_name
         plugin_data_dir.mkdir(parents=True)
         subprocess.run(
             ["uv", "venv", str(plugin_data_dir / ".venv")],
@@ -373,7 +373,7 @@ class TestMultiPluginEngine:
         registry = {"plugins": {f"kit:{plugin_name}": [{"installPath": f"./{plugin_name}", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": [f"kit:{plugin_name}"], "log_level": "info", "log_success_shell": False, "log_success_checks": False}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -415,7 +415,7 @@ class TestMultiPluginEngine:
             "venv": {"check_imports": ["os"]},
         }))
 
-        plugin_data_dir = tmp_path / "data" / plugin_name
+        plugin_data_dir = tmp_path / "data" / "kit" / plugin_name
         plugin_data_dir.mkdir(parents=True)
         subprocess.run(
             ["uv", "venv", str(plugin_data_dir / ".venv")],
@@ -425,7 +425,7 @@ class TestMultiPluginEngine:
         registry = {"plugins": {f"kit:{plugin_name}": [{"installPath": f"./{plugin_name}", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": [f"kit:{plugin_name}"], "log_level": "info", "log_success_shell": False, "log_success_checks": False}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -459,7 +459,7 @@ class TestMultiPluginEngine:
         registry = {"plugins": {"kit:git-plugin": [{"installPath": "./git-plugin", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:git-plugin"], "log_level": "info", "log_success_shell": False, "log_success_checks": False}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -494,7 +494,7 @@ class TestMultiPluginEngine:
         registry = {"plugins": {"mymkt:deep-plugin": [{"installPath": str(deep_plugin_dir), "version": "1.0.0"}]}}
         (tmp_path / "plugins" / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["mymkt:deep-plugin"], "log_level": "info", "log_success_shell": False, "log_success_checks": True}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -559,7 +559,7 @@ class TestPhase2PluginBootstrap:
         # Bootstrap's own manifest is empty (no checks)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:installer"], "log_level": "info",
                   "log_success_shell": False, "log_success_checks": True}
@@ -599,7 +599,7 @@ class TestPhase2PluginBootstrap:
         registry = {"plugins": {"kit:stable-plugin": [{"installPath": str(test_plugin_dir), "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:stable-plugin"], "log_level": "info",
                   "log_success_shell": False, "log_success_checks": True}
@@ -645,7 +645,7 @@ class TestPhase2PluginBootstrap:
         }}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:plugin-a", "kit:plugin-b"],
                   "log_level": "info", "log_success_shell": False, "log_success_checks": True}
@@ -805,7 +805,7 @@ class TestDevLayoutFilter:
         ]}}
         (prod_plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 5, "no_bootstrap": [], "bootstrap_cache": [],
                   "log_success_shell": False, "log_success_checks": True}
@@ -910,7 +910,7 @@ class TestGitDepPinnedCommit:
         registry = {"plugins": {"kit:pin-plugin": [{"installPath": "./pin-plugin", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:pin-plugin"], "log_level": "info",
                   "log_success_shell": False, "log_success_checks": False}
@@ -919,7 +919,7 @@ class TestGitDepPinnedCommit:
 
         # Pre-clone at HEAD (the WRONG commit) so the engine takes the
         # existing-clone + pinned-commit checkout branch.
-        target = tmp_path / "data" / "pin-plugin" / "github" / "srcrepo"
+        target = tmp_path / "data" / "kit" / "pin-plugin" / "github" / "srcrepo"
         target.parent.mkdir(parents=True)
         subprocess.run(["git", "clone", str(src_repo), str(target)],
                        check=True, capture_output=True)
@@ -967,7 +967,7 @@ class TestMalformedPluginManifest:
         }}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:bad-manifest", "kit:good-plugin"],
                   "log_level": "info", "log_success_shell": False, "log_success_checks": False}
@@ -1068,7 +1068,7 @@ class TestCooldownRestamp:
         registry = {"plugins": {"kit:fail-plugin": [{"installPath": "./fail-plugin", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:fail-plugin"], "log_level": "info",
                   "log_success_shell": False, "log_success_checks": False}
@@ -1116,7 +1116,7 @@ class TestScriptContextProjectDir:
         registry = {"plugins": {"kit:ctx-plugin": [{"installPath": "./ctx-plugin", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:ctx-plugin"], "log_level": "info", "log_success_shell": False, "log_success_checks": False}
         with open(os.path.join(data_dir, "config.json"), "w") as f:

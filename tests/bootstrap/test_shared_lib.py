@@ -281,9 +281,9 @@ class TestConvergenceSweep:
 
         # data_dir parent is the marketplace data root; _shared_libs lives beside it.
         data_root = tmp_path / "data"
-        bootstrap_data = data_root / "bootstrap"
+        bootstrap_data = data_root / "mkt" / "bootstrap"
         bootstrap_data.mkdir(parents=True)
-        shared_root = data_root / "_shared_libs"
+        shared_root = data_root / "mkt" / "_shared_libs"
 
         # Owner already published the lib (the sweep runs AFTER the owner loop).
         pkg = shared_root / "mylib" / "mylib"
@@ -292,7 +292,7 @@ class TestConvergenceSweep:
 
         # Consumer plugin + a real venv at <data_root>/consumer/.venv.
         install = self._consumer_plugin(tmp_path, "consumer", ["mylib"])
-        venv_dir = data_root / "consumer" / ".venv"
+        venv_dir = data_root / "mkt" / "consumer" / ".venv"
         try:
             subprocess.run(
                 [sys.executable, "-m", "venv", "--without-pip", str(venv_dir)],
@@ -324,15 +324,15 @@ class TestConvergenceSweep:
         from bootstrap_lib.plugin_resolve import PluginInfo
 
         data_root = tmp_path / "data"
-        bootstrap_data = data_root / "bootstrap"
+        bootstrap_data = data_root / "mkt" / "bootstrap"
         bootstrap_data.mkdir(parents=True)
-        shared_root = data_root / "_shared_libs"
+        shared_root = data_root / "mkt" / "_shared_libs"
         pkg = shared_root / "mylib" / "mylib"
         pkg.mkdir(parents=True)
         (pkg / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
 
         install = self._consumer_plugin(tmp_path, "consumer", ["mylib"])
-        venv_dir = data_root / "consumer" / ".venv"
+        venv_dir = data_root / "mkt" / "consumer" / ".venv"
         try:
             subprocess.run(
                 [sys.executable, "-m", "venv", "--without-pip", str(venv_dir)],

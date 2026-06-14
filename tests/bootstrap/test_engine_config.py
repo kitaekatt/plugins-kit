@@ -76,7 +76,7 @@ class TestEngineConfigPhase:
         registry = {"plugins": {"kit:cfg-plugin": [{"installPath": "./cfg-plugin", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:cfg-plugin"], "log_level": "info", "log_success_shell": False, "log_success_checks": False}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -88,7 +88,7 @@ class TestEngineConfigPhase:
         assert result.returncode == 0
 
         # Config should be copied to plugin data dir
-        plugin_data_dir = os.path.join(str(tmp_path / "data"), "cfg-plugin")
+        plugin_data_dir = os.path.join(str(tmp_path / "data" / "kit"), "cfg-plugin")
         config_path = os.path.join(plugin_data_dir, "config.yaml")
         assert os.path.isfile(config_path)
 
@@ -116,7 +116,7 @@ class TestEngineConfigPhase:
         registry = {"plugins": {"kit:cfg-plugin": [{"installPath": "./cfg-plugin", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:cfg-plugin"], "log_level": "info", "log_success_shell": False, "log_success_checks": False}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -157,7 +157,7 @@ class TestEngineConfigPhase:
         registry = {"plugins": {"kit:cfg-plugin": [{"installPath": "./cfg-plugin", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:cfg-plugin"], "log_level": "info", "log_success_shell": False, "log_success_checks": False}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -197,7 +197,7 @@ class TestEngineConfigPhase:
         registry = {"plugins": {"kit:cfg-plugin": [{"installPath": "./cfg-plugin", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:cfg-plugin"], "log_level": "info", "log_success_shell": False, "log_success_checks": False}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -249,7 +249,7 @@ class TestEngineConfigPhase:
         registry = {"plugins": {"kit:ad-plugin": [{"installPath": "./ad-plugin", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:ad-plugin"], "log_level": "info", "log_success_shell": False, "log_success_checks": False}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -266,7 +266,7 @@ class TestEngineConfigPhase:
             assert "SERVER" not in ctx
 
         # Verify config was written with detected value
-        plugin_data_dir = os.path.join(str(tmp_path / "data"), "ad-plugin")
+        plugin_data_dir = os.path.join(str(tmp_path / "data" / "kit"), "ad-plugin")
         config_path = os.path.join(plugin_data_dir, "config.yaml")
         with open(config_path) as f:
             content = f.read()
@@ -305,7 +305,7 @@ class TestEngineConfigPhase:
         registry = {"plugins": {"kit:ad-plugin": [{"installPath": "./ad-plugin", "version": "1.0.0"}]}}
         (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
 
-        data_dir = str(tmp_path / "data" / "bootstrap")
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
         os.makedirs(data_dir)
         config = {"schema_version": 3, "enabled_plugins": ["kit:ad-plugin"], "log_level": "info", "log_success_shell": False, "log_success_checks": False}
         with open(os.path.join(data_dir, "config.json"), "w") as f:
@@ -317,7 +317,7 @@ class TestEngineConfigPhase:
         assert result.returncode == 0
 
         # Verify autodetect ran and updated the value even though it was already set
-        plugin_data_dir = os.path.join(str(tmp_path / "data"), "ad-plugin")
+        plugin_data_dir = os.path.join(str(tmp_path / "data" / "kit"), "ad-plugin")
         config_path = os.path.join(plugin_data_dir, "config.yaml")
         with open(config_path) as f:
             content = f.read()

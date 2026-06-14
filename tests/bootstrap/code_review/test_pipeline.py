@@ -8,6 +8,7 @@ split_git_diff_sections/split_diff_sections).
 """
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -235,14 +236,15 @@ class TestAssembleBundle:
             workspace_root=ws,
         )
         # Nearest-ancestor first per file; unique list deduped, first-seen order.
-        assert core["changed_files"][0]["claude_mds"] == [
-            str(sub / "CLAUDE.md"),
-            str(ws / "CLAUDE.md"),
-        ]
-        assert core["unique_claude_mds"] == [
-            str(sub / "CLAUDE.md"),
-            str(ws / "CLAUDE.md"),
-        ]
+        # Compare via normcase: collect_claude_mds resolve()s paths, which
+        # canonicalizes drive-path case on Windows (a case-insensitive FS), so a
+        # raw string compare against the tmp_path spelling is spuriously brittle.
+        def _nc(paths):
+            return [os.path.normcase(p) for p in paths]
+
+        expected = _nc([str(sub / "CLAUDE.md"), str(ws / "CLAUDE.md")])
+        assert _nc(core["changed_files"][0]["claude_mds"]) == expected
+        assert _nc(core["unique_claude_mds"]) == expected
 
     def test_falsy_local_skips_claude_md_walk(self, tmp_path):
         ws = tmp_path / "ws"

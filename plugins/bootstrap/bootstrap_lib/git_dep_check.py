@@ -182,9 +182,16 @@ def pull_git_dep(target_path: str) -> tuple:
 
 
 def _extract_repo_name(url: str) -> str:
-    """Extract repository name from URL."""
+    """Extract repository name from URL.
+
+    Normalizes backslashes to forward slashes first so a local-path dep on
+    Windows (e.g. ``C:\\path\\to\\repo``) splits correctly -- otherwise the
+    bare ``rsplit("/")`` returns the whole drive path, and the downstream
+    ``os.path.join(data_dir, "github", <name>)`` resets to that absolute path,
+    pointing the dep at the wrong location entirely.
+    """
     # Handle URLs like https://github.com/octocat/Hello-World or .git suffix
-    name = url.rstrip("/").rsplit("/", 1)[-1]
+    name = url.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
     if name.endswith(".git"):
         name = name[:-4]
     return name

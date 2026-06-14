@@ -32,7 +32,10 @@ class TestLastVersionFlipFlop:
     def test_bootstrap_self_skips_version_detection(self, tmp_path):
         """When the plugin's data dir IS the engine data dir (bootstrap itself),
         the plugin loop must not write/compare last_version (Step 2b owns it)."""
-        data_dir = tmp_path / "data" / "bootstrap"
+        # Realistic layout: <root>/data/<marketplace>/bootstrap (the engine's own
+        # data dir). bootstrap's own marketplace == the engine's, so its plugin
+        # data dir resolves back to this same dir -> version detection is skipped.
+        data_dir = tmp_path / "data" / "plugins-kit" / "bootstrap"
         data_dir.mkdir(parents=True)
         install_path = tmp_path / "install"
         install_path.mkdir()
@@ -50,9 +53,11 @@ class TestLastVersionFlipFlop:
 
     def test_other_plugin_still_detects_version_change(self, tmp_path):
         """Regular plugins (distinct data dir) keep their update detection."""
-        engine_data_dir = tmp_path / "data" / "bootstrap"
+        engine_data_dir = tmp_path / "data" / "plugins-kit" / "bootstrap"
         engine_data_dir.mkdir(parents=True)
-        plugin_data_dir = tmp_path / "data" / "other-kit"
+        # other-kit's own marketplace is plugins-kit (set in _run_single), so its
+        # data dir lands under data/plugins-kit/, a sibling of the engine dir.
+        plugin_data_dir = tmp_path / "data" / "plugins-kit" / "other-kit"
         plugin_data_dir.mkdir(parents=True)
         (plugin_data_dir / "last_version").write_text("1.0.0")
         install_path = tmp_path / "install"

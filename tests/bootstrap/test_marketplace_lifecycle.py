@@ -1101,6 +1101,9 @@ class TestCheckMarketplaceCurrentNoUpstream:
             "test-mkt": {"installLocation": str(repo)},
         }))
         monkeypatch.setenv("HOME", str(home))
+        # Windows expanduser('~') prefers USERPROFILE over HOME, so isolating the
+        # home dir needs both (the pattern every other test in this file follows).
+        monkeypatch.setenv("USERPROFILE", str(home))
 
         result = check_marketplace_current("test-mkt")
         assert result.passed is True
