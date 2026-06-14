@@ -384,8 +384,44 @@ Each entry in the `marketplaces` array declares a marketplace the engine should 
 |-------|-----------|-------------|
 | `name` | Yes | Marketplace name; also the merge identity key |
 | `source` | For registration | Git URL passed to `claude plugin marketplace add` when the marketplace is not yet registered. Optional when it is already registered — the common case for a pin-only override in a user layer |
+| `remove` | No | When truthy (or `enabled: false`), deregister the marketplace via `claude plugin marketplace remove` (which also uninstalls its plugins). **Takes precedence over every other field** — `source`/`pin`/`alwaysUpdate` are meaningless for a marketplace being torn down. Idempotent: an already-absent marketplace is a verbose-only ok, so the directive can live in a checked-in layer forever without erroring once the removal has happened. See below |
 | `alwaysUpdate` | No | Refresh the marketplace **clone/listing** against its remote every session. NOTE: this does **not** bump *installed plugin versions* — for that the marketplace needs Claude Code's `autoUpdate: true` (set via an `extraKnownMarketplaces` block in a settings.json). Declaring a marketplace here with only `alwaysUpdate` keeps the listing fresh while installed plugins stay pinned — see the `plugin_autoupdate_propagation` fact in SKILL.md. **Ignored while `pin` is set** (a one-line warning action is emitted) |
 | `pin` | No | Git committish (SHA or tag) that snapshots the ENTIRE marketplace repo at a moment in time — see below |
+
+### `remove`
+
+Deregisters a marketplace and uninstalls the plugins that came from it. The
+canonical use is **tearing down a stray or superseded marketplace across a team**
+— declare the removal in a checked-in layer (e.g. `<project>/.claude/bootstrap.json`)
+and every teammate's next bootstrap pass removes it through the normal process,
+no manual `claude plugin marketplace remove` on each machine.
+
+```json
+{
+  "marketplaces": [
+    {"name": "old-fork", "remove": true}
+  ]
+}
+```
+
+**Behavior**: if the marketplace is not registered, the engine logs a verbose-only
+`already removed` ok and does nothing (idempotent — safe to leave the directive in
+place permanently). If it is registered, the engine runs `claude plugin marketplace
+remove <name>`, logs a `removed` action on success, or records a fix-all failure on
+error. `enabled: false` is accepted as a synonym for `remove: true` (mirrors the
+`plugins[]` entry's `enabled` field).
+
+**Resurrection**: a `remove` directive only deregisters; it does not block a later
+re-add. If some other manifest layer (or a manual `marketplace add`) re-registers
+the same marketplace, it comes back. Removal is durable only when nothing else
+re-adds it — confirm no bootstrap manifest declares the marketplace before relying
+on a one-time teardown.
+
+**Cooldown note**: when the directive lives in a *layered* `bootstrap.json`
+(`~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`), editing it does
+not auto-bypass the per-project cooldown, so run `bash
+plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh` (or wait out the cooldown)
+for the removal to apply on the next session.
 
 ### `pin`
 

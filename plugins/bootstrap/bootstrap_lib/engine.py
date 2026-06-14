@@ -1956,7 +1956,7 @@ def _phase_marketplaces(ctx):
     """
     from .marketplace_lifecycle import (
         check_marketplace_exists, check_marketplace_current,
-        add_marketplace, update_marketplace,
+        add_marketplace, remove_marketplace, update_marketplace,
         apply_marketplace_pin, release_marketplace_pin, load_pin_markers,
     )
 
@@ -1965,6 +1965,26 @@ def _phase_marketplaces(ctx):
         source_url = mkt_def.get("source", "")
         pin = mkt_def.get("pin", "")
         if not mkt_name:
+            continue
+
+        # remove / enabled:false -- deregister the marketplace (and its plugins)
+        # via `claude plugin marketplace remove`. Takes precedence over every
+        # other field (pin/source/alwaysUpdate are meaningless for a marketplace
+        # we are tearing down). Idempotent: an already-absent marketplace is a
+        # quiet ok, so the directive can sit in a checked-in layer forever
+        # without erroring once the removal has happened.
+        if mkt_def.get("remove") or mkt_def.get("enabled") is False:
+            if not check_marketplace_exists(mkt_name).passed:
+                ctx.ok(f"marketplace {mkt_name}: already removed")
+                continue
+            rm_result = remove_marketplace(mkt_name)
+            if rm_result.passed:
+                ctx.action(f"marketplace {mkt_name}: removed")
+            else:
+                ctx.fail(
+                    f"marketplace {mkt_name}: remove failed - {rm_result.message}",
+                    type="marketplace", name=mkt_name, message=rm_result.message,
+                )
             continue
 
         if pin:
