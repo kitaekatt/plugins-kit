@@ -27,7 +27,10 @@ def bootstrap(ctx: Any) -> None:
     """Ensure the Chromium browser html-pdf needs is installed."""
     marker = Path(ctx.data_dir) / MARKER_NAME
     if marker.exists():
-        ctx.log("html-pdf: chromium already installed (cached)")
+        # Steady state: nothing to do. Verbose-only so a healthy bootstrap stays
+        # silent instead of re-displaying this every session (see openrouter-kit's
+        # cached-validation branch for the same idiom).
+        ctx.log_ok("html-pdf: chromium already installed (cached)")
         return
 
     cmd = [
@@ -63,6 +66,9 @@ if __name__ == "__main__":
         data_dir = str(PLUGIN_ROOT / ".bootstrap-data")
 
         def log(self, msg: str) -> None:
+            print(msg, file=sys.stderr)
+
+        def log_ok(self, msg: str) -> None:
             print(msg, file=sys.stderr)
 
     bootstrap(_Ctx())
