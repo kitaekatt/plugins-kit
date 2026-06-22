@@ -1,6 +1,6 @@
 # Audit framework
 
-How skills-kit audits things. This is the canonical glossary for audit-related skills; the operational skills that consume it -- `skill-audit` (skill-shape audits over the User + Project + Plugins corpus; via `/md-audit skill`) and `references-audit` (cross-reference and orphan audits over markdown corpora; via `/md-audit references`) -- both reference it. When a term defined here appears in either skill, the definition lives here; the skill describes only how the audit applies the term.
+How skills-kit audits things. This is the canonical glossary for audit-related skills; the operational skills that consume it -- `skill-audit` (skill-shape audits over the User + Project + Plugins corpus; via `/md-audit skill`), `claude-md-audit` (CLAUDE.md cohesion/hygiene; via `/md-audit claude-md`), `project-doc-audit` (standalone project-document cohesion/placement; via `/md-audit project-doc`), and `references-audit` (cross-reference and orphan audits over markdown corpora; via `/md-audit references`) -- each reference it. When a term defined here appears in a member skill, the definition lives here; the skill describes only how the audit applies the term.
 
 ## Composition with `skills-kit:skill-authoring`
 
@@ -160,6 +160,18 @@ Operationalizes the **skill-md-audit** audit-kind (plus two corpus-wide inventor
 4. Renders a per-file COMPLIANT / NON-COMPLIANT verdict from the FAIL findings.
 
 In framework terms: the subject is `skill_md` inside a `skill` composition; the primitives consumed are `skill_md` and `yaml` (the embedded contract block); rules come from the audit-kind's bindings table. The skill's existing `criteria:` block names the same rules that the framework's bindings table references -- the YAML and the SKILL.md must stay in sync.
+
+### `project-doc-audit` (via `/md-audit project-doc`)
+
+Operationalizes the **project-doc-audit** audit-kind. The skill:
+
+1. Picks one or more **subjects** of type `plain_md` -- standalone project documents (`Docs/`, `.claude/docs/`, `<subsystem>/docs/`, READMEs, design notes) that sit outside any skill's `references/` folder and outside the CLAUDE.md hierarchy.
+2. Runs the **scaffolding** (`discover.py`) to enumerate candidates and compute the mechanical signals (effective lines, approx tokens, inbound-citation count); the orphan signal is `inbound_citations == 0`.
+3. Applies the cohesion-principles `project_reference_md` role + `skill_maturation_pipeline` via agent-judgment lanes: Placement (graduate / fold / absorb), CRP (single reading task), ADP (discoverability + one-hop + no-back-reference), CCP (no skill-content duplication).
+4. Classifies findings into its **taxonomy** (A misclassified, B graduate, ... K unclassified) and dispatches DISCUSS / SPECIAL **buckets** (this audit has no AUTO -- every remediation is a structural move or a confirmed judgment).
+5. Renders a per-file COMPLIANT / NON-COMPLIANT verdict from the FAIL findings.
+
+In framework terms: the subject is `plain_md` over the `directory` / `project` compositions; the only mechanical step is `discover.py` (there is no separate evaluator binary -- the lanes do the judgment); rules come from the audit-kind's bindings table. Skill-attached `reference_doc` is audited transitively via `skill_md_audit`; `claude_md` via `claude_md_audit` -- this audit owns only the standalone project document.
 
 ## Beyond audits: viewer scaffolding
 

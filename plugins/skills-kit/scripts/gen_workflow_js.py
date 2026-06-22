@@ -275,6 +275,64 @@ Rules:
 Return a summary: counts of applied/skipped/failed and a per-item action list.`
 }"""
 
+PROJECT_DOC_HEADER = f"""\
+// project-doc-audit {EM} REMEDIATE workflow (after-Q&A phase).
+//
+// Fan-out remediation, one lane per project document, applying the decisions the
+// main loop gathered during the Q&A gate (interactive) or inferred
+// (non-interactive / "fast" intent). Runs AFTER detection + the user decision
+// step {EM} never folded into detection (the `audit_then_self_remediate`
+// anti-pattern keeps the two phases apart so re-running the audit reproduces the
+// same findings).
+//
+// One lane per FILE (not per finding) so two lanes never edit the same file
+// concurrently; within a lane, remediations are applied in order. No worktree
+// isolation: lanes touch disjoint files, so they cannot conflict. Some
+// remediations are structural MOVES (graduate-to-skill B, fold-into-CLAUDE.md C,
+// move-into-skill D) {EM} the lane applies the move it is instructed to make;
+// authoring a brand-new skill beyond a simple move is handed to /md-authoring
+// skill by the main loop, not performed blind in a lane.
+//
+// Invoked by the project-doc-audit SKILL.md only when there is remediation work
+// spanning 2+ files (the multi-file threshold that equalizes Workflow-tool
+// overhead). Single-file remediation runs inline in the main loop.
+//
+// args = {{
+//   perFile: [ {{
+//     path: string,
+//     remediations: [ {{
+//       criterion: string, taxonomy: string, bucket: "AUTO"|"DISCUSS"|"SPECIAL",
+//       line: integer|null,
+//       instruction: string,          // the concrete edit/move to make
+//       decision: "apply"|"skip"|string  // user/inferred decision; free-text = a
+//                                          // refined instruction to apply instead
+//     }} ]
+//   }} ]
+// }}
+"""
+
+PROJECT_DOC_LANE_PROMPT = """\
+function lanePrompt(f) {
+  return `You are ONE lane of a project-document remediation pass. Apply the decided edits to exactly one file. Make ONLY the edits listed; do not audit, re-scan, or fix anything not listed here.
+
+Target: ${f.path}
+
+Remediations (apply in order):
+${f.remediations.map((r, i) => `${i + 1}. [${r.bucket} / taxonomy ${r.taxonomy} / ${r.criterion}${r.line != null ? ` @ line ${r.line}` : ''}]
+   instruction: ${r.instruction}
+   decision: ${r.decision}`).join('\\n')}
+
+Rules:
+- decision "apply"  -> make the edit exactly as the instruction describes.
+- decision "skip"   -> do nothing for that item; record status "skipped".
+- any other decision text -> treat it as a refined instruction and apply THAT instead of the original.
+- Some remediations are structural moves: fold-into-CLAUDE.md (C) appends the content to the named CLAUDE.md and deletes the standalone doc; move-into-skill (D) moves the file into the named skill's references/ folder; collapse-duplication (I) replaces duplicated prose with a pointer to the owning skill. The instruction names the exact destination. Graduate-to-skill (B) beyond a simple file move is NOT done here -- if the instruction asks for new-skill authoring, record status "skipped" with a note that it is routed to /md-authoring skill.
+- Use the Read tool to load the file (and any destination file) first, then Edit to make precise changes. Preserve surrounding formatting.
+- If an edit cannot be applied safely (anchor not found, ambiguous, destination missing), record status "failed" with a short note rather than guessing.
+
+Return a summary: counts of applied/skipped/failed and a per-item action list.`
+}"""
+
 REMEDIATE_FRAGMENTS = {
     "claude-md-audit": {
         "HEADER": CLAUDE_MD_HEADER,
@@ -320,6 +378,21 @@ REMEDIATE_FRAGMENTS = {
         "LANE_PROMPT_FN": REFERENCES_LANE_PROMPT,
         "LABEL_TAIL": ".pop()",
         "LOG_NOUN": "files",
+    },
+    "project-doc-audit": {
+        "HEADER": PROJECT_DOC_HEADER,
+        "META_NAME": "project-doc-audit-remediate",
+        "META_DESC": "Fan-out project-document remediation: apply the decided edits/moves, one lane per file (after-Q&A phase)",
+        "PHASE_DETAIL": "one lane per project document",
+        "KEY": "path",
+        "ACTION_FIELD": "criterion",
+        "ERR_SHAPE": "path, remediations",
+        "ITEM_NOUN": "remediation",
+        "ITEMS": "remediations",
+        "IV": "r",
+        "LANE_PROMPT_FN": PROJECT_DOC_LANE_PROMPT,
+        "LABEL_TAIL": ".pop()",
+        "LOG_NOUN": "docs",
     },
 }
 
@@ -374,6 +447,7 @@ const totals = results.reduce((acc, r) => {
 SHARED_CHUNK_TARGETS = {
     SKILLS / "claude-md-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_TOTALS_CHUNK],
     SKILLS / "skill-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_TOTALS_CHUNK],
+    SKILLS / "project-doc-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_TOTALS_CHUNK],
     SKILLS / "references-audit" / "workflow" / "classify.js": [ARGS_NORM_CHUNK],
 }
 
@@ -424,7 +498,10 @@ def main(argv: list[str]) -> int:
         return 1 if problems else 0
 
     for skill, path in remediate_targets().items():
-        path.write_text(render_remediate(skill), encoding="utf-8")
+        # newline="\n" forces LF regardless of platform -- without it, Python's
+        # text-mode write translates \n to \r\n on Windows, leaving the generated
+        # .js files perpetually "modified" (CRLF) against the LF-committed blobs.
+        path.write_text(render_remediate(skill), encoding="utf-8", newline="\n")
         print(f"wrote {path}")
     problems = check_shared_chunks()
     for p in problems:

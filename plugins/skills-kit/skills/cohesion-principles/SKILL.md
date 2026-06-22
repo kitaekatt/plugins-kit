@@ -12,7 +12,7 @@ graph — CLAUDE.md (and which one), SKILL.md, or `references/*.md`. Every place
 CRP / CCP / ADP applied to the load graph; the L1/L2/L3 load levels are a derived consequence, not the
 primary frame.
 
-This is the shared spine: the `md-audit` domain (the artifact audits, reached via `/md-audit skill|claude-md|references`)
+This is the shared spine: the `md-audit` domain (the artifact audits, reached via `/md-audit skill|claude-md|project-doc|references`)
 and the `md-authoring` domain all defer to it. `content-authoring` (a reference under `md-authoring`) is the companion
 that answers the orthogonal question — *how* a fact should be shaped (YAML vs prose vs frontmatter) — not where it lives.
 
@@ -530,4 +530,4 @@ content_allocation:
 - **Vocabulary** -- `glossary.md` (in skills-kit:skill-authoring): CRP, CCP, ADP, SSOT, progressive disclosure, conditional details.
 - **CRP for SKILL.md size splits** -- `framework.md` (in skills-kit:skill-authoring) "CRP is the test for L2 -> L3 splits" section. The placement algorithm here generalizes the CRP test to all placement decisions.
 - **Content shape (the orthogonal question)** -- the `content-authoring` reference under `/md-authoring`: how a fact should be shaped once you know where it lives.
-- **The audits that enforce these rules** -- the `md-audit` domain (`/md-audit skill`, `/md-audit claude-md`, `/md-audit references`).
+- **The audits that enforce these rules** -- the `md-audit` domain (`/md-audit skill`, `/md-audit claude-md`, `/md-audit project-doc`, `/md-audit references`). The `project_reference_md` per-artifact role + `skill_maturation_pipeline` here are operationalized by `project-doc-audit` (`/md-audit project-doc`).

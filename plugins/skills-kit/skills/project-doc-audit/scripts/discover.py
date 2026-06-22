@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""discover.py -- enumerate candidate PROJECT DOCUMENTS visible from a scan root.
+
+A *project document* is a standalone reference doc that is NOT a SKILL.md, NOT a
+CLAUDE.md / CLAUDE.local.md, and NOT inside a skill's references/ folder. These
+are the docs the project-doc-audit evaluates against the cohesion-principles
+`project_reference_md` role + the skill-maturation pipeline:
+
+    Docs/*.md, Docs/**/*.md.html (Markdeep), .claude/docs/*.md,
+    <subsystem>/docs/*.md, README / NOTES / design docs / hand-off plans.
+
+Skill-attached references (`*/skills/*/references/*.md`) and CLAUDE.md / SKILL.md
+files are deliberately EXCLUDED -- they are audited by skill-audit and
+claude-md-audit respectively. Vendored / generated trees are skipped.
+
+Usage:
+    python discover.py                       # numbered list, scan root = cwd
+    python discover.py --json                # JSON for the audit workflow
+    python discover.py --root PATH           # scan a specific subtree
+    python discover.py --path FILE [...]      # classify specific files only
+
+For each candidate it emits mechanical signals the audit lanes consume:
+
+    kind              project_doc | skill_reference | other_claude_artifact
+    lines             effective line count
+    approx_tokens     ~chars/4
+    inbound_citations number of OTHER text files that mention this doc by name
+                      (0 == orphan: nothing in the load graph points here)
+    cited_by          up to a few example citing paths (orphan triage)
+
+Stdlib-only; degrades gracefully without skills_kit_lib.
+"""
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+# The shared walk lives in skills_kit_lib; make the plugin root importable
+# regardless of which interpreter/venv launched this script.
+_PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+if str(_PLUGIN_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_ROOT))
+
+try:
+    from skills_kit_lib.dirwalk import iter_dirs  # noqa: E402
+except Exception:  # pragma: no cover - fallback when the lib is unavailable
+    iter_dirs = None
+
+
+SCAN_MAX_DEPTH = 8
+
+# Extensions that count as a project document.
+DOC_EXT = {".md", ".mdx", ".rst", ".txt"}
+# .md.html is a compound suffix (Markdeep); handled by name, not Path.suffix.
+MARKDEEP_SUFFIX = ".md.html"
+
+# Files that are other CLAUDE-artifacts, not project docs (audited elsewhere).
+_NOT_PROJECT_DOC_NAMES = {"SKILL.md", "CLAUDE.md", "CLAUDE.local.md"}
+
+# Directory names that are vendored, generated, or build output -- never project
+# docs. Matched against any path segment.
+_SKIP_DIRS = {
+    ".git", "node_modules", "__pycache__", ".pytest_cache", ".venv", "venv",
+    "site-packages", "dist", "build", "Intermediate", "Binaries", "Saved",
+    "Engine", "ThirdParty", "External", "uvcache", "stubs", "Generated",
+    "generated", ".mypy_cache", ".ruff_cache", "DerivedDataCache",
+}
+
+# Text file extensions that can plausibly *cite* a project doc (for the inbound
+# citation / orphan scan). We read these to see who points at each candidate.
+_CITER_EXT = {".md", ".mdx", ".rst", ".txt", ".yaml", ".yml", ".json"}
+
+_SKILL_REF_RE = re.compile(r"[/\\]skills[/\\][^/\\]+[/\\]references[/\\]")
+
+
+def is_doc_file(name: str) -> bool:
+    """True when a filename looks like a project document by extension."""
+    lower = name.lower()
+    if lower.endswith(MARKDEEP_SUFFIX):
+        return True
+    return Path(name).suffix.lower() in DOC_EXT
+
+
+def classify_kind(path: Path) -> str:
+    """Classify a doc-shaped path into the kind the audit cares about."""
+    name = path.name
+    if name in _NOT_PROJECT_DOC_NAMES:
+        return "other_claude_artifact"
+    posix = path.as_posix()
+    if _SKILL_REF_RE.search(posix) or _SKILL_REF_RE.search(str(path)):
+        return "skill_reference"
+    return "project_doc"
+
+
+def _has_skipped_segment(path: Path, root: Path) -> bool:
+    try:
+        rel_parts = path.relative_to(root).parts
+    except ValueError:
+        rel_parts = path.parts
+    return any(part in _SKIP_DIRS for part in rel_parts)
+
+
+def _walk_files(root: Path):
+    """Yield every file under root, honoring depth + skip-dir rules.
+
+    Uses skills_kit_lib.dirwalk when present (shared excludes); otherwise a
+    bounded stdlib walk with the same skip-dir set.
+    """
+    if iter_dirs is not None:
+        for dir_path, files in iter_dirs(root, SCAN_MAX_DEPTH):
+            if _has_skipped_segment(dir_path, root):
+                continue
+            for fname in files:
+                yield dir_path / fname
+        return
+    # Fallback: manual bounded walk.
+    root_depth = len(root.parts)
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(current.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.is_dir():
+                if entry.name in _SKIP_DIRS:
+                    continue
+                if len(entry.parts) - root_depth >= SCAN_MAX_DEPTH:
+                    continue
+                stack.append(entry)
+            elif entry.is_file():
+                yield entry
+
+
+def _measure(path: Path) -> tuple[int, int]:
+    """Return (effective_lines, approx_tokens) for a doc, best-effort."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return (0, 0)
+    lines = [ln for ln in text.splitlines()]
+    # Effective lines: drop trailing blank lines.
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return (len(lines), len(text) // 4)
+
+
+def collect_candidates(root: Path) -> list[Path]:
+    out: list[Path] = []
+    for path in _walk_files(root):
+        if not is_doc_file(path.name):
+            continue
+        if _has_skipped_segment(path, root):
+            continue
+        out.append(path)
+    out.sort(key=lambda p: str(p))
+    return out
+
+
+def build_inbound_index(root: Path, candidates: list[Path]) -> dict[str, list[Path]]:
+    """One pass over citer files: map each candidate basename -> citing files.
+
+    A candidate is "cited" when its basename appears verbatim in another text
+    file (a CLAUDE.md pointer, a SKILL.md reference, a doc-to-doc link, a config
+    entry). Self-mentions are excluded. This is the orphan signal: an empty
+    list means nothing in the scanned tree points at the doc.
+    """
+    basenames = {p.name for p in candidates}
+    # Map basename -> set of citing paths.
+    inbound: dict[str, set[str]] = {name: set() for name in basenames}
+    candidate_paths = {str(p) for p in candidates}
+
+    for path in _walk_files(root):
+        if path.suffix.lower() not in _CITER_EXT and not path.name.lower().endswith(
+            MARKDEEP_SUFFIX
+        ):
+            continue
+        if _has_skipped_segment(path, root):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        spath = str(path)
+        for name in basenames:
+            if name in text:
+                # Exclude the doc citing itself.
+                if spath in candidate_paths and Path(spath).name == name:
+                    continue
+                inbound[name].add(spath)
+    return {name: sorted(Path(s) for s in paths) for name, paths in inbound.items()}
+
+
+def describe(path: Path, inbound: dict[str, list[Path]], root: Path) -> dict:
+    kind = classify_kind(path)
+    lines, approx_tokens = _measure(path)
+    citing = inbound.get(path.name, [])
+    # Exclude self if the basename collides with the candidate itself.
+    citing = [c for c in citing if c != path]
+    cited_by = []
+    for c in citing[:5]:
+        try:
+            cited_by.append(str(c.relative_to(root)))
+        except ValueError:
+            cited_by.append(str(c))
+    return {
+        "path": str(path),
+        "kind": kind,
+        "lines": lines,
+        "approx_tokens": approx_tokens,
+        "inbound_citations": len(citing),
+        "cited_by": cited_by,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--json", action="store_true", help="emit JSON instead of a numbered list")
+    parser.add_argument("--root", default=None, help="scan root (default: cwd)")
+    parser.add_argument("--path", action="append", default=None,
+                        help="classify only this file (repeatable); skips the tree walk")
+    args = parser.parse_args()
+
+    root = Path(args.root).resolve() if args.root else Path.cwd().resolve()
+
+    if args.path:
+        candidates = [Path(p).resolve() for p in args.path]
+        # Inbound index still needs the tree to find citers.
+        inbound = build_inbound_index(root, candidates)
+    else:
+        candidates = collect_candidates(root)
+        inbound = build_inbound_index(root, candidates)
+
+    records = [describe(p, inbound, root) for p in candidates]
+
+    if args.json:
+        print(json.dumps(
+            [{"index": i + 1, **rec} for i, rec in enumerate(records)], indent=2))
+        return 0
+
+    if not records:
+        print(f"No project documents found under {root}.")
+        return 0
+
+    print(f"Project documents under {root}:\n")
+    for i, rec in enumerate(records, start=1):
+        try:
+            display = Path(rec["path"]).relative_to(root)
+        except ValueError:
+            display = rec["path"]
+        orphan = "ORPHAN" if rec["inbound_citations"] == 0 else f"{rec['inbound_citations']} ref"
+        kind = rec["kind"]
+        tag = "proj-doc" if kind == "project_doc" else (
+            "skill-ref" if kind == "skill_reference" else "claude-art")
+        print(f"  {i:>3}. [{tag:<10}] [{rec['lines']:>4}L] [{orphan:<7}] {display}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

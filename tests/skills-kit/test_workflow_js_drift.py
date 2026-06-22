@@ -1,7 +1,7 @@
 """Drift test for the workflow JS canonical template (arch-review S4).
 
-The three remediate.js files (claude-md-audit / skill-audit / references-audit)
-are generated from the canonical template + per-skill fragments in
+The remediate.js files (claude-md-audit / skill-audit / project-doc-audit /
+references-audit) are generated from the canonical template + per-skill fragments in
 plugins/skills-kit/scripts/gen_workflow_js.py. This test asserts the shipped
 files are byte-identical to the rendered template, and that the detect/classify
 scripts still carry the shared skeleton chunks verbatim -- the

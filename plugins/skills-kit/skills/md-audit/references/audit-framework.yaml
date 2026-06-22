@@ -201,7 +201,7 @@ audit_kinds:
   - id: references_audit
     skill: skills-kit:references-audit
     subject_type: corpus
-    discovery: in-script (the scanner walks the scan tree itself; future: shared with corpus discovery)
+    discovery: "in-script (the scanner walks the scan tree itself; future: shared with corpus discovery)"
     evaluator_scaffolding: plugins/skills-kit/skills/references-audit/scripts/references_audit.py
     consumes_primitives: [md]
     traverses_compositions: [directory, skill, plugin, project]
@@ -235,6 +235,20 @@ audit_kinds:
         - hygiene_thresholds
     taxonomy_in_skill: 'plugins/skills-kit/skills/skill-audit/SKILL.md (audit_skill.taxonomy)'
 
+  - id: project_doc_audit
+    skill: skills-kit:project-doc-audit
+    subject_type: corpus
+    discovery: plugins/skills-kit/skills/project-doc-audit/scripts/discover.py (scan-root relative; enumerates plain_md project docs and computes the mechanical orphan + size signals the lanes consume)
+    evaluator_scaffolding: plugins/skills-kit/skills/project-doc-audit/workflow/detect.js (LLM lanes apply the cohesion criteria; discover.py is the only standalone mechanical step -- there is no separate evaluator binary)
+    consumes_primitives: [plain_md]
+    traverses_compositions: [directory, project]
+    rules_owned_in: plugins/skills-kit/skills/project-doc-audit/SKILL.md (audit_skill.criteria)
+    rules_per_composition:
+      directory: [placement_not_in_skill_dir, placement_maturation, adp_discoverability, crp_unitary_reading_task, adp_one_hop_deep, adp_no_claude_md_back_reference, ccp_no_skill_content_duplication, hygiene_thresholds]
+      project: [placement_not_in_skill_dir, placement_maturation, adp_discoverability, crp_unitary_reading_task, adp_one_hop_deep, adp_no_claude_md_back_reference, ccp_no_skill_content_duplication, hygiene_thresholds]
+    taxonomy_in_skill: 'plugins/skills-kit/skills/project-doc-audit/SKILL.md (audit_skill.taxonomy)'
+    note: 'Subject is plain_md (a standalone project doc outside any skill references/ and outside the CLAUDE.md hierarchy). Skill-attached reference_doc is audited transitively via skill_md_audit; CLAUDE.md via claude_md_audit (claude-md-audit). This audit enforces the generic cohesion-principles project_reference_md role + skill_maturation_pipeline, NOT any project-specific documentation-home policy.'
+
 # ---------------------------------------------------------------------------
 # Future rules -- bindings declared in audit_kinds.*.rules_per_composition but
 # not yet implemented (no entry in the owning SKILL.md criteria block).
@@ -256,6 +270,10 @@ future_rules:
     audit_kind: references_audit
     target_composition: plugin
     intent: A shipped plugin skill does not reference a personal/project-only skill.
+  - id: markdown_hyperlinks_resolve
+    audit_kind: project_doc_audit
+    target_composition: directory
+    intent: 'Every markdown hyperlink in a project doc -- [text](relative/path) and [text](#anchor) -- resolves to an existing file / heading. Today the audit checks bare file-path references (PD-H1) and doc-to-doc one-hop discipline (PD-5); full [](...) hyperlink + anchor resolution is the planned extension. NOTE the naming boundary: references_audit owns SKILL-LINK integrity (/skill-name, skill:"..."); this rule owns DOCUMENT-to-document hyperlinks. The two do not overlap.'
 
 # ---------------------------------------------------------------------------
 # Viewer-kind registry -- viewers ride on the same substrate as audits but
@@ -325,9 +343,7 @@ future:
     - id: code
       description: Source code in a language other than markdown / yaml / json / scripted (e.g. .ts, .go). Used when audits or viewers need to scan compiled-language code for references or contracts.
   audit_kinds:
-    - id: claude_md_audit
-      description: Audit a CLAUDE.md for scope clarity, audience-claude posture, and decision-provenance hygiene.
     - id: plugin_manifest_audit
       description: Audit a plugin.json against on-disk skills/commands/agents and against the marketplace.json version.
     - id: orphan_audit
-      description: Detect skills, reference docs, and manifest entries with no inbound references inside their containing composition.
+      description: "Detect skills, reference docs, and manifest entries with no inbound references inside their containing composition. (Note: project_doc_audit's adp_discoverability rule already does inbound-citation orphan detection for plain_md project docs; this future audit-kind generalizes it to skills/manifest entries.)"
