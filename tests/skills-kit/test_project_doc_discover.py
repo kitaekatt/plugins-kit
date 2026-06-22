@@ -115,3 +115,39 @@ class TestMeasure:
         lines, approx_tokens = pd._measure(doc)
         assert lines == 2
         assert approx_tokens > 0
+
+
+class TestProjectRootCiterScope:
+    """The orphan scan must cover the whole project even when auditing a
+    subdirectory -- otherwise a .claude/docs doc cited from the root CLAUDE.md
+    would false-positive as an orphan. find_project_root scopes the citer scan."""
+
+    def test_find_project_root_finds_git_ancestor(self, tmp_path):
+        (tmp_path / ".git").mkdir()
+        deep = tmp_path / ".claude" / "docs"
+        deep.mkdir(parents=True)
+        assert pd.find_project_root(deep) == tmp_path
+
+    def test_find_project_root_finds_perforce_marker(self, tmp_path):
+        # Non-git project: Perforce workspace marker must also resolve.
+        (tmp_path / ".p4config.txt").write_text("P4USER=x\n", encoding="utf-8")
+        deep = tmp_path / "SpiritCrossing" / "Source"
+        deep.mkdir(parents=True)
+        assert pd.find_project_root(deep) == tmp_path
+
+    def test_find_project_root_none_without_marker(self, tmp_path):
+        deep = tmp_path / "a" / "b"
+        deep.mkdir(parents=True)
+        assert pd.find_project_root(deep) is None
+
+    def test_orphan_scan_from_project_root_sees_distant_citer(self, tmp_path):
+        # Doc in .claude/docs, cited only from a CLAUDE.md at the project root.
+        (tmp_path / ".git").mkdir()
+        doc = tmp_path / ".claude" / "docs" / "guide.md"
+        _write(doc)
+        _write(tmp_path / "CLAUDE.md", "For details see .claude/docs/guide.md\n")
+        # Candidate is just the doc; citer scan rooted at the project root finds
+        # the distant citer, so the doc is NOT flagged as an orphan.
+        inbound = pd.build_inbound_index(tmp_path, [doc])
+        rec = pd.describe(doc, inbound, tmp_path)
+        assert rec["inbound_citations"] >= 1

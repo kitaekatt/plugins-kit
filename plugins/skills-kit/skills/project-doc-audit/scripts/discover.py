@@ -75,6 +75,29 @@ _CITER_EXT = {".md", ".mdx", ".rst", ".txt", ".yaml", ".yml", ".json"}
 _SKILL_REF_RE = re.compile(r"[/\\]skills[/\\][^/\\]+[/\\]references[/\\]")
 
 
+# Project-root markers, VCS-agnostic: git, mercurial, svn, AND perforce
+# (.p4config.txt) -- the audited project may not be a git repo.
+_PROJECT_MARKERS = (".git", ".hg", ".svn", ".p4config.txt")
+
+
+def find_project_root(start: Path) -> Path | None:
+    """Nearest ancestor of `start` (inclusive) holding a project marker, else None.
+
+    Used to scope the inbound-citation (orphan) scan to the whole project even
+    when only a subdirectory is being audited -- a doc under .claude/docs is
+    cited from CLAUDE.md / skills elsewhere in the repo, so an orphan check that
+    only scanned .claude/docs would false-positive on nearly everything. Markers
+    cover git/hg/svn and Perforce (.p4config.txt) so non-git projects resolve too.
+    """
+    current = start if start.is_dir() else start.parent
+    while True:
+        if any((current / marker).exists() for marker in _PROJECT_MARKERS):
+            return current
+        if current == current.parent:
+            return None
+        current = current.parent
+
+
 def is_doc_file(name: str) -> bool:
     """True when a filename looks like a project document by extension."""
     lower = name.lower()
@@ -219,22 +242,39 @@ def describe(path: Path, inbound: dict[str, list[Path]], root: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="emit JSON instead of a numbered list")
-    parser.add_argument("--root", default=None, help="scan root (default: cwd)")
+    parser.add_argument("--root", default=None,
+                        help="candidate scan root -- where project docs are enumerated (default: cwd)")
+    parser.add_argument("--citer-root", default=None,
+                        help="root for the inbound-citation (orphan) scan. Default: the project "
+                             "root (.git ancestor) of the candidates, else --root. Decoupled from "
+                             "--root so auditing a subdirectory (e.g. .claude/docs) still detects "
+                             "citations from CLAUDE.md / skills elsewhere in the project.")
     parser.add_argument("--path", action="append", default=None,
-                        help="classify only this file (repeatable); skips the tree walk")
+                        help="classify only this file (repeatable); skips the candidate tree walk")
     args = parser.parse_args()
 
     root = Path(args.root).resolve() if args.root else Path.cwd().resolve()
 
     if args.path:
         candidates = [Path(p).resolve() for p in args.path]
-        # Inbound index still needs the tree to find citers.
-        inbound = build_inbound_index(root, candidates)
     else:
         candidates = collect_candidates(root)
-        inbound = build_inbound_index(root, candidates)
 
-    records = [describe(p, inbound, root) for p in candidates]
+    # The citer scan root is decoupled from the candidate root: an orphan check
+    # must see the WHOLE project (a .claude/docs doc is cited from CLAUDE.md /
+    # skills outside that folder). Default to the candidates' .git project root;
+    # fall back to --root when there is no git boundary.
+    if args.citer_root:
+        citer_root = Path(args.citer_root).resolve()
+    else:
+        anchor = candidates[0].parent if candidates else root
+        # VCS marker (git/hg/svn/p4) -> the directory the audit was launched from
+        # (usually the project top) -> never silently the candidate subdir, which
+        # would under-count citations and false-flag orphans.
+        citer_root = find_project_root(anchor) or Path.cwd().resolve()
+
+    inbound = build_inbound_index(citer_root, candidates)
+    records = [describe(p, inbound, citer_root) for p in candidates]
 
     if args.json:
         print(json.dumps(

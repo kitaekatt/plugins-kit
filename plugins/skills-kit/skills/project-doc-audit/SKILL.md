@@ -268,7 +268,7 @@ audit_skill:
   gotchas:
     - "The subject is a corpus of project documents, but the audit procedure visits one file at a time. discover.py is the corpus enumerator + mechanical-signal source."
     - "Idempotency: criteria, taxonomy, and bucket assignments are fixed. Same input produces the same verdict; do not re-rank session-to-session."
-    - "Discoverability (orphan) depends on the scan root. A narrow --path run cannot see citers outside the default scan tree; discover.py always scans from the project root for inbound citations, so run it from the project top for a reliable orphan signal."
+    - "Discoverability (orphan) detection scopes its citer scan to the whole project automatically -- discover.py decouples the inbound-citation root (--citer-root) from the candidate root (--root). Default citer-root = the candidates' project root by VCS marker (git/hg/svn/Perforce .p4config.txt), falling back to the launch cwd; so auditing a subdirectory like .claude/docs still sees citations from CLAUDE.md / skills elsewhere in the repo, even in a non-git (Perforce) project. Pass --citer-root explicitly for an unusual or multi-root layout."
 ```
 
 ## Argument grammar
