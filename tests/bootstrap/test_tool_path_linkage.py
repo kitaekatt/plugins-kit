@@ -144,3 +144,95 @@ class TestProcessToolEntry:
         )
         assert failure is not None
         assert failure["install_state"] == "installed_but_path_stale"
+
+    def test_manual_sentinel_not_executed(self, tmp_path, monkeypatch):
+        """A missing tool whose install is the "manual" sentinel must NOT run
+        `manual` as a command — it surfaces as a manual-attention failure."""
+        self._stub(monkeypatch)
+        # Fail loudly if the engine ever shells out for a "manual" tool.
+        def boom(cmd):
+            raise AssertionError(f"run_install should not be called for manual; got {cmd!r}")
+        monkeypatch.setattr(tool_check, "run_install", boom)
+        monkeypatch.setenv("PATH", "/usr/bin")  # tool deliberately absent
+
+        action_entries, ok_entries, tools_installed = [], [], []
+        failure = engine._process_tool_entry(
+            {"name": "p4", "install": {"linux": "manual"}},
+            "linux", "/data", "", action_entries, ok_entries,
+            tools_installed, plugin_name="p4-kit",
+        )
+        assert failure is not None
+        assert failure["install_state"] == "manual_install"
+        # No runnable command -> not fix-all eligible.
+        assert failure["install_cmd"] is None
+        assert engine._is_auto_fixable(failure) is False
+        assert any("manual install required" in a for a in action_entries)
+        # The bogus "install command failed - `manual`" line must be gone.
+        assert not any("install command failed" in a for a in action_entries)
+
+    def test_manual_fix_all_message(self, tmp_path):
+        """The fix-all directive for a manual tool guides the user to install it
+        manually — it never tells them to re-run the bogus `manual` command."""
+        import json
+        failure = {
+            "type": "tool", "name": "p4", "message": "not found in PATH",
+            "install_state": "manual_install", "install_cmd": None, "plugin": "p4-kit",
+        }
+        out_pending = tmp_path / "bootstrap_display.pending"
+        engine.emit_failure_response(
+            [failure], "linux", "log", label="bootstrap",
+            output_file=str(out_pending),
+        )
+        ac = json.loads(out_pending.read_text())["hookSpecificOutput"]["additionalContext"]
+        assert "Install p4 [p4-kit] manually" in ac
+        assert "on PATH" in ac
+        assert "`manual`" not in ac
+        assert engine._is_auto_fixable(failure) is False
+
+    def test_scoop_fulfillment_installs_and_records(self, tmp_path, monkeypatch):
+        """A `scoop` download fulfillment provisions Scoop (lazily) then installs
+        the package via Scoop, recording the shim path."""
+        self._stub(monkeypatch)
+        monkeypatch.setenv("PATH", str(tmp_path))  # p4 deliberately absent
+        import bootstrap_lib.scoop as scoop_mod
+        calls = {}
+        monkeypatch.setattr(scoop_mod, "ensure_scoop",
+                            lambda: scoop_mod.ScoopResult(True, None, "already installed"))
+        def fake_install(pkg, tool_name=None):
+            calls["pkg"], calls["tool"] = pkg, tool_name
+            return scoop_mod.ScoopResult(True, str(tmp_path / "p4.exe"),
+                                         f"installed {pkg} via scoop")
+        monkeypatch.setattr(scoop_mod, "scoop_install", fake_install)
+
+        action_entries, ok_entries, tools_installed = [], [], []
+        failure = engine._process_tool_entry(
+            {"name": "p4", "download": {"windows": {"scoop": "main/p4"}}},
+            "windows", "/data", "", action_entries, ok_entries,
+            tools_installed, plugin_name="p4-kit",
+        )
+        assert failure is None
+        assert calls == {"pkg": "main/p4", "tool": "p4"}
+        assert tools_installed and "via scoop" in tools_installed[0][1]
+
+    def test_scoop_unavailable_is_failure_no_pkg_install(self, tmp_path, monkeypatch):
+        """If Scoop can't be provisioned, don't try to install the package; emit a
+        non-auto-fixable scoop_failed failure."""
+        self._stub(monkeypatch)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        import bootstrap_lib.scoop as scoop_mod
+        monkeypatch.setattr(scoop_mod, "ensure_scoop",
+                            lambda: scoop_mod.ScoopResult(False, None, "scoop install failed"))
+        def boom(*a, **k):
+            raise AssertionError("must not install a package when scoop is unavailable")
+        monkeypatch.setattr(scoop_mod, "scoop_install", boom)
+
+        action_entries, ok_entries, tools_installed = [], [], []
+        failure = engine._process_tool_entry(
+            {"name": "p4", "download": {"windows": {"scoop": "main/p4"}}},
+            "windows", "/data", "", action_entries, ok_entries,
+            tools_installed, plugin_name="p4-kit",
+        )
+        assert failure is not None
+        assert failure["install_state"] == "scoop_failed"
+        assert failure["install_cmd"] is None
+        assert engine._is_auto_fixable(failure) is False

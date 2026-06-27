@@ -316,6 +316,7 @@ def _main():
         _bootstrap_single_plugin(
             plugin_info, current_os, data_dir, all_failures,
             log_success, display_sections, deferred_plugin_logs, args,
+            engine_version=version,
         )
 
     # Step 4b: Re-scan for plugins installed during Steps 3c/4
@@ -335,6 +336,7 @@ def _main():
         _bootstrap_single_plugin(
             plugin_info, current_os, data_dir, all_failures,
             log_success, display_sections, deferred_plugin_logs, args,
+            engine_version=version,
         )
 
     # Step 4c: Shared-lib convergence sweep. Every owner has now published (Steps
@@ -513,11 +515,16 @@ def _plugin_data_dir(data_dir, plugin_info):
 def _bootstrap_single_plugin(
     plugin_info, current_os, data_dir, all_failures,
     log_success, display_sections, deferred_plugin_logs, args,
+    engine_version="",
 ):
     """Process a single plugin's bootstrap.json manifest.
 
     Extracted from the Step 4 loop body to allow reuse in Step 4b (Phase 2 re-scan).
     Mutates the shared containers in place (same pattern as the original inline code).
+
+    `engine_version` is the running bootstrap plugin's version; a manifest can
+    declare ``requires_bootstrap`` to be skipped (with an "update bootstrap" note)
+    when this engine is too old to process it.
     """
     plugin_manifest_path = os.path.join(plugin_info.install_path, "bootstrap.json")
     if not os.path.isfile(plugin_manifest_path):
@@ -555,6 +562,34 @@ def _bootstrap_single_plugin(
         deferred_plugin_logs.append((plugin_data_dir, plugin_label, [entry]))
         plugin_display_header = f"{plugin_info.marketplace}:{plugin_info.name}@{plugin_info.version}" if plugin_info.marketplace else plugin_label
         display_sections.append((plugin_display_header, [entry], []))
+        return
+
+    # Forward-compat guard: a manifest can declare the minimum bootstrap-engine
+    # version it needs (e.g. it uses a `scoop:` fulfillment older engines can't
+    # process). If THIS engine is too old, skip the manifest entirely and tell the
+    # user to update bootstrap -- rather than misprocessing fields we don't grok.
+    required_bootstrap = plugin_manifest.get("requires_bootstrap")
+    if required_bootstrap and engine_version and not _version_satisfies(engine_version, required_bootstrap):
+        msg = (f"skipped: requires bootstrap >= {required_bootstrap}, but bootstrap "
+               f"{engine_version} is running — update the bootstrap plugin")
+        plugin_label = f"{plugin_info.name}@{plugin_info.version}" if plugin_info.version else plugin_info.name
+        deferred_plugin_logs.append((plugin_data_dir, plugin_label, [msg]))
+        plugin_display_header = (f"{plugin_info.marketplace}:{plugin_info.name}@{plugin_info.version}"
+                                 if plugin_info.marketplace else plugin_label)
+        display_sections.append((plugin_display_header, [msg], []))
+        all_failures.append({
+            "type": "bootstrap_outdated",
+            "name": plugin_info.name,
+            "plugin": plugin_info.name,
+            "message": msg,
+            "agent_msg": (
+                f"Plugin {plugin_info.name} requires the plugins-kit:bootstrap plugin to be "
+                f">= {required_bootstrap}, but {engine_version} is installed, so its setup was "
+                f"skipped. Update bootstrap (restart Claude / the IDE so the new SessionStart "
+                f"engine loads, or run `/plugin update`), then re-run."
+            ),
+            "persist_across_sessions": True,
+        })
         return
 
     # Per-plugin entry lists (written to plugin's own log)
@@ -1065,7 +1100,45 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
         ok_entries.append(f"{prefix}{result.subject}: ok - {result.message}")
         return None
 
-    # Phase-2 path: prefer downloading our own copy to ~/.local/bin over shelling
+    # Phase-2 path A: Scoop fulfillment (Windows userspace package manager). A
+    # `scoop` key in the resolved download entry means "install via Scoop" rather
+    # than a url/sha download. Scoop is provisioned LAZILY -- the first such tool
+    # installs it. See bootstrap_lib/scoop.py. (An older engine that predates this
+    # branch falls through to the install command, degrading to the legacy path.)
+    if download_def and download_def.get("scoop"):
+        from .scoop import ensure_scoop, scoop_install
+        from .path_repair import repair_path
+        pkg = download_def["scoop"]
+        es = ensure_scoop()
+        if not es.ok:
+            action_entries.append(f"{prefix}{name}: scoop unavailable - {es.message}")
+            return {"type": "tool", "name": name, "message": es.message,
+                    "install_state": "scoop_failed", "install_cmd": None,
+                    "plugin": plugin_name}
+        if es.message != "already installed":
+            action_entries.append(f"{prefix}scoop: {es.message}")
+        si = scoop_install(pkg, tool_name=name)
+        # Scoop adds ~/scoop/shims to the user PATH on install; reflect that into
+        # this already-running process so the re-check can resolve the binary.
+        repair_path()
+        recheck = check_tool(name, install_cmds, current_os,
+                             install_path=tool_install_path, check_cmd=check_cmd)
+        if recheck.passed:
+            if recheck.path:
+                tool_paths.record(None, recheck.subject, recheck.path)
+            tools_installed.append((name, f"installed `{pkg}` via scoop"))
+            return None
+        if si.ok and si.path:
+            # Resolvable on disk but not yet by bare name; record the shim path.
+            tool_paths.record(None, name, si.path)
+            tools_installed.append((name, f"installed `{pkg}` via scoop ({si.path})"))
+            return None
+        action_entries.append(f"{prefix}{name}: scoop install failed - {si.message}")
+        return {"type": "tool", "name": name, "message": si.message,
+                "install_state": "scoop_failed", "install_cmd": None,
+                "plugin": plugin_name}
+
+    # Phase-2 path B: prefer downloading our own copy to ~/.local/bin over shelling
     # out to a system package manager. See tool-resolution-redesign.md.
     if download_def and download_def.get("url") and download_def.get("sha256"):
         from .downloader import download_and_install
@@ -1085,8 +1158,15 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
         # Fall through to legacy install fallback below.
 
     # Tool not found — attempt remediation if an install command is available.
+    # The "manual" sentinel (dependency-philosophy.md) means there is no
+    # unattended installer for this OS: bootstrap verifies the tool resolves on
+    # PATH but never tries to install it. Treat it as a manual-attention item —
+    # do NOT execute "manual" as a shell command (it just fails with
+    # "command not found", surfacing a bogus install_failed every session).
     install_state = "no_install_cmd"
-    if result.install_cmd:
+    if result.install_cmd == "manual":
+        install_state = "manual_install"
+    elif result.install_cmd:
         from .tool_check import run_install
         from .path_repair import repair_path
         ok, _output = run_install(result.install_cmd)
@@ -1115,6 +1195,11 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
         )
     elif install_state == "install_failed":
         action_entries.append(f"{prefix}{result.subject}: install command failed - `{result.install_cmd}`")
+    elif install_state == "manual_install":
+        action_entries.append(
+            f"{prefix}{result.subject}: not installed — manual install required "
+            f"(no unattended installer for this OS); install it and ensure it's on PATH"
+        )
     else:
         action_entries.append(f"{prefix}{result.subject}: FAILED - {result.message}")
 
@@ -1123,7 +1208,9 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
         "name": result.subject,
         "message": result.message,
         "install_state": install_state,
-        "install_cmd": result.install_cmd,
+        # manual_install carries no runnable command — null it so the item is
+        # classified manual-attention (not fix-all eligible) downstream.
+        "install_cmd": None if install_state == "manual_install" else result.install_cmd,
         "plugin": plugin_name,
     }
 
@@ -2732,6 +2819,37 @@ def _resolve_download_def(download_block, current_os):
     return download_block.get(current_os)
 
 
+def _parse_semver(v):
+    """Parse a dotted version into a comparable (major, minor, patch) tuple.
+
+    Tolerant: strips a leading ">=", ignores pre-release/build suffixes, and
+    treats non-numeric components as 0. "1.2.3" -> (1,2,3); ">=0.21" -> (0,21,0).
+    """
+    s = str(v).strip()
+    if s.startswith(">="):
+        s = s[2:].strip()
+    out = []
+    for part in s.split(".")[:3]:
+        num = ""
+        for ch in part:
+            if ch.isdigit():
+                num += ch
+            else:
+                break
+        out.append(int(num) if num else 0)
+    while len(out) < 3:
+        out.append(0)
+    return tuple(out)
+
+
+def _version_satisfies(current, required):
+    """True if `current` >= the minimum `required` version (both dotted semver).
+
+    `required` may be bare ("0.21.0") or ">=0.21.0" -- both mean "at least".
+    """
+    return _parse_semver(current) >= _parse_semver(required)
+
+
 def _clear_project_cooldown(data_dir, project_dir):
     """Delete this project's cooldown stamp so the next SessionStart re-runs.
 
@@ -2891,7 +3009,9 @@ def _is_auto_fixable(failure):
         # AND the install hasn't already run successfully. If install_state
         # is "installed_but_path_stale", rerunning the install just produces
         # "already installed" — fix-all can't help; it's a bootstrap bug.
-        if failure.get("install_state") == "installed_but_path_stale":
+        # installed_but_path_stale: reinstall just says "already installed".
+        # manual_install: there's no unattended installer — only the user can act.
+        if failure.get("install_state") in ("installed_but_path_stale", "manual_install"):
             return False
         return bool(failure.get("install_cmd"))
     return t in _AUTO_FIXABLE_TYPES
@@ -2932,6 +3052,19 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
                 agent_lines.append(
                     f"{i}. Install of {f['name']} failed{plugin_tag}. "
                     f"Re-run and capture output: `{f['install_cmd']}`"
+                )
+            elif state == "manual_install":
+                agent_lines.append(
+                    f"{i}. Install {f['name']}{plugin_tag} manually — there is no unattended "
+                    f"installer for this OS. Install the vendor package and ensure "
+                    f"`{f['name']}` is on PATH. If this machine doesn't use it, disable the "
+                    f"plugin or override the tool in a layered bootstrap.json."
+                )
+            elif state == "scoop_failed":
+                agent_lines.append(
+                    f"{i}. Installing {f['name']}{plugin_tag} via Scoop failed: "
+                    f"{f.get('message', 'see log')}. Check network access and that Scoop "
+                    f"could be provisioned (~/scoop), then re-run."
                 )
             else:
                 agent_lines.append(f"{i}. Install {f['name']}{plugin_tag}: `{f['install_cmd'] or 'see documentation'}`")

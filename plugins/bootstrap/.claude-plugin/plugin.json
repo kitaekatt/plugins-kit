@@ -1,6 +1,6 @@
 {
   "name": "bootstrap",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "Centralized bootstrap engine for Claude Code plugins",
   "author": {
     "name": "Christina"

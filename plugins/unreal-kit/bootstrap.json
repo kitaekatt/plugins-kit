@@ -1,4 +1,5 @@
 {
+  "requires_bootstrap": "0.21.0",
   "tools": [
     {
       "name": "p4",
@@ -6,6 +7,9 @@
         "macos": "brew install --cask perforce",
         "windows": "manual",
         "ubuntu": "manual"
+      },
+      "download": {
+        "windows-amd64": { "scoop": "main/p4" }
       }
     }
   ],
