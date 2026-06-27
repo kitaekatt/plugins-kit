@@ -138,6 +138,86 @@ applies to every update **after** this protocol ships. (There is no way around
 this: a session is already running the pre-harvest `UserPromptSubmit` hook code,
 which has no harvest logic to run.)
 
+## Advising on a bootstrap update (read the state, tell the user, spot anomalies)
+
+After a bootstrap version is published, this is how to read a consumer machine's
+state and tell the user exactly what (if anything) they must do — and how to
+recognize when something went wrong instead of asserting success.
+
+### State to read
+
+Under `~/.claude/plugins/data/<marketplace>/bootstrap/` unless noted:
+
+- `~/.claude/plugins/installed_plugins.json` → `plugins["bootstrap@<mkt>"]` `version`
+  + `installPath`: the **installed/activated** version Claude Code loads next session.
+- `engine_ran_version` → the bootstrap version whose engine **last completed a pass**.
+- `harvest_launched_version` → the version the harvest last launched (dedup marker).
+- `last_session_id` → the Layer-1 session-id guard stamp.
+- `cooldowns/last_run_epoch.<sha1-of-cwd>` → the Layer-2 per-project cooldown stamp.
+- `bootstrap.log` → per-run headers `--- bootstrap@<version> <ISO-ts> ---` and harvest
+  audit lines (`--- bootstrap harvest … --- / harvest: launched bootstrap <v> engine`).
+- The SessionStart/UserPromptSubmit display label (`<mkt>:bootstrap@<version> -> …`)
+  names the **running** engine version for that output.
+
+### Healthy convergence flow
+
+1. **Publish** (version bump + master). Nothing happens on consumers until a session start.
+2. **Next session start:** Claude Code's autoUpdate **and/or** bootstrap's own pass
+   (`marketplaces.alwaysUpdate` refreshes the clone; the `plugins:[bootstrap]` entry
+   runs `claude plugin update`) fetch the new version → `installed_plugins.json`
+   repoints, new code lands in the cache. But the SessionStart hook already ran the
+   **old** engine (its command path was bound to the old `installPath` at session load).
+3. **Convergence to the new engine** happens one of two ways:
+   - **Harvest (automatic, same session):** the next `UserPromptSubmit` sees
+     `installed > engine_ran_version` and launches the new engine in-session; when it
+     completes, `engine_ran_version == installed`. **No second restart needed for
+     provisioning.** Requires the *running* version to carry a **working** harvest
+     (≥ 0.25.0 — the harvest first shipped in 0.22.0 but silently no-op'd until the
+     0.25.0 script-path fix; the guard bypass it relies on shipped in 0.24.0).
+   - **Next restart:** SessionStart re-resolves to the new `installPath` and runs the
+     new engine directly.
+
+### What the user must actually do
+
+- **Provisioning** (tools, venvs, shared-libs, config) is complete the moment
+  `engine_ran_version == installed` — whether the harvest or a restart got it there.
+  No further action for provisioning.
+- **A restart is required only to load new plugin *code*** (new hook/skill/command
+  bytes) into the running session — Claude Code binds those at session load. For an
+  engine-only / provisioning change, the harvest already did the work and a restart
+  is **optional**.
+- **The "restart to load it" nag is emitted by the *old* engine** *before* the harvest
+  runs. If `engine_ran_version` has since reached the installed version, provisioning
+  is done and the nag is **moot** — a restart then only refreshes loaded code. Say so
+  rather than parroting "you must restart."
+- **`claude --resume` works after an update:** both guards bypass on a newer registry
+  file, so the resumed pass runs (it does **not** silently skip), and the harvest
+  converges it. **No manual cooldown clear is needed in the normal case.**
+- **Manual override:** `bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh`
+  clears **both** the per-project cooldown **and** the session-id guard
+  (`--status` reports them without writing; `--all` covers every project). Needed
+  only when adopting a fix that can't deploy itself (the harvest's inherent caveat —
+  a bootstrap-mechanism fix can't use that same mechanism to adopt itself) or when
+  bootstrap genuinely appears stuck.
+
+### Anomalies — stop, investigate, surface to the user
+
+These mean the normal flow did **not** happen. Raise them; do not report success:
+
+- **`engine_ran_version` stays *behind* `installed`** after a restart **and** a prompt
+  or two → the new engine isn't running. Check `bootstrap.log` for a `bootstrap@<new>`
+  run and a `bootstrap harvest` line; check `harvest_launched_version`. A silent no-op
+  here is a real bug — this is exactly how the 0.25.0 harvest-script-path bug presented
+  (the harvest fired on every prompt but threw on import and was swallowed).
+- **The hook label keeps showing the *old* version** after the update should have
+  landed → the new engine hasn't executed. On `--resume`, suspect a guard stamp newer
+  than the registry write (so the bypass didn't fire).
+- **`installed` itself never advances** after a publish → the *fetch* didn't happen
+  (autoUpdate off? marketplace clone stale? offline?). Check the clone HEAD vs
+  `origin/master` and `known_marketplaces.json` `autoUpdate`.
+- **`harvest_launched_version == installed` but no `bootstrap@<installed>` run in the
+  log** → the harvest launched but the engine pass itself failed; read the log/stderr.
+
 ## Open / untested (don't over-claim)
 
 - **New-plugin registration via `/reload-plugins`.** We measured a *changed command

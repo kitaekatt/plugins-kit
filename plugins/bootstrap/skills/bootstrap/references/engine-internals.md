@@ -158,7 +158,13 @@ The engine accepts a `--background` flag. When set, output is written atomically
 
 The one real throttle is the **per-project session cooldown** applied by the shell hook (below). There is no generic per-check content-hash or time-based throttle in the engine — every pass re-runs every declared check. The two narrow caches that do exist are unrelated to throttling passes: the **plugin-discovery cache** (`bootstrap_cache` in `config.json`, see "Engine Phases" above — remembers which installed plugins have a `bootstrap.json` so discovery skips filesystem scans) and the **shared-lib sync hash** (`sync_shared_lib` content-hashes the package source and skips the copy when unchanged).
 
-### Per-project session cooldown (shell hook)
+`session-bootstrap.sh` applies **two** skip gates before launching the engine, checked in order (Layer 1 then Layer 2). Both are honored by default and both **bypass on a registry change** (`installed_plugins.json` / `known_marketplaces.json` newer than their stamp), so a published update is never skipped; `bootstrap-reset-cooldown` clears both.
+
+### Session-id guard (shell hook, Layer 1)
+
+When the SessionStart hook receives a `session_id` on stdin, the shell stamps it to `data/<marketplace>/bootstrap/last_session_id` and **skips** a later invocation that presents the *same* id — a cheap "don't double-fire within one session" dedup (a single SessionStart can fire more than once, and non-blocking hooks may not receive stdin). **Registry bypass:** the skip is taken only when no alert is pending **and** neither `installed_plugins.json` nor `known_marketplaces.json` is newer (`-nt`) than the guard stamp. This is load-bearing because **`claude --resume` re-presents the original session's `session_id`** — without the bypass a resumed session would skip bootstrap entirely even right after an update landed, so the new version never provisions until an unrelated fresh session. The fall-through re-stamps `last_session_id` (bumping its mtime), re-arming the guard so the next genuine same-session repeat with no new change still skips. (Mirrors Layer 2's bypass; the bypass was added after a live test showed `--resume` updates silently stalled.)
+
+### Per-project session cooldown (shell hook, Layer 2)
 
 Above the engine, `session-bootstrap.sh` applies a coarse **per-project cooldown**: the shell stamps `data/<marketplace>/bootstrap/cooldowns/last_run_epoch.<sha1-of-cwd>` before launching the engine, and subsequent SessionStart hooks within the 3600s window skip the entire engine invocation. A skip is silent and **does not refresh the stamp** — the stamp records when bootstrap last *actually ran*.
 

@@ -87,6 +87,10 @@ The reset script's `--help` is the canonical doc; the usage block lives inline a
 
 **The cooldown is the only run throttle.** (A per-check `bootstrap_cache.sha256` content-hash cache used to exist alongside it; that module was dead code and was deleted in bootstrap 0.17.0 -- if you see it referenced, the doc is stale.) The two narrow caches that DO still exist are unrelated to run throttling: the plugin-discovery `bootstrap_cache` list in bootstrap's config.json, and the shared-lib sync hash. When bootstrap appears to be ignoring you, the cooldown is the answer ~99% of the time.
 
+**Two skip gates, both bypass on a registry change.** `session-bootstrap.sh` has a second gate *above* the cooldown: a **session-id guard** that skips a repeat of the *same* `session_id` (anti-double-fire). It bites because **`claude --resume` re-presents the original session's id** — so after an update a resumed session would skip the whole pass, except the guard (like the cooldown) now **bypasses when `installed_plugins.json`/`known_marketplaces.json` is newer than its stamp** (added in bootstrap 0.24.0 after a live `--resume` test stalled). Net: a published update is picked up on the next session whether fresh or `--resume`, no manual reset. `bootstrap-reset-cooldown` clears **both** gates (`--status` reports both). The remaining manual-reset case is a *layered* `bootstrap.json` edit (touches no registry file).
+
+**Single-session updates (the harvest).** A bootstrap version bump used to need *two* restarts (the SessionStart pass runs the OLD engine; the fetch lands after; the NEW engine only runs next session). Bootstrap now **harvests** the already-fetched new engine on the next `UserPromptSubmit` and runs it in-session, converging an update in one session. **Advising the user:** provisioning is done once `engine_ran_version` (a stamp in the bootstrap data dir) equals the installed version — via the harvest *or* a restart; a restart is needed *only* to load new plugin **code** (hooks/skills), not for provisioning, so the SessionStart "restart to load it" nag is **moot** once `engine_ran_version` has caught up — say so rather than parroting it. If `engine_ran_version` stays *behind* `installed` after a restart + a prompt or two, that's an **anomaly** to surface (a silent harvest no-op is how a real bug presents), not success. Full operational guide — state files, healthy flow, anomaly checklist — is in `plugin-reload-lifecycle.md` (the `single_session_update_protocol` insight below points to it).
+
 For deeper material -- manifest schema, condition categories, fix-all flow, engine internals -- invoke `/bootstrap`.
 
 ## Development Workflow
@@ -378,8 +382,8 @@ claude_md:
       origin: User directive 2026-05-05 -- documentation gap surfaced when a unreal-kit publish appeared not to apply.
       added: "2026-05-05"
     - id: cooldown_registry_invalidation
-      keywords: [cooldown bypass, installed_plugins.json, known_marketplaces.json, stale shared_libs, version bump not applied, mtime, -nt, registry change, single-pass convergence, fewer reloads, reload-plugins vs restart, when to reload, when to restart, hooks need restart myth, SessionStart re-fire, script content live, registration reload]
-      summary: The per-project cooldown auto-bypasses when installed_plugins.json/known_marketplaces.json is newer than the cooldown stamp, so a plugin update re-arms a real bootstrap pass on the next session without a manual reset. Layered-bootstrap.json edits still need a manual reset.
+      keywords: [cooldown bypass, installed_plugins.json, known_marketplaces.json, stale shared_libs, version bump not applied, mtime, -nt, registry change, single-pass convergence, fewer reloads, reload-plugins vs restart, when to reload, when to restart, hooks need restart myth, SessionStart re-fire, script content live, registration reload, session-id guard, last_session_id, claude --resume, resume skips bootstrap, two skip gates, Layer 1, Layer 2]
+      summary: BOTH session-bootstrap.sh skip gates -- the Layer-1 session-id guard AND the Layer-2 per-project cooldown -- auto-bypass when installed_plugins.json/known_marketplaces.json is newer than their stamp, so a plugin update re-arms a real pass on the next session (fresh OR `claude --resume`, which reuses the session_id) without a manual reset. Layered-bootstrap.json edits still need a manual reset.
       detail: |
         Gotcha this fixes: Claude Code's plugin-update path bumps installed_plugins.json to the
         new version, but the per-project cooldown (last_run_epoch.<sha1-cwd>) independently
@@ -399,8 +403,17 @@ claude_md:
         (~/.claude/bootstrap.json or <project>/.claude/bootstrap.json), which touches neither
         registry file. Companion to bootstrap_cooldown_reset.
 
+        UPDATE (bootstrap 0.24.0): the SAME registry-newer bypass was added to the Layer-1
+        SESSION-ID GUARD (session-bootstrap.sh stamps last_session_id and skips a repeat of the
+        same session_id as an anti-double-fire dedup). `claude --resume` re-presents the ORIGINAL
+        session_id, so without that bypass a resumed session skipped the whole pass even right
+        after an update landed (a live test caught this). Now it bypasses when a registry file is
+        newer than the guard stamp and runs. bootstrap-reset-cooldown clears BOTH gates.
+
         The one restart bootstrap genuinely can't eliminate is Claude Code re-firing a SessionStart
-        hook (it only runs on a fresh session). For the provable case -- a plugin that ENTERED the
+        hook (it only runs on a fresh session) -- EXCEPT for bootstrap's OWN version updates, which
+        the harvest (see single_session_update_protocol) now converges in-session on the next
+        UserPromptSubmit, so a bootstrap version bump needs one session, not two restarts. For the provable case -- a plugin that ENTERED the
         registry during the pass (layered `plugins:` install, per-plugin, or script install; detected
         by a registry before/after diff, NOT Step 4b's new_plugins, which misses layered installs --
         the cache-kit end-to-end test caught that), not yet loaded -- the engine emits a reload/restart
@@ -416,6 +429,48 @@ claude_md:
         Toggle the nag with config notify_reload_needed (default true).
       origin: "Feedback report 2026-05-31 -- openrouter-kit 0.1.5 -> 0.2.0 publish left a consumer's _shared_libs stale because the cooldown blocked the resync across restarts. Implemented Part 1 (registry-change bypass) + Part 2 (convergence sweep)."
       added: "2026-05-31"
+    - id: single_session_update_protocol
+      keywords: [harvest, single-session update, engine_ran_version, harvest_launched_version, two restarts, bootstrap-display.sh, UserPromptSubmit, installPath, claude --resume, advise restart, provisioning done, update converged, anomaly, harvest no-op, script invocation, stamps.py]
+      summary: Bootstrap converges its OWN version updates in ONE session via the "harvest" -- the UserPromptSubmit hook launches the already-fetched new engine in-session instead of waiting for a second restart. Provisioning is done when the engine_ran_version stamp == the installed version; a restart is then needed only to load new plugin CODE, not for provisioning.
+      detail: |
+        Problem: a SessionStart hook re-fires only on a fresh session, so a published bootstrap bump
+        ran the OLD engine at session start, the fetch landed after, and the NEW engine only ran on a
+        SECOND restart. The harvest (bootstrap_lib/harvest.py, driven by
+        hooks/userpromptsubmit/bootstrap-display.sh) closes this: UserPromptSubmit DOES re-fire
+        in-session, so on each prompt it compares the installed bootstrap version (installed_plugins.json)
+        against the engine_ran_version stamp and, when installed > ran, launches the new engine by its
+        real installPath (NOT ${CLAUDE_PLUGIN_ROOT}, which is bound to the old dir), detached, in the
+        background/pending-file mode. The new engine stamps engine_ran_version = its own version on
+        completion (loop guard); harvest_launched_version caps relaunches at one per installed version.
+
+        ADVISING THE USER ON AN UPDATE: provisioning (tools/venv/shared-libs/config) is complete the
+        moment engine_ran_version == the installed version -- via the harvest OR a restart. The
+        SessionStart "restart to load it" nag is emitted by the OLD engine BEFORE the harvest runs;
+        once engine_ran_version catches up it is MOOT -- a restart then only reloads plugin CODE (new
+        hook/skill bytes Claude Code binds at session load). So for an engine-only / provisioning bump,
+        no restart is needed; only new plugin code needs one. `claude --resume` works (the guard bypass
+        -- see cooldown_registry_invalidation -- lets the resumed pass run and the harvest converge), so
+        no manual cooldown clear in the normal case.
+
+        ANOMALY (surface it, do not claim success): engine_ran_version staying BEHIND installed after a
+        restart + a prompt or two means the new engine isn't running -- check bootstrap.log for a
+        bootstrap@<new> run header and a "bootstrap harvest" audit line, and harvest_launched_version.
+        installed itself never advancing means the FETCH didn't happen (autoUpdate off / clone stale /
+        offline). This is exactly how the bugs below presented.
+
+        HISTORY / caveats: the harvest first shipped in 0.22.0 but SILENTLY NO-OP'd in production -- its
+        in-function imports were relative (from .stamps import ...) and the hook runs harvest.py as a
+        SCRIPT (no package context), so run_harvest threw and main() swallowed it; the module-level unit
+        tests hid it. Fixed in 0.25.0 (absolute imports + a subprocess test). The Layer-1 guard bypass it
+        relies on shipped in 0.24.0. The stamp files (engine_ran_version, last_version, cooldown) are
+        consolidated in bootstrap_lib/stamps.py (one atomic-write + one safe-read convention). INHERENT
+        caveat: a bootstrap-mechanism fix can't use that same mechanism to adopt itself -- the version
+        that first ships the (working) harvest can't harvest itself, and the guard-bypass version can't
+        bypass for its own adoption; that one transition needs a manual bootstrap-reset-cooldown + an
+        extra restart. Full operational guide (state files, healthy flow, anomaly checklist):
+        plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md.
+      origin: "Built + hardened this session (2026-06-27): single-session protocol added (0.22.0), then live testing on this machine exposed two real bugs only live/script testing could catch -- the --resume session-guard skip (fixed 0.24.0) and the harvest's script-path import failure that meant it had NEVER fired in production (fixed 0.25.0). Verified end-to-end converging 0.26.0 hands-off."
+      added: "2026-06-27"
     - id: host_python_via_plugin_venv
       keywords: [host-side python, plugin venv, uv run python, ModuleNotFoundError, foreign cwd, project root, pyyaml, skill examples]
       summary: SKILL.md examples that invoke host-side Python must use the explicit plugin-venv path, not `uv run python`, when the documented cwd is the user's project root.

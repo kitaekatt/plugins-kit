@@ -37,6 +37,27 @@ reference_skill:
         | fix-all        | User action required                         | Remediation message + prompt    |
       gotchas:
         - Healthy bootstrap is invisible -- no output means everything checked clean, not that bootstrap is broken. Verify by checking each plugin's log at ~/.claude/plugins/data/<marketplace>/<plugin>/bootstrap.log. If the log doesn't exist, bootstrap never reached that plugin.
+    - id: update_lifecycle
+      summary: A published bootstrap update converges in ONE session via the harvest; provisioning is done when engine_ran_version == the installed version, and a restart is needed only to load new plugin CODE. Both session-bootstrap.sh skip gates bypass on a registry change, so `claude --resume` re-runs after an update.
+      keywords: [update, harvest, single-session, engine_ran_version, installed_plugins.json, claude --resume, restart needed, cooldown status, session-id guard, two skip gates, anomaly, provisioning done, advise user]
+      detail: |
+        How to read an update and advise the user:
+        - installed version = installed_plugins.json plugins["bootstrap@<mkt>"].version (what loads next session).
+        - engine_ran_version (stamp in the bootstrap data dir) = the version that last COMPLETED a pass.
+        - Convergence: on the next session start the new version is fetched; the SessionStart hook ran the
+          OLD engine, then the harvest (UserPromptSubmit) launches the NEW engine in-session when
+          installed > engine_ran_version. Provisioning is DONE once engine_ran_version == installed.
+        - Restart: needed ONLY to load new plugin CODE (hooks/skills); NOT for provisioning. The "restart
+          to load it" nag is from the OLD engine pre-harvest and is moot once engine_ran_version caught up.
+        - claude --resume works: both skip gates (Layer-1 session-id guard, Layer-2 cooldown) bypass when a
+          registry file is newer than their stamp; bootstrap-reset-cooldown clears both.
+        Full operational guide (state files, healthy flow, anomaly checklist): references/plugin-reload-lifecycle.md.
+      gotchas:
+        - ANOMALY -- engine_ran_version staying BEHIND installed after a restart + a couple prompts means the
+          new engine isn't running; surface it for investigation (check bootstrap.log for a bootstrap@<new>
+          run header and a "harvest" line). Do NOT report success; a silent harvest no-op is how a real bug presented.
+        - A bootstrap-mechanism fix cannot adopt itself via that mechanism (the first working-harvest version
+          can't harvest itself); that one transition needs bootstrap-reset-cooldown + an extra restart.
     - id: remediation_phases
       summary: The engine remediates silently first; only escalates to fix-all when user action is required.
       keywords: [auto-remediation, fix-all, two-phase, silent install, remediation flow, autodetect, default values]
@@ -157,8 +178,8 @@ reference_skill:
         Layered configs are merged before plugin bootstrap.json files are processed.
   groupings:
     - name: engine_behavior
-      keywords: [engine, session start, processing order, messages, remediation flow]
-      fact_ids: [message_outcomes, remediation_phases]
+      keywords: [engine, session start, processing order, messages, remediation flow, update, harvest, restart, claude --resume]
+      fact_ids: [message_outcomes, update_lifecycle, remediation_phases]
     - name: config_files
       keywords: [bootstrap.json, manifest, layers, merge, override, pin, auto-update, autoUpdate, plugin not updating]
       fact_ids: [config_layers, marketplace_pinning, plugin_autoupdate_propagation, merge_semantics]
@@ -188,6 +209,6 @@ reference_skill:
       summary: Bootstrap's dependency-management philosophy and target architecture.
     - id: plugin_reload_lifecycle
       path: references/plugin-reload-lifecycle.md
-      keywords: [reload-plugins, restart, restart IDE, hook reload, registration, SessionStart re-fire, plugin update, when to reload, when to restart, script content live, cache version dir, reload advisory, _reload_advice]
-      summary: Measured rule for when a plugin change is live vs needs /reload-plugins vs needs a restart (the three layers code/registration/firing); informs the Step 4d reload nag.
+      keywords: [reload-plugins, restart, restart IDE, hook reload, registration, SessionStart re-fire, plugin update, when to reload, when to restart, script content live, cache version dir, reload advisory, _reload_advice, harvest, single-session update, engine_ran_version, claude --resume, advise update, cooldown status, anomaly, two skip gates]
+      summary: Measured rule for when a plugin change is live vs needs /reload-plugins vs needs a restart (the three layers code/registration/firing); informs the Step 4d reload nag. ALSO the operational guide for advising on a bootstrap update -- the single-session harvest, the two skip gates + --resume, which state files to read, and the anomaly checklist.
 ```
