@@ -99,6 +99,22 @@ class TestCooldownContract:
             "than the cooldown stamp"
         )
 
+    def test_session_guard_bypassed_on_registry_change(self) -> None:
+        """The Layer-1 session_id guard must ALSO bypass when a registry file is
+        newer than the guard stamp (or there's an unresolved alert). Otherwise
+        `claude --resume` re-presents the original session_id and the guard skips
+        the pass even right after an update landed, so the new version is never
+        provisioned — the two-restart trap. Mirrors the cooldown gate's bypass."""
+        text = SESSION_BOOTSTRAP.read_text()
+        assert '! "$_INSTALLED_PLUGINS" -nt "$_GUARD_FILE"' in text, (
+            "session guard must bypass when installed_plugins.json is newer than "
+            "the guard stamp (a resumed session after an update must re-run)"
+        )
+        assert '! "$_KNOWN_MARKETPLACES" -nt "$_GUARD_FILE"' in text, (
+            "session guard must bypass when known_marketplaces.json is newer than "
+            "the guard stamp"
+        )
+
 
 @needs_bash
 class TestResetScript:
@@ -269,4 +285,28 @@ class TestCooldownGateBehavior:
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "", (
             f"expected a silent cooldown skip, got stdout: {result.stdout!r}"
+        )
+
+    def test_session_guard_skips_repeat_same_session(self, tmp_path: Path) -> None:
+        """Same session_id + no newer registry file => Layer-1 guard skips
+        silently (exits before the run path, so empty stdout == skipped). Pins
+        that the registry-bypass added to Layer 1 doesn't break the normal skip."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        # Seed last_session_id under the hook's data dir (keyed by REPO_ROOT.name,
+        # matching how the hook derives MARKETPLACE_NAME from PLUGIN_ROOT/../..).
+        data = fake_home / ".claude" / "plugins" / "data" / REPO_ROOT.name / "bootstrap"
+        data.mkdir(parents=True, exist_ok=True)
+        (data / "last_session_id").write_text("sid-abc")
+        # No installed_plugins.json / known_marketplaces.json under fake HOME ->
+        # `-nt` is false for both -> the guard is honored and skips.
+        result = subprocess.run(
+            [BASH, "-c", f'cd "{proj}" && HOME="{fake_home}" "{BASH}" "{SESSION_BOOTSTRAP}"'],
+            input='{"session_id":"sid-abc"}', capture_output=True, text=True, timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "", (
+            f"expected a silent session-guard skip, got stdout: {result.stdout!r}"
         )

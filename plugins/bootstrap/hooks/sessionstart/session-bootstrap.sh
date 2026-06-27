@@ -101,9 +101,21 @@ if [ -f "$_ALERT_FILE" ]; then
     cp -f "$_ALERT_FILE" "$_PENDING_FILE" 2>/dev/null || true
 fi
 
-# Layer 1: session_id guard (works when stdin is available)
+# Layer 1: session_id guard (works when stdin is available). Skip a repeat of
+# the SAME session_id — UNLESS a plugin registry file is newer than the guard
+# stamp (a plugin was installed/updated/rescoped, or a marketplace refreshed,
+# since we last ran) or there's an unresolved alert. Without this bypass a
+# resumed session (`claude --resume` re-presents the ORIGINAL session_id) skips
+# the pass even right after an update landed, so the new version never gets
+# provisioned until some unrelated fresh session — the two-restart trap. Mirrors
+# Layer 2's bypass; the printf below re-stamps $_GUARD_FILE (bumping its mtime)
+# so the next genuine same-session repeat with no new change skips again. `-nt`
+# is false when the registry file is missing, so the guard is honored by default.
 if [ -n "${_GUARD_SID:-}" ]; then
-    if [ -f "$_GUARD_FILE" ] && [ "$(cat "$_GUARD_FILE" 2>/dev/null)" = "$_GUARD_SID" ]; then
+    if [ -f "$_GUARD_FILE" ] && [ "$(cat "$_GUARD_FILE" 2>/dev/null)" = "$_GUARD_SID" ] \
+       && [ ! -f "$_ALERT_FILE" ] \
+       && [ ! "$_INSTALLED_PLUGINS" -nt "$_GUARD_FILE" ] \
+       && [ ! "$_KNOWN_MARKETPLACES" -nt "$_GUARD_FILE" ]; then
         HOOK_OUTPUT_EMITTED=1
         exit 0
     fi

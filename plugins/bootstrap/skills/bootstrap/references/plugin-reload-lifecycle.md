@@ -67,10 +67,15 @@ Caveat: docs describe the contract; a specific Claude Code build may differ. Our
   registration resolves to (`${CLAUDE_PLUGIN_ROOT}`) move. The reliable action is
   **restart Claude (or restart your IDE)** — it re-resolves install paths, reloads
   every registration, and re-fires SessionStart so bootstrap re-provisions for the
-  new version. (With the cooldown registry-change bypass, that one restart's
-  bootstrap pass actually runs instead of being throttled.) Most marketplace
-  plugins here carry a SessionStart hook (bootstrap, and anything depending on it),
-  so a restart is the simple, correct default after a real update.
+  new version. (Both `session-bootstrap.sh` guards — the Layer-1 session-id guard
+  and the Layer-2 per-project cooldown — bypass when a registry file
+  [`installed_plugins.json` / `known_marketplaces.json`] is newer than their
+  stamp, so the pass actually runs instead of being skipped. This is what lets a
+  `claude --resume` — which re-presents the *original* session_id — re-provision
+  after an update instead of being guard-skipped; without the Layer-1 bypass a
+  resumed session skipped bootstrap entirely until an unrelated fresh session.)
+  Most marketplace plugins here carry a SessionStart hook (bootstrap, and anything
+  depending on it), so a restart is the simple, correct default after a real update.
 
 ## How the nag (Step 4d) uses this
 
