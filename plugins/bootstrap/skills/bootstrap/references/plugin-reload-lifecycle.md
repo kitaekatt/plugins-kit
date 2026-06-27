@@ -84,6 +84,55 @@ plugin registers a **SessionStart** hook (`_plugin_ships_sessionstart_hook`):
 - **SessionStart hook present** → advise **restart** (only a fresh session re-fires it).
 - **otherwise** (only skills/commands/event-hooks) → advise **`/reload-plugins`**.
 
+## Single-session update protocol (the harvest)
+
+The one limitation the nag above can't *fix*, only *report*: a SessionStart hook
+re-fires only on a fresh session. So when autoUpdate fetches a newer **bootstrap**
+mid-session — the new code lands in the cache and `installed_plugins.json` is
+repointed — the SessionStart hook already ran the **old** engine, and the new
+engine never executes until a restart. Historically this meant a published
+bootstrap update needed **two** session restarts (run #1 runs the old engine; the
+fetch lands afterward; run #2 finally runs the new engine).
+
+The **harvest** closes that to one session by exploiting the asymmetry in the
+layers above: `UserPromptSubmit` *does* re-fire within a session. So bootstrap's
+`UserPromptSubmit` hook harvests the already-fetched new engine on the next prompt.
+
+**Mechanism** (`bootstrap_lib/harvest.py`, driven by
+`hooks/userpromptsubmit/bootstrap-display.sh`):
+
+1. **Engine stamps its version on completion.** At the end of every completed
+   `engine._main` pass, the engine writes its own running `version` to a global
+   stamp `engine_ran_version` ("the bootstrap engine version that last actually
+   executed a pass"). A crash skips it (not a completed pass); `--console` debug
+   runs return earlier and never stamp.
+2. **Harvest reads two values per prompt.** On each `UserPromptSubmit`, the helper
+   reads the installed bootstrap `version` + `installPath` from
+   `installed_plugins.json` (entry key `bootstrap@<marketplace>`) and the
+   `engine_ran_version` stamp. Common (no-update) cost is two reads + a semver
+   compare — near zero.
+3. **If installed > ran**, the new code is on disk but its engine never ran this
+   session → launch the **new** engine **by its real `installPath`** (NOT
+   `${CLAUDE_PLUGIN_ROOT}`, which is bound to the *old* version dir this session),
+   detached, in the same background/pending-file output mode SessionStart uses
+   (output surfaces via `bootstrap_display.pending` on the following prompt). The
+   launch clears the per-project cooldown first so the forced pass isn't
+   throttled, and invokes the new `session-bootstrap.sh` with empty stdin (its
+   session-id guard is then inert).
+4. **Loop guard.** The harvested engine stamps `engine_ran_version = <its own
+   version>` on completion, so `installed == ran` afterward and it can never
+   re-trigger itself. A per-installed-version marker (`harvest_launched_version`)
+   additionally caps relaunches at one while the engine converges (guards against
+   several quick prompts spawning concurrent passes).
+
+**The one inherent caveat (documented, NOT solved):** the *running* bootstrap must
+already contain the harvest hook to harvest a newer version. The version that
+**first** ships this protocol therefore cannot harvest itself — that single
+transition still needs the old two-restart path. Single-session convergence
+applies to every update **after** this protocol ships. (There is no way around
+this: a session is already running the pre-harvest `UserPromptSubmit` hook code,
+which has no harvest logic to run.)
+
 ## Open / untested (don't over-claim)
 
 - **New-plugin registration via `/reload-plugins`.** We measured a *changed command

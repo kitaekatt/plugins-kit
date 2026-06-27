@@ -179,23 +179,20 @@ def _main():
     version_suffix = f"@{version}" if version else ""
     bootstrap_label = f"{marketplace_name}:{boot_plugin_name}{version_suffix}" if marketplace_name else f"{boot_plugin_name}{version_suffix}"
 
-    # Step 2b: Version change detection
+    # Step 2b: Version change detection. The last_version stamp is the engine's
+    # GLOBAL stamp (in data_dir) — routed through the stamps module's single
+    # atomic-write + safe-read convention. See bootstrap_lib/stamps.py.
+    from .stamps import global_stamp
     action_entries = []
     ok_entries = []
     if version:
-        last_version_file = os.path.join(data_dir, "last_version")
-        try:
-            with open(last_version_file, "r") as f:
-                last_version = f.read().strip()
-        except FileNotFoundError:
-            last_version = ""
+        last_version_stamp = global_stamp(data_dir, "last_version")
+        last_version = last_version_stamp.read()
         if last_version and last_version != version:
             action_entries.append(f"updated: {last_version} -> {version}")
         elif not last_version:
             action_entries.append(f"installed: {version}")
-        os.makedirs(data_dir, exist_ok=True)
-        with open(last_version_file, "w") as f:
-            f.write(version)
+        last_version_stamp.write(version)
     bootstrap_action_entries.extend(action_entries)
 
     # Step 3: Self-setup (tools, PATH, venv from config.self_setup) — runs every session
@@ -489,6 +486,18 @@ def _main():
         except OSError:
             pass
 
+    # Stamp the engine version that just COMPLETED a pass (global stamp). This is
+    # the single-session update protocol's loop guard: the UserPromptSubmit
+    # harvest (bootstrap_lib/harvest.py) only launches a newer engine when the
+    # installed bootstrap version > engine_ran_version, and the harvested engine
+    # writes its OWN version here on completion — so it can never re-trigger
+    # itself. Reached on both clean and check-failure passes (the engine still
+    # EXECUTED); only a crash (handled in main()) skips it, and console mode
+    # returns earlier so manual --console debug runs never stamp. See
+    # references/plugin-reload-lifecycle.md "Single-session update protocol".
+    if version:
+        global_stamp(data_dir, "engine_ran_version").write(version)
+
 
 def _plugin_data_dir(data_dir, plugin_info):
     """Per-plugin data dir keyed by the plugin's OWN marketplace, not the engine's.
@@ -605,18 +614,16 @@ def _bootstrap_single_plugin(
         os.path.normcase(os.path.normpath(plugin_data_dir))
         != os.path.normcase(os.path.normpath(data_dir))
     ):
-        last_version_file = os.path.join(plugin_data_dir, "last_version")
-        try:
-            with open(last_version_file, "r") as f:
-                last_version = f.read().strip()
-        except FileNotFoundError:
-            last_version = ""
+        # Per-plugin last_version stamp — same stamps-module convention as the
+        # engine's own (Step 2b), just scoped to this plugin's data dir.
+        from .stamps import plugin_stamp
+        last_version_stamp = plugin_stamp(plugin_data_dir, "last_version")
+        last_version = last_version_stamp.read()
         if last_version and last_version != plugin_info.version:
             plugin_action_entries.append(f"updated: {last_version} -> {plugin_info.version}")
         elif not last_version:
             plugin_action_entries.append(f"installed: {plugin_info.version}")
-        with open(last_version_file, "w") as f:
-            f.write(plugin_info.version)
+        last_version_stamp.write(plugin_info.version)
 
     # Project config phase (per-CWD discovery, before config phase)
     # project_detected: True when project found or no project_config section (non-gated plugin)
@@ -2853,53 +2860,38 @@ def _version_satisfies(current, required):
 def _clear_project_cooldown(data_dir, project_dir):
     """Delete this project's cooldown stamp so the next SessionStart re-runs.
 
-    Mirrors the path construction in hooks/sessionstart/session-bootstrap.sh:
+    Routed through the stamps module (project scope), which mirrors the path
+    construction in hooks/sessionstart/session-bootstrap.sh:
     <data_dir>/cooldowns/last_run_epoch.<sha1(project_dir)>, with the same
-    "_global_" fallback when no project_dir is available. Silent on any I/O
-    error -- a stale stamp at worst delays the next re-run by the throttle
-    window; it never blocks remediation.
+    "_global_" fallback when no project_dir is available. bash and Python share
+    the path convention, not a function — see stamps.py's bash/Python boundary
+    note. Silent on any I/O error (Stamp.clear swallows it) -- a stale stamp at
+    worst delays the next re-run by the throttle window; it never blocks
+    remediation.
     """
-    import hashlib
-    key = "_global_"
-    if project_dir:
-        try:
-            key = hashlib.sha1(project_dir.encode("utf-8")).hexdigest()
-        except Exception:
-            pass
-    stamp = os.path.join(data_dir, "cooldowns", f"last_run_epoch.{key}")
-    try:
-        os.remove(stamp)
-    except FileNotFoundError:
-        pass
-    except OSError:
-        pass
+    from .stamps import project_stamp
+    project_stamp(data_dir, "last_run_epoch", project_dir).clear()
 
 
 def _restamp_project_cooldown(data_dir, project_dir):
     """Refresh this project's cooldown stamp at the end of a clean pass.
 
-    Same path construction as _clear_project_cooldown. Only refreshes an
+    Same project-scope stamp as _clear_project_cooldown. Only refreshes an
     EXISTING stamp — creating it is the shell hook's job (so console runs,
     tests, and direct engine invocations never plant cooldowns), and the
     failure path clears it instead. Content matches the shell's format: the
     current epoch as text (the shell reads it for the age check; the
-    registry-bypass compares mtimes). Silent on I/O errors — at worst the
-    registry-mtime bypass re-arms one extra pass.
+    registry-bypass compares mtimes — and Stamp.write is the explicit touch that
+    advances the mtime). Silent on I/O errors — at worst the registry-mtime
+    bypass re-arms one extra pass.
     """
-    import hashlib
     import time
-    key = "_global_"
-    if project_dir:
-        try:
-            key = hashlib.sha1(project_dir.encode("utf-8")).hexdigest()
-        except Exception:
-            pass
-    stamp = os.path.join(data_dir, "cooldowns", f"last_run_epoch.{key}")
-    if not os.path.isfile(stamp):
+    from .stamps import project_stamp
+    stamp = project_stamp(data_dir, "last_run_epoch", project_dir)
+    if not stamp.exists():
         return
     try:
-        with open(stamp, "w") as f:
-            f.write(str(int(time.time())))
+        stamp.write(str(int(time.time())))
     except OSError:
         pass
 
