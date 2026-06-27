@@ -7,6 +7,9 @@ per-installed-version dedup guard.
 """
 
 import json
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +26,52 @@ def _registry(tmp_path, plugins):
     p = tmp_path / "installed_plugins.json"
     p.write_text(json.dumps({"plugins": plugins}), encoding="utf-8")
     return str(p)
+
+
+HARVEST_PY = Path(__file__).resolve().parents[2] / "plugins" / "bootstrap" / "bootstrap_lib" / "harvest.py"
+
+
+class TestScriptInvocation:
+    """harvest.py must work when EXECUTED AS A SCRIPT (`python harvest.py`) — the
+    way the UserPromptSubmit hook invokes it — not only when imported as a module.
+
+    Regression: in-function relative imports (`from .stamps import ...`) raise
+    "attempted relative import with no known parent package" under script
+    execution (no package context), which made run_harvest throw and the hook
+    silently no-op — the harvest never fired in production despite the module-
+    level unit tests passing. Run it as a real subprocess to catch that.
+    """
+
+    def test_runs_as_script_and_reaches_harvest_logic(self, tmp_path):
+        dd = tmp_path / "data"
+        dd.mkdir()
+        (dd / "engine_ran_version").write_text("0.0.1")  # an old engine "ran"
+        reg = tmp_path / "installed_plugins.json"
+        reg.write_text(json.dumps({"plugins": {
+            "bootstrap@plugins-kit": [
+                {"version": "9.9.9", "installPath": str(tmp_path / "no-such-install")}
+            ]
+        }}), encoding="utf-8")
+
+        result = subprocess.run(
+            [sys.executable, str(HARVEST_PY),
+             "--data-dir", str(dd),
+             "--project-dir", str(tmp_path),
+             "--marketplace", "plugins-kit",
+             "--registry", str(reg)],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        # run_harvest writes harvest_launched_version BEFORE attempting the launch
+        # (which fails here — the fake installPath has no session-bootstrap.sh).
+        # If a relative-import (or any top-level) error had no-op'd the script,
+        # this marker is absent.
+        marker = dd / "harvest_launched_version"
+        assert marker.exists(), (
+            "harvest.py run as a script did not reach the harvest logic — a "
+            f"relative import or other error silently no-op'd it. stderr={result.stderr!r}"
+        )
+        assert marker.read_text().strip() == "9.9.9"
 
 
 class TestReadInstalledBootstrap:

@@ -33,15 +33,19 @@ import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
-# Reuse the engine's tolerant semver parser rather than duplicating it. Works as
-# a package import (tests, in-process use); falls back to an absolute import when
-# run as a bare script (`python harvest.py`), where relative imports have no
-# package context. engine.py's top-level imports are light (stdlib + atomic_write).
-try:
-    from .engine import _parse_semver
-except ImportError:  # pragma: no cover - script-invocation path
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from bootstrap_lib.engine import _parse_semver
+# Make `bootstrap_lib.*` importable whether this file is imported as a MODULE
+# (tests, in-process) or executed as a SCRIPT (the UserPromptSubmit hook runs
+# `python harvest.py`). Under script execution __package__ is None, so RELATIVE
+# imports (`from .stamps import ...`) raise "attempted relative import with no
+# known parent package" — which made run_harvest throw and the hook silently
+# no-op (the harvest never fired in production). Putting the plugin root on
+# sys.path lets every import below use the absolute `bootstrap_lib.*` form, which
+# resolves in BOTH contexts. engine.py's top-level imports are light (stdlib +
+# atomic_write), so reusing its semver parser stays cheap.
+_PLUGIN_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PLUGIN_ROOT not in sys.path:
+    sys.path.insert(0, _PLUGIN_ROOT)
+from bootstrap_lib.engine import _parse_semver
 
 
 def _default_registry() -> str:
@@ -125,7 +129,7 @@ def launch_new_engine(install_path: str, project_dir: str, data_dir: str) -> boo
     # (and re-stamps the cooldown itself). Routed through the same project-scope
     # stamp the shell uses, so the path matches exactly.
     try:
-        from .stamps import project_stamp
+        from bootstrap_lib.stamps import project_stamp
         project_stamp(data_dir, "last_run_epoch", project_dir or "").clear()
     except Exception:
         pass  # a stale stamp at worst lets the -nt gate still bypass; never fatal
@@ -165,7 +169,7 @@ def run_harvest(
     Common path is two reads (registry version + engine_ran_version stamp) and a
     compare; the launch marker and engine spawn only happen on a genuine update.
     """
-    from .stamps import global_stamp
+    from bootstrap_lib.stamps import global_stamp
 
     installed_version, install_path = read_installed_bootstrap(registry_path, marketplace)
     if not installed_version or not install_path:
@@ -198,7 +202,7 @@ def _log_launch(data_dir: str, status: str) -> None:
     prompt). Honors the 'every action logs its outcome' principle without adding
     per-prompt cost. Best-effort."""
     try:
-        from .log import write_log_block
+        from bootstrap_lib.log import write_log_block
         write_log_block(data_dir, "bootstrap harvest", [status])
     except Exception:
         pass
