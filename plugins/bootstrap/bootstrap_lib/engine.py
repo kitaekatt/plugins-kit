@@ -1103,9 +1103,9 @@ class _ToolEntryCtx:
     """
 
     __slots__ = ("tool_def", "name", "install", "install_cmds", "scoop_pkg",
-                 "brew_spec", "tool_install_path", "check_cmd", "download_def",
-                 "current_os", "prefix", "action_entries", "ok_entries",
-                 "tools_installed", "plugin_name", "result")
+                 "brew_spec", "apt_pkg", "tool_install_path", "check_cmd",
+                 "download_def", "current_os", "prefix", "action_entries",
+                 "ok_entries", "tools_installed", "plugin_name", "result")
 
     def __init__(self, tool_def, current_os, prefix, action_entries,
                  ok_entries, tools_installed, plugin_name):
@@ -1129,6 +1129,10 @@ class _ToolEntryCtx:
         #   through. Only the current-OS install value is consulted (brew is
         #   macOS-only), mirroring scoop_pkg.
         self.brew_spec = self._parse_brew(os_spec)
+        #   apt_pkg -- the apt package name for this host, or None. Canonical
+        #   apt form is a bare string ({"apt": "net-tools"}); apt is Ubuntu-only,
+        #   so only the current-OS install value is consulted (mirrors scoop_pkg).
+        self.apt_pkg = os_spec.get("apt") if isinstance(os_spec, dict) else None
         self.tool_install_path = tool_def.get("installPath")
         self.check_cmd = tool_def.get("check")
         self.download_def = _resolve_download_def(tool_def.get("download", {}), current_os)
@@ -1282,6 +1286,83 @@ def _strategy_brew(ctx):
             "plugin": ctx.plugin_name})
 
 
+def _strategy_apt(ctx):
+    """Precedence 2c: apt fulfillment (Ubuntu system package manager). An `apt`
+    value under install.<os> means "install via apt-get" rather than a url/sha
+    download or an opaque command. Terminal whenever it applies. Mirrors
+    _strategy_scoop / _strategy_brew, and like them runs BEFORE url download
+    (manager-over-download); apt/scoop/brew are mutually exclusive by OS (each
+    reads only its own host's install value), so on Ubuntu ctx.apt_pkg is set and
+    scoop_pkg/brew_spec are None.
+
+    Elevation-aware (elevation policy, section 5): apt always needs root. When
+    passwordless sudo is unavailable and we are not root, apt_install NEVER
+    attempts the operation and reports needs_elevation; this strategy converts
+    that into a persistent `needs_elevation` manual-attention failure carrying an
+    `elevation` descriptor so a later step can accumulate every deferred op into
+    ONE remediation script. Accumulation is NOT done here.
+
+    Unlike brew's cask leniency, there is NO trust-despite-failed-recheck for
+    apt: apt packages install real binaries/services, so the post-install
+    re-check stays authoritative -- a package apt claims to have installed but
+    that still does not resolve is an apt_failed failure."""
+    from . import tool_paths
+    pkg = ctx.apt_pkg
+    if not pkg:
+        return _StrategyOutcome(False)
+    from .apt import apt_install
+    from .path_repair import repair_path
+    ai = apt_install(pkg)
+    if ai.needs_elevation:
+        manual_cmd = f"sudo apt-get install -y {pkg}"
+        ctx.action_entries.append(
+            f"{ctx.prefix}{ctx.name}: needs elevation - passwordless sudo "
+            f"unavailable; run: {manual_cmd}"
+        )
+        return _StrategyOutcome(True, {
+            "type": "tool", "name": ctx.name,
+            "message": ai.message,
+            "install_state": "needs_elevation",
+            # No runnable-by-us command: only the user can elevate. install_cmd
+            # None keeps the item off the fix-all path (manual-attention only).
+            "install_cmd": None,
+            # Structured elevation descriptor for the (later) elevation queue:
+            # method identifies the backend, package is what `apt-get install`
+            # needs, os disambiguates when the queue emits per-OS scripts.
+            "elevation": {"method": "apt", "package": pkg, "os": ctx.current_os},
+            "agent_msg": (
+                f"Installing {ctx.name} needs root, but passwordless sudo is not "
+                f"available on this machine (sudo -n failed) and bootstrap is not "
+                f"running as root. Run `{manual_cmd}`, then type 'fix-all' (or "
+                f"re-run bootstrap) to confirm it resolved."
+            ),
+            "plugin": ctx.plugin_name,
+            "persist_across_sessions": True,
+        })
+    # apt installs into system dirs already on PATH; repair_path for parity with
+    # the other managers so any late PATH change is visible to the re-check.
+    repair_path()
+    recheck = _tool_check(ctx)
+    if recheck.passed:
+        if recheck.path:
+            tool_paths.record(None, recheck.subject, recheck.path)
+        _link_tool_dir_to_path(recheck, ctx.prefix, ctx.action_entries)
+        ctx.tools_installed.append((ctx.name, f"installed `{pkg}` via apt"))
+        return _StrategyOutcome(True, None)
+    # Re-check failed: either the install errored, or the backend reported the
+    # package present (apt install, or the dpkg already-installed guard) but the
+    # tool still does not resolve (wrong check/binary name -- a manifest bug).
+    # ai.message names the actual reporter, so the wording stays accurate for both.
+    msg = ai.message if not ai.ok else (
+        f"{ai.message}, but it still does not resolve "
+        f"(check the entry's `check`/binary name)"
+    )
+    ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: apt install failed - {msg}")
+    return _StrategyOutcome(True, {"type": "tool", "name": ctx.name, "message": msg,
+            "install_state": "apt_failed", "install_cmd": None,
+            "plugin": ctx.plugin_name})
+
+
 def _strategy_url_download(ctx):
     """Precedence 3: prefer downloading our own copy to ~/.local/bin over
     shelling out to a system package manager. See tool-resolution-redesign.md.
@@ -1375,20 +1456,21 @@ def _strategy_install_command(ctx):
 
 
 # Ordered install-strategy dispatch table. Precedence is significant: resolve/
-# link -> scoop (Windows) -> brew (macOS) -> url download (download.url+sha256)
-# -> install command (re-check regardless of exit code, + manual sentinel).
-# scoop and brew are mutually exclusive by OS (each reads only its own host's
-# install value) and both run BEFORE url download, matching the per-OS method
-# ladder ("scoop > download", "brew > download"); the pre-existing strategies
-# keep their relative order (resolve -> scoop -> url -> install), brew is merely
-# inserted next to scoop. Each function takes the shared _ToolEntryCtx and
-# returns a _StrategyOutcome; the dispatcher returns the first terminal
-# outcome's ``failure``. install_command is always terminal, so the loop always
-# resolves.
+# link -> scoop (Windows) -> brew (macOS) -> apt (Ubuntu) -> url download
+# (download.url+sha256) -> install command (re-check regardless of exit code, +
+# manual sentinel). scoop, brew, and apt are mutually exclusive by OS (each reads
+# only its own host's install value) and all run BEFORE url download, matching
+# the per-OS method ladder ("scoop > download", "brew > download", "apt >
+# download"); the pre-existing strategies keep their relative order (resolve ->
+# scoop -> url -> install), with brew then apt inserted next to scoop. Each
+# function takes the shared _ToolEntryCtx and returns a _StrategyOutcome; the
+# dispatcher returns the first terminal outcome's ``failure``. install_command is
+# always terminal, so the loop always resolves.
 _INSTALL_STRATEGIES = (
     _strategy_resolve,
     _strategy_scoop,
     _strategy_brew,
+    _strategy_apt,
     _strategy_url_download,
     _strategy_install_command,
 )
@@ -3271,7 +3353,10 @@ def _is_auto_fixable(failure):
         # "already installed" — fix-all can't help; it's a bootstrap bug.
         # installed_but_path_stale: reinstall just says "already installed".
         # manual_install: there's no unattended installer — only the user can act.
-        if failure.get("install_state") in ("installed_but_path_stale", "manual_install"):
+        # needs_elevation: only the user can run sudo — a background hook must not.
+        if failure.get("install_state") in (
+            "installed_but_path_stale", "manual_install", "needs_elevation",
+        ):
             return False
         return bool(failure.get("install_cmd"))
     return t in _AUTO_FIXABLE_TYPES
@@ -3379,6 +3464,19 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
                     f"{i}. Installing {f['name']}{plugin_tag} via Homebrew failed: "
                     f"{f.get('message', 'see log')}. Ensure Homebrew is installed "
                     f"(https://brew.sh) and the formula/cask name is correct, then re-run."
+                )
+            elif state == "apt_failed":
+                agent_lines.append(
+                    f"{i}. Installing {f['name']}{plugin_tag} via apt failed: "
+                    f"{f.get('message', 'see log')}. Check the package name and apt "
+                    f"sources, then re-run."
+                )
+            elif state == "needs_elevation":
+                # Only the user can elevate; a background hook must not sudo/UAC.
+                # Surface the exact manual command (carried in agent_msg).
+                agent_lines.append(
+                    f"{i}. {f.get('agent_msg') or (f['name'] + ' needs elevation to install')}"
+                    f"{plugin_tag}"
                 )
             else:
                 agent_lines.append(f"{i}. Install {f['name']}{plugin_tag}: `{f['install_cmd'] or 'see documentation'}`")

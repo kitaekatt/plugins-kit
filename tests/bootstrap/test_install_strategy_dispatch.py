@@ -35,6 +35,7 @@ class TestStrategyTableShape:
             "_strategy_resolve",
             "_strategy_scoop",
             "_strategy_brew",
+            "_strategy_apt",
             "_strategy_url_download",
             "_strategy_install_command",
         ]
