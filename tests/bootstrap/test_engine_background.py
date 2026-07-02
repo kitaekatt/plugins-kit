@@ -80,7 +80,8 @@ class TestEngineBackground:
     def test_background_writes_display_file(self, data_dir, tmp_path):
         """Engine with --background creates bootstrap_display.pending when there's output."""
         fake_root = _make_minimal_root(tmp_path, with_version=True)
-        result = run_engine(data_dir, plugin_root=fake_root, extra_args=["--background"])
+        result = run_engine(data_dir, plugin_root=fake_root, extra_args=["--background"],
+                            env=_isolated_env(tmp_path))
         assert result.returncode == 0
         display_file = os.path.join(data_dir, "bootstrap_display.pending")
         assert os.path.isfile(display_file)
@@ -88,7 +89,8 @@ class TestEngineBackground:
     def test_background_no_stdout(self, data_dir, tmp_path):
         """In background mode, stdout is empty (output goes to file)."""
         fake_root = _make_minimal_root(tmp_path, with_version=True)
-        result = run_engine(data_dir, plugin_root=fake_root, extra_args=["--background"])
+        result = run_engine(data_dir, plugin_root=fake_root, extra_args=["--background"],
+                            env=_isolated_env(tmp_path))
         assert result.returncode == 0
         assert result.stdout.strip() == ""
 
@@ -129,7 +131,8 @@ class TestEngineBackground:
         (defaults / "config.json").write_text(json.dumps(config))
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
-        result = run_engine(data_dir, plugin_root=str(fake_root), extra_args=["--background"])
+        result = run_engine(data_dir, plugin_root=str(fake_root), extra_args=["--background"],
+                            env=_isolated_env(tmp_path))
         assert result.returncode == 0
         assert result.stdout.strip() == ""
 
@@ -150,7 +153,7 @@ class TestEngineBackground:
     def test_foreground_has_hook_specific_output(self, data_dir, tmp_path):
         """Non-background (SessionStart) output retains hookSpecificOutput."""
         fake_root = _make_minimal_root(tmp_path, with_version=True)
-        result = run_engine(data_dir, plugin_root=fake_root)
+        result = run_engine(data_dir, plugin_root=fake_root, env=_isolated_env(tmp_path))
         assert result.returncode == 0
         response = json.loads(result.stdout.strip())
         assert response["hookSpecificOutput"]["hookEventName"] == "SessionStart"
@@ -185,7 +188,8 @@ class TestEngineBackground:
     def test_console_mode_unaffected(self, data_dir, tmp_path):
         """--console still prints to stdout regardless of --background."""
         fake_root = _make_minimal_root(tmp_path)
-        result = run_engine(data_dir, plugin_root=fake_root, extra_args=["--console"])
+        result = run_engine(data_dir, plugin_root=fake_root, extra_args=["--console"],
+                            env=_isolated_env(tmp_path))
         assert result.returncode == 0
         # Console mode prints plain text to stdout (verbose by default)
         # No display file should be created

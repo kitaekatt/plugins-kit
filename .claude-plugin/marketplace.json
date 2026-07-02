@@ -9,7 +9,7 @@
     {
       "name": "unreal-kit",
       "description": "Unreal Engine automation: Python API for asset inspection and data extraction; MCP server for live Editor authoring (actors, Blueprints, materials, PIE)",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "author": {
         "name": "Christina"
       },
@@ -32,7 +32,7 @@
     {
       "name": "bootstrap",
       "description": "Centralized bootstrap engine for Claude Code plugins",
-      "version": "0.28.0",
+      "version": "0.29.0",
       "author": {
         "name": "Christina"
       },

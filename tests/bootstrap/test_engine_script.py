@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -14,10 +15,18 @@ ENGINE_SCRIPT = os.path.join(BOOTSTRAP_ROOT, "engine", "bootstrap_engine.py")
 
 
 def run_engine(data_dir, plugin_root=BOOTSTRAP_ROOT):
+    # Isolate HOME to an empty dir so the engine discovers no real
+    # installed_plugins.json (an un-isolated run would execute claude-ui-kit's
+    # install_statusline against the developer's real ~/.claude/settings.json).
+    env = dict(os.environ)
+    isolated_home = tempfile.mkdtemp(prefix="bootstrap_test_home_")
+    env["HOME"] = isolated_home
+    env["USERPROFILE"] = isolated_home
     return subprocess.run(
         [sys.executable, ENGINE_SCRIPT, "--plugin-root", plugin_root, "--data-dir", data_dir],
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
