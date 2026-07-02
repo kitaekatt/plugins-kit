@@ -120,7 +120,7 @@ def _main():
     from .path_repair import repair_path
     from .tool_check import check_tool
     from .path_check import check_path_entry
-    from .platform_detect import detect_os
+    from .platform_detect import detect_os, UnsupportedPlatformError
     from .plugin_resolve import list_enabled_plugins
     from .venv_check import check_venv
     from .git_dep_check import check_git_dep
@@ -135,7 +135,16 @@ def _main():
     defaults_dir = os.path.join(plugin_root, "defaults")
     config = load_config(data_dir, defaults_dir)
 
-    current_os = detect_os()
+    # Fail fast on an unsupported platform (non-Ubuntu Linux) BEFORE any tool
+    # or manifest processing: silently running Ubuntu/apt commands on a foreign
+    # distro is exactly what the ratified change forbids. This is a genuine
+    # fail-fast (failure policy), not a per-item fix-all failure -- the platform
+    # is unsupported as a fact, so there is nothing to auto-fix.
+    try:
+        current_os = detect_os()
+    except UnsupportedPlatformError as e:
+        _emit_unsupported_platform(str(e), data_dir, args)
+        return
     log_success = config.get("log_success_checks", False) or args.verbose
     all_failures = []
     # Bootstrap's own entries (self-bootstrap + user) — written to bootstrap's log
@@ -1094,9 +1103,9 @@ class _ToolEntryCtx:
     """
 
     __slots__ = ("tool_def", "name", "install", "install_cmds", "scoop_pkg",
-                 "tool_install_path", "check_cmd", "download_def", "current_os",
-                 "prefix", "action_entries", "ok_entries", "tools_installed",
-                 "plugin_name", "result")
+                 "brew_spec", "tool_install_path", "check_cmd", "download_def",
+                 "current_os", "prefix", "action_entries", "ok_entries",
+                 "tools_installed", "plugin_name", "result")
 
     def __init__(self, tool_def, current_os, prefix, action_entries,
                  ok_entries, tools_installed, plugin_name):
@@ -1114,6 +1123,12 @@ class _ToolEntryCtx:
                              if isinstance(v, dict) and "command" in v}
         os_spec = self.install.get(current_os)
         self.scoop_pkg = os_spec.get("scoop") if isinstance(os_spec, dict) else None
+        #   brew_spec -- the canonical brew fulfillment for this host, or None.
+        #   {"brew": "name"} shorthand -> {"formula": "name"}; the object forms
+        #   {"brew": {"cask": ...}} / {"brew": {"formula": ..., "tap": ...}} pass
+        #   through. Only the current-OS install value is consulted (brew is
+        #   macOS-only), mirroring scoop_pkg.
+        self.brew_spec = self._parse_brew(os_spec)
         self.tool_install_path = tool_def.get("installPath")
         self.check_cmd = tool_def.get("check")
         self.download_def = _resolve_download_def(tool_def.get("download", {}), current_os)
@@ -1124,6 +1139,27 @@ class _ToolEntryCtx:
         self.tools_installed = tools_installed
         self.plugin_name = plugin_name
         self.result = None
+
+    @staticmethod
+    def _parse_brew(os_spec):
+        """Canonicalize the brew fulfillment on this host's install value.
+
+        Accepts the shorthand string ({"brew": "direnv"} -> {"formula":
+        "direnv"}) and the object forms ({"brew": {"cask": ...}} /
+        {"brew": {"formula": ..., "tap": ...}}). Returns a dict with
+        formula|cask (+ optional tap), or None when no brew fulfillment is
+        declared for this host.
+        """
+        if not isinstance(os_spec, dict):
+            return None
+        brew = os_spec.get("brew")
+        if brew is None:
+            return None
+        if isinstance(brew, str):
+            return {"formula": brew}
+        if isinstance(brew, dict):
+            return dict(brew)
+        return None
 
 
 def _tool_check(ctx):
@@ -1194,6 +1230,55 @@ def _strategy_scoop(ctx):
     ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: scoop install failed - {si.message}")
     return _StrategyOutcome(True, {"type": "tool", "name": ctx.name, "message": si.message,
             "install_state": "scoop_failed", "install_cmd": None,
+            "plugin": ctx.plugin_name})
+
+
+def _strategy_brew(ctx):
+    """Precedence 2b: brew fulfillment (macOS package manager). A `brew` value
+    under install.<os> means "install via Homebrew" rather than a url/sha
+    download or an opaque command. Terminal whenever it applies.
+
+    Homebrew is NEVER auto-installed (ensure_brew is detect-only): a missing
+    brew is a descriptive per-item failure, mirroring how scoop surfaces an
+    unavailable manager. Only applies on macOS, where the canonical brew object
+    is present at install.macos (ctx.brew_spec); on other hosts brew_spec is
+    None and this falls through. Mirrors _strategy_scoop's shape."""
+    from . import tool_paths
+    spec = ctx.brew_spec
+    if not spec:
+        return _StrategyOutcome(False)
+    label = spec.get("cask") or spec.get("formula") or ctx.name
+    from .brew import ensure_brew, brew_install
+    from .path_repair import repair_path
+    eb = ensure_brew()
+    if not eb.ok:
+        ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: brew unavailable - {eb.message}")
+        return _StrategyOutcome(True, {"type": "tool", "name": ctx.name, "message": eb.message,
+                "install_state": "brew_failed", "install_cmd": None,
+                "plugin": ctx.plugin_name})
+    bi = brew_install(formula=spec.get("formula"), cask=spec.get("cask"), tap=spec.get("tap"))
+    # brew links formulae into its prefix bin (already on PATH); reflect any
+    # PATH change into this running process so the re-check can resolve it.
+    repair_path()
+    recheck = _tool_check(ctx)
+    if recheck.passed:
+        if recheck.path:
+            tool_paths.record(None, recheck.subject, recheck.path)
+        ctx.tools_installed.append((ctx.name, f"installed `{label}` via brew"))
+        return _StrategyOutcome(True, None)
+    if bi.ok and spec.get("cask"):
+        # CASK ONLY: brew reported success but the tool doesn't resolve by our
+        # check -- a GUI cask may have no CLI binary and no `check` command, so
+        # there is nothing on PATH for the re-check to see. Trust brew's success
+        # for casks alone. A FORMULA whose re-check fails (keg-only, broken
+        # PATH) falls through to the brew_failed failure dict below -- the
+        # re-check stays authoritative for anything that should resolve
+        # (strategy section 8; mirrors scoop, which only trusts an actual shim).
+        ctx.tools_installed.append((ctx.name, f"installed `{label}` via brew"))
+        return _StrategyOutcome(True, None)
+    ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: brew install failed - {bi.message}")
+    return _StrategyOutcome(True, {"type": "tool", "name": ctx.name, "message": bi.message,
+            "install_state": "brew_failed", "install_cmd": None,
             "plugin": ctx.plugin_name})
 
 
@@ -1289,16 +1374,21 @@ def _strategy_install_command(ctx):
     })
 
 
-# Ordered install-strategy dispatch table. Precedence is significant and MUST
-# match the former inline branch order exactly: resolve/link -> scoop
-# (download.scoop) -> url download (download.url+sha256) -> install command
-# (re-check regardless of exit code, + manual sentinel). Each function takes the
-# shared _ToolEntryCtx and returns a _StrategyOutcome; the dispatcher returns
-# the first terminal outcome's ``failure``. install_command is always terminal,
-# so the loop always resolves.
+# Ordered install-strategy dispatch table. Precedence is significant: resolve/
+# link -> scoop (Windows) -> brew (macOS) -> url download (download.url+sha256)
+# -> install command (re-check regardless of exit code, + manual sentinel).
+# scoop and brew are mutually exclusive by OS (each reads only its own host's
+# install value) and both run BEFORE url download, matching the per-OS method
+# ladder ("scoop > download", "brew > download"); the pre-existing strategies
+# keep their relative order (resolve -> scoop -> url -> install), brew is merely
+# inserted next to scoop. Each function takes the shared _ToolEntryCtx and
+# returns a _StrategyOutcome; the dispatcher returns the first terminal
+# outcome's ``failure``. install_command is always terminal, so the loop always
+# resolves.
 _INSTALL_STRATEGIES = (
     _strategy_resolve,
     _strategy_scoop,
+    _strategy_brew,
     _strategy_url_download,
     _strategy_install_command,
 )
@@ -1381,7 +1471,7 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
     identical to the former inline branches:
       - resolve: check_tool() via installPath candidates / `check` cmd / which;
         if resolved, record the path and link its dir onto PATH (philosophy P4).
-      - scoop / url download / install command run in order on a miss. After
+      - scoop / brew / url download / install command run in order on a miss. After
         ANY install attempt the tool is re-checked regardless of the
         installer's exit code — installers exit non-zero for "already installed
         / no upgrade" (winget 43), so the re-check, not the exit code, decides
@@ -3192,6 +3282,54 @@ def _format_indexes(idxs):
     return ", ".join(f"#{i}" for i in idxs)
 
 
+def _emit_unsupported_platform(message, data_dir, args):
+    """Surface an unsupported-platform hard error and stop the pass.
+
+    Non-Ubuntu Linux fails fast (detect_os raised UnsupportedPlatformError):
+    the platform is unsupported as a fact, so this is NOT a per-item fix-all
+    failure -- there is nothing to auto-fix. It surfaces through the same
+    channels as normal engine output (a bootstrap_display.pending file in
+    background mode, stdout JSON on SessionStart, plain text in console mode)
+    so the user sees WHY bootstrap did not run. The pass returns without
+    touching tools, manifests, or the cooldown stamp -- the shell hook already
+    stamped the per-project cooldown BEFORE launching the engine, so leaving it
+    in place means this message re-surfaces at most once per cooldown window
+    (not on every session).
+    """
+    label = "bootstrap"
+    system_message = f"{label} -> {message}"
+    additional_context = (
+        f"{label} -> bootstrap did not run: {message} This is not fixable in "
+        "place; tell the user this platform is unsupported by bootstrap."
+    )
+    if args.console:
+        print(system_message)
+        return
+    if args.background:
+        response = {
+            "continue": True,
+            "suppressOutput": False,
+            "systemMessage": system_message,
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": additional_context,
+            },
+        }
+        pending = os.path.join(data_dir, "bootstrap_display.pending")
+        _write_atomic(pending, json.dumps(response))
+    else:
+        response = {
+            "continue": True,
+            "suppressOutput": False,
+            "systemMessage": system_message,
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": additional_context,
+            },
+        }
+        print(json.dumps(response))
+
+
 def emit_failure_response(failures, current_os, log_content, label="bootstrap", output_file=None, persistent_output_file=None):
     """Emit hook JSON with fix-all directives to stdout or file.
 
@@ -3235,6 +3373,12 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
                     f"{i}. Installing {f['name']}{plugin_tag} via Scoop failed: "
                     f"{f.get('message', 'see log')}. Check network access and that Scoop "
                     f"could be provisioned (~/scoop), then re-run."
+                )
+            elif state == "brew_failed":
+                agent_lines.append(
+                    f"{i}. Installing {f['name']}{plugin_tag} via Homebrew failed: "
+                    f"{f.get('message', 'see log')}. Ensure Homebrew is installed "
+                    f"(https://brew.sh) and the formula/cask name is correct, then re-run."
                 )
             else:
                 agent_lines.append(f"{i}. Install {f['name']}{plugin_tag}: `{f['install_cmd'] or 'see documentation'}`")
