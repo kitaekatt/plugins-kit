@@ -447,6 +447,24 @@ def _main():
     from . import tool_paths as _tool_paths
     _tool_paths.export_tool_env_vars(data_dir)
 
+    # Step 7b: Elevation queue -> ONE per-OS remediation script. Harvest every
+    # `elevation` descriptor deferred during this pass (apt packages, elevated
+    # commands, a missing-brew installer signal), regenerate the script when the
+    # queue is non-empty, and DELETE a stale script when it is empty (the ops
+    # succeeded, so the item clears). When a script was written, append ONE
+    # aggregated fix-all item naming its path + what it will do; the per-item
+    # needs_elevation failures keep persisting on their own. See
+    # bootstrap_lib/elevation.py and analysis-dividing-line.md section 4.3.
+    from .elevation import (
+        queue_from_failures, write_or_clear_script, elevation_script_failure,
+    )
+    _elev_queue = queue_from_failures(all_failures, current_os)
+    _elev_path = write_or_clear_script(_elev_queue, data_dir, current_os)
+    if _elev_path:
+        all_failures.append(
+            elevation_script_failure(_elev_queue, current_os, _elev_path)
+        )
+
     # Step 8: Emit results
     output_file = os.path.join(data_dir, "bootstrap_display.pending") if args.background else None
     persistent_alert_path = os.path.join(data_dir, "bootstrap_alert.json")
@@ -1103,7 +1121,7 @@ class _ToolEntryCtx:
     """
 
     __slots__ = ("tool_def", "name", "install", "install_cmds", "scoop_pkg",
-                 "brew_spec", "apt_pkg", "tool_install_path", "check_cmd",
+                 "brew_spec", "apt_pkg", "elevated", "tool_install_path", "check_cmd",
                  "download_def", "current_os", "prefix", "action_entries",
                  "ok_entries", "tools_installed", "plugin_name", "result")
 
@@ -1133,6 +1151,12 @@ class _ToolEntryCtx:
         #   apt form is a bare string ({"apt": "net-tools"}); apt is Ubuntu-only,
         #   so only the current-OS install value is consulted (mirrors scoop_pkg).
         self.apt_pkg = os_spec.get("apt") if isinstance(os_spec, dict) else None
+        #   elevated -- does THIS host's opaque command need privileges? Read
+        #   with a False default: an author-written command object may omit the
+        #   field (audit note N2), and a bare-string install normalizes to
+        #   {"command": s, "elevated": False}. Consumed only by the install-
+        #   command strategy (scoop/brew/apt carry their own elevation model).
+        self.elevated = bool(os_spec.get("elevated", False)) if isinstance(os_spec, dict) else False
         self.tool_install_path = tool_def.get("installPath")
         self.check_cmd = tool_def.get("check")
         self.download_def = _resolve_download_def(tool_def.get("download", {}), current_os)
@@ -1172,6 +1196,14 @@ def _tool_check(ctx):
     from .tool_check import check_tool
     return check_tool(ctx.name, ctx.install_cmds, ctx.current_os,
                       install_path=ctx.tool_install_path, check_cmd=ctx.check_cmd)
+
+
+def _privileges_available(current_os):
+    """Module-level indirection over elevation.privileges_available so the
+    install-command strategy's defer-vs-run decision is monkeypatchable in tests
+    without touching the elevation module's probes."""
+    from .elevation import privileges_available
+    return privileges_available(current_os)
 
 
 def _strategy_resolve(ctx):
@@ -1257,8 +1289,16 @@ def _strategy_brew(ctx):
     eb = ensure_brew()
     if not eb.ok:
         ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: brew unavailable - {eb.message}")
+        # brew is missing while a brew-backed entry is pending: signal the
+        # elevation queue to lead the macOS remediation script with the Homebrew
+        # installer (strategy section 6). The official installer is interactive
+        # and may sudo, so the engine never runs it -- one user-run step, then
+        # brew entries install unattended next session. (This branch is
+        # macOS-only: brew_spec is None off macOS.) The brew_failed item itself
+        # re-checks and clears next session once brew exists.
         return _StrategyOutcome(True, {"type": "tool", "name": ctx.name, "message": eb.message,
                 "install_state": "brew_failed", "install_cmd": None,
+                "elevation": {"method": "brew_installer", "os": "macos"},
                 "plugin": ctx.plugin_name})
     bi = brew_install(formula=spec.get("formula"), cask=spec.get("cask"), tap=spec.get("tap"))
     # brew links formulae into its prefix bin (already on PATH); reflect any
@@ -1407,6 +1447,32 @@ def _strategy_install_command(ctx):
     install_state = "no_install_cmd"
     if result.install_cmd == "manual":
         install_state = "manual_install"
+    elif result.install_cmd and ctx.elevated and not _privileges_available(ctx.current_os):
+        # Elevated command + missing privileges: DEFER, never attempt (a
+        # background hook must not sudo / trigger UAC). The op is queued for the
+        # per-OS remediation script via this descriptor, and surfaced as a
+        # persistent needs_elevation item -- mirroring _strategy_apt. When
+        # privileges ARE available (or the command is not elevated -- N2/N3) this
+        # branch is skipped and the command runs directly, unchanged.
+        manual_cmd = result.install_cmd
+        ctx.action_entries.append(
+            f"{ctx.prefix}{result.subject}: needs elevation - run: {manual_cmd}"
+        )
+        return _StrategyOutcome(True, {
+            "type": "tool", "name": result.subject,
+            "message": f"{result.subject} install requires elevation: {manual_cmd}",
+            "install_state": "needs_elevation",
+            "install_cmd": None,
+            "elevation": {"method": "command", "command": manual_cmd, "os": ctx.current_os},
+            "agent_msg": (
+                f"Installing {result.subject} needs elevated privileges, which a "
+                f"background hook must not request. Run the elevated remediation "
+                f"script bootstrap generated (see the elevation item), or run "
+                f"`{manual_cmd}` with the needed privileges, then type 'fix-all'."
+            ),
+            "plugin": ctx.plugin_name,
+            "persist_across_sessions": True,
+        })
     elif result.install_cmd:
         from .tool_check import run_install
         from .path_repair import repair_path
@@ -3506,6 +3572,11 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
             agent_lines.append(f"{i}. Sync {f['src']} -> {f['dst']}{plugin_tag}: {f['message']}")
         elif f["type"] == "python_stub":
             agent_lines.append(f"{i}. python stub fix needed{plugin_tag}: {f.get('agent_msg', f.get('message', 'see log'))}")
+        elif f["type"] == "elevation_script":
+            # Aggregated remediation: names the ONE per-OS script + what it does.
+            # Manual-only (the user must supply credentials), so not fix-all
+            # eligible -- _AUTO_FIXABLE_TYPES omits it.
+            agent_lines.append(f"{i}. {f.get('agent_msg', f.get('message', 'run the elevation remediation script'))}{plugin_tag}")
         elif f["type"] == "manifest_parse":
             agent_lines.append(f"{i}. {f.get('agent_msg', f.get('message', 'manifest parse error'))}{plugin_tag}")
         else:
