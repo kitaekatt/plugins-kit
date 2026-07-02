@@ -1093,16 +1093,27 @@ class _ToolEntryCtx:
     reports on ``result.subject`` / ``result.install_cmd`` / ``result.message``).
     """
 
-    __slots__ = ("tool_def", "name", "install_cmds", "tool_install_path",
-                 "check_cmd", "download_def", "current_os", "prefix",
-                 "action_entries", "ok_entries", "tools_installed",
+    __slots__ = ("tool_def", "name", "install", "install_cmds", "scoop_pkg",
+                 "tool_install_path", "check_cmd", "download_def", "current_os",
+                 "prefix", "action_entries", "ok_entries", "tools_installed",
                  "plugin_name", "result")
 
     def __init__(self, tool_def, current_os, prefix, action_entries,
                  ok_entries, tools_installed, plugin_name):
         self.tool_def = tool_def
         self.name = tool_def["name"]
-        self.install_cmds = tool_def.get("install", {})
+        # tool_def is already canonicalized by _normalize_tool_entry: every
+        # install value is an object ({"command"..}, {"scoop"..}, ...) and scoop
+        # lives under install.<os> (never download). Derive the two shapes the
+        # strategies consume:
+        #   install_cmds -- os -> bare command string (what check_tool/run_install
+        #                   want; "manual" sentinel flows through unchanged).
+        #   scoop_pkg    -- the scoop package for this host, or None.
+        self.install = tool_def.get("install", {})
+        self.install_cmds = {k: v["command"] for k, v in self.install.items()
+                             if isinstance(v, dict) and "command" in v}
+        os_spec = self.install.get(current_os)
+        self.scoop_pkg = os_spec.get("scoop") if isinstance(os_spec, dict) else None
         self.tool_install_path = tool_def.get("installPath")
         self.check_cmd = tool_def.get("check")
         self.download_def = _resolve_download_def(tool_def.get("download", {}), current_os)
@@ -1143,18 +1154,20 @@ def _strategy_resolve(ctx):
 
 def _strategy_scoop(ctx):
     """Precedence 2: Scoop fulfillment (Windows userspace package manager). A
-    `scoop` key in the resolved download entry means "install via Scoop" rather
-    than a url/sha download. Scoop is provisioned LAZILY -- the first such tool
-    installs it. See bootstrap_lib/scoop.py. Terminal whenever it applies. (An
-    older engine that predates this branch falls through to the install
-    command, degrading to the legacy path.)"""
+    `scoop` value under install.<os> means "install via Scoop" rather than a
+    url/sha download. Normalization (_normalize_tool_entry) moves the legacy
+    `download.<os-arch>.scoop` spelling into this canonical install location, so
+    the strategy reads ctx.scoop_pkg regardless of which spelling the manifest
+    used. Scoop is provisioned LAZILY -- the first such tool installs it. See
+    bootstrap_lib/scoop.py. Terminal whenever it applies. (An older engine that
+    predates this branch falls through to the install command, degrading to the
+    legacy path.)"""
     from . import tool_paths
-    download_def = ctx.download_def
-    if not (download_def and download_def.get("scoop")):
+    pkg = ctx.scoop_pkg
+    if not pkg:
         return _StrategyOutcome(False)
     from .scoop import ensure_scoop, scoop_install
     from .path_repair import repair_path
-    pkg = download_def["scoop"]
     es = ensure_scoop()
     if not es.ok:
         ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: scoop unavailable - {es.message}")
@@ -1291,6 +1304,70 @@ _INSTALL_STRATEGIES = (
 )
 
 
+def _normalize_tool_entry(tool_def, current_os):
+    """Canonicalize legacy tool-entry spellings IN MEMORY (never on disk).
+
+    The single manifest-normalization choke point: every tool entry -- from the
+    layered user/project manifest, a per-plugin manifest, or engine self-setup --
+    flows through _process_tool_entry, which calls this first, so downstream
+    strategies (_ToolEntryCtx and the _INSTALL_STRATEGIES table) consume ONE
+    canonical form. Legacy spellings stay backwards-READABLE; the input dict is
+    NOT mutated (manifests may be shared / re-processed), and nothing is written
+    back to the JSON files on disk.
+
+    Normalizations, per analysis-dividing-line.md section 4 (4.2/4.5):
+
+      1. install.<os> string -> {"command": <s>, "elevated": false} (the opaque
+         command object). The "manual" sentinel is preserved as
+         {"command": "manual", "elevated": false}; downstream still keys on the
+         command string == "manual", so its manual-attention semantics are intact.
+         `elevated` is carried but not yet acted on (the elevation queue is a
+         later step); a bare string is exactly {"command": s, "elevated": false}.
+
+      2. download.<os[-arch]>.scoop (the legacy, deprecated-but-read spelling) ->
+         install.<os>.scoop (the canonical structured location). Only the entry
+         _resolve_download_def would pick for THIS host is promoted, so per-arch
+         behavior is unchanged. Scoop takes precedence over any command already
+         at install.<os> -- this matches the dispatch order (the scoop strategy
+         runs before the install-command strategy), which is load-bearing for
+         entries that declare both (e.g. p4-kit: install.windows "manual" +
+         download.scoop -> scoop wins).
+
+    Returns a shallow-cloned tool_def with canonical `install` / `download`.
+    """
+    if not isinstance(tool_def, dict):
+        return tool_def
+
+    # 1. string install values -> opaque command objects (all OS keys, so the
+    #    canonical shape is uniform regardless of which host runs).
+    install = {}
+    for os_key, val in tool_def.get("install", {}).items():
+        if isinstance(val, str):
+            install[os_key] = {"command": val, "elevated": False}
+        else:
+            install[os_key] = val
+
+    new_tool = dict(tool_def)
+
+    # 2. legacy download.scoop -> canonical install.<os>.scoop (host-resolved).
+    download = tool_def.get("download", {})
+    resolved_dl = _resolve_download_def(download, current_os)
+    if isinstance(resolved_dl, dict) and resolved_dl.get("scoop"):
+        # scoop precedence over any command spelled at install.<os>.
+        install[current_os] = {"scoop": resolved_dl["scoop"]}
+        # Strip scoop out of the download block so canonical form owns it and no
+        # downstream code reads scoop from `download` again.
+        new_download = {}
+        for k, v in download.items():
+            if isinstance(v, dict) and "scoop" in v:
+                v = {kk: vv for kk, vv in v.items() if kk != "scoop"}
+            new_download[k] = v
+        new_tool["download"] = new_download
+
+    new_tool["install"] = install
+    return new_tool
+
+
 def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
                         ok_entries, tools_installed, plugin_name):
     """Resolve one tool entry: check -> link-to-PATH -> download -> install.
@@ -1313,6 +1390,7 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
     ``data_dir`` is accepted for call-site symmetry; tool paths are recorded
     against the canonical bootstrap data dir (record(None, ...)).
     """
+    tool_def = _normalize_tool_entry(tool_def, current_os)
     ctx = _ToolEntryCtx(tool_def, current_os, prefix, action_entries,
                         ok_entries, tools_installed, plugin_name)
     for strategy in _INSTALL_STRATEGIES:
