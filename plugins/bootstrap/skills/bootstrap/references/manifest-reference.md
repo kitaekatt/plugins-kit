@@ -244,6 +244,140 @@ Variable references are expanded by the engine from plugin context and config:
 | `${data_dir}` | Plugin's data directory |
 | `${uproject_dir}` | From plugin config (if applicable) |
 
+## `install` — Per-OS Install Methods
+
+The `install` block answers "how do I install this tool on OS X" per OS. Its
+keys are exactly the `detect_os()` values — `macos`, `ubuntu`, `windows` (an
+exact-match lookup; a `darwin`/`linux` key silently never fires). Each per-OS
+**value** is one of two shapes:
+
+- an **opaque command string** — a shell command run verbatim, or the `manual`
+  sentinel;
+- a **structured manager object** — one of `scoop` / `brew` / `apt` / `command`.
+
+Both shapes are normalized to a canonical object at parse time
+(`_normalize_tool_entry`, in memory — never rewritten to disk), so a manifest
+may mix strings and objects freely and every legacy spelling keeps parsing.
+
+```json
+{
+  "name": "kitty",
+  "install": {
+    "macos":   {"brew": {"cask": "kitty"}, "check": "test -d /Applications/kitty.app"},
+    "ubuntu":  {"apt": "kitty"},
+    "windows": {"scoop": "extras/kitty"}
+  }
+}
+```
+
+### The object forms
+
+| Form | OS | Meaning |
+|------|----|---------|
+| `{"scoop": "bucket/pkg"}` | windows | Install via Scoop (userspace, no admin). `bucket/pkg` is the existing Scoop grammar. |
+| `{"brew": "formula"}` | macos | `brew install <formula>` (string shorthand = formula name). |
+| `{"brew": {"cask": "name"}}` | macos | `brew install --cask <name>`. |
+| `{"brew": {"formula": "name", "tap": "user/repo"}}` | macos | `brew install <tap/>name`; `formula` XOR `cask`, `tap` optional. |
+| `{"apt": "pkg"}` | ubuntu | `apt-get install -y <pkg>` (string package name only; elevation implied). |
+| `{"command": "…", "elevated": true\|false}` | any | Opaque shell command; `elevated: true` routes it through the elevation queue when privileges are missing. |
+| `"…"` (bare string) | any | Exactly equivalent to `{"command": "…", "elevated": false}`. |
+| `"manual"` (sentinel) | any | No unattended installer: bootstrap **verifies** the tool resolves on PATH but never tries to install it. Not a fix-all item. |
+
+**Legacy `download.<os-arch>.scoop` is deprecated but still read.** The
+normalizer promotes the host-resolved `download.…​.scoop` entry to
+`install.<os>.scoop` in memory (and strips it from the `download` block), so old
+manifests behave identically. New manifests should declare `install.<os>.scoop`
+directly. Scoop takes precedence over any command spelled at the same
+`install.<os>` key (this matches the dispatch order below), so an entry that
+declares both `install.windows: "manual"` and a scoop package installs via
+Scoop.
+
+### Runtime precedence
+
+For a tool that is not already resolvable, the engine dispatches an ordered
+strategy table (`_INSTALL_STRATEGIES`), taking the **first** that applies:
+
+1. **resolve** — `installPath` candidates → `check` command → `which` (see Tool
+   resolution below). A resolved tool records its path, is linked onto PATH, and
+   nothing is installed.
+2. **scoop** (`install.<os>.scoop`) — Windows only.
+3. **brew** (`install.macos.brew`) — macOS only.
+4. **apt** (`install.ubuntu.apt`) — Ubuntu only.
+5. **url download** (`download.url` + `download.sha256`) — our own copy under
+   `~/.local`. A failed download **falls through** to step 6.
+6. **install command** (`install.<os>.command`, or the `manual` sentinel).
+
+The three managers (scoop/brew/apt) are **mutually exclusive by OS** — each
+strategy reads only its own host's install value — and all run **before** url
+download, matching the per-OS ladder "manager > download > command". After any
+install attempt the tool is re-checked regardless of the installer's exit code.
+
+### Manager availability
+
+- **scoop** is provisioned **lazily** — the first scoop-backed entry installs
+  Scoop (no admin, no UAC). A scoop failure surfaces a per-item `scoop_failed`.
+- **brew** is **never auto-installed** (`ensure_brew` is detect-only). When brew
+  is missing while a brew-backed entry is pending, the entry surfaces a
+  `brew_failed` item AND signals the elevation queue to lead the macOS
+  remediation script with the official Homebrew installer (one user-run step;
+  brew entries then install unattended on the next pass).
+- **apt** always needs root — see elevation below.
+
+**Declare a `check` command on cask entries.** A GUI cask (e.g.
+`google-chrome`, `kitty`) usually has no CLI binary on PATH, so the resolve step
+can't detect it and the re-check after `brew install --cask` also can't. For a
+cask the engine therefore **trusts brew's success without a passing re-check**
+(cask-only leniency; a *formula* whose re-check fails is still a `brew_failed`).
+The consequence: a cask **without** a `check` re-runs `brew install --cask …`
+on **every** post-cooldown pass (a slow no-op). Add a `check` (e.g.
+`"test -d /Applications/kitty.app"`) so the resolve step short-circuits once the
+app is present.
+
+### Elevation behavior
+
+Bootstrap runs as a **non-interactive SessionStart hook**, so it must never
+prompt for a sudo password or trigger a UAC dialog. Before running any operation
+that needs privileges it probes: `sudo -n true` (root/passwordless-sudo) on
+Ubuntu/macOS, an admin-token check on Windows.
+
+- **Privileges available** → the operation runs **directly** (unchanged
+  behavior). On Christina's Ubuntu machines env-config's sudoers rules make
+  `sudo -n` pass, so apt entries install silently in the hook.
+- **Privileges missing** → the strategy **defers** instead of attempting. It
+  records a persistent per-item `needs_elevation` failure carrying a structured
+  `elevation` descriptor (`{method: apt|command|brew_installer, …}`).
+
+At the end of the pass the engine harvests every `elevation` descriptor for the
+current OS into one queue and writes **ONE** remediation script:
+
+- **Location**: `<data_dir>/elevate/install-elevated.{sh|bat}`.
+- **Regenerated every pass** from the current queue, and **deleted** when the
+  queue is empty — the script disappears once the deferred ops succeed.
+- **Ubuntu**: bash, `set -euo pipefail`, a leading `apt-get update` then
+  `apt-get install -y <all queued packages>`, then each deferred elevated
+  `command`. Run with `sudo bash <path>`.
+- **macOS**: bash; installs Homebrew first (official installer) when brew was the
+  missing prerequisite, then any deferred commands. Run with `bash <path>` as
+  the admin user.
+- **Windows**: a self-elevating `.bat` (UAC relaunch via
+  `Start-Process -Verb RunAs`, `fsutil` admin detect, success-only self-delete),
+  written CRLF, containing the deferred commands. Deferred commands are labeled
+  as comments (zero execution surface in the label itself).
+
+One aggregate `elevation_script` fix-all item names the script path and what it
+will do; the per-item `needs_elevation` failures keep persisting on their own.
+Both clear via the normal re-check on the next session (or `fix-all`) once the
+user has run the script.
+
+### Non-Ubuntu Linux fails fast
+
+`detect_os()` confirms Ubuntu via `/etc/os-release` (any `ID`/`ID_LIKE`
+mentioning `ubuntu`, which keeps Ubuntu-on-WSL and apt-based derivatives
+working). A genuinely different Linux distribution — or a host with no readable
+`/etc/os-release` — raises `UnsupportedPlatformError` with a descriptive message
+rather than silently receiving Ubuntu/apt install commands that would be wrong
+for it. This is a deliberate, user-ratified behavior change.
+
 ## Tool resolution: `installPath`, `check`, and PATH linkage
 
 A tool entry is resolved in this order: **`installPath` candidates** (file

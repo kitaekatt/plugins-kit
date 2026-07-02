@@ -54,6 +54,33 @@ The dual-path engine supports both — per-tool choice via the `download` and `i
 - **Tool → PATH linkage (owning the chain, P4 in practice).** When a tool resolves on disk (via `installPath` or a directory `which` found) but that directory is not on the persistent PATH, the engine adds the directory to PATH itself — RC files + Windows User PATH + the live process — rather than declaring success-and-forgetting or emitting a "restart your shell" instruction. "Present on disk but unreachable by bare name" is, for a consumer that invokes the tool by name, not installed. This is the operational form of principle 2 (own the full execution chain including the path that resolves the binary) and principle 4 (never make the user responsible for a link we own). Manifest authors get this for free: a tool entry with an `installPath` no longer needs a parallel `path_entries` entry to be callable. See manifest-reference.md "Tool → PATH linkage."
 - **Install exit codes are advisory; the re-check is authoritative.** Package managers exit non-zero for benign "already installed / no upgrade available" states (winget exit 43 is the canonical example). The engine therefore re-checks the tool after every install attempt regardless of exit code, and only records a failure when the tool is still unresolved afterward. Reading a non-zero install exit as failure produced false `install_failed` log lines for tools that were in fact already present.
 
+## Structured managers vs opaque command strings
+
+For the `install` block, prefer the **structured manager object** over an opaque
+command string:
+
+- A **plain package** — anything installed by naming it to a package manager —
+  gets the structured form: `{"scoop": "bucket/pkg"}`, `{"brew": "formula"}` /
+  `{"brew": {"cask": "…"}}`, `{"apt": "pkg"}`. Structured entries get uniform
+  detection, uniform elevation handling, and one obvious spelling — the "one
+  correct way" for the common case.
+- An **opaque command string** is reserved for installs that genuinely *are*
+  commands, not packages: curl-pipe installers, `npm install -g …`, `tic`
+  terminfo compilation, a distro's deb-repo setup. When such a command needs
+  privileges, spell it as `{"command": "…", "elevated": true}` so it routes
+  through the elevation queue instead of being attempted in the non-interactive
+  hook. A bare string is `{"command": "…", "elevated": false}`.
+
+The rule of thumb: if you would tell a person "install package X", it's a
+structured manager entry; if you would hand them a command to paste, it's a
+`command` string (with `elevated` set when it needs root/admin). Do not add
+version pinning or upgrade fields to the manager backends — pinning is the
+`download` block's job, and presence (not version) is what bootstrap checks for
+manager-backed tools.
+
+See manifest-reference.md "`install` — Per-OS Install Methods" for the exact
+forms, precedence, and elevation mechanics.
+
 ## User overrides
 
 Anything in this contract is overridable through the layered `bootstrap.json` hierarchy (priorities: project `bootstrap.local.json` > project `bootstrap.json` > `~/.claude/bootstrap.local.json` > `~/.claude/bootstrap.json` > plugin manifest). Tool entries with the same `name` deep-merge across layers, so users can pin individual fields without restating the whole entry.
