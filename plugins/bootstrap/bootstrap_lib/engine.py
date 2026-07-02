@@ -120,7 +120,7 @@ def _main():
     from .path_repair import repair_path
     from .tool_check import check_tool
     from .path_check import check_path_entry
-    from .platform_detect import detect_os
+    from .platform_detect import detect_os, UnsupportedPlatformError
     from .plugin_resolve import list_enabled_plugins
     from .venv_check import check_venv
     from .git_dep_check import check_git_dep
@@ -135,7 +135,16 @@ def _main():
     defaults_dir = os.path.join(plugin_root, "defaults")
     config = load_config(data_dir, defaults_dir)
 
-    current_os = detect_os()
+    # Fail fast on an unsupported platform (non-Ubuntu Linux) BEFORE any tool
+    # or manifest processing: silently running Ubuntu/apt commands on a foreign
+    # distro is exactly what the ratified change forbids. This is a genuine
+    # fail-fast (failure policy), not a per-item fix-all failure -- the platform
+    # is unsupported as a fact, so there is nothing to auto-fix.
+    try:
+        current_os = detect_os()
+    except UnsupportedPlatformError as e:
+        _emit_unsupported_platform(str(e), data_dir, args)
+        return
     log_success = config.get("log_success_checks", False) or args.verbose
     all_failures = []
     # Bootstrap's own entries (self-bootstrap + user) — written to bootstrap's log
@@ -437,6 +446,24 @@ def _main():
     # docs/planning/bootstrap/tool-resolution-redesign.md.
     from . import tool_paths as _tool_paths
     _tool_paths.export_tool_env_vars(data_dir)
+
+    # Step 7b: Elevation queue -> ONE per-OS remediation script. Harvest every
+    # `elevation` descriptor deferred during this pass (apt packages, elevated
+    # commands, a missing-brew installer signal), regenerate the script when the
+    # queue is non-empty, and DELETE a stale script when it is empty (the ops
+    # succeeded, so the item clears). When a script was written, append ONE
+    # aggregated fix-all item naming its path + what it will do; the per-item
+    # needs_elevation failures keep persisting on their own. See
+    # bootstrap_lib/elevation.py and analysis-dividing-line.md section 4.3.
+    from .elevation import (
+        queue_from_failures, write_or_clear_script, elevation_script_failure,
+    )
+    _elev_queue = queue_from_failures(all_failures, current_os)
+    _elev_path = write_or_clear_script(_elev_queue, data_dir, current_os)
+    if _elev_path:
+        all_failures.append(
+            elevation_script_failure(_elev_queue, current_os, _elev_path)
+        )
 
     # Step 8: Emit results
     output_file = os.path.join(data_dir, "bootstrap_display.pending") if args.background else None
@@ -1068,111 +1095,384 @@ def _link_tool_dir_to_path(result, prefix, action_entries):
     )
 
 
-def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
-                        ok_entries, tools_installed, plugin_name):
-    """Resolve one tool entry: check -> link-to-PATH -> download -> install.
+class _StrategyOutcome:
+    """Result contract shared by every install-strategy function.
 
-    Shared by _process_self_setup and _process_manifest (previously two
-    near-identical copies). Mutates action_entries / ok_entries / tools_installed
-    in place. Returns a failure dict, or None on success.
-
-    Resolution policy:
-      - check_tool() resolves via installPath candidates / `check` cmd / which.
-      - If resolved but not on PATH, _link_tool_dir_to_path() persists its dir
-        (owning the chain; no user "restart" instruction — philosophy P4).
-      - On miss: prefer a `download` recipe (our own copy under ~/.local/bin),
-        else run the install command. After ANY install attempt we re-check
-        regardless of the installer's exit code — installers exit non-zero for
-        "already installed / no upgrade" (winget 43), so the re-check, not the
-        exit code, decides "is it there now."
+    terminal=True  -> the dispatcher stops and returns ``failure`` (None on
+                      success, or a failure dict).
+    terminal=False -> the dispatcher falls through to the next strategy.
     """
+
+    __slots__ = ("terminal", "failure")
+
+    def __init__(self, terminal, failure=None):
+        self.terminal = terminal
+        self.failure = failure
+
+
+class _ToolEntryCtx:
+    """Shared state threaded through the install-strategy dispatch table.
+
+    Bundles the tool entry's parsed fields with the mutable accumulators
+    (action_entries / ok_entries / tools_installed) so each strategy takes a
+    single argument. ``result`` is the initial check_tool() outcome, populated
+    by the resolve strategy and reused by the install-command strategy (which
+    reports on ``result.subject`` / ``result.install_cmd`` / ``result.message``).
+    """
+
+    __slots__ = ("tool_def", "name", "install", "install_cmds", "scoop_pkg",
+                 "brew_spec", "apt_pkg", "elevated", "tool_install_path", "check_cmd",
+                 "download_def", "current_os", "prefix", "action_entries",
+                 "ok_entries", "tools_installed", "plugin_name", "result")
+
+    def __init__(self, tool_def, current_os, prefix, action_entries,
+                 ok_entries, tools_installed, plugin_name):
+        self.tool_def = tool_def
+        self.name = tool_def["name"]
+        # tool_def is already canonicalized by _normalize_tool_entry: every
+        # install value is an object ({"command"..}, {"scoop"..}, ...) and scoop
+        # lives under install.<os> (never download). Derive the two shapes the
+        # strategies consume:
+        #   install_cmds -- os -> bare command string (what check_tool/run_install
+        #                   want; "manual" sentinel flows through unchanged).
+        #   scoop_pkg    -- the scoop package for this host, or None.
+        self.install = tool_def.get("install", {})
+        self.install_cmds = {k: v["command"] for k, v in self.install.items()
+                             if isinstance(v, dict) and "command" in v}
+        os_spec = self.install.get(current_os)
+        self.scoop_pkg = os_spec.get("scoop") if isinstance(os_spec, dict) else None
+        #   brew_spec -- the canonical brew fulfillment for this host, or None.
+        #   {"brew": "name"} shorthand -> {"formula": "name"}; the object forms
+        #   {"brew": {"cask": ...}} / {"brew": {"formula": ..., "tap": ...}} pass
+        #   through. Only the current-OS install value is consulted (brew is
+        #   macOS-only), mirroring scoop_pkg.
+        self.brew_spec = self._parse_brew(os_spec)
+        #   apt_pkg -- the apt package name for this host, or None. Canonical
+        #   apt form is a bare string ({"apt": "net-tools"}); apt is Ubuntu-only,
+        #   so only the current-OS install value is consulted (mirrors scoop_pkg).
+        self.apt_pkg = os_spec.get("apt") if isinstance(os_spec, dict) else None
+        #   elevated -- does THIS host's opaque command need privileges? Read
+        #   with a False default: an author-written command object may omit the
+        #   field (audit note N2), and a bare-string install normalizes to
+        #   {"command": s, "elevated": False}. Consumed only by the install-
+        #   command strategy (scoop/brew/apt carry their own elevation model).
+        self.elevated = bool(os_spec.get("elevated", False)) if isinstance(os_spec, dict) else False
+        self.tool_install_path = tool_def.get("installPath")
+        self.check_cmd = tool_def.get("check")
+        self.download_def = _resolve_download_def(tool_def.get("download", {}), current_os)
+        self.current_os = current_os
+        self.prefix = prefix
+        self.action_entries = action_entries
+        self.ok_entries = ok_entries
+        self.tools_installed = tools_installed
+        self.plugin_name = plugin_name
+        self.result = None
+
+    @staticmethod
+    def _parse_brew(os_spec):
+        """Canonicalize the brew fulfillment on this host's install value.
+
+        Accepts the shorthand string ({"brew": "direnv"} -> {"formula":
+        "direnv"}) and the object forms ({"brew": {"cask": ...}} /
+        {"brew": {"formula": ..., "tap": ...}}). Returns a dict with
+        formula|cask (+ optional tap), or None when no brew fulfillment is
+        declared for this host.
+        """
+        if not isinstance(os_spec, dict):
+            return None
+        brew = os_spec.get("brew")
+        if brew is None:
+            return None
+        if isinstance(brew, str):
+            return {"formula": brew}
+        if isinstance(brew, dict):
+            return dict(brew)
+        return None
+
+
+def _tool_check(ctx):
+    """check_tool() with the entry's parsed args — the initial resolve and
+    every post-install re-check funnel through here (identical arguments)."""
     from .tool_check import check_tool
+    return check_tool(ctx.name, ctx.install_cmds, ctx.current_os,
+                      install_path=ctx.tool_install_path, check_cmd=ctx.check_cmd)
+
+
+def _privileges_available(current_os):
+    """Module-level indirection over elevation.privileges_available so the
+    install-command strategy's defer-vs-run decision is monkeypatchable in tests
+    without touching the elevation module's probes."""
+    from .elevation import privileges_available
+    return privileges_available(current_os)
+
+
+def _strategy_resolve(ctx):
+    """Precedence 1: already resolvable via installPath candidates / `check`
+    cmd / which. On success record the path, link its dir onto PATH (owning
+    the chain; no user "restart" instruction — philosophy P4), and finish."""
     from . import tool_paths
-
-    name = tool_def["name"]
-    install_cmds = tool_def.get("install", {})
-    tool_install_path = tool_def.get("installPath")
-    check_cmd = tool_def.get("check")
-    download_def = _resolve_download_def(tool_def.get("download", {}), current_os)
-
-    result = check_tool(name, install_cmds, current_os,
-                        install_path=tool_install_path, check_cmd=check_cmd)
-
+    result = _tool_check(ctx)
+    ctx.result = result
     if result.passed:
         if result.path:
             # data_dir=None -> the canonical bootstrap data dir; tool paths are
             # recorded centrally regardless of which plugin's pass found them.
             tool_paths.record(None, result.subject, result.path)
-        _link_tool_dir_to_path(result, prefix, action_entries)
-        ok_entries.append(f"{prefix}{result.subject}: ok - {result.message}")
-        return None
+        _link_tool_dir_to_path(result, ctx.prefix, ctx.action_entries)
+        ctx.ok_entries.append(f"{ctx.prefix}{result.subject}: ok - {result.message}")
+        return _StrategyOutcome(True, None)
+    return _StrategyOutcome(False)
 
-    # Phase-2 path A: Scoop fulfillment (Windows userspace package manager). A
-    # `scoop` key in the resolved download entry means "install via Scoop" rather
-    # than a url/sha download. Scoop is provisioned LAZILY -- the first such tool
-    # installs it. See bootstrap_lib/scoop.py. (An older engine that predates this
-    # branch falls through to the install command, degrading to the legacy path.)
-    if download_def and download_def.get("scoop"):
-        from .scoop import ensure_scoop, scoop_install
-        from .path_repair import repair_path
-        pkg = download_def["scoop"]
-        es = ensure_scoop()
-        if not es.ok:
-            action_entries.append(f"{prefix}{name}: scoop unavailable - {es.message}")
-            return {"type": "tool", "name": name, "message": es.message,
-                    "install_state": "scoop_failed", "install_cmd": None,
-                    "plugin": plugin_name}
-        if es.message != "already installed":
-            action_entries.append(f"{prefix}scoop: {es.message}")
-        si = scoop_install(pkg, tool_name=name)
-        # Scoop adds ~/scoop/shims to the user PATH on install; reflect that into
-        # this already-running process so the re-check can resolve the binary.
-        repair_path()
-        recheck = check_tool(name, install_cmds, current_os,
-                             install_path=tool_install_path, check_cmd=check_cmd)
-        if recheck.passed:
-            if recheck.path:
-                tool_paths.record(None, recheck.subject, recheck.path)
-            tools_installed.append((name, f"installed `{pkg}` via scoop"))
-            return None
-        if si.ok and si.path:
-            # Resolvable on disk but not yet by bare name; record the shim path.
-            tool_paths.record(None, name, si.path)
-            tools_installed.append((name, f"installed `{pkg}` via scoop ({si.path})"))
-            return None
-        action_entries.append(f"{prefix}{name}: scoop install failed - {si.message}")
-        return {"type": "tool", "name": name, "message": si.message,
+
+def _strategy_scoop(ctx):
+    """Precedence 2: Scoop fulfillment (Windows userspace package manager). A
+    `scoop` value under install.<os> means "install via Scoop" rather than a
+    url/sha download. Normalization (_normalize_tool_entry) moves the legacy
+    `download.<os-arch>.scoop` spelling into this canonical install location, so
+    the strategy reads ctx.scoop_pkg regardless of which spelling the manifest
+    used. Scoop is provisioned LAZILY -- the first such tool installs it. See
+    bootstrap_lib/scoop.py. Terminal whenever it applies. (An older engine that
+    predates this branch falls through to the install command, degrading to the
+    legacy path.)"""
+    from . import tool_paths
+    pkg = ctx.scoop_pkg
+    if not pkg:
+        return _StrategyOutcome(False)
+    from .scoop import ensure_scoop, scoop_install
+    from .path_repair import repair_path
+    es = ensure_scoop()
+    if not es.ok:
+        ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: scoop unavailable - {es.message}")
+        return _StrategyOutcome(True, {"type": "tool", "name": ctx.name, "message": es.message,
                 "install_state": "scoop_failed", "install_cmd": None,
-                "plugin": plugin_name}
+                "plugin": ctx.plugin_name})
+    if es.message != "already installed":
+        ctx.action_entries.append(f"{ctx.prefix}scoop: {es.message}")
+    si = scoop_install(pkg, tool_name=ctx.name)
+    # Scoop adds ~/scoop/shims to the user PATH on install; reflect that into
+    # this already-running process so the re-check can resolve the binary.
+    repair_path()
+    recheck = _tool_check(ctx)
+    if recheck.passed:
+        if recheck.path:
+            tool_paths.record(None, recheck.subject, recheck.path)
+        ctx.tools_installed.append((ctx.name, f"installed `{pkg}` via scoop"))
+        return _StrategyOutcome(True, None)
+    if si.ok and si.path:
+        # Resolvable on disk but not yet by bare name; record the shim path.
+        tool_paths.record(None, ctx.name, si.path)
+        ctx.tools_installed.append((ctx.name, f"installed `{pkg}` via scoop ({si.path})"))
+        return _StrategyOutcome(True, None)
+    ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: scoop install failed - {si.message}")
+    return _StrategyOutcome(True, {"type": "tool", "name": ctx.name, "message": si.message,
+            "install_state": "scoop_failed", "install_cmd": None,
+            "plugin": ctx.plugin_name})
 
-    # Phase-2 path B: prefer downloading our own copy to ~/.local/bin over shelling
-    # out to a system package manager. See tool-resolution-redesign.md.
-    if download_def and download_def.get("url") and download_def.get("sha256"):
-        from .downloader import download_and_install
-        dl = download_and_install(
-            name,
-            download_def["url"],
-            download_def["sha256"],
-            binary_name=download_def.get("binary_name"),
-            archive_path=download_def.get("archive_path"),
-            archive_type=download_def.get("archive_type"),
+
+def _strategy_brew(ctx):
+    """Precedence 2b: brew fulfillment (macOS package manager). A `brew` value
+    under install.<os> means "install via Homebrew" rather than a url/sha
+    download or an opaque command. Terminal whenever it applies.
+
+    Homebrew is NEVER auto-installed (ensure_brew is detect-only): a missing
+    brew is a descriptive per-item failure, mirroring how scoop surfaces an
+    unavailable manager. Only applies on macOS, where the canonical brew object
+    is present at install.macos (ctx.brew_spec); on other hosts brew_spec is
+    None and this falls through. Mirrors _strategy_scoop's shape."""
+    from . import tool_paths
+    spec = ctx.brew_spec
+    if not spec:
+        return _StrategyOutcome(False)
+    label = spec.get("cask") or spec.get("formula") or ctx.name
+    from .brew import ensure_brew, brew_install
+    from .path_repair import repair_path
+    eb = ensure_brew()
+    if not eb.ok:
+        ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: brew unavailable - {eb.message}")
+        # brew is missing while a brew-backed entry is pending: signal the
+        # elevation queue to lead the macOS remediation script with the Homebrew
+        # installer (strategy section 6). The official installer is interactive
+        # and may sudo, so the engine never runs it -- one user-run step, then
+        # brew entries install unattended next session. (This branch is
+        # macOS-only: brew_spec is None off macOS.) The brew_failed item itself
+        # re-checks and clears next session once brew exists.
+        return _StrategyOutcome(True, {"type": "tool", "name": ctx.name, "message": eb.message,
+                "install_state": "brew_failed", "install_cmd": None,
+                "elevation": {"method": "brew_installer", "os": "macos"},
+                "plugin": ctx.plugin_name})
+    bi = brew_install(formula=spec.get("formula"), cask=spec.get("cask"), tap=spec.get("tap"))
+    # brew links formulae into its prefix bin (already on PATH); reflect any
+    # PATH change into this running process so the re-check can resolve it.
+    repair_path()
+    recheck = _tool_check(ctx)
+    if recheck.passed:
+        if recheck.path:
+            tool_paths.record(None, recheck.subject, recheck.path)
+        ctx.tools_installed.append((ctx.name, f"installed `{label}` via brew"))
+        return _StrategyOutcome(True, None)
+    if bi.ok and spec.get("cask"):
+        # CASK ONLY: brew reported success but the tool doesn't resolve by our
+        # check -- a GUI cask may have no CLI binary and no `check` command, so
+        # there is nothing on PATH for the re-check to see. Trust brew's success
+        # for casks alone. A FORMULA whose re-check fails (keg-only, broken
+        # PATH) falls through to the brew_failed failure dict below -- the
+        # re-check stays authoritative for anything that should resolve
+        # (strategy section 8; mirrors scoop, which only trusts an actual shim).
+        ctx.tools_installed.append((ctx.name, f"installed `{label}` via brew"))
+        return _StrategyOutcome(True, None)
+    ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: brew install failed - {bi.message}")
+    return _StrategyOutcome(True, {"type": "tool", "name": ctx.name, "message": bi.message,
+            "install_state": "brew_failed", "install_cmd": None,
+            "plugin": ctx.plugin_name})
+
+
+def _strategy_apt(ctx):
+    """Precedence 2c: apt fulfillment (Ubuntu system package manager). An `apt`
+    value under install.<os> means "install via apt-get" rather than a url/sha
+    download or an opaque command. Terminal whenever it applies. Mirrors
+    _strategy_scoop / _strategy_brew, and like them runs BEFORE url download
+    (manager-over-download); apt/scoop/brew are mutually exclusive by OS (each
+    reads only its own host's install value), so on Ubuntu ctx.apt_pkg is set and
+    scoop_pkg/brew_spec are None.
+
+    Elevation-aware (elevation policy, section 5): apt always needs root. When
+    passwordless sudo is unavailable and we are not root, apt_install NEVER
+    attempts the operation and reports needs_elevation; this strategy converts
+    that into a persistent `needs_elevation` manual-attention failure carrying an
+    `elevation` descriptor so a later step can accumulate every deferred op into
+    ONE remediation script. Accumulation is NOT done here.
+
+    Unlike brew's cask leniency, there is NO trust-despite-failed-recheck for
+    apt: apt packages install real binaries/services, so the post-install
+    re-check stays authoritative -- a package apt claims to have installed but
+    that still does not resolve is an apt_failed failure."""
+    from . import tool_paths
+    pkg = ctx.apt_pkg
+    if not pkg:
+        return _StrategyOutcome(False)
+    from .apt import apt_install
+    from .path_repair import repair_path
+    ai = apt_install(pkg)
+    if ai.needs_elevation:
+        manual_cmd = f"sudo apt-get install -y {pkg}"
+        ctx.action_entries.append(
+            f"{ctx.prefix}{ctx.name}: needs elevation - passwordless sudo "
+            f"unavailable; run: {manual_cmd}"
         )
-        if dl.ok:
-            tool_paths.record(None, name, dl.path)
-            tools_installed.append((name, f"downloaded to {dl.path}"))
-            return None
-        action_entries.append(f"{prefix}{name}: download failed - {dl.message}")
-        # Fall through to legacy install fallback below.
+        return _StrategyOutcome(True, {
+            "type": "tool", "name": ctx.name,
+            "message": ai.message,
+            "install_state": "needs_elevation",
+            # No runnable-by-us command: only the user can elevate. install_cmd
+            # None keeps the item off the fix-all path (manual-attention only).
+            "install_cmd": None,
+            # Structured elevation descriptor for the (later) elevation queue:
+            # method identifies the backend, package is what `apt-get install`
+            # needs, os disambiguates when the queue emits per-OS scripts.
+            "elevation": {"method": "apt", "package": pkg, "os": ctx.current_os},
+            "agent_msg": (
+                f"Installing {ctx.name} needs root, but passwordless sudo is not "
+                f"available on this machine (sudo -n failed) and bootstrap is not "
+                f"running as root. Run `{manual_cmd}`, then type 'fix-all' (or "
+                f"re-run bootstrap) to confirm it resolved."
+            ),
+            "plugin": ctx.plugin_name,
+            "persist_across_sessions": True,
+        })
+    # apt installs into system dirs already on PATH; repair_path for parity with
+    # the other managers so any late PATH change is visible to the re-check.
+    repair_path()
+    recheck = _tool_check(ctx)
+    if recheck.passed:
+        if recheck.path:
+            tool_paths.record(None, recheck.subject, recheck.path)
+        _link_tool_dir_to_path(recheck, ctx.prefix, ctx.action_entries)
+        ctx.tools_installed.append((ctx.name, f"installed `{pkg}` via apt"))
+        return _StrategyOutcome(True, None)
+    # Re-check failed: either the install errored, or the backend reported the
+    # package present (apt install, or the dpkg already-installed guard) but the
+    # tool still does not resolve (wrong check/binary name -- a manifest bug).
+    # ai.message names the actual reporter, so the wording stays accurate for both.
+    msg = ai.message if not ai.ok else (
+        f"{ai.message}, but it still does not resolve "
+        f"(check the entry's `check`/binary name)"
+    )
+    ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: apt install failed - {msg}")
+    return _StrategyOutcome(True, {"type": "tool", "name": ctx.name, "message": msg,
+            "install_state": "apt_failed", "install_cmd": None,
+            "plugin": ctx.plugin_name})
 
-    # Tool not found — attempt remediation if an install command is available.
-    # The "manual" sentinel (dependency-philosophy.md) means there is no
-    # unattended installer for this OS: bootstrap verifies the tool resolves on
-    # PATH but never tries to install it. Treat it as a manual-attention item —
-    # do NOT execute "manual" as a shell command (it just fails with
-    # "command not found", surfacing a bogus install_failed every session).
+
+def _strategy_url_download(ctx):
+    """Precedence 3: prefer downloading our own copy to ~/.local/bin over
+    shelling out to a system package manager. See tool-resolution-redesign.md.
+    On failure this logs and FALLS THROUGH to the install command (legacy
+    fall-through preserved)."""
+    from . import tool_paths
+    download_def = ctx.download_def
+    if not (download_def and download_def.get("url") and download_def.get("sha256")):
+        return _StrategyOutcome(False)
+    from .downloader import download_and_install
+    dl = download_and_install(
+        ctx.name,
+        download_def["url"],
+        download_def["sha256"],
+        binary_name=download_def.get("binary_name"),
+        archive_path=download_def.get("archive_path"),
+        archive_type=download_def.get("archive_type"),
+    )
+    if dl.ok:
+        tool_paths.record(None, ctx.name, dl.path)
+        ctx.tools_installed.append((ctx.name, f"downloaded to {dl.path}"))
+        return _StrategyOutcome(True, None)
+    ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: download failed - {dl.message}")
+    # Fall through to legacy install fallback.
+    return _StrategyOutcome(False)
+
+
+def _strategy_install_command(ctx):
+    """Precedence 4 (final fallback): run the OS install command and re-check
+    regardless of exit code, or handle the "manual" sentinel.
+
+    The "manual" sentinel (dependency-philosophy.md) means there is no
+    unattended installer for this OS: bootstrap verifies the tool resolves on
+    PATH but never tries to install it. Treat it as a manual-attention item --
+    do NOT execute "manual" as a shell command (it just fails with
+    "command not found", surfacing a bogus install_failed every session).
+
+    Always terminal: returns None on a successful re-check or the failure dict
+    otherwise."""
+    from . import tool_paths
+    result = ctx.result
     install_state = "no_install_cmd"
     if result.install_cmd == "manual":
         install_state = "manual_install"
+    elif result.install_cmd and ctx.elevated and not _privileges_available(ctx.current_os):
+        # Elevated command + missing privileges: DEFER, never attempt (a
+        # background hook must not sudo / trigger UAC). The op is queued for the
+        # per-OS remediation script via this descriptor, and surfaced as a
+        # persistent needs_elevation item -- mirroring _strategy_apt. When
+        # privileges ARE available (or the command is not elevated -- N2/N3) this
+        # branch is skipped and the command runs directly, unchanged.
+        manual_cmd = result.install_cmd
+        ctx.action_entries.append(
+            f"{ctx.prefix}{result.subject}: needs elevation - run: {manual_cmd}"
+        )
+        return _StrategyOutcome(True, {
+            "type": "tool", "name": result.subject,
+            "message": f"{result.subject} install requires elevation: {manual_cmd}",
+            "install_state": "needs_elevation",
+            "install_cmd": None,
+            "elevation": {"method": "command", "command": manual_cmd, "os": ctx.current_os},
+            "agent_msg": (
+                f"Installing {result.subject} needs elevated privileges, which a "
+                f"background hook must not request. Run the elevated remediation "
+                f"script bootstrap generated (see the elevation item), or run "
+                f"`{manual_cmd}` with the needed privileges, then type 'fix-all'."
+            ),
+            "plugin": ctx.plugin_name,
+            "persist_across_sessions": True,
+        })
     elif result.install_cmd:
         from .tool_check import run_install
         from .path_repair import repair_path
@@ -1182,35 +1482,34 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
         # success from our standpoint. repair_path() first so a registry PATH
         # update from the installer is visible to this already-running process.
         repair_path()
-        recheck = check_tool(name, install_cmds, current_os,
-                             install_path=tool_install_path, check_cmd=check_cmd)
+        recheck = _tool_check(ctx)
         if recheck.passed:
             if recheck.path:
                 tool_paths.record(None, recheck.subject, recheck.path)
-            _link_tool_dir_to_path(recheck, prefix, action_entries)
+            _link_tool_dir_to_path(recheck, ctx.prefix, ctx.action_entries)
             verb = "via" if ok else "already present after"
-            tools_installed.append((result.subject, f"{verb} `{result.install_cmd}`"))
-            return None
+            ctx.tools_installed.append((result.subject, f"{verb} `{result.install_cmd}`"))
+            return _StrategyOutcome(True, None)
         # Re-check failed: distinguish "installer ran but we still can't find it"
         # from "installer itself errored".
         install_state = "installed_but_path_stale" if ok else "install_failed"
 
     if install_state == "installed_but_path_stale":
-        action_entries.append(
-            f"{prefix}{result.subject}: install succeeded but binary not findable afterward "
+        ctx.action_entries.append(
+            f"{ctx.prefix}{result.subject}: install succeeded but binary not findable afterward "
             f"(add an installPath hint, or a download recipe to fetch our own copy)"
         )
     elif install_state == "install_failed":
-        action_entries.append(f"{prefix}{result.subject}: install command failed - `{result.install_cmd}`")
+        ctx.action_entries.append(f"{ctx.prefix}{result.subject}: install command failed - `{result.install_cmd}`")
     elif install_state == "manual_install":
-        action_entries.append(
-            f"{prefix}{result.subject}: not installed — manual install required "
+        ctx.action_entries.append(
+            f"{ctx.prefix}{result.subject}: not installed — manual install required "
             f"(no unattended installer for this OS); install it and ensure it's on PATH"
         )
     else:
-        action_entries.append(f"{prefix}{result.subject}: FAILED - {result.message}")
+        ctx.action_entries.append(f"{ctx.prefix}{result.subject}: FAILED - {result.message}")
 
-    return {
+    return _StrategyOutcome(True, {
         "type": "tool",
         "name": result.subject,
         "message": result.message,
@@ -1218,8 +1517,125 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
         # manual_install carries no runnable command — null it so the item is
         # classified manual-attention (not fix-all eligible) downstream.
         "install_cmd": None if install_state == "manual_install" else result.install_cmd,
-        "plugin": plugin_name,
-    }
+        "plugin": ctx.plugin_name,
+    })
+
+
+# Ordered install-strategy dispatch table. Precedence is significant: resolve/
+# link -> scoop (Windows) -> brew (macOS) -> apt (Ubuntu) -> url download
+# (download.url+sha256) -> install command (re-check regardless of exit code, +
+# manual sentinel). scoop, brew, and apt are mutually exclusive by OS (each reads
+# only its own host's install value) and all run BEFORE url download, matching
+# the per-OS method ladder ("scoop > download", "brew > download", "apt >
+# download"); the pre-existing strategies keep their relative order (resolve ->
+# scoop -> url -> install), with brew then apt inserted next to scoop. Each
+# function takes the shared _ToolEntryCtx and returns a _StrategyOutcome; the
+# dispatcher returns the first terminal outcome's ``failure``. install_command is
+# always terminal, so the loop always resolves.
+_INSTALL_STRATEGIES = (
+    _strategy_resolve,
+    _strategy_scoop,
+    _strategy_brew,
+    _strategy_apt,
+    _strategy_url_download,
+    _strategy_install_command,
+)
+
+
+def _normalize_tool_entry(tool_def, current_os):
+    """Canonicalize legacy tool-entry spellings IN MEMORY (never on disk).
+
+    The single manifest-normalization choke point: every tool entry -- from the
+    layered user/project manifest, a per-plugin manifest, or engine self-setup --
+    flows through _process_tool_entry, which calls this first, so downstream
+    strategies (_ToolEntryCtx and the _INSTALL_STRATEGIES table) consume ONE
+    canonical form. Legacy spellings stay backwards-READABLE; the input dict is
+    NOT mutated (manifests may be shared / re-processed), and nothing is written
+    back to the JSON files on disk.
+
+    Normalizations, per analysis-dividing-line.md section 4 (4.2/4.5):
+
+      1. install.<os> string -> {"command": <s>, "elevated": false} (the opaque
+         command object). The "manual" sentinel is preserved as
+         {"command": "manual", "elevated": false}; downstream still keys on the
+         command string == "manual", so its manual-attention semantics are intact.
+         `elevated` is carried but not yet acted on (the elevation queue is a
+         later step); a bare string is exactly {"command": s, "elevated": false}.
+
+      2. download.<os[-arch]>.scoop (the legacy, deprecated-but-read spelling) ->
+         install.<os>.scoop (the canonical structured location). Only the entry
+         _resolve_download_def would pick for THIS host is promoted, so per-arch
+         behavior is unchanged. Scoop takes precedence over any command already
+         at install.<os> -- this matches the dispatch order (the scoop strategy
+         runs before the install-command strategy), which is load-bearing for
+         entries that declare both (e.g. p4-kit: install.windows "manual" +
+         download.scoop -> scoop wins).
+
+    Returns a shallow-cloned tool_def with canonical `install` / `download`.
+    """
+    if not isinstance(tool_def, dict):
+        return tool_def
+
+    # 1. string install values -> opaque command objects (all OS keys, so the
+    #    canonical shape is uniform regardless of which host runs).
+    install = {}
+    for os_key, val in tool_def.get("install", {}).items():
+        if isinstance(val, str):
+            install[os_key] = {"command": val, "elevated": False}
+        else:
+            install[os_key] = val
+
+    new_tool = dict(tool_def)
+
+    # 2. legacy download.scoop -> canonical install.<os>.scoop (host-resolved).
+    download = tool_def.get("download", {})
+    resolved_dl = _resolve_download_def(download, current_os)
+    if isinstance(resolved_dl, dict) and resolved_dl.get("scoop"):
+        # scoop precedence over any command spelled at install.<os>.
+        install[current_os] = {"scoop": resolved_dl["scoop"]}
+        # Strip scoop out of the download block so canonical form owns it and no
+        # downstream code reads scoop from `download` again.
+        new_download = {}
+        for k, v in download.items():
+            if isinstance(v, dict) and "scoop" in v:
+                v = {kk: vv for kk, vv in v.items() if kk != "scoop"}
+            new_download[k] = v
+        new_tool["download"] = new_download
+
+    new_tool["install"] = install
+    return new_tool
+
+
+def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
+                        ok_entries, tools_installed, plugin_name):
+    """Resolve one tool entry: check -> link-to-PATH -> download -> install.
+
+    Shared by _process_self_setup and _process_manifest. Mutates
+    action_entries / ok_entries / tools_installed in place. Returns a failure
+    dict, or None on success.
+
+    Dispatches the ordered _INSTALL_STRATEGIES table; each strategy shares the
+    (_ToolEntryCtx) -> _StrategyOutcome contract. Precedence and behavior are
+    identical to the former inline branches:
+      - resolve: check_tool() via installPath candidates / `check` cmd / which;
+        if resolved, record the path and link its dir onto PATH (philosophy P4).
+      - scoop / brew / url download / install command run in order on a miss. After
+        ANY install attempt the tool is re-checked regardless of the
+        installer's exit code — installers exit non-zero for "already installed
+        / no upgrade" (winget 43), so the re-check, not the exit code, decides
+        presence. A failed url download falls through to the install command.
+
+    ``data_dir`` is accepted for call-site symmetry; tool paths are recorded
+    against the canonical bootstrap data dir (record(None, ...)).
+    """
+    tool_def = _normalize_tool_entry(tool_def, current_os)
+    ctx = _ToolEntryCtx(tool_def, current_os, prefix, action_entries,
+                        ok_entries, tools_installed, plugin_name)
+    for strategy in _INSTALL_STRATEGIES:
+        outcome = strategy(ctx)
+        if outcome.terminal:
+            return outcome.failure
+    return None
 
 
 def _process_path_entries(path_entries, prefix, action_entries, ok_entries):
@@ -3003,7 +3419,10 @@ def _is_auto_fixable(failure):
         # "already installed" — fix-all can't help; it's a bootstrap bug.
         # installed_but_path_stale: reinstall just says "already installed".
         # manual_install: there's no unattended installer — only the user can act.
-        if failure.get("install_state") in ("installed_but_path_stale", "manual_install"):
+        # needs_elevation: only the user can run sudo — a background hook must not.
+        if failure.get("install_state") in (
+            "installed_but_path_stale", "manual_install", "needs_elevation",
+        ):
             return False
         return bool(failure.get("install_cmd"))
     return t in _AUTO_FIXABLE_TYPES
@@ -3012,6 +3431,54 @@ def _is_auto_fixable(failure):
 def _format_indexes(idxs):
     """Render a sorted index list as '#1, #2, #4' for footer copy."""
     return ", ".join(f"#{i}" for i in idxs)
+
+
+def _emit_unsupported_platform(message, data_dir, args):
+    """Surface an unsupported-platform hard error and stop the pass.
+
+    Non-Ubuntu Linux fails fast (detect_os raised UnsupportedPlatformError):
+    the platform is unsupported as a fact, so this is NOT a per-item fix-all
+    failure -- there is nothing to auto-fix. It surfaces through the same
+    channels as normal engine output (a bootstrap_display.pending file in
+    background mode, stdout JSON on SessionStart, plain text in console mode)
+    so the user sees WHY bootstrap did not run. The pass returns without
+    touching tools, manifests, or the cooldown stamp -- the shell hook already
+    stamped the per-project cooldown BEFORE launching the engine, so leaving it
+    in place means this message re-surfaces at most once per cooldown window
+    (not on every session).
+    """
+    label = "bootstrap"
+    system_message = f"{label} -> {message}"
+    additional_context = (
+        f"{label} -> bootstrap did not run: {message} This is not fixable in "
+        "place; tell the user this platform is unsupported by bootstrap."
+    )
+    if args.console:
+        print(system_message)
+        return
+    if args.background:
+        response = {
+            "continue": True,
+            "suppressOutput": False,
+            "systemMessage": system_message,
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": additional_context,
+            },
+        }
+        pending = os.path.join(data_dir, "bootstrap_display.pending")
+        _write_atomic(pending, json.dumps(response))
+    else:
+        response = {
+            "continue": True,
+            "suppressOutput": False,
+            "systemMessage": system_message,
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": additional_context,
+            },
+        }
+        print(json.dumps(response))
 
 
 def emit_failure_response(failures, current_os, log_content, label="bootstrap", output_file=None, persistent_output_file=None):
@@ -3058,6 +3525,25 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
                     f"{f.get('message', 'see log')}. Check network access and that Scoop "
                     f"could be provisioned (~/scoop), then re-run."
                 )
+            elif state == "brew_failed":
+                agent_lines.append(
+                    f"{i}. Installing {f['name']}{plugin_tag} via Homebrew failed: "
+                    f"{f.get('message', 'see log')}. Ensure Homebrew is installed "
+                    f"(https://brew.sh) and the formula/cask name is correct, then re-run."
+                )
+            elif state == "apt_failed":
+                agent_lines.append(
+                    f"{i}. Installing {f['name']}{plugin_tag} via apt failed: "
+                    f"{f.get('message', 'see log')}. Check the package name and apt "
+                    f"sources, then re-run."
+                )
+            elif state == "needs_elevation":
+                # Only the user can elevate; a background hook must not sudo/UAC.
+                # Surface the exact manual command (carried in agent_msg).
+                agent_lines.append(
+                    f"{i}. {f.get('agent_msg') or (f['name'] + ' needs elevation to install')}"
+                    f"{plugin_tag}"
+                )
             else:
                 agent_lines.append(f"{i}. Install {f['name']}{plugin_tag}: `{f['install_cmd'] or 'see documentation'}`")
         elif f["type"] == "path":
@@ -3086,6 +3572,11 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
             agent_lines.append(f"{i}. Sync {f['src']} -> {f['dst']}{plugin_tag}: {f['message']}")
         elif f["type"] == "python_stub":
             agent_lines.append(f"{i}. python stub fix needed{plugin_tag}: {f.get('agent_msg', f.get('message', 'see log'))}")
+        elif f["type"] == "elevation_script":
+            # Aggregated remediation: names the ONE per-OS script + what it does.
+            # Manual-only (the user must supply credentials), so not fix-all
+            # eligible -- _AUTO_FIXABLE_TYPES omits it.
+            agent_lines.append(f"{i}. {f.get('agent_msg', f.get('message', 'run the elevation remediation script'))}{plugin_tag}")
         elif f["type"] == "manifest_parse":
             agent_lines.append(f"{i}. {f.get('agent_msg', f.get('message', 'manifest parse error'))}{plugin_tag}")
         else:

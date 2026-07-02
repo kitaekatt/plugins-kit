@@ -1,0 +1,252 @@
+"""Unit tests for bootstrap_lib/elevation.py.
+
+Covers the elevation queue + per-OS remediation-script generator (sequence
+step 8): descriptor harvesting into ElevationQueue, golden-file script content
+per OS, script write/regenerate/clear (cleanup when the queue empties), the
+aggregated fix-all item, and the privilege dispatcher.
+"""
+
+import os
+
+import pytest
+
+import bootstrap_lib.elevation as elev
+from bootstrap_lib.elevation import ElevationQueue
+
+
+# --------------------------------------------------------------------------- #
+# Privilege dispatcher
+# --------------------------------------------------------------------------- #
+
+class TestPrivilegesAvailable:
+    def test_windows_uses_admin_token(self, monkeypatch):
+        monkeypatch.setattr(elev, "windows_admin_available", lambda: True)
+        monkeypatch.setattr(elev, "sudo_noninteractive_available",
+                            lambda: (_ for _ in ()).throw(AssertionError("must not probe sudo on windows")))
+        assert elev.privileges_available("windows") is True
+
+    def test_unix_uses_sudo_probe(self, monkeypatch):
+        monkeypatch.setattr(elev, "sudo_noninteractive_available", lambda: True)
+        monkeypatch.setattr(elev, "windows_admin_available",
+                            lambda: (_ for _ in ()).throw(AssertionError("must not probe admin token on unix")))
+        assert elev.privileges_available("ubuntu") is True
+        assert elev.privileges_available("macos") is True
+
+    def test_unix_sudo_missing_is_false(self, monkeypatch):
+        monkeypatch.setattr(elev, "sudo_noninteractive_available", lambda: False)
+        assert elev.privileges_available("ubuntu") is False
+
+
+# --------------------------------------------------------------------------- #
+# queue_from_failures: descriptor harvesting + accumulation across tools
+# --------------------------------------------------------------------------- #
+
+class TestQueueFromFailures:
+    def test_empty_failures_is_empty_queue(self):
+        q = elev.queue_from_failures([], "ubuntu")
+        assert q.is_empty()
+
+    def test_ignores_failures_without_descriptor(self):
+        q = elev.queue_from_failures(
+            [{"type": "tool", "name": "x", "install_state": "install_failed"}], "ubuntu")
+        assert q.is_empty()
+
+    def test_accumulates_multiple_apt_packages_in_order(self):
+        failures = [
+            {"elevation": {"method": "apt", "package": "net-tools", "os": "ubuntu"}},
+            {"elevation": {"method": "apt", "package": "tmux", "os": "ubuntu"}},
+        ]
+        q = elev.queue_from_failures(failures, "ubuntu")
+        assert q.apt_packages == ["net-tools", "tmux"]
+        assert not q.is_empty()
+
+    def test_accumulates_commands_and_apt_and_brew(self):
+        failures = [
+            {"elevation": {"method": "apt", "package": "net-tools", "os": "ubuntu"}},
+            {"elevation": {"method": "command", "command": "curl x | sh", "os": "ubuntu"}},
+        ]
+        q = elev.queue_from_failures(failures, "ubuntu")
+        assert q.apt_packages == ["net-tools"]
+        assert q.commands == ["curl x | sh"]
+        assert q.brew_installer is False
+
+    def test_brew_installer_flag_from_descriptor(self):
+        q = elev.queue_from_failures(
+            [{"elevation": {"method": "brew_installer", "os": "macos"}}], "macos")
+        assert q.brew_installer is True
+        assert not q.is_empty()
+
+    def test_filters_by_current_os(self):
+        # A macos descriptor must not land in an ubuntu queue.
+        failures = [{"elevation": {"method": "brew_installer", "os": "macos"}}]
+        q = elev.queue_from_failures(failures, "ubuntu")
+        assert q.is_empty()
+
+
+# --------------------------------------------------------------------------- #
+# Golden-file script content per OS
+# --------------------------------------------------------------------------- #
+
+class TestRenderUbuntu:
+    def test_apt_update_precedes_install_of_all_packages(self):
+        q = ElevationQueue(apt_packages=["net-tools", "tmux", "direnv"])
+        out = elev.render_script(q, "ubuntu", "/data/elevate/install-elevated.sh")
+        assert out.startswith("#!/usr/bin/env bash\n")
+        assert "set -euo pipefail" in out
+        # apt-get update comes before the single accumulated install line.
+        upd = out.index("apt-get update")
+        inst = out.index("apt-get install -y net-tools tmux direnv")
+        assert upd < inst
+        # header explains WHY elevation is needed.
+        assert "must never prompt for a sudo password" in out
+        assert 'sudo bash "/data/elevate/install-elevated.sh"' in out
+
+    def test_commands_rendered_after_apt(self):
+        q = ElevationQueue(apt_packages=["net-tools"], commands=["curl -fsSL x | sh"])
+        out = elev.render_script(q, "ubuntu", "/p.sh")
+        assert "apt-get install -y net-tools" in out
+        # Label is a plain comment (zero execution/quoting surface), not an echo.
+        assert "# bootstrap-elevate: curl -fsSL x | sh" in out
+        assert "\ncurl -fsSL x | sh\n" in out
+        assert out.index("apt-get install") < out.index("# bootstrap-elevate:")
+
+    def test_command_label_never_echoed(self):
+        # A command containing quotes/substitution must not appear inside an
+        # echo: an unbalanced quote would make the script unparseable (bypassing
+        # set -euo pipefail) and $(...) would execute during the label.
+        hostile = 'sh -c "echo $(whoami)"'
+        for os_key in ("ubuntu", "macos"):
+            out = elev.render_script(ElevationQueue(commands=[hostile]), os_key, "/p.sh")
+            assert f"# bootstrap-elevate: {hostile}" in out
+            assert "echo \"bootstrap-elevate" not in out
+
+    def test_commands_only_no_apt_section(self):
+        q = ElevationQueue(commands=["some-elevated-cmd"])
+        out = elev.render_script(q, "ubuntu", "/p.sh")
+        assert "apt-get update" not in out
+        assert "apt-get install" not in out
+        assert "some-elevated-cmd" in out
+
+
+class TestRenderMacos:
+    def test_brew_installer_leads_when_missing(self):
+        q = ElevationQueue(brew_installer=True, commands=["tic -x kitty.terminfo"])
+        out = elev.render_script(q, "macos", "/p.sh")
+        assert out.startswith("#!/usr/bin/env bash\n")
+        assert elev.HOMEBREW_INSTALLER in out
+        # installer precedes the elevated commands.
+        assert out.index(elev.HOMEBREW_INSTALLER) < out.index("tic -x kitty.terminfo")
+        assert 'bash "/p.sh"' in out
+        assert "apt-get" not in out
+
+    def test_no_brew_line_when_present(self):
+        q = ElevationQueue(commands=["tic -x kitty.terminfo"])
+        out = elev.render_script(q, "macos", "/p.sh")
+        assert "Homebrew" not in out
+        assert "tic -x kitty.terminfo" in out
+
+
+class TestRenderWindows:
+    def test_self_elevating_preamble_and_commands(self):
+        q = ElevationQueue(commands=["Enable-WindowsOptionalFeature -Online -FeatureName X"])
+        out = elev.render_script(q, "windows", "ignored")
+        # self-elevation preamble (mirrors fix_python_path.bat).
+        assert out.startswith("@echo off")
+        assert "fsutil dirty query" in out
+        assert "Start-Process -FilePath '%~f0' -Verb RunAs" in out
+        assert ":is_admin" in out
+        # the deferred command is present. The body is authored with plain \n;
+        # CRLF is applied ONCE at write time (see the on-disk bytes test below).
+        assert "Enable-WindowsOptionalFeature -Online -FeatureName X" in out
+        assert "\r" not in out
+        # self-delete idiom present.
+        assert '(goto) 2>nul & del "%~f0"' in out
+
+    def test_unknown_os_raises(self):
+        with pytest.raises(ValueError):
+            elev.render_script(ElevationQueue(commands=["x"]), "plan9", "p")
+
+
+# --------------------------------------------------------------------------- #
+# write_or_clear_script: regenerate + cleanup semantics
+# --------------------------------------------------------------------------- #
+
+class TestWriteOrClearScript:
+    def test_writes_script_when_nonempty(self, tmp_path):
+        q = ElevationQueue(apt_packages=["net-tools"])
+        path = elev.write_or_clear_script(q, str(tmp_path), "ubuntu")
+        assert path is not None
+        assert os.path.isfile(path)
+        assert path.endswith(os.path.join("elevate", "install-elevated.sh"))
+        assert "apt-get install -y net-tools" in open(path).read()
+
+    def test_windows_script_basename_is_bat(self, tmp_path):
+        q = ElevationQueue(commands=["x"])
+        path = elev.write_or_clear_script(q, str(tmp_path), "windows")
+        assert path.endswith("install-elevated.bat")
+
+    def test_windows_on_disk_bytes_are_crlf_never_crcrlf(self, tmp_path):
+        # The .bat must land with CRLF endings on EVERY platform (batch parsing
+        # requires them), applied exactly once: text-mode translation of a
+        # pre-joined \r\n body would produce \r\r\n on Windows.
+        q = ElevationQueue(commands=["Enable-Feature X"])
+        path = elev.write_or_clear_script(q, str(tmp_path), "windows")
+        raw = open(path, "rb").read()
+        assert b"\r\r\n" not in raw
+        assert b"\r\n" in raw
+        # No bare-\n lines: every \n is preceded by \r.
+        assert raw.count(b"\n") == raw.count(b"\r\n")
+
+    def test_bash_on_disk_bytes_have_no_cr(self, tmp_path):
+        # The newline override is .bat-only; bash scripts stay LF.
+        q = ElevationQueue(apt_packages=["net-tools"])
+        path = elev.write_or_clear_script(q, str(tmp_path), "ubuntu")
+        raw = open(path, "rb").read()
+        assert b"\r" not in raw
+
+    def test_empty_queue_removes_stale_script(self, tmp_path):
+        # First pass writes a script; a later empty pass must delete it.
+        q1 = ElevationQueue(apt_packages=["net-tools"])
+        path = elev.write_or_clear_script(q1, str(tmp_path), "ubuntu")
+        assert os.path.isfile(path)
+        cleared = elev.write_or_clear_script(ElevationQueue(), str(tmp_path), "ubuntu")
+        assert cleared is None
+        assert not os.path.exists(path)
+
+    def test_empty_queue_no_prior_script_is_noop(self, tmp_path):
+        assert elev.write_or_clear_script(ElevationQueue(), str(tmp_path), "ubuntu") is None
+
+    def test_regenerated_from_current_queue(self, tmp_path):
+        # Second write with a different queue overwrites the first content.
+        elev.write_or_clear_script(ElevationQueue(apt_packages=["net-tools"]), str(tmp_path), "ubuntu")
+        path = elev.write_or_clear_script(ElevationQueue(apt_packages=["tmux"]), str(tmp_path), "ubuntu")
+        content = open(path).read()
+        assert "tmux" in content
+        assert "net-tools" not in content
+
+
+# --------------------------------------------------------------------------- #
+# Aggregated fix-all item
+# --------------------------------------------------------------------------- #
+
+class TestElevationScriptFailure:
+    def test_names_path_and_what_it_does(self):
+        q = ElevationQueue(apt_packages=["net-tools", "tmux"], commands=["curl x | sh"])
+        f = elev.elevation_script_failure(q, "ubuntu", "/data/elevate/install-elevated.sh")
+        assert f["type"] == "elevation_script"
+        assert f["persist_across_sessions"] is True
+        assert f["script_path"] == "/data/elevate/install-elevated.sh"
+        assert "/data/elevate/install-elevated.sh" in f["agent_msg"]
+        assert "sudo bash" in f["agent_msg"]
+        assert "apt-get install net-tools tmux" in f["agent_msg"]
+
+    def test_macos_brew_summary(self):
+        q = ElevationQueue(brew_installer=True)
+        f = elev.elevation_script_failure(q, "macos", "/p.sh")
+        assert "install Homebrew" in f["agent_msg"]
+        assert 'bash "/p.sh"' in f["agent_msg"]
+
+    def test_windows_double_click_instruction(self):
+        q = ElevationQueue(commands=["x"])
+        f = elev.elevation_script_failure(q, "windows", "C:/data/elevate/install-elevated.bat")
+        assert "double-click" in f["agent_msg"]

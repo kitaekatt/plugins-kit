@@ -4,12 +4,16 @@ Scoop (https://scoop.sh) is the Windows userspace package manager: it installs
 portable apps into ``~/scoop`` in the user profile with NO administrator rights
 and NO UAC prompt -- matching bootstrap's local-first, ``~/.local`` philosophy.
 
-On Windows, a tool entry can declare a ``scoop`` fulfillment inside its
-``download`` block instead of a ``url``/``sha256`` pair::
+On Windows, a tool entry declares a ``scoop`` fulfillment under its
+``install`` block instead of a ``url``/``sha256`` download::
 
-    "download": { "windows-amd64": { "scoop": "main/p4" } }
+    "install": { "windows": { "scoop": "main/p4" } }
 
-and the engine installs it via Scoop. Scoop itself is installed LAZILY -- the
+and the engine installs it via Scoop. (The legacy spelling
+``"download": { "windows-amd64": { "scoop": "main/p4" } }`` is still READ --
+``_normalize_tool_entry`` promotes it to the canonical ``install.<os>.scoop``
+in memory -- but new manifests should use the ``install`` form above.) Scoop
+itself is installed LAZILY -- the
 first tool that needs it triggers :func:`ensure_scoop` -- so machines that never
 use a Scoop-backed tool never get Scoop.
 
