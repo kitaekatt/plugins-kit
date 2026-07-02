@@ -536,6 +536,20 @@ The `script` field declares an optional Python module that runs after manifest p
 
 The engine imports the module and calls the entry point function. The script runs in-process within a try/except. See [engine-internals.md](./engine-internals.md) for details on script execution.
 
+**Caveat — `script.path` in a layered (user/project) manifest resolves against
+bootstrap's plugin root, not the project.** `_run_script_phase` computes
+`script_path = os.path.join(plugin_root, script_def["path"])`
+(`bootstrap_lib/engine.py`), and when the layered user/project manifest is
+processed the engine passes bootstrap's own `--plugin-root` as `plugin_root`
+(not the project directory). So a `script` declared in a `<project>/.claude/bootstrap.json`
+or `~/.claude/bootstrap.json` cannot reference a project-relative file — its
+`path` is joined onto bootstrap's install directory and, unless a file happens
+to exist there, the phase logs `script: skipped (<path> not found)`. The
+`script` field is reliable only inside a **per-plugin** `bootstrap.json`, where
+`plugin_root` is that plugin's own install directory. (Layered-manifest scripts
+receive `project_dir` on their `_ScriptContext`, but the *module path itself* is
+still resolved against bootstrap's root.)
+
 ## Layered Config Model
 
 The engine supports a 4-layer `bootstrap.json` model — following the same pattern as Claude Code's `settings.json` / `settings.local.json`. This lets users and projects declare bootstrap requirements without creating a plugin.
@@ -559,21 +573,35 @@ The engine supports a 4-layer `bootstrap.json` model — following the same patt
 
 ### Identity Keys
 
-Each array type has an identity key used for deduplication during merge:
+Each array type below has an identity key used for deduplication during merge.
+This table is the exact set of identity-keyed sections in
+`bootstrap_lib/manifest_merge.py::_IDENTITY_KEYS` (code is authoritative):
 
 | Array | Identity key |
 |-------|-------------|
 | `tools` | `name` |
 | `marketplaces` | `name` |
 | `plugins` | `ref` |
-| `git_deps` | `url` |
-| `json_entries` | `target` |
-| `ini_settings` | `file` + `section` |
-| `sync_to_data` | `src` + `dst` |
+| `fonts` | `name` |
+| `json_entries` | `file` |
+| `ini_settings` | `file` + `section` (composite) |
 | `pypi_packages` | `package` |
 | `shared_libs` | `name` |
 
-`path_entries` and `shared_lib_imports` are plain string lists — unioned and deduplicated (order preserved), not identity-keyed.
+`path_entries` and `shared_lib_imports` are plain string lists — unioned and
+deduplicated (order preserved), not identity-keyed.
+
+**Sections NOT identity-keyed** (e.g. `git_deps`, `sync_to_data`): they are
+absent from `_IDENTITY_KEYS`, so `merge_manifests` falls through to plain list
+**concatenation** across layers — entries are appended, not deduplicated or
+merged by any key. If the same `git_deps`/`sync_to_data` entry is declared in
+two layers it appears twice in the merged result. Declare such entries in a
+single layer to avoid duplicates.
+
+> Note: `json_entries` merges by the `file` key, but the phase itself reads the
+> entry's `target` field (see the json_entries schema above); the merge and the
+> phase use different field names. This is the current code behavior, documented
+> here so the table matches `_IDENTITY_KEYS` exactly.
 
 ### Example
 

@@ -1068,108 +1068,163 @@ def _link_tool_dir_to_path(result, prefix, action_entries):
     )
 
 
-def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
-                        ok_entries, tools_installed, plugin_name):
-    """Resolve one tool entry: check -> link-to-PATH -> download -> install.
+class _StrategyOutcome:
+    """Result contract shared by every install-strategy function.
 
-    Shared by _process_self_setup and _process_manifest (previously two
-    near-identical copies). Mutates action_entries / ok_entries / tools_installed
-    in place. Returns a failure dict, or None on success.
-
-    Resolution policy:
-      - check_tool() resolves via installPath candidates / `check` cmd / which.
-      - If resolved but not on PATH, _link_tool_dir_to_path() persists its dir
-        (owning the chain; no user "restart" instruction — philosophy P4).
-      - On miss: prefer a `download` recipe (our own copy under ~/.local/bin),
-        else run the install command. After ANY install attempt we re-check
-        regardless of the installer's exit code — installers exit non-zero for
-        "already installed / no upgrade" (winget 43), so the re-check, not the
-        exit code, decides "is it there now."
+    terminal=True  -> the dispatcher stops and returns ``failure`` (None on
+                      success, or a failure dict).
+    terminal=False -> the dispatcher falls through to the next strategy.
     """
+
+    __slots__ = ("terminal", "failure")
+
+    def __init__(self, terminal, failure=None):
+        self.terminal = terminal
+        self.failure = failure
+
+
+class _ToolEntryCtx:
+    """Shared state threaded through the install-strategy dispatch table.
+
+    Bundles the tool entry's parsed fields with the mutable accumulators
+    (action_entries / ok_entries / tools_installed) so each strategy takes a
+    single argument. ``result`` is the initial check_tool() outcome, populated
+    by the resolve strategy and reused by the install-command strategy (which
+    reports on ``result.subject`` / ``result.install_cmd`` / ``result.message``).
+    """
+
+    __slots__ = ("tool_def", "name", "install_cmds", "tool_install_path",
+                 "check_cmd", "download_def", "current_os", "prefix",
+                 "action_entries", "ok_entries", "tools_installed",
+                 "plugin_name", "result")
+
+    def __init__(self, tool_def, current_os, prefix, action_entries,
+                 ok_entries, tools_installed, plugin_name):
+        self.tool_def = tool_def
+        self.name = tool_def["name"]
+        self.install_cmds = tool_def.get("install", {})
+        self.tool_install_path = tool_def.get("installPath")
+        self.check_cmd = tool_def.get("check")
+        self.download_def = _resolve_download_def(tool_def.get("download", {}), current_os)
+        self.current_os = current_os
+        self.prefix = prefix
+        self.action_entries = action_entries
+        self.ok_entries = ok_entries
+        self.tools_installed = tools_installed
+        self.plugin_name = plugin_name
+        self.result = None
+
+
+def _tool_check(ctx):
+    """check_tool() with the entry's parsed args — the initial resolve and
+    every post-install re-check funnel through here (identical arguments)."""
     from .tool_check import check_tool
+    return check_tool(ctx.name, ctx.install_cmds, ctx.current_os,
+                      install_path=ctx.tool_install_path, check_cmd=ctx.check_cmd)
+
+
+def _strategy_resolve(ctx):
+    """Precedence 1: already resolvable via installPath candidates / `check`
+    cmd / which. On success record the path, link its dir onto PATH (owning
+    the chain; no user "restart" instruction — philosophy P4), and finish."""
     from . import tool_paths
-
-    name = tool_def["name"]
-    install_cmds = tool_def.get("install", {})
-    tool_install_path = tool_def.get("installPath")
-    check_cmd = tool_def.get("check")
-    download_def = _resolve_download_def(tool_def.get("download", {}), current_os)
-
-    result = check_tool(name, install_cmds, current_os,
-                        install_path=tool_install_path, check_cmd=check_cmd)
-
+    result = _tool_check(ctx)
+    ctx.result = result
     if result.passed:
         if result.path:
             # data_dir=None -> the canonical bootstrap data dir; tool paths are
             # recorded centrally regardless of which plugin's pass found them.
             tool_paths.record(None, result.subject, result.path)
-        _link_tool_dir_to_path(result, prefix, action_entries)
-        ok_entries.append(f"{prefix}{result.subject}: ok - {result.message}")
-        return None
+        _link_tool_dir_to_path(result, ctx.prefix, ctx.action_entries)
+        ctx.ok_entries.append(f"{ctx.prefix}{result.subject}: ok - {result.message}")
+        return _StrategyOutcome(True, None)
+    return _StrategyOutcome(False)
 
-    # Phase-2 path A: Scoop fulfillment (Windows userspace package manager). A
-    # `scoop` key in the resolved download entry means "install via Scoop" rather
-    # than a url/sha download. Scoop is provisioned LAZILY -- the first such tool
-    # installs it. See bootstrap_lib/scoop.py. (An older engine that predates this
-    # branch falls through to the install command, degrading to the legacy path.)
-    if download_def and download_def.get("scoop"):
-        from .scoop import ensure_scoop, scoop_install
-        from .path_repair import repair_path
-        pkg = download_def["scoop"]
-        es = ensure_scoop()
-        if not es.ok:
-            action_entries.append(f"{prefix}{name}: scoop unavailable - {es.message}")
-            return {"type": "tool", "name": name, "message": es.message,
-                    "install_state": "scoop_failed", "install_cmd": None,
-                    "plugin": plugin_name}
-        if es.message != "already installed":
-            action_entries.append(f"{prefix}scoop: {es.message}")
-        si = scoop_install(pkg, tool_name=name)
-        # Scoop adds ~/scoop/shims to the user PATH on install; reflect that into
-        # this already-running process so the re-check can resolve the binary.
-        repair_path()
-        recheck = check_tool(name, install_cmds, current_os,
-                             install_path=tool_install_path, check_cmd=check_cmd)
-        if recheck.passed:
-            if recheck.path:
-                tool_paths.record(None, recheck.subject, recheck.path)
-            tools_installed.append((name, f"installed `{pkg}` via scoop"))
-            return None
-        if si.ok and si.path:
-            # Resolvable on disk but not yet by bare name; record the shim path.
-            tool_paths.record(None, name, si.path)
-            tools_installed.append((name, f"installed `{pkg}` via scoop ({si.path})"))
-            return None
-        action_entries.append(f"{prefix}{name}: scoop install failed - {si.message}")
-        return {"type": "tool", "name": name, "message": si.message,
+
+def _strategy_scoop(ctx):
+    """Precedence 2: Scoop fulfillment (Windows userspace package manager). A
+    `scoop` key in the resolved download entry means "install via Scoop" rather
+    than a url/sha download. Scoop is provisioned LAZILY -- the first such tool
+    installs it. See bootstrap_lib/scoop.py. Terminal whenever it applies. (An
+    older engine that predates this branch falls through to the install
+    command, degrading to the legacy path.)"""
+    from . import tool_paths
+    download_def = ctx.download_def
+    if not (download_def and download_def.get("scoop")):
+        return _StrategyOutcome(False)
+    from .scoop import ensure_scoop, scoop_install
+    from .path_repair import repair_path
+    pkg = download_def["scoop"]
+    es = ensure_scoop()
+    if not es.ok:
+        ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: scoop unavailable - {es.message}")
+        return _StrategyOutcome(True, {"type": "tool", "name": ctx.name, "message": es.message,
                 "install_state": "scoop_failed", "install_cmd": None,
-                "plugin": plugin_name}
+                "plugin": ctx.plugin_name})
+    if es.message != "already installed":
+        ctx.action_entries.append(f"{ctx.prefix}scoop: {es.message}")
+    si = scoop_install(pkg, tool_name=ctx.name)
+    # Scoop adds ~/scoop/shims to the user PATH on install; reflect that into
+    # this already-running process so the re-check can resolve the binary.
+    repair_path()
+    recheck = _tool_check(ctx)
+    if recheck.passed:
+        if recheck.path:
+            tool_paths.record(None, recheck.subject, recheck.path)
+        ctx.tools_installed.append((ctx.name, f"installed `{pkg}` via scoop"))
+        return _StrategyOutcome(True, None)
+    if si.ok and si.path:
+        # Resolvable on disk but not yet by bare name; record the shim path.
+        tool_paths.record(None, ctx.name, si.path)
+        ctx.tools_installed.append((ctx.name, f"installed `{pkg}` via scoop ({si.path})"))
+        return _StrategyOutcome(True, None)
+    ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: scoop install failed - {si.message}")
+    return _StrategyOutcome(True, {"type": "tool", "name": ctx.name, "message": si.message,
+            "install_state": "scoop_failed", "install_cmd": None,
+            "plugin": ctx.plugin_name})
 
-    # Phase-2 path B: prefer downloading our own copy to ~/.local/bin over shelling
-    # out to a system package manager. See tool-resolution-redesign.md.
-    if download_def and download_def.get("url") and download_def.get("sha256"):
-        from .downloader import download_and_install
-        dl = download_and_install(
-            name,
-            download_def["url"],
-            download_def["sha256"],
-            binary_name=download_def.get("binary_name"),
-            archive_path=download_def.get("archive_path"),
-            archive_type=download_def.get("archive_type"),
-        )
-        if dl.ok:
-            tool_paths.record(None, name, dl.path)
-            tools_installed.append((name, f"downloaded to {dl.path}"))
-            return None
-        action_entries.append(f"{prefix}{name}: download failed - {dl.message}")
-        # Fall through to legacy install fallback below.
 
-    # Tool not found — attempt remediation if an install command is available.
-    # The "manual" sentinel (dependency-philosophy.md) means there is no
-    # unattended installer for this OS: bootstrap verifies the tool resolves on
-    # PATH but never tries to install it. Treat it as a manual-attention item —
-    # do NOT execute "manual" as a shell command (it just fails with
-    # "command not found", surfacing a bogus install_failed every session).
+def _strategy_url_download(ctx):
+    """Precedence 3: prefer downloading our own copy to ~/.local/bin over
+    shelling out to a system package manager. See tool-resolution-redesign.md.
+    On failure this logs and FALLS THROUGH to the install command (legacy
+    fall-through preserved)."""
+    from . import tool_paths
+    download_def = ctx.download_def
+    if not (download_def and download_def.get("url") and download_def.get("sha256")):
+        return _StrategyOutcome(False)
+    from .downloader import download_and_install
+    dl = download_and_install(
+        ctx.name,
+        download_def["url"],
+        download_def["sha256"],
+        binary_name=download_def.get("binary_name"),
+        archive_path=download_def.get("archive_path"),
+        archive_type=download_def.get("archive_type"),
+    )
+    if dl.ok:
+        tool_paths.record(None, ctx.name, dl.path)
+        ctx.tools_installed.append((ctx.name, f"downloaded to {dl.path}"))
+        return _StrategyOutcome(True, None)
+    ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: download failed - {dl.message}")
+    # Fall through to legacy install fallback.
+    return _StrategyOutcome(False)
+
+
+def _strategy_install_command(ctx):
+    """Precedence 4 (final fallback): run the OS install command and re-check
+    regardless of exit code, or handle the "manual" sentinel.
+
+    The "manual" sentinel (dependency-philosophy.md) means there is no
+    unattended installer for this OS: bootstrap verifies the tool resolves on
+    PATH but never tries to install it. Treat it as a manual-attention item --
+    do NOT execute "manual" as a shell command (it just fails with
+    "command not found", surfacing a bogus install_failed every session).
+
+    Always terminal: returns None on a successful re-check or the failure dict
+    otherwise."""
+    from . import tool_paths
+    result = ctx.result
     install_state = "no_install_cmd"
     if result.install_cmd == "manual":
         install_state = "manual_install"
@@ -1182,35 +1237,34 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
         # success from our standpoint. repair_path() first so a registry PATH
         # update from the installer is visible to this already-running process.
         repair_path()
-        recheck = check_tool(name, install_cmds, current_os,
-                             install_path=tool_install_path, check_cmd=check_cmd)
+        recheck = _tool_check(ctx)
         if recheck.passed:
             if recheck.path:
                 tool_paths.record(None, recheck.subject, recheck.path)
-            _link_tool_dir_to_path(recheck, prefix, action_entries)
+            _link_tool_dir_to_path(recheck, ctx.prefix, ctx.action_entries)
             verb = "via" if ok else "already present after"
-            tools_installed.append((result.subject, f"{verb} `{result.install_cmd}`"))
-            return None
+            ctx.tools_installed.append((result.subject, f"{verb} `{result.install_cmd}`"))
+            return _StrategyOutcome(True, None)
         # Re-check failed: distinguish "installer ran but we still can't find it"
         # from "installer itself errored".
         install_state = "installed_but_path_stale" if ok else "install_failed"
 
     if install_state == "installed_but_path_stale":
-        action_entries.append(
-            f"{prefix}{result.subject}: install succeeded but binary not findable afterward "
+        ctx.action_entries.append(
+            f"{ctx.prefix}{result.subject}: install succeeded but binary not findable afterward "
             f"(add an installPath hint, or a download recipe to fetch our own copy)"
         )
     elif install_state == "install_failed":
-        action_entries.append(f"{prefix}{result.subject}: install command failed - `{result.install_cmd}`")
+        ctx.action_entries.append(f"{ctx.prefix}{result.subject}: install command failed - `{result.install_cmd}`")
     elif install_state == "manual_install":
-        action_entries.append(
-            f"{prefix}{result.subject}: not installed — manual install required "
+        ctx.action_entries.append(
+            f"{ctx.prefix}{result.subject}: not installed — manual install required "
             f"(no unattended installer for this OS); install it and ensure it's on PATH"
         )
     else:
-        action_entries.append(f"{prefix}{result.subject}: FAILED - {result.message}")
+        ctx.action_entries.append(f"{ctx.prefix}{result.subject}: FAILED - {result.message}")
 
-    return {
+    return _StrategyOutcome(True, {
         "type": "tool",
         "name": result.subject,
         "message": result.message,
@@ -1218,8 +1272,54 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
         # manual_install carries no runnable command — null it so the item is
         # classified manual-attention (not fix-all eligible) downstream.
         "install_cmd": None if install_state == "manual_install" else result.install_cmd,
-        "plugin": plugin_name,
-    }
+        "plugin": ctx.plugin_name,
+    })
+
+
+# Ordered install-strategy dispatch table. Precedence is significant and MUST
+# match the former inline branch order exactly: resolve/link -> scoop
+# (download.scoop) -> url download (download.url+sha256) -> install command
+# (re-check regardless of exit code, + manual sentinel). Each function takes the
+# shared _ToolEntryCtx and returns a _StrategyOutcome; the dispatcher returns
+# the first terminal outcome's ``failure``. install_command is always terminal,
+# so the loop always resolves.
+_INSTALL_STRATEGIES = (
+    _strategy_resolve,
+    _strategy_scoop,
+    _strategy_url_download,
+    _strategy_install_command,
+)
+
+
+def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
+                        ok_entries, tools_installed, plugin_name):
+    """Resolve one tool entry: check -> link-to-PATH -> download -> install.
+
+    Shared by _process_self_setup and _process_manifest. Mutates
+    action_entries / ok_entries / tools_installed in place. Returns a failure
+    dict, or None on success.
+
+    Dispatches the ordered _INSTALL_STRATEGIES table; each strategy shares the
+    (_ToolEntryCtx) -> _StrategyOutcome contract. Precedence and behavior are
+    identical to the former inline branches:
+      - resolve: check_tool() via installPath candidates / `check` cmd / which;
+        if resolved, record the path and link its dir onto PATH (philosophy P4).
+      - scoop / url download / install command run in order on a miss. After
+        ANY install attempt the tool is re-checked regardless of the
+        installer's exit code — installers exit non-zero for "already installed
+        / no upgrade" (winget 43), so the re-check, not the exit code, decides
+        presence. A failed url download falls through to the install command.
+
+    ``data_dir`` is accepted for call-site symmetry; tool paths are recorded
+    against the canonical bootstrap data dir (record(None, ...)).
+    """
+    ctx = _ToolEntryCtx(tool_def, current_os, prefix, action_entries,
+                        ok_entries, tools_installed, plugin_name)
+    for strategy in _INSTALL_STRATEGIES:
+        outcome = strategy(ctx)
+        if outcome.terminal:
+            return outcome.failure
+    return None
 
 
 def _process_path_entries(path_entries, prefix, action_entries, ok_entries):
