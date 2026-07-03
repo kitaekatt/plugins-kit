@@ -322,6 +322,107 @@ class TestLayeredManifests:
         # Should show project_venv activity (either created or ok)
         assert "project_venv" in msg
 
+    def test_project_venv_subdir_creates_venv_in_subdir(self, data_dir, tmp_path):
+        """project_venv.subdir provisions <project>/<subdir>/.venv from
+        <project>/<subdir>/pyproject.toml (the env-config python/ layout)."""
+        fake_root = make_minimal_root(tmp_path)
+        fake_home = str(tmp_path / "fakehome")
+        claude_dir = os.path.join(fake_home, ".claude")
+        os.makedirs(claude_dir)
+
+        # Project whose pyproject lives in a python/ subdir, NOT the root.
+        project_dir = str(tmp_path / "project")
+        py_dir = os.path.join(project_dir, "python")
+        os.makedirs(py_dir)
+        with open(os.path.join(py_dir, "pyproject.toml"), "w") as f:
+            f.write('[project]\nname = "test-proj"\nversion = "0.1.0"\nrequires-python = ">=3.10"\n'
+                    'dependencies = []\n\n[project.optional-dependencies]\ndev = ["pytest"]\n')
+
+        manifest = {"project_venv": {"subdir": "python", "extras": ["dev"],
+                                     "check_imports": ["pytest"]}}
+        with open(os.path.join(claude_dir, "bootstrap.json"), "w") as f:
+            json.dump(manifest, f)
+
+        config_path = os.path.join(data_dir, "config.json")
+        with open(config_path, "w") as f:
+            json.dump({"schema_version": 5, "log_success_checks": True}, f)
+
+        result = run_engine(
+            data_dir, plugin_root=fake_root, project_dir=project_dir,
+            env_override={"HOME": fake_home},
+        )
+        assert result.returncode == 0
+        # The venv lands in the subdir, not the project root.
+        assert os.path.isdir(os.path.join(py_dir, ".venv")), "expected python/.venv"
+        assert not os.path.exists(os.path.join(project_dir, ".venv")), \
+            "root .venv must not be created when subdir is declared"
+
+    def test_project_venv_without_subdir_targets_root(self, data_dir, tmp_path):
+        """Absent subdir preserves the root behavior: <project>/.venv from
+        <project>/pyproject.toml (never-regress)."""
+        fake_root = make_minimal_root(tmp_path)
+        fake_home = str(tmp_path / "fakehome")
+        claude_dir = os.path.join(fake_home, ".claude")
+        os.makedirs(claude_dir)
+
+        project_dir = str(tmp_path / "project")
+        os.makedirs(project_dir)
+        with open(os.path.join(project_dir, "pyproject.toml"), "w") as f:
+            f.write('[project]\nname = "test-proj"\nversion = "0.1.0"\nrequires-python = ">=3.10"\n'
+                    'dependencies = []\n\n[project.optional-dependencies]\ndev = []\n')
+
+        manifest = {"project_venv": {"extras": [], "check_imports": []}}
+        with open(os.path.join(claude_dir, "bootstrap.json"), "w") as f:
+            json.dump(manifest, f)
+
+        config_path = os.path.join(data_dir, "config.json")
+        with open(config_path, "w") as f:
+            json.dump({"schema_version": 5, "log_success_checks": True}, f)
+
+        result = run_engine(
+            data_dir, plugin_root=fake_root, project_dir=project_dir,
+            env_override={"HOME": fake_home},
+        )
+        assert result.returncode == 0
+        assert os.path.isdir(os.path.join(project_dir, ".venv")), "expected root .venv"
+
+    def test_project_venv_subdir_escape_rejected(self, tmp_path, monkeypatch):
+        """A subdir resolving outside the project is a descriptive failure --
+        no venv work runs (fail fast, no fallback to the root)."""
+        import bootstrap_lib.engine as engine
+        monkeypatch.setattr(engine, "_process_venv_def",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("venv work must not run for an escaping subdir")))
+        project_dir = str(tmp_path / "project")
+        os.makedirs(project_dir)
+
+        actions, oks, failures = engine._process_project_venv(
+            {"subdir": "../outside", "check_imports": []}, project_dir)
+        assert len(failures) == 1
+        assert failures[0]["type"] == "project_venv"
+        assert "subdir" in failures[0]["message"]
+        assert "../outside" in failures[0]["message"]
+        assert any("FAILED" in a for a in actions)
+        assert oks == []
+
+    def test_project_venv_subdir_absolute_rejected(self, tmp_path, monkeypatch):
+        """An absolute subdir is a descriptive failure -- subdir must be
+        project-relative."""
+        import bootstrap_lib.engine as engine
+        monkeypatch.setattr(engine, "_process_venv_def",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("venv work must not run for an absolute subdir")))
+        project_dir = str(tmp_path / "project")
+        os.makedirs(project_dir)
+        abs_subdir = str(tmp_path / "elsewhere")
+
+        actions, oks, failures = engine._process_project_venv(
+            {"subdir": abs_subdir, "check_imports": []}, project_dir)
+        assert len(failures) == 1
+        assert failures[0]["type"] == "project_venv"
+        assert "subdir" in failures[0]["message"]
+        assert any("FAILED" in a for a in actions)
+
     def test_project_venv_skipped_without_project_dir(self, data_dir, tmp_path):
         """project_venv is silently skipped when --project-dir is not provided."""
         fake_root = make_minimal_root(tmp_path)

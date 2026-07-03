@@ -1859,11 +1859,19 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
 def _process_project_venv(venv_def, project_dir):
     """Process project_venv: ensure the project's own .venv is ready.
 
-    Unlike the plugin venv (which lives in data_dir), this targets
-    <project_dir>/.venv using the project's own pyproject.toml.
+    Unlike the plugin venv (which lives in data_dir), this targets the
+    project's own pyproject.toml. By default that is the project root
+    (<project_dir>/pyproject.toml -> <project_dir>/.venv); an optional
+    'subdir' names a project-relative subdirectory that becomes BOTH the
+    uv-sync project target and the .venv parent
+    (<project_dir>/<subdir>/pyproject.toml -> <project_dir>/<subdir>/.venv)
+    -- for layouts like env-config's python/ package dir. A subdir that is
+    absolute or resolves outside project_dir is a descriptive failure (fail
+    fast; no fallback to the root).
 
     Args:
-        venv_def: Dict with optional 'extras' (list) and 'check_imports' (list).
+        venv_def: Dict with optional 'subdir' (str), 'extras' (list), and
+            'check_imports' (list).
         project_dir: Absolute path to the project root.
 
     Returns:
@@ -1873,11 +1881,33 @@ def _process_project_venv(venv_def, project_dir):
     ok_entries = []
     failures = []
 
-    # project_dir serves as both data_dir (.venv location) and plugin_root
+    target_dir = project_dir
+    subdir = venv_def.get("subdir")
+    if subdir:
+        root = os.path.abspath(project_dir)
+        resolved = os.path.abspath(os.path.join(root, subdir))
+        if os.path.isabs(subdir) or not (
+            resolved == root or resolved.startswith(root + os.sep)
+        ):
+            msg = (
+                f"subdir {subdir!r} must be a relative path inside the project "
+                f"(it resolves to {resolved}, outside {root})"
+            )
+            action_entries.append(f"project_venv: FAILED - {msg}")
+            failures.append({
+                "type": "project_venv",
+                "message": msg,
+                "remediation_cmd": None,
+                "plugin": "config",
+            })
+            return action_entries, ok_entries, failures
+        target_dir = resolved
+
+    # target_dir serves as both data_dir (.venv location) and plugin_root
     # (pyproject.toml location). No env-var export: the project venv belongs
     # to the project, not a plugin.
     _process_venv_def(
-        venv_def, project_dir, project_dir, "", "project_venv",
+        venv_def, target_dir, target_dir, "", "project_venv",
         action_entries, ok_entries, failures,
         plugin_name="config", failure_type="project_venv", failure_plugin="config",
         extras=venv_def.get("extras", []), export_env_var=False,

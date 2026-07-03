@@ -72,6 +72,7 @@ A declarative configuration file covering automatable operations. The engine rea
     {"ref": "plugins-kit:bootstrap", "min_version": "0.9.1"}
   ],
   "project_venv": {
+    "subdir": "python",
     "extras": ["dev"],
     "check_imports": ["pytest"]
   },
@@ -152,6 +153,28 @@ if Path(sys.executable).resolve() != Path(_venv).resolve():
 **Reach**: Exports in `CLAUDE_ENV_FILE` are sourced by Claude Code before every subsequent Bash tool invocation. They do NOT automatically propagate to hook script invocations — hook scripts that need the venv must either re-derive the path or source `$CLAUDE_ENV_FILE` themselves. For the common case (scripts called via Bash or re-exec'd via `os.execv`), the variable is always set.
 
 **Fail-fast semantics**: if bootstrap cannot create the venv, no export line is written. Consumer scripts then error out on the unset var rather than re-exec'ing an invalid interpreter path.
+
+## `project_venv` — Project's Own Python Environment
+
+A **layered** manifest (`~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`) declares `project_venv` to have bootstrap provision the *project's* venv — synced from the project's own `pyproject.toml` via `uv sync`, verified with `check_imports`. It runs only when the engine has a `--project-dir` (silently skipped otherwise), and never exports a `*_VENV` env var (the venv belongs to the project, not a plugin).
+
+Fields (all optional):
+
+- `extras` — dependency extras (`uv sync --extra <name>` each).
+- `check_imports` — module names that must import inside the venv.
+- `subdir` — a **project-relative** subdirectory that becomes BOTH the uv-sync project target and the `.venv` parent: `<project>/<subdir>/pyproject.toml` → `<project>/<subdir>/.venv`. Absent = the project root (`<project>/pyproject.toml` → `<project>/.venv`). A `subdir` that is absolute or resolves outside the project is a descriptive `project_venv` failure — no fallback to the root.
+
+Example — env-config, whose Python package lives under `python/`:
+
+```json
+{
+  "project_venv": {
+    "subdir": "python",
+    "extras": ["dev"],
+    "check_imports": ["yaml"]
+  }
+}
+```
 
 ## `shared_libs` / `shared_lib_imports` — Cross-Plugin First-Party Libraries
 
