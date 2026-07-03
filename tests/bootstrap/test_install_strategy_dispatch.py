@@ -32,6 +32,7 @@ class TestStrategyTableShape:
         assert isinstance(engine._INSTALL_STRATEGIES, tuple)
         names = [f.__name__ for f in engine._INSTALL_STRATEGIES]
         assert names == [
+            "_strategy_skip",
             "_strategy_resolve",
             "_strategy_scoop",
             "_strategy_brew",
@@ -197,3 +198,118 @@ class TestPrecedence:
         assert failure is None
         assert any("download failed" in a for a in action_entries)
         assert tools_installed and "`pkg install tool`" in tools_installed[0][1]
+
+
+class TestSkipSentinel:
+    """The "skip" install sentinel: install.<os> == "skip" means "not applicable
+    on this OS" -- the entry short-circuits BEFORE resolve (no check subprocess,
+    no install, no failure) with a verbose-only ok line. Per-OS: other OSes'
+    fulfillments are untouched. Ruling: design-os-not-applicable.md."""
+
+    def test_skip_short_circuits_before_resolve_no_check(self, monkeypatch):
+        # check_tool must NEVER be called for a skipped entry -- the skip
+        # strategy sits before resolve in the dispatch table.
+        _stub(monkeypatch)
+        monkeypatch.setattr(tool_check, "check_tool",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("check_tool must not run for a skipped entry")))
+
+        ok_entries, action_entries = [], []
+        failure = engine._process_tool_entry(
+            {"name": "tmux", "install": {"windows": "skip"}},
+            "windows", "/data", "", action_entries, ok_entries, [], plugin_name="p",
+        )
+        assert failure is None
+        assert len(ok_entries) == 1
+        assert "tmux" in ok_entries[0] and "skipped" in ok_entries[0]
+        assert "windows" in ok_entries[0]
+
+    def test_skip_is_per_os_other_os_still_installs(self, tmp_path, monkeypatch):
+        # windows "skip" does not affect an ubuntu pass: the apt fulfillment
+        # runs exactly as before.
+        import bootstrap_lib.apt as apt_mod
+        _stub(monkeypatch)
+        monkeypatch.setenv("PATH", str(tmp_path))
+
+        def fake_install(pkg, timeout=600):
+            (tmp_path / "tmux").write_text("#!/bin/sh\n")
+            return apt_mod.AptResult(True, False, f"installed {pkg} via apt")
+
+        monkeypatch.setattr(apt_mod, "apt_install", fake_install)
+
+        tools_installed = []
+        failure = engine._process_tool_entry(
+            {"name": "tmux", "installPath": str(tmp_path),
+             "install": {"ubuntu": {"apt": "tmux"}, "windows": "skip"}},
+            "ubuntu", "/data", "", [], [], tools_installed, plugin_name="p",
+        )
+        assert failure is None
+        assert tools_installed and "via apt" in tools_installed[0][1]
+
+    def test_omitted_os_key_still_fails_no_install_cmd(self, monkeypatch):
+        # Omission is NOT redefined: an ubuntu-only install map on windows with
+        # the tool missing still surfaces the load-bearing FAILED item.
+        _stub(monkeypatch)
+        monkeypatch.setenv("PATH", "/usr/bin")  # tool absent
+
+        action_entries = []
+        failure = engine._process_tool_entry(
+            {"name": "tmux", "install": {"ubuntu": {"apt": "tmux"}}},
+            "windows", "/data", "", action_entries, [], [], plugin_name="p",
+        )
+        assert failure is not None
+        assert failure["install_state"] == "no_install_cmd"
+        assert any("FAILED" in a for a in action_entries)
+        assert engine._is_auto_fixable(failure) is False
+
+    def test_skip_wins_over_same_os_download(self, monkeypatch):
+        # "skip" beats a same-OS download block: the downloader is never invoked.
+        _stub(monkeypatch)
+        monkeypatch.setattr(tool_check, "check_tool",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("check_tool must not run for a skipped entry")))
+        monkeypatch.setattr(downloader, "download_and_install",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("download must not run for a skipped entry")))
+
+        failure = engine._process_tool_entry(
+            {"name": "ffmpeg", "install": {"windows": "skip"},
+             "download": {"windows": {"url": "http://x/y", "sha256": "ab"}}},
+            "windows", "/data", "", [], [], [], plugin_name="p",
+        )
+        assert failure is None
+
+    def test_manual_sentinel_semantics_unchanged(self, monkeypatch):
+        # "manual" keeps its wanted-but-user-installs semantics: verify-on-PATH,
+        # manual-attention manual_install failure when missing.
+        _stub(monkeypatch)
+        monkeypatch.setenv("PATH", "/usr/bin")  # tool absent
+
+        action_entries = []
+        failure = engine._process_tool_entry(
+            {"name": "helix", "install": {"windows": "manual"}},
+            "windows", "/data", "", action_entries, [], [], plugin_name="p",
+        )
+        assert failure is not None
+        assert failure["install_state"] == "manual_install"
+        assert failure["install_cmd"] is None
+        assert any("manual install required" in a for a in action_entries)
+        assert engine._is_auto_fixable(failure) is False
+
+    def test_skip_line_is_verbose_only(self, monkeypatch):
+        # The skip line goes to ok_entries (the verbose-only channel, shown only
+        # with --verbose / log_success_checks) -- NEVER to action_entries, which
+        # always display.
+        _stub(monkeypatch)
+        monkeypatch.setattr(tool_check, "check_tool",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("check_tool must not run for a skipped entry")))
+
+        ok_entries, action_entries = [], []
+        failure = engine._process_tool_entry(
+            {"name": "w3m", "install": {"windows": "skip"}},
+            "windows", "/data", "", action_entries, ok_entries, [], plugin_name="p",
+        )
+        assert failure is None
+        assert action_entries == []
+        assert len(ok_entries) == 1
