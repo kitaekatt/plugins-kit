@@ -56,6 +56,25 @@ class TestNormalizeInstallStrings:
         # Sentinel semantics preserved: downstream keys on command == "manual".
         assert out["install"]["ubuntu"] == {"command": "manual", "elevated": False}
 
+    def test_skip_sentinel_becomes_skip_object(self):
+        # "skip" (not applicable on this OS) canonicalizes to {"skip": true} --
+        # NEVER to {"command": "skip"} (design-os-not-applicable.md ruling).
+        out = engine._normalize_tool_entry(
+            {"name": "tmux", "install": {"windows": "skip"}}, "windows",
+        )
+        assert out["install"]["windows"] == {"skip": True}
+
+    def test_skip_object_form_passes_through(self):
+        out = engine._normalize_tool_entry(
+            {"name": "tmux", "install": {"windows": {"skip": True}}}, "windows",
+        )
+        assert out["install"]["windows"] == {"skip": True}
+
+    def test_skip_input_not_mutated(self):
+        entry = {"name": "tmux", "install": {"windows": "skip"}}
+        engine._normalize_tool_entry(entry, "windows")
+        assert entry["install"]["windows"] == "skip"  # original intact
+
     def test_all_os_keys_canonicalized_not_just_host(self):
         out = engine._normalize_tool_entry(
             {"name": "t", "install": {

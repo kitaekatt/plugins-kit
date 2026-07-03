@@ -251,8 +251,8 @@ keys are exactly the `detect_os()` values — `macos`, `ubuntu`, `windows` (an
 exact-match lookup; a `darwin`/`linux` key silently never fires). Each per-OS
 **value** is one of two shapes:
 
-- an **opaque command string** — a shell command run verbatim, or the `manual`
-  sentinel;
+- an **opaque command string** — a shell command run verbatim, or one of the
+  two string sentinels, `manual` and `skip`;
 - a **structured manager object** — one of `scoop` / `brew` / `apt` / `command`.
 
 Both shapes are normalized to a canonical object at parse time
@@ -282,6 +282,7 @@ may mix strings and objects freely and every legacy spelling keeps parsing.
 | `{"command": "…", "elevated": true\|false}` | any | Opaque shell command; `elevated: true` routes it through the elevation queue when privileges are missing. |
 | `"…"` (bare string) | any | Exactly equivalent to `{"command": "…", "elevated": false}`. |
 | `"manual"` (sentinel) | any | No unattended installer: bootstrap **verifies** the tool resolves on PATH but never tries to install it. Not a fix-all item. |
+| `"skip"` (sentinel) | any | Not applicable on this OS: the entry is skipped entirely (no check, no install, verbose-only log line). Use for tools wanted only on some OSes. Omitting the OS key instead means "must already resolve on this OS" and surfaces a FAILED item when it does not. Canonical object form: `{"skip": true}`. Do not declare both `"skip"` and a same-OS `download` block. |
 
 **Legacy `download.<os-arch>.scoop` is deprecated but still read.** The
 normalizer promotes the host-resolved `download.…​.scoop` entry to
@@ -297,6 +298,8 @@ Scoop.
 For a tool that is not already resolvable, the engine dispatches an ordered
 strategy table (`_INSTALL_STRATEGIES`), taking the **first** that applies:
 
+0. **skip** (`install.<os> == "skip"`) — the entry is not processed on this OS
+   (no check, no install, no failure; a verbose-only log line).
 1. **resolve** — `installPath` candidates → `check` command → `which` (see Tool
    resolution below). A resolved tool records its path, is linked onto PATH, and
    nothing is installed.

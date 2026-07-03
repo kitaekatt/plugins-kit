@@ -1124,7 +1124,7 @@ class _ToolEntryCtx:
     reports on ``result.subject`` / ``result.install_cmd`` / ``result.message``).
     """
 
-    __slots__ = ("tool_def", "name", "install", "install_cmds", "scoop_pkg",
+    __slots__ = ("tool_def", "name", "install", "install_cmds", "skip", "scoop_pkg",
                  "brew_spec", "apt_pkg", "elevated", "tool_install_path", "check_cmd",
                  "download_def", "current_os", "prefix", "action_entries",
                  "ok_entries", "tools_installed", "plugin_name", "result")
@@ -1144,6 +1144,10 @@ class _ToolEntryCtx:
         self.install_cmds = {k: v["command"] for k, v in self.install.items()
                              if isinstance(v, dict) and "command" in v}
         os_spec = self.install.get(current_os)
+        #   skip -- "not applicable on this OS" (canonical {"skip": true}, from
+        #   the "skip" string sentinel). Consumed by the skip strategy, which
+        #   short-circuits the entry before resolve.
+        self.skip = bool(os_spec.get("skip")) if isinstance(os_spec, dict) else False
         self.scoop_pkg = os_spec.get("scoop") if isinstance(os_spec, dict) else None
         #   brew_spec -- the canonical brew fulfillment for this host, or None.
         #   {"brew": "name"} shorthand -> {"formula": "name"}; the object forms
@@ -1208,6 +1212,22 @@ def _privileges_available(current_os):
     without touching the elevation module's probes."""
     from .elevation import privileges_available
     return privileges_available(current_os)
+
+
+def _strategy_skip(ctx):
+    """Precedence 0: the "skip" sentinel -- this tool is not applicable on this
+    OS (design-os-not-applicable.md ruling). The entry short-circuits BEFORE
+    resolve: no check subprocess, no install, no PATH work, no failure dict --
+    just one verbose-only ok line. Per-OS: only the current OS's install value
+    is consulted, so other OSes' fulfillments are untouched. Omitting an OS key
+    is NOT skip -- omission keeps its "must already resolve, else a
+    no_install_cmd FAILED item" semantics."""
+    if not ctx.skip:
+        return _StrategyOutcome(False)
+    ctx.ok_entries.append(
+        f"{ctx.prefix}{ctx.name}: skipped - not applicable on {ctx.current_os}"
+    )
+    return _StrategyOutcome(True, None)
 
 
 def _strategy_resolve(ctx):
@@ -1525,18 +1545,21 @@ def _strategy_install_command(ctx):
     })
 
 
-# Ordered install-strategy dispatch table. Precedence is significant: resolve/
-# link -> scoop (Windows) -> brew (macOS) -> apt (Ubuntu) -> url download
-# (download.url+sha256) -> install command (re-check regardless of exit code, +
-# manual sentinel). scoop, brew, and apt are mutually exclusive by OS (each reads
-# only its own host's install value) and all run BEFORE url download, matching
-# the per-OS method ladder ("scoop > download", "brew > download", "apt >
-# download"); the pre-existing strategies keep their relative order (resolve ->
-# scoop -> url -> install), with brew then apt inserted next to scoop. Each
-# function takes the shared _ToolEntryCtx and returns a _StrategyOutcome; the
-# dispatcher returns the first terminal outcome's ``failure``. install_command is
-# always terminal, so the loop always resolves.
+# Ordered install-strategy dispatch table. Precedence is significant: skip
+# (not-applicable-on-this-OS sentinel, beats everything incl. resolve and a
+# same-OS download) -> resolve/link -> scoop (Windows) -> brew (macOS) -> apt
+# (Ubuntu) -> url download (download.url+sha256) -> install command (re-check
+# regardless of exit code, + manual sentinel). scoop, brew, and apt are mutually
+# exclusive by OS (each reads only its own host's install value) and all run
+# BEFORE url download, matching the per-OS method ladder ("scoop > download",
+# "brew > download", "apt > download"); the pre-existing strategies keep their
+# relative order (resolve -> scoop -> url -> install), with brew then apt
+# inserted next to scoop. Each function takes the shared _ToolEntryCtx and
+# returns a _StrategyOutcome; the dispatcher returns the first terminal
+# outcome's ``failure``. install_command is always terminal, so the loop always
+# resolves.
 _INSTALL_STRATEGIES = (
+    _strategy_skip,
     _strategy_resolve,
     _strategy_scoop,
     _strategy_brew,
@@ -1563,8 +1586,11 @@ def _normalize_tool_entry(tool_def, current_os):
          command object). The "manual" sentinel is preserved as
          {"command": "manual", "elevated": false}; downstream still keys on the
          command string == "manual", so its manual-attention semantics are intact.
-         `elevated` is carried but not yet acted on (the elevation queue is a
-         later step); a bare string is exactly {"command": s, "elevated": false}.
+         The "skip" sentinel (not applicable on this OS) canonicalizes to
+         {"skip": true} instead -- the skip strategy short-circuits the entry
+         for that OS (design-os-not-applicable.md ruling). `elevated` is carried
+         but not yet acted on (the elevation queue is a later step); any other
+         bare string is exactly {"command": s, "elevated": false}.
 
       2. download.<os[-arch]>.scoop (the legacy, deprecated-but-read spelling) ->
          install.<os>.scoop (the canonical structured location). Only the entry
@@ -1581,10 +1607,15 @@ def _normalize_tool_entry(tool_def, current_os):
         return tool_def
 
     # 1. string install values -> opaque command objects (all OS keys, so the
-    #    canonical shape is uniform regardless of which host runs).
+    #    canonical shape is uniform regardless of which host runs). The "skip"
+    #    sentinel ("not applicable on this OS") is special-cased BEFORE the
+    #    generic string->command rule: it canonicalizes to {"skip": true},
+    #    never to {"command": "skip"} (design-os-not-applicable.md ruling).
     install = {}
     for os_key, val in tool_def.get("install", {}).items():
-        if isinstance(val, str):
+        if val == "skip":
+            install[os_key] = {"skip": True}
+        elif isinstance(val, str):
             install[os_key] = {"command": val, "elevated": False}
         else:
             install[os_key] = val
