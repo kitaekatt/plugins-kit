@@ -100,9 +100,10 @@ def brew_install(
 
     ``formula`` installs a CLI package (``brew install <formula>``); ``cask``
     installs a GUI app (``brew install --cask <cask>``). ``tap`` is added first
-    when declared (e.g. ``tidwall/jj``) so a formula from a non-default tap
-    resolves. Assumes :func:`ensure_brew` already confirmed brew is present;
-    runs unprivileged.
+    when declared (e.g. ``tidwall/jj``) and the install then targets the
+    tap-qualified name (``tidwall/jj/jj``) so a same-named homebrew-core
+    formula cannot shadow the tapped one. Assumes :func:`ensure_brew` already
+    confirmed brew is present; runs unprivileged.
     """
     if sys.platform != "darwin":
         return BrewResult(False, None, "brew is macOS-only")
@@ -123,7 +124,14 @@ def brew_install(
     if cask:
         target, args = cask, ["install", "--cask", cask]
     else:
-        target, args = formula, ["install", formula]
+        # Tap-qualify the install target (<tap>/<formula>): homebrew-core can
+        # ship a formula with the same bare name (e.g. core's `jj` vs
+        # tidwall/jj's `jj`), and a bare `brew install <formula>` resolves the
+        # core one even right after tapping. Fully-qualified names always
+        # resolve to the tapped formula (manifest-reference: `brew install
+        # <tap/>name`).
+        target = f"{tap}/{formula}" if tap else formula
+        args = ["install", target]
 
     ok, out = _run_brew(binp, args, timeout=timeout)
     if ok:

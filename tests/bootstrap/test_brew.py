@@ -94,8 +94,42 @@ class TestBrewInstall:
              patch.object(brew, "_run_brew", side_effect=fake_run):
             r = brew.brew_install(formula="jj", tap="tidwall/jj")
         assert r.ok is True
-        # tap first, then install, in order.
-        assert calls == [["tap", "tidwall/jj"], ["install", "jj"]]
+        # tap first, then install, in order. The install target MUST be
+        # tap-qualified (<tap>/<formula>): homebrew-core ships a formula also
+        # named `jj`, so a bare `brew install jj` after tapping tidwall/jj can
+        # install the WRONG tool from core instead of the tapped one.
+        assert calls == [["tap", "tidwall/jj"], ["install", "tidwall/jj/jj"]]
+        assert "installed tidwall/jj/jj via brew" in r.message
+
+    def test_tap_qualified_failure_names_qualified_target(self):
+        # The error message must name the tap-qualified target the install
+        # actually attempted, not the bare formula name.
+        def fake_run(bin_path, args, timeout=600):
+            if args[0] == "tap":
+                return True, "ok"
+            return False, "No available formula"
+
+        with _darwin(), \
+             patch.object(brew, "_brew_bin", return_value="/x/brew"), \
+             patch.object(brew, "_run_brew", side_effect=fake_run):
+            r = brew.brew_install(formula="jj", tap="tidwall/jj")
+        assert r.ok is False
+        assert "brew install tidwall/jj/jj failed: No available formula" in r.message
+
+    def test_untapped_formula_stays_bare(self):
+        # No tap declared -> the install target is the bare formula (no prefix).
+        calls = []
+
+        def fake_run(bin_path, args, timeout=600):
+            calls.append(list(args))
+            return True, "ok"
+
+        with _darwin(), \
+             patch.object(brew, "_brew_bin", return_value="/x/brew"), \
+             patch.object(brew, "_run_brew", side_effect=fake_run):
+            r = brew.brew_install(formula="direnv")
+        assert r.ok is True
+        assert calls == [["install", "direnv"]]
 
     def test_install_failure_reports_output(self):
         with _darwin(), \
