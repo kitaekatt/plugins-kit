@@ -83,7 +83,7 @@ audit_skill:
       keywords: ["claude_md schema", "yaml validation", "optional contract", "claude-md schema"]
       summary: "Files carrying a `claude_md:` YAML contract block in the body must validate against CLAUDE_MD_SCHEMA in schemas.py. Files without the block are not gated on schema validation."
       severity: "FAIL"
-      detail: "Mechanical validation via audit.py when the block is present. Conditional: applies only when the file declares the contract."
+      detail: "Mechanical validation via audit.py when the block is present. Conditional: applies only when the file declares the contract. Root-role files SHOULD carry the block (claude-md-authoring adds one when it touches a root file); absence on a pre-existing root file is surfaced as INFO, never FAIL."
     - id: "cd_anchor_modality_classify"
       name: "CodeDir -- classify every anchor's modality before any existence check"
       keywords: ["code-directory", "anchor modality", "requires-present", "requires-absent", "external", "template", "vendored", "generated"]
@@ -270,7 +270,7 @@ audit_skill:
           tool: "Workflow | inline"
           input: "detect.js args.refs: criteria=${CLAUDE_PLUGIN_ROOT}/skills/claude-md-audit/references/audit-criteria.md; codeDirFilter=${CLAUDE_PLUGIN_ROOT}/skills/claude-md-audit/references/code-dir-insight-filter.md; densityCriteria=${CLAUDE_PLUGIN_ROOT}/skills/claude-md-audit/references/density-criteria.md (passed only when args.density is true); pluginRoot=${CLAUDE_PLUGIN_ROOT}; venvPython=<plugin venv python>. Each file carries its dimension; the lane loads the code-dir filter only for dimension=code-directory and the density criteria only when args.density is true. (cohesion-principles is intentionally NOT passed -- lanes load only the self-contained criteria doc(s) for cache efficiency.) Schema validator is run as: (cd ${CLAUDE_PLUGIN_ROOT} && <venvPython> -m skills_kit_lib.audit <path> --json)."
           expected: "Structured per-file findings (group incl. CodeDir and Density, severity, criterion, message, line, taxonomy, bucket, remediation) + per-file verdict."
-          on_failure: "If the schema validator is unavailable, the lane marks the Schema group JUDGMENT ('validator unavailable') and continues -- never fail a file for that. If an anchor cannot be classified or resolved cheaply, mark it external-unverifiable/INFO rather than FAIL."
+          on_failure: "If the Workflow tool is not available in this environment (subagent contexts do not expose it), fall back to the ONE-file inline detect procedure run sequentially per file -- detection and remediation stay separate passes. If the schema validator is unavailable, the lane marks the Schema group JUDGMENT ('validator unavailable') and continues -- never fail a file for that. If an anchor cannot be classified or resolved cheaply, mark it external-unverifiable/INFO rather than FAIL."
         - n: 3
           action: "Render the per-file report (output_template) from the collected findings: per-file verdict blocks followed by an overall summary with bucket counts. This is the before-Q&A surface the user reads."
           expected: "Markdown report in the user's chat with compliance verdicts and AUTO/DISCUSS/SPECIAL counts."
@@ -368,7 +368,7 @@ audit_skill:
   gotchas:
     - "The subject is a corpus of CLAUDE.md files, but the audit procedure visits one file at a time. The role-to-criteria map ensures the right criteria apply to the right file."
     - "Role classification is cwd-relative. A standalone audit of a single file outside a project tree will classify it as root by default; surface that assumption if it affects criteria."
-    - "Schema validation is conditional -- only files carrying a `claude_md:` YAML contract block are checked. Files without the block are not failed for its absence; CLAUDE.md is not required to declare a contract."
+    - "Schema validation is conditional -- only files carrying a `claude_md:` YAML contract block are checked. Files without the block are never FAILed for its absence. Root-role files SHOULD carry the block (the authoring path adds it); a pre-existing root file without one gets an INFO, not a FAIL."
     - "Idempotency: criteria, taxonomy, and bucket assignments are fixed. Same input produces the same verdict; do not re-rank or re-order findings session-to-session."
   anti_patterns:
     - id: "audit_then_self_remediate"
@@ -409,7 +409,7 @@ resolve (main loop)
   -> final summary + "re-run to verify"
 ```
 
-**Multi-file threshold (the overhead equalizer).** The Workflow tool has real per-run overhead (background orchestration, agent spin-up). For a single file that overhead is not worth it, so a 1-file audit runs inline in the main loop. At 2+ files the parallel fan-out pays for itself, so detection (and, separately, remediation) go through the workflow scripts. Detection and remediation are **always separate passes** even in workflow mode -- the interactive Q&A sits between them, and a background workflow cannot ask the user anything. This split is also what preserves the `audit_then_self_remediate` anti-pattern: re-running the audit reproduces the same findings because nothing was remediated during detection.
+**Multi-file threshold (the overhead equalizer).** The Workflow tool has real per-run overhead (background orchestration, agent spin-up). For a single file that overhead is not worth it, so a 1-file audit runs inline in the main loop. At 2+ files the parallel fan-out pays for itself, so detection (and, separately, remediation) go through the workflow scripts. **Fallback when the Workflow tool is not exposed** (subagent environments do not have it): run the 1-file inline procedure sequentially per file -- detection for all files first, then remediation, keeping the two as separate passes with the Q&A gate between them. Detection and remediation are **always separate passes** even in workflow mode -- the interactive Q&A sits between them, and a background workflow cannot ask the user anything. This split is also what preserves the `audit_then_self_remediate` anti-pattern: re-running the audit reproduces the same findings because nothing was remediated during detection.
 
 **The two workflow scripts** (hand-authored, shipped as skill assets):
 

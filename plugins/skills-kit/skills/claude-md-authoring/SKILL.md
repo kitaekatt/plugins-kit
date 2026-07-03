@@ -55,9 +55,9 @@ technique_skill:
           tool: "Read (references/code-directory-claude-md.md) when code-directory"
           expected: "Confirmation that a claude_md block is the right home -- OR a determination that this is a code-directory review-notes file, authored per references/code-directory-claude-md.md."
         - n: 2
-          action: "Choose WHICH CLAUDE.md in the load graph (root / subsystem / directory) via cohesion-principles (CCP change-cadence -> CRP reader-set -> ADP load-order). Do not re-derive placement."
+          action: "Choose WHICH CLAUDE.md in the load graph (root / subsystem / directory) via cohesion-principles (CCP change-cadence -> CRP reader-set -> ADP load-order). Do not re-derive placement. PRE-RESOLVED PLACEMENT: when a placement decision arrives already resolved (an audit remediation naming the destination, an orchestrator directive), follow it -- do not re-invoke cohesion-principles for it; invoke cohesion-principles only for facts without a resolved placement."
           tool: "Skill (skills-kit:cohesion-principles)"
-          expected: "One target CLAUDE.md, justified by the placement algorithm."
+          expected: "One target CLAUDE.md, justified by the placement algorithm (or accepted as pre-resolved)."
         - n: 3
           action: "Write or extend the claude_md block: scope.covers + scope.excludes (the exclusion clause is load-bearing), then insights as records carrying id / keywords (>=3) / summary / detail / origin / added. Add conventions or glossary only if the shape calls for it."
           tool: "Edit"
@@ -71,7 +71,8 @@ technique_skill:
           tool: "Bash (skills_kit_lib.audit)"
           expected: "0 FAILs on the target CLAUDE.md."
       gotchas:
-        - "Re-deriving placement from memory instead of invoking cohesion-principles -- which CLAUDE.md a fact belongs in is a framework decision, not a guess."
+        - "Re-deriving placement from memory instead of invoking cohesion-principles -- which CLAUDE.md a fact belongs in is a framework decision, not a guess. (Exception: a placement already resolved upstream -- audit remediation, orchestrator directive -- is followed, not re-derived; see step 2.)"
+        - "A root CLAUDE.md without a `claude_md:` block -- root files SHOULD carry the block; add one when authoring touches a root file that lacks it. (The audit side treats absence on a pre-existing root file as INFO, not FAIL -- adding the block is the authoring path's job.)"
         - "Omitting scope.excludes -- the exclusion clause is what stops adjacent areas from drifting into this file's ownership; the schema requires it."
         - "Putting skill-contract or decision-provenance content into a CLAUDE.md that should be SKILL.md (skill-authoring) or a reference -- match the artifact to the content."
         - "Keywords cluster under 3 entries on an insight record -- the schema floor is >=3 for chat-term routing."

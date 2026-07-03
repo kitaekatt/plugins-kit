@@ -52,6 +52,8 @@ Route by the artifact being authored, then load that member and follow it. The m
 
 To dispatch: load the member skill's `SKILL.md` and follow it. `skill-authoring` is itself a domain (it has its own deep reference graph and scripts); loading it on dispatch is the union pattern -- you load this router plus that one sub-domain, never both.
 
+**Project documents** (standalone reference docs outside skills and the CLAUDE.md hierarchy) have no authoring member; they are authored directly against `cohesion-principles`' `project_reference_md` role -- forward-only load-graph edges, one-hop cross-references, no back-references into CLAUDE.md sections, and pointers to skill-owned content rather than restatement (the skill's references/ stays SSOT). The audit counterpart is `/md-audit project-doc`.
+
 ## Domain contract
 
 ```yaml
