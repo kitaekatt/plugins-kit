@@ -114,7 +114,8 @@ class TestEngineIntegration:
         (defaults / "config.json").write_text(json.dumps(config))
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
-        result = run_engine(data_dir, plugin_root=str(fake_root))
+        result = run_engine(data_dir, plugin_root=str(fake_root),
+                            home=self._isolated_home(tmp_path))
         assert result.returncode == 0
         assert result.stdout.strip() != ""
 
@@ -151,7 +152,8 @@ class TestEngineIntegration:
         (defaults / "config.json").write_text(json.dumps(config))
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
-        result = run_engine(data_dir, plugin_root=str(fake_root))
+        result = run_engine(data_dir, plugin_root=str(fake_root),
+                            home=self._isolated_home(tmp_path))
         assert result.returncode == 0
         assert result.stdout.strip() != ""
 
@@ -159,7 +161,7 @@ class TestEngineIntegration:
         assert response["continue"] is True
         assert "nonexistent_tool_xyz_abc" in response["hookSpecificOutput"]["additionalContext"]
 
-    def test_config_migration_on_run(self, data_dir):
+    def test_config_migration_on_run(self, data_dir, tmp_path):
         """Engine should migrate v0 config to current version on first run."""
         # Pre-create a v0 config
         os.makedirs(data_dir, exist_ok=True)
@@ -167,7 +169,7 @@ class TestEngineIntegration:
         with open(os.path.join(data_dir, "config.json"), "w") as f:
             json.dump(v0_config, f)
 
-        result = run_engine(data_dir)
+        result = run_engine(data_dir, home=self._isolated_home(tmp_path))
         assert result.returncode == 0
 
         # Config should now be current version
@@ -311,6 +313,15 @@ class TestPythonStubIntegration:
         deletes it on success."""
         sys.path.insert(0, BOOTSTRAP_ROOT)
         from bootstrap_lib import python_stub_check as psc
+
+        # Isolate HOME so the in-process engine run discovers an EMPTY plugins
+        # dir instead of the developer's real ~/.claude/plugins/installed_plugins.json
+        # (which would run claude-ui-kit's install_statusline against the real
+        # ~/.claude/settings.json). See run_engine's docstring.
+        isolated_home = tmp_path / "home"
+        isolated_home.mkdir()
+        monkeypatch.setenv("HOME", str(isolated_home))
+        monkeypatch.setenv("USERPROFILE", str(isolated_home))
 
         bad_python = r"C:\Users\fake\AppData\Local\Microsoft\WindowsApps\python.exe"
         good_dir = str(tmp_path / "standalone" / "python")

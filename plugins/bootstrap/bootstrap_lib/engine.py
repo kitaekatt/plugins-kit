@@ -145,6 +145,10 @@ def _main():
     except UnsupportedPlatformError as e:
         _emit_unsupported_platform(str(e), data_dir, args)
         return
+    # Re-arm the apt backend's once-per-pass `apt-get update` guard so the first
+    # direct apt install of THIS pass refreshes package lists (see apt.py).
+    from .apt import reset_apt_pass_state
+    reset_apt_pass_state()
     log_success = config.get("log_success_checks", False) or args.verbose
     all_failures = []
     # Bootstrap's own entries (self-bootstrap + user) — written to bootstrap's log

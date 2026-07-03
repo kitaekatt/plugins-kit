@@ -321,7 +321,11 @@ install attempt the tool is re-checked regardless of the installer's exit code.
   `brew_failed` item AND signals the elevation queue to lead the macOS
   remediation script with the official Homebrew installer (one user-run step;
   brew entries then install unattended on the next pass).
-- **apt** always needs root — see elevation below.
+- **apt** always needs root — see elevation below. The backend runs `apt-get
+  update` **once per pass**, immediately before the first *direct* apt install it
+  performs, so a stale/empty package index does not fail an installable package.
+  It is a single per-pass guard — not per package, and not on the deferred path
+  (that update instead leads the emitted remediation script).
 
 **Declare a `check` command on cask entries.** A GUI cask (e.g.
 `google-chrome`, `kitty`) usually has no CLI binary on PATH, so the resolve step

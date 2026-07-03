@@ -49,6 +49,15 @@ def make_minimal_root(tmp_path):
 class TestLegacyUserBootstrap:
     """Legacy user-bootstrap.json still works but emits deprecation notice."""
 
+    @staticmethod
+    def _isolated_home(tmp_path):
+        """An empty HOME so the engine discovers no real installed_plugins.json
+        (an un-isolated run would execute claude-ui-kit's install_statusline
+        against the developer's real ~/.claude/settings.json)."""
+        home = tmp_path / "fakehome"
+        home.mkdir(exist_ok=True)
+        return {"HOME": str(home), "USERPROFILE": str(home)}
+
     def test_legacy_user_bootstrap_processed(self, data_dir, tmp_path):
         """user-bootstrap.json in data_dir is still processed (backward compat)."""
         fake_root = make_minimal_root(tmp_path)
@@ -62,7 +71,8 @@ class TestLegacyUserBootstrap:
         with open(config_path, "w") as f:
             json.dump({"schema_version": 5, "log_success_checks": True}, f)
 
-        result = run_engine(data_dir, plugin_root=fake_root)
+        result = run_engine(data_dir, plugin_root=fake_root,
+                            env_override=self._isolated_home(tmp_path))
         assert result.returncode == 0
 
     def test_legacy_deprecation_notice(self, data_dir, tmp_path):
@@ -77,7 +87,8 @@ class TestLegacyUserBootstrap:
         with open(config_path, "w") as f:
             json.dump({"schema_version": 5, "log_success_checks": True}, f)
 
-        result = run_engine(data_dir, plugin_root=fake_root)
+        result = run_engine(data_dir, plugin_root=fake_root,
+                            env_override=self._isolated_home(tmp_path))
         assert result.returncode == 0
         assert result.stdout.strip() != ""
         response = json.loads(result.stdout)
@@ -92,7 +103,8 @@ class TestLegacyUserBootstrap:
         with open(user_path, "w") as f:
             json.dump(user_manifest, f)
 
-        result = run_engine(data_dir, plugin_root=fake_root)
+        result = run_engine(data_dir, plugin_root=fake_root,
+                            env_override=self._isolated_home(tmp_path))
         assert result.returncode == 0
         assert result.stdout.strip() != ""
         response = json.loads(result.stdout)

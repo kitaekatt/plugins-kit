@@ -127,6 +127,44 @@ def dpkg_installed(pkg: str) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "installed"
 
 
+# Once-per-pass guard for `apt-get update`. apt's package lists can be stale or
+# empty on a fresh machine, so a direct `apt-get install` may fail to find an
+# otherwise-available package. We refresh the lists ONCE, right before the first
+# DIRECT apt install a pass performs -- never per package (wasteful) and never on
+# the deferred/elevation path (that update leads the emitted remediation script,
+# see elevation.py). The engine calls reset_apt_pass_state() at the start of each
+# pass so the next pass refreshes again. This is the whole caching story: a single
+# boolean, no config knob, no persistence.
+_apt_update_ran = False
+
+
+def reset_apt_pass_state() -> None:
+    """Re-arm the once-per-pass `apt-get update` guard for a new engine pass.
+
+    Called by the engine at pass start. A production pass is a fresh process, so
+    this only matters when several passes share one process (the test suite, the
+    harvest): without it the first pass's update would suppress every later pass's.
+    """
+    global _apt_update_ran
+    _apt_update_ran = False
+
+
+def _apt_get_update_once(prefix, timeout: int = 600) -> None:
+    """Run `apt-get update` at most once per pass, before the first direct install.
+
+    ``prefix`` is the same privilege prefix the install uses (``[]`` as root, else
+    ``["sudo", "-n"]``); the caller has already confirmed non-interactive privilege,
+    so this never prompts. A failed refresh is non-fatal -- the subsequent install's
+    authoritative re-check surfaces any real problem -- but the guard still flips so
+    the pass does not retry update for every package.
+    """
+    global _apt_update_ran
+    if _apt_update_ran:
+        return
+    _apt_update_ran = True
+    _run(prefix + ["apt-get", "update"], timeout=timeout)
+
+
 def _run(argv, timeout: int = 600):
     """Invoke ``argv`` non-interactively. Returns (ok, combined_output).
 
@@ -180,6 +218,9 @@ def apt_install(pkg: str, timeout: int = 600) -> AptResult:
         )
 
     prefix = [] if is_root() else ["sudo", "-n"]
+    # Refresh package lists once per pass before the first direct install so a
+    # stale/empty index does not fail an otherwise-installable package.
+    _apt_get_update_once(prefix, timeout=timeout)
     ok, out = _run(prefix + ["apt-get", "install", "-y", pkg], timeout=timeout)
     if ok:
         return AptResult(True, False, f"installed {pkg} via apt")
