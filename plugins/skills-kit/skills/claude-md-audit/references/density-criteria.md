@@ -44,6 +44,8 @@ Distinguish it from the classic criteria so findings don't double-count:
 ### DD-3. intra_file_redundancy (JUDGMENT → N_intra_file_redundancy, DISCUSS)
 The **same fact stated more than once within this one file** (distinct from `ccp_cross_file_duplication` (B), which is duplication across the role chain and is a FAIL/AUTO). Output: keep the single best statement; replace the others with a cross-reference. State once.
 
+Boundary -- prose vs insight-record overlap: when one file carries both prose sections and structured records (e.g. a `claude_md:` insights block), summary-level overlap is acceptable -- a prose orientation and a record's `summary:` may state the same fact. The detail lives in exactly one place; flag only detail-level duplication.
+
 ### DD-4. value_earns_tokens (JUDGMENT → O_low_value_verbose, DISCUSS)
 A section that **does not earn its tokens** under the value filter — and is verbose about it. This is the **classic-file generalization** of the code-directory value filter. Rank kept content by the same lattice; for the canonical ranking and the carve-out list, defer to **`references/code-dir-insight-filter.md` Step 4** (do not restate it here — SSOT). Low-value-and-verbose → propose downgrade (compress to a line) or, for a genuinely contentless section, deletion, **with the user's confirmation**.
 

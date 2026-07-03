@@ -277,6 +277,8 @@ Severity: FAIL on linter-redundant style rules.
 
 Exhaustive API docs, architecture deep-dives, or long reference tables that should be deferred references.
 
+Boundary -- deferred-reference pointer lists: a list of pointers to deferred references is not embedded documentation. The annotation ceiling is one "read when ..." line per pointer; annotating beyond that (multi-line summaries per pointer) re-embeds the documentation and trips this criterion.
+
 Severity: FAIL on embedded documentation > 30 lines that has no agent-error driver.
 
 ### H-10. No unpruned auto-generation

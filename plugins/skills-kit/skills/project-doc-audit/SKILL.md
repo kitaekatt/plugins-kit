@@ -178,7 +178,7 @@ audit_skill:
           tool: "Workflow | inline"
           input: "detect.js args.refs: criteria=${CLAUDE_PLUGIN_ROOT}/skills/project-doc-audit/references/audit-criteria.md; pluginRoot=${CLAUDE_PLUGIN_ROOT}. (cohesion-principles is intentionally NOT passed -- lanes load only the self-contained criteria doc for cache efficiency.)"
           expected: "Structured per-file findings (group, severity, criterion, message, line, taxonomy, bucket, remediation) + per-file verdict."
-          on_failure: "If a maturation/duplication judgment cannot be made cheaply (e.g. the candidate skill is ambiguous), mark it JUDGMENT/DISCUSS rather than FAIL."
+          on_failure: "If the Workflow tool is not available in this environment (subagent contexts do not expose it), fall back to the ONE-file inline detect procedure run sequentially per file -- detection and remediation stay separate passes. If a maturation/duplication judgment cannot be made cheaply (e.g. the candidate skill is ambiguous), mark it JUDGMENT/DISCUSS rather than FAIL."
         - n: 3
           action: "Render the per-file report (output_template): per-file verdict blocks followed by an overall summary with bucket counts. This is the before-Q&A surface the user reads."
           expected: "Markdown report with compliance verdicts and AUTO/DISCUSS/SPECIAL counts."
@@ -268,6 +268,7 @@ audit_skill:
   gotchas:
     - "The subject is a corpus of project documents, but the audit procedure visits one file at a time. discover.py is the corpus enumerator + mechanical-signal source."
     - "Idempotency: criteria, taxonomy, and bucket assignments are fixed. Same input produces the same verdict; do not re-rank session-to-session."
+    - "Known discover.py issues: the inbound-citation scan false-positives on dependency build trees (e.g. deps/ -- not in _SKIP_DIRS, so its files are read as citers/candidates) and counts stale working copies under .claude/worktrees/. Treat inbound counts sourced from those paths as suspect; the fix is extending _SKIP_DIRS in scripts/discover.py."
     - "Discoverability (orphan) detection scopes its citer scan to the whole project automatically -- discover.py decouples the inbound-citation root (--citer-root) from the candidate root (--root). Default citer-root = the candidates' project root by VCS marker (git/hg/svn/Perforce .p4config.txt), falling back to the launch cwd; so auditing a subdirectory like .claude/docs still sees citations from CLAUDE.md / skills elsewhere in the repo, even in a non-git (Perforce) project. Pass --citer-root explicitly for an unusual or multi-root layout."
 ```
 
@@ -295,7 +296,7 @@ resolve (main loop, via discover.py)
   -> final summary + "re-run to verify"
 ```
 
-**Multi-file threshold (the overhead equalizer).** The Workflow tool has real per-run overhead. For a single file that overhead is not worth it, so a 1-file audit runs inline in the main loop. At 2+ files the parallel fan-out pays for itself, so detection (and, separately, remediation) go through the workflow scripts. Detection and remediation are **always separate passes** even in workflow mode -- the interactive Q&A sits between them, and a background workflow cannot ask the user anything.
+**Multi-file threshold (the overhead equalizer).** The Workflow tool has real per-run overhead. For a single file that overhead is not worth it, so a 1-file audit runs inline in the main loop. At 2+ files the parallel fan-out pays for itself, so detection (and, separately, remediation) go through the workflow scripts. **Fallback when the Workflow tool is not exposed** (subagent environments do not have it): run the 1-file inline procedure sequentially per file -- detection for all files first, then remediation, keeping the two as separate passes with the Q&A gate between them. Detection and remediation are **always separate passes** even in workflow mode -- the interactive Q&A sits between them, and a background workflow cannot ask the user anything.
 
 **The two workflow scripts** (the detect script is hand-authored; the remediate script is generated from `scripts/gen_workflow_js.py` and drift-checked):
 

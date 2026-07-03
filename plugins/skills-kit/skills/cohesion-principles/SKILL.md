@@ -312,6 +312,13 @@ content_allocation:
           rule: no `see <subdir>/CLAUDE.md` citation that creates a load dependency.
           test: scan for child-CLAUDE.md references; for each, judge whether root content is incomplete without the child.
           severity: FAIL on incomplete-without-child references.
+      notes: |
+        Externally-expected root facts vs CRP: when a fact externally expected at the root
+        (a build command specific to one subsystem, a subsystem's directory detail) has a
+        CRP-correct home in a child scope, CRP wins -- push the detail down to the child
+        CLAUDE.md and keep a one-line pointer at the root. The pointer satisfies the
+        root-level expectation (essential_commands / directory_structure) without inflating
+        the root for readers who do not need the detail.
 
     - id: subsystem_claude_md
       ccp_role: changes when subsystem conventions / decisions change.
