@@ -18,6 +18,7 @@ reference_skill:
     covers:
       - SessionStart bootstrap message interpretation
       - bootstrap.json schema and merge semantics
+      - env.json personalization schema, machine registry, and the env gate
       - remediable condition categories
       - configuration-file layering
       - the auto-remediate / fix-all flow
@@ -167,6 +168,38 @@ reference_skill:
         - Never hand-edit the plugin cache, installed_plugins.json, or settings to force a version -- bootstrap/CC re-sync from the activated version and revert it (and "Never copy files directly into the plugin cache" per the repo CLAUDE.md). Set `autoUpdate` (or run `/plugin update`) and let the update path do it.
         - `pin` forces `autoUpdate: false` while set (see marketplace_pinning) -- a pinned marketplace will not auto-update its plugins by design.
         - A project settings.json `extraKnownMarketplaces` entry only fires in sessions for THAT project, but it seeds the GLOBAL known_marketplaces.json -- so once any such session runs, that machine auto-updates the marketplace everywhere.
+    - id: env_manifest
+      summary: env.json is bootstrap.json's identity-bearing sibling -- a separate manifest, same engine and pass, processed after bootstrap.json and before plugin manifests. It requires a `machines` registry (unknown machine = hard error), keys entries by os/hosts, and is GATED by an env_state.json stamp so it runs only when its merged content changed / last pass failed / engine bumped / reset. Carries the five declarative personalization features + the env_checks check/fix contract.
+      keywords: [env.json, env.local.json, personalization, machines registry, machine identity, unknown machine, os cross-check, hosts filter, env gate, env_state.json, env-reset-cooldown, symlinks, shell_rc, macos_defaults, macos_hotkeys, login_items, env_checks, contract script, out-of-band drift]
+      detail: |
+        Homes (4 layers, lowest first): ~/.claude/env.json (primary tracked home,
+        claude-settings repo), ~/.claude/env.local.json, <project>/.claude/env.json,
+        <project>/.claude/env.local.json. Same merge discipline as bootstrap.json;
+        identity keys differ (symlinks/shell_rc/login_items/env_checks by `name`,
+        macos_defaults by domain+key, macos_hotkeys by `id`). `machines` is a
+        hostname-keyed dict; the current host resolves exact-match-then-short-form,
+        `os` is cross-checked against detect_os(), and every `hosts` filter must name
+        a registered machine.
+
+        The gate (env_state.json = merged-manifest sha256 + engine version + last
+        result): the phase runs on first-run / hash-change / non-clean-last / engine-bump
+        / reset, else logs one "env: up to date" line. env-reset-cooldown.sh deletes the
+        stamp AND clears the project bootstrap cooldown (which gates the whole pass).
+        DRIFT TRADEOFF: the hostname is NOT in the stamp, so out-of-band drift (a
+        hand-edited rc line, a deleted symlink, a machine rename with unchanged manifest)
+        is not auto-healed until an edit / failure / engine upgrade / reset -- by design.
+
+        env.json has NO env_vars section and NO PATH edits (both are bootstrap.json's
+        alone). All env.json failures are manual-attention -- the engine already ran the
+        fix. Full schema: references/manifest-reference.md (the env.json section).
+      gotchas:
+        - Unknown machine, os mismatch, hosts-filter typo, and a missing `machines`
+          registry are all hard errors (one descriptive fix-all item each); bootstrap.json
+          provisioning is unaffected -- personalization refuses to guess.
+        - env_checks check/fix values are opaque shell strings resolved BY THE SHELL
+          (tilde-anchored), not plugin-rooted paths like the bootstrap.json `script` phase.
+          A check that cannot run (timeout/no shell) is a persistent failure and the fix is
+          never attempted; the re-check is authoritative with no trust exceptions.
     - id: merge_semantics
       summary: Layered configs merge by identity key for arrays, deep-merge for objects, override for scalars.
       keywords: [merge semantics, union, identity key, deep merge, path entries, scalar override]
@@ -181,8 +214,8 @@ reference_skill:
       keywords: [engine, session start, processing order, messages, remediation flow, update, harvest, restart, claude --resume]
       fact_ids: [message_outcomes, update_lifecycle, remediation_phases]
     - name: config_files
-      keywords: [bootstrap.json, manifest, layers, merge, override, pin, auto-update, autoUpdate, plugin not updating]
-      fact_ids: [config_layers, marketplace_pinning, plugin_autoupdate_propagation, merge_semantics]
+      keywords: [bootstrap.json, env.json, manifest, layers, merge, override, pin, auto-update, autoUpdate, plugin not updating, machines registry, env gate, personalization]
+      fact_ids: [config_layers, env_manifest, marketplace_pinning, plugin_autoupdate_propagation, merge_semantics]
     - name: catalogues
       keywords: [conditions, categories, remediation table]
       fact_ids: [condition_categories]
@@ -193,8 +226,8 @@ reference_skill:
       summary: Engine internals deep-dive.
     - id: manifest_reference
       path: references/manifest-reference.md
-      keywords: [bootstrap.json, manifest, schema, fields, variable expansion, layered config, merge semantics, identity keys, example, marketplace pin, pin field, unpin workflow]
-      summary: bootstrap.json manifest field reference (incl. the marketplace pin field and the unpin workflow).
+      keywords: [bootstrap.json, env.json, manifest, schema, fields, variable expansion, layered config, merge semantics, identity keys, example, marketplace pin, pin field, unpin workflow, machines registry, env gate, env_checks, symlinks, shell_rc, macos_defaults, macos_hotkeys, login_items, personalization]
+      summary: bootstrap.json manifest field reference (incl. the marketplace pin field and the unpin workflow) PLUS the sibling env.json personalization manifest (machines registry, env gate, the five declarative features, and the env_checks contract).
     - id: remediation_reference
       path: references/remediation-reference.md
       keywords: [condition, remediation, check method, tool missing, venv broken, marketplace, plugin scope, fix-all, blocking, manual operation, pinned wrong commit, pin removed, unresolvable pin]

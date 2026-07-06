@@ -301,6 +301,13 @@ install commands in any later phase (e.g. a tool `install` invoking
 `path_entries` and the tool→PATH linkage. Do not declare PATH (or PATH-like
 prepend/append edits) as an `env_vars` entry.
 
+**`env_vars` is bootstrap.json's alone.** Environment variables are a
+provisioning concern (software can require a variable to run correctly), so
+`env_vars` lives here and nowhere else — the sibling `env.json` personalization
+manifest (below) has **no** `env_vars` section, and no `env.json` section
+touches PATH. This keeps a variable present on every pass where `bootstrap.json`
+runs, including passes where the env gate skips `env.json` entirely.
+
 ## Variable Expansion
 
 Variable references are expanded by the engine from plugin context and config:
@@ -843,3 +850,431 @@ The engine merges these layers before processing plugin `bootstrap.json` files (
 ### Migration from user-bootstrap.json
 
 The legacy `user-bootstrap.json` in the data dir is still processed (lowest priority) but emits a deprecation notice. Move its contents to `~/.claude/bootstrap.json`.
+
+---
+
+# The `env.json` Personalization Manifest (sibling file)
+
+`env.json` is a **separate manifest file** processed by the same engine, in the
+same SessionStart pass, immediately **after** the layered `bootstrap.json`
+manifest (so `env_vars` → tools → fonts → path → project_venv have all run — every
+variable and binary a personalization references already exists) and **before**
+the per-plugin manifests. It is `bootstrap.json`'s *identity-bearing* sibling:
+where `bootstrap.json` stays deliberately identity-free (any unseen client can
+read it), `env.json` requires a `machines` registry and refuses to run on a
+machine it does not recognize. It is where a single user's personal machine
+configuration lives — symlinked dotfiles, shell-rc lines, macOS preferences,
+login items, and the bespoke check/fix scripts that finish a machine's setup.
+
+Three traits distinguish it from `bootstrap.json`:
+
+1. A **required `machines` registry** and per-entry `os`/`hosts` filters — entries
+   are keyed by machine identity, and an unknown machine is a hard error.
+2. It is **gated** by a dedicated `env_state.json` stamp: unlike `bootstrap.json`
+   (re-checked every session because upstream software drifts underneath it),
+   `env.json` runs only when its merged content changed, its last pass was not
+   clean, the engine was upgraded, or a reset was requested.
+3. **Backwards-readable from v1** (same discipline as `bootstrap.json`): unknown
+   top-level sections are ignored with a verbose log line, user files are never
+   rewritten on disk, and an engine too old to know `env.json` skips the file
+   entirely.
+
+All of `env.json`'s failure types are **manual-attention** items (never
+auto-fixable in the fix-all sense): the engine has *already* run each fix in the
+same pass. What surfaces is the residue that the fix could not resolve — a
+persistent failure that keeps the phase re-running (via the gate) every session
+until it converges. `env.json` failures never block `bootstrap.json` provisioning
+(tools, fonts, venvs); failure isolation is per-item, as everywhere in the engine.
+
+## File homes and 4-layer precedence
+
+`env.json` uses the same four-layer model as `bootstrap.json`, lowest priority
+first:
+
+| Priority | File | Checked in? |
+|----------|------|-------------|
+| 4 (highest) | `<project>/.claude/env.local.json` | No (gitignored) |
+| 3 | `<project>/.claude/env.json` | Yes |
+| 2 | `~/.claude/env.local.json` | No (per-machine) |
+| 1 (lowest) | `~/.claude/env.json` | Yes |
+
+The **primary tracked home is `~/.claude/env.json`** (the user layer). "It is my
+configuration" — a single user's machine setup, tracked in the claude-settings
+repo, applied on every session on every machine. The project layers are supported
+by the engine as a generic capability; a project may add its own `env.json`, but
+the personal fleet content rides in the user layer.
+
+The four layers are merged (via `merge_env_manifests`) before processing, exactly
+like `bootstrap.json`'s layers; the merged manifest is what the gate hashes and
+the phase processes.
+
+## Merge semantics and identity keys
+
+`env.json` follows the **same merge discipline** as `bootstrap.json` (see *Merge
+Semantics* above): identity-keyed array union, dict deep-merge, `path_entries`-style
+string-list union, scalar override, and **explicit `null` is treated as absent**
+(a higher layer can override a value but cannot null-out a lower layer's key). Only
+the identity keys differ — this is the exact set from
+`bootstrap_lib/manifest_merge.py::_ENV_IDENTITY_KEYS` (code is authoritative):
+
+| Section | Identity key |
+|---------|--------------|
+| `symlinks` | `name` |
+| `shell_rc` | `name` |
+| `macos_defaults` | `domain` + `key` (composite) |
+| `macos_hotkeys` | `id` |
+| `login_items` | `name` |
+| `env_checks` | `name` |
+
+`env.json` has **no** string-list sections. The `machines` registry is a plain
+dict keyed by hostname, so it deep-merges generically — a higher layer can add a
+machine or override one machine's fields without disturbing the rest.
+
+## The `machines` registry
+
+Any `env.json` that declares entries **must** carry a `machines` registry;
+entries are keyed by machine identity, so processing on an unrecognized machine
+is refused rather than guessed.
+
+```json
+{
+  "machines": {
+    "christina-mac.local": {"os": "macos"},
+    "5090RTX":  {"os": "ubuntu"},
+    "2060S":    {"os": "ubuntu"},
+    "RTX5090W": {"os": "windows",
+                 "skip_repos": ["llm-dev", "claude-settings"]},
+    "ricoprime": {"os": "ubuntu", "skip_repos": ["llm-dev"]}
+  }
+}
+```
+
+- **Keys are hostnames.** The current host (`socket.gethostname()`) resolves
+  **exact-match first, then the domain-stripped short form**
+  (`hostname.split(".", 1)[0]`) — one rule, mirroring terminalcolor-init's
+  precedent. The resolved *registry key* is what `hosts` filters name.
+- **`os` is required per machine** and cross-checked against the engine's
+  `detect_os()`. A declared-vs-detected mismatch is a hard error — it catches a
+  hostname collision across dual-boot installs (same hostname, different OS) or a
+  registry typo, before any personalization runs.
+- **Unknown machine = hard error, no fallback.** If the current hostname resolves
+  to no registry entry, the whole env phase fails with one descriptive item
+  (`Unknown machine '<h>'. Known machines: ... Add it to ~/.claude/env.json under
+  'machines'.`). `bootstrap.json` provisioning is unaffected — software still
+  installs; personalization refuses to guess.
+- **`hosts`-filter validation (typo protection).** Every hostname referenced by
+  *any* entry's `hosts` filter, in any section, must exist as a `machines` key.
+  This is validated section-agnostically at parse time — including filters in
+  sections this engine version does not yet handle (hostnames are registry facts,
+  not section semantics) — and runs *before* host resolution, so a filter typo
+  surfaces even on a machine that is itself unregistered.
+- **Per-host data fields ride along** for env-config's own consumers: `skip_repos`
+  (the repo-sync host axis), `kitty_shortcuts` (setup-ssh-keys display). These are
+  opaque to the engine — it reads only `os` — but travel with the registry so a
+  single source of truth serves both.
+
+Each of the four registry violations (missing registry, hosts-filter typo, unknown
+machine, os mismatch) is a single descriptive persistent failure with an agent-facing
+`fix-all` message; none is auto-fixable — the registry is the user's to correct.
+
+## Entry filters: `os` and `hosts`
+
+Every entry in every `env.json` array accepts two optional filters:
+
+- `os: ["macos", "ubuntu", ...]` — apply only on these OSes.
+- `hosts: ["5090RTX", ...]` — apply only on these machines (names are `machines`
+  registry keys, not raw hostnames — they are the resolved key).
+
+Omitted = applies everywhere `env.json` applies. Both present = **intersection**.
+An entry filtered out on this machine logs a verbose skip line (it is *not* a
+failure and does not affect the pass result). These are hostname lists, not tags
+(a five-machine fleet; tags would be YAGNI).
+
+## The env gate (`env_state.json`)
+
+`env.json` runs only when it needs to. The engine keeps a dedicated stamp,
+`env_state.json`, in bootstrap's data dir, recording exactly three fields:
+
+```json
+{"manifest_sha256": "<hash>", "engine_version": "<v>", "last_result": "clean|failed"}
+```
+
+- `manifest_sha256` — sha256 of the **canonical merged manifest** (sorted-key,
+  compact JSON over the *full* merged dict, unknown keys included). "Modified"
+  therefore means the merged content changed in any way — an edit, an addition, or
+  a removal in *any* of the four layers.
+- `engine_version` — the engine that last stamped.
+- `last_result` — `clean` (every applicable entry ended ok) or `failed` (any
+  failure at all, including a deferred `needs_elevation` or a check-only
+  manual-attention item).
+
+**The phase RUNS iff any of** (else it logs one verbose `env: up to date` line and
+is skipped entirely):
+
+1. **no stamp** — first run (an explicit reset recreates this state by deleting the
+   stamp);
+2. **the merged-manifest hash differs** from the stamp (any layer changed);
+3. **the last result was not `clean`** — any failure, including `needs_elevation`,
+   re-runs the phase every session until green, which is what makes the
+   elevation-queue convergence loop work ("run the script, next session's re-check
+   clears it");
+4. **the engine version changed** — a new engine may understand a section the old
+   one ignored, so re-interpret;
+5. **a reset was requested** (below).
+
+A **parse error** in any layer also forces the pass and stamps it `failed`, so a
+broken `env.json` re-runs every session until the JSON is fixed. A missing/corrupt
+stamp is treated as absent (reopen the gate and re-converge). When no `env.json`
+exists in any layer, there is nothing to gate or stamp — the phase is a no-op.
+
+### `env-reset-cooldown.sh` — the "re-converge my machine" lever
+
+`plugins/bootstrap/scripts/env-reset-cooldown.sh` deletes the env stamp so the next
+session runs the phase. Because the per-project **bootstrap cooldown** gates the
+*whole* SessionStart pass (env phase included), the reset script **also clears that
+cooldown** (by calling `bootstrap-reset-cooldown.sh`) — otherwise "next session runs
+the env phase" would not hold inside the cooldown window. `--status` prints the
+current stamp without writing. This is the explicit "check everything now" command;
+env-config's thin `update.sh` may wrap it.
+
+Note the env stamp is **independent** of the bootstrap cooldown and is the **only**
+gate for the env phase — editing `env.json` never needs `bootstrap-reset-cooldown.sh`
+(the merged-hash gate self-detects the edit).
+
+### The drift tradeoff, stated
+
+The stamp records the *manifest hash*, not the *machine's observed state*, and
+**the hostname is deliberately NOT part of the stamp**. Two consequences, both by
+design:
+
+- **Out-of-band drift is not auto-healed** until an `env.json` edit, a failure, an
+  engine upgrade, or a reset opens the gate. A hand-edited rc line, a deleted
+  symlink, or a changed macOS default sits un-reconverged until then. This is the
+  deliberate trade: personalization changes rarely, so it does not warrant
+  `bootstrap.json`'s every-session cadence; the reset script is the explicit lever
+  when you *do* want a full re-check.
+- **A machine rename with an unchanged manifest stays gated.** Because the hostname
+  is not in the stamp, renaming the host does not by itself reopen the phase — the
+  merged manifest is identical, so the gate still reads "up to date." That is
+  out-of-band drift like any other, healed by a manifest edit or an explicit reset.
+
+## The five declarative feature sections
+
+Five sections carry personal data as **pure configuration**; the engine implements
+each mechanism exactly once as a check → fix → **authoritative re-check** pair
+(env_var_check's shape). Common contract across all five:
+
+- **Checks are unprivileged and side-effect free.** The gate is an *optimization,
+  never a semantic guarantee* — checks still run repeatedly during failure
+  convergence, after every manifest edit, and on every reset, so a check that
+  mutates state or prompts is a defect regardless of how rarely the gate opens.
+- **Fixes are idempotent** — a second pass performs no writes.
+- **The re-check is authoritative**, with no trust exceptions (unlike
+  `bootstrap.json`'s brew-cask leniency). A fix's own success/failure is advisory;
+  the post-fix re-check decides.
+- **Per-entry filters** (`os`/`hosts`) and **per-item failure isolation** apply
+  throughout; every failure persists across sessions (keeping the gate open).
+- Each entry is validated: a malformed entry is a descriptive persistent failure,
+  not a crash and not a guess.
+
+### `symlinks`
+
+Ensure `target` is a symlink resolving to `source` (env-config's
+ConfigLinkManager semantics).
+
+```json
+{"name": "starship-config",
+ "source": "~/.claude/dotfiles/starship.toml",
+ "target": "~/.config/starship.toml", "backup": true}
+```
+
+| Field | Required? | Meaning |
+|-------|-----------|---------|
+| `name` | Yes | Identity key |
+| `source` | Yes | The tracked file the link points at. Must exist — a link "pointing at" a missing source **fails** (a dangling link means the manifest references a file not on disk, a content error to surface) |
+| `target` | Yes | Where the link is created |
+| `backup` | No (default false) | When a **real file** already sits at `target`, preserve it as a timestamped `.backup_<ts>` sibling before linking; else it is removed |
+
+Paths expand `~` and `$VARS` (an unresolved `$VAR` is an error — declare it via
+`bootstrap.json` `env_vars`). A **directory** at `target` is never replaced (a
+descriptive failure). An existing symlink (wrong or dangling) is replaced without
+backup — a link carries no content worth keeping. A `source == target` entry is
+refused (it would self-reference).
+
+### `shell_rc` — two modes: `ensure` and `forbid`
+
+Assert things about `~/.bashrc` and `~/.zshrc`. Exactly one mode per entry
+(`content` XOR `forbid`); declaring both, or neither, is a descriptive failure.
+
+**ensure (`content`)** — the block must be present in **every existing** rc file
+(the fix appends to every one, so this is the honest postcondition; env-config's
+weaker grep-any-file check is deliberately tightened here). The literal
+`SHELL_NAME` is substituted per file (`bash` in `.bashrc`, `zsh` in `.zshrc`), so
+`starship init SHELL_NAME` renders correctly in each. On a **fresh machine** (no rc
+file at all), the fix creates the platform default first — `~/.zshrc` on macOS,
+`~/.bashrc` elsewhere — then appends. A block is only ever appended when absent, so
+it never doubles.
+
+```json
+{"name": "starship-init", "content": "eval \"$(starship init SHELL_NAME)\""}
+```
+
+**forbid (`forbid`)** — a regex that must **not** match any line of any existing rc
+file; the fix comments matching lines out (`# ` prefix), never deleting them. No rc
+file = trivially clean.
+
+```json
+{"name": "no-term-override", "forbid": "^\\s*(export\\s+)?TERM=",
+ "os": ["macos", "ubuntu"]}
+```
+
+> **The `forbid` pattern owns comment-exclusion.** The fix comments out a matching
+> line by prefixing `# `. If the *pattern itself* also matches an already-commented
+> line, the next pass would re-mutate it (prepending another `# `). The engine does
+> **not** special-case comments — the pattern must. Anchor it so a commented line
+> cannot match, exactly as the canonical `TERM` example does:
+> `^\s*(export\s+)?TERM=` cannot match a `#`-prefixed line because `^\s*` is
+> followed by an optional `export` and then `TERM=`, none of which admit a leading
+> `#`. Write every `forbid` pattern to exclude comments this way.
+
+**Authoring rule (spec directive 3): `shell_rc` never carries PATH lines** — PATH
+belongs exclusively to `bootstrap.json` (`path_entries` + tool→PATH linkage).
+
+### `macos_defaults` — macOS only
+
+`defaults read`/`write` assertions. On any non-macOS host the entire section
+no-ops with a verbose skip line (entries may also carry `os` filters, but the
+mechanism itself only exists on macOS).
+
+```json
+{"domain": "NSGlobalDomain", "key": "InitialKeyRepeat", "value": 25}
+```
+
+| Field | Required? | Meaning |
+|-------|-----------|---------|
+| `domain` | Yes | `defaults` domain |
+| `key` | Yes | Preference key |
+| `value` | Yes | `bool` (written `-bool`, read as `0`/`1`), `int` (`-int`), or `string` (`-string`). Any other type is an invalid entry |
+
+`domain` + `key` is the composite identity key. After **any** successful write in
+the section, the standard preference-cache flush (`killall cfprefsd SystemUIServer`)
+runs once for the pass — best-effort (the writes are already committed and
+re-checked; the flush only nudges running apps).
+
+### `macos_hotkeys` — macOS only
+
+Remap symbolic hotkeys (the `com.apple.symbolichotkeys` domain).
+
+```json
+{"id": 28, "parameters": [48, 29, 1179648], "enabled": true,
+ "description": "Screenshot: save screen to file (cmd+shift+0)"}
+```
+
+| Field | Required? | Meaning |
+|-------|-----------|---------|
+| `id` | Yes | Integer hotkey id; the identity key |
+| `parameters` | Yes | Non-empty list of ints (key code, modifiers) |
+| `enabled` | No (default true) | Whether the hotkey is active |
+| `description` | No | Used as the log label |
+
+Check is one side-effect-free plist export compare. Fix is **one**
+export → mutate → import round-trip for the whole failing batch, then the cache
+flush / process restarts, then a fresh export re-checks each fixed entry (the
+re-check is authoritative). An `id` **absent** from the plist is a descriptive
+failure — the fix only mutates *existing* hotkey slots; it never fabricates one.
+
+### `login_items` — macOS only
+
+Register an app to launch at login (via System Events).
+
+```json
+{"name": "Tailscale", "path": "/Applications/Tailscale.app",
+ "hidden": false, "os": ["macos"]}
+```
+
+| Field | Required? | Meaning |
+|-------|-----------|---------|
+| `name` | Yes | Login-item name (identity key) and the name checked against the current login-item list |
+| `path` | Yes | App bundle path (expands `~`/`$VARS`) |
+| `hidden` | No (default false) | Start hidden |
+
+> **Deviation from env-config:** a **missing app** (path not on disk) is a
+> **persistent failure**, not env-config's warning-skip. Under the gate a silent
+> skip would stamp the pass `clean` and never converge once the app is later
+> installed; a failure keeps the phase re-running until the app appears (bootstrap
+> tools run earlier in the same pass) — the gate's convergence loop working as
+> designed.
+
+## `env_checks` — the generic check/fix contract
+
+One mechanism covers every non-declarative item — the escape hatch for anything the
+five declarative features do not model (gpu-stack, ssh-server, sudoers, plank,
+repo-sync, a perforce rider, check-only reminders). An entry is a named `check`
+command with an optional `fix` command.
+
+```json
+{"name": "ssh-key",
+ "check": "test -f ~/.ssh/id_ed25519 -o -f ~/.ssh/id_rsa",
+ "fix":   "ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N '' -C \"$USER@$(hostname)\""}
+```
+
+| Field | Required? | Meaning |
+|-------|-----------|---------|
+| `name` | Yes | Identity key |
+| `check` | Yes | Command; **exit 0 = configured**, non-zero = not configured. Must be unprivileged and side-effect free |
+| `fix` | No | Command run when the check fails. Omitted = a **check-only** entry (manual-attention only) |
+| `os` / `hosts` | No | The standard entry filters |
+| `elevated` | No (default false) | The fix needs privileges — routed through the elevation queue, never attempted in-pass without privileges |
+| `timeout` | No (default 600s) | Per-**command** timeout in seconds (positive int). Contract scripts may drive real installs (gpu-stack), so the bound is generous but never absent |
+| `description` | No | The user-facing instruction for a check-only entry's manual-attention item |
+
+**Dispatch per applicable entry:**
+
+1. Run `check`. **Exit 0** → configured (verbose ok, done).
+2. **The check could not run at all** — timeout, missing shell, OS error (returncode
+   is `None`, not a non-zero exit): a **persistent failure**, and the **fix is NEVER
+   attempted**. State is unknown; a check that hangs or cannot run is a
+   contract-script defect to surface, not a "not configured" to converge on. (This
+   is the third check outcome, distinct from the exit-0 / exit-nonzero grammar.)
+3. **Failing and no `fix`** — a **check-only** manual-attention item (`name` +
+   `description` + the check's last output line). It keeps the pass `failed`, so the
+   phase re-runs until resolved. (Consumers: cuda-toolkit on RTX5090W, reboot-flag.)
+4. **`elevated: true` and privileges are missing** — the fix is **never attempted**.
+   It is deferred into the elevation queue with the standard
+   `{method: "command", command: "<fix>"}` descriptor, so it lands in the same per-OS
+   remediation script `bootstrap.json` already writes (bash / self-elevating `.bat`).
+   Because a failed pass reopens the gate, the next session's re-check picks up
+   out-of-band completion — no new surfacing channel. **Elevated fixes go through the
+   queue, never self-elevate in-pass.**
+5. **Otherwise run `fix`** (its exit code is **advisory**), then **RE-RUN `check`**.
+   The re-check is authoritative, with **no trust exceptions**. Passing → fixed;
+   still failing → a persistent failure whose message is the fix's last non-empty
+   stdout/stderr line (descriptive errors are the script's job).
+
+> **Odd-reading message, by design:** because the re-check is the sole authority, a
+> `fix` that *times out* (returncode `None`, detail `timed out after 600s`) but whose
+> **re-check nonetheless passes** counts as **fixed** — and the success line echoes
+> the fix's last detail, so it can read `env_check <name>: fixed - timed out after
+> 600s`. That is correct: the fix's own outcome is advisory; the passing re-check is
+> what "fixed" means.
+
+**A "contract script" is the recommended packaging** for a multi-step item — one file
+implementing `check` and `fix` verbs — not a separate engine feature. It lives in
+claude-settings under `scripts/env/` and is invoked via a `~`-anchored command.
+Conventions (enforced by review, not the engine): idempotent under repeated fix;
+`check` exits 0-or-nonzero only (no inverted or tri-state grammar — the old
+`checks.yaml` `exit_0_means` machinery does not carry over); multi-step fixes stop at
+natural barriers (a reboot) with a clear message and rely on the reopened gate +
+re-check to continue next session; print what you did.
+
+### Script resolution: opaque shell strings, not plugin-rooted paths
+
+This is the deliberate contrast with `bootstrap.json`'s `script` phase (whose
+`script.path` is joined onto bootstrap's plugin root). `env_checks` `check`/`fix`
+values are **opaque shell strings run verbatim through the engine's bash shim** —
+there is **no engine-side path joining at all**. A command like
+`bash ~/.claude/scripts/env/sudoers.sh check` is resolved **by the shell**
+(tilde-anchored to the user's home), not by the engine. On Windows/MSYS the command
+runs via Git Bash when available, so Unix syntax works everywhere. This sidesteps the
+layered-`script` plugin-root caveat by construction: an `env_checks` command can
+reference any file the shell can find, because the engine never tries to locate it.
