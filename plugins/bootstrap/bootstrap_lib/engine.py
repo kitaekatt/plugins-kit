@@ -288,6 +288,26 @@ def _main():
         bootstrap_ok_entries.extend(f"config: {e}" for e in pv_ok)
         all_failures.extend(pv_failures)
 
+    # Step 3e: Process the layered env.json manifest (identity-bearing
+    # personalization; bootstrap-env-refactor spec 4.4). Placement is
+    # load-bearing: immediately AFTER the layered bootstrap.json manifest
+    # (env_vars -> tools -> fonts -> path -> project_venv have all run, so
+    # every variable and binary a personalization entry references already
+    # exists) and BEFORE plugin manifests (Step 4). Gated by the
+    # env_state.json stamp -- see _process_env_pass. env.json failures never
+    # affect the bootstrap.json phases above: software still provisions;
+    # personalization refuses to guess.
+    env_action_entries = []
+    env_ok_entries = []
+    env_failures = _process_env_pass(
+        args.project_dir, current_os, data_dir, plugin_root,
+        env_action_entries, env_ok_entries, engine_version=version,
+    )
+    bootstrap_action_entries.extend(f"env: {e}" for e in env_action_entries)
+    bootstrap_ok_entries.extend(f"env: {e}" for e in env_ok_entries)
+    if env_failures:
+        all_failures.extend(env_failures)
+
     # Add bootstrap's own section to display
     display_sections.append((bootstrap_label, list(bootstrap_action_entries), list(bootstrap_ok_entries)))
 
@@ -2332,6 +2352,88 @@ class _ManifestContext:
         self.failures.append(failure)
 
 
+def _entry_label(name):
+    """Failure-dict label for a possibly-missing entry name.
+
+    Invalid manifest entries may lack a usable name; a stable "(unnamed)"
+    placeholder beats str(None)'s misleading "None".
+    """
+    if name is None or (isinstance(name, str) and not name):
+        return "(unnamed)"
+    return str(name)
+
+
+def _phase_env_vars(ctx):
+    """env_vars: persist + live-export environment variables.
+
+    Runs FIRST in the phase table (order is load-bearing): install commands
+    in any later phase of the same pass may reference these variables (e.g.
+    an install command invoking ``$DEVROOT/...``). Each entry is
+    ``{"name", "value"}``; ``~`` in the value expands to the user's home at
+    apply time so committed manifests stay identity-free. The variable is
+    exported into the live process + $CLAUDE_ENV_FILE every pass, and
+    persisted (shell rc in-place update on Unix, User registry on Windows)
+    when not already in the wanted state. The post-set re-check is
+    authoritative.
+
+    PATH is never an env_vars concern (spec directive 3): a PATH entry (any
+    case) is rejected as a hard failure before any export or write -- PATH
+    edits belong exclusively to ``path_entries`` + tool->PATH linkage, and
+    an env_vars PATH entry would clobber the composed value they manage.
+    """
+    from .env_var_check import check_env_var, export_env_var, set_env_var
+
+    vars_set = []
+    for var_def in ctx.manifest.get("env_vars", []):
+        name = var_def.get("name")
+        value = var_def.get("value")
+        if not isinstance(name, str) or not name or not isinstance(value, str):
+            ctx.fail(
+                f"env_var: INVALID entry {var_def!r} - needs string 'name' and 'value'",
+                type="env_var",
+                name=_entry_label(name),
+                message=f"invalid env_vars entry {var_def!r}: needs string 'name' and 'value'",
+            )
+            continue
+        if name.upper() == "PATH":
+            ctx.fail(
+                f"env_var {name}: REFUSED - PATH is managed by bootstrap path_entries, never env_vars",
+                type="env_var",
+                name=name,
+                message=(
+                    f"{name}: PATH is never an env_vars concern. PATH edits "
+                    f"belong exclusively to bootstrap 'path_entries' (and "
+                    f"the automatic tool->PATH linkage); remove this "
+                    f"env_vars entry."
+                ),
+            )
+            continue
+        expanded = os.path.expanduser(value)
+        exported = export_env_var(name, expanded)
+        if exported:
+            ctx.ok(f"env_var {name}: exported to CLAUDE_ENV_FILE")
+
+        result = check_env_var(name, expanded, ctx.current_os)
+        if result.passed:
+            ctx.ok(f"env_var {name}: ok - {result.message}")
+            continue
+        set_ok, msg = set_env_var(name, expanded, ctx.current_os)
+        recheck = check_env_var(name, expanded, ctx.current_os)
+        if set_ok and recheck.passed:
+            vars_set.append((name, msg))
+        else:
+            detail = msg if not set_ok else f"set reported '{msg}' but re-check failed: {recheck.message}"
+            ctx.fail(
+                f"env_var {name}: FAILED - {detail}",
+                type="env_var",
+                name=name,
+                message=f"{name}: {detail}",
+            )
+
+    if vars_set:
+        ctx.action(f"env vars set: {_join_items(vars_set)}")
+
+
 def _phase_tools(ctx):
     """tools: resolve -> link-to-PATH -> download -> install.
 
@@ -3049,6 +3151,9 @@ def _phase_script(ctx):
 
 # The manifest phase table (B12): each phase runs when any of its manifest
 # keys is present (truthy). ORDER IS LOAD-BEARING:
+#   - env_vars first: the variables are live-exported into the engine
+#     process, so install commands in every later phase of the same pass
+#     can reference them (e.g. $DEVROOT/...).
 #   - tools before venv: uv may be installed by the tools phase.
 #   - venv before shared_libs: a consumer link targets this plugin's .venv.
 #   - marketplaces before json_entries: the marketplace must be cloned before
@@ -3056,6 +3161,7 @@ def _phase_script(ctx):
 #   - plugins before ini/json: installs rewrite the plugin registry first.
 #   - script last: it may build on everything the manifest set up.
 _MANIFEST_PHASES = (
+    (("env_vars",), _phase_env_vars),
     (("tools",), _phase_tools),
     (("fonts",), _phase_fonts),
     (("path_entries",), _phase_path_entries),
@@ -3089,6 +3195,777 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
     for keys, handler in _MANIFEST_PHASES:
         if any(manifest.get(k) for k in keys):
             handler(ctx)
+    return ctx.failures
+
+
+class _EnvManifestContext(_ManifestContext):
+    """_ManifestContext plus machine identity, for the env.json phase.
+
+    env.json entries may be keyed by hostname as well as OS (spec 4.2):
+    ``machine_key`` is the machines-registry key the current hostname
+    resolved to (exact match, else the domain-stripped short form),
+    ``machine`` that key's registry entry, ``machines`` the whole registry.
+    ``machine_key``/``machine`` are set by _validate_env_machines once the
+    registry validates; feature handlers (the _ENV_PHASES table) only run
+    after that. ``entry_applies`` applies the generic per-entry
+    ``os``/``hosts`` filters (intersection semantics).
+    """
+
+    def __init__(self, manifest, current_os, data_dir, plugin_root,
+                 action_entries, ok_entries, project_dir,
+                 hostname, machines):
+        super().__init__(
+            manifest, current_os, data_dir, plugin_root,
+            action_entries, ok_entries, "env", project_dir, True,
+        )
+        self.hostname = hostname
+        self.machines = machines
+        self.machine_key = None
+        self.machine = None
+
+    def entry_applies(self, entry):
+        from .env_manifest import entry_applies
+        return entry_applies(entry, self.current_os, self.machine_key)
+
+
+def _env_section_entries(ctx, section, failure_type):
+    """The section's entry list, or None after one descriptive failure.
+
+    Every env.json feature section is an array of entry objects; anything
+    else is a manifest error surfaced per-section (not a crash, not a
+    guess). ``failure_type`` is the section's per-entry failure type
+    (``env_symlink``, ``env_check``, ...) -- section-shape errors carry the
+    same type as the entries they gate, one name per section.
+    """
+    value = ctx.manifest.get(section)
+    if isinstance(value, list):
+        return value
+    ctx.fail(
+        f"{section}: INVALID section - expected an array of entries, got {type(value).__name__}",
+        type=failure_type,
+        name=section,
+        message=f"env.json '{section}' must be an array of entries, got {type(value).__name__}",
+        persist_across_sessions=True,
+    )
+    return None
+
+
+def _env_phase_symlinks(ctx):
+    """symlinks: ensure target is a symlink pointing at source (spec 4.3).
+
+    env-config ConfigLinkManager semantics translated to the engine's
+    check -> fix -> authoritative re-check idiom: a real file at target is
+    preserved as a timestamped backup when the entry sets backup: true; a
+    directory at target is never replaced; a missing source is a
+    descriptive failure (personalization refuses to guess).
+    """
+    from .env_features import check_symlink, expand_env_path, fix_symlink
+
+    entries = _env_section_entries(ctx, "symlinks", "env_symlink")
+    if entries is None:
+        return
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        source = entry.get("source") if isinstance(entry, dict) else None
+        target = entry.get("target") if isinstance(entry, dict) else None
+        if not (isinstance(name, str) and name and isinstance(source, str)
+                and source and isinstance(target, str) and target):
+            ctx.fail(
+                f"symlink: INVALID entry {entry!r} - needs string 'name', 'source' and 'target'",
+                type="env_symlink",
+                name=_entry_label(name),
+                message=f"invalid symlinks entry {entry!r}: needs string 'name', 'source' and 'target'",
+                persist_across_sessions=True,
+            )
+            continue
+        if not ctx.entry_applies(entry):
+            ctx.ok(f"symlink {name}: skipped (os/hosts filter)")
+            continue
+        try:
+            src = expand_env_path(source)
+            tgt = expand_env_path(target)
+        except ValueError as e:
+            ctx.fail(
+                f"symlink {name}: FAILED - {e}",
+                type="env_symlink", name=name, message=f"{name}: {e}",
+                persist_across_sessions=True,
+            )
+            continue
+
+        result = check_symlink(src, tgt)
+        if result.passed:
+            ctx.ok(f"symlink {name}: ok - {result.message}")
+            continue
+        fix_ok, msg = fix_symlink(src, tgt, backup=bool(entry.get("backup", False)))
+        recheck = check_symlink(src, tgt)
+        if fix_ok and recheck.passed:
+            ctx.action(f"symlink {name}: {msg}")
+        else:
+            detail = msg if not fix_ok else (
+                f"fix reported '{msg}' but re-check failed: {recheck.message}"
+            )
+            ctx.fail(
+                f"symlink {name}: FAILED - {detail}",
+                type="env_symlink", name=name, message=f"{name}: {detail}",
+                persist_across_sessions=True,
+            )
+
+
+def _env_phase_shell_rc(ctx):
+    """shell_rc: rc-file assertions, two modes (spec 3.1 feature 2).
+
+    ensure (`content`): the SHELL_NAME-rendered block is present in every
+    existing rc file among ~/.bashrc and ~/.zshrc; a fresh machine gets the
+    platform-default rc created. forbid (`forbid`): the regex must not
+    match any rc line; the fix comments matching lines out. Exactly one
+    mode per entry. Authoring rule (spec directive 3): shell_rc never
+    carries PATH lines -- PATH belongs exclusively to bootstrap.
+    """
+    import re as _re
+    from .env_features import (
+        check_shell_ensure, check_shell_forbid,
+        fix_shell_ensure, fix_shell_forbid,
+    )
+
+    entries = _env_section_entries(ctx, "shell_rc", "env_shell_rc")
+    if entries is None:
+        return
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        content = entry.get("content") if isinstance(entry, dict) else None
+        forbid = entry.get("forbid") if isinstance(entry, dict) else None
+        has_content = isinstance(content, str) and bool(content.strip())
+        has_forbid = isinstance(forbid, str) and bool(forbid)
+        if not (isinstance(name, str) and name) or has_content == has_forbid:
+            ctx.fail(
+                f"shell_rc: INVALID entry {entry!r} - needs string 'name' and exactly one of 'content'/'forbid'",
+                type="env_shell_rc",
+                name=_entry_label(name),
+                message=f"invalid shell_rc entry {entry!r}: needs string 'name' and exactly one of 'content' (ensure) or 'forbid' (pattern)",
+                persist_across_sessions=True,
+            )
+            continue
+        if not ctx.entry_applies(entry):
+            ctx.ok(f"shell_rc {name}: skipped (os/hosts filter)")
+            continue
+
+        if has_forbid:
+            try:
+                _re.compile(forbid)
+            except _re.error as e:
+                ctx.fail(
+                    f"shell_rc {name}: INVALID forbid pattern - {e}",
+                    type="env_shell_rc", name=name,
+                    message=f"{name}: invalid forbid regex {forbid!r}: {e}",
+                    persist_across_sessions=True,
+                )
+                continue
+            result = check_shell_forbid(name, forbid)
+            if result.passed:
+                ctx.ok(f"shell_rc {name}: ok - {result.message}")
+                continue
+            fix_ok, msg = fix_shell_forbid(forbid)
+            recheck = check_shell_forbid(name, forbid)
+        else:
+            result = check_shell_ensure(name, content)
+            if result.passed:
+                ctx.ok(f"shell_rc {name}: ok - {result.message}")
+                continue
+            fix_ok, msg = fix_shell_ensure(content, ctx.current_os)
+            recheck = check_shell_ensure(name, content)
+
+        if fix_ok and recheck.passed:
+            ctx.action(f"shell_rc {name}: {msg}")
+        else:
+            detail = msg if not fix_ok else (
+                f"fix reported '{msg}' but re-check failed: {recheck.message}"
+            )
+            ctx.fail(
+                f"shell_rc {name}: FAILED - {detail}",
+                type="env_shell_rc", name=name, message=f"{name}: {detail}",
+                persist_across_sessions=True,
+            )
+
+
+def _env_phase_macos_defaults(ctx):
+    """macos_defaults: `defaults read`/`write` assertions (spec 3.1 feature 3).
+
+    macOS-only: on any other OS the whole section no-ops with a verbose
+    skip line (entries may also carry os filters, but the mechanism itself
+    only exists on macOS). After any successful fix the standard
+    preference-cache flush runs once for the pass.
+    """
+    if ctx.current_os != "macos":
+        ctx.ok("macos_defaults: skipped (not macOS)")
+        return
+    from .env_features import (
+        check_macos_default, defaults_expected_string,
+        fix_macos_default, flush_macos_defaults_cache,
+    )
+
+    entries = _env_section_entries(ctx, "macos_defaults", "env_macos_default")
+    if entries is None:
+        return
+    fixed_any = False
+    for entry in entries:
+        domain = entry.get("domain") if isinstance(entry, dict) else None
+        key = entry.get("key") if isinstance(entry, dict) else None
+        value = entry.get("value") if isinstance(entry, dict) else None
+        label = (f"{domain}.{key}"
+                 if isinstance(domain, str) and isinstance(key, str)
+                 else "(unnamed)")
+        if not (isinstance(domain, str) and domain and isinstance(key, str)
+                and key) or defaults_expected_string(value) is None:
+            ctx.fail(
+                f"macos_default: INVALID entry {entry!r} - needs string 'domain'/'key' and bool/int/string 'value'",
+                type="env_macos_default",
+                name=label,
+                message=f"invalid macos_defaults entry {entry!r}: needs string 'domain'/'key' and bool/int/string 'value'",
+                persist_across_sessions=True,
+            )
+            continue
+        if not ctx.entry_applies(entry):
+            ctx.ok(f"macos_default {label}: skipped (os/hosts filter)")
+            continue
+
+        result = check_macos_default(domain, key, value)
+        if result.passed:
+            ctx.ok(f"macos_default {label}: ok - {result.message}")
+            continue
+        fix_ok, msg = fix_macos_default(domain, key, value)
+        recheck = check_macos_default(domain, key, value)
+        if fix_ok and recheck.passed:
+            fixed_any = True
+            ctx.action(f"macos_default {label}: {msg}")
+        else:
+            detail = msg if not fix_ok else (
+                f"fix reported '{msg}' but re-check failed: {recheck.message}"
+            )
+            ctx.fail(
+                f"macos_default {label}: FAILED - {detail}",
+                type="env_macos_default", name=label,
+                message=f"{label}: {detail}",
+                persist_across_sessions=True,
+            )
+    if fixed_any:
+        flush_macos_defaults_cache()
+        ctx.ok("macos_defaults: preference cache flushed")
+
+
+def _env_phase_macos_hotkeys(ctx):
+    """macos_hotkeys: symbolic-hotkey remaps (spec 3.1 feature 4). macOS-only.
+
+    Check via one side-effect-free plist export compare; fix via ONE
+    export -> mutate -> import round-trip for the whole failing batch plus
+    the cache flush / process restarts (env-config
+    apply_macos_keyboard_shortcuts), then a fresh export re-checks each
+    fixed entry (the re-check is authoritative). An id absent from the
+    plist is a descriptive failure -- the fix only mutates existing hotkey
+    slots, it never fabricates one.
+    """
+    if ctx.current_os != "macos":
+        ctx.ok("macos_hotkeys: skipped (not macOS)")
+        return
+    from .env_features import (
+        apply_symbolic_hotkeys, hotkey_state, read_symbolic_hotkeys,
+    )
+
+    entries = _env_section_entries(ctx, "macos_hotkeys", "env_macos_hotkey")
+    if entries is None:
+        return
+    applicable = []
+    for entry in entries:
+        hid = entry.get("id") if isinstance(entry, dict) else None
+        params = entry.get("parameters") if isinstance(entry, dict) else None
+        valid = (
+            isinstance(hid, int) and not isinstance(hid, bool)
+            and isinstance(params, list) and params
+            and all(isinstance(p, int) and not isinstance(p, bool) for p in params)
+        )
+        if not valid:
+            ctx.fail(
+                f"macos_hotkey: INVALID entry {entry!r} - needs int 'id' and int-list 'parameters'",
+                type="env_macos_hotkey",
+                name=_entry_label(hid),
+                message=f"invalid macos_hotkeys entry {entry!r}: needs int 'id' and a non-empty int list 'parameters'",
+                persist_across_sessions=True,
+            )
+            continue
+        if not ctx.entry_applies(entry):
+            ctx.ok(f"macos_hotkey {hid}: skipped (os/hosts filter)")
+            continue
+        applicable.append(entry)
+    if not applicable:
+        return
+
+    data, err = read_symbolic_hotkeys()
+    if data is None:
+        ctx.fail(
+            f"macos_hotkeys: FAILED - {err}",
+            type="env_macos_hotkey", name="macos_hotkeys", message=err,
+            persist_across_sessions=True,
+        )
+        return
+
+    def _label(entry):
+        return entry.get("description") or f"id {entry['id']}"
+
+    failing = []
+    for entry in applicable:
+        status, detail = hotkey_state(
+            data, entry["id"], entry["parameters"], entry.get("enabled", True))
+        if status == "ok":
+            ctx.ok(f"macos_hotkey {entry['id']}: ok - {_label(entry)}")
+        elif status == "missing":
+            ctx.fail(
+                f"macos_hotkey {entry['id']}: FAILED - {detail}",
+                type="env_macos_hotkey", name=str(entry["id"]),
+                message=f"{_label(entry)}: {detail} (the fix only remaps existing hotkeys)",
+                persist_across_sessions=True,
+            )
+        else:
+            failing.append(entry)
+    if not failing:
+        return
+
+    fix_ok, msg = apply_symbolic_hotkeys(data, failing)
+    redata, rerr = read_symbolic_hotkeys()
+    for entry in failing:
+        if redata is None:
+            re_ok, detail = False, rerr
+        else:
+            status, detail = hotkey_state(
+                redata, entry["id"], entry["parameters"],
+                entry.get("enabled", True))
+            re_ok = status == "ok"
+        if fix_ok and re_ok:
+            ctx.action(f"macos_hotkey {entry['id']}: applied - {_label(entry)}")
+        else:
+            detail2 = msg if not fix_ok else (
+                f"fix reported '{msg}' but re-check failed: {detail}"
+            )
+            ctx.fail(
+                f"macos_hotkey {entry['id']}: FAILED - {detail2}",
+                type="env_macos_hotkey", name=str(entry["id"]),
+                message=f"{_label(entry)}: {detail2}",
+                persist_across_sessions=True,
+            )
+
+
+def _env_phase_login_items(ctx):
+    """login_items: macOS login-item autostart via System Events (spec 3.1).
+
+    macOS-only. The declared app must exist on disk: a missing app is a
+    persistent failure (NOT env-config's warning-skip -- under the env
+    gate a silent skip would stamp the pass clean and never converge once
+    the app appears; a failure keeps the phase re-running until green,
+    which is the gate's convergence loop working as designed).
+    """
+    if ctx.current_os != "macos":
+        ctx.ok("login_items: skipped (not macOS)")
+        return
+    from .env_features import (
+        add_login_item, check_login_item, expand_env_path,
+    )
+
+    entries = _env_section_entries(ctx, "login_items", "env_login_item")
+    if entries is None:
+        return
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        path = entry.get("path") if isinstance(entry, dict) else None
+        if not (isinstance(name, str) and name and isinstance(path, str) and path):
+            ctx.fail(
+                f"login_item: INVALID entry {entry!r} - needs string 'name' and 'path'",
+                type="env_login_item",
+                name=_entry_label(name),
+                message=f"invalid login_items entry {entry!r}: needs string 'name' and 'path'",
+                persist_across_sessions=True,
+            )
+            continue
+        if not ctx.entry_applies(entry):
+            ctx.ok(f"login_item {name}: skipped (os/hosts filter)")
+            continue
+        try:
+            app_path = expand_env_path(path)
+        except ValueError as e:
+            ctx.fail(
+                f"login_item {name}: FAILED - {e}",
+                type="env_login_item", name=name, message=f"{name}: {e}",
+                persist_across_sessions=True,
+            )
+            continue
+        if not os.path.exists(app_path):
+            ctx.fail(
+                f"login_item {name}: FAILED - app not found at {app_path}",
+                type="env_login_item", name=name,
+                message=(
+                    f"{name}: app not found at {app_path}. Install the app "
+                    f"(bootstrap tools run earlier in the same pass); the "
+                    f"env phase re-runs until this converges."
+                ),
+                persist_across_sessions=True,
+            )
+            continue
+
+        result = check_login_item(name)
+        if result.passed:
+            ctx.ok(f"login_item {name}: ok - {result.message}")
+            continue
+        fix_ok, msg = add_login_item(app_path, bool(entry.get("hidden", False)))
+        recheck = check_login_item(name)
+        if fix_ok and recheck.passed:
+            ctx.action(f"login_item {name}: {msg}")
+        else:
+            detail = msg if not fix_ok else (
+                f"fix reported '{msg}' but re-check failed: {recheck.message}"
+            )
+            ctx.fail(
+                f"login_item {name}: FAILED - {detail}",
+                type="env_login_item", name=name, message=f"{name}: {detail}",
+                persist_across_sessions=True,
+            )
+
+
+def _env_phase_env_checks(ctx):
+    """env_checks: the generic check/fix contract (spec section 5).
+
+    One mechanism covers every non-declarative item: each entry names a
+    `check` command (unprivileged, side-effect free -- the gate is an
+    optimization, never a semantic guarantee) and an optional `fix`, both
+    opaque shell strings run through the engine's bash shim with a
+    per-entry `timeout` (default 600s per command). No engine-side path
+    joining -- the deliberate resolution contrast with the plugin-rooted
+    `script` phase; contract scripts are invoked via ~-anchored commands.
+
+    Dispatch per applicable entry:
+
+    1. check: exit 0 = configured (verbose ok line, done).
+    2. failing + no fix = a persistent manual-attention item (name +
+       description + last output line).
+    3. `elevated: true` without privileges: NEVER attempted -- deferred
+       into the elevation queue via the standard `{method: "command"}`
+       descriptor, so the fix lands in the per-OS remediation script the
+       pass already writes; the failed stamp keeps the gate open so the
+       next session's re-check picks up out-of-band completion.
+    4. otherwise run fix (exit code advisory), then RE-RUN check: the
+       re-check is authoritative, with NO trust exceptions. Still failing
+       = a persistent failure whose message is the fix's last non-empty
+       stdout/stderr line (descriptive errors are the script's job).
+
+    A check that cannot complete at all (timeout / no shell) is its own
+    persistent failure and the fix is NOT attempted: state is unknown, and
+    a check that hangs or cannot run is a contract-script defect to
+    surface, not a "not configured" to converge on.
+    """
+    from .env_features import ENV_CHECK_DEFAULT_TIMEOUT, run_env_command
+
+    entries = _env_section_entries(ctx, "env_checks", "env_check")
+    if entries is None:
+        return
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        check = entry.get("check") if isinstance(entry, dict) else None
+        fix = entry.get("fix") if isinstance(entry, dict) else None
+        if not (isinstance(name, str) and name and isinstance(check, str)
+                and check and (fix is None or (isinstance(fix, str) and fix))):
+            ctx.fail(
+                f"env_check: INVALID entry {entry!r} - needs string 'name' and 'check' (plus optional string 'fix')",
+                type="env_check",
+                name=_entry_label(name),
+                message=f"invalid env_checks entry {entry!r}: needs string 'name' and 'check', plus an optional string 'fix'",
+                persist_across_sessions=True,
+            )
+            continue
+        timeout = entry.get("timeout", ENV_CHECK_DEFAULT_TIMEOUT)
+        if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+            ctx.fail(
+                f"env_check {name}: INVALID timeout {timeout!r} - must be a positive integer (seconds)",
+                type="env_check", name=name,
+                message=f"{name}: invalid timeout {timeout!r}: must be a positive integer number of seconds",
+                persist_across_sessions=True,
+            )
+            continue
+        if not ctx.entry_applies(entry):
+            ctx.ok(f"env_check {name}: skipped (os/hosts filter)")
+            continue
+
+        rc, detail = run_env_command(check, timeout)
+        if rc == 0:
+            ctx.ok(f"env_check {name}: ok")
+            continue
+        if rc is None:
+            ctx.fail(
+                f"env_check {name}: CHECK could not run - {detail}",
+                type="env_check", name=name,
+                message=(
+                    f"{name}: check could not run ({detail}). Checks must "
+                    f"be cheap and side-effect free; fix the check command "
+                    f"or raise the entry's 'timeout'."
+                ),
+                persist_across_sessions=True,
+            )
+            continue
+
+        if fix is None:
+            # Check-only entry: manual-attention item (spec step 2). The
+            # description is the entry's user-facing instruction; detail is
+            # the check's last output line.
+            description = entry.get("description")
+            parts = [p for p in (
+                description if isinstance(description, str) else None,
+                detail,
+            ) if p]
+            ctx.fail(
+                f"env_check {name}: needs manual attention - {'; '.join(parts)}",
+                type="env_check", name=name,
+                message=f"{name}: {'; '.join(parts)}",
+                persist_across_sessions=True,
+            )
+            continue
+
+        if bool(entry.get("elevated", False)) and not _privileges_available(ctx.current_os):
+            ctx.fail(
+                f"env_check {name}: needs elevation - deferred; run: {fix}",
+                type="env_check", name=name,
+                message=f"{name}: fix requires elevation: {fix}",
+                elevation={"method": "command", "command": fix,
+                           "os": ctx.current_os},
+                agent_msg=(
+                    f"The env check '{name}' is not configured and its fix "
+                    f"needs elevated privileges, which a background "
+                    f"SessionStart hook must not request. Bootstrap queued "
+                    f"it into the remediation script (see the elevation "
+                    f"item); the user can also run `{fix}` with the needed "
+                    f"privileges, then type 'fix-all' so the re-check "
+                    f"confirms it."
+                ),
+                persist_across_sessions=True,
+            )
+            continue
+
+        _fix_rc, fix_detail = run_env_command(fix, timeout)
+        # The fix's exit code is advisory; the re-check is authoritative
+        # (task rule: env_checks has NO trust exceptions).
+        re_rc, _re_detail = run_env_command(check, timeout)
+        if re_rc == 0:
+            ctx.action(f"env_check {name}: fixed - {fix_detail}")
+        else:
+            ctx.fail(
+                f"env_check {name}: FAILED - {fix_detail}",
+                type="env_check", name=name,
+                message=f"{name}: {fix_detail}",
+                persist_across_sessions=True,
+            )
+
+
+# The env.json phase table (spec 4.4). Section order is load-bearing:
+# `machines` validation runs first (in _process_env_pass, before dispatch),
+# then symlinks -> shell_rc -> macos_defaults -> macos_hotkeys ->
+# login_items -> env_checks (array order within each; a contract script's
+# internal ordering is its own business), mirroring _MANIFEST_PHASES.
+# Until a section has a handler here it is reported as an ignored unknown
+# key (forward compatibility, spec 4.5).
+_ENV_PHASES = (
+    (("symlinks",), _env_phase_symlinks),
+    (("shell_rc",), _env_phase_shell_rc),
+    (("macos_defaults",), _env_phase_macos_defaults),
+    (("macos_hotkeys",), _env_phase_macos_hotkeys),
+    (("login_items",), _env_phase_login_items),
+    (("env_checks",), _env_phase_env_checks),
+)
+
+
+def _validate_env_machines(ctx, merged, hostname, current_os):
+    """The machines-registry gatekeeping (spec 4.2).
+
+    Returns True when entry processing may proceed. Every violation is a
+    hard error: one descriptive persistent failure item, no fallbacks --
+    personalization refuses to guess. On success, sets ``ctx.machine_key``
+    and ``ctx.machine``.
+    """
+    from .env_manifest import resolve_machine, validate_entry_filters
+
+    machines = merged.get("machines")
+    if not isinstance(machines, dict) or not machines:
+        ctx.fail(
+            "machines registry MISSING - required in any env.json that declares entries",
+            type="env_manifest",
+            name="machines",
+            message=(
+                "env.json has no 'machines' registry. Declare every known "
+                "machine in ~/.claude/env.json, e.g. "
+                '{"machines": {"<hostname>": {"os": "macos|ubuntu|windows"}}}.'
+            ),
+            agent_msg=(
+                "The merged env.json declares entries but no 'machines' "
+                "registry, which is required (env.json entries are keyed by "
+                "machine identity). Add a 'machines' object to "
+                "~/.claude/env.json mapping each hostname to at least "
+                '{"os": "macos|ubuntu|windows"}, then ask the user to type '
+                "'fix-all' to re-run bootstrap."
+            ),
+            persist_across_sessions=True,
+        )
+        return False
+
+    known = ", ".join(sorted(machines))
+
+    # Entry-filter validation (list shape + hosts typo protection) is
+    # registry-level -- run it before host resolution so a filter error
+    # surfaces even on a machine that is itself unregistered on a later pass.
+    filter_errors = validate_entry_filters(merged, machines)
+    for err in filter_errors:
+        ctx.fail(
+            f"entry filter INVALID - {err}",
+            type="env_manifest",
+            name="entry_filter",
+            message=err,
+            agent_msg=(
+                f"env.json entry-filter validation failed: {err} Fix the "
+                "manifest, then ask the user to type 'fix-all' to re-run "
+                "bootstrap."
+            ),
+            persist_across_sessions=True,
+        )
+    if filter_errors:
+        return False
+
+    machine_key = resolve_machine(machines, hostname)
+    if machine_key is None:
+        ctx.fail(
+            f"UNKNOWN MACHINE '{hostname}' - not in the env.json machines registry",
+            type="env_manifest",
+            name="machines",
+            message=(
+                f"Unknown machine '{hostname}'. Known machines: {known}. "
+                f"Add it to ~/.claude/env.json under 'machines'."
+            ),
+            agent_msg=(
+                f"This machine's hostname '{hostname}' is not declared in "
+                f"the env.json machines registry (known machines: {known}). "
+                f"env.json personalization refuses to run on an unknown "
+                f"machine -- no fallbacks. Add the hostname to "
+                f"~/.claude/env.json under 'machines' (value at minimum "
+                f'{{"os": "macos|ubuntu|windows"}}), then ask the user to '
+                f"type 'fix-all' to re-run bootstrap. bootstrap.json "
+                f"provisioning is unaffected."
+            ),
+            persist_across_sessions=True,
+        )
+        return False
+
+    declared_os = machines[machine_key].get("os")
+    if declared_os != current_os:
+        detail = (
+            f"declares os '{declared_os}'" if declared_os
+            else "declares no 'os'"
+        )
+        ctx.fail(
+            f"OS MISMATCH for machine '{machine_key}' - {detail}, "
+            f"but this host detected as '{current_os}'",
+            type="env_manifest",
+            name="machines",
+            message=(
+                f"Machine '{machine_key}' {detail} in the env.json machines "
+                f"registry, but this host detected as '{current_os}'. "
+                f"Likely a hostname collision (e.g. dual-boot installs "
+                f"sharing a hostname) or a registry typo -- fix the registry "
+                f"before any personalization runs."
+            ),
+            agent_msg=(
+                f"env.json machine '{machine_key}' {detail}, but "
+                f"detect_os() reports '{current_os}'. This usually means a "
+                f"hostname collision across dual-boot installs or a wrong "
+                f"'os' value in ~/.claude/env.json. Fix the machines "
+                f"registry, then ask the user to type 'fix-all' to re-run "
+                f"bootstrap."
+            ),
+            persist_across_sessions=True,
+        )
+        return False
+
+    ctx.machine_key = machine_key
+    ctx.machine = machines[machine_key]
+    ctx.ok(
+        f"machine '{machine_key}' identified (hostname {hostname}, os {current_os})"
+    )
+    return True
+
+
+def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
+                      action_entries, ok_entries, engine_version="",
+                      hostname=None):
+    """Step 3e: process the layered env.json manifest, gated by env_state.json.
+
+    Returns the list of failure dicts (empty when green, skipped, or when no
+    env.json exists anywhere). The gate (spec 4.4): the phase runs only when
+    there is no stamp (first run or explicit reset via
+    scripts/env-reset-cooldown.sh), the merged-manifest hash changed, the
+    last result was not clean, or the engine version changed; otherwise it
+    logs one verbose line and is skipped entirely. A parse error in any
+    layer forces the pass to run and stamps it failed, so it re-runs every
+    session until fixed.
+    """
+    from .env_manifest import (
+        canonical_manifest_hash, current_hostname, env_gate_reason,
+        load_layered_env_manifests, read_env_state, write_env_state,
+    )
+
+    merged, parse_errors = load_layered_env_manifests(project_dir)
+    if not merged and not parse_errors:
+        return []  # env.json not in use anywhere -- nothing to gate or stamp
+
+    manifest_hash = canonical_manifest_hash(merged)
+    if parse_errors:
+        reason = "manifest parse error"
+    else:
+        reason = env_gate_reason(
+            read_env_state(data_dir), manifest_hash, engine_version)
+    if reason is None:
+        ok_entries.append("up to date (merged manifest unchanged, last pass clean)")
+        return []
+    ok_entries.append(f"running ({reason})")
+
+    if hostname is None:
+        hostname = current_hostname()
+    ctx = _EnvManifestContext(
+        merged, current_os, data_dir, plugin_root,
+        action_entries, ok_entries, project_dir,
+        hostname, merged.get("machines") or {},
+    )
+
+    for pe in parse_errors:
+        ctx.fail(
+            f"manifest {pe['path']}: PARSE FAILED - {pe['error']}",
+            type="manifest_parse",
+            path=pe["path"],
+            message=pe["error"],
+            agent_msg=(
+                f"The env manifest at {pe['path']} failed to parse "
+                f"({pe['error']}). Open the file, fix the JSON syntax, and "
+                "ask the user to type 'fix-all' to re-run bootstrap. Common "
+                "causes: missing/extra commas, unquoted keys, trailing commas."
+            ),
+            persist_across_sessions=True,
+        )
+
+    if merged and _validate_env_machines(ctx, merged, hostname, current_os):
+        handled = {"machines"}
+        for keys, handler in _ENV_PHASES:
+            handled.update(keys)
+            if any(merged.get(k) for k in keys):
+                handler(ctx)
+        # Forward compatibility (spec 4.5): unknown keys are ignored with a
+        # verbose log line, never an error -- an engine too old to know a
+        # section skips it; the engine-version gate re-runs the phase once
+        # an upgrade teaches the engine the section.
+        for section in sorted(merged):
+            if section not in handled:
+                ctx.ok(f"section '{section}' ignored (not supported by this engine)")
+
+    result = "failed" if ctx.failures else "clean"
+    write_env_state(data_dir, manifest_hash, engine_version, result)
     return ctx.failures
 
 

@@ -1,12 +1,14 @@
-"""Deep-merge utilities for bootstrap manifest dicts."""
+"""Deep-merge utilities for bootstrap and env manifest dicts."""
 
 
 # Sections whose entries are objects keyed by an identity field.
 # Maps section name → identity key used for deduplication.
+# A value of None means the section uses a composite key (see _COMPOSITE_FNS).
 _IDENTITY_KEYS = {
     "plugins": "ref",
     "marketplaces": "name",
     "tools": "name",
+    "env_vars": "name",
     "fonts": "name",
     "json_entries": "file",
     "ini_settings": None,  # composite key: file + section
@@ -17,10 +19,37 @@ _IDENTITY_KEYS = {
 # Sections that are plain string lists (unioned, deduplicated, order preserved).
 _STRING_LIST_KEYS = {"path_entries", "shared_lib_imports"}
 
+# env.json identity keys (bootstrap-env-refactor spec 4.1: same merge
+# discipline as bootstrap.json, identity-keyed sections). `machines` is a
+# plain dict keyed by hostname, so the generic dict deep-merge covers it.
+_ENV_IDENTITY_KEYS = {
+    "symlinks": "name",
+    "shell_rc": "name",
+    "macos_defaults": None,  # composite key: domain + key
+    "macos_hotkeys": "id",
+    "login_items": "name",
+    "env_checks": "name",
+}
+
+_ENV_STRING_LIST_KEYS = frozenset()
+
 
 def _ini_key(entry):
     """Composite identity key for ini_settings entries."""
     return (entry.get("file", ""), entry.get("section", ""))
+
+
+def _defaults_key(entry):
+    """Composite identity key for macos_defaults entries."""
+    return (entry.get("domain", ""), entry.get("key", ""))
+
+
+# Section name → composite key fn, for _IDENTITY_KEYS/_ENV_IDENTITY_KEYS
+# entries whose value is None.
+_COMPOSITE_FNS = {
+    "ini_settings": _ini_key,
+    "macos_defaults": _defaults_key,
+}
 
 
 def _merge_arrays(base_list, override_list, identity_key=None, composite_fn=None):
@@ -110,6 +139,22 @@ def merge_manifests(base, override):
     Returns:
         New merged dict (inputs are not mutated).
     """
+    return _merge_layers(base, override, _IDENTITY_KEYS, _STRING_LIST_KEYS)
+
+
+def merge_env_manifests(base, override):
+    """Deep-merge two env.json manifest dicts. Override wins for conflicts.
+
+    Same merge discipline as :func:`merge_manifests` (identity-keyed array
+    union, dict deep-merge, null-is-absent), with env.json's own identity
+    keys (``_ENV_IDENTITY_KEYS``). The ``machines`` registry is a plain dict
+    keyed by hostname, so per-machine fields deep-merge across layers.
+    """
+    return _merge_layers(base, override, _ENV_IDENTITY_KEYS, _ENV_STRING_LIST_KEYS)
+
+
+def _merge_layers(base, override, identity_keys, string_list_keys):
+    """Shared layer-merge machinery behind merge_manifests/merge_env_manifests."""
     if not base:
         return dict(override) if override else {}
     if not override:
@@ -131,7 +176,7 @@ def merge_manifests(base, override):
             continue
 
         # Plain string-list sections: union (deduplicated, order preserved)
-        if key in _STRING_LIST_KEYS:
+        if key in string_list_keys:
             seen = set()
             merged = []
             for item in (base_val or []) + (over_val or []):
@@ -142,10 +187,10 @@ def merge_manifests(base, override):
             continue
 
         # Identity-keyed array sections
-        if key in _IDENTITY_KEYS:
-            id_key = _IDENTITY_KEYS[key]
-            if key == "ini_settings":
-                result[key] = _merge_arrays(base_val, over_val, composite_fn=_ini_key)
+        if key in identity_keys:
+            id_key = identity_keys[key]
+            if id_key is None:
+                result[key] = _merge_arrays(base_val, over_val, composite_fn=_COMPOSITE_FNS[key])
             else:
                 result[key] = _merge_arrays(base_val, over_val, identity_key=id_key)
             continue
