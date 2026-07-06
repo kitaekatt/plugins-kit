@@ -568,8 +568,15 @@ class TestElevation:
         assert "set -euo pipefail" in content
         assert "must never prompt for a sudo password" in content
         assert f'sudo bash "{script}"' in content
-        # Comment label (zero execution surface) then the command itself.
-        assert f"# bootstrap-elevate: {SUDOERS_FIX}\n{SUDOERS_FIX}\n" in content
+        # Comment label (zero execution surface) then the command itself,
+        # with ~ pre-expanded to the invoking user's home: the script runs
+        # under `sudo bash` (HOME=/root), so the verbatim ~ of SUDOERS_FIX
+        # would resolve to root's home and abort the script.
+        expanded_fix = f"bash {isolated_home}/.claude/scripts/env/sudoers.sh fix"
+        assert f"# bootstrap-elevate: {expanded_fix}\n{expanded_fix}\n" in content
+        assert "~/.claude" not in content
+        # The queue itself keeps the verbatim command (expansion is render-time).
+        assert queue.commands == [SUDOERS_FIX]
         # No apt section: the env fix is a plain deferred command.
         assert "apt-get" not in content
 

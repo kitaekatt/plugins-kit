@@ -42,6 +42,7 @@ Stdlib-only. Imports the privilege probes from :mod:`bootstrap_lib.apt`.
 """
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -135,6 +136,35 @@ _SH_RERUN = (
     "# and bootstrap will re-check and clear these items.\n"
 )
 
+# $HOME / ${HOME} references, word-bounded so $HOMEBREW_PREFIX etc. survive.
+_HOME_VAR_RE = re.compile(r"\$\{HOME\}|\$HOME(?![A-Za-z0-9_])")
+# ~/ at start-of-string or after whitespace (the shell's expansion positions
+# we care about; no full shell parsing).
+_TILDE_RE = re.compile(r"(?:(?<=\s)|^)~(?=/)")
+
+
+def _expand_home_refs(command: str) -> str:
+    """Expand user-home references in a queued command to the INVOKING user's
+    real home, at render time.
+
+    Why: the Ubuntu remediation script is run via ``sudo bash``, under which
+    HOME=/root, so a verbatim ``~`` or ``$HOME`` in a queued fix (e.g.
+    ``bash ~/.claude/scripts/env/sudoers.sh fix``) would resolve to root's
+    home and abort the script. The engine knows the real home -- SessionStart
+    runs as the user -- so it bakes it in when rendering.
+
+    The rule (deliberately simple and predictable, no shell parsing): every
+    ``~/`` at the start of the string or after whitespace, and every ``$HOME``
+    or ``${HOME}`` not followed by an identifier character (so
+    ``$HOMEBREW_PREFIX`` is untouched), is replaced with
+    ``os.path.expanduser("~")``. Unix renders only; the Windows .bat has no
+    bash tilde semantics and UAC preserves the user profile. In-pass (non-
+    queued) execution is unaffected -- it already runs as the user.
+    """
+    home = os.path.expanduser("~")
+    expanded = _HOME_VAR_RE.sub(lambda _m: home, command)
+    return _TILDE_RE.sub(lambda _m: home, expanded)
+
 
 def _render_ubuntu(queue: ElevationQueue, path: str) -> str:
     lines = [
@@ -148,6 +178,7 @@ def _render_ubuntu(queue: ElevationQueue, path: str) -> str:
         "#",
         f'#     sudo bash "{path}"',
         "#",
+        "# Command paths (~, $HOME) were pre-expanded to the invoking user's home.",
         _SH_RERUN.rstrip("\n"),
         "set -euo pipefail",
         "",
@@ -160,6 +191,7 @@ def _render_ubuntu(queue: ElevationQueue, path: str) -> str:
         lines.append("apt-get install -y " + " ".join(queue.apt_packages))
         lines.append("")
     for cmd in queue.commands:
+        cmd = _expand_home_refs(cmd)
         # Label as a plain comment, NOT an echo: embedding the command inside a
         # quoted echo would let an unbalanced quote break the parse (bypassing
         # set -euo pipefail) and $(...)/backticks execute during the label.
@@ -181,6 +213,7 @@ def _render_macos(queue: ElevationQueue, path: str) -> str:
         "#",
         f'#     bash "{path}"',
         "#",
+        "# Command paths (~, $HOME) were pre-expanded to the invoking user's home.",
         _SH_RERUN.rstrip("\n"),
         "set -euo pipefail",
         "",
@@ -191,6 +224,7 @@ def _render_macos(queue: ElevationQueue, path: str) -> str:
         lines.append(HOMEBREW_INSTALLER)
         lines.append("")
     for cmd in queue.commands:
+        cmd = _expand_home_refs(cmd)
         # Comment label, not echo -- see _render_ubuntu (quoting/execution surface).
         lines.append(f"# bootstrap-elevate: {cmd}")
         lines.append(cmd)
@@ -273,7 +307,14 @@ def _render_windows(queue: ElevationQueue) -> str:
 
 
 def render_script(queue: ElevationQueue, current_os: str, path: str) -> str:
-    """Render the OS-appropriate remediation script content for ``queue``."""
+    """Render the OS-appropriate remediation script content for ``queue``.
+
+    Unix renders pre-expand ``~``/``$HOME`` in queued commands to the invoking
+    user's real home (see :func:`_expand_home_refs`): the script runs under
+    sudo where HOME is root's, so verbatim home references would resolve
+    wrongly. Windows rendering is untouched (no bash tilde semantics; UAC
+    preserves the user profile).
+    """
     if current_os == "ubuntu":
         return _render_ubuntu(queue, path)
     if current_os == "macos":
