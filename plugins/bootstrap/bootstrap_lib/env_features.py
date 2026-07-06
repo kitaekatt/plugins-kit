@@ -1,10 +1,12 @@
-"""The five declarative env.json feature sections (E1 step 4).
+"""The declarative env.json feature sections + the env_checks contract runner.
 
 Check/fix primitives for the engine's env phase handlers (engine.py
 ``_ENV_PHASES``): ``symlinks``, ``shell_rc`` (ensure + forbid),
-``macos_defaults``, ``macos_hotkeys``, ``login_items`` -- the
-bootstrap-env-refactor spec, sections 3.1/4.3. Personal data rides as entry
-configuration; these functions implement each mechanism exactly once.
+``macos_defaults``, ``macos_hotkeys``, ``login_items`` (E1 step 4, spec
+sections 3.1/4.3) plus :func:`run_env_command`, the bash-shim command
+runner behind the ``env_checks`` check/fix contract (E1 step 5, spec
+section 5). Personal data rides as entry configuration; these functions
+implement each mechanism exactly once.
 
 Semantics replicate env-config's implementations (config_manager.py,
 action_executor.py, check_runner.py, checks.yaml), translated to the
@@ -21,7 +23,9 @@ belong exclusively to bootstrap ``path_entries`` (spec directive 3).
 import os
 import plistlib
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -39,6 +43,11 @@ _DEFAULTS_TIMEOUT = 10
 _PLIST_TIMEOUT = 60
 _OSASCRIPT_TIMEOUT = 30
 _FLUSH_TIMEOUT = 10
+
+# env_checks contract commands (spec section 5): 600s default per command,
+# overridable per entry via its `timeout` field -- contract scripts may drive
+# real installs (gpu-stack), so the bound is generous but never absent.
+ENV_CHECK_DEFAULT_TIMEOUT = 600
 
 
 def _last_output_line(proc: "subprocess.CompletedProcess") -> str:
@@ -73,6 +82,51 @@ def expand_env_path(path: str) -> str:
             " declare it via bootstrap.json env_vars"
         )
     return expanded
+
+
+# ---------------------------------------------------------------------------
+# env_checks contract runner (spec section 5)
+# ---------------------------------------------------------------------------
+
+def run_env_command(command: str, timeout: int) -> Tuple[Optional[int], str]:
+    """Run one env_checks check/fix command through the engine's bash shim.
+
+    Commands are opaque shell strings -- no engine-side path joining (spec
+    4.4's command-resolution rule; the deliberate contrast with the
+    plugin-rooted ``script`` phase). On Windows/MSYS they run via Git Bash
+    when available so Unix syntax works everywhere (tool_check's shim);
+    elsewhere plain ``shell=True``.
+
+    Returns ``(returncode, detail)`` where detail is the last non-empty
+    stdout/stderr line (descriptive errors are the contract script's job;
+    falls back to ``exit code N`` when the command printed nothing).
+    ``returncode`` is ``None`` when the command could not complete at all
+    (timeout, missing shell, OS error) -- contained per the R1 discipline,
+    never raised into the engine pass.
+    """
+    try:
+        if sys.platform == "win32" or "MSYSTEM" in os.environ:
+            bash = shutil.which("bash")
+            if bash:
+                proc = subprocess.run(
+                    [bash, "-c", command], capture_output=True, text=True,
+                    timeout=timeout,
+                )
+            else:
+                proc = subprocess.run(
+                    command, shell=True, capture_output=True, text=True,
+                    timeout=timeout,
+                )
+        else:
+            proc = subprocess.run(
+                command, shell=True, capture_output=True, text=True,
+                timeout=timeout,
+            )
+    except subprocess.TimeoutExpired:
+        return None, f"timed out after {timeout}s"
+    except (subprocess.SubprocessError, OSError) as e:
+        return None, f"could not run: {e}"
+    return proc.returncode, _last_output_line(proc)
 
 
 # ---------------------------------------------------------------------------

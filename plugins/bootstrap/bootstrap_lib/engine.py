@@ -3594,12 +3594,143 @@ def _env_phase_login_items(ctx):
             )
 
 
+def _env_phase_env_checks(ctx):
+    """env_checks: the generic check/fix contract (spec section 5).
+
+    One mechanism covers every non-declarative item: each entry names a
+    `check` command (unprivileged, side-effect free -- the gate is an
+    optimization, never a semantic guarantee) and an optional `fix`, both
+    opaque shell strings run through the engine's bash shim with a
+    per-entry `timeout` (default 600s per command). No engine-side path
+    joining -- the deliberate resolution contrast with the plugin-rooted
+    `script` phase; contract scripts are invoked via ~-anchored commands.
+
+    Dispatch per applicable entry:
+
+    1. check: exit 0 = configured (verbose ok line, done).
+    2. failing + no fix = a persistent manual-attention item (name +
+       description + last output line).
+    3. `elevated: true` without privileges: NEVER attempted -- deferred
+       into the elevation queue via the standard `{method: "command"}`
+       descriptor, so the fix lands in the per-OS remediation script the
+       pass already writes; the failed stamp keeps the gate open so the
+       next session's re-check picks up out-of-band completion.
+    4. otherwise run fix (exit code advisory), then RE-RUN check: the
+       re-check is authoritative, with NO trust exceptions. Still failing
+       = a persistent failure whose message is the fix's last non-empty
+       stdout/stderr line (descriptive errors are the script's job).
+
+    A check that cannot complete at all (timeout / no shell) is its own
+    persistent failure and the fix is NOT attempted: state is unknown, and
+    a check that hangs or cannot run is a contract-script defect to
+    surface, not a "not configured" to converge on.
+    """
+    from .env_features import ENV_CHECK_DEFAULT_TIMEOUT, run_env_command
+
+    entries = _env_section_entries(ctx, "env_checks")
+    if entries is None:
+        return
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        check = entry.get("check") if isinstance(entry, dict) else None
+        fix = entry.get("fix") if isinstance(entry, dict) else None
+        if not (isinstance(name, str) and name and isinstance(check, str)
+                and check and (fix is None or (isinstance(fix, str) and fix))):
+            ctx.fail(
+                f"env_check: INVALID entry {entry!r} - needs string 'name' and 'check' (plus optional string 'fix')",
+                type="env_check",
+                name=str(name),
+                message=f"invalid env_checks entry {entry!r}: needs string 'name' and 'check', plus an optional string 'fix'",
+                persist_across_sessions=True,
+            )
+            continue
+        timeout = entry.get("timeout", ENV_CHECK_DEFAULT_TIMEOUT)
+        if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+            ctx.fail(
+                f"env_check {name}: INVALID timeout {timeout!r} - must be a positive integer (seconds)",
+                type="env_check", name=name,
+                message=f"{name}: invalid timeout {timeout!r}: must be a positive integer number of seconds",
+                persist_across_sessions=True,
+            )
+            continue
+        if not ctx.entry_applies(entry):
+            ctx.ok(f"env_check {name}: skipped (os/hosts filter)")
+            continue
+
+        rc, detail = run_env_command(check, timeout)
+        if rc == 0:
+            ctx.ok(f"env_check {name}: ok")
+            continue
+        if rc is None:
+            ctx.fail(
+                f"env_check {name}: CHECK could not run - {detail}",
+                type="env_check", name=name,
+                message=(
+                    f"{name}: check could not run ({detail}). Checks must "
+                    f"be cheap and side-effect free; fix the check command "
+                    f"or raise the entry's 'timeout'."
+                ),
+                persist_across_sessions=True,
+            )
+            continue
+
+        if fix is None:
+            # Check-only entry: manual-attention item (spec step 2). The
+            # description is the entry's user-facing instruction; detail is
+            # the check's last output line.
+            description = entry.get("description")
+            parts = [p for p in (
+                description if isinstance(description, str) else None,
+                detail,
+            ) if p]
+            ctx.fail(
+                f"env_check {name}: needs manual attention - {'; '.join(parts)}",
+                type="env_check", name=name,
+                message=f"{name}: {'; '.join(parts)}",
+                persist_across_sessions=True,
+            )
+            continue
+
+        if bool(entry.get("elevated", False)) and not _privileges_available(ctx.current_os):
+            ctx.fail(
+                f"env_check {name}: needs elevation - deferred; run: {fix}",
+                type="env_check", name=name,
+                message=f"{name}: fix requires elevation: {fix}",
+                elevation={"method": "command", "command": fix,
+                           "os": ctx.current_os},
+                agent_msg=(
+                    f"The env check '{name}' is not configured and its fix "
+                    f"needs elevated privileges, which a background "
+                    f"SessionStart hook must not request. Bootstrap queued "
+                    f"it into the remediation script (see the elevation "
+                    f"item); the user can also run `{fix}` with the needed "
+                    f"privileges, then type 'fix-all' so the re-check "
+                    f"confirms it."
+                ),
+                persist_across_sessions=True,
+            )
+            continue
+
+        _fix_rc, fix_detail = run_env_command(fix, timeout)
+        # The fix's exit code is advisory; the re-check is authoritative
+        # (task rule: env_checks has NO trust exceptions).
+        re_rc, _re_detail = run_env_command(check, timeout)
+        if re_rc == 0:
+            ctx.action(f"env_check {name}: fixed - {fix_detail}")
+        else:
+            ctx.fail(
+                f"env_check {name}: FAILED - {fix_detail}",
+                type="env_check", name=name,
+                message=f"{name}: {fix_detail}",
+                persist_across_sessions=True,
+            )
+
+
 # The env.json phase table (spec 4.4). Section order is load-bearing:
 # `machines` validation runs first (in _process_env_pass, before dispatch),
 # then symlinks -> shell_rc -> macos_defaults -> macos_hotkeys ->
-# login_items -> env_checks (array order within each). The env_checks
-# contract lands with E1 step 5, plugging in here as
-# (("env_checks",), _env_phase_env_checks), mirroring _MANIFEST_PHASES.
+# login_items -> env_checks (array order within each; a contract script's
+# internal ordering is its own business), mirroring _MANIFEST_PHASES.
 # Until a section has a handler here it is reported as an ignored unknown
 # key (forward compatibility, spec 4.5).
 _ENV_PHASES = (
@@ -3608,6 +3739,7 @@ _ENV_PHASES = (
     (("macos_defaults",), _env_phase_macos_defaults),
     (("macos_hotkeys",), _env_phase_macos_hotkeys),
     (("login_items",), _env_phase_login_items),
+    (("env_checks",), _env_phase_env_checks),
 )
 
 
