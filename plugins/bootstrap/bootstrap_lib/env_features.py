@@ -30,6 +30,16 @@ from .result import Result
 
 HOTKEYS_DOMAIN = "com.apple.symbolichotkeys"
 
+# Subprocess timeouts (engine idiom: every bootstrap_lib subprocess site is
+# bounded -- brew.py 600s, venv_check.py 10s, shared_lib.py 20s). Short for
+# plain reads/writes, longer for the plist export/import round-trip; the
+# osascript System Events calls get a real bound because macOS can park them
+# behind an automation-permission prompt, which must never hang SessionStart.
+_DEFAULTS_TIMEOUT = 10
+_PLIST_TIMEOUT = 60
+_OSASCRIPT_TIMEOUT = 30
+_FLUSH_TIMEOUT = 10
+
 
 def _last_output_line(proc: "subprocess.CompletedProcess") -> str:
     """The last non-empty stderr/stdout line -- the descriptive-error tail."""
@@ -112,6 +122,11 @@ def fix_symlink(source: str, target: str, backup: bool) -> Tuple[bool, str]:
     (wrong or dangling) is replaced without backup -- a link carries no
     content worth keeping. A directory at target is never replaced.
     """
+    if os.path.abspath(source) == os.path.abspath(target):
+        return False, (
+            f"source and target are the same path: {target} -- refusing "
+            f"(would replace the source with a self-referential link)"
+        )
     if not os.path.exists(source):
         return False, f"source does not exist: {source}"
 
@@ -331,10 +346,17 @@ def defaults_expected_string(value) -> Optional[str]:
 def check_macos_default(domain: str, key: str, value) -> Result:
     """`defaults read <domain> <key>` must equal the manifest value."""
     subject = f"{domain}.{key}"
-    proc = subprocess.run(
-        ["defaults", "read", domain, key], capture_output=True, text=True,
-    )
     want = defaults_expected_string(value)
+    try:
+        proc = subprocess.run(
+            ["defaults", "read", domain, key], capture_output=True,
+            text=True, timeout=_DEFAULTS_TIMEOUT,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        return Result(
+            passed=False, subject=subject,
+            message=f"defaults read failed: {e}",
+        )
     if proc.returncode != 0:
         return Result(
             passed=False, subject=subject,
@@ -359,10 +381,13 @@ def _defaults_write_args(value) -> List[str]:
 
 def fix_macos_default(domain: str, key: str, value) -> Tuple[bool, str]:
     """`defaults write <domain> <key>` with the typed flag (env-config)."""
-    proc = subprocess.run(
-        ["defaults", "write", domain, key, *_defaults_write_args(value)],
-        capture_output=True, text=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["defaults", "write", domain, key, *_defaults_write_args(value)],
+            capture_output=True, text=True, timeout=_DEFAULTS_TIMEOUT,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        return False, f"defaults write failed: {e}"
     if proc.returncode != 0:
         return False, f"defaults write failed: {_last_output_line(proc)}"
     return True, f"set to {defaults_expected_string(value)!r}"
@@ -372,10 +397,17 @@ def flush_macos_defaults_cache() -> None:
     """The standard preference-cache flush after `defaults write` (spec 3.1).
 
     Best-effort by design: the writes themselves are already committed
-    (and re-checked); the flush only nudges running apps to pick them up.
+    (and re-checked); the flush only nudges running apps to pick them up,
+    so any subprocess failure (missing binary, timeout) is swallowed.
     """
     for proc_name in ("cfprefsd", "SystemUIServer"):
-        subprocess.run(["killall", proc_name], capture_output=True)
+        try:
+            subprocess.run(
+                ["killall", proc_name], capture_output=True,
+                timeout=_FLUSH_TIMEOUT,
+            )
+        except (subprocess.SubprocessError, OSError):
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +423,7 @@ def read_symbolic_hotkeys() -> Tuple[Optional[Dict], str]:
     try:
         proc = subprocess.run(
             ["defaults", "export", HOTKEYS_DOMAIN, "-"], capture_output=True,
+            timeout=_PLIST_TIMEOUT,
         )
         if proc.returncode != 0:
             return None, (
@@ -398,7 +431,8 @@ def read_symbolic_hotkeys() -> Tuple[Optional[Dict], str]:
                 f"{_last_output_line(proc)}"
             )
         data = plistlib.loads(proc.stdout)
-    except (OSError, plistlib.InvalidFileException, ValueError) as e:
+    except (subprocess.SubprocessError, OSError,
+            plistlib.InvalidFileException, ValueError) as e:
         return None, f"failed to read symbolic hotkeys: {e}"
     if "AppleSymbolicHotKeys" not in data:
         return None, f"no AppleSymbolicHotKeys dict in {HOTKEYS_DOMAIN}"
@@ -453,11 +487,11 @@ def apply_symbolic_hotkeys(data: Dict, entries: List[Dict]) -> Tuple[bool, str]:
             tmpfile = f.name
         proc = subprocess.run(
             ["defaults", "import", HOTKEYS_DOMAIN, tmpfile],
-            capture_output=True,
+            capture_output=True, timeout=_PLIST_TIMEOUT,
         )
         if proc.returncode != 0:
             return False, f"defaults import failed: {_last_output_line(proc)}"
-    except OSError as e:
+    except (subprocess.SubprocessError, OSError) as e:
         return False, f"failed to apply symbolic hotkeys: {e}"
     finally:
         if tmpfile and os.path.exists(tmpfile):
@@ -468,14 +502,23 @@ def apply_symbolic_hotkeys(data: Dict, entries: List[Dict]) -> Tuple[bool, str]:
 
 
 def _flush_hotkey_caches() -> None:
-    """Flush preference cache + restart shortcut-handling processes (best-effort)."""
-    for proc_name in ("cfprefsd", "screencaptureui", "SystemUIServer"):
-        subprocess.run(["killall", proc_name], capture_output=True)
-    subprocess.run(
+    """Flush preference cache + restart shortcut-handling processes.
+
+    Best-effort for real: the remaps are already imported (and re-checked
+    by the caller), so a missing binary (the activateSettings private
+    framework is not a stable contract), a timeout, or any other subprocess
+    failure is swallowed rather than aborting the engine pass.
+    """
+    commands = [["killall", p]
+                for p in ("cfprefsd", "screencaptureui", "SystemUIServer")]
+    commands.append(
         ["/System/Library/PrivateFrameworks/SystemAdministration.framework"
-         "/Resources/activateSettings", "-u"],
-        capture_output=True,
-    )
+         "/Resources/activateSettings", "-u"])
+    for cmd in commands:
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=_FLUSH_TIMEOUT)
+        except (subprocess.SubprocessError, OSError):
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -487,11 +530,14 @@ def list_login_items() -> Tuple[Optional[List[str]], str]:
 
     Returns ``(names, "")`` or ``(None, error)``.
     """
-    proc = subprocess.run(
-        ["osascript", "-e",
-         'tell application "System Events" to get the name of every login item'],
-        capture_output=True, text=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to get the name of every login item'],
+            capture_output=True, text=True, timeout=_OSASCRIPT_TIMEOUT,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        return None, f"osascript login-item query failed: {e}"
     if proc.returncode != 0:
         return None, f"osascript login-item query failed: {_last_output_line(proc)}"
     out = proc.stdout.strip()
@@ -521,9 +567,13 @@ def add_login_item(path: str, hidden: bool) -> Tuple[bool, str]:
         'tell application "System Events" to make login item at end with '
         f'properties {{path:"{path}", hidden:{hidden_s}}}'
     )
-    proc = subprocess.run(
-        ["osascript", "-e", script], capture_output=True, text=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", script], capture_output=True, text=True,
+            timeout=_OSASCRIPT_TIMEOUT,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        return False, f"osascript make login item failed: {e}"
     if proc.returncode != 0:
         return False, f"osascript make login item failed: {_last_output_line(proc)}"
     return True, f"added login item ({path}, hidden {hidden_s})"

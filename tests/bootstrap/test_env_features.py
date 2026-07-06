@@ -330,6 +330,33 @@ class TestCheckSymlinkUnit:
         assert not ok
         assert "directory" in msg
 
+    def test_fix_refuses_source_equal_target(self, tmp_path):
+        """source == target must never destroy the user's file (R2)."""
+        path = tmp_path / "f.toml"
+        path.write_text("precious")
+        ok, msg = fix_symlink(str(path), str(path), backup=False)
+        assert not ok
+        assert "same path" in msg
+        assert path.is_file() and not path.is_symlink()
+        assert path.read_text() == "precious"
+
+
+class TestSymlinkSourceEqualsTarget:
+    def test_entry_fails_and_preserves_file(self, isolated_home, run_env_pass):
+        path = isolated_home / "starship.toml"
+        path.write_text("precious")
+        entry = {"name": "self-link", "source": str(path),
+                 "target": str(path)}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(symlinks=[entry]))
+
+        result = run_env_pass()
+
+        assert len(result.failures) == 1
+        assert "same path" in result.failures[0]["message"]
+        assert path.is_file() and not path.is_symlink()
+        assert path.read_text() == "precious"
+
 
 # ---------------------------------------------------------------------------
 # shell_rc
@@ -549,6 +576,20 @@ class FakeProc:
         self.stderr = stderr
 
 
+def _fake_subprocess(run):
+    """A subprocess stand-in: fake `run`, real exception classes.
+
+    env_features' except clauses reference subprocess.SubprocessError /
+    TimeoutExpired from its module-level `subprocess` name, so the stub
+    must carry them for the failure-path tests.
+    """
+    return SimpleNamespace(
+        run=run,
+        SubprocessError=subprocess.SubprocessError,
+        TimeoutExpired=subprocess.TimeoutExpired,
+    )
+
+
 def _hotkeys_plist(entries):
     """Build an AppleSymbolicHotKeys plist dict from {id: (params, enabled)}."""
     return {
@@ -573,7 +614,7 @@ class FakeMac:
 
     def install(self, monkeypatch):
         monkeypatch.setattr(
-            env_features, "subprocess", SimpleNamespace(run=self.run))
+            env_features, "subprocess", _fake_subprocess(self.run))
         return self
 
     def write_calls(self):
@@ -582,6 +623,9 @@ class FakeMac:
                 or (c[0] == "osascript" and "make login item" in c[2])]
 
     def run(self, cmd, **kwargs):
+        # Engine idiom: every subprocess call is bounded (R1). Asserting it
+        # here covers every call site the feature tests exercise.
+        assert "timeout" in kwargs, f"unbounded subprocess call: {cmd}"
         cmd = [str(c) for c in cmd]
         self.calls.append(cmd)
         prog = os.path.basename(cmd[0])
@@ -1026,7 +1070,7 @@ class TestLoginItems:
             return FakeProc(1, stderr="osascript: not authorized")
 
         monkeypatch.setattr(
-            env_features, "subprocess", SimpleNamespace(run=failing_run))
+            env_features, "subprocess", _fake_subprocess(failing_run))
         self._write_manifest(isolated_home, self._app(isolated_home))
 
         result = run_env_pass(current_os="macos")
@@ -1047,6 +1091,128 @@ class TestLoginItems:
         assert second.failures == []
         assert second.action_entries == []
         assert mac.write_calls() == []
+
+
+# ---------------------------------------------------------------------------
+# Subprocess bounds + best-effort flushes (R1)
+# ---------------------------------------------------------------------------
+
+class TestSubprocessFailureContainment:
+    """Timeouts and missing binaries become descriptive failures, and the
+    best-effort flush helpers really are best-effort (never raise)."""
+
+    def _install_raising(self, monkeypatch, exc_factory):
+        calls = []
+
+        def raising_run(cmd, **kwargs):
+            calls.append([str(c) for c in cmd])
+            raise exc_factory(cmd)
+
+        monkeypatch.setattr(
+            env_features, "subprocess", _fake_subprocess(raising_run))
+        return calls
+
+    @staticmethod
+    def _timeout(cmd):
+        return subprocess.TimeoutExpired(cmd, 10)
+
+    @staticmethod
+    def _missing(cmd):
+        return FileNotFoundError(2, "No such file or directory", cmd[0])
+
+    def test_defaults_read_timeout_is_a_failed_check(self, monkeypatch):
+        self._install_raising(monkeypatch, self._timeout)
+        result = env_features.check_macos_default("NSGlobalDomain", "KeyRepeat", 6)
+        assert not result.passed
+        assert "defaults read failed" in result.message
+
+    def test_defaults_write_timeout_is_a_failed_fix(self, monkeypatch):
+        self._install_raising(monkeypatch, self._timeout)
+        ok, msg = env_features.fix_macos_default("NSGlobalDomain", "KeyRepeat", 6)
+        assert not ok
+        assert "defaults write failed" in msg
+
+    def test_hotkey_export_timeout_is_an_error(self, monkeypatch):
+        self._install_raising(monkeypatch, self._timeout)
+        data, err = env_features.read_symbolic_hotkeys()
+        assert data is None
+        assert "failed to read symbolic hotkeys" in err
+
+    def test_hotkey_import_failure_is_a_failed_fix(self, monkeypatch):
+        self._install_raising(monkeypatch, self._missing)
+        data = _hotkeys_plist({28: ([1, 2, 3], True)})
+        ok, msg = env_features.apply_symbolic_hotkeys(
+            data, [{"id": 28, "parameters": [4, 5, 6], "enabled": True}])
+        assert not ok
+        assert "failed to apply symbolic hotkeys" in msg
+
+    def test_osascript_timeout_is_an_error(self, monkeypatch):
+        self._install_raising(monkeypatch, self._timeout)
+        items, err = env_features.list_login_items()
+        assert items is None
+        assert "login-item query failed" in err
+        ok, msg = env_features.add_login_item("/Applications/X.app", False)
+        assert not ok
+        assert "make login item failed" in msg
+
+    def test_flush_helpers_swallow_missing_binary(self, monkeypatch):
+        calls = self._install_raising(monkeypatch, self._missing)
+        env_features.flush_macos_defaults_cache()  # must not raise
+        env_features._flush_hotkey_caches()        # must not raise
+        assert len(calls) == 2 + 4  # 2 killall + 3 killall + activateSettings
+
+    def test_flush_helpers_swallow_timeout(self, monkeypatch):
+        self._install_raising(monkeypatch, self._timeout)
+        env_features.flush_macos_defaults_cache()
+        env_features._flush_hotkey_caches()
+
+    def test_osascript_timeout_surfaces_as_engine_failure(
+        self, isolated_home, run_env_pass, monkeypatch
+    ):
+        """The SessionStart-hang scenario: a blocked System Events call is
+        bounded and lands as one persistent failure, not a wedged pass."""
+        self._install_raising(monkeypatch, self._timeout)
+        app_dir = isolated_home / "Applications" / "Tailscale.app"
+        app_dir.mkdir(parents=True)
+        entry = {"name": "Tailscale", "path": str(app_dir)}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(os_="macos", login_items=[entry]))
+
+        result = run_env_pass(current_os="macos")
+
+        assert len(result.failures) == 1
+        # The bounded timeout flows through check -> fix -> re-check and
+        # surfaces as the fix's descriptive message.
+        assert "osascript" in result.failures[0]["message"]
+        assert "timed out" in result.failures[0]["message"]
+        assert read_env_state(str(run_env_pass.data_dir))["last_result"] == "failed"
+
+    def test_missing_activate_settings_does_not_abort_hotkey_fix(
+        self, isolated_home, run_env_pass, monkeypatch
+    ):
+        """A macOS without the activateSettings private binary still
+        converges: the flush is best-effort, the pass completes green."""
+        mac = FakeMac(hotkeys=FACTORY_HOTKEYS)
+
+        real_run = mac.run
+
+        def run(cmd, **kwargs):
+            if str(cmd[0]).endswith("activateSettings"):
+                raise self._missing([str(c) for c in cmd])
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr(
+            env_features, "subprocess", _fake_subprocess(run))
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(os_="macos", macos_hotkeys=SCREENSHOT_HOTKEYS))
+
+        result = run_env_pass(current_os="macos")
+
+        assert result.failures == []
+        assert len(result.action_entries) == 2
+        hot = mac.hotkeys["AppleSymbolicHotKeys"]
+        assert hot["28"]["value"]["parameters"] == [48, 29, 1179648]
+        assert read_env_state(str(run_env_pass.data_dir))["last_result"] == "clean"
 
 
 # ---------------------------------------------------------------------------
