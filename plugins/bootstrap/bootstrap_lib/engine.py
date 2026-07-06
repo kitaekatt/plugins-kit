@@ -2332,6 +2332,59 @@ class _ManifestContext:
         self.failures.append(failure)
 
 
+def _phase_env_vars(ctx):
+    """env_vars: persist + live-export environment variables.
+
+    Runs FIRST in the phase table (order is load-bearing): install commands
+    in any later phase of the same pass may reference these variables (e.g.
+    an install command invoking ``$DEVROOT/...``). Each entry is
+    ``{"name", "value"}``; ``~`` in the value expands to the user's home at
+    apply time so committed manifests stay identity-free. The variable is
+    exported into the live process + $CLAUDE_ENV_FILE every pass, and
+    persisted (shell rc in-place update on Unix, User registry on Windows)
+    when not already in the wanted state. The post-set re-check is
+    authoritative.
+    """
+    from .env_var_check import check_env_var, export_env_var, set_env_var
+
+    vars_set = []
+    for var_def in ctx.manifest.get("env_vars", []):
+        name = var_def.get("name")
+        value = var_def.get("value")
+        if not isinstance(name, str) or not name or not isinstance(value, str):
+            ctx.fail(
+                f"env_var: INVALID entry {var_def!r} - needs string 'name' and 'value'",
+                type="env_var",
+                name=str(name),
+                message=f"invalid env_vars entry {var_def!r}: needs string 'name' and 'value'",
+            )
+            continue
+        expanded = os.path.expanduser(value)
+        exported = export_env_var(name, expanded)
+        if exported:
+            ctx.ok(f"env_var {name}: exported to CLAUDE_ENV_FILE")
+
+        result = check_env_var(name, expanded, ctx.current_os)
+        if result.passed:
+            ctx.ok(f"env_var {name}: ok - {result.message}")
+            continue
+        set_ok, msg = set_env_var(name, expanded, ctx.current_os)
+        recheck = check_env_var(name, expanded, ctx.current_os)
+        if set_ok and recheck.passed:
+            vars_set.append((name, msg))
+        else:
+            detail = msg if not set_ok else f"set reported '{msg}' but re-check failed: {recheck.message}"
+            ctx.fail(
+                f"env_var {name}: FAILED - {detail}",
+                type="env_var",
+                name=name,
+                message=f"{name}: {detail}",
+            )
+
+    if vars_set:
+        ctx.action(f"env vars set: {_join_items(vars_set)}")
+
+
 def _phase_tools(ctx):
     """tools: resolve -> link-to-PATH -> download -> install.
 
@@ -3049,6 +3102,9 @@ def _phase_script(ctx):
 
 # The manifest phase table (B12): each phase runs when any of its manifest
 # keys is present (truthy). ORDER IS LOAD-BEARING:
+#   - env_vars first: the variables are live-exported into the engine
+#     process, so install commands in every later phase of the same pass
+#     can reference them (e.g. $DEVROOT/...).
 #   - tools before venv: uv may be installed by the tools phase.
 #   - venv before shared_libs: a consumer link targets this plugin's .venv.
 #   - marketplaces before json_entries: the marketplace must be cloned before
@@ -3056,6 +3112,7 @@ def _phase_script(ctx):
 #   - plugins before ini/json: installs rewrite the plugin registry first.
 #   - script last: it may build on everything the manifest set up.
 _MANIFEST_PHASES = (
+    (("env_vars",), _phase_env_vars),
     (("tools",), _phase_tools),
     (("fonts",), _phase_fonts),
     (("path_entries",), _phase_path_entries),

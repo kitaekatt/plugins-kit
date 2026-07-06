@@ -7,6 +7,7 @@ _IDENTITY_KEYS = {
     "plugins": "ref",
     "marketplaces": "name",
     "tools": "name",
+    "env_vars": "name",
     "fonts": "name",
     "json_entries": "file",
     "ini_settings": None,  # composite key: file + section

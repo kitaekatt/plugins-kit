@@ -23,6 +23,9 @@ A declarative configuration file covering automatable operations. The engine rea
     }
   ],
   "path_entries": ["~/.local/bin"],
+  "env_vars": [
+    {"name": "DEVROOT", "value": "~/Dev"}
+  ],
   "venv": {
     "check_imports": ["yaml", "upyrc"]
   },
@@ -256,6 +259,47 @@ needed. A missing font is **cosmetic** (glyphs fall back to ASCII/emoji), so a
 failed download logs an action line and retries next session rather than
 surfacing a blocking fix-all item. After install, restart the terminal so it
 picks up the new font.
+
+## `env_vars` — Persistent Environment Variables
+
+Declares environment variables that software provisioned by bootstrap needs.
+Valid in every manifest layer; entries merge by `name` (higher layer's value
+wins), so a machine-local `bootstrap.local.json` can override a single
+variable's value with a one-line entry.
+
+```json
+{
+  "env_vars": [
+    {"name": "DEVROOT", "value": "~/Dev"}
+  ]
+}
+```
+
+Both fields are required strings. A leading `~` in `value` expands to the
+user's home at apply time, so committed manifests stay identity-free.
+
+**Processed first.** `env_vars` is the first phase in every manifest pass —
+install commands in any later phase (e.g. a tool `install` invoking
+`$DEVROOT/...`) see the variables.
+
+**Semantics per entry**, every pass:
+
+1. **Live export**: set in the engine process (same-pass install commands
+   inherit it) and appended as an export line to `$CLAUDE_ENV_FILE` (same
+   reach as the `<PLUGIN>_VENV` export — subsequent Bash tool invocations
+   in the session see it).
+2. **Persistence** (skipped when already in the wanted state, which logs an
+   ok entry): on macOS the `export NAME="value"` line is written/updated
+   **in place** in `~/.zshrc` and `~/.bashrc` (Ubuntu: `~/.bashrc`) — a
+   value change replaces the existing line rather than appending a stale
+   duplicate. On Windows the variable is written to the User-scope registry
+   (`HKCU\Environment`), same direct-winreg idiom as the PATH linkage. The
+   post-set re-check is authoritative; a persistence failure surfaces as a
+   fix-all item.
+
+**PATH is not an env_vars concern**: PATH modification belongs exclusively to
+`path_entries` and the tool→PATH linkage. Do not declare PATH (or PATH-like
+prepend/append edits) as an `env_vars` entry.
 
 ## Variable Expansion
 
@@ -744,6 +788,7 @@ This table is the exact set of identity-keyed sections in
 | Array | Identity key |
 |-------|-------------|
 | `tools` | `name` |
+| `env_vars` | `name` |
 | `marketplaces` | `name` |
 | `plugins` | `ref` |
 | `fonts` | `name` |
