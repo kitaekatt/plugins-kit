@@ -288,6 +288,26 @@ def _main():
         bootstrap_ok_entries.extend(f"config: {e}" for e in pv_ok)
         all_failures.extend(pv_failures)
 
+    # Step 3e: Process the layered env.json manifest (identity-bearing
+    # personalization; bootstrap-env-refactor spec 4.4). Placement is
+    # load-bearing: immediately AFTER the layered bootstrap.json manifest
+    # (env_vars -> tools -> fonts -> path -> project_venv have all run, so
+    # every variable and binary a personalization entry references already
+    # exists) and BEFORE plugin manifests (Step 4). Gated by the
+    # env_state.json stamp -- see _process_env_pass. env.json failures never
+    # affect the bootstrap.json phases above: software still provisions;
+    # personalization refuses to guess.
+    env_action_entries = []
+    env_ok_entries = []
+    env_failures = _process_env_pass(
+        args.project_dir, current_os, data_dir, plugin_root,
+        env_action_entries, env_ok_entries, engine_version=version,
+    )
+    bootstrap_action_entries.extend(f"env: {e}" for e in env_action_entries)
+    bootstrap_ok_entries.extend(f"env: {e}" for e in env_ok_entries)
+    if env_failures:
+        all_failures.extend(env_failures)
+
     # Add bootstrap's own section to display
     display_sections.append((bootstrap_label, list(bootstrap_action_entries), list(bootstrap_ok_entries)))
 
@@ -3146,6 +3166,240 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
     for keys, handler in _MANIFEST_PHASES:
         if any(manifest.get(k) for k in keys):
             handler(ctx)
+    return ctx.failures
+
+
+class _EnvManifestContext(_ManifestContext):
+    """_ManifestContext plus machine identity, for the env.json phase.
+
+    env.json entries may be keyed by hostname as well as OS (spec 4.2):
+    ``machine_key`` is the machines-registry key the current hostname
+    resolved to (exact match, else the domain-stripped short form),
+    ``machine`` that key's registry entry, ``machines`` the whole registry.
+    ``machine_key``/``machine`` are set by _validate_env_machines once the
+    registry validates; feature handlers (the _ENV_PHASES table) only run
+    after that. ``entry_applies`` applies the generic per-entry
+    ``os``/``hosts`` filters (intersection semantics).
+    """
+
+    def __init__(self, manifest, current_os, data_dir, plugin_root,
+                 action_entries, ok_entries, project_dir,
+                 hostname, machines):
+        super().__init__(
+            manifest, current_os, data_dir, plugin_root,
+            action_entries, ok_entries, "env", project_dir, True,
+        )
+        self.hostname = hostname
+        self.machines = machines
+        self.machine_key = None
+        self.machine = None
+
+    def entry_applies(self, entry):
+        from .env_manifest import entry_applies
+        return entry_applies(entry, self.current_os, self.machine_key)
+
+
+# The env.json phase table (spec 4.4). Section order is load-bearing:
+# `machines` validation runs first (in _process_env_pass, before dispatch),
+# then symlinks -> shell_rc -> macos_defaults -> macos_hotkeys ->
+# login_items -> env_checks (array order within each). The five declarative
+# feature handlers land with E1 step 4 and the env_checks contract with
+# step 5; each plugs in here as (("<section>",), _env_phase_<section>),
+# mirroring _MANIFEST_PHASES. Until a section has a handler here it is
+# reported as an ignored unknown key (forward compatibility, spec 4.5).
+_ENV_PHASES = ()
+
+
+def _validate_env_machines(ctx, merged, hostname, current_os):
+    """The machines-registry gatekeeping (spec 4.2).
+
+    Returns True when entry processing may proceed. Every violation is a
+    hard error: one descriptive persistent failure item, no fallbacks --
+    personalization refuses to guess. On success, sets ``ctx.machine_key``
+    and ``ctx.machine``.
+    """
+    from .env_manifest import resolve_machine, validate_hosts_filters
+
+    machines = merged.get("machines")
+    if not isinstance(machines, dict) or not machines:
+        ctx.fail(
+            "machines registry MISSING - required in any env.json that declares entries",
+            type="env_manifest",
+            name="machines",
+            message=(
+                "env.json has no 'machines' registry. Declare every known "
+                "machine in ~/.claude/env.json, e.g. "
+                '{"machines": {"<hostname>": {"os": "macos|ubuntu|windows"}}}.'
+            ),
+            agent_msg=(
+                "The merged env.json declares entries but no 'machines' "
+                "registry, which is required (env.json entries are keyed by "
+                "machine identity). Add a 'machines' object to "
+                "~/.claude/env.json mapping each hostname to at least "
+                '{"os": "macos|ubuntu|windows"}, then ask the user to type '
+                "'fix-all' to re-run bootstrap."
+            ),
+            persist_across_sessions=True,
+        )
+        return False
+
+    known = ", ".join(sorted(machines))
+
+    # hosts-filter validation (typo protection) is registry-level -- run it
+    # before host resolution so a filter typo surfaces even on a machine
+    # that is itself unregistered on a later pass.
+    filter_errors = validate_hosts_filters(merged, machines)
+    for err in filter_errors:
+        ctx.fail(
+            f"hosts filter INVALID - {err}",
+            type="env_manifest",
+            name="hosts_filter",
+            message=err,
+            agent_msg=(
+                f"env.json hosts-filter validation failed: {err} Fix the "
+                "manifest, then ask the user to type 'fix-all' to re-run "
+                "bootstrap."
+            ),
+            persist_across_sessions=True,
+        )
+    if filter_errors:
+        return False
+
+    machine_key = resolve_machine(machines, hostname)
+    if machine_key is None:
+        ctx.fail(
+            f"UNKNOWN MACHINE '{hostname}' - not in the env.json machines registry",
+            type="env_manifest",
+            name="machines",
+            message=(
+                f"Unknown machine '{hostname}'. Known machines: {known}. "
+                f"Add it to ~/.claude/env.json under 'machines'."
+            ),
+            agent_msg=(
+                f"This machine's hostname '{hostname}' is not declared in "
+                f"the env.json machines registry (known machines: {known}). "
+                f"env.json personalization refuses to run on an unknown "
+                f"machine -- no fallbacks. Add the hostname to "
+                f"~/.claude/env.json under 'machines' (value at minimum "
+                f'{{"os": "macos|ubuntu|windows"}}), then ask the user to '
+                f"type 'fix-all' to re-run bootstrap. bootstrap.json "
+                f"provisioning is unaffected."
+            ),
+            persist_across_sessions=True,
+        )
+        return False
+
+    declared_os = machines[machine_key].get("os")
+    if declared_os != current_os:
+        detail = (
+            f"declares os '{declared_os}'" if declared_os
+            else "declares no 'os'"
+        )
+        ctx.fail(
+            f"OS MISMATCH for machine '{machine_key}' - {detail}, "
+            f"but this host detected as '{current_os}'",
+            type="env_manifest",
+            name="machines",
+            message=(
+                f"Machine '{machine_key}' {detail} in the env.json machines "
+                f"registry, but this host detected as '{current_os}'. "
+                f"Likely a hostname collision (e.g. dual-boot installs "
+                f"sharing a hostname) or a registry typo -- fix the registry "
+                f"before any personalization runs."
+            ),
+            agent_msg=(
+                f"env.json machine '{machine_key}' {detail}, but "
+                f"detect_os() reports '{current_os}'. This usually means a "
+                f"hostname collision across dual-boot installs or a wrong "
+                f"'os' value in ~/.claude/env.json. Fix the machines "
+                f"registry, then ask the user to type 'fix-all' to re-run "
+                f"bootstrap."
+            ),
+            persist_across_sessions=True,
+        )
+        return False
+
+    ctx.machine_key = machine_key
+    ctx.machine = machines[machine_key]
+    ctx.ok(
+        f"machine '{machine_key}' identified (hostname {hostname}, os {current_os})"
+    )
+    return True
+
+
+def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
+                      action_entries, ok_entries, engine_version="",
+                      hostname=None):
+    """Step 3e: process the layered env.json manifest, gated by env_state.json.
+
+    Returns the list of failure dicts (empty when green, skipped, or when no
+    env.json exists anywhere). The gate (spec 4.4): the phase runs only when
+    there is no stamp (first run or explicit reset via
+    scripts/env-reset-cooldown.sh), the merged-manifest hash changed, the
+    last result was not clean, or the engine version changed; otherwise it
+    logs one verbose line and is skipped entirely. A parse error in any
+    layer forces the pass to run and stamps it failed, so it re-runs every
+    session until fixed.
+    """
+    from .env_manifest import (
+        canonical_manifest_hash, current_hostname, env_gate_reason,
+        load_layered_env_manifests, read_env_state, write_env_state,
+    )
+
+    merged, parse_errors = load_layered_env_manifests(project_dir)
+    if not merged and not parse_errors:
+        return []  # env.json not in use anywhere -- nothing to gate or stamp
+
+    manifest_hash = canonical_manifest_hash(merged)
+    if parse_errors:
+        reason = "manifest parse error"
+    else:
+        reason = env_gate_reason(
+            read_env_state(data_dir), manifest_hash, engine_version)
+    if reason is None:
+        ok_entries.append("up to date (merged manifest unchanged, last pass clean)")
+        return []
+    ok_entries.append(f"running ({reason})")
+
+    if hostname is None:
+        hostname = current_hostname()
+    ctx = _EnvManifestContext(
+        merged, current_os, data_dir, plugin_root,
+        action_entries, ok_entries, project_dir,
+        hostname, merged.get("machines") or {},
+    )
+
+    for pe in parse_errors:
+        ctx.fail(
+            f"manifest {pe['path']}: PARSE FAILED - {pe['error']}",
+            type="manifest_parse",
+            path=pe["path"],
+            message=pe["error"],
+            agent_msg=(
+                f"The env manifest at {pe['path']} failed to parse "
+                f"({pe['error']}). Open the file, fix the JSON syntax, and "
+                "ask the user to type 'fix-all' to re-run bootstrap. Common "
+                "causes: missing/extra commas, unquoted keys, trailing commas."
+            ),
+            persist_across_sessions=True,
+        )
+
+    if merged and _validate_env_machines(ctx, merged, hostname, current_os):
+        handled = {"machines"}
+        for keys, handler in _ENV_PHASES:
+            handled.update(keys)
+            if any(merged.get(k) for k in keys):
+                handler(ctx)
+        # Forward compatibility (spec 4.5): unknown keys are ignored with a
+        # verbose log line, never an error -- an engine too old to know a
+        # section skips it; the engine-version gate re-runs the phase once
+        # an upgrade teaches the engine the section.
+        for section in sorted(merged):
+            if section not in handled:
+                ctx.ok(f"section '{section}' ignored (not supported by this engine)")
+
+    result = "failed" if ctx.failures else "clean"
+    write_env_state(data_dir, manifest_hash, engine_version, result)
     return ctx.failures
 
 
