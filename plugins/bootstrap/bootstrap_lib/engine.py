@@ -2352,6 +2352,17 @@ class _ManifestContext:
         self.failures.append(failure)
 
 
+def _entry_label(name):
+    """Failure-dict label for a possibly-missing entry name.
+
+    Invalid manifest entries may lack a usable name; a stable "(unnamed)"
+    placeholder beats str(None)'s misleading "None".
+    """
+    if name is None or (isinstance(name, str) and not name):
+        return "(unnamed)"
+    return str(name)
+
+
 def _phase_env_vars(ctx):
     """env_vars: persist + live-export environment variables.
 
@@ -2364,6 +2375,11 @@ def _phase_env_vars(ctx):
     persisted (shell rc in-place update on Unix, User registry on Windows)
     when not already in the wanted state. The post-set re-check is
     authoritative.
+
+    PATH is never an env_vars concern (spec directive 3): a PATH entry (any
+    case) is rejected as a hard failure before any export or write -- PATH
+    edits belong exclusively to ``path_entries`` + tool->PATH linkage, and
+    an env_vars PATH entry would clobber the composed value they manage.
     """
     from .env_var_check import check_env_var, export_env_var, set_env_var
 
@@ -2375,8 +2391,21 @@ def _phase_env_vars(ctx):
             ctx.fail(
                 f"env_var: INVALID entry {var_def!r} - needs string 'name' and 'value'",
                 type="env_var",
-                name=str(name),
+                name=_entry_label(name),
                 message=f"invalid env_vars entry {var_def!r}: needs string 'name' and 'value'",
+            )
+            continue
+        if name.upper() == "PATH":
+            ctx.fail(
+                f"env_var {name}: REFUSED - PATH is managed by bootstrap path_entries, never env_vars",
+                type="env_var",
+                name=name,
+                message=(
+                    f"{name}: PATH is never an env_vars concern. PATH edits "
+                    f"belong exclusively to bootstrap 'path_entries' (and "
+                    f"the automatic tool->PATH linkage); remove this "
+                    f"env_vars entry."
+                ),
             )
             continue
         expanded = os.path.expanduser(value)
@@ -3199,19 +3228,21 @@ class _EnvManifestContext(_ManifestContext):
         return entry_applies(entry, self.current_os, self.machine_key)
 
 
-def _env_section_entries(ctx, section):
+def _env_section_entries(ctx, section, failure_type):
     """The section's entry list, or None after one descriptive failure.
 
     Every env.json feature section is an array of entry objects; anything
     else is a manifest error surfaced per-section (not a crash, not a
-    guess).
+    guess). ``failure_type`` is the section's per-entry failure type
+    (``env_symlink``, ``env_check``, ...) -- section-shape errors carry the
+    same type as the entries they gate, one name per section.
     """
     value = ctx.manifest.get(section)
     if isinstance(value, list):
         return value
     ctx.fail(
         f"{section}: INVALID section - expected an array of entries, got {type(value).__name__}",
-        type=f"env_{section}",
+        type=failure_type,
         name=section,
         message=f"env.json '{section}' must be an array of entries, got {type(value).__name__}",
         persist_across_sessions=True,
@@ -3230,7 +3261,7 @@ def _env_phase_symlinks(ctx):
     """
     from .env_features import check_symlink, expand_env_path, fix_symlink
 
-    entries = _env_section_entries(ctx, "symlinks")
+    entries = _env_section_entries(ctx, "symlinks", "env_symlink")
     if entries is None:
         return
     for entry in entries:
@@ -3242,7 +3273,7 @@ def _env_phase_symlinks(ctx):
             ctx.fail(
                 f"symlink: INVALID entry {entry!r} - needs string 'name', 'source' and 'target'",
                 type="env_symlink",
-                name=str(name),
+                name=_entry_label(name),
                 message=f"invalid symlinks entry {entry!r}: needs string 'name', 'source' and 'target'",
                 persist_across_sessions=True,
             )
@@ -3296,7 +3327,7 @@ def _env_phase_shell_rc(ctx):
         fix_shell_ensure, fix_shell_forbid,
     )
 
-    entries = _env_section_entries(ctx, "shell_rc")
+    entries = _env_section_entries(ctx, "shell_rc", "env_shell_rc")
     if entries is None:
         return
     for entry in entries:
@@ -3309,7 +3340,7 @@ def _env_phase_shell_rc(ctx):
             ctx.fail(
                 f"shell_rc: INVALID entry {entry!r} - needs string 'name' and exactly one of 'content'/'forbid'",
                 type="env_shell_rc",
-                name=str(name),
+                name=_entry_label(name),
                 message=f"invalid shell_rc entry {entry!r}: needs string 'name' and exactly one of 'content' (ensure) or 'forbid' (pattern)",
                 persist_across_sessions=True,
             )
@@ -3372,7 +3403,7 @@ def _env_phase_macos_defaults(ctx):
         fix_macos_default, flush_macos_defaults_cache,
     )
 
-    entries = _env_section_entries(ctx, "macos_defaults")
+    entries = _env_section_entries(ctx, "macos_defaults", "env_macos_default")
     if entries is None:
         return
     fixed_any = False
@@ -3380,7 +3411,9 @@ def _env_phase_macos_defaults(ctx):
         domain = entry.get("domain") if isinstance(entry, dict) else None
         key = entry.get("key") if isinstance(entry, dict) else None
         value = entry.get("value") if isinstance(entry, dict) else None
-        label = f"{domain}.{key}"
+        label = (f"{domain}.{key}"
+                 if isinstance(domain, str) and isinstance(key, str)
+                 else "(unnamed)")
         if not (isinstance(domain, str) and domain and isinstance(key, str)
                 and key) or defaults_expected_string(value) is None:
             ctx.fail(
@@ -3437,7 +3470,7 @@ def _env_phase_macos_hotkeys(ctx):
         apply_symbolic_hotkeys, hotkey_state, read_symbolic_hotkeys,
     )
 
-    entries = _env_section_entries(ctx, "macos_hotkeys")
+    entries = _env_section_entries(ctx, "macos_hotkeys", "env_macos_hotkey")
     if entries is None:
         return
     applicable = []
@@ -3453,7 +3486,7 @@ def _env_phase_macos_hotkeys(ctx):
             ctx.fail(
                 f"macos_hotkey: INVALID entry {entry!r} - needs int 'id' and int-list 'parameters'",
                 type="env_macos_hotkey",
-                name=str(hid),
+                name=_entry_label(hid),
                 message=f"invalid macos_hotkeys entry {entry!r}: needs int 'id' and a non-empty int list 'parameters'",
                 persist_across_sessions=True,
             )
@@ -3535,7 +3568,7 @@ def _env_phase_login_items(ctx):
         add_login_item, check_login_item, expand_env_path,
     )
 
-    entries = _env_section_entries(ctx, "login_items")
+    entries = _env_section_entries(ctx, "login_items", "env_login_item")
     if entries is None:
         return
     for entry in entries:
@@ -3545,7 +3578,7 @@ def _env_phase_login_items(ctx):
             ctx.fail(
                 f"login_item: INVALID entry {entry!r} - needs string 'name' and 'path'",
                 type="env_login_item",
-                name=str(name),
+                name=_entry_label(name),
                 message=f"invalid login_items entry {entry!r}: needs string 'name' and 'path'",
                 persist_across_sessions=True,
             )
@@ -3627,7 +3660,7 @@ def _env_phase_env_checks(ctx):
     """
     from .env_features import ENV_CHECK_DEFAULT_TIMEOUT, run_env_command
 
-    entries = _env_section_entries(ctx, "env_checks")
+    entries = _env_section_entries(ctx, "env_checks", "env_check")
     if entries is None:
         return
     for entry in entries:
@@ -3639,7 +3672,7 @@ def _env_phase_env_checks(ctx):
             ctx.fail(
                 f"env_check: INVALID entry {entry!r} - needs string 'name' and 'check' (plus optional string 'fix')",
                 type="env_check",
-                name=str(name),
+                name=_entry_label(name),
                 message=f"invalid env_checks entry {entry!r}: needs string 'name' and 'check', plus an optional string 'fix'",
                 persist_across_sessions=True,
             )
@@ -3751,7 +3784,7 @@ def _validate_env_machines(ctx, merged, hostname, current_os):
     personalization refuses to guess. On success, sets ``ctx.machine_key``
     and ``ctx.machine``.
     """
-    from .env_manifest import resolve_machine, validate_hosts_filters
+    from .env_manifest import resolve_machine, validate_entry_filters
 
     machines = merged.get("machines")
     if not isinstance(machines, dict) or not machines:
@@ -3778,18 +3811,18 @@ def _validate_env_machines(ctx, merged, hostname, current_os):
 
     known = ", ".join(sorted(machines))
 
-    # hosts-filter validation (typo protection) is registry-level -- run it
-    # before host resolution so a filter typo surfaces even on a machine
-    # that is itself unregistered on a later pass.
-    filter_errors = validate_hosts_filters(merged, machines)
+    # Entry-filter validation (list shape + hosts typo protection) is
+    # registry-level -- run it before host resolution so a filter error
+    # surfaces even on a machine that is itself unregistered on a later pass.
+    filter_errors = validate_entry_filters(merged, machines)
     for err in filter_errors:
         ctx.fail(
-            f"hosts filter INVALID - {err}",
+            f"entry filter INVALID - {err}",
             type="env_manifest",
-            name="hosts_filter",
+            name="entry_filter",
             message=err,
             agent_msg=(
-                f"env.json hosts-filter validation failed: {err} Fix the "
+                f"env.json entry-filter validation failed: {err} Fix the "
                 "manifest, then ask the user to type 'fix-all' to re-run "
                 "bootstrap."
             ),

@@ -299,7 +299,8 @@ install commands in any later phase (e.g. a tool `install` invoking
 
 **PATH is not an env_vars concern**: PATH modification belongs exclusively to
 `path_entries` and the tool→PATH linkage. Do not declare PATH (or PATH-like
-prepend/append edits) as an `env_vars` entry.
+prepend/append edits) as an `env_vars` entry — the engine rejects an entry
+named `PATH` (any case) as a hard failure before any export or write.
 
 **`env_vars` is bootstrap.json's alone.** Environment variables are a
 provisioning concern (software can require a variable to run correctly), so
@@ -973,9 +974,10 @@ is refused rather than guessed.
   opaque to the engine — it reads only `os` — but travel with the registry so a
   single source of truth serves both.
 
-Each of the four registry violations (missing registry, hosts-filter typo, unknown
-machine, os mismatch) is a single descriptive persistent failure with an agent-facing
-`fix-all` message; none is auto-fixable — the registry is the user's to correct.
+Each registry violation (missing registry, non-list `os`/`hosts` filter value,
+hosts-filter typo, unknown machine, os mismatch) is a single descriptive persistent
+failure with an agent-facing `fix-all` message; none is auto-fixable — the registry
+is the user's to correct.
 
 ## Entry filters: `os` and `hosts`
 
@@ -988,7 +990,9 @@ Every entry in every `env.json` array accepts two optional filters:
 Omitted = applies everywhere `env.json` applies. Both present = **intersection**.
 An entry filtered out on this machine logs a verbose skip line (it is *not* a
 failure and does not affect the pass result). These are hostname lists, not tags
-(a five-machine fleet; tags would be YAGNI).
+(a five-machine fleet; tags would be YAGNI). Filter values must be lists — a
+scalar (e.g. `"os": "macos"`) is a validation failure, surfaced with the same
+registry-level machinery as a hosts-filter typo.
 
 ## The env gate (`env_state.json`)
 

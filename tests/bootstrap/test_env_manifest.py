@@ -26,7 +26,7 @@ from bootstrap_lib.env_manifest import (
     load_layered_env_manifests,
     read_env_state,
     resolve_machine,
-    validate_hosts_filters,
+    validate_entry_filters,
     write_env_state,
 )
 from bootstrap_lib.manifest_merge import merge_env_manifests
@@ -356,17 +356,58 @@ class TestMachinesValidation:
         assert "machines" in result.failures[0]["message"]
         assert read_env_state(str(run_env_pass.data_dir))["last_result"] == "failed"
 
-    def test_validate_hosts_filters_walks_all_sections(self):
+    def test_validate_entry_filters_walks_all_sections(self):
         machines = {"a": {"os": "macos"}}
         merged = {
             "machines": machines,
             "symlinks": [{"name": "s", "hosts": ["b"]}],
             "future_section": [{"name": "f", "hosts": ["c"]}],
         }
-        errors = validate_hosts_filters(merged, machines)
+        errors = validate_entry_filters(merged, machines)
         assert len(errors) == 2
         assert any("symlinks entry 's'" in e for e in errors)
         assert any("future_section entry 'f'" in e for e in errors)
+
+    @pytest.mark.parametrize("filt,value", [
+        ("os", "ubuntu"),           # scalar string: 'in' would substring-match
+        ("hosts", "testhost"),      # scalar string: would iterate characters
+        ("os", {"ubuntu": True}),   # wrong container type
+    ])
+    def test_non_list_filter_is_a_validation_error(self, filt, value):
+        machines = {"testhost": {"os": "ubuntu"}}
+        merged = {
+            "machines": machines,
+            "symlinks": [{"name": "s", filt: value}],
+        }
+        errors = validate_entry_filters(merged, machines)
+        assert len(errors) == 1
+        assert f"'{filt}' filter must be a list" in errors[0]
+        assert "symlinks entry 's'" in errors[0]
+
+    def test_scalar_filter_fails_the_env_pass(
+        self, isolated_home, run_env_pass
+    ):
+        """A scalar os filter is a persistent failure item; the entry never
+        runs (scalar 'in' substring semantics must not silently apply it)."""
+        target = isolated_home / "t"
+        source = isolated_home / "src"
+        source.write_text("x")
+        _write_json(isolated_home / ".claude" / "env.json", {
+            "machines": {"testhost": {"os": "ubuntu"}},
+            "symlinks": [{"name": "s", "source": str(source),
+                          "target": str(target), "os": "ubuntu"}],
+        })
+
+        result = run_env_pass()
+
+        assert len(result.failures) == 1
+        failure = result.failures[0]
+        assert failure["type"] == "env_manifest"
+        assert failure["name"] == "entry_filter"
+        assert failure["persist_across_sessions"] is True
+        assert "'os' filter must be a list" in failure["message"]
+        assert not target.exists()
+        assert read_env_state(str(run_env_pass.data_dir))["last_result"] == "failed"
 
 
 class TestUnknownSections:

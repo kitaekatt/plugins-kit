@@ -657,12 +657,23 @@ class TestFiltersAndValidation:
         assert len(result.failures) == 1
         assert "invalid env_checks entry" in result.failures[0]["message"]
 
+    def test_unnamed_invalid_entry_uses_placeholder(
+        self, isolated_home, run_env_pass
+    ):
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(env_checks=[{"check": "true"}]))
+        result = run_env_pass()
+        assert len(result.failures) == 1
+        assert result.failures[0]["name"] == "(unnamed)"
+
     def test_non_array_section_is_a_failure(self, isolated_home, run_env_pass):
         _write_json(isolated_home / ".claude" / "env.json",
                     _manifest(env_checks={"name": "not-a-list"}))
         result = run_env_pass()
         assert len(result.failures) == 1
         assert "must be an array" in result.failures[0]["message"]
+        # Section-shape errors carry the section's per-entry type (singular).
+        assert result.failures[0]["type"] == "env_check"
 
 
 # ---------------------------------------------------------------------------

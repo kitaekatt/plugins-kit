@@ -291,6 +291,16 @@ class TestSymlinks:
         result = run_env_pass()
         assert len(result.failures) == 1
         assert "invalid symlinks entry" in result.failures[0]["message"]
+        assert result.failures[0]["name"] == "broken"
+
+    def test_unnamed_invalid_entry_uses_placeholder(
+        self, isolated_home, run_env_pass
+    ):
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(symlinks=[{"source": "~/x"}]))
+        result = run_env_pass()
+        assert len(result.failures) == 1
+        assert result.failures[0]["name"] == "(unnamed)"
 
     def test_devroot_expansion_via_env_var(
         self, isolated_home, run_env_pass, monkeypatch
@@ -339,6 +349,45 @@ class TestCheckSymlinkUnit:
         assert "same path" in msg
         assert path.is_file() and not path.is_symlink()
         assert path.read_text() == "precious"
+
+    def test_fix_refuses_directory_symlink_alias(self, tmp_path):
+        """Textually distinct paths that are the same file (target reaches
+        the source through a symlinked ancestor dir) must never destroy the
+        source -- the realpath guard, not just the abspath one."""
+        real = tmp_path / "real"
+        real.mkdir()
+        source = real / "f.toml"
+        source.write_text("precious")
+        alias = tmp_path / "alias"
+        alias.symlink_to(real)
+        target = alias / "f.toml"
+
+        ok, msg = fix_symlink(str(source), str(target), backup=False)
+
+        assert not ok
+        assert "resolve to the same file" in msg
+        assert source.is_file() and not source.is_symlink()
+        assert source.read_text() == "precious"
+
+    def test_fix_creates_link_under_symlinked_ancestor_to_other_file(
+        self, tmp_path
+    ):
+        """The realpath guard must not refuse the normal create case: a
+        missing target under a symlinked ancestor pointing at a DIFFERENT
+        file still gets linked."""
+        real = tmp_path / "real"
+        real.mkdir()
+        source = tmp_path / "src.toml"
+        source.write_text("x")
+        alias = tmp_path / "alias"
+        alias.symlink_to(real)
+        target = alias / "link.toml"
+
+        ok, msg = fix_symlink(str(source), str(target), backup=False)
+
+        assert ok
+        assert target.is_symlink()
+        assert check_symlink(str(source), str(target)).passed
 
 
 class TestSymlinkSourceEqualsTarget:
@@ -1226,6 +1275,8 @@ class TestSectionShape:
         result = run_env_pass()
         assert len(result.failures) == 1
         assert "must be an array" in result.failures[0]["message"]
+        # Section-shape errors carry the section's per-entry type (singular).
+        assert result.failures[0]["type"] == "env_symlink"
 
     def test_feature_failure_stamps_pass_failed(
         self, isolated_home, run_env_pass

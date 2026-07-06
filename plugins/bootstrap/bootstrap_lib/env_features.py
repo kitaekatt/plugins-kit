@@ -175,6 +175,16 @@ def fix_symlink(source: str, target: str, backup: bool) -> Tuple[bool, str]:
     sibling when ``backup`` is true, else removed. An existing symlink
     (wrong or dangling) is replaced without backup -- a link carries no
     content worth keeping. A directory at target is never replaced.
+
+    Two self-alias guards protect the source: a textual one (source and
+    target are the same path) and a resolved one (textually distinct paths
+    that are the same file, e.g. the target reaches the source through a
+    symlinked ancestor directory) -- replacing either would destroy the
+    source. The resolved guard runs after the source-exists check, so
+    ``os.path.realpath(source)`` names a real file; the normal create case
+    (target does not exist) can never trip it, because the realpath of a
+    non-existent target resolves only through existing ancestors and its
+    final component still does not exist.
     """
     if os.path.abspath(source) == os.path.abspath(target):
         return False, (
@@ -183,6 +193,14 @@ def fix_symlink(source: str, target: str, backup: bool) -> Tuple[bool, str]:
         )
     if not os.path.exists(source):
         return False, f"source does not exist: {source}"
+    real_source = os.path.realpath(source)
+    if real_source == os.path.realpath(target):
+        return False, (
+            f"source and target resolve to the same file: {source} and "
+            f"{target} are both {real_source} -- refusing (a symlink in the "
+            f"target's path aliases it onto the source; replacing it would "
+            f"destroy the source)"
+        )
 
     try:
         parent = os.path.dirname(target)

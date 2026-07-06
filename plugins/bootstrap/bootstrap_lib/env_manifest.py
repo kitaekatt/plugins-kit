@@ -17,9 +17,10 @@ builds on:
 - **Machine identity** (spec 4.2): the ``machines`` registry keys are
   hostnames; the current hostname resolves exact-match-first, then by the
   domain-stripped short form (terminalcolor-init's precedent -- one rule).
-  Unknown machine, a declared-vs-detected os mismatch, and a ``hosts``
-  filter naming an unregistered hostname are all hard errors surfaced by
-  the engine; there are no fallbacks.
+  Unknown machine, a declared-vs-detected os mismatch, a non-list
+  ``os``/``hosts`` filter value, and a ``hosts`` filter naming an
+  unregistered hostname are all hard errors surfaced by the engine; there
+  are no fallbacks.
 - **The env gate** (spec 4.4): a dedicated stamp, ``env_state.json`` in
   bootstrap's data dir, records the sha256 of the canonical merged
   manifest, the engine version, and the last result. The env phase runs
@@ -130,14 +131,20 @@ def resolve_machine(machines, hostname):
     return None
 
 
-def validate_hosts_filters(merged, machines):
-    """Validate every entry-level ``hosts`` filter against the registry.
+def validate_entry_filters(merged, machines):
+    """Validate every entry-level ``os``/``hosts`` filter in the manifest.
 
-    Every hostname referenced by any entry's ``hosts:`` filter must exist as
-    a ``machines`` key (typo protection, spec 4.2). Walks every list-valued
-    section of the merged manifest -- section-agnostic, so filters in
-    sections this engine version does not yet handle are still validated
-    (hostnames are registry facts, not section semantics).
+    Two rules, both section-agnostic (walks every list-valued section of the
+    merged manifest, so filters in sections this engine version does not yet
+    handle are still validated -- filters are manifest facts, not section
+    semantics):
+
+    - **Shape**: a present ``os`` or ``hosts`` filter must be a list. A
+      scalar (e.g. ``"os": "macos"``) would silently fall into Python
+      substring semantics under ``in`` -- a validation failure, never a
+      guess.
+    - **Registry** (typo protection, spec 4.2): every hostname referenced by
+      any entry's ``hosts`` filter must exist as a ``machines`` key.
 
     Returns a list of descriptive error strings (empty when valid).
     """
@@ -150,12 +157,24 @@ def validate_hosts_filters(merged, machines):
         for entry in value:
             if not isinstance(entry, dict):
                 continue
+            label = entry.get("name", entry.get("id", "(unnamed)"))
+            bad_shape = False
+            for filt in ("os", "hosts"):
+                filter_value = entry.get(filt)
+                if filter_value is not None and not isinstance(filter_value, list):
+                    bad_shape = True
+                    errors.append(
+                        f"{section} entry '{label}': '{filt}' filter must be "
+                        f"a list, got {type(filter_value).__name__} "
+                        f"{filter_value!r}. Write \"{filt}\": [...]."
+                    )
+            if bad_shape:
+                continue
             hosts = entry.get("hosts")
             if not hosts:
                 continue
             unregistered = [str(h) for h in hosts if h not in machines]
             if unregistered:
-                label = entry.get("name", entry.get("id", "<unnamed>"))
                 errors.append(
                     f"{section} entry '{label}': hosts filter names "
                     f"unregistered machine(s) {', '.join(unregistered)}. "

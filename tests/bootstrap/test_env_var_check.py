@@ -300,6 +300,40 @@ class TestEnvVarsPhase:
         assert "needs string 'name' and 'value'" in failures[0]["message"]
         assert any("INVALID" in e for e in action_entries)
 
+    def test_unnamed_invalid_entry_uses_placeholder(
+        self, isolated_home, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
+        manifest = {"env_vars": [{"value": "~/Dev"}]}
+
+        with patch.dict(os.environ):
+            failures, _action, _ok = self._run(manifest, tmp_path)
+
+        assert len(failures) == 1
+        assert failures[0]["name"] == "(unnamed)"
+
+    @pytest.mark.parametrize("name", ["PATH", "Path", "path"])
+    def test_path_entry_is_rejected(
+        self, isolated_home, tmp_path, monkeypatch, name
+    ):
+        """PATH (any case) is a hard failure: PATH edits belong exclusively
+        to path_entries + tool->PATH linkage (spec directive 3). The guard
+        fires before any export or persistence write."""
+        env_file = tmp_path / "claude-env"
+        monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
+        manifest = {"env_vars": [{"name": name, "value": "/clobbered"}]}
+
+        with patch.dict(os.environ):
+            failures, action_entries, _ok = self._run(manifest, tmp_path)
+            assert os.environ.get(name) != "/clobbered"
+
+        assert len(failures) == 1
+        assert failures[0]["type"] == "env_var"
+        assert "path_entries" in failures[0]["message"]
+        assert any("REFUSED" in e for e in action_entries)
+        assert not env_file.exists()  # no CLAUDE_ENV_FILE export happened
+        assert not (isolated_home / ".bashrc").exists()  # no persistence
+
 
 class TestEnvVarsLayerMerge:
     """env_vars merges across manifest layers by name (identity-keyed)."""
