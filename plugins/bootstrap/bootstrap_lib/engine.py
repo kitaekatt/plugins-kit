@@ -3199,15 +3199,416 @@ class _EnvManifestContext(_ManifestContext):
         return entry_applies(entry, self.current_os, self.machine_key)
 
 
+def _env_section_entries(ctx, section):
+    """The section's entry list, or None after one descriptive failure.
+
+    Every env.json feature section is an array of entry objects; anything
+    else is a manifest error surfaced per-section (not a crash, not a
+    guess).
+    """
+    value = ctx.manifest.get(section)
+    if isinstance(value, list):
+        return value
+    ctx.fail(
+        f"{section}: INVALID section - expected an array of entries, got {type(value).__name__}",
+        type=f"env_{section}",
+        name=section,
+        message=f"env.json '{section}' must be an array of entries, got {type(value).__name__}",
+        persist_across_sessions=True,
+    )
+    return None
+
+
+def _env_phase_symlinks(ctx):
+    """symlinks: ensure target is a symlink pointing at source (spec 4.3).
+
+    env-config ConfigLinkManager semantics translated to the engine's
+    check -> fix -> authoritative re-check idiom: a real file at target is
+    preserved as a timestamped backup when the entry sets backup: true; a
+    directory at target is never replaced; a missing source is a
+    descriptive failure (personalization refuses to guess).
+    """
+    from .env_features import check_symlink, expand_env_path, fix_symlink
+
+    entries = _env_section_entries(ctx, "symlinks")
+    if entries is None:
+        return
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        source = entry.get("source") if isinstance(entry, dict) else None
+        target = entry.get("target") if isinstance(entry, dict) else None
+        if not (isinstance(name, str) and name and isinstance(source, str)
+                and source and isinstance(target, str) and target):
+            ctx.fail(
+                f"symlink: INVALID entry {entry!r} - needs string 'name', 'source' and 'target'",
+                type="env_symlink",
+                name=str(name),
+                message=f"invalid symlinks entry {entry!r}: needs string 'name', 'source' and 'target'",
+                persist_across_sessions=True,
+            )
+            continue
+        if not ctx.entry_applies(entry):
+            ctx.ok(f"symlink {name}: skipped (os/hosts filter)")
+            continue
+        try:
+            src = expand_env_path(source)
+            tgt = expand_env_path(target)
+        except ValueError as e:
+            ctx.fail(
+                f"symlink {name}: FAILED - {e}",
+                type="env_symlink", name=name, message=f"{name}: {e}",
+                persist_across_sessions=True,
+            )
+            continue
+
+        result = check_symlink(src, tgt)
+        if result.passed:
+            ctx.ok(f"symlink {name}: ok - {result.message}")
+            continue
+        fix_ok, msg = fix_symlink(src, tgt, backup=bool(entry.get("backup", False)))
+        recheck = check_symlink(src, tgt)
+        if fix_ok and recheck.passed:
+            ctx.action(f"symlink {name}: {msg}")
+        else:
+            detail = msg if not fix_ok else (
+                f"fix reported '{msg}' but re-check failed: {recheck.message}"
+            )
+            ctx.fail(
+                f"symlink {name}: FAILED - {detail}",
+                type="env_symlink", name=name, message=f"{name}: {detail}",
+                persist_across_sessions=True,
+            )
+
+
+def _env_phase_shell_rc(ctx):
+    """shell_rc: rc-file assertions, two modes (spec 3.1 feature 2).
+
+    ensure (`content`): the SHELL_NAME-rendered block is present in every
+    existing rc file among ~/.bashrc and ~/.zshrc; a fresh machine gets the
+    platform-default rc created. forbid (`forbid`): the regex must not
+    match any rc line; the fix comments matching lines out. Exactly one
+    mode per entry. Authoring rule (spec directive 3): shell_rc never
+    carries PATH lines -- PATH belongs exclusively to bootstrap.
+    """
+    import re as _re
+    from .env_features import (
+        check_shell_ensure, check_shell_forbid,
+        fix_shell_ensure, fix_shell_forbid,
+    )
+
+    entries = _env_section_entries(ctx, "shell_rc")
+    if entries is None:
+        return
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        content = entry.get("content") if isinstance(entry, dict) else None
+        forbid = entry.get("forbid") if isinstance(entry, dict) else None
+        has_content = isinstance(content, str) and bool(content.strip())
+        has_forbid = isinstance(forbid, str) and bool(forbid)
+        if not (isinstance(name, str) and name) or has_content == has_forbid:
+            ctx.fail(
+                f"shell_rc: INVALID entry {entry!r} - needs string 'name' and exactly one of 'content'/'forbid'",
+                type="env_shell_rc",
+                name=str(name),
+                message=f"invalid shell_rc entry {entry!r}: needs string 'name' and exactly one of 'content' (ensure) or 'forbid' (pattern)",
+                persist_across_sessions=True,
+            )
+            continue
+        if not ctx.entry_applies(entry):
+            ctx.ok(f"shell_rc {name}: skipped (os/hosts filter)")
+            continue
+
+        if has_forbid:
+            try:
+                _re.compile(forbid)
+            except _re.error as e:
+                ctx.fail(
+                    f"shell_rc {name}: INVALID forbid pattern - {e}",
+                    type="env_shell_rc", name=name,
+                    message=f"{name}: invalid forbid regex {forbid!r}: {e}",
+                    persist_across_sessions=True,
+                )
+                continue
+            result = check_shell_forbid(name, forbid)
+            if result.passed:
+                ctx.ok(f"shell_rc {name}: ok - {result.message}")
+                continue
+            fix_ok, msg = fix_shell_forbid(forbid)
+            recheck = check_shell_forbid(name, forbid)
+        else:
+            result = check_shell_ensure(name, content)
+            if result.passed:
+                ctx.ok(f"shell_rc {name}: ok - {result.message}")
+                continue
+            fix_ok, msg = fix_shell_ensure(content, ctx.current_os)
+            recheck = check_shell_ensure(name, content)
+
+        if fix_ok and recheck.passed:
+            ctx.action(f"shell_rc {name}: {msg}")
+        else:
+            detail = msg if not fix_ok else (
+                f"fix reported '{msg}' but re-check failed: {recheck.message}"
+            )
+            ctx.fail(
+                f"shell_rc {name}: FAILED - {detail}",
+                type="env_shell_rc", name=name, message=f"{name}: {detail}",
+                persist_across_sessions=True,
+            )
+
+
+def _env_phase_macos_defaults(ctx):
+    """macos_defaults: `defaults read`/`write` assertions (spec 3.1 feature 3).
+
+    macOS-only: on any other OS the whole section no-ops with a verbose
+    skip line (entries may also carry os filters, but the mechanism itself
+    only exists on macOS). After any successful fix the standard
+    preference-cache flush runs once for the pass.
+    """
+    if ctx.current_os != "macos":
+        ctx.ok("macos_defaults: skipped (not macOS)")
+        return
+    from .env_features import (
+        check_macos_default, defaults_expected_string,
+        fix_macos_default, flush_macos_defaults_cache,
+    )
+
+    entries = _env_section_entries(ctx, "macos_defaults")
+    if entries is None:
+        return
+    fixed_any = False
+    for entry in entries:
+        domain = entry.get("domain") if isinstance(entry, dict) else None
+        key = entry.get("key") if isinstance(entry, dict) else None
+        value = entry.get("value") if isinstance(entry, dict) else None
+        label = f"{domain}.{key}"
+        if not (isinstance(domain, str) and domain and isinstance(key, str)
+                and key) or defaults_expected_string(value) is None:
+            ctx.fail(
+                f"macos_default: INVALID entry {entry!r} - needs string 'domain'/'key' and bool/int/string 'value'",
+                type="env_macos_default",
+                name=label,
+                message=f"invalid macos_defaults entry {entry!r}: needs string 'domain'/'key' and bool/int/string 'value'",
+                persist_across_sessions=True,
+            )
+            continue
+        if not ctx.entry_applies(entry):
+            ctx.ok(f"macos_default {label}: skipped (os/hosts filter)")
+            continue
+
+        result = check_macos_default(domain, key, value)
+        if result.passed:
+            ctx.ok(f"macos_default {label}: ok - {result.message}")
+            continue
+        fix_ok, msg = fix_macos_default(domain, key, value)
+        recheck = check_macos_default(domain, key, value)
+        if fix_ok and recheck.passed:
+            fixed_any = True
+            ctx.action(f"macos_default {label}: {msg}")
+        else:
+            detail = msg if not fix_ok else (
+                f"fix reported '{msg}' but re-check failed: {recheck.message}"
+            )
+            ctx.fail(
+                f"macos_default {label}: FAILED - {detail}",
+                type="env_macos_default", name=label,
+                message=f"{label}: {detail}",
+                persist_across_sessions=True,
+            )
+    if fixed_any:
+        flush_macos_defaults_cache()
+        ctx.ok("macos_defaults: preference cache flushed")
+
+
+def _env_phase_macos_hotkeys(ctx):
+    """macos_hotkeys: symbolic-hotkey remaps (spec 3.1 feature 4). macOS-only.
+
+    Check via one side-effect-free plist export compare; fix via ONE
+    export -> mutate -> import round-trip for the whole failing batch plus
+    the cache flush / process restarts (env-config
+    apply_macos_keyboard_shortcuts), then a fresh export re-checks each
+    fixed entry (the re-check is authoritative). An id absent from the
+    plist is a descriptive failure -- the fix only mutates existing hotkey
+    slots, it never fabricates one.
+    """
+    if ctx.current_os != "macos":
+        ctx.ok("macos_hotkeys: skipped (not macOS)")
+        return
+    from .env_features import (
+        apply_symbolic_hotkeys, hotkey_state, read_symbolic_hotkeys,
+    )
+
+    entries = _env_section_entries(ctx, "macos_hotkeys")
+    if entries is None:
+        return
+    applicable = []
+    for entry in entries:
+        hid = entry.get("id") if isinstance(entry, dict) else None
+        params = entry.get("parameters") if isinstance(entry, dict) else None
+        valid = (
+            isinstance(hid, int) and not isinstance(hid, bool)
+            and isinstance(params, list) and params
+            and all(isinstance(p, int) and not isinstance(p, bool) for p in params)
+        )
+        if not valid:
+            ctx.fail(
+                f"macos_hotkey: INVALID entry {entry!r} - needs int 'id' and int-list 'parameters'",
+                type="env_macos_hotkey",
+                name=str(hid),
+                message=f"invalid macos_hotkeys entry {entry!r}: needs int 'id' and a non-empty int list 'parameters'",
+                persist_across_sessions=True,
+            )
+            continue
+        if not ctx.entry_applies(entry):
+            ctx.ok(f"macos_hotkey {hid}: skipped (os/hosts filter)")
+            continue
+        applicable.append(entry)
+    if not applicable:
+        return
+
+    data, err = read_symbolic_hotkeys()
+    if data is None:
+        ctx.fail(
+            f"macos_hotkeys: FAILED - {err}",
+            type="env_macos_hotkey", name="macos_hotkeys", message=err,
+            persist_across_sessions=True,
+        )
+        return
+
+    def _label(entry):
+        return entry.get("description") or f"id {entry['id']}"
+
+    failing = []
+    for entry in applicable:
+        status, detail = hotkey_state(
+            data, entry["id"], entry["parameters"], entry.get("enabled", True))
+        if status == "ok":
+            ctx.ok(f"macos_hotkey {entry['id']}: ok - {_label(entry)}")
+        elif status == "missing":
+            ctx.fail(
+                f"macos_hotkey {entry['id']}: FAILED - {detail}",
+                type="env_macos_hotkey", name=str(entry["id"]),
+                message=f"{_label(entry)}: {detail} (the fix only remaps existing hotkeys)",
+                persist_across_sessions=True,
+            )
+        else:
+            failing.append(entry)
+    if not failing:
+        return
+
+    fix_ok, msg = apply_symbolic_hotkeys(data, failing)
+    redata, rerr = read_symbolic_hotkeys()
+    for entry in failing:
+        if redata is None:
+            re_ok, detail = False, rerr
+        else:
+            status, detail = hotkey_state(
+                redata, entry["id"], entry["parameters"],
+                entry.get("enabled", True))
+            re_ok = status == "ok"
+        if fix_ok and re_ok:
+            ctx.action(f"macos_hotkey {entry['id']}: applied - {_label(entry)}")
+        else:
+            detail2 = msg if not fix_ok else (
+                f"fix reported '{msg}' but re-check failed: {detail}"
+            )
+            ctx.fail(
+                f"macos_hotkey {entry['id']}: FAILED - {detail2}",
+                type="env_macos_hotkey", name=str(entry["id"]),
+                message=f"{_label(entry)}: {detail2}",
+                persist_across_sessions=True,
+            )
+
+
+def _env_phase_login_items(ctx):
+    """login_items: macOS login-item autostart via System Events (spec 3.1).
+
+    macOS-only. The declared app must exist on disk: a missing app is a
+    persistent failure (NOT env-config's warning-skip -- under the env
+    gate a silent skip would stamp the pass clean and never converge once
+    the app appears; a failure keeps the phase re-running until green,
+    which is the gate's convergence loop working as designed).
+    """
+    if ctx.current_os != "macos":
+        ctx.ok("login_items: skipped (not macOS)")
+        return
+    from .env_features import (
+        add_login_item, check_login_item, expand_env_path,
+    )
+
+    entries = _env_section_entries(ctx, "login_items")
+    if entries is None:
+        return
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        path = entry.get("path") if isinstance(entry, dict) else None
+        if not (isinstance(name, str) and name and isinstance(path, str) and path):
+            ctx.fail(
+                f"login_item: INVALID entry {entry!r} - needs string 'name' and 'path'",
+                type="env_login_item",
+                name=str(name),
+                message=f"invalid login_items entry {entry!r}: needs string 'name' and 'path'",
+                persist_across_sessions=True,
+            )
+            continue
+        if not ctx.entry_applies(entry):
+            ctx.ok(f"login_item {name}: skipped (os/hosts filter)")
+            continue
+        try:
+            app_path = expand_env_path(path)
+        except ValueError as e:
+            ctx.fail(
+                f"login_item {name}: FAILED - {e}",
+                type="env_login_item", name=name, message=f"{name}: {e}",
+                persist_across_sessions=True,
+            )
+            continue
+        if not os.path.exists(app_path):
+            ctx.fail(
+                f"login_item {name}: FAILED - app not found at {app_path}",
+                type="env_login_item", name=name,
+                message=(
+                    f"{name}: app not found at {app_path}. Install the app "
+                    f"(bootstrap tools run earlier in the same pass); the "
+                    f"env phase re-runs until this converges."
+                ),
+                persist_across_sessions=True,
+            )
+            continue
+
+        result = check_login_item(name)
+        if result.passed:
+            ctx.ok(f"login_item {name}: ok - {result.message}")
+            continue
+        fix_ok, msg = add_login_item(app_path, bool(entry.get("hidden", False)))
+        recheck = check_login_item(name)
+        if fix_ok and recheck.passed:
+            ctx.action(f"login_item {name}: {msg}")
+        else:
+            detail = msg if not fix_ok else (
+                f"fix reported '{msg}' but re-check failed: {recheck.message}"
+            )
+            ctx.fail(
+                f"login_item {name}: FAILED - {detail}",
+                type="env_login_item", name=name, message=f"{name}: {detail}",
+                persist_across_sessions=True,
+            )
+
+
 # The env.json phase table (spec 4.4). Section order is load-bearing:
 # `machines` validation runs first (in _process_env_pass, before dispatch),
 # then symlinks -> shell_rc -> macos_defaults -> macos_hotkeys ->
-# login_items -> env_checks (array order within each). The five declarative
-# feature handlers land with E1 step 4 and the env_checks contract with
-# step 5; each plugs in here as (("<section>",), _env_phase_<section>),
-# mirroring _MANIFEST_PHASES. Until a section has a handler here it is
-# reported as an ignored unknown key (forward compatibility, spec 4.5).
-_ENV_PHASES = ()
+# login_items -> env_checks (array order within each). The env_checks
+# contract lands with E1 step 5, plugging in here as
+# (("env_checks",), _env_phase_env_checks), mirroring _MANIFEST_PHASES.
+# Until a section has a handler here it is reported as an ignored unknown
+# key (forward compatibility, spec 4.5).
+_ENV_PHASES = (
+    (("symlinks",), _env_phase_symlinks),
+    (("shell_rc",), _env_phase_shell_rc),
+    (("macos_defaults",), _env_phase_macos_defaults),
+    (("macos_hotkeys",), _env_phase_macos_hotkeys),
+    (("login_items",), _env_phase_login_items),
+)
 
 
 def _validate_env_machines(ctx, merged, hostname, current_os):
