@@ -23,6 +23,20 @@ def _tool_result(name, passed, message, install_cmd=None, path=None, on_path=Fal
     )
 
 
+def resolve_bash() -> Optional[str]:
+    """Absolute path of the bash behind the engine's Windows/MSYS shim, or None.
+
+    This is the SINGLE discovery path for bash-on-Windows semantics: the
+    check/install shims here, :func:`bootstrap_lib.env_features.run_env_command`,
+    and elevation's Windows queued-command render all resolve through this
+    function, so every consumer agrees on WHICH bash runs a command. It finds
+    bash because Claude Code's SessionStart runs inside Git Bash (usr/bin on
+    PATH); elevated cmd.exe would not (Git for Windows exposes Git\\cmd only),
+    which is exactly why elevation embeds this ABSOLUTE path at render time.
+    """
+    return shutil.which("bash")
+
+
 def _dir_on_path(directory: str) -> bool:
     """True if `directory` is present in the current process PATH."""
     target = os.path.normcase(os.path.normpath(directory))
@@ -40,7 +54,7 @@ def _run_check_cmd(check_cmd: str) -> bool:
     """
     try:
         if sys.platform == "win32" or "MSYSTEM" in os.environ:
-            bash = shutil.which("bash")
+            bash = resolve_bash()
             if bash:
                 result = subprocess.run([bash, "-c", check_cmd], capture_output=True, text=True, timeout=30)
             else:
@@ -134,7 +148,7 @@ def run_install(install_cmd: str) -> tuple[bool, str]:
     """
     try:
         if sys.platform == "win32" or "MSYSTEM" in os.environ:
-            bash = shutil.which("bash")
+            bash = resolve_bash()
             if bash:
                 result = subprocess.run(
                     [bash, "-c", install_cmd],

@@ -23,7 +23,6 @@ belong exclusively to bootstrap ``path_entries`` (spec directive 3).
 import os
 import plistlib
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -31,6 +30,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from .result import Result
+from .tool_check import resolve_bash
 
 HOTKEYS_DOMAIN = "com.apple.symbolichotkeys"
 
@@ -106,7 +106,7 @@ def run_env_command(command: str, timeout: int) -> Tuple[Optional[int], str]:
     """
     try:
         if sys.platform == "win32" or "MSYSTEM" in os.environ:
-            bash = shutil.which("bash")
+            bash = resolve_bash()
             if bash:
                 proc = subprocess.run(
                     [bash, "-c", command], capture_output=True, text=True,

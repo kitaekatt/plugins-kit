@@ -25,7 +25,9 @@ per pass:
     is needed (per the decision record: "a script that tells the user why admin
     access is necessary"); a self-elevating ``.bat`` for Windows on the model of
     python_stub_check's ``fix_python_path.bat`` (UAC relaunch + fsutil admin
-    detect).
+    detect), whose queued commands run through the engine-resolved absolute
+    Git Bash (:func:`_windows_command_line`) since elevated cmd.exe neither
+    tilde-expands nor has bash on PATH.
   * :func:`write_or_clear_script` regenerates the script each pass from the
     current queue and DELETES a stale script when the queue is empty, so a script
     never lingers after its ops succeed.
@@ -48,6 +50,7 @@ from typing import List, Optional
 
 from .apt import sudo_noninteractive_available, windows_admin_available
 from .atomic_write import write_atomic
+from .tool_check import resolve_bash
 
 
 # Official Homebrew installer (non-interactive-unfriendly: it prompts and may
@@ -157,9 +160,11 @@ def _expand_home_refs(command: str) -> str:
     ``~/`` at the start of the string or after whitespace, and every ``$HOME``
     or ``${HOME}`` not followed by an identifier character (so
     ``$HOMEBREW_PREFIX`` is untouched), is replaced with
-    ``os.path.expanduser("~")``. Unix renders only; the Windows .bat has no
-    bash tilde semantics and UAC preserves the user profile. In-pass (non-
-    queued) execution is unaffected -- it already runs as the user.
+    ``os.path.expanduser("~")``. Unix renders only: the Windows .bat instead
+    runs each queued command through ``bash -c`` (see
+    :func:`_windows_command_line`), where ``~``/``$HOME`` expand natively as
+    the invoking user (UAC preserves the user profile). In-pass (non-queued)
+    execution is unaffected -- it already runs as the user.
     """
     home = os.path.expanduser("~")
     expanded = _HOME_VAR_RE.sub(lambda _m: home, command)
@@ -232,7 +237,52 @@ def _render_macos(queue: ElevationQueue, path: str) -> str:
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
+def _windows_command_line(cmd: str, bash: str) -> str:
+    """Render one queued ``method:"command"`` entry as a .bat line.
+
+    The .bat runs under elevated cmd.exe, where a verbatim queued command
+    breaks twice: cmd.exe never tilde-expands (``~/...`` stays a literal
+    argv), and ``bash`` is not resolvable on elevated cmd's PATH (Git for
+    Windows exposes Git\\cmd only; the engine finds bash because SessionStart
+    runs inside Git Bash). So the command is rendered through the
+    engine-resolved ABSOLUTE bash -- ``"<bash.exe>" -c "<command>"`` --
+    mirroring :func:`bootstrap_lib.env_features.run_env_command`'s in-pass
+    semantics exactly: ``~``/``$HOME`` expand INSIDE ``bash -c``, and the
+    launch is PATH-independent. ``bash`` comes from
+    :func:`bootstrap_lib.tool_check.resolve_bash` at RENDER time, on the same
+    machine that will run the .bat.
+
+    Quoting rule (deliberately simple, no cmd.exe escaping): the command is
+    embedded verbatim between ONE pair of double quotes, so it must not
+    itself contain a double quote -- current consumers (env_check fixes,
+    elevated install commands) do not, and the caller rejects one
+    descriptively rather than emitting a broken .bat.
+    """
+    return f'"{bash}" -c "{cmd}"'
+
+
 def _render_windows(queue: ElevationQueue) -> str:
+    bash = None
+    if queue.commands:
+        bash = resolve_bash()
+        if not bash:
+            raise RuntimeError(
+                "cannot render install-elevated.bat: bash not found on PATH at "
+                "render time, and the queued elevated command(s) must run via "
+                'Git for Windows bash ("<bash.exe>" -c ...) because elevated '
+                "cmd.exe neither tilde-expands nor has bash on its PATH. "
+                "Install Git for Windows (or run the session from Git Bash) "
+                "and start a new session."
+            )
+        for cmd in queue.commands:
+            if '"' in cmd:
+                raise ValueError(
+                    f"cannot render install-elevated.bat: queued command {cmd!r} "
+                    'contains a double quote, which the "<bash.exe>" -c '
+                    '"<command>" cmd.exe line cannot carry (no escaping rule; '
+                    "see _windows_command_line). Rewrite the command with "
+                    "single quotes."
+                )
     body = [
         "@echo off",
         "REM ============================================================",
@@ -273,11 +323,12 @@ def _render_windows(queue: ElevationQueue) -> str:
         "echo Running with administrator privileges.",
         "echo.",
         "",
-        "REM Commands deferred for elevation:",
+        "REM Commands deferred for elevation (each runs through Git Bash by",
+        "REM absolute path, so ~ and $HOME resolve and PATH does not matter):",
     ]
     for cmd in queue.commands:
         body.append(f"echo bootstrap-elevate: {cmd}")
-        body.append(cmd)
+        body.append(_windows_command_line(cmd, bash))
         body.append("if %errorlevel% neq 0 goto :failed")
     body.extend([
         "",
@@ -312,8 +363,12 @@ def render_script(queue: ElevationQueue, current_os: str, path: str) -> str:
     Unix renders pre-expand ``~``/``$HOME`` in queued commands to the invoking
     user's real home (see :func:`_expand_home_refs`): the script runs under
     sudo where HOME is root's, so verbatim home references would resolve
-    wrongly. Windows rendering is untouched (no bash tilde semantics; UAC
-    preserves the user profile).
+    wrongly. The Windows render instead wraps each queued command in the
+    engine-resolved absolute Git Bash -- ``"<bash.exe>" -c "<command>"`` (see
+    :func:`_windows_command_line`) -- because elevated cmd.exe neither
+    tilde-expands nor has bash on PATH; it raises descriptively when bash
+    cannot be resolved or a command carries a double quote, rather than emit
+    a broken .bat.
     """
     if current_os == "ubuntu":
         return _render_ubuntu(queue, path)
