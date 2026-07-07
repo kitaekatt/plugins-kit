@@ -146,6 +146,64 @@ class TestRenderMacos:
         assert "tic -x kitty.terminfo" in out
 
 
+class TestHomeExpansion:
+    """Queued commands with ~ / $HOME are pre-expanded to the INVOKING user's
+    home at render time: the Ubuntu script runs under `sudo bash` where
+    HOME=/root, so verbatim home references would resolve to root's home and
+    abort the script. Rule: ~/ at start-of-string or after whitespace, and
+    word-bounded $HOME / ${HOME}, become os.path.expanduser("~")."""
+
+    @pytest.fixture(autouse=True)
+    def fake_home(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/christina")
+
+    def test_ubuntu_tilde_command_expanded_in_label_and_body(self):
+        q = ElevationQueue(commands=["bash ~/.claude/scripts/env/sudoers.sh fix"])
+        out = elev.render_script(q, "ubuntu", "/p.sh")
+        expanded = "bash /home/christina/.claude/scripts/env/sudoers.sh fix"
+        assert f"# bootstrap-elevate: {expanded}\n{expanded}\n" in out
+        assert "~/.claude" not in out
+        # header notes the pre-expansion for the invoking user.
+        assert "pre-expanded to the invoking user's home" in out
+
+    def test_macos_home_var_command_expanded(self):
+        q = ElevationQueue(commands=['install -m 0644 "$HOME/kitty.terminfo" /usr/share/x'])
+        out = elev.render_script(q, "macos", "/p.sh")
+        assert 'install -m 0644 "/home/christina/kitty.terminfo" /usr/share/x' in out
+        assert "$HOME/kitty.terminfo" not in out
+
+    def test_all_embedded_occurrences_expanded(self):
+        q = ElevationQueue(commands=["bash ~/.claude/x.sh && cp ~/a ~/b && mv ${HOME}/c $HOME/d"])
+        out = elev.render_script(q, "ubuntu", "/p.sh")
+        assert ("bash /home/christina/.claude/x.sh && cp /home/christina/a "
+                "/home/christina/b && mv /home/christina/c /home/christina/d") in out
+
+    def test_rule_boundaries_no_shell_parsing(self):
+        # $HOMEBREW_PREFIX is a different variable (word boundary); a tilde not
+        # at start/after-whitespace is not a home reference. Both pass through.
+        q = ElevationQueue(commands=["echo $HOMEBREW_PREFIX --opt=~/x a~/b"])
+        out = elev.render_script(q, "ubuntu", "/p.sh")
+        assert "echo $HOMEBREW_PREFIX --opt=~/x a~/b" in out
+
+    def test_command_without_home_refs_unchanged(self):
+        cmd = "curl -fsSL https://example.com/i.sh | sh -s -- --system"
+        out = elev.render_script(ElevationQueue(commands=[cmd]), "ubuntu", "/p.sh")
+        assert f"# bootstrap-elevate: {cmd}\n{cmd}\n" in out
+
+    def test_apt_packages_not_touched(self):
+        # Expansion applies to command strings only; apt lines are package names.
+        q = ElevationQueue(apt_packages=["net-tools"])
+        out = elev.render_script(q, "ubuntu", "/p.sh")
+        assert "apt-get install -y net-tools" in out
+
+    def test_windows_render_out_of_scope(self):
+        # No bash tilde semantics in .bat; UAC preserves the user profile.
+        q = ElevationQueue(commands=["copy ~/x %TEMP%\\x"])
+        out = elev.render_script(q, "windows", "ignored")
+        assert "copy ~/x" in out
+        assert "/home/christina" not in out
+
+
 class TestRenderWindows:
     def test_self_elevating_preamble_and_commands(self):
         q = ElevationQueue(commands=["Enable-WindowsOptionalFeature -Online -FeatureName X"])
