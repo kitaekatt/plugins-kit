@@ -13,6 +13,10 @@ import pytest
 import bootstrap_lib.elevation as elev
 from bootstrap_lib.elevation import ElevationQueue
 
+# The engine-resolved Git Bash a Windows render would embed (tests pin the
+# resolver so goldens are hermetic on every dev platform).
+FAKE_BASH = "C:\\Program Files\\Git\\usr\\bin\\bash.exe"
+
 
 # --------------------------------------------------------------------------- #
 # Privilege dispatcher
@@ -196,15 +200,30 @@ class TestHomeExpansion:
         out = elev.render_script(q, "ubuntu", "/p.sh")
         assert "apt-get install -y net-tools" in out
 
-    def test_windows_render_out_of_scope(self):
-        # No bash tilde semantics in .bat; UAC preserves the user profile.
-        q = ElevationQueue(commands=["copy ~/x %TEMP%\\x"])
+    def test_windows_render_never_pre_expands(self, monkeypatch):
+        # Windows commands are NOT pre-expanded at render time: the queued
+        # command rides verbatim inside `"<bash.exe>" -c "..."`, where the
+        # tilde expands natively as the invoking user when the .bat runs.
+        monkeypatch.setattr(elev, "resolve_bash", lambda: FAKE_BASH)
+        q = ElevationQueue(commands=["copy ~/x /y"])
         out = elev.render_script(q, "windows", "ignored")
-        assert "copy ~/x" in out
+        assert f'"{FAKE_BASH}" -c "copy ~/x /y"' in out
         assert "/home/christina" not in out
 
 
 class TestRenderWindows:
+    """Queued method:"command" entries run under elevated cmd.exe, which
+    neither tilde-expands nor has bash on PATH (Git for Windows exposes
+    Git\\cmd only; SessionStart finds bash because it runs inside Git Bash).
+    So each command is rendered as `"<abs bash.exe>" -c "<command>"` --
+    run_env_command's in-pass semantics: ~/$HOME expand INSIDE bash -c,
+    launch is PATH-independent. bash is resolved at render time via the
+    shim's single resolver (tool_check.resolve_bash)."""
+
+    @pytest.fixture(autouse=True)
+    def pinned_bash(self, monkeypatch):
+        monkeypatch.setattr(elev, "resolve_bash", lambda: FAKE_BASH)
+
     def test_self_elevating_preamble_and_commands(self):
         q = ElevationQueue(commands=["Enable-WindowsOptionalFeature -Online -FeatureName X"])
         out = elev.render_script(q, "windows", "ignored")
@@ -213,12 +232,55 @@ class TestRenderWindows:
         assert "fsutil dirty query" in out
         assert "Start-Process -FilePath '%~f0' -Verb RunAs" in out
         assert ":is_admin" in out
-        # the deferred command is present. The body is authored with plain \n;
-        # CRLF is applied ONCE at write time (see the on-disk bytes test below).
-        assert "Enable-WindowsOptionalFeature -Online -FeatureName X" in out
+        # the deferred command is present, wrapped in the absolute bash. The
+        # body is authored with plain \n; CRLF is applied ONCE at write time
+        # (see the on-disk bytes test below).
+        assert (f'"{FAKE_BASH}" -c '
+                '"Enable-WindowsOptionalFeature -Online -FeatureName X"') in out
         assert "\r" not in out
         # self-delete idiom present.
         assert '(goto) 2>nul & del "%~f0"' in out
+
+    def test_tilde_command_golden_lines(self):
+        # E4's shape: an env_check fix queued for elevation. Golden: echo
+        # label (verbatim command), then the two-level cmd.exe line -- quoted
+        # absolute bash.exe, -c, the command verbatim in ONE pair of double
+        # quotes (tilde untouched: it expands inside bash -c on the target
+        # machine) -- then the errorlevel check.
+        cmd = "bash ~/.claude/scripts/env/ssh-server-windows.sh fix"
+        out = elev.render_script(ElevationQueue(commands=[cmd]), "windows", "ignored")
+        assert (
+            f"echo bootstrap-elevate: {cmd}\n"
+            f'"{FAKE_BASH}" -c "{cmd}"\n'
+            "if %errorlevel% neq 0 goto :failed\n"
+        ) in out
+        # never rendered bare: every occurrence of the command is the echo
+        # label or inside the bash -c wrapper.
+        assert f"\n{cmd}\n" not in out
+        # tilde is NOT pre-expanded (contrast with the unix renders).
+        assert "~/.claude" in out
+
+    def test_multiple_commands_each_wrapped(self):
+        q = ElevationQueue(commands=["bash ~/a.sh fix", "bash ~/b.sh fix"])
+        out = elev.render_script(q, "windows", "ignored")
+        assert f'"{FAKE_BASH}" -c "bash ~/a.sh fix"' in out
+        assert f'"{FAKE_BASH}" -c "bash ~/b.sh fix"' in out
+        assert out.index("a.sh") < out.index("b.sh")
+
+    def test_bash_unresolvable_fails_render_descriptively(self, monkeypatch):
+        # No bash at render time -> fail the render (never emit a .bat whose
+        # commands cannot run), with a descriptive, actionable message.
+        monkeypatch.setattr(elev, "resolve_bash", lambda: None)
+        with pytest.raises(RuntimeError, match="bash not found on PATH"):
+            elev.render_script(ElevationQueue(commands=["bash ~/x.sh fix"]), "windows", "p")
+
+    def test_double_quote_in_command_rejected(self):
+        # The two-level `"bash.exe" -c "cmd"` line has no escaping rule; a
+        # command carrying a double quote would break the .bat's quoting, so
+        # the render rejects it descriptively instead.
+        with pytest.raises(ValueError, match="double quote"):
+            elev.render_script(
+                ElevationQueue(commands=['sh -c "echo hi"']), "windows", "p")
 
     def test_unknown_os_raises(self):
         with pytest.raises(ValueError):
@@ -238,15 +300,17 @@ class TestWriteOrClearScript:
         assert path.endswith(os.path.join("elevate", "install-elevated.sh"))
         assert "apt-get install -y net-tools" in open(path).read()
 
-    def test_windows_script_basename_is_bat(self, tmp_path):
+    def test_windows_script_basename_is_bat(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(elev, "resolve_bash", lambda: FAKE_BASH)
         q = ElevationQueue(commands=["x"])
         path = elev.write_or_clear_script(q, str(tmp_path), "windows")
         assert path.endswith("install-elevated.bat")
 
-    def test_windows_on_disk_bytes_are_crlf_never_crcrlf(self, tmp_path):
+    def test_windows_on_disk_bytes_are_crlf_never_crcrlf(self, tmp_path, monkeypatch):
         # The .bat must land with CRLF endings on EVERY platform (batch parsing
         # requires them), applied exactly once: text-mode translation of a
         # pre-joined \r\n body would produce \r\r\n on Windows.
+        monkeypatch.setattr(elev, "resolve_bash", lambda: FAKE_BASH)
         q = ElevationQueue(commands=["Enable-Feature X"])
         path = elev.write_or_clear_script(q, str(tmp_path), "windows")
         raw = open(path, "rb").read()
