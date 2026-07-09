@@ -267,8 +267,9 @@ def validate_ref(
         if not items_result.block_found:
             warnings.append(
                 f"no task_items block: {resolved.canonical}/plan.md does not "
-                "enumerate the open items -- add the task_items unit "
-                "(task-items contract)"
+                "enumerate the open items -- run the one-time conversion "
+                "(task skill references/handoff-template.md, 'Converting a "
+                "pre-contract folder')"
             )
         elif not items_result.errors:
             claude_md = folder / "CLAUDE.md"
