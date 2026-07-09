@@ -61,3 +61,33 @@ TASK_LIST_SCHEMA: dict = {
         },
     },
 }
+
+# task_items embedded item enumeration (design/task-items-design.md section 4):
+# { items: list[item] }, embedded in plan.md, one block per task. items may be
+# empty (a fresh task has nothing enumerated yet). Post-walker checks in
+# task_items.py (same layering as task.yaml's): state within the type's
+# item_state_vocabulary, priority against the type's priority pattern,
+# kebab-case ids, id uniqueness, block singularity + plan.md placement.
+TASK_ITEMS_SCHEMA: dict = {
+    "root": "task_items",
+    "keys": {
+        "items": {
+            "required": True,
+            "type": "list",
+            "items": {
+                "keys": {
+                    "id": {"required": True, "type": "string"},
+                    "title": {
+                        "required": True,
+                        "type": "string",
+                        "forbid_regex": r"^\s*$",
+                        "msg": "title must be non-empty",
+                    },
+                    "state": {"required": True, "type": "string"},
+                    "priority": {"required": False, "type": "string"},
+                    "note": {"required": False, "type": "string"},
+                },
+            },
+        },
+    },
+}

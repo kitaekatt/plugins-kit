@@ -29,6 +29,10 @@ class TaskType:
     schema: dict
     schema_versions: tuple[str, ...]
     closure_policy: dict
+    # Legal states for plan.md task_items entries (task-items design section
+    # 4): the in-flight triage buckets promoted to contract. Items share the
+    # type's priority_pattern -- one priority vocabulary system-wide.
+    item_state_vocabulary: tuple[str, ...] = ()
 
 
 HAND_OFF = TaskType(
@@ -36,6 +40,7 @@ HAND_OFF = TaskType(
     scaffolding=("CLAUDE.md", "plan.md", "log.md", "task.yaml"),
     state_vocabulary=("active", "blocked", "closed", "archived"),
     priority_pattern=r"^P[1-3]$",
+    item_state_vocabulary=("available", "in-flight", "blocked-user", "deferred"),
     schema=TASK_SCHEMA,
     schema_versions=("1",),
     closure_policy={

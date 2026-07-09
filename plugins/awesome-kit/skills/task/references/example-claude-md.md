@@ -39,7 +39,12 @@ REPLACE the existing <thing>; do NOT keep both. Validate on `<scope of validatio
 
 ## Immediate Priorities
 
-Near-term blockers, pending decisions, and concrete next actions framed against the state above and the goal above.
+Live menu: `task items` (plan.md's task_items block is the source of truth).
+
+Near-term blockers, pending decisions, and concrete next actions framed against the state above and the goal above. Work is named by backticked item id from plan.md's `task_items` block -- never with its state restated (state has one home):
+
+- Resume `<item-id-1>` (<one clause of framing>).
+- `<item-id-2>` and `<item-id-3>` are blocked on the question below.
 
 ### Open questions for the user
 
@@ -262,4 +267,5 @@ Sibling project root files (`<sibling-path>/`):
 - **The seam between `## Protocols` and `## Behaviors`.** Protocols name a trigger (turn 1 -> invoke skills + read docs + say the opening response sentence; end of every turn -> emit the three-part template). Behaviors apply continuously (autonomy status, authorizations, rules, anti-patterns) regardless of which protocol is firing.
 - **Vocabulary capture with a path decoder.** When prose names diverge from on-disk literals, `## Project vocabulary` names both AND explains the mapping. Saves the next agent from asking the user to translate.
 - **In-flight triage surfaced under `## Immediate Priorities`.** Blocked-on-user decisions get an explicit "Open questions for the user" subsection. The next agent surfaces these before tool use.
+- **Priorities as references.** The section names work by `task_items` id and never restates item state -- a pointer cannot drift from the item it points at (the task-items contract; see the task skill's handoff-template.md).
 - **One-line purpose per file under `## Relevant files`.** No "Files: a.md, b.md, c.md" lists. Every entry tells the next agent whether to open it.

@@ -36,6 +36,9 @@ LOCAL = "testhost"
 OTHER = "otherhost"
 
 
+PLAN_MD_SCAFFOLD = "# Plan\n\n```yaml\ntask_items:\n  items: []\n```\n"
+
+
 def make_task(
     project_root: Path,
     rel: str,
@@ -64,7 +67,8 @@ def make_task(
             yaml.safe_dump({"task": block}), encoding="utf-8"
         )
     if scaffolding:
-        for fname in ("CLAUDE.md", "plan.md", "log.md"):
+        (folder / "plan.md").write_text(PLAN_MD_SCAFFOLD, encoding="utf-8")
+        for fname in ("CLAUDE.md", "log.md"):
             (folder / fname).write_text("placeholder\n", encoding="utf-8")
     return folder
 

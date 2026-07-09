@@ -48,6 +48,7 @@ import yaml
 from skills_kit_lib import schema_engine
 
 from . import resolve
+from .task_items import read_task_items, stale_priority_refs
 from .types import DEFAULT_TYPE_NAME, TaskType, get_type
 
 
@@ -253,6 +254,35 @@ def validate_ref(
             reason = _dangling_reason(entry, project_root)
             if reason is not None:
                 warnings.append(f"dangling {field_name} entry {entry!r}: {reason}")
+
+    # --- task_items unit (design/task-items-design.md section 9) -------------
+    # For types whose scaffolding includes plan.md: the block's structural /
+    # vocabulary findings are errors; a missing block is the pre-contract
+    # warning (gates work, prompting the one-time forward conversion); a
+    # CLAUDE.md Immediate Priorities id reference that resolves to no item is
+    # the stale-reference warning.
+    if ttype is not None and "plan.md" in ttype.scaffolding:
+        items_result = read_task_items(folder, ttype)
+        errors.extend(items_result.errors)
+        if not items_result.block_found:
+            warnings.append(
+                f"no task_items block: {resolved.canonical}/plan.md does not "
+                "enumerate the open items -- add the task_items unit "
+                "(task-items contract)"
+            )
+        elif not items_result.errors:
+            claude_md = folder / "CLAUDE.md"
+            if claude_md.is_file():
+                try:
+                    text = claude_md.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    text = ""
+                ids = {item.id for item in items_result.items}
+                for token in stale_priority_refs(text, ids):
+                    warnings.append(
+                        f"stale item reference in CLAUDE.md Immediate "
+                        f"Priorities: `{token}` matches no task_items id"
+                    )
 
     # --- classification -------------------------------------------------------
     if errors:
