@@ -199,6 +199,19 @@ all projects, matching "one active task globally"):
 - `work`/`switch` write it; `current` reads it; closing/archiving/deleting the *current* task clears it.
 - A pointer to a now-missing folder is **stale** — `current` reports it as such and clears it (no error).
 
+### 2.7 `task_items` — the item enumeration (added 2026-07-09)
+
+An **item** (accepted synonym "work item") is the enumerable unit of next work *within* a task.
+The `task_items:` typed unit — a fenced YAML block in the folder's `plan.md`, one per task — is the
+single home for the task's open items (`id` / `title` / `state` / optional `priority` reusing the
+type's pattern / optional `note`). States are the in-flight triage buckets promoted to contract:
+`available` / `in-flight` / `blocked-user` / `deferred`; **completion is removal** from the block.
+CLAUDE.md's Immediate Priorities references items by id and never restates state. There is no
+sub-task entity: an item needing identity/lifecycle outside its plan is promoted to a task. The
+`items` verb enumerates the block; `validate` checks it (block findings are errors; a missing block
+is the pre-contract warning). Full contract, evidence, and rationale:
+[`task-items-design.md`](task-items-design.md).
+
 ---
 
 ## 3. Relationships
@@ -279,7 +292,8 @@ A task with **no folder and no reference anywhere** does not exist — it has va
 
 ## 6. Source of truth
 
-- **The folder is authoritative.** Specifically, the folder's `task.yaml`.
+- **The folder is authoritative.** task.yaml for the task-level record; plan.md's `task_items`
+  unit for the item-level enumeration (§2.7). Nothing outside the folder carries task OR item state.
 - References and `task_list` entries are **pure associations** — they never duplicate status, so they
   cannot drift from the folder.
 - `show` / `list` resolve references to folders and project selected `task.yaml` fields. This is
@@ -311,7 +325,8 @@ inference exception.
 | `status <ref>` | **inference** | Summarize a task — works on **any** task. Resolves the task's classification via `validate`, then **summarizes** in a **background agent** to preserve context. |
 | `list [--scope ...]` | script | Enumerate tasks in a scope (§8). Resolves references → folders → projects selected `task.yaml` fields, classifying each via `validate`. Dedupes by path. |
 | `show <ref>` | script | Render one task's selected `task.yaml` fields. Cheap, no inference. |
-| `validate <ref>` | script | Check the folder/`task.yaml` against the type schema. Emits errors and warnings. **All warnings originate here.** Gates `work` (§9). |
+| `items [<ref>]` | script | Enumerate the task's open items (the plan.md `task_items` unit, §2.7): one line per item — `id  state  priority  title` — sorted by priority then block order; `--state`/`--priority` filter. Ref defaults to the **current** task. Cheap, no inference. |
+| `validate <ref>` | script | Check the folder/`task.yaml` against the type schema **and the `task_items` unit** (§2.7). Emits errors and warnings. **All warnings originate here.** Gates `work` (§9). |
 
 **Common conventions.** `<ref>` is a path or a stub (stub resolved via §5; ambiguous stub → error
 listing candidates). Script verbs exit `0` on success, non-zero on failure/block, and print findings
@@ -472,6 +487,10 @@ forward.
 | missing scaffolding | a file the type's `scaffolding` requires is absent |
 | unknown `type` | `type:` names no registered type |
 
+**Errors from the `task_items` unit (§2.7; block; task is `invalid`):** unparseable/schema-failing
+block, state outside the item vocabulary, priority outside the type pattern, non-kebab or duplicate
+`id`, more than one block, or a block outside plan.md.
+
 **Warnings (also block `work`; do not by themselves make a task `invalid`):**
 
 | Condition | Detail |
@@ -480,6 +499,8 @@ forward.
 | uncommitted `dev/tasks` folder | unsaved durable work; `archive` refuses until committed (§7.4) |
 | dangling `depends_on`/`blocked_by` | references a path with no resolvable task |
 | orphaned tmp reference | a tmp ref (local host) whose folder is absent (§4) |
+| no `task_items` block in plan.md | pre-contract folder; prompts the one-time forward conversion (§2.7) |
+| stale item reference in CLAUDE.md | a backticked hyphenated id under Immediate Priorities matching no item |
 
 **Reuse of audit machinery.** `validate` is intended to run the **same typed-unit schema validation**
 skills-kit uses for embedded YAML (the `task`/`task_list` units registered as schemas). *Resolved (§10):

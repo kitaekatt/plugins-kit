@@ -3,7 +3,8 @@
 One entry point with verb subcommands. Steps 1-5 ship ``validate``, ``init``,
 the read ops ``list`` / ``show`` / ``current`` / ``status``, the state ops
 ``work`` / ``switch`` / ``update`` / ``close`` / ``reopen``, and the
-destructive + location ops ``archive`` / ``delete`` / ``move``.
+destructive + location ops ``archive`` / ``delete`` / ``move``. The
+task-items design adds ``items``, the item-level read op.
 
 Conventions (spec 7.1): exit 0 on success, non-zero on failure/block;
 findings print to stderr. ``validate`` exits 0 iff there are no errors AND no
@@ -28,8 +29,18 @@ Read-op conventions (Step 3):
 - ``status <ref>`` is the spec's one INFERENCE verb (spec 7.1): a background
   agent summarizes the task. The script side implemented here is the
   SUBSTRATE ONLY -- classification + findings + the raw material
-  (task.yaml fields, document paths). The summarization itself is
-  dispatched by the skill layer (Step 6), not by this script.
+  (task.yaml fields, document paths, the parsed task_items). The
+  summarization itself is dispatched by the skill layer (Step 6), not by
+  this script.
+- ``items [<ref>]`` enumerates the task's open items (the plan.md
+  ``task_items`` unit; design/task-items-design.md section 8): one parseable
+  line per item -- ``id  state  priority  title`` (two-space separated,
+  absent priority ``-``), sorted by priority then block order;
+  ``--state``/``--priority`` filter. The ref defaults to the CURRENT task.
+  Findings about the block go to stderr as notes (validate is the gate that
+  reports them as findings); exit 0 even when empty. Non-zero with a reason
+  only when the ref is unresolvable, nothing is current, or the folder is
+  not readable locally (archived / orphaned / remote) -- matching ``show``.
 
 State-op conventions (Step 4):
 - ``work <ref>`` exits non-zero when validate blocks (ANY error or warning),
@@ -70,6 +81,7 @@ Usage:
     task.py list [--scope user|project|skill|file] [--target X]
                  [--status S] [--priority P] [--root PATH]
     task.py show <ref> [--root PATH]
+    task.py items [<ref>] [--state S] [--priority P] [--root PATH] [--pointer PATH]
     task.py current [--root PATH] [--pointer PATH]
     task.py status <ref> [--root PATH]
     task.py work <ref> [--root PATH] [--pointer PATH]
@@ -113,6 +125,8 @@ try:
     )
     from task_system.init import InitError, init_task  # noqa: E402
     from task_system.state_ops import StateOpError  # noqa: E402
+    from task_system.task_items import read_task_items, sort_items  # noqa: E402
+    from task_system.types import DEFAULT_TYPE_NAME, get_type  # noqa: E402
     from task_system.validate import validate_ref  # noqa: E402
 except ImportError:
     # Safety net for the installed-but-not-yet-provisioned window: the failed
@@ -243,6 +257,78 @@ def _pointer_path(args: argparse.Namespace) -> Path:
     return (
         args.pointer if args.pointer is not None else pointer_mod.DEFAULT_POINTER_PATH
     )
+
+
+def _items_type(folder: Path):
+    """The registered type governing a folder's task_items vocabulary; falls
+    back to the default type for a missing/unknown ``type`` so items still
+    render (the type finding itself is validate's job)."""
+    block = read_task_block(folder) or {}
+    type_name = block.get("type")
+    ttype = get_type(type_name) if isinstance(type_name, str) else None
+    if ttype is None:
+        ttype = get_type(DEFAULT_TYPE_NAME)
+    assert ttype is not None
+    return ttype
+
+
+def _format_item_line(item) -> str:
+    return "  ".join([item.id, item.state, item.priority or "-", item.title])
+
+
+def _cmd_items(args: argparse.Namespace) -> int:
+    root = (args.root if args.root is not None else Path.cwd()).resolve()
+    if args.ref is None:
+        # Ref defaults to the CURRENT task (module docstring): the friction
+        # moment is "what next?" mid-session. The pointer's absolute path
+        # supersedes --root, exactly like update's default-ref derivation.
+        stored = pointer_mod.read_current(_pointer_path(args))
+        folder = Path(stored) if stored is not None else None
+        derived = (
+            state_ops.derive_root_and_canonical(folder)
+            if folder is not None
+            else None
+        )
+        if derived is None or folder is None or not folder.is_dir():
+            print(
+                "error: no <ref> given and nothing is current -- pass a ref "
+                "or run work first",
+                file=sys.stderr,
+            )
+            return 1
+        root, canonical = derived
+    else:
+        try:
+            resolved = resolve.resolve_ref(args.ref, root)
+        except resolve.RefResolutionError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        canonical = resolved.canonical
+        folder = resolved.folder(root)
+        if not folder.is_dir():
+            print(
+                f"error: {canonical}: no task folder readable locally "
+                "(archived, orphaned, or remote)",
+                file=sys.stderr,
+            )
+            return 1
+    result = read_task_items(folder, _items_type(folder))
+    for msg in result.errors:
+        print(f"note: {msg}", file=sys.stderr)
+    if not result.block_found:
+        print(
+            f"note: no task_items block in {canonical}/plan.md -- "
+            "pre-contract folder; enumerate the open items (run validate)",
+            file=sys.stderr,
+        )
+    items = sort_items(result.items)
+    if args.state is not None:
+        items = [it for it in items if it.state == args.state]
+    if args.priority is not None:
+        items = [it for it in items if it.priority == args.priority]
+    for item in items:
+        print(_format_item_line(item))
+    return 0
 
 
 def _cmd_current(args: argparse.Namespace) -> int:
@@ -449,6 +535,18 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 fpath = folder / fname
                 suffix = "" if fpath.is_file() else "  (missing)"
                 print(f"  {fname}: {fpath}{suffix}")
+            # The parsed task_items menu (design section 8): part of the
+            # substrate so the summarizer leads with it without re-parsing.
+            # Its findings already surface above via validate.
+            items_result = read_task_items(folder, _items_type(folder))
+            if not items_result.block_found:
+                print("items: no task_items block in plan.md (pre-contract)")
+            elif not items_result.items:
+                print("items: none (empty task_items block)")
+            else:
+                print("items:")
+                for item in sort_items(items_result.items):
+                    print(f"  {_format_item_line(item)}")
     print(
         "note: status is an inference verb -- summarization of this material "
         "is dispatched by the skill layer (Step 6); this output is the "
@@ -541,6 +639,42 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help="Project root the ref is relative to (default: cwd).",
+    )
+
+    p_items = sub.add_parser(
+        "items",
+        help="Enumerate the task's open items (the plan.md task_items unit): "
+        "one line per item -- id  state  priority  title -- sorted by "
+        "priority then block order. Ref defaults to the current task.",
+    )
+    p_items.add_argument(
+        "ref",
+        nargs="?",
+        default=None,
+        help="Task path (tmp/<stub> or dev/tasks/<stub>) or bare stub "
+        "(default: the current task).",
+    )
+    p_items.add_argument(
+        "--state",
+        default=None,
+        help="Only items in this state (available | in-flight | "
+        "blocked-user | deferred).",
+    )
+    p_items.add_argument(
+        "--priority", default=None, help="Only items with this priority."
+    )
+    p_items.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="Project root the ref is relative to (default: cwd).",
+    )
+    p_items.add_argument(
+        "--pointer",
+        type=Path,
+        default=None,
+        help="Pointer file location for the current-task default (default: "
+        "the user-global pointer).",
     )
 
     p_current = sub.add_parser(
@@ -699,6 +833,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_list(args)
     if args.verb == "show":
         return _cmd_show(args)
+    if args.verb == "items":
+        return _cmd_items(args)
     if args.verb == "current":
         return _cmd_current(args)
     if args.verb == "status":

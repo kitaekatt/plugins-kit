@@ -59,6 +59,9 @@ def run_cli(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     )
 
 
+PLAN_MD_SCAFFOLD = "# Plan\n\n```yaml\ntask_items:\n  items: []\n```\n"
+
+
 def make_task(
     project_root: Path,
     rel: str,
@@ -82,7 +85,8 @@ def make_task(
         (folder / "task.yaml").write_text(
             yaml.safe_dump({"task": block}, sort_keys=False), encoding="utf-8"
         )
-    for fname in ("CLAUDE.md", "plan.md", "log.md"):
+    (folder / "plan.md").write_text(PLAN_MD_SCAFFOLD, encoding="utf-8")
+    for fname in ("CLAUDE.md", "log.md"):
         (folder / fname).write_text("placeholder\n", encoding="utf-8")
     return folder
 

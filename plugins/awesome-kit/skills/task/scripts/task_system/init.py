@@ -114,8 +114,12 @@ done>
 
 ## Immediate Priorities
 
-- Replace the placeholders in this scaffold: fill this file's sections and
-  write the first concrete steps into `plan.md`.
+Live menu: `task items` (plan.md's task_items block is the source of truth;
+reference items here by backticked id, never restating their state).
+
+- Replace the placeholders in this scaffold: fill this file's sections,
+  enumerate the open items in plan.md's task_items block, and write the
+  first concrete steps into `plan.md`.
 
 ## Project vocabulary
 
@@ -182,7 +186,8 @@ BEFORE any tool use, end the first turn with:
 Contents of `{canonical}/` -- this task's own working tree.
 
 - `CLAUDE.md` -- self (this file); auto-loaded orientation.
-- `plan.md` -- accomplished + forward overview; required read on turn 1.
+- `plan.md` -- accomplished + forward overview (its task_items block is the
+  open-item menu); required read on turn 1.
 - `log.md` -- on-demand history.
 - `task.yaml` -- the structured task record (status lives here).
 
@@ -201,7 +206,13 @@ _PLAN_MD_TEMPLATE = """\
 
 ## Forward overview
 
-1. <fill: the first concrete step, in actionable detail>
+```yaml
+task_items:
+  items: []
+```
+
+1. <fill: the first concrete step, in actionable detail; enumerate the open
+   items in the task_items block above as they take shape>
 """
 
 _LOG_MD_TEMPLATE = """\

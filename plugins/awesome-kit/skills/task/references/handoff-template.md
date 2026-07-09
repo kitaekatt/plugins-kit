@@ -84,6 +84,18 @@ template-vs-additional; the consistent eight `##` shape is the contract.
   would still be true after the agent acts (a fact of the project), it
   belongs in *Where we are today*; if acting on it changes it (a decision or
   next step), it belongs in *Immediate Priorities*.
+
+  **Reference view, not a content list.** When this section names work, it
+  names it by backticked item id from plan.md's `task_items` block (see the
+  plan.md section below), optionally with one clause of framing -- it never
+  restates an item's content at length and NEVER restates its state. Item
+  state has exactly one home (the block); a priority that is a pointer
+  cannot drift from the item it points at. Prose stays for genuinely
+  non-item content: open questions for the user, standing warnings, the
+  seam-test facts above. Open the section with the standing line:
+  "Live menu: `task items` (plan.md's task_items block is the source of
+  truth)." (`validate` warns on a backticked hyphenated id here that matches
+  no item.)
 - **`## Project vocabulary`** -- terms, stage names, trial names, domain
   conventions used in the rest of the file. Includes naming evolutions that
   left on-disk paths with old names (e.g. "renamed `cycle` to `pass` in
@@ -157,8 +169,42 @@ work allows.
 Read on turn 1 because CLAUDE.md tells the agent to. Two sections only:
 
 1. **Accomplished** -- one line per completed step. No implementation detail.
-2. **Forward overview** -- the next 1-3 steps in actionable detail; later
-   steps as one-line summaries only.
+2. **Forward overview** -- opens with the `task_items` block (below), the
+   index of open work; then the next 1-3 items in actionable detail (prose
+   sections keyed by item id, e.g. `### nano-swipe-controls -- <title>`);
+   later items as one-line summaries or just their block entry.
+
+### The `task_items` block (the open-item menu)
+
+An **item** (accepted synonym: "work item") is the enumerable unit of next
+work within the task -- a goal, a chore, a blocked decision, a watch item.
+The `task_items:` typed unit, a fenced YAML block at the top of the Forward
+overview, is the SINGLE home for the task's open items; `task items`
+enumerates it and `validate` checks it. Item state lives there and only
+there -- everything else (CLAUDE.md priorities, prose) references items by
+id.
+
+```yaml
+task_items:
+  items:
+    - id: nano-swipe-controls        # kebab-case, unique within the task
+      title: "Nano swipe-gesture controls"
+      state: in-flight               # available | in-flight | blocked-user | deferred
+      priority: P1                   # optional; same P1-P3 scale as task.yaml
+      note: "resume: see log 2026-07-09"   # optional one-liner
+```
+
+The four states are the in-flight triage buckets (below) promoted to
+contract: `available` (queued, ready to start), `in-flight` (under way,
+including paused mid-step), `blocked-user` (needs a user decision or the
+user's hands), `deferred` (parked deliberately). There is **no `done`
+state**: completion is REMOVAL from the block at the rotation pass -- one
+line in Accomplished, detail to log.md. The block enumerates open work only,
+a moving window like the rest of the plan. Within equal priority (and among
+items with none), list order means sooner. An item that outgrows the block
+(own plan, own sessions) is promoted to a task of its own (`init` + a
+`task_list` reference); it is an item exactly as long as it needs no
+identity outside this plan.
 
 **Soft target: up to 400 lines** (verify with `wc -l plan.md`). plan.md is
 read on turn 1 of every session, so length is a context budget; 400 lines is
@@ -185,16 +231,20 @@ follow a link to know what's coming) than removing past work (the next agent
 does not care). The plan is a moving window, not a record.
 
 **In-flight triage.** Before writing the forward overview, classify every
-in-flight item into one of four buckets:
+in-flight item into one of four buckets -- each maps to a `task_items`
+state:
 
-- **Blocked on user decision** -- surface under `## Immediate Priorities` in
-  CLAUDE.md; do not list as a forward step in plan.md until decided.
+- **Blocked on user decision** (`state: blocked-user`) -- reference the id
+  under `## Immediate Priorities` in CLAUDE.md; record what is needed in the
+  item's `note:`.
 - **Blocked on prior step** -- list in plan.md as the prior step's
-  continuation, not as a standalone item.
+  continuation, not as a standalone item (a soft ordering note like "after
+  `<id>`" fits in `note:` when it must stand alone).
 - **Done but uncommitted** -- note in plan.md so the next agent does not
   re-do.
-- **Queued** -- ready to start; the next-1-3-steps actionable detail covers
-  these.
+- **Queued** (`state: available`) -- ready to start; the next-1-3-items
+  actionable detail covers the top of the list. Deliberately parked work is
+  `state: deferred` with the reason in `note:`.
 
 ## `log.md` -- history
 
@@ -228,13 +278,20 @@ The plan should always answer "where are we now and what's coming." On every
 substantive update of an existing folder, run three passes:
 
 - **Rotation pass.** Step completed -> move its detailed instructions from
-  plan.md to log.md (plan keeps one line: "Step N: done [link]"). Future step
-  too far away -> move its implementation detail to a referenced doc.
-  Decision made -> if currently-actionable, one line in plan; if not, into
-  the log.
+  plan.md to log.md (plan keeps one line: "Step N: done [link]") AND remove
+  the completed item from the `task_items` block. Future step too far away
+  -> move its implementation detail to a referenced doc. Decision made -> if
+  currently-actionable, one line in plan; if not, into the log.
+  **Promotion rule: the block is the only place open work may live.** Any
+  open item surfaced mid-session in log prose or CLAUDE.md banners --
+  `(OPEN)` tags, watch-lists, carry-forwards -- is either promoted into the
+  block (usually `blocked-user` or `deferred`, with a `note:`) or
+  deliberately discarded, at this same pass.
 - **Stale-state pass.** Anything now untrue under current scope (e.g. "ready
   to ship" when scope just expanded) gets fixed in place. Untrue text is
-  worse than missing text.
+  worse than missing text. Check that every backticked item id referenced in
+  CLAUDE.md still resolves to a `task_items` entry (`validate` warns on
+  strays).
 - **Vocabulary pass.** Compare the vocabulary the session evolved (names that
   drifted, stage names, paths that retain old names) against what is
   currently in `## Project vocabulary`. Update so the next agent reads
@@ -260,6 +317,12 @@ in the auto-load surface.
   belongs in the plan. If not must-read, it belongs in the log.
 - **Plan as record.** Plan accumulates every step's full detail forever.
   Auto-load surface bloats. Rotate.
+- **Item state restated outside the block.** A priorities list that copies
+  item titles and states ("RESUME POINT -> ...", "(not started)") is a
+  second copy that WILL drift -- the mined failure mode behind the
+  task-items contract (see design/task-items-design.md). Reference the id;
+  let the block carry the state. Same disease: `DONE`-tagged items accreting
+  in the block or a checkbox list instead of being removed at rotation.
 - **Session-scoped slug.** `atoms-22` outlived by `atoms-17-phase2`. Pick the
   scope that outlives the session -- the work-unit, not the conversation.
 - **Vocabulary loss across the hand-off.** Mid-session, terms evolve.

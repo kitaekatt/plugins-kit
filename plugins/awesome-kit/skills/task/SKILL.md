@@ -8,22 +8,27 @@ description: Use when creating, listing, working, closing, archiving, or moving 
 
 # Task
 
-Dispatch surface for the task system: one CLI (`scripts/task.py`) exposing 14
+Dispatch surface for the task system: one CLI (`scripts/task.py`) exposing 15
 verbs over file-backed task folders. This skill routes a natural-language task
-request ("start a task for X", "what tasks are open here?", "archive the
-closet task") to the right verb invocation and tells you what the agent --
-not the script -- must do with the output. The system evolved from the
-`/hand-off` skill; the task folder IS the generalized hand-off folder, and
-`hand-off` survives as the name of the v1 task TYPE (`type:` in task.yaml).
+request ("start a task for X", "what tasks are open here?", "what can I work
+on in this task?", "archive the closet task") to the right verb invocation
+and tells you what the agent -- not the script -- must do with the output.
+The system evolved from the `/hand-off` skill; the task folder IS the
+generalized hand-off folder, and `hand-off` survives as the name of the v1
+task TYPE (`type:` in task.yaml).
 
 ## Data model (one breath)
 
-The task **folder** is the source of truth -- all structured state lives in
-its `task.yaml`. **References** (`task_list:` blocks embedded in any markdown
-doc) are inert pointers: `{path, host?}`, no status, resolved by reading the
-folder. The task **id is its path** (`tmp/<stub>` or `dev/tasks/<stub>`), so
-`move` must rewrite every reference. There is **one global `current`
-pointer** (a file at `~/.claude/plugins/data/plugins-kit/awesome-kit/current`)
+The task **folder** is the source of truth -- task-level state lives in its
+`task.yaml`; the open **items** (the enumerable units of next work within the
+task; synonym "work item") live in plan.md's embedded `task_items:` block,
+and ONLY there (completion = removal; CLAUDE.md priorities reference items by
+id, never restating state). **References** (`task_list:` blocks embedded in
+any markdown doc) are inert pointers: `{path, host?}`, no status, resolved by
+reading the folder. The task **id is its path** (`tmp/<stub>` or
+`dev/tasks/<stub>`), so `move` must rewrite every reference. There is **one
+global `current` pointer** (a file at
+`~/.claude/plugins/data/plugins-kit/awesome-kit/current`)
 naming the single task being worked. **Durability is location**: `tmp/<stub>`
 is ephemeral and machine-local; `dev/tasks/<stub>` is git-tracked -- archiving
 a dev/tasks folder deletes it because git is the record.
@@ -48,10 +53,11 @@ candidates).
 ```yaml
 capability_skill:
   _schema_version: "1"
-  identity: "Dispatch surface routing natural-language task requests to the task-system CLI's 14 verbs and defining the agent-side behaviors (work's Skill lines, status's background summarizer, update's rotation) the scripts deliberately leave to the agent."
+  identity: "Dispatch surface routing natural-language task requests to the task-system CLI's 15 verbs and defining the agent-side behaviors (work's Skill lines, status's background summarizer, update's rotation) the scripts deliberately leave to the agent."
   scope:
     covers:
       - "Creating, listing, showing, validating, and summarizing file-backed task folders (tmp/<stub>, dev/tasks/<stub>)"
+      - "Enumerating a task's open items (plan.md's task_items unit) with their states -- the item-level menu below the task level"
       - "Working/switching the single global current task and acting on the emitted Skill(...) / agent_hint lines"
       - "Lifecycle transitions: close, reopen, archive, delete, and move (with task_list reference rewriting)"
       - "Filling in scaffolded task folders per the hand-off template (references/handoff-template.md)"
@@ -62,13 +68,13 @@ capability_skill:
   external_capability:
     kind: tool
     name: task.py (task-system CLI)
-    description: "Single-entry-point CLI at skills/task/scripts/task.py with 14 verb subcommands over task folders, task.yaml records, task_list references, and the global current pointer. 13 verbs are script-driven; status is the one inference verb (the script prints substrate only)."
+    description: "Single-entry-point CLI at skills/task/scripts/task.py with 15 verb subcommands over task folders, task.yaml records, task_list references, plan.md task_items blocks, and the global current pointer. 14 verbs are script-driven; status is the one inference verb (the script prints substrate only)."
   layering:
     claude_md: []
     skill_md:
-      - "The data model in one breath (folder = SoT, refs inert, id = path, one current pointer, durability = location)"
+      - "The data model in one breath (folder = SoT, items in plan.md's task_items block, refs inert, id = path, one current pointer, durability = location)"
       - "The canonical venv-python invocation and CLI conventions"
-      - "The 14-verb capability surface with per-verb contracts"
+      - "The 15-verb capability surface with per-verb contracts"
       - "The three agent-side behaviors the scripts leave open (work dispatch, status background summary, update rotation)"
     references:
       - "orchestration.md -- the delegation rule (orchestrator does no task work) and the model-routing table for background-agent dispatch"
@@ -132,7 +138,7 @@ capability_skill:
         [--skill-to-invoke NAME ...] [--root PATH] [--pointer PATH]
       gotchas:
         - "Contract: ref defaults to the current task; inits when absent (upsert). Applies the field edits, appends one dated entry to log.md, re-validates, prints the classification; exit 0 iff no findings -- but the write persists regardless (fix-forward). List-valued flags are repeatable and REPLACE the stored list."
-        - "AGENT BEHAVIOR: the script's only document write is the dated log.md line -- it never rewrites plan.md. The real rotation discipline (completed-step detail plan -> log, stale-state pass, vocabulary pass, 400-line soft targets) is YOUR work, per references/handoff-template.md, whenever the update represents substantive session progress."
+        - "AGENT BEHAVIOR: the script's only document write is the dated log.md line -- it never rewrites plan.md. The real rotation discipline (completed-step detail plan -> log, REMOVING done items from the task_items block, promoting stray open items into it, stale-state pass, vocabulary pass, 400-line soft targets) is YOUR work, per references/handoff-template.md, whenever the update represents substantive session progress."
     - id: close
       keywords: [close task, finish task, mark done, keep folder]
       user_objective: "Mark an active task's work done while keeping the folder reopenable."
@@ -207,6 +213,17 @@ capability_skill:
         show <ref> [--root PATH]
       gotchas:
         - "Contract: pure field read, no inference. Non-zero with a reason when the ref is unresolvable or the folder is not locally readable (archived / orphaned / remote)."
+    - id: items
+      keywords: [items, task items, work items, open items, goals, priorities, what next, what can I work on, what is available, sub-tasks, enumerate items, item menu]
+      user_objective: "Enumerate the current (or a named) task's open items -- the menu of next work within the task, with states."
+      operation: >-
+        ~/.claude/plugins/data/plugins-kit/awesome-kit/.venv/bin/python
+        "${CLAUDE_PLUGIN_ROOT}/skills/task/scripts/task.py"
+        items [<ref>] [--state S] [--priority P] [--root PATH]
+      gotchas:
+        - "Contract: reads plan.md's task_items unit; one parseable line per item -- 'id  state  priority  title' (absent priority '-') -- sorted by priority then block order; --state/--priority filter (states: available | in-flight | blocked-user | deferred). Ref DEFAULTS TO THE CURRENT TASK. Exit 0 even when empty; block findings go to stderr as notes (validate is the gate that reports them as findings)."
+        - "This answers 'what else can I work on in this task?' -- item-level, within one task. For the task-level question ('what tasks are open here?') use list. A pre-contract folder (no task_items block yet) prints a note: enumerate its open items into the block (the one-time forward conversion validate's warning prompts)."
+        - "AGENT BEHAVIOR: item edits are plan.md edits -- there are no item CLI flags. Add/remove/re-state items by editing the block directly during the update rotation, per references/handoff-template.md (completion = REMOVAL from the block; the block is the only place open work may live)."
     - id: status
       keywords: [task status, summarize task, where does it stand, background summary]
       user_objective: "Get a human summary of where a task stands (any task, any state)."
@@ -216,7 +233,7 @@ capability_skill:
         status <ref> [--root PATH]
       steps:
         - n: 1
-          action: "Run the status verb. The script prints the SUBSTRATE only: classification, findings, the task.yaml fields, and the document paths (CLAUDE.md / plan.md / log.md)."
+          action: "Run the status verb. The script prints the SUBSTRATE only: classification, findings, the task.yaml fields, the document paths (CLAUDE.md / plan.md / log.md), and the parsed task_items menu."
         - n: 2
           action: "AGENT BEHAVIOR: status is the system's ONE inference verb. Dispatch a BACKGROUND sub-agent (Task tool) to read the substrate's documents and produce the summary -- do NOT read plan.md/log.md and summarize inline in the main context. The point is main-context preservation; the sub-agent returns the short summary, you relay it. Summarization is information gathering: route it to sonnet per references/orchestration.md."
       gotchas:
@@ -227,6 +244,7 @@ capability_skill:
     - "The current pointer is USER-GLOBAL (one across all projects), matching 'one active task globally'. Tests and sandboxes must inject --pointer; never point real work at a scratch pointer or vice versa."
     - "validate gates work with BOTH errors and warnings -- an uncommitted dev/tasks folder (a warning) blocks work until committed. This is deliberate: durable work that exists only in the working tree is one rm away from gone."
     - "References never carry status. To answer 'is X done?' resolve the folder (show/validate/list) -- do not infer from the presence or wording of a task_list entry."
+    - "Vocabulary: the unit below the task is an ITEM (long form 'task item'; accepted synonym 'work item') -- route all of 'work items', 'open items', 'goals', 'sub-tasks', 'what's available on this task' to the items verb. Never introduce a sub-task entity: an item has no folder, no lifecycle verbs, no outside references; an item that outgrows the block is promoted to a real task (init + a task_list ref)."
   anti_patterns:
     - id: inline_status_summary
       name: Summarizing status inline in the main context
@@ -256,8 +274,8 @@ references:
     summary: "The delegation rule (the orchestrator does no task work -- every task goes to a background agent) and the model-routing table (fable = deep analysis/complex coding, sonnet = information gathering/simple analysis, haiku = trivial operations, opus = everything else). Load whenever dispatching work to agents."
   - id: handoff_template
     path: references/handoff-template.md
-    keywords: [hand-off template, eight sections, CLAUDE.md template, plan rotation, log filter, fill in scaffold]
-    summary: "How to fill in and maintain a hand-off-type task folder: the eight-section CLAUDE.md contract, plan.md rotation discipline, log.md filter, anti-patterns, self-verify. Load when populating or updating a scaffolded folder."
+    keywords: [hand-off template, eight sections, CLAUDE.md template, plan rotation, log filter, fill in scaffold, task_items block, item states, promotion rule, priorities reference items]
+    summary: "How to fill in and maintain a hand-off-type task folder: the eight-section CLAUDE.md contract (Immediate Priorities = references to item ids), plan.md's task_items block + rotation discipline (completion = removal; promotion rule), log.md filter, anti-patterns, self-verify. Load when populating or updating a scaffolded folder."
   - id: example_claude_md
     path: references/example-claude-md.md
     keywords: [worked example, produced CLAUDE.md, template made concrete]
@@ -270,4 +288,8 @@ references:
     path: design/task-system-design.md
     keywords: [design spec, entities, states, verb contracts, validation rules, discovery algorithm]
     summary: "The full task-system design specification (implementation contract; code is authoritative on divergence). Load for semantics questions the capability records do not settle."
+  - id: task_items_design
+    path: design/task-items-design.md
+    keywords: [task items design, item vocabulary, work item, item states, no done state, no sub-task, priorities as references, mined evidence, homeassistant test case]
+    summary: "The task-items design proposal (ratified 2026-07-09): evidence from real task folders, the vocabulary decision (item, not sub-task/goal/deliverable), and the full contract rationale. Load for why-questions about items; the operating contract lives in handoff-template.md."
 ```
