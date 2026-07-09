@@ -318,7 +318,8 @@ def _cmd_items(args: argparse.Namespace) -> int:
     if not result.block_found:
         print(
             f"note: no task_items block in {canonical}/plan.md -- "
-            "pre-contract folder; enumerate the open items (run validate)",
+            "pre-contract folder; run the one-time conversion "
+            "(handoff-template.md, 'Converting a pre-contract folder')",
             file=sys.stderr,
         )
     items = sort_items(result.items)

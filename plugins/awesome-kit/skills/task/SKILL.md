@@ -139,6 +139,7 @@ capability_skill:
       gotchas:
         - "Contract: ref defaults to the current task; inits when absent (upsert). Applies the field edits, appends one dated entry to log.md, re-validates, prints the classification; exit 0 iff no findings -- but the write persists regardless (fix-forward). List-valued flags are repeatable and REPLACE the stored list."
         - "AGENT BEHAVIOR: the script's only document write is the dated log.md line -- it never rewrites plan.md. The real rotation discipline (completed-step detail plan -> log, REMOVING done items from the task_items block, promoting stray open items into it, stale-state pass, vocabulary pass, 400-line soft targets) is YOUR work, per references/handoff-template.md, whenever the update represents substantive session progress."
+        - "PRE-CONTRACT FOLDER (validate warns 'no task_items block'): the update/hand-off pass STARTS with the one-time conversion -- sweep all three docs for open work, dedupe into items, map triage states, rewrite Immediate Priorities as id references, retire the superseded GOAL/checkbox/banner forms, validate until clean. The full procedure is handoff-template.md 'Converting a pre-contract folder'; the block must end as the ONLY carrier of open-work state (a half-conversion recreates the drift)."
     - id: close
       keywords: [close task, finish task, mark done, keep folder]
       user_objective: "Mark an active task's work done while keeping the folder reopenable."
@@ -222,7 +223,7 @@ capability_skill:
         items [<ref>] [--state S] [--priority P] [--root PATH]
       gotchas:
         - "Contract: reads plan.md's task_items unit; one parseable line per item -- 'id  state  priority  title' (absent priority '-') -- sorted by priority then block order; --state/--priority filter (states: available | in-flight | blocked-user | deferred). Ref DEFAULTS TO THE CURRENT TASK. Exit 0 even when empty; block findings go to stderr as notes (validate is the gate that reports them as findings)."
-        - "This answers 'what else can I work on in this task?' -- item-level, within one task. For the task-level question ('what tasks are open here?') use list. A pre-contract folder (no task_items block yet) prints a note: enumerate its open items into the block (the one-time forward conversion validate's warning prompts)."
+        - "This answers 'what else can I work on in this task?' -- item-level, within one task. For the task-level question ('what tasks are open here?') use list. A pre-contract folder (no task_items block yet) prints a note: run the one-time conversion per handoff-template.md 'Converting a pre-contract folder' (sweep docs, dedupe, triage states, priorities as references, retire old forms, validate clean)."
         - "AGENT BEHAVIOR: item edits are plan.md edits -- there are no item CLI flags. Add/remove/re-state items by editing the block directly during the update rotation, per references/handoff-template.md (completion = REMOVAL from the block; the block is the only place open work may live)."
     - id: status
       keywords: [task status, summarize task, where does it stand, background summary]
@@ -274,8 +275,8 @@ references:
     summary: "The delegation rule (the orchestrator does no task work -- every task goes to a background agent) and the model-routing table (fable = deep analysis/complex coding, sonnet = information gathering/simple analysis, haiku = trivial operations, opus = everything else). Load whenever dispatching work to agents."
   - id: handoff_template
     path: references/handoff-template.md
-    keywords: [hand-off template, eight sections, CLAUDE.md template, plan rotation, log filter, fill in scaffold, task_items block, item states, promotion rule, priorities reference items]
-    summary: "How to fill in and maintain a hand-off-type task folder: the eight-section CLAUDE.md contract (Immediate Priorities = references to item ids), plan.md's task_items block + rotation discipline (completion = removal; promotion rule), log.md filter, anti-patterns, self-verify. Load when populating or updating a scaffolded folder."
+    keywords: [hand-off template, eight sections, CLAUDE.md template, plan rotation, log filter, fill in scaffold, task_items block, item states, promotion rule, priorities reference items, pre-contract conversion, convert old folder, no task_items block]
+    summary: "How to fill in and maintain a hand-off-type task folder: the eight-section CLAUDE.md contract (Immediate Priorities = references to item ids), plan.md's task_items block + rotation discipline (completion = removal; promotion rule), the one-time pre-contract-folder conversion procedure, log.md filter, anti-patterns, self-verify. Load when populating or updating a scaffolded folder."
   - id: example_claude_md
     path: references/example-claude-md.md
     keywords: [worked example, produced CLAUDE.md, template made concrete]

@@ -206,6 +206,39 @@ items with none), list order means sooner. An item that outgrows the block
 `task_list` reference); it is an item exactly as long as it needs no
 identity outside this plan.
 
+### Converting a pre-contract folder (one-time)
+
+A folder created before the task-items contract has no `task_items` block;
+`validate` warns ("no task_items block") and the warning gates `work`. The
+conversion is the FIRST act of the next update/hand-off pass on such a
+folder -- do it before any other rotation work, and do it completely. The
+correct end state is: **the block is the only carrier of open-work state
+anywhere in the folder.** A half-conversion (block added, but old forms left
+behind still carrying state) recreates the drift this contract exists to
+kill.
+
+1. **Sweep all three documents for open work.** The legacy forms it hides
+   in: CLAUDE.md Immediate Priorities entries and dated "RESUME HERE" /
+   status banners; plan.md Forward-overview prose steps, `GOAL:` heading
+   blocks, and `[ ]/[x]` checkbox lists; log.md `(OPEN)` tags and the
+   watch-list / carry-forward fragments at the tail of recent entries.
+2. **Dedupe into distinct items.** One entry per unit of work, however many
+   documents and wordings mention it. Pick kebab-case ids; keep the freshest
+   wording (the log and dated banners usually beat a stale priority list).
+3. **Map states via the triage buckets above**; put blockers, reasons, and
+   resume pointers in `note:` (one line each).
+4. **Write the block** at the top of the Forward overview.
+5. **Rewrite CLAUDE.md Immediate Priorities as the reference view** (ids +
+   the standing line; state stated nowhere).
+6. **Retire the superseded forms.** A `GOAL:` block becomes an id-keyed
+   detail section (`### <id> -- <title>`, state parenthetical dropped); done
+   checkbox entries collapse to Accomplished one-liners; open log items are
+   now in the block (promotion rule) -- leave the log prose as history, but
+   nothing outside the block may READ as a live open-work list.
+7. **Re-run `validate` until clean.** Clean validate -- no missing-block
+   warning, no stale item references -- is the definition of conversion
+   done; do not end the pass with findings outstanding.
+
 **Soft target: up to 400 lines** (verify with `wc -l plan.md`). plan.md is
 read on turn 1 of every session, so length is a context budget; 400 lines is
 the comfortable ceiling, not a goal.
