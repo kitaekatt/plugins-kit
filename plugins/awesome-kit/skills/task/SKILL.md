@@ -71,6 +71,7 @@ capability_skill:
       - "The 14-verb capability surface with per-verb contracts"
       - "The three agent-side behaviors the scripts leave open (work dispatch, status background summary, update rotation)"
     references:
+      - "orchestration.md -- the delegation rule (orchestrator does no task work) and the model-routing table for background-agent dispatch"
       - "handoff-template.md -- how to fill in and rotate a scaffolded folder's CLAUDE.md / plan.md / log.md"
       - "example-claude-md.md -- worked example of a fully-populated task-folder CLAUDE.md"
       - "communication-framework.md -- shared vocabulary (work-unit, auto-loaded vs on-demand, hand-off baton)"
@@ -108,7 +109,7 @@ capability_skill:
         - n: 1
           action: "Run the work verb. It validates first: ANY error OR warning blocks (exit non-zero, findings on stderr, pointer unwritten). A remote ref (tmp + other host) cannot be worked locally. If no folder exists at the ref, work auto-inits it (promotion)."
         - n: 2
-          action: "On success the script writes the current pointer and prints one Skill(skill: \"<name>\") line per skills_to_invoke entry plus an agent_hint: <type> line when set. AGENT BEHAVIOR: actually invoke each emitted skill via the Skill tool now, and consider dispatching the work to a sub-agent of the agent_hint type. The script only emits these lines; acting on them is your job."
+          action: "On success the script writes the current pointer and prints one Skill(skill: \"<name>\") line per skills_to_invoke entry plus an agent_hint: <type> line when set. AGENT BEHAVIOR: actually invoke each emitted skill via the Skill tool now, then dispatch the work to a background agent per references/orchestration.md (delegation rule + model routing), honoring the agent_hint type when set. The script only emits these lines; acting on them is your job."
       gotchas:
         - "Do not skip the emitted Skill(...) invocations -- they are the task's self-documented working context (the self-documenting-task pattern), not decoration."
     - id: switch
@@ -217,7 +218,7 @@ capability_skill:
         - n: 1
           action: "Run the status verb. The script prints the SUBSTRATE only: classification, findings, the task.yaml fields, and the document paths (CLAUDE.md / plan.md / log.md)."
         - n: 2
-          action: "AGENT BEHAVIOR: status is the system's ONE inference verb. Dispatch a BACKGROUND sub-agent (Task tool) to read the substrate's documents and produce the summary -- do NOT read plan.md/log.md and summarize inline in the main context. The point is main-context preservation; the sub-agent returns the short summary, you relay it."
+          action: "AGENT BEHAVIOR: status is the system's ONE inference verb. Dispatch a BACKGROUND sub-agent (Task tool) to read the substrate's documents and produce the summary -- do NOT read plan.md/log.md and summarize inline in the main context. The point is main-context preservation; the sub-agent returns the short summary, you relay it. Summarization is information gathering: route it to sonnet per references/orchestration.md."
       gotchas:
         - "Summarizing inline defeats the verb's reason for existing (context preservation). The script even prints a reminder note to this effect."
   gotchas:
@@ -249,6 +250,10 @@ capability_skill:
 
 ```yaml
 references:
+  - id: orchestration
+    path: references/orchestration.md
+    keywords: [orchestration, delegate, background agent, model routing, fable, sonnet, haiku, opus, dispatch, do no work inline]
+    summary: "The delegation rule (the orchestrator does no task work -- every task goes to a background agent) and the model-routing table (fable = deep analysis/complex coding, sonnet = information gathering/simple analysis, haiku = trivial operations, opus = everything else). Load whenever dispatching work to agents."
   - id: handoff_template
     path: references/handoff-template.md
     keywords: [hand-off template, eight sections, CLAUDE.md template, plan rotation, log filter, fill in scaffold]
