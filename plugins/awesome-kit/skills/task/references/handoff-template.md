@@ -387,10 +387,19 @@ Read CLAUDE.md and plan.md as if you were the next agent. Verify:
   name? If not, `## Project vocabulary` is missing the decoder.
 
 When the folder is being packaged for a fresh session, end the turn with the
-`hand-off baton` (see framework): the literal line
-`Paste into a new session to continue:` followed by a short actionable
-instruction -- typically `Read <task-folder>/CLAUDE.md and proceed per its
-protocol.`
+`hand-off baton` (see framework). For a task folder the baton is a two-line
+block giving the current working directory and the resume command:
+
+```
+CWD: <project root directory>
+Continue: /task work <CWD-relative task-folder path>
+```
+
+The user copies the `Continue:` line into a new session; `/task work` makes
+the folder the current task and loads its working context (better than a bare
+`Read <folder>/CLAUDE.md`, which does neither). The `CWD:` line names the
+directory that line is relative to; the task-folder path is CWD-relative, never
+absolute, so the baton works across machines.
 
 ## Principles specific to hand-off folders
 

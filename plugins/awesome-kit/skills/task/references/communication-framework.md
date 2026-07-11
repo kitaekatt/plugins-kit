@@ -62,14 +62,14 @@ Corollary: if a system-reminder describes resumed state ("queued next concrete a
 
 ### hand-off baton
 
-The explicit transfer signal at the end of a hand-off reply (the turn that packages a task folder for a fresh session) -- a two-line block ending the response:
+The explicit transfer signal at the end of a hand-off reply (the turn that packages a task folder for a fresh session) -- a two-line block ending the response. For a task folder it names the working directory and the resume command:
 
 ```
-Paste into a new session to continue:
-<short actionable instruction pointing at CLAUDE.md>
+CWD: <project root directory>
+Continue: /task work <CWD-relative task-folder path>
 ```
 
-The user copies the second line, opens a new session, and pastes it as the first user message. Without the baton, the user has to compose the instruction themselves.
+The user copies the `Continue:` line, opens a new session, and pastes it as the first user message; `/task work` makes the folder the current task and loads its context. The `CWD:` line names the directory the path is relative to (paths stay CWD-relative, never absolute, so the baton works across machines). Without the baton, the user has to compose the instruction themselves.
 
 ### provenance triad
 
