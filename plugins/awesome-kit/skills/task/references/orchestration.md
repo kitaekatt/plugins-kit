@@ -8,28 +8,44 @@ restating it.
 
 ## The delegation rule
 
-**The orchestrator does no task work. Every task is delegated to a background
-agent.**
+**Delegate by context footprint, not difficulty. Work that reads a lot or
+emits a lot goes to a background agent; a small self-contained op whose
+result the next orchestration decision needs stays inline.**
 
-The main context's job is orchestration only: decompose the work, dispatch
-agents, monitor their results, and synthesize/relay the outcome to the user.
-Task work executed inline -- edits, analysis, research, test runs -- pays its
-full token cost in the orchestrating context and serializes work that agents
-could run in parallel. This is the same main-context-preservation rationale
-the `status` verb is built on, applied to all work rather than just
-summarization.
+The orchestrating context lives for hundreds of messages; every file read,
+diff, and command dump done inline stays in it for all of them. That
+persistent footprint is the deciding axis -- not difficulty or duration. A
+hard one-line decision is fine inline; an easy grep across the tree is not.
+This is the `status` verb's main-context-preservation rationale generalized
+to all work.
 
-Not task work (stays in the main context): invoking task.py verbs, launching
-and messaging agents, reading agent return values, answering the user, and
-writing the final synthesis.
+Classify by shape, in one glance:
+
+- **Delegate** -- the work reads content you will not need verbatim later, or
+  emits bulk (diffs, logs, long listings, drafts). Anything shaped "read a
+  bunch, conclude a little" or "produce a bunch."
+- **Inline** -- the op is small AND self-contained AND its result feeds the
+  very next orchestration decision (a task.py verb, a one-line file check, a
+  single field edit). Dispatching these costs about as much context (prompt
+  plus relay) as doing them, and adds latency.
+- **Do not deliberate.** If classifying takes more thought than the two
+  bullets above, treat it as delegate-shaped and dispatch. A per-action "how
+  expensive will this be" estimate is itself context spend this rule exists
+  to avoid.
+
+Orchestration proper always stays in the main context: invoking task.py
+verbs, launching and messaging agents, reading agent return values, answering
+the user, and writing the final synthesis.
 
 ### Rationalizations
 
 | Excuse | Reality |
 |---|---|
-| "This is just a quick edit -- faster to do it inline." | Quick edits compound; ten inline "quick" tasks fill the orchestrating context with diffs and file reads. The dispatch costs seconds; the context is gone for the session. |
+| "This is just a quick edit -- faster to do it inline." | Quick is not small. If it means opening files and emitting diffs, that output sits in the context for the hundreds of messages that follow. Shape says delegate. |
 | "I need to read these files anyway to know what to dispatch." | Scoping a dispatch needs the work-list, not the content. Delegate the reading (information gathering -> sonnet) and dispatch from the returned summary. |
-| "One agent is enough; I'll do the rest myself while it runs." | The rest is also task work. Dispatch it too -- independent agents launched in parallel finish sooner than orchestrator-plus-one. |
+| "One agent is enough; I'll do the rest myself while it runs." | The rest is also footprint. Independent delegate-shaped work goes out as parallel agents in one message, not orchestrator-plus-one. |
+| "The rule says delegate, so this one-line check goes to an agent too." | The opposite failure. An agent round-trip for a small self-contained op costs as much context as doing it inline -- and you wait for it. Inline it. |
+| "Let me work out how heavy this will be first." | That estimate is the cost. One glance at the shape (reads-a-lot / emits-a-lot vs small-and-self-contained), then move. |
 
 ## Model routing
 

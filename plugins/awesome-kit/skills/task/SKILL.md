@@ -77,7 +77,7 @@ capability_skill:
       - "The 15-verb capability surface with per-verb contracts"
       - "The agent-side behaviors the scripts leave open (work dispatch, status background summary, update rotation, and the required end-of-turn hand-off baton the update/hand-off packaging must emit)"
     references:
-      - "orchestration.md -- the delegation rule (orchestrator does no task work) and the model-routing table for background-agent dispatch"
+      - "orchestration.md -- the delegation rule (delegate by context footprint: reads-a-lot / emits-a-lot work -> background agent, small self-contained ops -> inline) and the model-routing table for background-agent dispatch"
       - "handoff-template.md -- how to fill in and rotate a scaffolded folder's CLAUDE.md / plan.md / log.md"
       - "example-claude-md.md -- worked example of a fully-populated task-folder CLAUDE.md"
       - "communication-framework.md -- shared vocabulary (work-unit, auto-loaded vs on-demand, hand-off baton)"
@@ -92,7 +92,7 @@ capability_skill:
         init <stub|desc> [--dest tmp|dev/tasks] [--type hand-off] [--root PATH]
       gotchas:
         - "Contract: output is always a valid active task -- on any validation failure init removes the folder and exits non-zero; it never leaves a partial/invalid folder. Prints the absolute folder path on success."
-        - "Default dest is tmp (ephemeral). Existing target path errors -- use update, not init. A freeform description argument derives the stub; a path-shaped argument is sanitized, never treated as a path."
+        - "Default dest is tmp (ephemeral). Existing target path errors -- use update, not init. A freeform description argument derives the stub; a path-shaped argument is sanitized, never treated as a path. Scope the stub to the work-unit (phase or project), never the session -- atoms-17-phase2, not atoms-22 (handoff-template.md)."
         - "After init, the folder holds placeholder scaffolds -- filling them in is agent work per references/handoff-template.md."
     - id: validate
       keywords: [validate task, check task, findings, classification, schema check]
@@ -138,8 +138,8 @@ capability_skill:
         [--skill-to-invoke NAME ...] [--root PATH] [--pointer PATH]
       gotchas:
         - "Contract: ref defaults to the current task; inits when absent (upsert). Applies the field edits, appends one dated entry to log.md, re-validates, prints the classification; exit 0 iff no findings -- but the write persists regardless (fix-forward). List-valued flags are repeatable and REPLACE the stored list."
-        - "AGENT BEHAVIOR: the script's only document write is the dated log.md line -- it never rewrites plan.md. The real rotation discipline (completed-step detail plan -> log, REMOVING done items from the task_items block, promoting stray open items into it, stale-state pass, vocabulary pass, 400-line soft targets) is YOUR work, per references/handoff-template.md, whenever the update represents substantive session progress."
-        - "HAND-OFF BATON (required end-of-turn output): when the update PACKAGES the folder for a fresh session -- an explicit hand-off, or any session-boundary update -- you MUST end the turn with the hand-off baton: a two-line block `CWD: <project root>` then `Continue: /task work <CWD-relative task-folder path>` (see references/handoff-template.md 'Self-verify' + communication-framework.md 'hand-off baton'). It is a REQUIRED output, not optional; the script never emits it, so emitting it is the AGENT's job. Skipping it is the top hand-off miss -- the baton is what lets the next session resume with one paste."
+        - "AGENT BEHAVIOR: the script's only document write is the dated log.md line -- it never rewrites plan.md. The real rotation discipline (completed-step detail plan -> log, REMOVING done items from the task_items block, promoting stray open items into it, stale-state pass, vocabulary pass, 400-line soft targets) is YOUR work, per references/handoff-template.md, whenever the update represents substantive session progress. Rotation is the standing discipline, applied by default on every such update -- not a cleanup that fires only once a doc crosses 400 lines."
+        - "HAND-OFF BATON (required end-of-turn output): when the update PACKAGES the folder for a fresh session -- an explicit hand-off, or any session-boundary update -- FIRST run the self-verify read (handoff-template.md 'Self-verify'): read CLAUDE.md + plan.md cold, as the next agent, and confirm the goal is legible without other docs, the concrete next step is known, the opening response is known, cwd + non-obvious operational rules are stated, nothing references conversation context a cold reader cannot resolve, and Project vocabulary decodes any renamed paths. THEN end the turn with the hand-off baton: a two-line block `CWD: <project root>` then `Continue: /task work <CWD-relative task-folder path>` (communication-framework.md 'hand-off baton'). Both are REQUIRED, not optional; the script emits neither, so both are the AGENT's job. Skipping the baton is the top hand-off miss -- it is what lets the next session resume with one paste."
         - "PRE-CONTRACT FOLDER (validate warns 'no task_items block'): the update/hand-off pass STARTS with the one-time conversion -- sweep all three docs for open work, dedupe into items, map triage states, rewrite Immediate Priorities as id references, retire the superseded GOAL/checkbox/banner forms, validate until clean. The full procedure is handoff-template.md 'Converting a pre-contract folder'; the block must end as the ONLY carrier of open-work state (a half-conversion recreates the drift)."
     - id: close
       keywords: [close task, finish task, mark done, keep folder]
@@ -246,6 +246,7 @@ capability_skill:
     - "The current pointer is USER-GLOBAL (one across all projects), matching 'one active task globally'. Tests and sandboxes must inject --pointer; never point real work at a scratch pointer or vice versa."
     - "validate gates work with BOTH errors and warnings -- an uncommitted dev/tasks folder (a warning) blocks work until committed. This is deliberate: durable work that exists only in the working tree is one rm away from gone."
     - "References never carry status. To answer 'is X done?' resolve the folder (show/validate/list) -- do not infer from the presence or wording of a task_list entry."
+    - "Every agent dispatch names `model` explicitly, routed per references/orchestration.md (fable = deep analysis/complex coding, sonnet = information gathering/simple analysis, haiku = trivial operations, opus = everything else). Omitting model silently inherits the session model and skips the routing -- a model-less dispatch is a red flag, not a neutral default."
     - "Vocabulary: the unit below the task is an ITEM (long form 'task item'; accepted synonym 'work item') -- route all of 'work items', 'open items', 'goals', 'sub-tasks', 'what's available on this task' to the items verb. Never introduce a sub-task entity: an item has no folder, no lifecycle verbs, no outside references; an item that outgrows the block is promoted to a real task (init + a task_list ref)."
   anti_patterns:
     - id: inline_status_summary
@@ -266,14 +267,20 @@ capability_skill:
       why_it_seems_right: "The pointer is set and the command exited 0 -- the verb succeeded, time to start coding."
       why_it_is_wrong: "The Skill(...) and agent_hint: lines ARE the task's working context -- skills the task declared it needs and the sub-agent type suited to it. Ignoring them starts the work without the vocabulary the task recorded for itself."
       alternative: "Invoke each emitted skill via the Skill tool, then weigh dispatching to the agent_hint sub-agent type before proceeding (the work capability's step 2)."
+    - id: inline_footprint_work
+      name: Doing reads-a-lot / emits-a-lot work inline in the orchestrating context
+      keywords: [inline work, context footprint, delegate, background agent, quick edit]
+      why_it_seems_right: "It's quick, I'm already here, and dispatching an agent costs a prompt and a relay."
+      why_it_is_wrong: "Sessions run hundreds of messages; every file read and diff emitted inline stays in the orchestrating context for all of them. Difficulty and duration are the wrong axis -- persistent context footprint is."
+      alternative: "Classify by shape in one glance (references/orchestration.md, the delegation rule): reads-a-lot or emits-a-lot -> background agent; small, self-contained, and the result feeds the next orchestration decision -> inline (an agent round-trip there costs as much context as the work). Never run a heavy 'how expensive will this be' estimate -- that meta-analysis is itself the cost."
 ```
 
 ```yaml
 references:
   - id: orchestration
     path: references/orchestration.md
-    keywords: [orchestration, delegate, background agent, model routing, fable, sonnet, haiku, opus, dispatch, do no work inline]
-    summary: "The delegation rule (the orchestrator does no task work -- every task goes to a background agent) and the model-routing table (fable = deep analysis/complex coding, sonnet = information gathering/simple analysis, haiku = trivial operations, opus = everything else). Load whenever dispatching work to agents."
+    keywords: [orchestration, delegate, background agent, model routing, fable, sonnet, haiku, opus, dispatch, context footprint, inline vs delegate]
+    summary: "The delegation rule (delegate by persistent context footprint: reads-a-lot or emits-a-lot work goes to a background agent; small self-contained ops whose result feeds the next orchestration decision stay inline; classify by shape in one glance, never by heavy estimate) and the model-routing table (fable = deep analysis/complex coding, sonnet = information gathering/simple analysis, haiku = trivial operations, opus = everything else). Load whenever dispatching work to agents."
   - id: handoff_template
     path: references/handoff-template.md
     keywords: [hand-off template, eight sections, CLAUDE.md template, plan rotation, log filter, fill in scaffold, task_items block, item states, promotion rule, priorities reference items, pre-contract conversion, convert old folder, no task_items block]
