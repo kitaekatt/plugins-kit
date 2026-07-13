@@ -16,7 +16,7 @@ claude_md:
   insights:
     - id: crp_verdict_keep_whole
       keywords: [crp verdict, no references dir, over threshold, keep whole, split evaluated, tool-call doubling, dec-11]
-      summary: The SKILL.md is over the 500-line signal threshold (533 lines) with no references/ dir -- evaluated 2026-06-10 and deliberately kept whole; do not re-propose a split without new structure.
+      summary: The SKILL.md is over the 500-line signal threshold (533 lines at the 2026-06-10 evaluation) with no references/ dir -- evaluated 2026-06-10 and deliberately kept whole; do not re-propose a split without new structure.
       detail: |
         Dec-11 evaluation (size is a signal, CRP is the test): the body is an
         Index facts block that routes into ONE content_allocation framework
@@ -47,7 +47,8 @@ claude_md:
         (claude-md-audit load-trigger note + C-7; project-doc-audit PD-9/PD-10 +
         taxonomy L/M; audit.py asset resolution) operationalize these roles.
       origin: |
-        steam-analysis stress-test feedback (docs/skills-kit-feedback.md, worked
+        steam-analysis stress-test feedback
+        (~/Dev/steam-analysis/docs/skills-kit-feedback.md (external repo), worked
         2026-07-13): gaps 1, 2, 3, 5, 6 of 8. The framework was applied end-to-end
         on a real repo and every gap names the exact change site plus evidence.
       added: "2026-07-13"

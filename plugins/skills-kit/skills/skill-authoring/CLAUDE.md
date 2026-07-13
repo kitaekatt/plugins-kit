@@ -85,7 +85,7 @@ claude_md:
         (output-shape contract) that stays as an optional companion field, not a
         substitute.
 
-        Implementation: schemas.py TECHNIQUE_SKILL_SCHEMA now requires steps: with min_len
+        Implementation: skills_kit_lib/schemas/skill_types.py TECHNIQUE_SKILL_SCHEMA now requires steps: with min_len
         1 on every technique. trigger_model is metadata. output_template: is optional
         with a note clarifying it's a companion to steps. The trigger-model conditional
         was dropped from framework.md technique-skill row; audit.py and classify.py
@@ -120,7 +120,7 @@ claude_md:
         discipline-skills). Unknown keys not in the forbidden list pass silently.
 
         Codified in: framework.md "Schemas are floors, not ceilings" section;
-        schemas.py module docstring; skills_kit_lib/CLAUDE.md insight extra_keys_allowed
+        skills_kit_lib/schema_registry.py module docstring; skills_kit_lib/CLAUDE.md insight extra_keys_allowed
         which is the validator-side detail of the same decision. yaml-refactor-design-spec
         Q3 marked resolved.
       origin: |
@@ -154,7 +154,7 @@ claude_md:
         decomposition is what makes the entry useful at audit time -- a list of "don't
         do X" bullets without rationalization counters cannot survive a pressure test.
 
-        Codified in: schemas.py ANTI_PATTERNS_RULE (constant, reused by both schemas);
+        Codified in: skills_kit_lib/rule_fragments.py ANTI_PATTERNS_RULE (constant, reused by both schemas);
         framework.md schemas_are_floors.promoted_extensions block listing the new field
         and its rationale.
       origin: |
@@ -279,25 +279,16 @@ claude_md:
         grain (a single gotcha, a single anti-pattern record, a single
         escaping example), not just at the major-content grain.
 
-        The canonical criterion (apply verbatim):
-        - L1 (CLAUDE.md): if they are COMMON. Frequency dominates -- the
-          example/anti-pattern fires in most sessions touching the area;
-          ambient cost is justified.
-        - L2 (SKILL.md): if they are DIRECTLY RELATED to why the agent
-          invokes the skill. Stays in SKILL.md regardless of frequency
-          when this fires. Trigger-relevance dominates frequency when both
-          fire (e.g. a PowerShell -Command escaping gotcha that's
-          literally why the skill exists belongs in SKILL.md, not
-          CLAUDE.md, even if also common).
-        - L3 (references/): if they are ESOTERIC. One-in-a-hundred edge
-          cases, third-party-tool-specific quirks, environment-specific
-          footguns most invocations never hit. Specificity dominates --
-          ambient cost is not justified, but the content must be
-          reachable when the rare situation fires.
+        Decision: closes a gap the framework was silent on -- examples and
+        anti-patterns need a visibility criterion at their own grain, not
+        just at the major-content grain.
 
-        Codified in: framework.md "Visibility criterion for examples and
-        anti-patterns" sub-section, under the existing L1/L2/L3 content
-        allocation block.
+        Rule codified verbatim in framework.md, "Visibility criterion for
+        examples and anti-patterns" section (under the L1/L2/L3 content
+        allocation block): L1 if COMMON (frequency dominates), L2 if
+        DIRECTLY RELATED to why the agent invokes the skill (trigger-
+        relevance dominates frequency when both fire), L3 if ESOTERIC
+        (specificity dominates).
       origin: |
         Surface: a tool-wrapper skill layering audit (April 2026) found 5
         of 7 SKILL.md gotchas should have been in CLAUDE.md (frequency
@@ -322,25 +313,26 @@ claude_md:
         invokes TaskCreate (or another step tracker) at the start of the
         procedure, parallel `- [ ]` markdown adds no information.
 
-        The refined rule (apply verbatim):
-        Ship a paste-able `- [ ]` checklist OR explicitly invoke a step
-        tracker (TaskCreate, scratch file, etc.) at the start of the
-        procedure. Either satisfies the underlying goal of preventing
-        premature completion claims; the markdown syntax is one path, not
-        the only one.
+        Decision: the requirement is satisfied by EITHER a paste-able
+        `- [ ]` checklist OR an explicit step-tracker invocation (e.g.
+        TaskCreate, a scratch file) at the start of the procedure -- either
+        satisfies the underlying goal of preventing premature completion
+        claims; the markdown syntax is one path, not the only one. Rule
+        codified verbatim in framework.md's conditionally-required-patterns
+        row for technique-skills (explicit step-tracking).
 
         Implementation:
         - framework.md technique-skill table row + conditional_requirements
           example restated as the OR-form, with a note that the goal is
           the discipline of explicit step-tracking.
-        - _shared.py adds has_step_tracker_invocation() detector
+        - skills_kit_lib/markdown_heuristics.py adds has_step_tracker_invocation() detector
           (recognizes TaskCreate / TaskWrite / TodoWrite invocations and
           explicit prose markers like "track steps in", "step tracker",
           "scratch file for steps").
         - audit.py technique-skill row "explicit step-tracking
           (conditional, IF >3 steps): checklist OR tracker invocation"
           passes when EITHER signal is present.
-        - schemas.py keeps `checklist:` as an optional field with a note
+        - skills_kit_lib/schemas/skill_types.py keeps `checklist:` as an optional field with a note
           that the OR-form is enforced at audit.py level on the rendered
           SKILL.md body, not in the YAML schema (the schema cannot detect
           a step-tracker invocation in step text).
@@ -442,7 +434,7 @@ claude_md:
            reference-skill that documents harness permission rules stays
            reference-skill, even though it's harness-targeted.
 
-        Codified in: schemas.py CAPABILITY_SKILL_SCHEMA module docstring
+        Codified in: skills_kit_lib/schemas/skill_types.py CAPABILITY_SKILL_SCHEMA module docstring
         + external_capability.kind note (adds "harness");
         framework.md capability-skill required-blocks row (adds harness
         to the kinds list); framework.md capability-skill Examples row
@@ -540,7 +532,7 @@ claude_md:
         and live in subdomain-schema.md as auditable conditions rather
         than schema rules.
         
-        Codified in: schemas.py CAPABILITY_SKILL_SCHEMA `subdomain_config`
+        Codified in: skills_kit_lib/schemas/skill_types.py CAPABILITY_SKILL_SCHEMA `subdomain_config`
         block; framework.md capability-skill required-blocks row
         (subdomain_config: noted as optional with cross-reference);
         glossary.md new `subdomain_config` record under Patterns >
@@ -572,35 +564,19 @@ claude_md:
         standalone skills and deciding whether they should MERGE into one
         domain.
 
-        The merge criterion (apply verbatim):
-        - Justified only when BOTH hold: (1) 2+ skills share a subject --
-          not co-location, not topical adjacency, not a shared pattern;
-          (2) the skills are doer types.
-        - Mergeable-vs-foldable by type: technique / capability / audit
-          merge as MEMBERS (they are operations over the subject; multiple
-          operations on one subject IS the domain). reference / pattern /
-          discipline FOLD IN as supporting content (reference -> L3 doc;
-          pattern -> stays standalone, it applies across many subjects;
-          discipline -> the domain's guardrails) -- none needs its own
-          member sub-trigger. domain NEVER nests (fails top-level CRP).
-        - Consequences: one doer + N references is a skill with references,
-          not a domain; skills sharing a pattern but different subjects are
-          not a domain (they reference one pattern-skill); a plugin is a
-          packaging unit, a domain is a subject unit -- they can diverge or
-          a subject can span two plugins.
-        - CRP gate (same as L2->L3 splits): each member must fire on a
-          distinct sub-trigger so a typical invocation loads container + one
-          member. If every candidate co-loads, it is a CRP-fail merge --
-          keep them separate, exactly as a CRP-fail split gets reverted.
+        Decision: consolidation is justified only when 2+ skills share a
+        SUBJECT (not co-location, not topical adjacency, not a shared
+        pattern) AND are doer types. Doer types (technique/capability/audit)
+        merge as members; reference/pattern/discipline fold in as
+        supporting content instead; domain members never nest (a CRP
+        top-level test, refined by dec_16 into union vs nest). Same CRP
+        gate as L2->L3 splits: each member must fire on a distinct
+        sub-trigger.
 
-        Audit hook codified for /skill-audit hierarchy: cluster skills by
-        subject, flag any subject owning 2+ doer-type skills as a
-        consolidation candidate; flag any domain whose members all co-load
-        as a CRP-fail to revert.
-
-        Codified in: framework.md new section "When to consolidate skills
-        into a domain (the merge direction)" under the L1/L2/L3 content
-        allocation block, parallel to "CRP is the test for L2 -> L3 splits".
+        Rule, consequences table, and the /skill-audit hierarchy hook
+        codified verbatim in framework.md, "When to consolidate skills into
+        a domain (the merge direction)" section, under the L1/L2/L3 content
+        allocation block.
       origin: |
         Surface: a repository domain-structure design session (2026-05-30)
         that pulled back from "should these specific skills merge" to "what
@@ -632,20 +608,16 @@ claude_md:
         reference that is the shared substrate of two sibling domains cannot fold
         into either without orphaning the other.
 
-        The rule (apply verbatim): a reference cited by 2+ sibling domains stays
-        standalone, exactly as a pattern-skill does, and every consuming domain
-        cites it. Test: if folding the reference into one domain would force a
-        sibling domain to reach across a domain boundary to read it, keep it
-        standalone. This is the cross-verb base case -- structurally a pattern in
-        the merge table's sense.
+        Decision: a reference cited by 2+ sibling domains stays standalone,
+        exactly as a pattern-skill does, and every consuming domain cites
+        it -- structurally a pattern in the merge table's sense. Live
+        example: cohesion-principles (placement CCP/CRP/ADP) is cited by
+        both md-authoring and md-audit; folding it into either would orphan
+        the other.
 
-        Live example: cohesion-principles (placement CCP/CRP/ADP) is cited by both
-        md-authoring (placement while authoring) and md-audit (placement criteria
-        while auditing). Folding it into either orphans the other; it stays
-        standalone.
-
-        Codified in: framework.md new section "Shared references across sibling
-        domains stay standalone" under the merge-direction block.
+        Rule and test codified verbatim in framework.md, "Shared references
+        across sibling domains stay standalone" section, under the
+        merge-direction block.
       origin: |
         Surface: the skills-kit verb x artifact reorg design session (2026-05-31);
         P1 re-read of the framework merge table (lines ~269-291) found it did not
@@ -709,34 +681,21 @@ claude_md:
         have a broader domain so it's a union not a nest," and pointed at
         spiritcrossing's dialog-domain as a live sub-domain example.
 
-        The refinement (apply verbatim):
-        - The "never nest" rule is the top-level CRP test, not a ban on a domain
-          appearing under a domain. A BROADER UNION DOMAIN is a thin router that
-          greets + argument-dispatches into ONE sub-domain at a time (the
-          domain-layering pattern). Invoking it loads the router plus the single
-          selected sub-domain, so CRP holds -- exactly the gate every member merge
-          already passes (each member fires on a distinct sub-trigger).
-        - UNION (allowed) = selective dispatch. NEST (prohibited) = the parent
-          force-co-loads its member domains' full content on every invocation
-          (wanted one sub-area, got all of them, two domain-indexes deep).
-        - The test is selective-dispatch vs co-load, NOT "is the member a domain."
-          A union domain's sub-domain member MAY itself be a full domain-skill;
-          member `type: domain-skill` is legitimate in that case.
-        - Two backings for a sub-domain (domain-layering.md): a reference sub-area
-          (sub_domains: index with reference: path, e.g. dialog-domain's first_pass)
-          OR a member skill (index.members[], for a substantial standalone skill or
-          a pre-existing domain). Same routing behavior; different backing.
+        Decision: "never nest" is the top-level CRP test, not a topology ban.
+        The discriminator is selective-dispatch (UNION, allowed -- a thin
+        router loads itself plus exactly one sub-domain) vs force-co-load
+        (NEST, prohibited), not whether the member is itself a domain; a
+        union's sub-domain member may legitimately carry `type:
+        domain-skill`. This is what licenses md-authoring (broader union
+        domain) over skill-authoring (kept whole as a domain-skill) +
+        claude-md-authoring via index.members[], and the parallel md-audit.
+        Refines, does not delete, dec_13's "domain never nests" cell.
 
-        This is what licenses md-authoring (broader union domain) over skill-authoring
-        (kept whole as a domain-skill) + claude-md-authoring via index.members[], and
-        the parallel md-audit. skill-authoring is NOT retyped; it stays a domain and
-        becomes a sub-domain member.
-
-        Codified in: framework.md merge-table `domain` row (rewritten union-vs-nest)
-        + new section "Broader union domains over sub-domains (union vs nest)";
-        domain-layering.md new subsection "Two ways to back a sub-domain: reference
-        sub-area vs member skill". Refines (does not delete) dec_13's "domain never
-        nests" cell.
+        Rule, the two sub-domain backings (reference sub-area vs member
+        skill), and the worked example codified verbatim in framework.md,
+        merge-table `domain` row (rewritten union-vs-nest) + new section
+        "Broader union domains over sub-domains (union vs nest)"; the two
+        backings also documented in domain-layering.md.
       origin: |
         User correction during the reorg (2026-05-31): "domains do not nest, but we
         can have a broader domain so it's a union not a nest" + "domains can have
@@ -848,12 +807,12 @@ claude_md:
         - framework.md owns contracts (per-type required/conditional/prohibited rows,
           description requirements, content-form choice, schemas-as-floors section).
           The markdown contract tables are kept for human review clarity.
-        - skills_kit_lib/schema_registry.py owns the machine-readable contract. When schemas.py and
-          framework.md tables diverge, schemas.py wins. Framework tables get updated
+        - skills_kit_lib/schema_registry.py owns the machine-readable contract. When schema_registry.py and
+          framework.md tables diverge, schema_registry.py wins. Framework tables get updated
           to match; the schema does not get loosened to match an out-of-date table.
 
         This split is what makes audits deterministic: audit.py validates against
-        schemas.py, not against markdown heuristics. The markdown surface is for the
+        schema_registry.py, not against markdown heuristics. The markdown surface is for the
         human reviewer; the YAML schema is for the agent.
       origin: |
         Phase Y5 schema v1 lock 2026-04-28. Codified in framework.md "Canonical
@@ -894,5 +853,5 @@ claude_md:
         - framework sync
         - SSOT discipline
         - paired update
-      why: schemas.py is authoritative on divergence, but a stale framework.md table is the most common drift source and confuses reviewers. Pair the updates so the divergence window is zero.
+      why: skills_kit_lib/schema_registry.py is authoritative on divergence, but a stale framework.md table is the most common drift source and confuses reviewers. Pair the updates so the divergence window is zero.
 ```

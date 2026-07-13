@@ -215,8 +215,8 @@ audit_skill:
           tool: "Workflow | inline"
           expected: "Edits applied; per-file applied/skipped/failed summary."
         - n: 6
-          action: "Render the final summary: what was applied per file, what was skipped, any failures, and the bucket totals. Remind the user that re-running the audit should reproduce a clean (or reduced-FAIL) verdict -- detection and remediation are separate passes, so the re-run is the verification step."
-          expected: "Closing summary; user can re-run /md-audit project-doc to verify FAILs cleared."
+          action: "Render the final summary: what was applied per file, what was skipped, any failures, and the bucket totals. Remind the user that re-running the audit should reproduce a clean (or reduced-FAIL) verdict -- detection and remediation are separate passes, so the re-run is the verification step. Scope the verification re-run to the files that were actually MODIFIED by remediation -- results for untouched files stand; re-auditing them wastes runs."
+          expected: "Closing summary; user can re-run /md-audit project-doc on the modified files to verify FAILs cleared."
       output_template: |
         ## <file path> (<kind>, <lines>L, <inbound_citations> inbound)
 

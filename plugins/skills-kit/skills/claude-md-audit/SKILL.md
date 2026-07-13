@@ -187,6 +187,18 @@ audit_skill:
       detection_signal: "CLAUDE.local.md body contains project-conventional content that should be in the checked-in CLAUDE.md instead of a personal override."
       default_remediation: "Propose moving the project-conventional content to the checked-in CLAUDE.md (so all collaborators see it). User confirms before moving."
       bucket: "DISCUSS"
+    - id: "P_stale_factual_claim"
+      name: "A numeric count or checkable factual claim is contradicted by current repo state"
+      keywords: ["stale count", "stale claim", "factual drift", "wrong number", "A-3 classic home"]
+      detection_signal: "A-3 stale-reference hit: a numeric count or other checkable factual claim in a classic (non-code-directory) CLAUDE.md (e.g. 'the six unittest suites') is contradicted by current repo state (e.g. seven test files exist)."
+      default_remediation: "AUTO when the fix is a mechanical count/value update with unambiguous ground truth (recount and correct the number). DISCUSS when the discrepancy might be intentional (e.g. the count is aspirational or the claim is ambiguous). User confirms in the DISCUSS case."
+      bucket: "DISCUSS"
+    - id: "Q_skill_content_duplication"
+      name: "CLAUDE.md restates content a skill owns"
+      keywords: ["skill duplication", "C-6", "skill content in CLAUDE.md", "trim to guardrail", "pointer"]
+      detection_signal: "C-6 hit: a substantial block in a CLAUDE.md (or a project reference doc it cites) restates content owned by a skill or skill reference (verbatim or near-verbatim). NOT B, which is ancestor-CLAUDE.md restatement."
+      default_remediation: "Trim to a one-line guardrail naming the rule or failure mode plus a pointer to the skill (per C-5/A-4); the skill carries the depth. An authorial judgment -- user confirms what the guardrail line keeps."
+      bucket: "DISCUSS"
     - id: "H_stale_anchor"
       name: "CodeDir: requires-present anchor no longer resolves"
       keywords: ["code-directory", "stale anchor", "broken symbol", "missing sibling", "fidelity"]
@@ -244,7 +256,7 @@ audit_skill:
     - id: "K_unclassified"
       name: "Unclassified / special case"
       keywords: ["unclassified", "special case", "escape hatch", "K bucket"]
-      detection_signal: "Finding does not match any A-G or H-J detection signal after deliberate attempt."
+      detection_signal: "Finding does not match any A-G, P, Q, or H-J detection signal after deliberate attempt."
       default_remediation: "Surface to the user with the audit row that fired, attempted matches, and reasons none fit. User proposes strategy."
       bucket: "SPECIAL"
   procedures:
@@ -282,8 +294,8 @@ audit_skill:
           tool: "Workflow | inline"
           expected: "Edits applied to the target files; per-file applied/skipped/failed summary."
         - n: 6
-          action: "Render the final summary: what was applied per file, what was skipped, any failures, and the bucket totals. Remind the user that re-running the audit should now reproduce a clean (or reduced-FAIL) verdict -- detection and remediation are separate passes, so the re-run is the verification step."
-          expected: "Closing summary; user can re-run /md-audit claude-md to verify FAILs cleared."
+          action: "Render the final summary: what was applied per file, what was skipped, any failures, and the bucket totals. Remind the user that re-running the audit should now reproduce a clean (or reduced-FAIL) verdict -- detection and remediation are separate passes, so the re-run is the verification step. Scope the verification re-run to the files that were actually MODIFIED by remediation -- results for untouched files stand; re-auditing them wastes runs."
+          expected: "Closing summary; user can re-run /md-audit claude-md on the modified files to verify FAILs cleared."
       output_template: |
         ## <file path> (<role>)
 
@@ -351,6 +363,10 @@ audit_skill:
         procedure: "Run the CRP test (do body sections serve different reading tasks?). If yes, escalate to C. If no, INFO stays; the larger CLAUDE.md is correct."
       - category: "G_descendant_role_mismatch"
         procedure: "Propose moving project-conventional content from .local file into the checked-in CLAUDE.md (so all collaborators see it). User confirms before applying."
+      - category: "P_stale_factual_claim"
+        procedure: "Show the stale count/claim and current ground truth. AUTO sub-case (unambiguous mechanical correction) can be applied immediately; ambiguous cases (discrepancy might be intentional) wait for the user."
+      - category: "Q_skill_content_duplication"
+        procedure: "Show the restated block and the owning skill/reference. Propose trimming to a one-line guardrail plus a pointer to the skill (per C-5/A-4); the skill carries the depth. User confirms what the guardrail line keeps."
       - category: "L_verbose_in_place"
         procedure: "Show the over-worded section and a tightened rewrite (or the sentences to compress) with an approximate token-savings figure. Tighten IN PLACE only -- never move or delete. User confirms; honor carve-outs (teaching examples, load-bearing nuance, labeled safety-rail repetition)."
       - category: "M_extract_to_reference"

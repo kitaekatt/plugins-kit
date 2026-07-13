@@ -64,7 +64,7 @@ const FILE_FINDINGS_SCHEMA = {
           criterion: { type: 'string', description: 'criterion id or short name, e.g. ccp_cross_file_duplication' },
           message: { type: 'string' },
           line: { type: ['integer', 'null'], description: 'line number in the file, or null' },
-          taxonomy: { type: 'string', description: 'taxonomy id A-G or K; "none" for PASS/INFO/JUDGMENT that need no remediation' },
+          taxonomy: { type: 'string', description: 'taxonomy id A-G, P, Q, or K; "none" for PASS/INFO/JUDGMENT that need no remediation' },
           bucket: { type: 'string', enum: ['AUTO', 'DISCUSS', 'SPECIAL', 'NONE'] },
           remediation: { type: 'string', description: 'concrete proposed remediation for AUTO/DISCUSS/SPECIAL; empty for NONE' },
         },
@@ -120,10 +120,10 @@ Steps:
 6. ${codeDirClause}
 7. ${densityClause}
 8. Classify EVERY non-PASS finding into a taxonomy id and a remediation bucket:
-     - AUTO    = mechanical, safe to auto-apply (e.g. B: delete restated parent rule; I2: drop a drifted line number)
-     - DISCUSS = needs a user decision (A, C, D, E-authorial, F, G; CodeDir H, H2, I, J; Density L, M, N, O)
+     - AUTO    = mechanical, safe to auto-apply (e.g. B: delete restated parent rule; I2: drop a drifted line number; P: unambiguous count/value correction)
+     - DISCUSS = needs a user decision (A, C, D, E-authorial, F, G, P-ambiguous, Q; CodeDir H, H2, I, J; Density L, M, N, O)
      - SPECIAL = K, unclassified
-   Classic-dimension findings use taxonomy A-G/K; CodeDir-group findings use H_stale_anchor / H2_inverted_absence / I_claim_drift / I2_line_drift / J_low_value_insight (or K); Density-group findings use L_verbose_in_place / M_extract_to_reference / N_intra_file_redundancy / O_low_value_verbose.
+   Classic-dimension findings use taxonomy A-G/P/Q/K (P = stale factual claim/count, e.g. a "the six unittest suites" count contradicted by current repo state; AUTO when the fix is unambiguous, DISCUSS when the discrepancy might be intentional. Q = a CLAUDE.md block restating content a skill owns, the C-6 hit -- NOT B, which is ancestor-CLAUDE.md restatement; DISCUSS, remediation is trim-to-guardrail-plus-pointer); CodeDir-group findings use H_stale_anchor / H2_inverted_absence / I_claim_drift / I2_line_drift / J_low_value_insight (or K); Density-group findings use L_verbose_in_place / M_extract_to_reference / N_intra_file_redundancy / O_low_value_verbose.
    PASS / INFO / JUDGMENT findings that need no remediation get taxonomy "none" and bucket "NONE".
    For each AUTO/DISCUSS/SPECIAL finding write a concrete \`remediation\` (what edit you propose, with line refs).
 9. Verdict: NON-COMPLIANT if ANY finding has severity FAIL; otherwise COMPLIANT. INFO/JUDGMENT never gate. (A CodeDir CD-2 H/H2 FAIL gates exactly like a classic FAIL. Density findings are JUDGMENT only and never affect the verdict.)
