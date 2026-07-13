@@ -47,7 +47,11 @@ reference_skill:
     - id: load_graph_dag
       summary: The files Claude loads form a DAG in load order; references run forward-only -- later-loaded may cite earlier-loaded, never the reverse.
       keywords: [load graph, dag, load order, forward-only, l1 l2 l3, surfaces]
-      detail: Surfaces are root/subsystem/directory CLAUDE.md + .local (L1), SKILL.md (L2), references/ (L3), project references (L3-equivalent), scripts/assets (out-of-band). An edge must not reverse load order (e.g. a reference must not cite SKILL.md sections). See load_graph in the framework block.
+      detail: Surfaces are root/subsystem/directory CLAUDE.md + .local (L1, loading on cwd descent OR file access beneath the directory), SKILL.md (L2), references/ (L3), project references (L3-equivalent), and the out-of-band surfaces -- scripts/assets, in-code contract docs, README. An edge must not reverse load order (e.g. a reference must not cite SKILL.md sections). See load_graph in the framework block.
+    - id: total_ownership_roles
+      summary: Every md (and md-adjacent) file in a project has a named role -- including README (derived human brief), generated artifacts (provenance-only audit), and in-code contract docs (SSOT for code-enforced schemas). No file is outside the model.
+      keywords: [readme role, generated artifact, code-enforced contract, docstring ssot, out-of-band surface, asset dependency, total ownership]
+      detail: "README: the agent-facing copy is SSOT, README is the derived brief; identity-grain overlap tolerated; agent-relevant facts stranded README-only are a FAIL. Generated artifacts (identified by a generation-record sidecar or in-file marker): audits check only that provenance is named. Code-enforced contracts: the validator's in-code doc owns the fields; md states existence/invariants/change-discipline. Runtime asset consumption is declared via asset_dependencies: so moves/renames FAIL the audit instead of breaking silently. See readme_md / generated_artifact / in_code_contract_doc in the framework block."
     - id: three_principles
       summary: Every placement reduces to CCP (write-together), CRP (read-together), ADP (link-forward-only); the L1/L2/L3 levels are a derived consequence.
       keywords: [ccp, crp, adp, common closure, common reuse, acyclic dependencies]
@@ -89,13 +93,23 @@ content_allocation:
         load_level: L1 (always loaded for any session in this project)
       - id: subsystem_claude_md
         path_pattern: "<project>/<subsystem>/CLAUDE.md (e.g. plugins/skills-kit/CLAUDE.md)"
-        load_trigger: any cwd inside the subsystem
+        load_trigger: cwd inside the subsystem, OR file access (Read/Edit/Write) beneath it
         load_level: L1 (always loaded when working within the subsystem)
-        notes: Multiple levels may exist (subsystem -> sub-subsystem). Each is loaded only when the cwd descends into it.
+        notes: Multiple levels may exist (subsystem -> sub-subsystem). Each loads when the session descends into it -- by cwd or by touching files beneath it.
       - id: directory_claude_md
         path_pattern: "<any-directory>/CLAUDE.md (e.g. plugins/skills-kit/skills/skill-authoring/CLAUDE.md)"
-        load_trigger: cwd inside this directory
-        load_level: L1 (lazy-loaded; ambient only when the agent is working in this directory)
+        load_trigger: cwd inside this directory, OR file access (Read/Edit/Write) beneath it
+        load_level: L1 (lazy-loaded; ambient whenever the session touches this directory's files)
+        notes: |
+          BOTH triggers are real: the harness loads a directory's CLAUDE.md when the cwd
+          descends into it AND when files beneath it are read or edited by path. Most
+          data directories and leaf code packages are worked BY PATH from a repo-root
+          cwd -- a cwd-only model would mark their CLAUDE.md dead weight and force every
+          fact to bubble to root, which is wrong. CRP consequence: the reader set of a
+          directory CLAUDE.md is "sessions touching files beneath this directory"
+          (by cwd or by path), not "sessions cd'd into it". A CLAUDE.md in a path-worked
+          data or leaf-package directory (review rails for committed-data diffs, package
+          review notes) is reachable and correctly placed.
       - id: claude_local_md
         path_pattern: "<any-directory>/CLAUDE.local.md"
         load_trigger: same as the co-located CLAUDE.md, but loaded only on the author's machine (p4ignored / gitignored)
@@ -126,9 +140,39 @@ content_allocation:
           project_reference_md. Project references are the escape hatch / nursery, not the
           primary mode.
       - id: script_or_asset
-        path_pattern: "<skill-dir>/scripts/*.py, <skill-dir>/templates/*"
+        path_pattern: "<skill-dir>/scripts/*.py, <skill-dir>/templates/*, <skill-dir>/*.js"
         load_trigger: agent invokes via Bash / Read at runtime
         load_level: out-of-band (executables and assets do NOT enter context as text; only their stdout / read-content does)
+        notes: |
+          A script (or a SKILL.md/reference tool-argument example) may consume a repo file
+          at runtime -- a reference owned by another skill, a data file, a template. That
+          consumption is a real load-graph edge invisible to md-citation scanning; it must
+          be declared in the skill's asset_dependencies: block (see the asset_dependency
+          edge below) so the audits can resolve it mechanically.
+      - id: in_code_contract_doc
+        path_pattern: "module docstring or contract comment of the code that VALIDATES a machine contract (e.g. the schema module, the validator, the parser)"
+        load_trigger: agent Reads the module on demand
+        load_level: out-of-band (in-code documentation; enters context only when the module is read)
+        notes: |
+          For a CODE-ENFORCED contract (a schema the code validates, a wire format the
+          code parses), the validator's in-code doc is the SSOT -- it changes in the
+          same diff as the validator (perfect CCP). md surfaces state the contract's
+          EXISTENCE, its INVARIANTS, and its CHANGE-DISCIPLINE, and cite the module for
+          the field-level detail. An md file that enumerates every field of a
+          code-validated schema is a drift hazard, not documentation (see the
+          md_restates_code_enforced_contract anti-pattern).
+      - id: readme_md
+        path_pattern: "<project>/README.md (and <subsystem>/README.md)"
+        load_trigger: never ambient for the agent; read only on explicit demand
+        load_level: out-of-band (human-facing; readers are humans and web crawlers, effectively never the agent)
+        notes: |
+          The GitHub-facing brief. The agent-facing copy (the CLAUDE.md / skill graph)
+          is the SSOT; README is the DERIVED brief -- identity, one architecture
+          paragraph, layout pointers. Overlap with the root CLAUDE.md is tolerated at
+          the identity-sentence grain (both may open with the same project identity).
+          Commands, conventions, and schemas are never duplicated into README; any such
+          fact present in README must also be reachable through the CLAUDE.md / skill
+          graph, or agents can never see it.
     edges:
       - from: child_claude_md
         to: parent_claude_md
@@ -159,6 +203,18 @@ content_allocation:
       - from: project_reference_md
         to: sibling_project_reference_md
         rule: one-hop-deep cross-citation only; same constraint as skill references.
+      - from: skill (its scripts, or tool-argument examples in its SKILL.md / references)
+        to: any_repo_file (asset dependency)
+        rule: |
+          A skill may consume a repo file at RUNTIME -- a reference owned by another skill
+          (correct when the file's CCP home is the other skill), a data file, a committed
+          template. This is the asset_dependency edge. It is legitimate and often the right
+          design (the asset stays with its CCP siblings; the consumer Reads it out-of-band),
+          but it is invisible to md-citation checks -- so it MUST be declared in the
+          consuming skill's asset_dependencies: block (a portable typed unit; see
+          skill-authoring framework.md "Runtime asset dependencies"). The audit resolves
+          each declared path mechanically: moving or renaming the asset then FAILs the
+          consuming skill's audit instead of breaking silently at runtime.
       - prohibited:
           - from: parent_claude_md
             to: child_claude_md
@@ -254,6 +310,10 @@ content_allocation:
           rule: Every cross-file reference must resolve.
           why: a broken edge breaks the DAG; the agent is left with no path to the cited content.
           test: for every "see X" citation, verify X exists. (Mechanical check.)
+        - id: runtime_asset_dependencies_declared
+          rule: Every repo file a skill consumes at runtime (via its scripts or its tool-argument examples) is declared in the skill's asset_dependencies: block, and every declared path resolves.
+          why: the consumption edge is invisible to md-citation scanning ("see X" checks); undeclared, a rename/move of the asset breaks the consumer silently at runtime with no audit signal.
+          test: for every declared asset_dependencies path, verify it resolves against the skill dir or the project root. (Mechanical check -- skills_kit_lib audit enforces it.) The judgment half -- "is every runtime consumption actually declared?" -- is checked by reading the skill's scripts and tool-args examples for embedded repo paths.
         - id: skills_must_not_gate_load_bearing_facts_for_common_errors
           rule: A common agent error pattern must live in a CLAUDE.md (always loaded for the relevant scope), not behind a skill's trigger.
           why: skill invocation is conditional on the trigger firing; common errors must be reachable on every session that could hit them. Gating a common error behind a skill creates a load-graph dependency on a trigger that may not fire.
@@ -344,7 +404,7 @@ content_allocation:
 
     - id: directory_claude_md
       ccp_role: changes when local conventions or decision history in this directory changes.
-      crp_role: every session WORKING IN this directory needs every fact (this is a narrower set than "every session triggering a skill in this directory" - SKILL.md serves that audience).
+      crp_role: every session TOUCHING FILES BENEATH this directory -- by cwd descent or by path access -- needs every fact (this is a narrower set than "every session triggering a skill in this directory" - SKILL.md serves that audience). Do not treat a path-worked directory's CLAUDE.md as unreachable; the file-access trigger makes it load exactly when its readers appear.
       adp_role: cites ancestor CLAUDE.md content freely; does not cite SKILL.md or references/ as a dependency (those are downstream and triggered by different load events).
       audit_rules:
         - id: directory_specific_content
@@ -409,6 +469,10 @@ content_allocation:
           rule: no citation of SKILL.md sections by name.
           test: scan for `SKILL.md` mentions citing section content.
           severity: FAIL on back-citations.
+        - id: no_code_contract_field_restatement
+          rule: the reference does not enumerate field-by-field a machine contract that code validates; it states the contract's existence, invariants, and change-discipline and cites the validating module (the in_code_contract_doc surface) for the fields.
+          test: for each schema/format the reference describes, check whether code validates it; if yes, check whether the reference restates the field list rather than citing the module.
+          severity: FAIL on live field-by-field restatement; INFO when the restatement is flagged in-doc as an accepted drift risk.
 
     - id: project_reference_md
       ccp_role: changes when the specific topic the document covers changes. Same as skill_reference_md, but the change driver is whatever the topic is rather than a particular skill's contract.
@@ -433,6 +497,39 @@ content_allocation:
           rule: no citation of CLAUDE.md sections by name.
           test: scan for `CLAUDE.md` mentions citing section content from CLAUDE.md.
           severity: FAIL on back-citations.
+        - id: no_code_contract_field_restatement
+          rule: the doc does not enumerate field-by-field a machine contract that code validates; it states the contract's existence, invariants, and change-discipline and cites the validating module (the in_code_contract_doc surface) for the fields.
+          test: for each schema/format the doc describes, check whether code validates it; if yes, check whether the doc restates the field list rather than citing the module.
+          severity: FAIL on live field-by-field restatement; INFO when the restatement is flagged in-doc as an accepted drift risk.
+
+    - id: readme_md
+      ccp_role: changes when the project's public identity or high-level architecture changes -- the same drivers as the root CLAUDE.md's identity content, which is why the identity-grain overlap is tolerated.
+      crp_role: readers are humans and web crawlers landing on the repo; effectively never the agent. Content is for that audience -- identity, one architecture paragraph, layout pointers, badges, install/usage for outsiders.
+      adp_role: out-of-band; nothing in the agent load graph depends on README. README may point INTO the graph ("see CLAUDE.md", "see docs/"); nothing points out to it as a load dependency.
+      audit_rules:
+        - id: derived_brief_not_ssot
+          rule: the agent-facing copy (CLAUDE.md / skill graph) is the SSOT; README is the derived brief. Identity/architecture overlap with the root CLAUDE.md is tolerated at the identity-sentence grain and is NOT a duplication finding.
+          test: for overlapping content, confirm the grain -- an identity sentence or a single architecture paragraph passes; a synchronized multi-section restatement fails (derive, don't mirror).
+          severity: INFO on grain overflow (recommend trimming README to the brief).
+        - id: no_agent_only_facts_stranded_in_readme
+          rule: every command, convention, or schema present in README is also reachable through the CLAUDE.md / skill graph.
+          test: for each command block, convention statement, or schema description in README, verify the same fact (or its SSOT) is reachable from a CLAUDE.md or skill surface.
+          severity: FAIL on facts stranded in README only -- agents never load README, so a README-only fact is invisible to every session.
+
+    - id: generated_artifact
+      ccp_role: changes when REGENERATED -- the change driver is the generator plus its inputs, never a hand edit. Committed outputs of a tool or an analysis session (renderings, generated reports, session-analysis documents).
+      crp_role: readers are humans reviewing the output, or sessions regenerating it. The content is not hand-maintained knowledge; placement/maturation rules for authored docs do not apply.
+      adp_role: out-of-band leaf; nothing may depend on a generated artifact as a load-bearing knowledge surface (regeneration may rewrite it wholesale).
+      identification: |
+        A path convention or provenance signal identifies the role: a machine-readable
+        generation-record sidecar next to the artifact (e.g. <name>.params.json recording
+        exactly how to regenerate), OR an in-file marker in the first ~20 lines naming the
+        generator or the generating session ("generated by X", "generated analysis").
+      audit_rules:
+        - id: provenance_named
+          rule: the generator or session provenance is named -- via the sidecar or the in-file marker. This is the ONLY audit rule for a generated artifact; the authored-doc criteria (maturation, CRP split, orphan, duplication) are skipped.
+          test: check for a generation-record sidecar or an in-file generation marker.
+          severity: FAIL when a file is claimed/committed as generated output but carries neither signal (unverifiable provenance); everything else about the file is exempt.
 
   skill_maturation_pipeline:
     description: |
@@ -523,6 +620,13 @@ content_allocation:
       why_it_seems_right: "the doc is doing useful work where it sits; readers know to look there; migration is friction."
       why_it_is_wrong: "structured procedural / rule / lookup / wrapper content has more leverage as a skill -- a discoverable trigger, an audit surface, a typed contract. Leaving structured content as an unstructured project reference forfeits those benefits and makes the content less reachable than it could be."
       alternative: graduate the project reference into a skill. Identify the matching skill type (technique / discipline / reference / capability), restructure the content into the type's contract, ship a SKILL.md with the appropriate frontmatter and trigger. Migrate the project reference content into the skill's references/ folder if it serves a sub-trigger, or replace it entirely with structured SKILL.md content.
+
+    - id: md_restates_code_enforced_contract
+      name: md surface enumerates every field of a schema that code validates
+      keywords: [code-enforced contract, schema restatement, docstring ssot, field-by-field drift, validator doc]
+      why_it_seems_right: "the reference doc feels incomplete without the schema's fields; readers shouldn't have to open the code."
+      why_it_is_wrong: "the validator's in-code doc changes in the same diff as the validator (perfect CCP); an md copy of the field list changes in a DIFFERENT diff and drifts. Two enumerations of one code-enforced contract is an SSOT violation with a silent failure mode -- the md copy keeps looking authoritative after the code moves on."
+      alternative: the module docstring (or contract comment) of the validating code is the SSOT for the fields. md surfaces state the contract's existence, its invariants, and its change-discipline ("the schema changes in the same diff as metadata.py's validator"), and cite the module for the field-level detail.
 
     - id: project_reference_proliferation_when_skill_exists
       name: a project reference doc duplicates content already in a skill

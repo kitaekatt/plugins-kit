@@ -32,6 +32,7 @@ audit_skill:
       - "discoverability / orphan detection -- whether the doc is reachable from a CLAUDE.md, SKILL.md, or sibling doc in the load graph (mechanical inbound-citation count from discover.py)"
       - "CRP single-reading-task and one-hop-deep cross-reference checks; ADP no-back-reference-into-CLAUDE.md; CCP no-duplication-of-skill-content"
       - "listing project documents visible from a scan root (the discover.py helper for index-based selection)"
+      - "named-role dispatch for READMEs (derived human brief -- readme_md role) and committed generated artifacts (provenance-only audit -- generated_artifact role)"
     excludes:
       - "auditing SKILL.md files (use /md-audit skill)"
       - "auditing CLAUDE.md / CLAUDE.local.md files (use /md-audit claude-md)"
@@ -84,6 +85,18 @@ audit_skill:
       summary: "When a skill exists for the doc's topic, that skill's references/ is the SSOT. A project doc that restates skill content creates a second copy that drifts. The doc should collapse to a pointer ('for X, invoke /skill-name')."
       severity: "FAIL"
       detail: "Judgment-assisted: the lane checks whether a skill covers the doc's topic and whether the doc restates (rather than points at) that skill's content. INFO when the project ref predates the skill and graduation is in progress; FAIL on live parallel duplication."
+    - id: "readme_role"
+      name: "Named role -- README is the derived human brief"
+      keywords: ["readme", "derived brief", "human-facing", "stranded facts", "identity overlap"]
+      summary: "A README (discover.py role_hint == readme) is judged under the cohesion-principles readme_md role: the agent-facing copy (CLAUDE.md / skill graph) is the SSOT, README is the derived brief. Identity/architecture overlap with root CLAUDE.md is tolerated at the identity-sentence grain (not a PD-8 duplication finding); maturation and orphan checks are skipped (a README is intentionally human-facing). FAIL when a command, convention, or schema in README is not also reachable through the CLAUDE.md / skill graph -- agents never load README."
+      severity: "FAIL"
+      detail: "Role dispatch is mechanical (role_hint from discover.py); the stranded-fact check is judgment-assisted -- for each command block / convention / schema in the README, verify the fact or its SSOT is reachable from a CLAUDE.md or skill surface. INFO when the tolerated overlap grows past the identity-sentence grain."
+    - id: "generated_artifact_provenance"
+      name: "Named role -- generated artifact, provenance-only audit"
+      keywords: ["generated artifact", "provenance", "sidecar", "params.json", "generation marker", "exempt"]
+      summary: "A committed generated output (discover.py generated == true, via a generation-record sidecar or an in-file marker in the first ~20 lines) is exempt from the authored-doc criteria (maturation, CRP split, orphan, duplication, size). The single applicable check: the generator or session provenance is named. A doc CLAIMED as generated with neither signal FAILs (unverifiable provenance)."
+      severity: "FAIL"
+      detail: "Mechanical from discover.py generated / generation_record. With a signal present: PASS, all other criteria skipped -- no exemption needs declaring by hand in the doc. Claimed-generated without a signal: taxonomy M; remediation is adding a machine-readable generation record (the <name>.params.json sidecar recipe is the proven shape) or an in-file marker naming the generator."
     - id: "hygiene_thresholds"
       name: "Hygiene -- size signal and broken outbound file links"
       keywords: ["hygiene", "size signal", "broken link", "file path", "line count"]
@@ -151,10 +164,22 @@ audit_skill:
       detection_signal: "Mechanical INFO: effective lines > 500 or approx tokens > 3000."
       default_remediation: "Run the CRP test (do sections serve different reading tasks?). If yes, escalate to E. If no, INFO stays -- a large single-task doc is correct."
       bucket: "DISCUSS"
+    - id: "L_readme_stranded_fact"
+      name: "Agent-relevant fact stranded in README"
+      keywords: ["readme", "stranded fact", "unreachable command", "ssot", "derived brief"]
+      detection_signal: "The doc is a README (role_hint == readme) and carries a command, convention, or schema that is not reachable through the CLAUDE.md / skill graph."
+      default_remediation: "Move the fact's SSOT into the agent-facing graph (the owning CLAUDE.md or skill) and keep README as the derived brief; README may keep a human-facing copy once the graph owns the fact. User confirms the destination."
+      bucket: "DISCUSS"
+    - id: "M_generated_missing_provenance"
+      name: "Claimed-generated doc without a provenance signal"
+      keywords: ["generated", "missing provenance", "no sidecar", "no marker", "unverifiable"]
+      detection_signal: "The doc is claimed/presented as generated output but discover.py found neither a generation-record sidecar nor an in-file generation marker (generated == false)."
+      default_remediation: "Add a machine-readable generation record -- a <name>.params.json sidecar recording exactly how to regenerate (the proven shape) -- or an in-file marker naming the generator/session. User confirms which."
+      bucket: "DISCUSS"
     - id: "K_unclassified"
       name: "Unclassified / special case"
       keywords: ["unclassified", "special case", "escape hatch", "K bucket"]
-      detection_signal: "Finding does not match any A-J detection signal after a deliberate attempt."
+      detection_signal: "Finding does not match any A-J / L / M detection signal after a deliberate attempt."
       default_remediation: "Surface to the user with the audit row that fired, attempted matches, and reasons none fit. User proposes strategy."
       bucket: "SPECIAL"
   procedures:
@@ -168,13 +193,13 @@ audit_skill:
         - "The user is in a project directory so discoverability / orphan signals are meaningful."
       steps:
         - n: 1
-          action: "Resolve the audit target set from $ARGUMENTS. Empty -> scan cwd and list. 'list' -> emit numbered list via discover.py and stop. A directory path -> scan it for project docs (discover.py --root). A file path -> audit it directly (discover.py --path). Integers -> map to paths from the last list. Strip any non-interactive token ('fast', '--fast', '--yes', '-y') first and set non_interactive accordingly (also set it if the user's prose expresses non-interactive intent). For each target capture (path, kind, lines, approx_tokens, inbound_citations, cited_by) from discover.py --json. Drop targets whose kind is `skill_reference` or `other_claude_artifact` with an A_misclassified_skill_ref note (route them to the right auditor)."
+          action: "Resolve the audit target set from $ARGUMENTS. Empty -> scan cwd and list. 'list' -> emit numbered list via discover.py and stop. A directory path -> scan it for project docs (discover.py --root). A file path -> audit it directly (discover.py --path). Integers -> map to paths from the last list. Strip any non-interactive token ('fast', '--fast', '--yes', '-y') first and set non_interactive accordingly (also set it if the user's prose expresses non-interactive intent). For each target capture (path, kind, role_hint, generated, generation_record, lines, approx_tokens, inbound_citations, cited_by) from discover.py --json. Drop targets whose kind is `skill_reference` or `other_claude_artifact` with an A_misclassified_skill_ref note (route them to the right auditor)."
           tool: "discover.py"
           input: "uv run python ${CLAUDE_PLUGIN_ROOT}/skills/project-doc-audit/scripts/discover.py [--root DIR | --path FILE ...] --json"
           expected: "Resolved per-doc records (path, kind, lines, approx_tokens, inbound_citations, cited_by) + non_interactive flag."
           on_failure: "If no project docs resolve, surface the scan root and stop."
         - n: 2
-          action: "DETECT phase (before-Q&A). Choose execution mode by file count -- this threshold equalizes the Workflow tool's per-run overhead. ONE file: audit inline in the main loop (Read the doc; Read references/audit-criteria.md -- the single self-contained criteria doc; apply the project_reference_md criteria; use the mechanical signals discover.py already computed -- orphan from inbound_citations, size from lines/approx_tokens; judge maturation / CRP / duplication; classify each finding into taxonomy + bucket). TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/project-doc-audit/workflow/detect.js and args = { files:[{path, kind, lines, approx_tokens, inbound_citations, cited_by}], refs:{criteria, pluginRoot} }. The workflow fans one lane out per file and returns { perFile, totals }. Detection only -- no file is edited in this phase."
+          action: "DETECT phase (before-Q&A). Choose execution mode by file count -- this threshold equalizes the Workflow tool's per-run overhead. Named-role dispatch first: a `generated` target gets ONLY the PD-10 provenance check (all authored-doc criteria skipped); a `role_hint: readme` target gets the PD-9 readme-role criteria (maturation/orphan skipped, identity-grain overlap tolerated). ONE file: audit inline in the main loop (Read the doc; Read references/audit-criteria.md -- the single self-contained criteria doc; apply the project_reference_md criteria; use the mechanical signals discover.py already computed -- orphan from inbound_citations, size from lines/approx_tokens, role_hint/generated for named-role dispatch; judge maturation / CRP / duplication; classify each finding into taxonomy + bucket). TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/project-doc-audit/workflow/detect.js and args = { files:[{path, kind, role_hint, generated, generation_record, lines, approx_tokens, inbound_citations, cited_by}], refs:{criteria, pluginRoot} }. The workflow fans one lane out per file and returns { perFile, totals }. Detection only -- no file is edited in this phase."
           tool: "Workflow | inline"
           input: "detect.js args.refs: criteria=${CLAUDE_PLUGIN_ROOT}/skills/project-doc-audit/references/audit-criteria.md; pluginRoot=${CLAUDE_PLUGIN_ROOT}. (cohesion-principles is intentionally NOT passed -- lanes load only the self-contained criteria doc for cache efficiency.)"
           expected: "Structured per-file findings (group, severity, criterion, message, line, taxonomy, bucket, remediation) + per-file verdict."
@@ -223,6 +248,7 @@ audit_skill:
         - "Maturation (B/C/D) findings are advisory -- a project doc doing useful work where it sits is COMPLIANT. Graduation is a higher-leverage opportunity, not a defect. Never FAIL a doc for not yet being a skill."
         - "Size is a SIGNAL (INFO/J), never a verdict. A large single-reading-task doc that passes CRP is correct; only escalate to E_crp_split when a CRP-passing decomposition genuinely exists."
         - "Cross-reference (broken skill-link) integrity is NOT this audit's job -- /md-audit references owns it. This audit checks doc-to-doc one-hop discipline and file-path resolution only."
+        - "Named roles override the generic criteria: a generated artifact (sidecar / in-file marker) is audited for provenance ONLY -- never flag it for maturation, split, orphan, or duplication, and no in-doc exemption declaration is needed. A README is the human-facing derived brief -- never flag its identity-grain overlap with root CLAUDE.md as duplication, and never flag it as an orphan."
       anti_patterns:
         - id: "audit_then_self_remediate"
           name: "Audit and remediate in the same procedure pass"

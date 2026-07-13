@@ -112,6 +112,33 @@ CCP/SSOT says: when a skill owns a topic, its `references/` is the single source
 
 **Severity:** FAIL (taxonomy I) on live parallel duplication. INFO when the project ref predates the skill and graduation is in progress.
 
+## Named-role findings (README, generated artifacts)
+
+Two per-artifact roles from cohesion-principles override the generic project-doc criteria. `discover.py` computes both signals mechanically (`role_hint`, `generated` / `generation_record`).
+
+### PD-9. README is the derived human brief (readme_md role)
+
+**Rule:** a README (`role_hint == "readme"`) is judged under the cohesion-principles `readme_md` role, NOT the generic project-doc criteria. Readers are humans and web crawlers; the agent-facing copy (CLAUDE.md / skill graph) is the SSOT and README is the derived brief. Two consequences:
+
+1. **Tolerated overlap:** identity/architecture overlap with the root CLAUDE.md at the identity-sentence grain is NOT a duplication finding (skip PD-8 for that overlap). INFO when the overlap grows past the brief grain into synchronized multi-section restatement.
+2. **No stranded agent facts (FAIL):** every command, convention, or schema present in README must also be reachable through the CLAUDE.md / skill graph. Agents never load README; a README-only fact is invisible to every session.
+
+**Also skipped for READMEs:** PD-2 maturation (a README never graduates to a skill) and PD-4 orphan (a README is intentionally human-facing; zero inbound citations is its normal state).
+
+**Test:** for each command block / convention / schema in the README, verify the fact (or its SSOT) is reachable from a CLAUDE.md or skill surface.
+
+**Severity:** FAIL (taxonomy L) on stranded agent-relevant facts; INFO on overlap past the identity-sentence grain.
+
+### PD-10. Generated artifacts: provenance only (generated_artifact role)
+
+**Rule:** a committed generated output (`generated == true` -- identified by a generation-record sidecar like `<name>.params.json`, or an in-file generation marker in the first ~20 lines) is exempt from the authored-doc criteria (PD-2 maturation, PD-3 CRP split, PD-4 orphan, PD-8 duplication, size signals). One check applies: the generator or session provenance is named -- which the identifying signal itself establishes.
+
+**The FAIL case:** a doc that *claims* to be generated (title/header says "generated", user asserts it) but carries neither a sidecar nor an in-file marker -- unverifiable provenance (taxonomy M). Remediation: add a machine-readable generation record (the sidecar pattern -- a `<name>.params.json` recording exactly how to regenerate -- is the proven shape) or an explicit in-file marker naming the generator.
+
+**Test:** mechanical, from discover.py `generated` / `generation_record`.
+
+**Severity:** PASS with provenance (all other criteria skipped); FAIL (taxonomy M) on claimed-generated without a signal.
+
 ## Hygiene findings (universal)
 
 ### PD-H1. Outbound file links resolve
@@ -155,6 +182,6 @@ COMPLIANT | NON-COMPLIANT
 
 ### Decision rules
 
-- Any FAIL finding (PD-5 chain, PD-6 back-reference, PD-8 live duplication, PD-H1 broken link) -> file is NON-COMPLIANT.
+- Any FAIL finding (PD-5 chain, PD-6 back-reference, PD-8 live duplication, PD-9 stranded agent facts in README, PD-10 unverifiable generation provenance, PD-H1 broken link) -> file is NON-COMPLIANT.
 - Only PASS / INFO / JUDGMENT findings -> file is COMPLIANT.
 - JUDGMENT findings (PD-2 maturation, PD-3 split candidacy, PD-4 orphan) and INFO findings are advisory; they do not escalate to FAIL on subsequent runs even if unaddressed.

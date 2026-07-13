@@ -50,34 +50,37 @@ For requests that name a specific action ("run the inspector", "rebuild the inde
 
 ### 4. Sub-domain registration
 
-Sub-domains are declared in a machine-readable index inside the SKILL.md or in a dedicated reference file. Each entry carries:
+Sub-domains are declared **once**, in the domain_skill contract's `index:` block -- the same declaration the schema validator checks. There is no separate layering index; the routing behaviors (greeting menu, argument dispatch, overview detection) consume the `index:` block directly. One declaration satisfies both the schema and the layering surface.
 
-- `name` -- canonical sub-domain identifier
-- `description` -- one sentence on the sub-domain's scope
-- `keyword_cues` -- list of phrases that route to this sub-domain
-- `reference` -- path to the sub-domain's deeper documentation
+- **Reference-backed sub-domain** -- one `index.references[]` entry. The schema's fields carry the routing data: `id` is the canonical sub-domain identifier, `summary` is the one-sentence scope (the greeting-menu line), `keywords` is the routing cue cluster (argument-dispatch matches against it), `path` is the sub-domain's deeper documentation.
+- **Member-skill-backed sub-domain** -- one `index.members[]` entry (`name` / `type` / `ref` / `keywords`); see "Two ways to back a sub-domain" below.
 
-Example index shape:
+Example (reference-backed):
 
 ```yaml
-sub_domains:
-  - name: subdomain-A
-    description: First sub-area description.
-    keyword_cues: [keyword-a, keyword-a-alt, alt-cue]
-    reference: references/subdomain-a.md
-  - name: subdomain-B
-    description: Second sub-area description.
-    keyword_cues: [keyword-b, keyword-b-alt]
-    reference: references/subdomain-b.md
+domain_skill:
+  # ... identity / companions / scope / orientation ...
+  index:
+    references:
+      - id: subdomain-a
+        path: references/subdomain-a.md
+        keywords: [keyword-a, keyword-a-alt, alt-cue]
+        summary: First sub-area description.
+      - id: subdomain-b
+        path: references/subdomain-b.md
+        keywords: [keyword-b, keyword-b-alt]
+        summary: Second sub-area description.
 ```
 
-The index is the source of truth for the greeting menu and for argument-dispatch matching. Tooling that audits the domain-skill consumes this index to verify each declared sub-domain has a reachable reference doc.
+The `index:` block is the single source of truth for the greeting menu and for argument-dispatch matching. Audit tooling consumes the same block: the schema validator enforces the record shape, and the reference-resolution check verifies each declared `path` is reachable on disk.
+
+**Do not declare a parallel `sub_domains:` block.** Earlier versions of this pattern used a bespoke `sub_domains:` index (`name` / `description` / `keyword_cues` / `reference`) alongside the schema's `index.references` -- two near-synonymous declarations over the same files, which drift. That shape is retired for domain-skills on the YAML contract. (For generic md documents NOT on the domain_skill contract, the portable `sub_areas:` unit -- same record shape -- remains the right declaration; see md-authoring's `area-ownership.md`.)
 
 ### Two ways to back a sub-domain: reference sub-area vs member skill
 
 A sub-domain can be backed two ways. The routing behavior (greeting, argument-dispatch, overview detection) is identical; only what the sub-domain *points at* differs.
 
-- **Reference sub-area.** The sub-domain is a `references/*.md` doc inside this domain. Declared with the `sub_domains:` index above (`reference:` path). Use when the sub-area is knowledge owned by this domain, not a standalone skill -- dialog-domain's `first_pass` / `dialog_testing` are reference sub-areas.
+- **Reference sub-area.** The sub-domain is a `references/*.md` doc inside this domain. Declared with an `index.references[]` entry (see the registration section above). Use when the sub-area is knowledge owned by this domain, not a standalone skill -- dialog-domain's `first_pass` / `dialog_testing` are reference sub-areas.
 - **Member skill.** The sub-domain is a separate flat skill, pointed at by the domain_skill's `index.members[]` (each entry carries `name` / `type` / `ref` / `keywords`). Use when the sub-domain is a substantial standalone skill that already exists -- or is itself a domain-skill. The member `type` may be `domain-skill`: a **broader union domain** routes to sub-domain members this way without nesting (see framework.md "Broader union domains over sub-domains"). The parent stays a thin router; argument-dispatch loads exactly one member.
 
 Pick member-skill backing when the sub-domain has its own lifecycle, scripts, or reference graph (it earns a directory and a SKILL.md); pick reference-sub-area backing when it is a body of knowledge the parent owns. A broader union domain typically uses `index.members[]` because its sub-domains are pre-existing domains it is putting a roof over.
@@ -98,22 +101,25 @@ The convention extends to dispatch: when a parent task calls for a sub-agent, th
 
 A `/project-mgmt` domain-skill with three sub-domains -- tickets, milestones, approvals -- declares its layering as follows:
 
-**SKILL.md sub-domain index:**
+**SKILL.md sub-domain index (the domain_skill contract's own `index:` block):**
 
 ```yaml
-sub_domains:
-  - name: tickets
-    description: ticket creation, triage, status transitions
-    keyword_cues: [ticket, issue, bug report, task, triage]
-    reference: references/tickets.md
-  - name: milestones
-    description: milestone planning, dependency tracking, due-date management
-    keyword_cues: [milestone, sprint, release, deadline, schedule]
-    reference: references/milestones.md
-  - name: approvals
-    description: approval routing, sign-off tracking, escalation
-    keyword_cues: [approval, sign-off, review request, escalate]
-    reference: references/approvals.md
+domain_skill:
+  # ... identity / companions / scope / orientation ...
+  index:
+    references:
+      - id: tickets
+        path: references/tickets.md
+        keywords: [ticket, issue, bug report, task, triage]
+        summary: ticket creation, triage, status transitions
+      - id: milestones
+        path: references/milestones.md
+        keywords: [milestone, sprint, release, deadline, schedule]
+        summary: milestone planning, dependency tracking, due-date management
+      - id: approvals
+        path: references/approvals.md
+        keywords: [approval, sign-off, review request, escalate]
+        summary: approval routing, sign-off tracking, escalation
 ```
 
 **Bare invocation `/project-mgmt`:**
@@ -133,11 +139,11 @@ Or can I help you with something else?
 
 **Domain overview request "what can I do with milestones":**
 
-(matches keyword_cues of `milestones`; responds with milestones capabilities table only, no extra commentary)
+(matches the `milestones` entry's keywords; responds with milestones capabilities table only, no extra commentary)
 
 **Specific action "create a ticket for the auth bug":**
 
-(matches `ticket` keyword cue; skips overview; routes to ticket-creation capability and executes)
+(matches the `ticket` keyword; skips overview; routes to ticket-creation capability and executes)
 
 ## Worked example: hypothetical inventory domain
 
@@ -158,7 +164,7 @@ The dispatch paragraph is required because there is a paired agent. Without it, 
 
 A domain-skill claiming the layering pattern must satisfy these auditable conditions:
 
-- Sub-domain index present, machine-readable, and consumable for greeting/dispatch/overview-detection logic.
+- Sub-domain declarations live in the domain_skill contract's `index:` block (references and/or members) -- ONE declaration serving both the schema validator and the routing surface. A parallel `sub_domains:` block duplicating the index is itself a finding (two declarations over the same files drift).
 - Each declared sub-domain has a reachable reference file (no broken references).
 - Bare-invocation greeting documented in SKILL.md.
 - Overview-vs-action detection rule documented in SKILL.md.

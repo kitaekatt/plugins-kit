@@ -131,6 +131,20 @@ claude_md:
         reorg re-wires md-authoring / md-audit members; a script guard makes a
         mis-pointed member fail the audit instead of dangling silently.
       added: "2026-05-31"
+    - id: asset_and_floor_document_checks
+      keywords: [check_asset_dependencies_resolve, check_claude_md_record_floor, asset_dependencies, tools tests, union floor, document-level check, path resolution]
+      summary: "Two document-level checks added 2026-07-13 (steam-analysis stress test): check_asset_dependencies_resolve resolves every declared asset_dependencies path (top-level or nested in any skill-type unit) AND every domain_skill tools[].tests path against the skill dir then the nearest project root (markers: .git/.hg/.svn/.p4config.txt), FAILing per unresolved path; check_claude_md_record_floor enforces >=1 record across the claude_md insights/conventions union (the schema no longer requires insights as a key)."
+      detail: |
+        Both follow the established convention: cross-key/cross-source rules live in
+        audit.py after the walker, not in the schema engine. Asset resolution strips a
+        ${CLAUDE_PLUGIN_ROOT}/ prefix and a leading slash before trying bases (declared
+        paths are skill-dir-relative or project-root-relative by contract). Nested
+        asset_dependencies are collected from inside skill-type units the same way
+        check_facts_cross_rules collects nested facts (collect_yaml_units does NOT emit
+        nested portable units as separate units). Both checks degrade silently without
+        pyyaml, consistent with the contract-staged state.
+      origin: steam-analysis stress-test feedback gaps 5/7/8 implementation (2026-07-13).
+      added: "2026-07-13"
   conventions:
     - rule: When extending heuristics, modify markdown_heuristics.py first; audit.py and classify.py both import from there.
       keywords: [SSOT, markdown_heuristics, helper extraction, drift]

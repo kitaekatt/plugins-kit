@@ -2,7 +2,7 @@
 name: md-audit
 author: christina
 skill-type: domain-skill
-description: Use when auditing an md artifact -- a CLAUDE.md, a SKILL.md, a project document, or skill cross-references -- or via /md-audit. Do NOT use to author skills (use md-authoring).
+description: Use when auditing an md artifact -- CLAUDE.md, SKILL.md, project doc, or cross-references -- or via /md-audit. Do NOT use to author (use md-authoring).
 disable-model-invocation: false
 user-invocable: true
 argument-hint: "[skill <path> | claude-md <path> | project-doc <path> | references [--scope skills|references|md|all]]"

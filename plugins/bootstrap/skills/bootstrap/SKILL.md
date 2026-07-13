@@ -127,7 +127,11 @@ reference_skill:
         - pin takes precedence over alwaysUpdate (a one-line warning is emitted when both are set), and a min_version constraint the pinned snapshot cannot satisfy fails with a message naming the pin.
         - The first session after setting a pin can race Claude Code's auto-updater once (it may pull before bootstrap re-pins); self-heals on the next pass.
     - id: plugin_autoupdate_propagation
-      summary: Two different flags govern updates -- bootstrap's `alwaysUpdate` refreshes the marketplace CLONE; Claude Code's `autoUpdate` bumps installed PLUGIN versions. A marketplace needs `autoUpdate: true` for its plugins to actually move; `alwaysUpdate` alone leaves installed versions stuck.
+      summary: >-
+        Two different flags govern updates -- bootstrap's `alwaysUpdate` refreshes the
+        marketplace CLONE; Claude Code's `autoUpdate` bumps installed PLUGIN versions.
+        A marketplace needs `autoUpdate: true` for its plugins to actually move;
+        `alwaysUpdate` alone leaves installed versions stuck.
       keywords: [plugin not updating, stuck version, version not updating, autoUpdate, alwaysUpdate, extraKnownMarketplaces, known_marketplaces.json, plugin update, /plugin update, plugin marketplace update, publish not applying, installed_plugins.json, plugin-versions.sh, consumer update, auto-update plugins, marketplace not refreshing, restart not updating, reload-plugins]
       detail: |
         Two independent mechanisms, often confused -- a plugin can be published and
@@ -166,7 +170,7 @@ reference_skill:
       gotchas:
         - Diagnose with `bash scripts/plugin-versions.sh` (local / marketplace / installed / cached per plugin). installed_plugins.json holds the ACTIVATED version + installPath; a known_marketplaces.json entry with a stale `lastUpdated` and no `autoUpdate` is the tell that its plugins will never move.
         - Never hand-edit the plugin cache, installed_plugins.json, or settings to force a version -- bootstrap/CC re-sync from the activated version and revert it (and "Never copy files directly into the plugin cache" per the repo CLAUDE.md). Set `autoUpdate` (or run `/plugin update`) and let the update path do it.
-        - `pin` forces `autoUpdate: false` while set (see marketplace_pinning) -- a pinned marketplace will not auto-update its plugins by design.
+        - "`pin` forces `autoUpdate: false` while set (see marketplace_pinning) -- a pinned marketplace will not auto-update its plugins by design."
         - A project settings.json `extraKnownMarketplaces` entry only fires in sessions for THAT project, but it seeds the GLOBAL known_marketplaces.json -- so once any such session runs, that machine auto-updates the marketplace everywhere.
     - id: env_manifest
       summary: env.json is bootstrap.json's identity-bearing sibling -- a separate manifest, same engine and pass, processed after bootstrap.json and before plugin manifests. It requires a `machines` registry (unknown machine = hard error), keys entries by os/hosts, and is GATED by an env_state.json stamp so it runs only when its merged content changed / last pass failed / engine bumped / reset. Carries the five declarative personalization features + the env_checks check/fix contract.

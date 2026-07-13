@@ -238,6 +238,12 @@ DOMAIN_SKILL_SCHEMA = {
             "name": {"type": "string", "required": True},
             "command": {"type": "string", "required": True},
             "description": {"type": "string", "required": True},
+            "tests": {"type": "string", "required": False,
+                      "note": "path to the tool's companion test (skill-dir-relative or "
+                              "project-root-relative); audit resolves it. Convention: "
+                              "skill-shipped script tests live next to the script under "
+                              "the skill's scripts/, stdlib-only, and the project's test "
+                              "inventory names them alongside the main suite."},
         }}},
         "agent_binding": {"type": "dict", "required": False, "keys": {
             "agent_name": {"type": "string", "required": True},
