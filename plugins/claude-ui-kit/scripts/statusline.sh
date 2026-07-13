@@ -15,8 +15,11 @@ if ! printf '%s' "$DATA" | "$JQ" -e . >/dev/null 2>&1; then
     exit 0
 fi
 
-# Extract fields via single jq call
-IFS=$'\t' read -r MODEL MODEL_ID DIR PCT SESS WEEK SESS_RESET WEEK_RESET < <(
+# Extract fields via single jq call. Delimit with \x1f (unit separator), not
+# @tsv: tab is IFS whitespace, so bash `read` collapses consecutive tabs and
+# empty fields (e.g. an absent rate-limit window) shift later values left.
+# Non-whitespace IFS chars delimit one field each, preserving empties.
+IFS=$'\x1f' read -r MODEL MODEL_ID DIR PCT SESS WEEK SESS_RESET WEEK_RESET EFFORT < <(
     echo "$DATA" | "$JQ" -r '[
         (.model.display_name // "Claude"),
         (try (.model.id // "unknown") catch "unknown"),
@@ -34,9 +37,24 @@ IFS=$'\t' read -r MODEL MODEL_ID DIR PCT SESS WEEK SESS_RESET WEEK_RESET < <(
         ((.rate_limits.five_hour.used_percentage // null) | if . == null then "" else ((100 - .) | floor | tostring) end),
         ((.rate_limits.seven_day.used_percentage // null) | if . == null then "" else ((100 - .) | floor | tostring) end),
         ((.rate_limits.five_hour.resets_at // null) | if . == null then "" else (. | floor | tostring) end),
-        ((.rate_limits.seven_day.resets_at // null) | if . == null then "" else (. | floor | tostring) end)
-    ] | @tsv' | tr -d '\r'
+        ((.rate_limits.seven_day.resets_at // null) | if . == null then "" else (. | floor | tostring) end),
+        (.effort.level // "")
+    ] | map(tostring) | join("\u001f")' | tr -d '\r'
 )
+
+# Model segment: display name with version tokens stripped ("Fable 5" -> "Fable",
+# "Opus 4.8" -> "Opus"), prefixed with an effort meter glyph when the session
+# reports a reasoning effort (absent for models without the effort parameter).
+# On by default; hide with STATUSLINE_SHOW_MODEL=0 in settings.json env.
+MODEL=$(printf '%s' "$MODEL" | sed -E 's/ [0-9][0-9.]*//g')
+case "$EFFORT" in
+    low)    EFFORT_GLYPH="▁" ;;
+    medium) EFFORT_GLYPH="▃" ;;
+    high)   EFFORT_GLYPH="▅" ;;
+    xhigh)  EFFORT_GLYPH="▇" ;;
+    max)    EFFORT_GLYPH="█" ;;
+    *)      EFFORT_GLYPH="" ;;
+esac
 
 # System message: most recently modified file in <cwd>/.local-data/claude-ui-kit/
 # matching systemmessage.*.txt. First line, capped at 20 chars.
@@ -116,7 +134,13 @@ fmt_reset() {
 SESS_RESET_STR=$(fmt_reset "$SESS_RESET")
 WEEK_RESET_STR=$(fmt_reset "$WEEK_RESET")
 
-OUT="\033[38;5;250m📁 $DIR\033[0m\033[2m\033[38;5;238m │ \033[0m${CTX_CLR}🧠 $PCT%\033[0m"
+OUT="\033[38;5;250m📁 $DIR\033[0m"
+if [ "${STATUSLINE_SHOW_MODEL:-1}" != "0" ] && [ -n "$MODEL" ]; then
+    MODEL_SEG="$MODEL"
+    [ -n "$EFFORT_GLYPH" ] && MODEL_SEG="$EFFORT_GLYPH $MODEL"
+    OUT="$OUT\033[2m\033[38;5;238m │ \033[0m\033[38;5;250m$MODEL_SEG\033[0m"
+fi
+OUT="$OUT\033[2m\033[38;5;238m │ \033[0m${CTX_CLR}🧠 $PCT%\033[0m"
 if [ -n "$SESS" ]; then
     OUT="$OUT\033[2m\033[38;5;238m │ \033[0m${SESS_CLR}🔋 $SESS%"
     [ -n "$SESS_RESET_STR" ] && OUT="$OUT ($SESS_RESET_STR)"

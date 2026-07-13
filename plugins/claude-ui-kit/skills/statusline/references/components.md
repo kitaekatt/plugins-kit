@@ -16,6 +16,7 @@ Then extract via `jq`. Parsing every field in a single jq call (with `@tsv`) is 
 |-------|---------|-------|
 | Model display name | `.model.display_name` | e.g. "Claude Opus 4.7" |
 | Model id | `.model.id` | e.g. "claude-opus-4-7" |
+| Reasoning effort | `.effort.level` | `low`/`medium`/`high`/`xhigh`/`max`; live session value (tracks `/effort`); ultracode reports as `xhigh`. Absent when the model has no effort parameter. Default statusline renders it as a meter glyph `▁▃▅▇█`. |
 | Working directory | `.cwd` | Absolute path. Use `\| split("/") \| last` for basename. |
 | Session id | `.session_id` | UUID for the current session |
 | Context window size | `.context_window.context_window_size` | Total tokens |

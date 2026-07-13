@@ -7,11 +7,12 @@ Opinionated defaults and customization skills for Claude Code's UI surfaces. Cur
 When the plugin is installed (and no other `statusLine` is already configured), it writes a `statusLine` block into the project's `.claude/settings.local.json` (per-user, gitignored/p4ignored — safe in source-controlled projects) pointing at the bundled script. The default shows:
 
 ```
-📁 dirname  │  🧠 96%  │  🔋 88%  │  📅 62%
+📁 dirname  │  ▇ Fable  │  🧠 96%  │  🔋 88%  │  📅 62%
 ```
 
 All percentages are **capacity remaining** — higher is better, lower triggers warning colors.
 
+- **▇ model + effort** — model display name (version stripped: "Fable 5" → "Fable"), prefixed with a meter glyph for the session's reasoning effort: `▁` low, `▃` medium, `▅` high, `▇` xhigh, `█` max. The glyph is omitted for models without the effort parameter. Hide the whole segment with `STATUSLINE_SHOW_MODEL=0` (env var, see below).
 - **🧠 context remaining** — turns orange at 70%, red at 30%
 - **🔋 5-hour budget remaining** — turns orange at 30%, red at 10%
 - **📅 7-day budget remaining** — gray (no thresholds)
@@ -25,6 +26,16 @@ Override thresholds via env vars in `settings.json` (values are in "% remaining"
   "env": {
     "STATUSLINE_CTX_ORANGE_AT": "60",
     "STATUSLINE_CTX_RED_AT": "20"
+  }
+}
+```
+
+The model + effort segment is on by default; disable it the same way:
+
+```json
+{
+  "env": {
+    "STATUSLINE_SHOW_MODEL": "0"
   }
 }
 ```

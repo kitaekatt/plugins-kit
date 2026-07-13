@@ -20,9 +20,12 @@ _STATUSLINE = _PLUGIN_ROOT / "scripts" / "statusline.sh"
 _HAS_TOOLS = shutil.which("bash") and shutil.which("jq")
 
 
-def run_statusline(stdin_text, cwd):
+def run_statusline(stdin_text, cwd, extra_env=None):
     env = dict(os.environ)
     env.pop("BOOTSTRAP_BIN_JQ", None)  # use PATH jq deterministically
+    env.pop("STATUSLINE_SHOW_MODEL", None)  # test the default unless overridden
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         ["bash", str(_STATUSLINE)], input=stdin_text, cwd=cwd,
         env=env, capture_output=True, text=True, timeout=30)
@@ -47,6 +50,46 @@ class TestMalformedStdinFallback:
         })
         result = run_statusline(payload, tmp_path)
         assert result.returncode == 0
+        assert "myproj" in result.stdout
+
+
+@pytest.mark.skipif(not _HAS_TOOLS, reason="bash + jq required")
+class TestModelEffortSegment:
+    """Model + effort meter segment (on by default, STATUSLINE_SHOW_MODEL=0 hides)."""
+
+    _GLYPHS = {"low": "▁", "medium": "▃", "high": "▅",
+               "xhigh": "▇", "max": "█"}
+
+    @staticmethod
+    def _payload(display_name="Fable 5", effort=None):
+        data = {"model": {"display_name": display_name, "id": "m-1"},
+                "cwd": "/tmp/myproj"}
+        if effort is not None:
+            data["effort"] = {"level": effort}
+        return json.dumps(data)
+
+    @pytest.mark.parametrize("level", list(_GLYPHS))
+    def test_effort_level_renders_meter_glyph(self, tmp_path, level):
+        result = run_statusline(self._payload(effort=level), tmp_path)
+        assert result.returncode == 0
+        assert f"{self._GLYPHS[level]} Fable" in result.stdout
+
+    def test_version_stripped_from_display_name(self, tmp_path):
+        result = run_statusline(self._payload("Opus 4.8", effort="high"), tmp_path)
+        assert "Opus" in result.stdout
+        assert "4.8" not in result.stdout
+
+    def test_effort_absent_renders_bare_model_name(self, tmp_path):
+        result = run_statusline(self._payload(), tmp_path)
+        assert "Fable" in result.stdout
+        for glyph in self._GLYPHS.values():
+            assert glyph not in result.stdout
+
+    def test_show_model_zero_hides_segment(self, tmp_path):
+        result = run_statusline(self._payload(effort="xhigh"), tmp_path,
+                                extra_env={"STATUSLINE_SHOW_MODEL": "0"})
+        assert result.returncode == 0
+        assert "Fable" not in result.stdout
         assert "myproj" in result.stdout
 
 
