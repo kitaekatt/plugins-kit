@@ -19,7 +19,12 @@ CLAUDE_MD_SCHEMA = {
             "covers": {"type": "list", "required": True, "min_len": 1},
             "excludes": {"type": "list", "required": False},
         }},
-        "insights": {"type": "list", "required": True, "min_len": 1, "items": {"keys": {
+        "insights": {"type": "list", "required": False, "min_len": 1,
+                     "note": "optional as a KEY: a conventions-only CLAUDE.md is valid. The "
+                             "non-empty floor is the insights/conventions UNION, enforced as "
+                             "a document-level check in audit.py (check_claude_md_record_floor) "
+                             "-- an empty block still fails. When present, min 1 record.",
+                     "items": {"keys": {
             "id": {"type": "string", "required": True},
             "keywords": KEYWORDS_RULE,
             "summary": {"type": "string", "required": True},

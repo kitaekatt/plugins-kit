@@ -134,7 +134,7 @@ procedure that routes the two sub-decisions to the skills that own them
 
 ## CLAUDE.md instance example
 
-CLAUDE.md is the canonical persistence target for the insights this skill encodes. The `claude_md:` schema validates the shape of that file's load-bearing content -- scope, insights, optional conventions and glossary. A minimal-valid instance block:
+CLAUDE.md is the canonical persistence target for the insights this skill encodes. The `claude_md:` schema validates the shape of that file's load-bearing content -- scope, plus insights and/or conventions (and an optional glossary). The non-empty floor is the insights/conventions UNION: a conventions-only CLAUDE.md validates (rules + why with no insight records is a legitimate shape); an empty block -- neither insights nor conventions -- fails the audit. A minimal-valid instance block:
 
 ```yaml
 claude_md:

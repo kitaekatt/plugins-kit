@@ -743,6 +743,95 @@ claude_md:
         sub-domains as well see .../dialog-domain/SKILL.md" + "you may need to update
         the docs so they enable navigating this type of situation better in the future."
       added: "2026-05-31"
+    - id: dec_17_subdomain_single_declaration
+      keywords:
+        - sub_domains retired
+        - index.references is the sub-domain index
+        - single declaration
+        - domain layering registration
+        - drift twin blocks
+        - one declaration two authorities
+      summary: "Sub-domains of a contract domain-skill are declared ONCE, in the domain_skill schema's index: block (index.references[] for reference-backed, index.members[] for member-skill-backed). The bespoke sub_domains: index in domain-layering.md is retired for contract skills -- it demanded the same records twice (name/description/keyword_cues/reference vs id/summary/keywords/path), and the two blocks drift. The portable sub_areas: unit (same shape) remains the declaration for generic md documents NOT on the domain_skill contract."
+      detail: |
+        The stress test authored a real domain-skill against both authorities:
+        DOMAIN_SKILL_SCHEMA requires index.references (id/path/keywords/summary),
+        domain-layering.md required a sub_domains: index (name/reference/
+        keyword_cues/description) -- near-synonymous field pairs over the same
+        files, authored twice to satisfy both, guaranteed to drift. Resolution:
+        the schema is the single authority (consistent with ssot_canonical_split
+        -- schemas win); domain-layering.md's routing behaviors (greeting menu,
+        argument dispatch, overview detection) now consume the index: block
+        directly (id = identifier, summary = menu line, keywords = routing cues,
+        path = deeper doc). A parallel sub_domains: block is itself an audit
+        finding. The layering audit hooks and both worked examples were rewritten
+        against index:. framework.md's "Two ways to back a sub-domain" and the
+        domain-skill conditional row updated to match.
+      origin: |
+        steam-analysis stress-test feedback gap 4 (docs/skills-kit-feedback.md,
+        worked 2026-07-13): game-analysis declared both blocks over the same two
+        files to pass both authorities.
+      added: "2026-07-13"
+    - id: dec_18_asset_dependencies_and_script_contracts
+      keywords:
+        - asset_dependencies portable unit
+        - runtime asset edge
+        - mirrors invariant
+        - script contract surface
+        - tools tests path
+        - skill-shipped tests convention
+        - resolve check
+      summary: "New portable unit asset_dependencies: ({path, consumer?, purpose, invariant?}) declares repo files a skill consumes at RUNTIME (bundled scripts, tool-args examples) -- an edge invisible to md-citation checks. audit.py resolves every declared path (skill dir, then project root); a move/rename FAILs the consumer's audit instead of breaking silently. The invariant field carries the mirrors-style sync contract a bundled script must uphold against a doc section. domain_skill tools[] gains an optional tests path (resolved the same way); convention: skill-shipped script tests live next to the script under scripts/, stdlib-only, and the project's test inventory names skill test roots alongside the main suite."
+      detail: |
+        Two stress-test gaps, one mechanism. Gap 5: a workflow script consumed a
+        reference owned by a SIBLING skill (right design -- the asset stays with
+        its CCP siblings) but a rename would break it with no audit signal. Gap 7:
+        a skill whose operative core is a bundled workflow.js had its load-bearing
+        sync invariant ("output records mirror the funnel's output-schema
+        section") only as a code comment, and its companion test joined no test
+        inventory. Direction REJECTED: extending the mechanical resolve-check to
+        path literals embedded in scripts/examples -- heuristic path-scanning
+        false-positives (placeholders, examples, generated strings) and cannot
+        distinguish consumption from mention. Direction taken: an explicit,
+        schema-validated declaration, consistent with the framework's
+        structure-asserts stance. Nested-or-top-level placement follows the
+        portable-unit convention; audit.py collects both and also resolves
+        tools[].tests. ${CLAUDE_PLUGIN_ROOT}/ prefixes are stripped before
+        resolution. Codified in: schemas/portable.py ASSET_DEPENDENCIES_SCHEMA;
+        audit.py check_asset_dependencies_resolve; framework.md "Runtime asset
+        dependencies and script contracts" + portable-units table + domain-skill
+        conditional row; cohesion-principles asset_dependency edge +
+        runtime_asset_dependencies_declared rule.
+      origin: |
+        steam-analysis stress-test feedback gaps 5 + 7 (docs/skills-kit-feedback.md,
+        worked 2026-07-13): the candidate-screening-funnel runtime dependency and
+        the workflow.js mirrors-comment with no auditable surface.
+      added: "2026-07-13"
+    - id: dec_19_claude_md_union_floor
+      keywords:
+        - claude_md schema
+        - conventions-only valid
+        - insights optional
+        - union floor
+        - non-empty block
+        - document-level check
+      summary: "CLAUDE_MD_SCHEMA no longer requires insights: specifically -- the floor is >=1 record across the insights/conventions UNION, enforced as a document-level check (audit.py check_claude_md_record_floor). A conventions-only CLAUDE.md (rules + why) validates; an empty block (neither insights nor conventions) still fails."
+      detail: |
+        The old floor ("insights required, min 1") aimed at the wrong invariant:
+        it forced a conventions-only CLAUDE.md to manufacture a filler insight
+        record to validate, when the real invariant is "the block is non-empty".
+        The schema engine validates per-key shapes and cannot express a
+        cross-key union floor, so per the existing convention (custom rules go
+        in audit.py as document-level checks evaluated after the walker), the
+        union floor lives in audit.py and runs on every claude_md audit. The
+        insights: key keeps min_len 1 WHEN PRESENT (an empty insights list is
+        still a shape error); it is simply no longer required as a key.
+        knowledge-encoding (the owner doc) documents the union floor beside its
+        instance example.
+      origin: |
+        steam-analysis stress-test feedback gap 8 (docs/skills-kit-feedback.md,
+        worked 2026-07-13): a conventions-only root CLAUDE.md would have had to
+        invent an insight to validate.
+      added: "2026-07-13"
     - id: ssot_canonical_split
       keywords:
         - SSOT

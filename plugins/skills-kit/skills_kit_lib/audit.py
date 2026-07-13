@@ -490,6 +490,114 @@ def check_facts_cross_rules(body_text: str, declared_type: str | None) -> list[C
     return results
 
 
+_PROJECT_MARKERS = (".git", ".hg", ".svn", ".p4config.txt")
+
+
+def _find_project_root(start: Path) -> Path | None:
+    """Nearest ancestor of `start` (inclusive) holding a VCS/project marker."""
+    current = start if start.is_dir() else start.parent
+    while True:
+        if any((current / marker).exists() for marker in _PROJECT_MARKERS):
+            return current
+        if current == current.parent:
+            return None
+        current = current.parent
+
+
+def _declared_asset_paths(body_text: str) -> list[tuple[str, str]]:
+    """Collect (row_label, path) pairs from asset_dependencies declarations
+    (top-level portable unit OR nested inside a skill-type unit) and from
+    domain_skill tools[].tests entries."""
+    out: list[tuple[str, str]] = []
+    units, _ = collect_yaml_units(body_text)
+    seen_ids = set()
+
+    def _add_deps(deps, origin: str):
+        if not isinstance(deps, list):
+            return
+        for i, d in enumerate(deps):
+            if isinstance(d, dict) and isinstance(d.get("path"), str):
+                key = (origin, i, d["path"])
+                if key not in seen_ids:
+                    seen_ids.add(key)
+                    out.append((f"asset_dependencies[{i}].path", d["path"]))
+
+    for unit_root, block_data in units:
+        if unit_root == "asset_dependencies":
+            _add_deps(block_data.get("asset_dependencies"), "top")
+        elif unit_root in SKILL_TYPE_ROOTS:
+            inner = block_data.get(unit_root)
+            if isinstance(inner, dict):
+                _add_deps(inner.get("asset_dependencies"), unit_root)
+                tools = inner.get("tools")
+                if isinstance(tools, list):
+                    for i, t in enumerate(tools):
+                        if isinstance(t, dict) and isinstance(t.get("tests"), str):
+                            out.append((f"tools[{i}].tests", t["tests"]))
+    return out
+
+
+def check_asset_dependencies_resolve(body_text: str, skill_dir: Path) -> list[CheckResult]:
+    """Resolve every declared runtime asset dependency (and tools[].tests path)
+    against the skill dir, then the nearest project root. A declared path that
+    resolves against neither is a broken asset edge: the consumer would break
+    silently at runtime (cohesion-principles runtime_asset_dependencies_declared)."""
+    if not HAVE_YAML:
+        return []
+    declared = _declared_asset_paths(body_text)
+    if not declared:
+        return []
+
+    project_root = _find_project_root(skill_dir)
+    results: list[CheckResult] = []
+    missing = 0
+    for row_label, raw in declared:
+        rel = raw.replace("${CLAUDE_PLUGIN_ROOT}/", "").lstrip("/")
+        candidates = [skill_dir / rel]
+        if project_root is not None:
+            candidates.append(project_root / rel)
+        if any(c.exists() for c in candidates):
+            continue
+        missing += 1
+        results.append(CheckResult(
+            f"yaml: {row_label}",
+            FAIL,
+            f"declared asset does not resolve against skill dir or project root: {raw}",
+        ))
+    if not missing:
+        results.append(CheckResult(
+            "yaml: asset dependencies resolve",
+            PASS,
+            f"{len(declared)} declared path(s) resolve",
+        ))
+    return results
+
+
+def check_claude_md_record_floor(yaml_data: dict) -> CheckResult | None:
+    """Document-level floor for claude_md blocks: at least one record across
+    the insights/conventions union. The schema no longer requires insights
+    specifically -- a conventions-only CLAUDE.md is valid -- but an empty
+    block (neither insights nor conventions) fails."""
+    inner = yaml_data.get("claude_md")
+    if not isinstance(inner, dict):
+        return None
+    insights = inner.get("insights")
+    conventions = inner.get("conventions")
+    n_insights = len(insights) if isinstance(insights, list) else 0
+    n_conventions = len(conventions) if isinstance(conventions, list) else 0
+    if n_insights + n_conventions >= 1:
+        return CheckResult(
+            "yaml: >=1 record across insights/conventions (union floor)",
+            PASS,
+            f"{n_insights} insight(s), {n_conventions} convention(s)",
+        )
+    return CheckResult(
+        "yaml: >=1 record across insights/conventions (union floor)",
+        FAIL,
+        "claude_md block carries neither insights nor conventions; the block must be non-empty",
+    )
+
+
 def check_cross_block_drift(body_text: str) -> CheckResult | None:
     """Cross-block mixed-type drift detection."""
     if not HAVE_YAML:
@@ -522,6 +630,9 @@ def audit_claude_md(claude_md_path: Path, content: str) -> dict[str, Any]:
             ))
         else:
             yaml_results, yaml_root = check_yaml_contract(yaml_data)
+            floor = check_claude_md_record_floor(yaml_data)
+            if floor is not None:
+                yaml_results.append(floor)
     elif yaml_err == "no-yaml-parser":
         yaml_results.append(CheckResult(
             f"yaml: contract block detected (root='{detected_root}')",
@@ -592,6 +703,7 @@ def audit(skill_md_path: Path) -> dict[str, Any]:
 
     yaml_results.extend(check_portable_units(body.text))
     yaml_results.extend(check_facts_cross_rules(body.text, declared_type))
+    yaml_results.extend(check_asset_dependencies_resolve(body.text, skill_dir))
 
     cross_block_drift = check_cross_block_drift(body.text)
     if cross_block_drift is not None:

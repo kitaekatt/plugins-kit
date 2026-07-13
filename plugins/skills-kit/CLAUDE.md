@@ -4,6 +4,7 @@ Plugin-level orientation for `plugins-kit:skills-kit`. The plugin is organized a
 
 The framework the plugin advocates:
 
+- **Total ownership (the conceptual goal).** skills-kit is an opinionated model for owning EVERY md artifact in a project: SKILL.md, CLAUDE.md (root / subsystem / directory / .local), skill references, project docs, README (the derived human brief), committed generated artifacts (provenance-only), and the out-of-band surfaces the md graph touches (in-code contract docs, runtime asset dependencies). An md file the framework cannot name a role for is a gap in the framework -- not an exempt file. Stress-test gaps are worked into the spine (cohesion-principles) and the audits, never waved off.
 - **Audience-Claude.** Skills are runtime context for Claude, not human documentation.
 - **Form-choice bias toward structured data.** Default to YAML for LLM-facing content; prose only when content is naturally narrative.
 - **Schemas are floors, not ceilings.** Each per-type schema names the required minimum; authors may add load-bearing structured keys beyond it.

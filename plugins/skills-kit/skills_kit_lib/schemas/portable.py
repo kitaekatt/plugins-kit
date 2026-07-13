@@ -85,6 +85,32 @@ SUB_AREAS_SCHEMA = {
 }
 
 
+# ASSET_DEPENDENCIES_SCHEMA -- runtime asset-dependency declarations.
+# Each record names a repo file the skill consumes at RUNTIME (via a bundled
+# script or a tool-argument example) -- an edge invisible to md-citation
+# scanning. Declaring it makes the edge auditable: the per-skill audit
+# resolves every declared path against the skill dir and the project root,
+# so moving/renaming the asset FAILs the consumer's audit instead of
+# breaking silently at runtime. The optional invariant field carries a
+# mirrors-style sync contract ("script X mirrors section Y of the asset").
+ASSET_DEPENDENCIES_SCHEMA = {
+    "root": "asset_dependencies",
+    "owner_doc": "skills/skill-authoring/references/framework.md",
+    "root_type": "list",
+    "min_len": 1,
+    "items": {"keys": {
+        "path": {"type": "string", "required": True,
+                 "note": "skill-dir-relative or project-root-relative path to the consumed file"},
+        "consumer": {"type": "string", "required": False,
+                     "note": "the script or doc inside this skill that consumes the asset (e.g. workflow.js)"},
+        "purpose": {"type": "string", "required": True,
+                    "note": "what the asset is consumed for at runtime"},
+        "invariant": {"type": "string", "required": False,
+                      "note": "sync contract the consumer must uphold against the asset (mirrors-style SSOT pointer)"},
+    }},
+}
+
+
 # ACTIONS_SCHEMA -- ordered-list-of-operations recipes.
 # Root is a dict of arbitrary action names; every value matches the
 # action-record shape. Uses value_schema (dict-of-records with arbitrary keys).
@@ -115,3 +141,5 @@ register_schema("sub_areas", SUB_AREAS_SCHEMA, role="portable",
                 owner_doc=SUB_AREAS_SCHEMA["owner_doc"])
 register_schema("actions", ACTIONS_SCHEMA, role="portable",
                 owner_doc=ACTIONS_SCHEMA["owner_doc"])
+register_schema("asset_dependencies", ASSET_DEPENDENCIES_SCHEMA, role="portable",
+                owner_doc=ASSET_DEPENDENCIES_SCHEMA["owner_doc"])

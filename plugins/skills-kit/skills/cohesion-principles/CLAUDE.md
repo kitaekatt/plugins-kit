@@ -29,4 +29,26 @@ claude_md:
         (e.g. a worked-examples corpus readers skip on normal placement calls).
       origin: Arch-review finding S18 (2026-06-09); CRP evaluated during the S2-S18 remediation pass 2026-06-10.
       added: "2026-06-10"
+    - id: stress_test_total_ownership_extensions
+      keywords: [steam-analysis stress test, directory load trigger, file access trigger, readme role, in-code contract doc, generated artifact, asset dependency edge, total ownership]
+      summary: "The 2026-07 steam-analysis stress test drove five spine extensions toward total ownership (every md file has a named role): (1) directory/subsystem CLAUDE.md load_trigger models BOTH cwd descent and file access beneath the directory; (2) readme_md surface + role (agent-facing copy is SSOT, README is the derived human brief); (3) in_code_contract_doc surface (validator's in-code doc is SSOT for code-enforced schemas) + the md_restates_code_enforced_contract anti-pattern; (4) generated_artifact role (provenance-only audit); (5) the asset_dependency edge (runtime consumption declared via the asset_dependencies: portable unit, mechanically resolved)."
+      detail: |
+        Every extension was hit as a real gap when the full framework was applied
+        end-to-end on a freshly extracted repo (steam-analysis): a data-directory
+        CLAUDE.md was correct in practice but dead weight under the strict-cwd
+        model; README/root-CLAUDE.md overlap had to be resolved ad hoc; two
+        code-validated schemas had no SSOT rule across docstrings and md; a
+        committed generated rendering needed a by-fiat exemption; and a cross-skill
+        runtime asset path (a workflow consuming another skill's reference) had no
+        audit signal. Direction chosen for (5): an explicit declaration
+        (asset_dependencies:) rather than heuristic path-literal scanning --
+        scanning false-positives and cannot know intent; a declaration is
+        opinionated, schema-validated, and mechanically resolvable. The audits
+        (claude-md-audit load-trigger note + C-7; project-doc-audit PD-9/PD-10 +
+        taxonomy L/M; audit.py asset resolution) operationalize these roles.
+      origin: |
+        steam-analysis stress-test feedback (docs/skills-kit-feedback.md, worked
+        2026-07-13): gaps 1, 2, 3, 5, 6 of 8. The framework was applied end-to-end
+        on a real repo and every gap names the exact change site plus evidence.
+      added: "2026-07-13"
 ```

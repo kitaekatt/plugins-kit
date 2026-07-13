@@ -8,6 +8,8 @@ The placement principles these criteria derive from live in the `cohesion-princi
 
 The role of a CLAUDE.md determines which subset of criteria applies. Roles are computed relative to the current working directory.
 
+**Load-trigger note (reachability).** A non-root CLAUDE.md loads on BOTH triggers: cwd descent into its directory AND file access (Read/Edit/Write) beneath it. Data directories and leaf code packages are typically worked by path from a repo-root cwd -- their CLAUDE.md files (review rails for committed-data diffs, package review notes) are REACHABLE and correctly placed. Do not flag such a file as dead weight or its facts for bubbling to root on a cwd-only reachability model; the reader set is "sessions touching files beneath this directory", by cwd or by path (see cohesion-principles `directory_claude_md`).
+
 | Role | Definition | Criteria applied |
 |---|---|---|
 | `root` | CLAUDE.md at cwd when no CLAUDE.md exists above it -- claude was launched at the project top | CCP (all), CRP (all), ADP (all), Hygiene (all incl. H1/H2/H3) |
@@ -92,6 +94,16 @@ CCP says: content that changes for the same reason belongs in the same file. A C
 **Test:** for each substantial block of CLAUDE.md content (or each project-reference doc cited from CLAUDE.md), check whether a skill exists for the same topic. If yes, the content should collapse to a pointer (`for X, invoke /example:skill-name`) or, where the harness supports it, a `required-skills:` declaration.
 
 **Severity:** FAIL on duplicated skill content. INFO when the project-reference predates the skill and graduation work is in progress.
+
+### C-7. No field-by-field restatement of a code-enforced contract
+
+**Rule:** For a machine contract that code validates (a schema enforced by a validator module, a wire format enforced by a parser), the validating code's in-code doc (module docstring / contract comment) is the SSOT for the field-level detail. A CLAUDE.md states the contract's existence, its invariants, and its change-discipline ("the schema changes in the same diff as the validator"), and cites the module for the fields. It must not enumerate the schema field-by-field.
+
+**Why CCP/SSOT:** the in-code doc changes in the same diff as the validator (perfect CCP); an md copy of the field list changes in a different diff and drifts while still looking authoritative.
+
+**Test:** for each schema/format the file describes, check whether code validates it; if yes, check whether the file restates the field list rather than citing the module.
+
+**Severity:** FAIL on live field-by-field restatement; INFO when the restatement is explicitly flagged in-doc as an accepted drift risk.
 
 ## CRP findings (read-together / smallest reader-set)
 

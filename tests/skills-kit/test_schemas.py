@@ -333,13 +333,17 @@ class TestClaudeMd:
         fails, _ = validate(minimal_claude_md, CLAUDE_MD_SCHEMA)
         assert fails == [], f"unexpected fails: {fails}"
 
-    def test_insights_required(self, minimal_claude_md, make_invalid):
+    def test_insights_key_is_optional_at_schema_level(self, minimal_claude_md, make_invalid):
+        # Dec-19: the non-empty floor is the insights/conventions UNION, enforced
+        # as a document-level check (see test_claude_md_floor.py). Dropping the
+        # insights KEY is no longer a schema failure -- a conventions-only
+        # CLAUDE.md is a valid shape.
         bad = make_invalid(
             minimal_claude_md,
             lambda d: d["claude_md"].pop("insights"),
         )
         fails, _ = validate(bad, CLAUDE_MD_SCHEMA)
-        assert _has_fail_at(fails, "insights")
+        assert not _has_fail_at(fails, "insights")
 
     def test_insight_missing_origin_fails(self, minimal_claude_md, make_invalid):
         bad = make_invalid(

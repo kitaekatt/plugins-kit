@@ -22,6 +22,11 @@ Usage:
 For each candidate it emits mechanical signals the audit lanes consume:
 
     kind              project_doc | skill_reference | other_claude_artifact
+    role_hint         readme | null -- docs judged under a special per-artifact
+                      role (README = human-facing derived brief)
+    generated         true when a generated_artifact provenance signal exists
+    generation_record sidecar:<name> | marker:<line> | null -- the signal
+                      (generated docs are audited for provenance ONLY)
     lines             effective line count
     approx_tokens     ~chars/4
     inbound_citations number of OTHER text files that mention this doc by name
@@ -73,6 +78,55 @@ _SKIP_DIRS = {
 _CITER_EXT = {".md", ".mdx", ".rst", ".txt", ".yaml", ".yml", ".json"}
 
 _SKILL_REF_RE = re.compile(r"[/\\]skills[/\\][^/\\]+[/\\]references[/\\]")
+
+# --- generated_artifact role signals (cohesion-principles generated_artifact) ---
+# A committed generated output is identified by a machine-readable generation-
+# record sidecar next to it (e.g. top50.params.json for top50.md) or an in-file
+# marker in the first ~20 lines. The audit then checks ONLY provenance.
+_GENERATION_SIDECAR_SUFFIXES = (".params.json", ".recipe.json", ".gen.json")
+_GENERATED_MARKER_RE = re.compile(
+    r"generated (?:analysis|by|from|with)|auto-?generated"
+    r"|do not edit(?: by hand)?|this (?:file|document) (?:is|was) generated",
+    re.IGNORECASE,
+)
+
+
+def _doc_stem(name: str) -> str:
+    """Strip the doc extension, handling the compound Markdeep suffix."""
+    lower = name.lower()
+    if lower.endswith(MARKDEEP_SUFFIX):
+        return name[: -len(MARKDEEP_SUFFIX)]
+    return name[: -len(Path(name).suffix)] if Path(name).suffix else name
+
+
+def generation_record(path: Path) -> str | None:
+    """Provenance signal for the generated_artifact role, or None.
+
+    Returns "sidecar:<name>" when a generation-record sidecar sits next to the
+    artifact, "marker:<line>" when an in-file generation marker appears in the
+    first 20 lines.
+    """
+    stem = _doc_stem(path.name)
+    for suffix in _GENERATION_SIDECAR_SUFFIXES:
+        sidecar = path.with_name(stem + suffix)
+        if sidecar.exists():
+            return f"sidecar:{sidecar.name}"
+    try:
+        head = path.read_text(encoding="utf-8", errors="ignore")[:4000]
+    except OSError:
+        return None
+    for line in head.splitlines()[:20]:
+        if _GENERATED_MARKER_RE.search(line):
+            return f"marker:{line.strip()[:120]}"
+    return None
+
+
+def role_hint(path: Path) -> str | None:
+    """Named-role hint for docs judged under a special per-artifact role:
+    'readme' (human-facing derived brief, cohesion-principles readme_md)."""
+    if path.name.lower().split(".")[0] == "readme":
+        return "readme"
+    return None
 
 
 # Project-root markers, VCS-agnostic: git, mercurial, svn, AND perforce
@@ -229,9 +283,13 @@ def describe(path: Path, inbound: dict[str, list[Path]], root: Path) -> dict:
             cited_by.append(str(c.relative_to(root)))
         except ValueError:
             cited_by.append(str(c))
+    gen_record = generation_record(path)
     return {
         "path": str(path),
         "kind": kind,
+        "role_hint": role_hint(path),
+        "generated": gen_record is not None,
+        "generation_record": gen_record,
         "lines": lines,
         "approx_tokens": approx_tokens,
         "inbound_citations": len(citing),
@@ -295,7 +353,12 @@ def main() -> int:
         kind = rec["kind"]
         tag = "proj-doc" if kind == "project_doc" else (
             "skill-ref" if kind == "skill_reference" else "claude-art")
-        print(f"  {i:>3}. [{tag:<10}] [{rec['lines']:>4}L] [{orphan:<7}] {display}")
+        extras = ""
+        if rec.get("generated"):
+            extras += " [generated]"
+        if rec.get("role_hint"):
+            extras += f" [{rec['role_hint']}]"
+        print(f"  {i:>3}. [{tag:<10}] [{rec['lines']:>4}L] [{orphan:<7}] {display}{extras}")
     return 0
 
 
