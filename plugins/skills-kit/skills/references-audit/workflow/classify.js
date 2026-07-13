@@ -89,9 +89,13 @@ Idempotency matters: classify deterministically from the detection signals. Retu
 
 phase('Classify')
 const perFile = await parallel(input.files.map((f) => () =>
+  // Default lane tier: opus at high effort. Classification is the audit's
+  // judgment core — it warrants the judge tier, explicitly pinned.
   agent(lanePrompt(f), {
     label: `classify:${f.file.split(/[\\/]/).pop()}`,
     phase: 'Classify',
+    model: 'opus',
+    effort: 'high',
     schema: FILE_CLASSIFIED_SCHEMA,
   }).then((r) => ({ ...r, file: f.file }))
 ))

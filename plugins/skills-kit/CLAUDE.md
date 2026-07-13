@@ -182,7 +182,15 @@ claude_md:
       origin: Arch-review finding S19 (2026-06-09).
       added: "2026-06-10"
   conventions:
-    - rule: Surface a framework decision as a lessons-learned entry with surface / finding / follow-up provenance before the contract change ships. Land it in skill-authoring/CLAUDE.md (framework decisions) or skills_kit_lib/CLAUDE.md (validator-side decisions).
+    - rule: "Audit workflow lanes pin an explicit model AND effort -- never inherit either from the session: detect/classify lanes set model 'opus' + effort 'high'; remediate lanes set model 'sonnet' + effort 'low'. The remediate defaults live once in scripts/gen_workflow_js.py (the template); the detect/classify defaults live in each hand-authored detect.js/classify.js agent() call. A new audit workflow script must follow the same split."
+      keywords:
+        - workflow lane model
+        - opus detect high effort
+        - sonnet remediate low effort
+        - no inherited effort
+        - token cost
+        - agent() model default
+      why: "Without explicit tiers, every fan-out lane inherits the main-loop session model and effort -- a 20-file audit on a top-tier session is 20 top-tier lanes, mostly wasted, while a low-effort session would silently under-power detection. Each lane declares the RIGHT tier for its work instead: remediation applies already-decided edits (the judgment happened at the Q&A gate), so sonnet at low effort suffices; detection/classification IS the audits' judgment core (CCP/CRP/ADP criteria application), the judge stage that warrants opus at high effort. User directive 2026-07-13 (explicitly: pin the right effort, do not inherit)."
       keywords:
         - provenance
         - decision log

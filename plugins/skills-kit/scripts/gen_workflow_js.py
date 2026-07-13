@@ -85,10 +85,18 @@ const actionable = input.perFile.filter(
 @LANE_PROMPT_FN@
 
 phase('Remediate')
+// Default lane tier: sonnet at low effort. Remediation applies already-decided
+// edits to disjoint files @EM@ the judgment happened at the Q&A gate @EM@ so the
+// lane needs neither the session's main-loop model nor high reasoning effort.
+// (Detect/classify lanes pin opus at high effort @EM@ criteria application is
+// the audits' judgment core; each lane declares its right tier explicitly
+// rather than inheriting whatever the session happens to run.)
 const results = await parallel(actionable.map((f) => () =>
   agent(lanePrompt(f), {
     label: `fix:${f.@KEY@.split(/[\\\\/]/)@LABEL_TAIL@}`,
     phase: 'Remediate',
+    model: 'sonnet',
+    effort: 'low',
     schema: FILE_RESULT_SCHEMA,
   }).then((r) => ({ ...r, @KEY@: f.@KEY@ }))
 ))
