@@ -31,11 +31,11 @@ CCP says: content that changes for the same reason belongs in the same file. A C
 
 **Why CCP:** the duplicated facts share the same change driver (whatever caused the parent to state the rule causes the child to need updating); SSOT is broken; updates drift between copies.
 
-**Test:** read parent CLAUDE.md content; for each instruction in the child, check whether the same instruction (verbatim or near-verbatim) is in any ancestor.
+**Test:** read parent CLAUDE.md content; for each instruction in the child, check whether the same instruction (verbatim or near-verbatim) is in any ancestor. The test is TEXTUAL: verbatim or near-verbatim sentence-level similarity of the instruction/content. An argument that the child "operationalizes" the ancestor's concepts (e.g. as review rails), serves a different reading task, or has a different change driver does NOT exempt a near-verbatim restatement -- if the sentences match, the finding fires regardless of the surrounding framing.
 
 **Severity:** FAIL (each duplicated instruction is a finding).
 
-**Remedy:** delete the duplicate from the child; the ancestor instruction already loads ambient.
+**Remedy:** delete the duplicate from the child; the ancestor instruction already loads ambient. Exception: a one-line guardrail naming the rule or failure mode may remain per C-5's "never flag instructions that document known agent failure modes" and A-4's "keep a one-line guardrail in CLAUDE.md naming the error; the skill carries the depth" -- multi-sentence restatement of mechanics/detail still fails, so the remedy for such lines is trim-to-guardrail-plus-pointer, not deletion.
 
 ### C-2. Sibling duplication
 
@@ -91,9 +91,9 @@ CCP says: content that changes for the same reason belongs in the same file. A C
 
 **Why CCP/SSOT:** when a skill exists for a topic, the skill's references/ folder is the SSOT. A CLAUDE.md that duplicates skill content (inline or via a parallel project reference doc) creates two copies that drift independently.
 
-**Test:** for each substantial block of CLAUDE.md content (or each project-reference doc cited from CLAUDE.md), check whether a skill exists for the same topic. If yes, the content should collapse to a pointer (`for X, invoke /example:skill-name`) or, where the harness supports it, a `required-skills:` declaration.
+**Test:** for each substantial block of CLAUDE.md content (or each project-reference doc cited from CLAUDE.md), check whether a skill exists for the same topic. If yes, the content should collapse to a pointer (`for X, invoke /example:skill-name`) or, where the harness supports it, a `required-skills:` declaration. The test is TEXTUAL: verbatim or near-verbatim similarity of the instruction/content against the skill's own text. An argument that the CLAUDE.md block "operationalizes" the skill content for a different reading task or change driver does NOT exempt a near-verbatim restatement -- if the sentences match, the finding fires.
 
-**Severity:** FAIL on duplicated skill content. INFO when the project-reference predates the skill and graduation work is in progress.
+**Severity:** FAIL on duplicated skill content. INFO when the project-reference predates the skill and graduation work is in progress. Exception: a one-line guardrail naming the rule or failure mode may remain per C-5's "never flag instructions that document known agent failure modes" and A-4's "keep a one-line guardrail in CLAUDE.md naming the error; the skill carries the depth" -- multi-sentence restatement of mechanics/detail still fails, so the remedy for such lines is trim-to-guardrail-plus-pointer, not deletion.
 
 ### C-7. No field-by-field restatement of a code-enforced contract
 

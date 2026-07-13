@@ -131,13 +131,15 @@ Two per-artifact roles from cohesion-principles override the generic project-doc
 
 ### PD-10. Generated artifacts: provenance only (generated_artifact role)
 
-**Rule:** a committed generated output (`generated == true` -- identified by a generation-record sidecar like `<name>.params.json`, or an in-file generation marker in the first ~20 lines) is exempt from the authored-doc criteria (PD-2 maturation, PD-3 CRP split, PD-4 orphan, PD-8 duplication, size signals). One check applies: the generator or session provenance is named -- which the identifying signal itself establishes.
+**Rule:** a committed generated output (`generated == true` -- identified by a generation-record sidecar like `<name>.params.json`, or an in-file generation marker in the first ~20 lines) is exempt from ALL other criteria -- the authored-doc criteria (PD-2 maturation, PD-3 CRP split, PD-4 orphan, PD-8 duplication, size signals) AND the hygiene criteria including PD-H1 link resolution (a broken-looking string in generated output is the generator's business; regenerating fixes it). One check applies: the generator or session provenance is named -- which the identifying signal itself establishes.
 
-**The FAIL case:** a doc that *claims* to be generated (title/header says "generated", user asserts it) but carries neither a sidecar nor an in-file marker -- unverifiable provenance (taxonomy M). Remediation: add a machine-readable generation record (the sidecar pattern -- a `<name>.params.json` recording exactly how to regenerate -- is the proven shape) or an explicit in-file marker naming the generator.
+**Minimum marker content:** an in-file generation marker qualifies as provenance ONLY if it names the generator (tool, script, model, or session) or states the regeneration command/recipe. A bare assertion of generated-ness (e.g. "this document is generated analysis") does NOT qualify -- it asserts generated-ness without establishing provenance. A generation-record sidecar always qualifies (it is machine-readable by construction).
 
-**Test:** mechanical, from discover.py `generated` / `generation_record`.
+**The FAIL case:** a doc that *claims* to be generated (title/header says "generated", user asserts it) but carries neither a sidecar nor a qualifying in-file marker -- unverifiable provenance (taxonomy M). This includes a bare generated-assertion with no named generator. Remediation: add a machine-readable generation record (the sidecar pattern -- a `<name>.params.json` recording exactly how to regenerate -- is the proven shape) or an explicit in-file marker naming the generator.
 
-**Severity:** PASS with provenance (all other criteria skipped); FAIL (taxonomy M) on claimed-generated without a signal.
+**Test:** mechanical, from discover.py `generated` / `generation_record`. When `generation_record` is marker-type (in-file, not sidecar), the lane additionally verifies the marker meets the minimum-content bar above -- a marker signal alone does not end the check.
+
+**Severity:** PASS with provenance (all other criteria skipped); FAIL (taxonomy M) on claimed-generated without a signal, including a signal that fails the minimum-content bar.
 
 ## Hygiene findings (universal)
 

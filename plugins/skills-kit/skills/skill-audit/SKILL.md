@@ -212,8 +212,8 @@ audit_skill:
           tool: "Workflow | inline"
           expected: "Edits applied to the target files; per-file applied/skipped/failed summary."
         - n: 6
-          action: "Render the final summary: what was applied per file, what was skipped, any failures, and the bucket totals. Remind the user that re-running the audit should now reproduce a clean (or reduced-FAIL) verdict -- detection and remediation are separate passes, so the re-run is the verification step."
-          expected: "Closing summary; user can re-run /md-audit skill to verify FAILs cleared."
+          action: "Render the final summary: what was applied per file, what was skipped, any failures, and the bucket totals. Remind the user that re-running the audit should now reproduce a clean (or reduced-FAIL) verdict -- detection and remediation are separate passes, so the re-run is the verification step. Scope the verification re-run to the files that were actually MODIFIED by remediation -- results for untouched files stand; re-auditing them wastes runs."
+          expected: "Closing summary; user can re-run /md-audit skill on the modified files to verify FAILs cleared."
       output_template: |
         ## <skill name> (<skill-type>) -- <file path>
 
@@ -405,5 +405,6 @@ When the non-interactive flag is set (argument token or expressed intent), the Q
 - Mechanical validator: `plugins/skills-kit/skills_kit_lib/audit.py` (run as `python -m skills_kit_lib.audit` from the plugin root).
 - Type classifier (for category C remediation): `plugins/skills-kit/skills_kit_lib/classify.py` (run as `python -m skills_kit_lib.classify`).
 - Shared corpus discovery: `plugins/skills-kit/skills_kit_lib/corpus.py` (used by the roster and hierarchy procedures).
+- Report-script usage detail (roster / hierarchy discovery tiers, output formats, exit codes): `references/usage.md`.
 - Sibling audit skill: `claude-md-audit` (via `/md-audit claude-md`) for CLAUDE.md files.
 - Sibling reference scanner: `references-audit` (via `/md-audit references`) for broken skill cross-references across markdown.
