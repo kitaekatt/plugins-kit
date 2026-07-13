@@ -135,7 +135,9 @@ claude --plugin-dir ~/Dev/plugins-kit/plugins/my-plugin
 2. Push the version-bumped commit to `origin/dev`.
 3. Merge `dev` to `master` (via PR or fast-forward) and push to `origin/master`.
 
-A version bump without a master merge is **not** a publish — users still see the old version. A push to `dev` without a master merge is **not** a publish — `master` is the cache source. A master merge without a version bump is **not** a publish — the cache key doesn't change, so consumers don't refetch. All three steps are required; an unambiguous publish go-signal authorizes all three.
+4. Regenerate the marketplace landing page `index.html` and commit it to master (see "The marketplace landing page" below for the in-session flow), **unless** the release changes nothing the page renders — the page embeds each published plugin's name, version, description, and skill roster/descriptions, so a version bump of any *published* plugin already qualifies as page-affecting; the skip applies only to releases confined to dev-only (`published: false`) plugins or non-plugin infra.
+
+A version bump without a master merge is **not** a publish — users still see the old version. A push to `dev` without a master merge is **not** a publish — `master` is the cache source. A master merge without a version bump is **not** a publish — the cache key doesn't change, so consumers don't refetch. Steps 1-3 are always required (plus step 4 unless its skip clause applies); an unambiguous publish go-signal authorizes all of them.
 
 Publishing is reversible-but-visible: nothing is destroyed, but it goes out to other machines. The bar is "user has expressed publish intent for this work," not "user has reconfirmed each git command." Treat unambiguous go-signals — `go`, `ship it`, `publish`, `do it`, `close the loop`, `push` — as authorizing the **entire** three-step publish flow above. Don't re-prompt for sub-steps once intent is clear; that's procedural friction, not safety. Confirm only when intent is genuinely ambiguous (partial work, no version bump in sight, unrelated WIP staged, or the user is mid-thought).
 
@@ -156,11 +158,19 @@ python plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py \
 
 **It crawls the cache, not the dev tree.** `generate.py` reads `~/.claude/plugins/installed_plugins.json` and walks each plugin's **cached `installPath`** (`~/.claude/plugins/cache/<mkt>/<plugin>/<version>/`), filtered by `marketplace.json`. So it reflects the **installed/published** skill roster — **not** unpublished skills sitting on `dev`. Consequence: regenerating `index.html` from a normal session **before** publishing reproduces the *old* landing page (a new skill like `cohesion-audit` won't appear until its plugin version is published and the local cache refetches it).
 
-**Therefore `index.html` regeneration is a publish step, not a dev step.** A dev-branch skill change is not "done" for the landing page until it is published and the page is regenerated. The correct sequence:
+**Therefore `index.html` regeneration is a publish step, not a dev step** — publish step 4, run in the SAME session right after the master merge (no restart needed; verified live 2026-07-13). A dev-branch skill change is not "done" for the landing page until it is published and the page is regenerated. The in-session sequence:
 
-1. Publish (version bumps + push dev + merge master), so consumers' — and your own next-session — caches refetch the new versions.
-2. In a session where the local cache reflects the published versions (i.e. after a SessionStart bootstrap has updated the cache — clear the cooldown if needed), run the `generate.py` command above.
-3. Commit the refreshed `index.html` (to master, where the page is served).
+1. Publish (version bumps + push dev + merge master).
+2. Refresh the local cache in-session — the `claude plugin` CLI works from a Bash tool with the nested-session guard unset:
+   ```bash
+   CLAUDECODE= claude plugin marketplace update plugins-kit
+   CLAUDECODE= claude plugin update <plugin>@plugins-kit   # once per published plugin in the release
+   bash scripts/plugin-versions.sh | grep "VERSION DRIFT"  # must print nothing
+   ```
+3. Run the `generate.py` command above and sanity-check the diff (new versions / changed skill descriptions present).
+4. Commit the refreshed `index.html` to master (where the page is served) and keep dev's copy in sync (same commit merged/cherry-picked to both), so the file never conflicts on the next reconcile.
+
+**Skip clause:** skip regeneration only when the release changes nothing the page renders (plugin name/version/description, skill roster, skill descriptions). Since every publish bumps a published plugin's version and versions render on the page, a genuine publish practically always requires the regen; the skip covers dev-only-plugin and non-plugin-infra releases.
 
 To **preview** the page against unpublished dev skills without publishing, run the generator under a dev-tree-pointed session (`claude-dev` / `pk-dev`, which rewrite `installed_plugins.json` `installPath`s at the dev tree) — but do not commit a dev-preview page as the published landing page.
 
