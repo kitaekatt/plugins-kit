@@ -75,7 +75,7 @@ capability_skill:
       - "The data model in one breath (folder = SoT, items in plan.md's task_items block, refs inert, id = path, one current pointer, durability = location)"
       - "The canonical venv-python invocation and CLI conventions"
       - "The 15-verb capability surface with per-verb contracts"
-      - "The three agent-side behaviors the scripts leave open (work dispatch, status background summary, update rotation)"
+      - "The agent-side behaviors the scripts leave open (work dispatch, status background summary, update rotation, and the required end-of-turn hand-off baton the update/hand-off packaging must emit)"
     references:
       - "orchestration.md -- the delegation rule (orchestrator does no task work) and the model-routing table for background-agent dispatch"
       - "handoff-template.md -- how to fill in and rotate a scaffolded folder's CLAUDE.md / plan.md / log.md"
@@ -139,6 +139,7 @@ capability_skill:
       gotchas:
         - "Contract: ref defaults to the current task; inits when absent (upsert). Applies the field edits, appends one dated entry to log.md, re-validates, prints the classification; exit 0 iff no findings -- but the write persists regardless (fix-forward). List-valued flags are repeatable and REPLACE the stored list."
         - "AGENT BEHAVIOR: the script's only document write is the dated log.md line -- it never rewrites plan.md. The real rotation discipline (completed-step detail plan -> log, REMOVING done items from the task_items block, promoting stray open items into it, stale-state pass, vocabulary pass, 400-line soft targets) is YOUR work, per references/handoff-template.md, whenever the update represents substantive session progress."
+        - "HAND-OFF BATON (required end-of-turn output): when the update PACKAGES the folder for a fresh session -- an explicit hand-off, or any session-boundary update -- you MUST end the turn with the hand-off baton: a two-line block `CWD: <project root>` then `Continue: /task work <CWD-relative task-folder path>` (see references/handoff-template.md 'Self-verify' + communication-framework.md 'hand-off baton'). It is a REQUIRED output, not optional; the script never emits it, so emitting it is the AGENT's job. Skipping it is the top hand-off miss -- the baton is what lets the next session resume with one paste."
         - "PRE-CONTRACT FOLDER (validate warns 'no task_items block'): the update/hand-off pass STARTS with the one-time conversion -- sweep all three docs for open work, dedupe into items, map triage states, rewrite Immediate Priorities as id references, retire the superseded GOAL/checkbox/banner forms, validate until clean. The full procedure is handoff-template.md 'Converting a pre-contract folder'; the block must end as the ONLY carrier of open-work state (a half-conversion recreates the drift)."
     - id: close
       keywords: [close task, finish task, mark done, keep folder]
