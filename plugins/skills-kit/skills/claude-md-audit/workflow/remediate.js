@@ -94,10 +94,18 @@ Return a summary: counts of applied/skipped/failed and a per-item action list.`
 }
 
 phase('Remediate')
+// Default lane tier: sonnet at low effort. Remediation applies already-decided
+// edits to disjoint files — the judgment happened at the Q&A gate — so the
+// lane needs neither the session's main-loop model nor high reasoning effort.
+// (Detect/classify lanes pin opus at high effort — criteria application is
+// the audits' judgment core; each lane declares its right tier explicitly
+// rather than inheriting whatever the session happens to run.)
 const results = await parallel(actionable.map((f) => () =>
   agent(lanePrompt(f), {
     label: `fix:${f.path.split(/[\\/]/).pop()}`,
     phase: 'Remediate',
+    model: 'sonnet',
+    effort: 'low',
     schema: FILE_RESULT_SCHEMA,
   }).then((r) => ({ ...r, path: f.path }))
 ))

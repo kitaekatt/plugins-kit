@@ -108,9 +108,13 @@ Idempotency matters: apply the fixed criteria and taxonomy deterministically. Do
 
 phase('Audit')
 const perFile = await parallel(input.files.map((f) => () =>
+  // Default lane tier: opus at high effort. Detection is the audits' judgment
+  // core — criteria application warrants the judge tier, explicitly pinned.
   agent(lanePrompt(f), {
     label: `audit:${f.path.split(/[\\/]/).pop() === 'SKILL.md' ? f.path.split(/[\\/]/).slice(-2).join('/') : f.path.split(/[\\/]/).pop()}`,
     phase: 'Audit',
+    model: 'opus',
+    effort: 'high',
     schema: FILE_FINDINGS_SCHEMA,
   }).then((r) => ({ ...r, path: f.path }))
 ))
