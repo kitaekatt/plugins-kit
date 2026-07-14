@@ -9,6 +9,7 @@ audit note N2) always runs directly, exactly as today.
 """
 
 import bootstrap_lib.engine as engine
+import bootstrap_lib.scoop as scoop_mod
 import bootstrap_lib.tool_check as tool_check
 import bootstrap_lib.path_check as path_check
 import bootstrap_lib.path_repair as path_repair
@@ -147,3 +148,131 @@ class TestElevatedCommandDeferral:
         )
         assert failure["install_state"] == "needs_elevation"
         assert failure["elevation"]["os"] == "windows"
+
+
+class TestElevatedScoopDeferral:
+    """{"scoop": ..., "elevated": true}: an admin-gated scoop package (e.g.
+    extras/tailscale's pre_install is_admin gate) is DEFERRED into the
+    elevation queue when privileges are missing -- never attempted
+    unelevated -- and installs directly when privileges are available."""
+
+    def _fail_resolve(self, monkeypatch):
+        from bootstrap_lib.result import Result
+
+        def fake_check(ctx):
+            return Result(passed=False, subject=ctx.name, message="absent",
+                          remediation_cmd=None,
+                          extras={"path": None, "install_cmd": None,
+                                  "on_path": False})
+
+        monkeypatch.setattr(engine, "_tool_check", fake_check)
+
+    def _scoop_ready(self, monkeypatch):
+        monkeypatch.setattr(
+            scoop_mod, "ensure_scoop",
+            lambda: scoop_mod.ScoopResult(True, None, "already installed"))
+
+    def _entry(self):
+        return {"name": "tailscale",
+                "install": {"windows": {"scoop": "extras/tailscale",
+                                        "elevated": True}}}
+
+    def test_defers_when_unprivileged(self, monkeypatch):
+        _stub(monkeypatch)
+        _priv(monkeypatch, available=False)
+        self._fail_resolve(monkeypatch)
+        self._scoop_ready(monkeypatch)
+        monkeypatch.setattr(
+            scoop_mod, "scoop_install",
+            lambda pkg, tool_name=None: (_ for _ in ()).throw(
+                AssertionError("elevated scoop install must not run unprivileged")))
+
+        action_entries = []
+        failure = engine._process_tool_entry(
+            self._entry(), "windows", "/data", "",
+            action_entries, [], [], plugin_name="p",
+        )
+
+        assert failure is not None
+        assert failure["install_state"] == "needs_elevation"
+        assert failure["install_cmd"] is None
+        assert failure["persist_across_sessions"] is True
+        cmd = failure["elevation"]["command"]
+        assert failure["elevation"] == {
+            "method": "command", "command": cmd, "os": "windows"}
+        # The deferred command must be runnable from the .bat's
+        # "<bash.exe>" -c "<cmd>" wrapper: powershell shell-out (scoop is a
+        # PowerShell function) and no double quotes (renderer constraint).
+        assert cmd == ("powershell -NoProfile -ExecutionPolicy Bypass "
+                       "-Command 'scoop bucket add extras; "
+                       "scoop install extras/tailscale'")
+        assert '"' not in cmd
+        assert engine._is_auto_fixable(failure) is False
+        assert any("needs elevation" in a for a in action_entries)
+
+    def test_installs_directly_when_privileged(self, monkeypatch):
+        _stub(monkeypatch)
+        _priv(monkeypatch, available=True)
+        self._scoop_ready(monkeypatch)
+        calls = []
+
+        def fake_install(pkg, tool_name=None):
+            calls.append(pkg)
+            return scoop_mod.ScoopResult(True, "C:/u/scoop/shims/tailscale.exe",
+                                         f"installed {pkg} via scoop")
+
+        monkeypatch.setattr(scoop_mod, "scoop_install", fake_install)
+        from bootstrap_lib.result import Result
+        seq = iter([False, True])
+
+        def fake_check(ctx):
+            passed = next(seq)
+            return Result(passed=passed, subject="tailscale",
+                          message="ok" if passed else "absent",
+                          remediation_cmd=None,
+                          extras={"path": "C:/u/scoop/shims/tailscale.exe"
+                                  if passed else None,
+                                  "install_cmd": None, "on_path": True})
+
+        monkeypatch.setattr(engine, "_tool_check", fake_check)
+
+        tools_installed = []
+        failure = engine._process_tool_entry(
+            self._entry(), "windows", "/data", "",
+            [], [], tools_installed, plugin_name="p",
+        )
+
+        assert failure is None
+        assert calls == ["extras/tailscale"]
+        assert tools_installed and tools_installed[0][0] == "tailscale"
+
+    def test_non_elevated_scoop_never_consults_privileges(self, monkeypatch):
+        _stub(monkeypatch)
+        monkeypatch.setattr(
+            engine, "_privileges_available",
+            lambda current_os: (_ for _ in ()).throw(
+                AssertionError("must not probe privileges for unelevated scoop")))
+        self._scoop_ready(monkeypatch)
+        monkeypatch.setattr(
+            scoop_mod, "scoop_install",
+            lambda pkg, tool_name=None: scoop_mod.ScoopResult(
+                True, "C:/u/scoop/shims/p4.exe", "installed main/p4 via scoop"))
+        from bootstrap_lib.result import Result
+        seq = iter([False, True])
+
+        def fake_check(ctx):
+            passed = next(seq)
+            return Result(passed=passed, subject="p4",
+                          message="ok" if passed else "absent",
+                          remediation_cmd=None,
+                          extras={"path": "C:/u/scoop/shims/p4.exe"
+                                  if passed else None,
+                                  "install_cmd": None, "on_path": True})
+
+        monkeypatch.setattr(engine, "_tool_check", fake_check)
+
+        failure = engine._process_tool_entry(
+            {"name": "p4", "install": {"windows": {"scoop": "main/p4"}}},
+            "windows", "/data", "", [], [], [], plugin_name="p",
+        )
+        assert failure is None

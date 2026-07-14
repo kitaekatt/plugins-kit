@@ -350,6 +350,7 @@ may mix strings and objects freely and every legacy spelling keeps parsing.
 | Form | OS | Meaning |
 |------|----|---------|
 | `{"scoop": "bucket/pkg"}` | windows | Install via Scoop (userspace, no admin). `bucket/pkg` is the existing Scoop grammar. |
+| `{"scoop": "bucket/pkg", "elevated": true}` | windows | A Scoop package whose manifest is admin-gated (a `pre_install` `is_admin` check, e.g. `extras/tailscale`). Without privileges the install is **deferred** into the elevation queue (a `powershell -Command 'scoop install …'` line in the remediation `.bat`), never attempted unelevated. |
 | `{"brew": "formula"}` | macos | `brew install <formula>` (string shorthand = formula name). |
 | `{"brew": {"cask": "name"}}` | macos | `brew install --cask <name>`. |
 | `{"brew": {"formula": "name", "tap": "user/repo"}}` | macos | `brew install <tap/>name`; `formula` XOR `cask`, `tap` optional. |
@@ -394,6 +395,14 @@ install attempt the tool is re-checked regardless of the installer's exit code.
 
 - **scoop** is provisioned **lazily** — the first scoop-backed entry installs
   Scoop (no admin, no UAC). A scoop failure surfaces a per-item `scoop_failed`.
+  Failure detection does **not** trust scoop's exit code alone: `scoop install`
+  can exit 0 after an `ERROR …` line (e.g. an admin-gated `pre_install` that
+  `error`s and `break`s, leaving a broken `~/scoop/apps/<pkg>` behind with no
+  shim), so error/`install failed` text in the output — or a missing shim after
+  an otherwise-clean install — is reported as a failed install carrying the
+  captured scoop error. Admin-gated packages must declare
+  `{"scoop": …, "elevated": true}` (see the object forms above) so the install
+  defers to the remediation script instead of failing unelevated.
 - **brew** is **never auto-installed** (`ensure_brew` is detect-only). When brew
   is missing while a brew-backed entry is pending, the entry surfaces a
   `brew_failed` item AND signals the elevation queue to lead the macOS
@@ -1104,6 +1113,15 @@ Paths expand `~` and `$VARS` (an unresolved `$VAR` is an error — declare it vi
 descriptive failure). An existing symlink (wrong or dangling) is replaced without
 backup — a link carries no content worth keeping. A `source == target` entry is
 refused (it would self-reference).
+
+**Windows elevation (WinError 1314).** Unelevated symlink creation on Windows
+requires Developer Mode (or `SeCreateSymbolicLinkPrivilege`). When creation
+fails with WinError 1314 the entry is **deferred** into the elevation queue —
+the remediation `.bat` creates the link elevated via
+`MSYS=winsymlinks:nativestrict ln -sfn '<source>' '<target>'` — instead of
+surfacing a raw failure. Alternatively the user can enable Developer Mode
+(Settings > System > For developers) and type `fix-all`; the re-check then
+creates the link unelevated.
 
 ### `shell_rc` — two modes: `ensure` and `forbid`
 

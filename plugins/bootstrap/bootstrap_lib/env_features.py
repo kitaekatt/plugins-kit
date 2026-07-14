@@ -27,7 +27,7 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from .result import Result
 from .tool_check import resolve_bash
@@ -168,7 +168,27 @@ def check_symlink(source: str, target: str) -> Result:
     )
 
 
-def fix_symlink(source: str, target: str, backup: bool) -> Tuple[bool, str]:
+# Windows error for a symlink attempt without SeCreateSymbolicLinkPrivilege
+# (no Developer Mode, not elevated): "A required privilege is not held by
+# the client".
+_WINERROR_PRIVILEGE_NOT_HELD = 1314
+
+
+class SymlinkFixResult(NamedTuple):
+    """Outcome of :func:`fix_symlink`.
+
+    ``needs_elevation`` marks the one failure the engine can remediate by
+    deferring instead of surfacing raw: unelevated symlink creation on
+    Windows without Developer Mode (WinError 1314). Mirrors
+    ``apt.AptResult.needs_elevation``.
+    """
+
+    ok: bool
+    message: str
+    needs_elevation: bool = False
+
+
+def fix_symlink(source: str, target: str, backup: bool) -> SymlinkFixResult:
     """Make target a symlink to source (env-config ConfigLinkManager semantics).
 
     A real file at target is preserved as a timestamped ``.backup_<ts>``
@@ -185,22 +205,27 @@ def fix_symlink(source: str, target: str, backup: bool) -> Tuple[bool, str]:
     (target does not exist) can never trip it, because the realpath of a
     non-existent target resolves only through existing ancestors and its
     final component still does not exist.
+
+    A WinError 1314 from ``os.symlink`` (unelevated Windows without Developer
+    Mode lacks SeCreateSymbolicLinkPrivilege) is reported with
+    ``needs_elevation=True`` so the engine defers the creation into the
+    elevation remediation script instead of surfacing a raw failure.
     """
     if os.path.abspath(source) == os.path.abspath(target):
-        return False, (
+        return SymlinkFixResult(False, (
             f"source and target are the same path: {target} -- refusing "
             f"(would replace the source with a self-referential link)"
-        )
+        ))
     if not os.path.exists(source):
-        return False, f"source does not exist: {source}"
+        return SymlinkFixResult(False, f"source does not exist: {source}")
     real_source = os.path.realpath(source)
     if real_source == os.path.realpath(target):
-        return False, (
+        return SymlinkFixResult(False, (
             f"source and target resolve to the same file: {source} and "
             f"{target} are both {real_source} -- refusing (a symlink in the "
             f"target's path aliases it onto the source; replacing it would "
             f"destroy the source)"
-        )
+        ))
 
     try:
         parent = os.path.dirname(target)
@@ -212,7 +237,8 @@ def fix_symlink(source: str, target: str, backup: bool) -> Tuple[bool, str]:
             if os.path.islink(target):
                 os.unlink(target)
             elif os.path.isdir(target):
-                return False, f"target is a directory, refusing to replace: {target}"
+                return SymlinkFixResult(
+                    False, f"target is a directory, refusing to replace: {target}")
             elif backup:
                 backed_up = f"{target}.backup_{datetime.now():%Y%m%d_%H%M%S}"
                 os.replace(target, backed_up)
@@ -221,12 +247,18 @@ def fix_symlink(source: str, target: str, backup: bool) -> Tuple[bool, str]:
 
         os.symlink(source, target)
     except OSError as e:
-        return False, f"failed to create symlink {target} -> {source}: {e}"
+        return SymlinkFixResult(
+            False,
+            f"failed to create symlink {target} -> {source}: {e}",
+            needs_elevation=(
+                getattr(e, "winerror", None) == _WINERROR_PRIVILEGE_NOT_HELD
+            ),
+        )
 
     msg = f"linked {target} -> {source}"
     if backed_up:
         msg += f" (existing file backed up to {backed_up})"
-    return True, msg
+    return SymlinkFixResult(True, msg)
 
 
 # ---------------------------------------------------------------------------

@@ -1179,11 +1179,14 @@ class _ToolEntryCtx:
         #   apt form is a bare string ({"apt": "net-tools"}); apt is Ubuntu-only,
         #   so only the current-OS install value is consulted (mirrors scoop_pkg).
         self.apt_pkg = os_spec.get("apt") if isinstance(os_spec, dict) else None
-        #   elevated -- does THIS host's opaque command need privileges? Read
-        #   with a False default: an author-written command object may omit the
-        #   field (audit note N2), and a bare-string install normalizes to
-        #   {"command": s, "elevated": False}. Consumed only by the install-
-        #   command strategy (scoop/brew/apt carry their own elevation model).
+        #   elevated -- does THIS host's install need privileges? Read with a
+        #   False default: an author-written object may omit the field (audit
+        #   note N2), and a bare-string install normalizes to
+        #   {"command": s, "elevated": False}. Consumed by the install-command
+        #   strategy and, on Windows, by the scoop strategy (a manifest with
+        #   admin-gated pre_install, e.g. extras/tailscale, declares
+        #   {"scoop": ..., "elevated": true}); brew/apt carry their own
+        #   elevation model.
         self.elevated = bool(os_spec.get("elevated", False)) if isinstance(os_spec, dict) else False
         self.tool_install_path = tool_def.get("installPath")
         self.check_cmd = tool_def.get("check")
@@ -1277,7 +1280,13 @@ def _strategy_scoop(ctx):
     used. Scoop is provisioned LAZILY -- the first such tool installs it. See
     bootstrap_lib/scoop.py. Terminal whenever it applies. (An older engine that
     predates this branch falls through to the install command, degrading to the
-    legacy path.)"""
+    legacy path.)
+
+    Elevation-aware: a scoop fulfillment declaring ``elevated: true`` (an
+    admin-gated scoop manifest, e.g. extras/tailscale) is NEVER attempted
+    without privileges -- it defers into the elevation queue exactly like an
+    elevated opaque command, after ensure_scoop (scoop itself always installs
+    unelevated)."""
     from . import tool_paths
     pkg = ctx.scoop_pkg
     if not pkg:
@@ -1292,6 +1301,43 @@ def _strategy_scoop(ctx):
                 "plugin": ctx.plugin_name})
     if es.message != "already installed":
         ctx.action_entries.append(f"{ctx.prefix}scoop: {es.message}")
+    if ctx.elevated and not _privileges_available(ctx.current_os):
+        # {"scoop": ..., "elevated": true} + missing privileges: DEFER, never
+        # attempt (a background hook must not trigger UAC, and an admin-gated
+        # scoop manifest fails unelevated anyway -- pre_install `is_admin`
+        # gates error out while leaving a broken ~/scoop/apps install behind).
+        # Queued for the remediation .bat via the standard {method: "command"}
+        # descriptor; the command wraps scoop in powershell because the .bat
+        # runs the queue through bash under elevated cmd (see
+        # scoop.elevated_install_command). Mirrors _strategy_install_command's
+        # deferral. ensure_scoop ran ABOVE on purpose: scoop itself installs
+        # unelevated (and must not be installed as admin), so the deferred
+        # elevated install finds a working scoop.
+        from .scoop import elevated_install_command
+        manual_cmd = elevated_install_command(pkg)
+        ctx.action_entries.append(
+            f"{ctx.prefix}{ctx.name}: needs elevation - scoop package {pkg} "
+            f"requires admin rights; deferred to the remediation script"
+        )
+        return _StrategyOutcome(True, {
+            "type": "tool", "name": ctx.name,
+            "message": f"scoop package {pkg} requires elevation to install",
+            "install_state": "needs_elevation",
+            # No runnable-by-us command: only the user can elevate. install_cmd
+            # None keeps the item off the fix-all path (manual-attention only).
+            "install_cmd": None,
+            "elevation": {"method": "command", "command": manual_cmd,
+                          "os": ctx.current_os},
+            "agent_msg": (
+                f"Installing {ctx.name} (scoop package {pkg}) needs "
+                f"administrator rights, which a background hook must not "
+                f"request. Run the elevated remediation script bootstrap "
+                f"generated (see the elevation item), or run `{manual_cmd}` "
+                f"from an elevated shell, then type 'fix-all'."
+            ),
+            "plugin": ctx.plugin_name,
+            "persist_across_sessions": True,
+        })
     si = scoop_install(pkg, tool_name=ctx.name)
     # Scoop adds ~/scoop/shims to the user PATH on install; reflect that into
     # this already-running process so the re-check can resolve the binary.
@@ -3296,13 +3342,49 @@ def _env_phase_symlinks(ctx):
         if result.passed:
             ctx.ok(f"symlink {name}: ok - {result.message}")
             continue
-        fix_ok, msg = fix_symlink(src, tgt, backup=bool(entry.get("backup", False)))
+        fix = fix_symlink(src, tgt, backup=bool(entry.get("backup", False)))
+        if fix.needs_elevation:
+            # WinError 1314: unelevated symlink creation on Windows needs
+            # Developer Mode or admin rights. Defer into the elevation queue
+            # via the standard {method: "command"} descriptor (the same
+            # route as an elevated env_check fix): the remediation .bat runs
+            # the queue through Git Bash elevated, where
+            # MSYS=winsymlinks:nativestrict makes `ln -s` create a REAL
+            # Windows symlink (default MSYS ln copies instead). -sfn replaces
+            # a stale/dangling link left by an earlier attempt. Any backup of
+            # a pre-existing regular file already happened inside fix_symlink
+            # before os.symlink raised.
+            manual_cmd = f"MSYS=winsymlinks:nativestrict ln -sfn '{src}' '{tgt}'"
+            ctx.fail(
+                f"symlink {name}: needs elevation - deferred; creating "
+                f"{tgt} -> {src} requires Developer Mode or admin rights "
+                f"on Windows",
+                type="env_symlink", name=name,
+                message=(
+                    f"{name}: creating symlink {tgt} -> {src} requires "
+                    f"elevation (WinError 1314)"
+                ),
+                elevation={"method": "command", "command": manual_cmd,
+                           "os": ctx.current_os},
+                agent_msg=(
+                    f"The symlink '{name}' ({tgt} -> {src}) could not be "
+                    f"created: unelevated symlink creation on Windows needs "
+                    f"Developer Mode or administrator rights (WinError "
+                    f"1314). Bootstrap queued it into the elevation "
+                    f"remediation script (see the elevation item). The user "
+                    f"can instead enable Windows Developer Mode (Settings > "
+                    f"System > For developers) and type 'fix-all' to let "
+                    f"bootstrap create it unelevated."
+                ),
+                persist_across_sessions=True,
+            )
+            continue
         recheck = check_symlink(src, tgt)
-        if fix_ok and recheck.passed:
-            ctx.action(f"symlink {name}: {msg}")
+        if fix.ok and recheck.passed:
+            ctx.action(f"symlink {name}: {fix.message}")
         else:
-            detail = msg if not fix_ok else (
-                f"fix reported '{msg}' but re-check failed: {recheck.message}"
+            detail = fix.message if not fix.ok else (
+                f"fix reported '{fix.message}' but re-check failed: {recheck.message}"
             )
             ctx.fail(
                 f"symlink {name}: FAILED - {detail}",
