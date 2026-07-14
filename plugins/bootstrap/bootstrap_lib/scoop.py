@@ -22,6 +22,7 @@ Stdlib-only (subprocess to PowerShell); never imports the rest of bootstrap_lib.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -110,13 +111,49 @@ def _find_shim(name: str) -> Optional[str]:
     return None
 
 
+# Failure markers inside `scoop install` output. scoop's `error` helper
+# prints an "ERROR <msg>" line but the scoop process can still EXIT 0
+# (observed live: extras/tailscale's pre_install admin gate errors + breaks;
+# files land under ~/scoop/apps/<pkg>, `scoop list` shows "Install failed",
+# no shim is created) -- so the exit code alone is not trustworthy.
+_ERROR_LINE_RE = re.compile(r"^\s*ERROR\b", re.IGNORECASE)
+_FAILED_TEXT_RE = re.compile(r"install(ation)?[^\n]*\bfailed\b", re.IGNORECASE)
+
+
+def _install_failure_detail(ok: bool, out: str) -> Optional[str]:
+    """None when the install output looks successful, else the error detail.
+
+    A failure is a non-zero exit AND/OR failure text in the output (an
+    ``ERROR ...`` line or an "install ... failed" phrase). The detail
+    prefers the failure lines themselves; a silent non-zero exit falls back
+    to the last non-empty output line.
+    """
+    error_lines = [
+        ln.strip() for ln in out.splitlines()
+        if _ERROR_LINE_RE.match(ln) or _FAILED_TEXT_RE.search(ln)
+    ]
+    if error_lines:
+        return "; ".join(error_lines)
+    if not ok:
+        tail = [ln for ln in out.strip().splitlines() if ln.strip()]
+        return tail[-1].strip() if tail else "no output"
+    return None
+
+
 def scoop_install(package: str, tool_name: Optional[str] = None) -> ScoopResult:
     """Install a Scoop package, adding its bucket first for ``bucket/pkg`` form.
 
     ``package`` is ``"pkg"`` (default ``main`` bucket) or ``"bucket/pkg"``
     (e.g. ``"main/p4"``, ``"extras/perforce"``). On success returns the installed
     shim path for ``tool_name`` (defaults to the package's bare name).
-    Windows-only; assumes :func:`ensure_scoop` already succeeded.
+
+    Success requires BOTH a clean install (exit 0, no failure text -- see
+    :func:`_install_failure_detail`) AND a locatable shim; anything else is a
+    failure carrying the captured scoop error. (A package that legitimately
+    ships no shim under the tool's name still succeeds at the engine level
+    when the entry's own ``check`` re-check resolves it -- the engine consults
+    its re-check BEFORE this result.) Windows-only; assumes
+    :func:`ensure_scoop` already succeeded.
     """
     if sys.platform != "win32":
         return ScoopResult(False, None, "scoop is Windows-only")
@@ -126,9 +163,36 @@ def scoop_install(package: str, tool_name: Optional[str] = None) -> ScoopResult:
         # "already added" -- not fatal; the subsequent install is the real check.
         _scoop_cmd(f"bucket add {bucket}")
     ok, out = _scoop_cmd(f"install {package}")
-    shim = _find_shim(tool_name or pkg)
-    if shim:
-        return ScoopResult(True, shim, f"installed {package} via scoop")
-    if ok:
-        return ScoopResult(True, None, f"installed {package} via scoop (shim not located)")
-    return ScoopResult(False, None, f"scoop install {package} failed: {out}")
+    failure = _install_failure_detail(ok, out)
+    if failure is None:
+        shim = _find_shim(tool_name or pkg)
+        if shim:
+            return ScoopResult(True, shim, f"installed {package} via scoop")
+        failure = (
+            f"scoop reported success but no shim for "
+            f"'{tool_name or pkg}' exists in {_shims_dir()}"
+        )
+    return ScoopResult(False, None, f"scoop install {package} failed: {failure}")
+
+
+def elevated_install_command(package: str) -> str:
+    """The user-runnable command for a scoop install deferred for elevation.
+
+    Rendered into the Windows remediation .bat, whose queued commands run
+    through Git Bash (``"<bash.exe>" -c "<cmd>"`` -- see
+    :func:`bootstrap_lib.elevation._windows_command_line`). ``scoop`` is a
+    PowerShell function, so the command shells out to ``powershell -Command``
+    explicitly instead of relying on bash resolving the shim; the elevated
+    process keeps the invoking user's profile (UAC same-user elevation), so
+    the user-PATH ``~/scoop/shims`` entry resolves ``scoop`` there. Single
+    quotes only: the .bat renderer rejects double-quoted commands. The
+    bucket add is included for ``bucket/pkg`` form (idempotent; benign when
+    already added).
+    """
+    bucket, _pkg = (package.split("/", 1) if "/" in package else (None, package))
+    steps = []
+    if bucket:
+        steps.append(f"scoop bucket add {bucket}")
+    steps.append(f"scoop install {package}")
+    inner = "; ".join(steps)
+    return f"powershell -NoProfile -ExecutionPolicy Bypass -Command '{inner}'"

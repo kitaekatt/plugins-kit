@@ -336,17 +336,17 @@ class TestCheckSymlinkUnit:
         source.write_text("x")
         target = tmp_path / "d"
         target.mkdir()
-        ok, msg = fix_symlink(str(source), str(target), backup=True)
-        assert not ok
-        assert "directory" in msg
+        res = fix_symlink(str(source), str(target), backup=True)
+        assert not res.ok
+        assert "directory" in res.message
 
     def test_fix_refuses_source_equal_target(self, tmp_path):
         """source == target must never destroy the user's file (R2)."""
         path = tmp_path / "f.toml"
         path.write_text("precious")
-        ok, msg = fix_symlink(str(path), str(path), backup=False)
-        assert not ok
-        assert "same path" in msg
+        res = fix_symlink(str(path), str(path), backup=False)
+        assert not res.ok
+        assert "same path" in res.message
         assert path.is_file() and not path.is_symlink()
         assert path.read_text() == "precious"
 
@@ -362,10 +362,10 @@ class TestCheckSymlinkUnit:
         alias.symlink_to(real)
         target = alias / "f.toml"
 
-        ok, msg = fix_symlink(str(source), str(target), backup=False)
+        res = fix_symlink(str(source), str(target), backup=False)
 
-        assert not ok
-        assert "resolve to the same file" in msg
+        assert not res.ok
+        assert "resolve to the same file" in res.message
         assert source.is_file() and not source.is_symlink()
         assert source.read_text() == "precious"
 
@@ -383,11 +383,116 @@ class TestCheckSymlinkUnit:
         alias.symlink_to(real)
         target = alias / "link.toml"
 
-        ok, msg = fix_symlink(str(source), str(target), backup=False)
+        res = fix_symlink(str(source), str(target), backup=False)
 
-        assert ok
+        assert res.ok
         assert target.is_symlink()
         assert check_symlink(str(source), str(target)).passed
+
+
+class _WinPrivilegeError(OSError):
+    """OSError double carrying WinError 1314 on any test platform.
+
+    ``winerror`` is a real attribute only on Windows Python; a subclass
+    setting it explicitly exercises fix_symlink's ``getattr`` detection
+    identically everywhere.
+    """
+
+    def __init__(self, msg="[WinError 1314] A required privilege is not held "
+                           "by the client"):
+        super().__init__(msg)
+        self.winerror = 1314
+
+
+class TestSymlinkNeedsElevation:
+    """WinError 1314 (unelevated Windows symlink creation) routes into the
+    elevated-deferral mechanism instead of surfacing as a raw failure."""
+
+    def test_fix_symlink_reports_needs_elevation_on_1314(
+        self, tmp_path, monkeypatch
+    ):
+        source = tmp_path / "src.toml"
+        source.write_text("x")
+        target = tmp_path / "link.toml"
+        monkeypatch.setattr(
+            env_features.os, "symlink",
+            lambda s, t: (_ for _ in ()).throw(_WinPrivilegeError()))
+
+        res = fix_symlink(str(source), str(target), backup=False)
+
+        assert not res.ok
+        assert res.needs_elevation is True
+        assert "1314" in res.message
+
+    def test_other_oserror_is_not_needs_elevation(self, tmp_path, monkeypatch):
+        source = tmp_path / "src.toml"
+        source.write_text("x")
+        target = tmp_path / "link.toml"
+        monkeypatch.setattr(
+            env_features.os, "symlink",
+            lambda s, t: (_ for _ in ()).throw(OSError("disk full")))
+
+        res = fix_symlink(str(source), str(target), backup=False)
+
+        assert not res.ok
+        assert res.needs_elevation is False
+
+    def test_engine_defers_1314_into_elevation_queue(
+        self, isolated_home, run_env_pass, monkeypatch
+    ):
+        """The env pass converts the needs_elevation fix result into a
+        persistent env_symlink failure carrying the standard
+        {method: "command"} descriptor, so the pass's elevation-queue
+        harvest lands the creation in the remediation script."""
+        from bootstrap_lib.elevation import queue_from_failures
+
+        source = isolated_home / "src.toml"
+        source.write_text("x")
+        target = isolated_home / ".config" / "starship.toml"
+        entry = {"name": "starship-config", "source": str(source),
+                 "target": str(target)}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(os_="windows", symlinks=[entry]))
+        monkeypatch.setattr(
+            env_features.os, "symlink",
+            lambda s, t: (_ for _ in ()).throw(_WinPrivilegeError()))
+
+        result = run_env_pass(current_os="windows")
+
+        assert len(result.failures) == 1
+        failure = result.failures[0]
+        assert failure["type"] == "env_symlink"
+        assert failure["persist_across_sessions"] is True
+        expected_cmd = (
+            f"MSYS=winsymlinks:nativestrict ln -sfn '{source}' '{target}'"
+        )
+        assert failure["elevation"] == {
+            "method": "command", "command": expected_cmd, "os": "windows"}
+        assert "Developer Mode" in failure["agent_msg"]
+        assert any("needs elevation" in a for a in result.action_entries)
+        # The pass-level harvest picks the command up like any deferred op.
+        queue = queue_from_failures(result.failures, "windows")
+        assert queue.commands == [expected_cmd]
+
+    def test_non_1314_failure_stays_a_raw_failure(
+        self, isolated_home, run_env_pass, monkeypatch
+    ):
+        source = isolated_home / "src.toml"
+        source.write_text("x")
+        target = isolated_home / ".config" / "starship.toml"
+        entry = {"name": "starship-config", "source": str(source),
+                 "target": str(target)}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(symlinks=[entry]))
+        monkeypatch.setattr(
+            env_features.os, "symlink",
+            lambda s, t: (_ for _ in ()).throw(OSError("disk full")))
+
+        result = run_env_pass()
+
+        assert len(result.failures) == 1
+        assert "elevation" not in result.failures[0]
+        assert any("FAILED" in a for a in result.action_entries)
 
 
 class TestSymlinkSourceEqualsTarget:
