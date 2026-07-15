@@ -16,30 +16,52 @@ Behavior:
 The script is idempotent: re-running on every SessionStart is a no-op once
 installed.
 
-Windows interpreter wrapping + self-heal
-----------------------------------------
-On Windows, Claude Code spawns the statusLine command through `cmd.exe /c`. A
-bare `.sh` path has no interpreter, so cmd opens it via Windows file
-association (`sh_auto_file`) instead of executing it -> empty stdout, exit 0,
-blank status line. (macOS/Linux are unaffected: the script's shebang makes a
-bare `.sh` directly executable.)
+The command must be machine-INDEPENDENT
+---------------------------------------
+`~/.claude/settings.json` is a single file that many machines may share (it is
+git-tracked in some setups). We rewrite `statusLine.command` there on every
+SessionStart, so if that command embeds absolute paths, every machine rewrites
+the line to its own home and interpreter and they clobber each other forever --
+the file is permanently dirty and committing from one box breaks the others.
+Claude Code offers no way out of writing here: a plugin's own settings.json
+supports only the `agent` and `subagentStatusLine` keys, not `statusLine`.
 
-So on Windows we emit the command as an explicit Git Bash invocation:
+So the emitted command must be one string that is identical everywhere and
+resolves per-machine at run time:
 
-    "<bash.exe>" "<.../statusline.sh>"
+    bash ~/.claude/plugins/data/<marketplace>/claude-ui-kit/scripts/statusline.sh
 
-bash.exe is resolved from CLAUDE_CODE_GIT_BASH_PATH, falling back to the common
-Git-for-Windows install locations. The build is idempotent and self-recognizing
-(`_expected_command` is exactly what `_is_ours` + the equality check expect), so
-re-runs are no-ops. And because a *previously installed* bare-path command (from
-an older version of this installer) is still recognized as ours via the
-`/claude-ui-kit/` substring, the refresh branch in install() rewrites it to the
-wrapped form automatically -- existing broken installs self-heal on the next
-SessionStart without a reinstall.
+Why this form:
+
+- `~`, not an absolute home. Claude Code documents `~` in `statusLine.command`
+  as expanding on every platform, Windows included. Expansion happens in the
+  shell, so the STORED string stays identical across machines. It is
+  deliberately unquoted -- bash does not tilde-expand inside quotes -- which is
+  safe because the result of tilde expansion is not field-split, so a home
+  directory containing spaces still survives.
+- `bash`, resolved from PATH, not an absolute interpreter. Claude Code runs the
+  status line through Git Bash on Windows (or PowerShell when Git Bash is
+  absent), and through a shell on POSIX, so a bare interpreter token resolves.
+- The path points at the plugin DATA dir, which carries no version segment --
+  unlike the cache dir (.../cache/<mkt>/claude-ui-kit/<version>/), which would
+  churn the command on every upgrade.
+
+The `bash` prefix is belt-and-braces. Under Git Bash a bare `.sh` path would
+work on its own (the shebang runs it); the prefix additionally survives the
+command being handed to `cmd.exe`, which cannot execute a bare `.sh` -- it
+file-associates it, yielding empty stdout and a blank bar. Keeping the prefix
+means this works under either invocation model without having to be right about
+which one Claude Code uses.
+
+Self-heal: an existing command is recognized as ours via the `/claude-ui-kit/`
+substring, so any older absolute-path form (including the previous
+`"<bash.exe>" "<abs path>"` wrapping) is rewritten to the portable form by the
+refresh branch in install(). Every machine converges to the identical string on
+its next SessionStart with no manual edits, and settings.json then stops going
+dirty.
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Optional, Tuple
@@ -49,14 +71,9 @@ PLUGIN_NAME = "claude-ui-kit"
 INSTALLED_SCRIPT_RELPATH = "scripts/statusline.sh"
 CUSTOMIZED_FLAG = "customized.flag"
 
-# Common Git-for-Windows bash.exe locations, tried in order when
-# CLAUDE_CODE_GIT_BASH_PATH is unset. First existing wins; if none exist we
-# fall back to the first entry so the emitted command is still well-formed
-# (and fixable once Git is on PATH / the env var is set).
-_GIT_BASH_FALLBACKS = (
-    r"C:\Program Files\Git\bin\bash.exe",
-    r"C:\Program Files (x86)\Git\bin\bash.exe",
-)
+# Interpreter token for the emitted command. A bare name resolved from PATH,
+# never an absolute path -- see the module docstring on machine independence.
+_INTERPRETER = "bash"
 
 
 def install(ctx) -> None:
@@ -91,13 +108,18 @@ def install(ctx) -> None:
     if project_root is not None:
         candidate_paths.append(project_root / ".claude" / "settings.local.json")
         candidate_paths.append(project_root / ".claude" / "settings.json")
-    # Do NOT target the user-level ~/.claude/settings.local.json: Claude Code
-    # does not read a *user-level* settings.local.json for statusLine (only the
-    # project-level one). A command written there is silently ignored and the
-    # bar stays blank no matter how many times we refresh it. Target the
-    # user-level settings.json, which CC does read. (Confirmed 2026-06: a
-    # command stuck in ~/.claude/settings.local.json rendered nothing until it
-    # was moved to ~/.claude/settings.json.)
+    # Do NOT target the user-level ~/.claude/settings.local.json. This is by
+    # design, not a quirk: `.local.json` is a PROJECT-scope concept (it exists
+    # so a contributor can override a checked-in project settings.json without
+    # committing personal preferences). The documented settings hierarchy has
+    # exactly three physical scopes -- user settings.json, project
+    # settings.json, project settings.local.json -- and no user-level .local
+    # variant, for ANY key. A file written there is inert; the bar stays blank
+    # no matter how many times we refresh it. (Confirmed empirically 2026-06;
+    # confirmed against the settings docs 2026-07, after the inert file was
+    # created a second time by someone reaching for the obvious-looking fix.)
+    # So settings.json is the only place this can go -- which is exactly why
+    # the command written there must be machine-independent (module docstring).
     candidate_paths.append(Path.home() / ".claude" / "settings.json")
 
     existing = _find_existing_statusline(candidate_paths)
@@ -119,18 +141,18 @@ def install(ctx) -> None:
     if _is_ours(current_command):
         # Our statusLine, but the stored command differs from what we'd emit
         # now. Two causes, both remediated by rewriting to expected_command:
-        #   1. Plugin path moved (upgrade, version bump, scope change).
-        #   2. The command is BROKEN on Windows -- a bare `.sh` path with no
-        #      interpreter, written by an older version of this installer, which
-        #      renders a blank status line (see module docstring). This is the
-        #      detect-and-remediate path that self-heals existing installs.
+        #   1. Plugin path moved (upgrade, scope change).
+        #   2. The command is a LEGACY absolute form written by an older version
+        #      of this installer -- machine-specific, so each machine rewrote it
+        #      and they clobbered each other. Rewriting to the portable form is
+        #      the one-time migration that ends the churn (module docstring).
         if _refuse_unparseable(ctx, settings_path):
             return
         _write_statusline(settings_path, expected_command)
-        if _is_broken_command(current_command):
+        if not _is_portable(current_command):
             ctx.log(
-                f"statusline: remediated broken (un-wrapped) command in "
-                f"{_posix(settings_path)} -- wrapped with Git Bash interpreter"
+                f"statusline: migrated machine-specific command in "
+                f"{_posix(settings_path)} to the portable form"
             )
         else:
             ctx.log(f"statusline: refreshed path in {_posix(settings_path)}")
@@ -166,62 +188,41 @@ def _resolve_installed_script(data_dir: str) -> Optional[Path]:
     return p if p.is_file() else None
 
 
-def _is_windows() -> bool:
-    return os.name == "nt"
+def _tilde_path(p: Path) -> str:
+    """Spell `p` relative to `~` when it lives under the home directory.
 
-
-def _git_bash_path() -> str:
-    """Resolve the Git Bash interpreter to wrap the .sh with on Windows.
-
-    Prefers CLAUDE_CODE_GIT_BASH_PATH (Claude Code's own env var for this),
-    then the common Git-for-Windows install locations. Always returns a
-    forward-slash path so the emitted command is uniform and quote-safe.
+    This is what keeps the emitted command identical across machines: the stored
+    string carries no home prefix, and the shell Claude Code runs it through
+    expands `~` locally. Falls back to the absolute posix path when `p` is not
+    under home (nothing else is portable, and a working absolute command beats a
+    broken relative one).
     """
-    env = os.environ.get("CLAUDE_CODE_GIT_BASH_PATH")
-    if env:
-        return env.replace("\\", "/")
-    for candidate in _GIT_BASH_FALLBACKS:
-        if os.path.isfile(candidate):
-            return candidate.replace("\\", "/")
-    return _GIT_BASH_FALLBACKS[0].replace("\\", "/")
+    try:
+        relative = p.relative_to(Path.home())
+    except ValueError:
+        return _posix(p)
+    return "~/" + _posix(relative)
 
 
 def _build_command(installed_script: Path) -> str:
     """The statusLine command string to write into settings.
 
-    POSIX: the bare script path (shebang makes it executable).
-    Windows: the script path wrapped in an explicit Git Bash invocation, since
-    cmd.exe would otherwise file-associate a bare `.sh` and produce no output.
-    Both forms are quoted so paths with spaces survive.
+    One spelling for every platform: a PATH-resolved interpreter plus a
+    `~`-relative script path. See the module docstring for why each half is
+    required and why the path is deliberately unquoted.
     """
-    script = _posix(installed_script)
-    if _is_windows():
-        return f'"{_git_bash_path()}" "{script}"'
-    return script
+    return f"{_INTERPRETER} {_tilde_path(installed_script)}"
 
 
-def _is_broken_command(command: str) -> bool:
-    """True if `command` is a bare `.sh` path that Windows cannot execute.
+def _is_portable(command: str) -> bool:
+    """True if `command` is already the machine-independent form.
 
-    A broken command is one that ends in `.sh` (optionally quoted/whitespace)
-    with no interpreter token in front -- i.e. cmd.exe would file-associate it.
-    A correctly wrapped command starts with a `bash`/`sh` interpreter, so it has
-    a token before the `.sh`. Only meaningful on Windows; on POSIX a bare `.sh`
-    is correct, so this always returns False there.
+    Used only to describe what happened in the log -- rewriting an absolute
+    legacy command (the old `"<bash.exe>" "<abs path>"` wrapping, or a bare
+    absolute `.sh`) is the migration that stops settings.json churning, and is
+    worth saying out loud rather than reporting as a routine path refresh.
     """
-    if not _is_windows():
-        return False
-    stripped = command.strip().strip('"').strip()
-    if not stripped.lower().endswith(".sh"):
-        return False  # not a plain script path (already wrapped, or non-.sh)
-    # A wrapped command ("<bash>" "<script>.sh") still ends in .sh after the
-    # outer strip only if there is exactly one quoted token; detect a leading
-    # interpreter by checking for an unquoted/quoted token before the path.
-    # The simplest robust signal: a correctly wrapped command contains a
-    # bash/sh executable reference; a bare path does not.
-    lowered = command.lower()
-    return ("bash" not in lowered) and ("/sh " not in lowered) \
-        and ("\\sh " not in lowered)
+    return command.startswith(f"{_INTERPRETER} ~/")
 
 
 def _find_existing_statusline(paths) -> Optional[Tuple[Path, str]]:

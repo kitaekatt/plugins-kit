@@ -11,7 +11,6 @@ unattended at SessionStart.
 """
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -19,9 +18,9 @@ import pytest
 import install_statusline
 
 
-WINDOWS = os.name == "nt"
-windows_only = pytest.mark.skipif(not WINDOWS, reason="Windows-specific behavior")
-posix_only = pytest.mark.skipif(WINDOWS, reason="POSIX-specific behavior")
+# No windows_only / posix_only markers by design: the emitted command is now a
+# single machine-independent string, so every test below runs on every platform.
+# A platform-conditional command is the bug this module was fixed to avoid.
 
 
 class FakeCtx:
@@ -56,15 +55,18 @@ def fake_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def ctx(tmp_path):
+def ctx(tmp_path, fake_home):
     """FakeCtx with a data_dir containing the synced statusline script.
 
-    The data_dir includes a `claude-ui-kit` path segment to mirror the real
-    install layout (~/.claude/plugins/data/<mkt>/claude-ui-kit/), so that
-    _is_ours() recognizes commands pointing into it -- which is what drives the
-    refresh / self-heal branch.
+    The data_dir mirrors the real install layout UNDER HOME
+    (~/.claude/plugins/data/<mkt>/claude-ui-kit/) for two reasons: the
+    `claude-ui-kit` segment is what _is_ours() keys on to drive the refresh /
+    self-heal branch, and living under home is what lets _tilde_path emit the
+    portable `~/...` form. A data_dir outside home would silently fall back to
+    an absolute command and the portability tests would pass vacuously.
     """
-    data_dir = tmp_path / "data" / "claude-ui-kit"
+    data_dir = (fake_home / ".claude" / "plugins" / "data"
+                / "plugins-kit" / "claude-ui-kit")
     script = data_dir / "scripts" / "statusline.sh"
     script.parent.mkdir(parents=True)
     script.write_text("#!/bin/sh\necho hi\n")
@@ -74,18 +76,10 @@ def ctx(tmp_path):
 
 
 def _expected_command(ctx):
-    """The command install() should emit -- platform-aware.
-
-    Mirrors install_statusline._build_command: bare posix path off Windows,
-    Git-Bash-wrapped on Windows.
-    """
+    """The command install() should emit -- the same on every platform."""
     return install_statusline._build_command(
         Path(ctx.data_dir) / "scripts" / "statusline.sh"
     )
-
-
-def _bare_command(ctx):
-    return str(Path(ctx.data_dir) / "scripts" / "statusline.sh").replace("\\", "/")
 
 
 def _user_settings(fake_home):
@@ -117,10 +111,9 @@ class TestRefresh:
         assert data["statusLine"]["command"] == _expected_command(ctx)
         assert data["model"] == "opus"
         assert ctx.failures == []
-        # On posix this is a plain path refresh; on Windows a stale bare path is
-        # also un-wrapped, so it takes the remediation branch. Either way the
-        # command is rewritten to expected.
-        assert any(("refreshed path" in m) or ("remediated broken" in m) for m in ctx.logs)
+        # The stale command is an absolute path, so this is the migration
+        # branch; TestLegacyMigration covers the real legacy shapes.
+        assert any("migrated machine-specific" in m for m in ctx.logs)
 
 
 class TestConflict:
@@ -162,81 +155,124 @@ class TestMalformedSettings:
 
 
 class TestCommandBuilder:
-    """_build_command is the platform-conditional core of both the installer
-    fix and the self-heal: posix -> bare path, Windows -> Git-Bash-wrapped."""
+    """_build_command emits ONE spelling for every platform: a PATH-resolved
+    interpreter plus a `~`-relative script path. There is deliberately no
+    platform branch -- an OS-conditional command is what made settings.json
+    machine-specific in the first place.
+    """
 
-    @posix_only
-    def test_posix_emits_bare_path(self):
-        cmd = install_statusline._build_command(Path("/x/claude-ui-kit/scripts/statusline.sh"))
-        assert cmd == "/x/claude-ui-kit/scripts/statusline.sh"
-        assert "bash" not in cmd
+    def test_emits_portable_form_on_every_platform(self, fake_home):
+        script = (fake_home / ".claude/plugins/data/plugins-kit/claude-ui-kit"
+                  / "scripts/statusline.sh")
+        assert install_statusline._build_command(script) == (
+            "bash ~/.claude/plugins/data/plugins-kit/claude-ui-kit/scripts/statusline.sh"
+        )
 
-    @windows_only
-    def test_windows_wraps_with_git_bash(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_CODE_GIT_BASH_PATH", r"C:\Program Files\Git\bin\bash.exe")
-        cmd = install_statusline._build_command(Path("C:/x/claude-ui-kit/scripts/statusline.sh"))
-        assert cmd == '"C:/Program Files/Git/bin/bash.exe" "C:/x/claude-ui-kit/scripts/statusline.sh"'
+    def test_command_leaks_no_machine_specific_value(self, fake_home):
+        """The load-bearing invariant. settings.json may be shared across
+        machines, so the emitted string must contain no home path, no drive
+        letter, and no absolute interpreter -- otherwise every machine rewrites
+        the line to its own and they clobber each other forever.
+        """
+        script = (fake_home / ".claude/plugins/data/plugins-kit/claude-ui-kit"
+                  / "scripts/statusline.sh")
+        cmd = install_statusline._build_command(script)
 
-    @windows_only
-    def test_windows_is_idempotent_not_double_wrapped(self, monkeypatch):
-        """Building twice yields the same string; building from an already-built
-        command's script path never nests a second interpreter."""
-        monkeypatch.setenv("CLAUDE_CODE_GIT_BASH_PATH", r"C:\Program Files\Git\bin\bash.exe")
-        script = Path("C:/x/claude-ui-kit/scripts/statusline.sh")
+        assert str(fake_home).replace("\\", "/") not in cmd
+        assert "\\" not in cmd
+        assert ":" not in cmd          # no C:/ drive letter
+        assert ".exe" not in cmd       # no absolute interpreter
+        assert cmd.startswith("bash ~/")
+
+    def test_identical_across_different_homes(self, tmp_path, monkeypatch):
+        """Two machines with different home dirs must produce the SAME string.
+        This is the whole point; assert it directly rather than by proxy."""
+        commands = set()
+        for home_name in ("home_windows", "home_macos"):
+            home = tmp_path / home_name
+            script = (home / ".claude/plugins/data/plugins-kit/claude-ui-kit"
+                      / "scripts/statusline.sh")
+            monkeypatch.setattr(Path, "home", classmethod(lambda cls, h=home: h))
+            commands.add(install_statusline._build_command(script))
+        assert len(commands) == 1
+
+    def test_is_idempotent(self, fake_home):
+        script = (fake_home / ".claude/plugins/data/plugins-kit/claude-ui-kit"
+                  / "scripts/statusline.sh")
         once = install_statusline._build_command(script)
-        twice = install_statusline._build_command(script)
-        assert once == twice
-        assert once.count("bash.exe") == 1
+        assert install_statusline._build_command(script) == once
+        assert once.count("bash") == 1  # never nests a second interpreter
+
+    def test_falls_back_to_absolute_outside_home(self, fake_home):
+        """Not under home -> nothing portable is possible; a working absolute
+        command beats a broken relative one."""
+        cmd = install_statusline._build_command(
+            Path("/opt/x/claude-ui-kit/scripts/statusline.sh"))
+        assert cmd == "bash /opt/x/claude-ui-kit/scripts/statusline.sh"
 
 
-class TestBrokenDetection:
-    @windows_only
-    def test_bare_sh_path_is_broken(self):
-        assert install_statusline._is_broken_command("C:/x/claude-ui-kit/scripts/statusline.sh")
-        assert install_statusline._is_broken_command('"C:/x/claude-ui-kit/scripts/statusline.sh"')
+class TestPortabilityDetection:
+    def test_portable_form_recognized(self):
+        assert install_statusline._is_portable(
+            "bash ~/.claude/plugins/data/plugins-kit/claude-ui-kit/scripts/statusline.sh")
 
-    @windows_only
-    def test_wrapped_command_is_not_broken(self):
-        wrapped = '"C:/Program Files/Git/bin/bash.exe" "C:/x/claude-ui-kit/scripts/statusline.sh"'
-        assert not install_statusline._is_broken_command(wrapped)
+    def test_legacy_absolute_forms_are_not_portable(self):
+        """Both shapes the old installer wrote -- Windows Git-Bash-wrapped and
+        the POSIX bare path -- must read as non-portable so they migrate."""
+        assert not install_statusline._is_portable(
+            '"C:/Program Files/Git/bin/bash.exe" '
+            '"C:/Users/truff/.claude/plugins/data/plugins-kit/claude-ui-kit/scripts/statusline.sh"')
+        assert not install_statusline._is_portable(
+            "/Users/christina/.claude/plugins/data/plugins-kit/claude-ui-kit/scripts/statusline.sh")
 
-    @posix_only
-    def test_never_broken_on_posix(self):
-        assert not install_statusline._is_broken_command("/x/claude-ui-kit/scripts/statusline.sh")
 
+class TestLegacyMigration:
+    """The one-time self-heal that ends the churn: a legacy machine-specific
+    command for OUR plugin is rewritten to the portable form on the next
+    SessionStart, on every machine, with no manual edit.
+    """
 
-@windows_only
-class TestWindowsRemediation:
-    """The detect-and-remediate self-heal: a previously installed bare-path
-    (broken) command for OUR plugin is rewritten to the wrapped form, and an
-    already-wrapped command is a no-op."""
+    LEGACY_WINDOWS = ('"C:/Program Files/Git/bin/bash.exe" '
+                      '"C:/Users/truff/.claude/plugins/data/plugins-kit/'
+                      'claude-ui-kit/scripts/statusline.sh"')
+    LEGACY_POSIX = ("/Users/christina/.claude/plugins/data/plugins-kit/"
+                    "claude-ui-kit/scripts/statusline.sh")
 
-    def test_broken_bare_path_is_remediated(self, ctx, fake_home, monkeypatch):
-        monkeypatch.setenv("CLAUDE_CODE_GIT_BASH_PATH", r"C:\Program Files\Git\bin\bash.exe")
-        broken = {
-            "statusLine": {"type": "command", "command": _bare_command(ctx)},
+    @pytest.mark.parametrize("legacy", [LEGACY_WINDOWS, LEGACY_POSIX])
+    def test_legacy_command_is_migrated(self, ctx, fake_home, legacy):
+        _user_settings(fake_home).write_text(json.dumps({
+            "statusLine": {"type": "command", "command": legacy},
             "model": "opus",
-        }
-        _user_settings(fake_home).write_text(json.dumps(broken))
+        }))
 
         install_statusline.install(ctx)
 
         data = json.loads(_user_settings(fake_home).read_text())
         assert data["statusLine"]["command"] == _expected_command(ctx)
-        assert "bash.exe" in data["statusLine"]["command"]
+        assert install_statusline._is_portable(data["statusLine"]["command"])
         assert data["model"] == "opus"  # other keys preserved
         assert ctx.failures == []
-        assert any("remediated broken" in m for m in ctx.logs)
+        assert any("migrated machine-specific" in m for m in ctx.logs)
 
-    def test_already_wrapped_is_noop(self, ctx, fake_home, monkeypatch):
-        monkeypatch.setenv("CLAUDE_CODE_GIT_BASH_PATH", r"C:\Program Files\Git\bin\bash.exe")
-        wrapped = {"statusLine": {"type": "command", "command": _expected_command(ctx)}}
-        _user_settings(fake_home).write_text(json.dumps(wrapped))
+    def test_already_portable_is_noop(self, ctx, fake_home):
+        settings = {"statusLine": {"type": "command", "command": _expected_command(ctx)}}
+        _user_settings(fake_home).write_text(json.dumps(settings))
 
         install_statusline.install(ctx)
 
         data = json.loads(_user_settings(fake_home).read_text())
         assert data["statusLine"]["command"] == _expected_command(ctx)
-        assert data["statusLine"]["command"].count("bash.exe") == 1  # not double-wrapped
         assert ctx.failures == []
         assert any("no-op" in m for m in ctx.ok_logs)
+
+    def test_converged_fleet_leaves_settings_byte_identical(self, ctx, fake_home):
+        """The end state that matters: once converged, a SessionStart must not
+        rewrite the file at all -- that is what stops it going dirty."""
+        _user_settings(fake_home).write_text(json.dumps(
+            {"statusLine": {"type": "command", "command": _expected_command(ctx)},
+             "model": "opus"}, indent=2))
+        before = _user_settings(fake_home).read_bytes()
+
+        install_statusline.install(ctx)
+
+        assert _user_settings(fake_home).read_bytes() == before
