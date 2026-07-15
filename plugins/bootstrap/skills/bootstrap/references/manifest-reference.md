@@ -493,11 +493,22 @@ elevation: the interactive re-run of the engine carries the `--fix-all` flag
 engine's own interpreter — the UAC prompt is then a direct consequence of the
 user's typed command, not a "go double-click this file" errand. Launching the
 runner elevated up front means the shim's own UAC self-relaunch never fires, so
-the wait covers the real elevated process, with a bounded 10-minute timeout. On
+the wait covers the real elevated process. The wait is bounded by what the queue
+declares (the sum of the tasks' `timeout`s, plus grace for answering UAC and for
+the runner's closing keypress — never less than ~15 minutes). On
 success the engine spawns a re-check pass (without `--fix-all`, so it can never
 re-prompt) and the elevated items clear in the same fix-all cycle; on
 decline/failure/timeout the item reports the outcome and falls back to the
-run-it-yourself shim. SessionStart passes never carry `--fix-all` and never
+run-it-yourself shim.
+
+**The runner's window narrates, and waits.** It prints the plan (numbered,
+quickest first, with the downloads flagged), then per task a `[n/N]` header, the
+command, and an explicit `-> done` / `-> FAILED` verdict — a step with no verdict
+is indistinguishable from a skipped one to the person watching. It then holds
+until the user presses **Space or Enter**, on success as well as failure: this
+window is the only account the user gets of what ran elevated on their machine,
+and it is spawned detached, so closing it on success would hide exactly the runs
+that had nothing to complain about. SessionStart passes never carry `--fix-all` and never
 launch or prompt. Ubuntu/macOS keep the shim instruction even under `fix-all`:
 the run has no TTY, so neither a foreground `sudo` nor a secret prompt could be
 answered.
@@ -1292,6 +1303,7 @@ command with an optional `fix` command.
 | `os` / `hosts` | No | The standard entry filters |
 | `elevated` | No (default false) | The fix needs privileges — routed through the fix queue, never attempted in-pass without privileges |
 | `timeout` | No (default 600s) | Per-**command** timeout in seconds (positive int). Contract scripts may drive real installs (gpu-stack), so the bound is generous but never absent |
+| `cost` | No (inferred) | `quick` or `slow` — whether the **fix** downloads. Orders the fix queue (quick first) and drives the runner's "this can take several minutes" note. **Usually omit it**: an entry whose `timeout` exceeds the 600s default is inferred `slow`, which already classifies a real install correctly. Declare it only to correct that inference |
 | `description` | No | The user-facing instruction for a check-only entry's manual-attention item. Doubles as the **label** when an `elevated` entry is deferred to the fix queue (else the label is `name`) |
 
 **Dispatch per applicable entry:**

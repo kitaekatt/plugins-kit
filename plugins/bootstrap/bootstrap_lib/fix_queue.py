@@ -14,6 +14,8 @@ This module:
       - ``{"method": "apt", "package": <pkg>}``      -- deferred apt package;
       - ``{"method": "command", "command": <cmd>}``  -- deferred elevated command;
       - ``{"method": "brew_installer"}``             -- Homebrew missing on macOS.
+    A ``command`` descriptor may also carry ``cost`` (see :func:`cost_of`),
+    which is what lets the queue run the cheap work first.
   * :func:`write_or_clear_queue` regenerates ``<data_dir>/elevate/queue.json``
     each pass and DELETES a stale queue when nothing is deferred, so the fix-all
     offer disappears once its operations succeed.
@@ -40,7 +42,7 @@ from typing import List, Optional
 from .apt import sudo_noninteractive_available, windows_admin_available
 from .atomic_write import write_atomic
 from .tool_check import resolve_bash
-from .fix_runner import QUEUE_VERSION
+from .fix_runner import COST_QUICK, COST_SLOW, QUEUE_VERSION
 
 
 def privileges_available(current_os: str) -> bool:
@@ -77,6 +79,12 @@ class FixTask:
     # produced it. The runner does not enforce it (the user is watching); the
     # ENGINE needs it to bound its wait honestly -- see launch_timeout_for.
     timeout: Optional[int] = None
+    # COST_QUICK | COST_SLOW: whether this task fetches things over a network
+    # (a package install, a multi-GB toolkit) or just touches local state (a
+    # symlink, a config write). Drives ordering (order_tasks) and the runner's
+    # "this will take a while" note. Not a duration -- a COARSE class, because
+    # the honest input is "does it download", not a number anyone can predict.
+    cost: str = COST_QUICK
 
     def to_json(self) -> dict:
         # Drop unset optionals so the queue file stays readable -- it is a
@@ -98,13 +106,60 @@ class FixTask:
             out["target"] = self.target
         if self.timeout is not None:
             out["timeout"] = self.timeout
+        # Emitted only when slow: quick is the reader's default assumption, and
+        # a `"cost": "quick"` on every line is noise in a file a human may open.
+        if self.cost == COST_SLOW:
+            out["cost"] = self.cost
         return out
+
+
+# A declared timeout ABOVE the engine's default is a manifest author saying
+# "this one is different" -- in practice, that it downloads (winget install
+# Nvidia.CUDA declares 3600). Entries that take the default said nothing, so
+# they read as quick. This is the fallback for descriptors with no explicit
+# `cost`; it keeps every existing manifest correctly classified without an edit.
+def cost_of(desc: dict) -> str:
+    """Classify one ``command`` descriptor as COST_QUICK or COST_SLOW.
+
+    Explicit `cost` wins -- it is the manifest's own statement of intent, and
+    the reason the descriptor format carries the field at all. The timeout
+    heuristic is only consulted when nothing was declared.
+    """
+    declared = desc.get("cost")
+    if declared in (COST_QUICK, COST_SLOW):
+        return declared
+    timeout = desc.get("timeout")
+    if isinstance(timeout, int) and not isinstance(timeout, bool) \
+            and timeout > DEFAULT_TASK_TIMEOUT:
+        return COST_SLOW
+    return COST_QUICK
+
+
+def order_tasks(tasks: List[FixTask]) -> List[FixTask]:
+    """Front-load the quick work; leave the downloads for last.
+
+    A stable partition, not a sort: within a cost class the incoming order is
+    load-bearing and must survive. The Homebrew installer has to precede any
+    brew-based install, and apt's single batched task has to precede commands
+    that assume those packages -- both are COST_SLOW, so both keep their
+    relative order inside the slow group.
+
+    Why front-load at all: every task here is independent, so the order is free
+    to choose, and the user is sitting in front of the window watching. Running
+    the symlink and the config write first means they SEE progress and see it
+    finish, instead of staring at a 3GB toolkit download wondering whether the
+    quick items ran at all. It also means a walked-away user who misses the
+    engine's bounded wait has already banked the cheap fixes.
+    """
+    return ([t for t in tasks if t.cost != COST_SLOW]
+            + [t for t in tasks if t.cost == COST_SLOW])
 
 
 def queue_from_failures(failures, current_os: str) -> List[FixTask]:
     """Harvest ``elevation`` descriptors from the pass's failures into tasks.
 
-    Order: the Homebrew installer first when needed (macOS cannot run brew
+    Order: quick tasks first (order_tasks), then the slow ones -- and inside the
+    slow group the Homebrew installer first when needed (macOS cannot run brew
     entries without it), then apt as ONE task (a single ``apt-get install``
     resolves co-dependent packages that would fail installed one at a time),
     then commands in pass order.
@@ -136,6 +191,7 @@ def queue_from_failures(failures, current_os: str) -> List[FixTask]:
                     elevated=True,
                     command=cmd,
                     timeout=desc.get("timeout"),
+                    cost=cost_of(desc),
                 ))
         elif method == "brew_installer":
             brew = True
@@ -148,15 +204,21 @@ def queue_from_failures(failures, current_os: str) -> List[FixTask]:
             # The installer elevates itself where it needs to and refuses to
             # run as root, so it must NOT be wrapped in sudo.
             elevated=False,
+            # Fetches and compiles; nobody has ever called it quick.
+            cost=COST_SLOW,
         ))
     if apt_packages:
         tasks.append(FixTask(
             id="apt:" + ",".join(apt_ids), kind="apt",
             label="Install " + ", ".join(apt_packages),
             elevated=True, packages=apt_packages,
+            # An apt-get update + install is a network fetch by definition, so
+            # this is structural rather than declared -- no manifest can make it
+            # cheap.
+            cost=COST_SLOW,
         ))
     tasks.extend(commands)
-    return tasks
+    return order_tasks(tasks)
 
 
 def task_labels(tasks: List[FixTask]) -> List[str]:
@@ -297,6 +359,11 @@ def write_or_clear_queue(tasks: List[FixTask], data_dir: str,
 # an ignored dialog.
 LAUNCH_TIMEOUT = 600
 UAC_GRACE = 120
+# The runner holds its window until the user presses a key (fix_runner.main), so
+# the engine's wait must cover reading the output as well as producing it. Not
+# covering it would make a successful fix-all report a spurious "timed out" the
+# moment the user took a minute to read what ran with admin rights on their box.
+ACK_GRACE = 300
 # What a task may take when its manifest entry declared nothing, mirroring the
 # engine's own ENV_CHECK_DEFAULT_TIMEOUT by copy (a top-level import of
 # env_features would drag heavy modules into this near-stdlib-only import graph).
@@ -311,10 +378,11 @@ def launch_timeout_for(tasks: List[FixTask]) -> int:
     A queue of quick tasks stays snappy to fail; a queue containing a genuinely
     slow install (a multi-GB winget download declaring `timeout: 3600`) gets the
     room it asked for instead of a spurious "timed out" while it is still
-    working.
+    working. Both graces are added on top: UAC_GRACE for answering the dialog
+    before the work starts, ACK_GRACE for the runner's hold after it ends.
     """
     total = sum(t.timeout or DEFAULT_TASK_TIMEOUT for t in tasks)
-    return max(LAUNCH_TIMEOUT, total + UAC_GRACE)
+    return max(LAUNCH_TIMEOUT, total + UAC_GRACE) + ACK_GRACE
 
 
 @dataclass

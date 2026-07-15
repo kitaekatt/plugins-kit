@@ -1457,9 +1457,12 @@ def _strategy_scoop(ctx):
             # No runnable-by-us command: only the user can elevate. install_cmd
             # None keeps the item off the fix-all path (manual-attention only).
             "install_cmd": None,
+            # cost: a package install fetches over the network, so it sorts
+            # behind the local config fixes. Declared, not derived: these
+            # descriptors carry no timeout for fix_queue.cost_of to read.
             "elevation": {"method": "command", "command": manual_cmd,
                           "os": ctx.current_os, "id": f"tool:{ctx.name}",
-                          "label": f"Install {ctx.name}"},
+                          "label": f"Install {ctx.name}", "cost": "slow"},
             "agent_msg": (
                 f"Installing {ctx.name} (scoop package {pkg}) needs "
                 f"administrator rights, which a background hook must not "
@@ -1683,9 +1686,10 @@ def _strategy_install_command(ctx):
             "message": f"{result.subject} install requires elevation: {manual_cmd}",
             "install_state": "needs_elevation",
             "install_cmd": None,
+            # cost: an OS install command downloads -- see the scoop strategy.
             "elevation": {"method": "command", "command": manual_cmd,
                           "os": ctx.current_os, "id": f"tool:{result.subject}",
-                          "label": f"Install {result.subject}"},
+                          "label": f"Install {result.subject}", "cost": "slow"},
             "agent_msg": (
                 f"Installing {result.subject} needs elevated privileges, which a "
                 f"background hook must not request; bootstrap deferred it into "
@@ -3902,6 +3906,15 @@ def _env_phase_env_checks(ctx):
                 persist_across_sessions=True,
             )
             continue
+        cost = entry.get("cost")
+        if cost is not None and cost not in ("quick", "slow"):
+            ctx.fail(
+                f"env_check {name}: INVALID cost {cost!r} - must be 'quick' or 'slow'",
+                type="env_check", name=name,
+                message=f"{name}: invalid cost {cost!r}: must be 'quick' or 'slow'",
+                persist_across_sessions=True,
+            )
+            continue
         if not ctx.entry_applies(entry):
             ctx.ok(f"env_check {name}: skipped (os/hosts filter)")
             continue
@@ -3956,6 +3969,11 @@ def _env_phase_env_checks(ctx):
                     # engine bounds its fix-all wait by the queue's declarations
                     # rather than one blanket number.
                     "timeout": timeout,
+                    # Optional, and usually absent: fix_queue.cost_of falls back
+                    # to reading the timeout above, which already separates a
+                    # 3600s toolkit download from a default-timeout config fix.
+                    # Declare it only when that inference is wrong.
+                    **({"cost": cost} if cost else {}),
                 },
                 agent_msg=(
                     f"The env check '{name}' is not configured and its fix "

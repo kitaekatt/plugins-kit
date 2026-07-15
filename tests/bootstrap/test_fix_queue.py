@@ -113,20 +113,37 @@ class TestQueueFromFailures:
         assert [t.command for t in tasks] == ["first", "second"]
         assert [t.label for t in tasks] == ["First", "Second"]
 
-    def test_brew_installer_leads_and_is_not_elevated(self):
+    def test_brew_installer_leads_the_slow_group_and_is_not_elevated(self):
         """The Homebrew installer refuses to run as root and elevates itself
-        where it needs to, so wrapping it in sudo would break it."""
+        where it needs to, so wrapping it in sudo would break it.
+
+        Both it and a `brew install` command are COST_SLOW, so front-loading
+        cannot separate them: the installer must still come first, or the
+        install it enables has no brew to run under.
+        """
         tasks = fq.queue_from_failures(
-            [desc(command="brew install jq", os_="macos", label="Install jq"),
+            [desc(command="brew install jq", os_="macos", label="Install jq",
+                  cost="slow"),
              desc("brew_installer", os_="macos")], "macos")
         assert tasks[0].kind == "brew_installer"
         assert tasks[0].elevated is False
         assert tasks[1].kind == "command"
 
-    def test_apt_precedes_commands(self):
+    def test_apt_precedes_slow_commands(self):
+        """Ordering inside a cost class is preserved, so apt's batched install
+        still lands before the slow commands that may want those packages."""
         tasks = fq.queue_from_failures(
-            [desc(command="c", label="C"), desc("apt", package="net-tools")], "ubuntu")
+            [desc(command="c", label="C", cost="slow"),
+             desc("apt", package="net-tools")], "ubuntu")
         assert [t.kind for t in tasks] == ["apt", "command"]
+
+    def test_quick_commands_are_front_loaded_ahead_of_apt(self):
+        """The point of the reorder: the user watching the window sees the cheap
+        fixes land and finish instead of staring at a package download first."""
+        tasks = fq.queue_from_failures(
+            [desc("apt", package="net-tools"),
+             desc(command="ln -s a b", label="Link")], "ubuntu")
+        assert [t.kind for t in tasks] == ["command", "apt"]
 
     def test_only_current_os_descriptors_collected(self):
         tasks = fq.queue_from_failures(
@@ -145,6 +162,80 @@ class TestQueueFromFailures:
             [desc(command="a", label="Link starship-config"),
              desc(command="b", label="ssh-server-windows")], "ubuntu")
         assert fq.task_labels(tasks) == ["Link starship-config", "ssh-server-windows"]
+
+
+# --------------------------------------------------------------------------- #
+# Cost classification + ordering
+# --------------------------------------------------------------------------- #
+
+class TestCostOf:
+    def test_explicit_cost_wins_over_the_timeout_heuristic(self):
+        """The declared field is the manifest's statement of intent; the timeout
+        rule is only an inference for entries that declared nothing."""
+        assert fq.cost_of({"cost": "quick", "timeout": 3600}) == fq.COST_QUICK
+        assert fq.cost_of({"cost": "slow", "timeout": 5}) == fq.COST_SLOW
+
+    def test_a_timeout_above_the_default_reads_as_slow(self):
+        """An author raising the timeout is telling us this one is different --
+        in practice, that it downloads (winget install Nvidia.CUDA: 3600)."""
+        assert fq.cost_of({"timeout": fq.DEFAULT_TASK_TIMEOUT + 1}) == fq.COST_SLOW
+
+    def test_the_default_timeout_reads_as_quick(self):
+        """Taking the default says nothing, so it must not imply 'slow' -- that
+        would flag every ordinary env_check fix as a download."""
+        assert fq.cost_of({"timeout": fq.DEFAULT_TASK_TIMEOUT}) == fq.COST_QUICK
+        assert fq.cost_of({}) == fq.COST_QUICK
+
+    def test_garbage_cost_falls_back_rather_than_raising(self):
+        """A descriptor is data from a manifest; a typo must not crash the pass
+        that is trying to tell the user what is broken."""
+        assert fq.cost_of({"cost": "medium"}) == fq.COST_QUICK
+        assert fq.cost_of({"cost": "medium", "timeout": 3600}) == fq.COST_SLOW
+
+    def test_bool_timeout_is_not_read_as_an_int(self):
+        """bool is an int subclass; True > 600 is False, but the guard keeps the
+        intent explicit rather than accidental."""
+        assert fq.cost_of({"timeout": True}) == fq.COST_QUICK
+
+
+class TestOrderTasks:
+    def _t(self, name, cost):
+        return FixTask(id=name, kind="command", label=name, command="x", cost=cost)
+
+    def test_quick_precede_slow(self):
+        out = fq.order_tasks([self._t("s", fq.COST_SLOW), self._t("q", fq.COST_QUICK)])
+        assert [t.label for t in out] == ["q", "s"]
+
+    def test_order_within_a_class_is_stable(self):
+        """A sort would be free to permute equals; the incoming order carries
+        real constraints (brew before brew-install), so it must survive."""
+        out = fq.order_tasks([
+            self._t("s1", fq.COST_SLOW), self._t("q1", fq.COST_QUICK),
+            self._t("s2", fq.COST_SLOW), self._t("q2", fq.COST_QUICK)])
+        assert [t.label for t in out] == ["q1", "q2", "s1", "s2"]
+
+    def test_no_tasks_are_dropped(self):
+        tasks = [self._t("a", fq.COST_QUICK), self._t("b", fq.COST_SLOW)]
+        assert len(fq.order_tasks(tasks)) == 2
+
+
+class TestCostSerialization:
+    def test_slow_is_emitted(self):
+        t = FixTask(id="i", kind="command", label="L", command="x", cost=fq.COST_SLOW)
+        assert t.to_json()["cost"] == "slow"
+
+    def test_quick_is_omitted_as_the_readers_default(self):
+        """queue.json is a disclosure surface a human may open; a `cost: quick`
+        on every line is noise."""
+        t = FixTask(id="i", kind="command", label="L", command="x")
+        assert "cost" not in t.to_json()
+
+    def test_the_runner_accepts_what_the_queue_emits(self):
+        """Cross-module contract: fix_runner.validate rejects an unknown cost,
+        so the writer's vocabulary must be the reader's."""
+        import bootstrap_lib.fix_runner as fr
+        t = FixTask(id="i", kind="command", label="L", command="x", cost=fq.COST_SLOW)
+        assert fr.validate({"version": fq.QUEUE_VERSION, "tasks": [t.to_json()]}) == []
 
 
 # --------------------------------------------------------------------------- #

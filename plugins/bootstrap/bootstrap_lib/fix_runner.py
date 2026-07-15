@@ -51,6 +51,20 @@ approving. A data file is more opaque, so the runner prints the plan -- one
 labeled line per task -- before executing. The UAC prompt (or sudo) is the
 consent; the plan is the disclosure.
 
+Narration, and the hold
+-----------------------
+This console is the ONLY place the user learns what bootstrap did to their
+machine with admin rights: the engine's session message names the labels, not
+the outcomes. So the runner narrates -- ``[n/N]`` progress, the command, and an
+explicit per-task verdict -- and then HOLDS until a keypress, unconditionally.
+
+The hold used to be skipped on the engine-launched success path, on the
+reasoning that the engine was waiting and a human would not be. That reasoning
+was backwards: on success the window closed instantly, which is precisely the
+case where the user never got to read what ran. The engine's wait is bounded and
+budgets for the acknowledgement (``fix_queue.ACK_GRACE``), so holding costs a
+keypress, not correctness.
+
 Stdlib-only, and run as a SCRIPT (``python fix_runner.py <queue.json>``), so it
 must not rely on package-relative imports -- the same trap that made the harvest
 silently no-op in 0.22.0.
@@ -77,6 +91,16 @@ QUEUE_VERSION = 1
 # silently, since a skipped elevated task looks like success to the re-check.
 KNOWN_KINDS = frozenset({"command", "apt", "brew_installer", "secret"})
 
+# How long a task is expected to take, as declared by the engine (see
+# fix_queue.COST_*). The runner uses it for one thing only: telling the user
+# which step is about to sit there apparently doing nothing. A missing/unknown
+# value reads as quick -- an un-annotated queue from an older engine should not
+# grow scary "this may take a while" notes it never meant.
+COST_QUICK = "quick"
+COST_SLOW = "slow"
+KNOWN_COSTS = frozenset({COST_QUICK, COST_SLOW})
+SLOW_NOTE = "downloads / installs -- this can take several minutes"
+
 # Official Homebrew installer. It prompts and may sudo on its own, which is
 # exactly why the engine never runs it and it lands here instead.
 HOMEBREW_INSTALLER = (
@@ -102,18 +126,84 @@ def _bash() -> str:
     )
 
 
+def is_slow(task):
+    """True when the engine flagged this task as a download/install."""
+    return task.get("cost") == COST_SLOW
+
+
 def _run(argv, label):
     """Run argv, streaming output to the console the user is watching."""
-    print(f"  $ {label}")
+    print(f"    $ {label}")
+    # The child inherits this stdout and writes to the fd directly, so anything
+    # still sitting in OUR buffer would surface AFTER the child's output --
+    # narration printed after the thing it narrates. A TTY hides this (line
+    # buffering); a pipe (the runner tee'd to a log) does not.
+    sys.stdout.flush()
     try:
         proc = subprocess.run(argv)
     except OSError as e:
-        print(f"  ! could not launch: {e}")
+        print(f"    ! could not launch: {e}")
         return False
     if proc.returncode != 0:
-        print(f"  ! failed (exit {proc.returncode})")
+        print(f"    ! exited {proc.returncode}")
         return False
     return True
+
+
+def wait_for_key(prompt):
+    """Block until the user presses Space or Enter.
+
+    A single keypress, not a line: this is an acknowledgement, not input, and
+    the window it holds open was opened FOR the user to read. Falls back to
+    line-reading `input()` wherever raw-mode is unavailable (no TTY, a piped
+    stdin, a console host without the platform module) -- there the hold still
+    works, it just wants Enter.
+    """
+    print(prompt, end="", flush=True)
+    try:
+        _read_one_key()
+    except (EOFError, KeyboardInterrupt, OSError, ImportError, ValueError):
+        # A hold is a courtesy; it must never be the thing that fails the run.
+        pass
+    print()
+
+
+def _accepted(ch):
+    return ch in (" ", "\r", "\n")
+
+
+def _read_one_key():
+    # The TTY check comes FIRST, before any platform branch: msvcrt reads the
+    # console directly rather than stdin, so on Windows it would happily block
+    # forever in a context that has no console at all (a test runner, a piped
+    # invocation) -- a hang, not a fallback. No TTY means no raw mode anywhere.
+    if not sys.stdin.isatty():
+        input()
+        return
+    if os.name == "nt":
+        import msvcrt
+        while True:
+            ch = msvcrt.getwch()
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            if _accepted(ch):
+                return
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            if ch == "":
+                raise EOFError
+            if _accepted(ch):
+                return
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
 
 class Runner:
@@ -245,11 +335,19 @@ def validate(queue):
             problems.append(f"task {i}: command task has no command")
         if kind == "secret" and not task.get("target"):
             problems.append(f"task {i}: secret task has no target")
+        cost = task.get("cost")
+        if cost is not None and cost not in KNOWN_COSTS:
+            problems.append(f"task {i}: unknown cost {cost!r}")
     return problems
 
 
 def print_plan(queue):
-    """Disclose what is about to run, before it runs."""
+    """Disclose what is about to run, before it runs.
+
+    Order is the engine's (quick work first -- see fix_queue.order_tasks); this
+    just makes that order legible, so the user can see the cheap items clear
+    before the long download starts rather than wondering if it hung.
+    """
     tasks = queue["tasks"]
     print()
     print("=" * 62)
@@ -257,11 +355,12 @@ def print_plan(queue):
     print("=" * 62)
     print()
     print("  Bootstrap runs in the background with no console, so it could not")
-    print("  do the following without you. Running now:")
+    print("  do the following without you. Running now, quickest first:")
     print()
-    for task in tasks:
+    for i, task in enumerate(tasks, 1):
         mark = "admin" if task.get("elevated") else "     "
-        print(f"    [{mark}] {task['label']}")
+        note = f"  ({SLOW_NOTE})" if is_slow(task) else ""
+        print(f"    {i}. [{mark}] {task['label']}{note}")
     print()
 
 
@@ -274,26 +373,34 @@ def run_queue(queue):
     stays failed there.
     """
     runner = Runner(queue)
+    tasks = queue["tasks"]
+    total = len(tasks)
     failed = []
-    for task in queue["tasks"]:
-        print(f"  {task['label']}")
+    for i, task in enumerate(tasks, 1):
+        print("-" * 62)
+        print(f"  [{i}/{total}] {task['label']}")
+        if is_slow(task):
+            print(f"    ({SLOW_NOTE}; leave this window open)")
         try:
             ok = runner.dispatch(task)
         except Exception as e:  # noqa: BLE001 - one bad task must not kill the run
-            print(f"  ! {e}")
+            print(f"    ! {e}")
             ok = False
+        # An explicit verdict per step, not just noise-on-failure: a silent step
+        # is indistinguishable from a skipped one to the person watching.
+        print(f"    -> {'done' if ok else 'FAILED'}")
         if not ok:
             failed.append(task["label"])
         print()
-    print("-" * 62)
+    print("=" * 62)
     if failed:
-        print(f"  {len(failed)} of {len(queue['tasks'])} did not complete:")
+        print(f"  {len(failed)} of {total} did not complete:")
         for label in failed:
             print(f"    - {label}")
         print()
         print("  Bootstrap will re-check these on your next session.")
         return EXIT_TASK_FAILED
-    print(f"  All {len(queue['tasks'])} completed.")
+    print(f"  All {total} completed.")
     return EXIT_OK
 
 
@@ -303,9 +410,10 @@ def main(argv=None):
         print("usage: fix_runner.py <queue.json>", file=sys.stderr)
         return EXIT_BAD_QUEUE
     path = argv[0]
-    # `--engine` marks an engine-initiated run: the engine is waiting on this
-    # process, so the success path skips the "press a key" hold that a
-    # double-clicking human needs to read the output.
+    # `--engine` marks an engine-initiated run. It no longer gates the hold (the
+    # window always waits for the user); it only changes what the hold SAYS, so
+    # the user knows whether a key resumes their Claude session or just closes a
+    # window they double-clicked.
     engine_launch = "--engine" in argv[1:]
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -323,13 +431,16 @@ def main(argv=None):
     print_plan(queue)
     code = run_queue(queue)
 
-    # Hold the window open when a human is reading it: always on failure (the
-    # errors must stay legible), and on success only when no engine is waiting.
-    if code != EXIT_OK or not engine_launch:
-        try:
-            input("  Press Enter to close. ")
-        except (EOFError, KeyboardInterrupt):
-            pass
+    # Always hold. This window is the only account the user gets of what ran
+    # elevated on their machine, and it is spawned detached -- closing it on
+    # success would hide exactly the runs that had nothing to complain about.
+    # The engine budgets for this wait (fix_queue.ACK_GRACE).
+    print()
+    wait_for_key(
+        "  Press Space or Enter to continue. "
+        if engine_launch else
+        "  Press Space or Enter to close. "
+    )
     return code
 
 

@@ -195,6 +195,16 @@ class TestValidate:
     def test_empty_queue_is_reported(self):
         assert any("no tasks" in p for p in fr.validate({"version": 1, "tasks": []}))
 
+    def test_unknown_cost_is_reported(self):
+        problems = fr.validate({"version": 1, "tasks": [
+            {"kind": "command", "label": "L", "command": "x", "cost": "medium"}]})
+        assert any("unknown cost" in p for p in problems)
+
+    def test_absent_cost_is_fine(self):
+        """An older engine's queue has no cost anywhere; it must still run."""
+        assert fr.validate({"version": 1, "tasks": [
+            {"kind": "command", "label": "L", "command": "x"}]}) == []
+
 
 # --------------------------------------------------------------------------- #
 # Plan + run
@@ -210,6 +220,38 @@ class TestPlanAndRun:
         assert "OpenRouter API key" in out
         assert "[admin] Install net-tools" in out
         assert "[admin] OpenRouter API key" not in out
+
+    def test_plan_flags_only_the_slow_tasks(self, capsys):
+        """The note is what stops a 3GB download reading as a hang -- and what
+        stops a symlink reading as one if it were applied to everything."""
+        fr.print_plan({"tasks": [
+            {"label": "Link starship-config", "elevated": True},
+            {"label": "CUDA Toolkit", "elevated": True, "cost": "slow"}]})
+        out = capsys.readouterr().out
+        cuda = [l for l in out.splitlines() if "CUDA" in l][0]
+        link = [l for l in out.splitlines() if "starship" in l][0]
+        assert fr.SLOW_NOTE in cuda
+        assert fr.SLOW_NOTE not in link
+
+    def test_plan_numbers_tasks_in_queue_order(self, capsys):
+        fr.print_plan({"tasks": [{"label": "alpha"}, {"label": "beta"}]})
+        listed = [l.strip() for l in capsys.readouterr().out.splitlines()
+                  if "alpha" in l or "beta" in l]
+        assert listed == ["1. [     ] alpha", "2. [     ] beta"]
+
+    def test_each_step_reports_progress_and_a_verdict(self, monkeypatch, capsys):
+        """A step with no outcome line is indistinguishable from a skipped one
+        to the person watching the window."""
+        monkeypatch.setattr(fr.Runner, "dispatch",
+                            lambda self, task: task["label"] == "good")
+        fr.run_queue({"os": "ubuntu", "bash": "/usr/bin/bash", "tasks": [
+            {"kind": "command", "label": "good", "command": "x"},
+            {"kind": "command", "label": "bad", "command": "y"}]})
+        out = capsys.readouterr().out
+        assert "[1/2] good" in out
+        assert "[2/2] bad" in out
+        assert "-> done" in out
+        assert "-> FAILED" in out
 
     def test_run_continues_past_a_failed_task(self, monkeypatch, capsys):
         """Tasks are independent; one broken fix must not block the rest. The
@@ -266,19 +308,24 @@ class TestMain:
     def test_no_args_is_usage(self, capsys):
         assert fr.main([]) == fr.EXIT_BAD_QUEUE
 
-    def test_engine_launch_skips_the_success_hold(self, monkeypatch, tmp_path):
-        """The engine is waiting on this process, so a `press Enter` on success
-        would hang the fix-all run until a human noticed."""
+    def test_engine_launch_holds_on_success(self, monkeypatch, tmp_path):
+        """REGRESSION GUARD. The hold used to be skipped exactly here, so a
+        clean fix-all closed its window instantly -- hiding the only account the
+        user gets of what just ran elevated on their machine. The engine budgets
+        for the wait (fix_queue.ACK_GRACE); it must not be reintroduced as an
+        optimization."""
+        held = []
         monkeypatch.setattr(fr.Runner, "dispatch", lambda self, task: True)
-        monkeypatch.setattr("builtins.input", lambda *a: pytest.fail("must not hold"))
+        monkeypatch.setattr(fr, "wait_for_key", lambda prompt: held.append(prompt))
         path = self._queue(tmp_path, [{"kind": "command", "label": "a", "command": "x"}])
         assert fr.main([path, "--engine"]) == fr.EXIT_OK
+        assert held
 
     def test_engine_launch_still_holds_on_failure(self, monkeypatch, tmp_path):
         """Errors must stay legible in the window that is about to close."""
         held = []
         monkeypatch.setattr(fr.Runner, "dispatch", lambda self, task: False)
-        monkeypatch.setattr("builtins.input", lambda *a: held.append(True))
+        monkeypatch.setattr(fr, "wait_for_key", lambda prompt: held.append(prompt))
         path = self._queue(tmp_path, [{"kind": "command", "label": "a", "command": "x"}])
         assert fr.main([path, "--engine"]) == fr.EXIT_TASK_FAILED
         assert held
@@ -286,19 +333,58 @@ class TestMain:
     def test_human_launch_holds_on_success(self, monkeypatch, tmp_path):
         held = []
         monkeypatch.setattr(fr.Runner, "dispatch", lambda self, task: True)
-        monkeypatch.setattr("builtins.input", lambda *a: held.append(True))
+        monkeypatch.setattr(fr, "wait_for_key", lambda prompt: held.append(prompt))
         path = self._queue(tmp_path, [{"kind": "command", "label": "a", "command": "x"}])
         fr.main([path])
         assert held
+
+    def test_hold_prompt_says_what_the_key_does(self, monkeypatch, tmp_path):
+        """An engine-launched window resumes a waiting Claude session; a
+        double-clicked one just closes. Same key, different consequence."""
+        held = []
+        monkeypatch.setattr(fr.Runner, "dispatch", lambda self, task: True)
+        monkeypatch.setattr(fr, "wait_for_key", lambda prompt: held.append(prompt))
+        path = self._queue(tmp_path, [{"kind": "command", "label": "a", "command": "x"}])
+        fr.main([path, "--engine"])
+        fr.main([path])
+        assert "continue" in held[0] and "close" in held[1]
+        assert all("Space or Enter" in p for p in held)
 
     def test_plan_is_printed_before_anything_runs(self, monkeypatch, tmp_path, capsys):
         """The disclosure that replaces reading the generated script."""
         order = []
         monkeypatch.setattr(fr, "print_plan", lambda q: order.append("plan"))
         monkeypatch.setattr(fr, "run_queue", lambda q: order.append("run") or fr.EXIT_OK)
+        monkeypatch.setattr(fr, "wait_for_key", lambda prompt: None)
         path = self._queue(tmp_path, [{"kind": "command", "label": "a", "command": "x"}])
         fr.main([path, "--engine"])
         assert order == ["plan", "run"]
+
+
+class TestHold:
+    def test_no_tty_falls_back_to_line_input(self, monkeypatch, capsys):
+        """REGRESSION GUARD. msvcrt reads the CONSOLE, not stdin, so branching
+        on os.name before checking isatty() made the hold block forever wherever
+        no console exists (a test runner, a piped run) -- a hang, not a
+        fallback. The TTY check must come first on every platform."""
+        monkeypatch.setattr(fr.sys.stdin, "isatty", lambda: False, raising=False)
+        called = []
+        monkeypatch.setattr("builtins.input", lambda *a: called.append(True) or "")
+        fr.wait_for_key("  Press Space or Enter. ")
+        assert called
+        assert "Press Space or Enter." in capsys.readouterr().out
+
+    def test_hold_never_raises(self, monkeypatch):
+        """A courtesy pause must not be the thing that fails the run."""
+        monkeypatch.setattr(fr.sys.stdin, "isatty", lambda: False, raising=False)
+        monkeypatch.setattr("builtins.input", lambda *a: (_ for _ in ()).throw(EOFError))
+        fr.wait_for_key("  x ")  # must not raise
+
+    def test_space_and_enter_are_both_accepted(self):
+        assert fr._accepted(" ")
+        assert fr._accepted("\r")
+        assert fr._accepted("\n")
+        assert not fr._accepted("q")
 
 
 class TestScriptInvocation:
