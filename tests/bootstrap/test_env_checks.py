@@ -26,6 +26,7 @@ import pytest
 
 import bootstrap_lib.engine as engine
 import bootstrap_lib.env_features as env_features
+import bootstrap_lib.path_repair as path_repair
 from bootstrap_lib.fix_queue import queue_from_failures, write_or_clear_queue
 from bootstrap_lib.engine import _ENV_PHASES, _env_phase_env_checks, _process_env_pass
 from bootstrap_lib.env_features import ENV_CHECK_DEFAULT_TIMEOUT, run_env_command
@@ -200,6 +201,44 @@ class TestDispatchOrder:
         assert any("env_check flag-check: fixed - created flag" in e
                    for e in result.action_entries)
         assert read_env_state(str(run_env_pass.data_dir))["last_result"] == "clean"
+
+    def test_path_is_repaired_between_fix_and_recheck(
+        self, isolated_home, run_env_pass, tmp_path, monkeypatch
+    ):
+        """REGRESSION GUARD. A fix that installs a tool updates the REGISTRY
+        PATH, which this already-running process cannot see -- and
+        run_env_command hands our os.environ straight to the check's shell. So
+        the re-check hunted for a binary that was installed but invisible and
+        reported a spurious FAILED for a fix that had worked. cuda-toolkit
+        (`command -v nvcc` after `winget install Nvidia.CUDA`) is the live case.
+
+        Modelled on _strategy_install_command, which already repairs before its
+        re-check. Asserted via ordering rather than a real registry write: the
+        repair must land BETWEEN the fix and the re-check, not merely happen.
+
+        Both names are patched on their SOURCE modules, not on `engine` -- the
+        handler imports them function-locally, so an `engine.` attribute would
+        be rebound out from under the patch on every call.
+        """
+        calls = []
+        real = env_features.run_env_command
+
+        def tracking_run(command, timeout):
+            calls.append(("fix" if "touch" in command else "check", command))
+            return real(command, timeout)
+
+        monkeypatch.setattr(path_repair, "repair_path",
+                            lambda: calls.append(("repair", None)))
+        monkeypatch.setattr(env_features, "run_env_command", tracking_run)
+
+        _log, _flag, entry = self._entry(isolated_home, tmp_path)
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(env_checks=[entry]))
+
+        run_env_pass()
+
+        kinds = [c[0] for c in calls]
+        assert kinds == ["check", "fix", "repair", "check"], kinds
 
     def test_second_pass_is_idempotent(
         self, isolated_home, run_env_pass, tmp_path

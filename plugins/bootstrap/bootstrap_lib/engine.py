@@ -3879,6 +3879,7 @@ def _env_phase_env_checks(ctx):
     surface, not a "not configured" to converge on.
     """
     from .env_features import ENV_CHECK_DEFAULT_TIMEOUT, run_env_command
+    from .path_repair import repair_path
 
     entries = _env_section_entries(ctx, "env_checks", "env_check")
     if entries is None:
@@ -3986,6 +3987,15 @@ def _env_phase_env_checks(ctx):
             continue
 
         _fix_rc, fix_detail = run_env_command(fix, timeout)
+        # A fix may install a tool and update the REGISTRY PATH, which this
+        # already-running process cannot see: its os.environ predates the fix,
+        # and run_env_command hands that same environ to the check's shell. The
+        # re-check would then hunt for a binary that is installed but invisible
+        # and report a spurious FAILED for a fix that worked (cuda-toolkit --
+        # `command -v nvcc` after `winget install Nvidia.CUDA` -- is the live
+        # example). Merge the registry PATH back in first, exactly as
+        # _strategy_install_command does before ITS re-check.
+        repair_path()
         # The fix's exit code is advisory; the re-check is authoritative
         # (task rule: env_checks has NO trust exceptions).
         re_rc, _re_detail = run_env_command(check, timeout)
