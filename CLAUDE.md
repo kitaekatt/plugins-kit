@@ -125,20 +125,22 @@ claude --plugin-dir ~/Dev/plugins-kit/plugins/my-plugin
 
 **Publishing changes** — the plugin cache syncs from the remote repository's default branch, not the local working copy. Develop on the `dev` branch; merge to `master` only when releasing a version bump. This prevents the silent divergence explained under **The cache keys on version** below.
 
-**Definition.** "Publish" in this repo means **all three** of:
+**How.** Commit your code and the version bump on `dev`, then:
 
-1. Bump the plugin version in `plugins/<name>/.claude-plugin/plugin.json` (the plugin's own manifest is the source of truth). Then regenerate the marketplace listing:
-   ```bash
-   python scripts/regen_marketplace.py
-   ```
-   `.claude-plugin/marketplace.json` is **derived data** — its `plugins[]` array is rebuilt from each plugin's `plugin.json`, filtered by the `"published"` field (missing = `true`; `false` = excluded from the marketplace). Do not hand-edit marketplace.json plugin entries; the pre-commit hook will reject drift.
-2. Regenerate the marketplace landing page `index.html` **from the dev tree** and commit it in the same release commit (see "The marketplace landing page" below for the flow), **unless** the release changes nothing the page renders — the page embeds each published plugin's name, version, description, and skill roster/descriptions, so a version bump of any *published* plugin already qualifies as page-affecting; the skip applies only to releases confined to dev-only (`published: false`) plugins or non-plugin infra.
-3. Push the version-bumped commit to `origin/dev`.
-4. Merge `dev` to `master` (via PR or fast-forward) and push to `origin/master`.
+```bash
+uv run python scripts/publish.py            # preflight, publish, verify
+uv run python scripts/publish.py --check    # preflight only; no writes, no pushes
+```
 
-A version bump without a master merge is **not** a publish — users still see the old version. A push to `dev` without a master merge is **not** a publish — `master` is the cache source. A master merge without a version bump is **not** a publish — the cache key doesn't change, so consumers don't refetch. Steps 1, 3 and 4 are always required (plus step 2 unless its skip clause applies); an unambiguous publish go-signal authorizes all of them.
+**`scripts/publish.py` is the source of truth for the flow** — steps, guards, and post-verification live in code so this file cannot drift from what actually runs. Read its module docstring for the mechanics. Do not hand-run the steps; the script exists because three of them are easy to get wrong in ways that fail silently (a half-restored dev-tree that makes your next session load plugins from the working copy; a merge that publishes a dev-only plugin; an `index.html` that lands outside the release commit).
 
-Publishing is reversible-but-visible: nothing is destroyed, but it goes out to other machines. The bar is "user has expressed publish intent for this work," not "user has reconfirmed each git command." Treat unambiguous go-signals — `go`, `ship it`, `publish`, `do it`, `close the loop`, `push` — as authorizing the **entire** three-step publish flow above. Don't re-prompt for sub-steps once intent is clear; that's procedural friction, not safety. Confirm only when intent is genuinely ambiguous (partial work, no version bump in sight, unrelated WIP staged, or the user is mid-thought).
+**Definition.** "Publish" means **all** of: version bump + regenerated `marketplace.json`, regenerated `index.html` inside the release commit, `dev` pushed, and `master` fast-forwarded and pushed. A bump without a master merge is **not** a publish — users still see the old version. A `dev` push without a master merge is **not** a publish — `master` is the cache source. A master merge without a bump is **not** a publish — the cache key doesn't change, so consumers never refetch. `publish.py` refuses each of these rather than half-shipping.
+
+`.claude-plugin/marketplace.json` is **derived data** — rebuilt from each plugin's `plugin.json`, filtered by `"published"` (missing = `true`; `false` = excluded). Never hand-edit its plugin entries; the pre-commit hook rejects drift.
+
+**What the script will NOT do:** decide what ships. When `origin/master..dev` holds commits touching a dev-only (`published: false`) plugin, it refuses and names them — branch from master and cherry-pick the publish-ready commits yourself.
+
+Publishing is reversible-but-visible: nothing is destroyed, but it goes out to other machines. The bar is "user has expressed publish intent for this work," not "user has reconfirmed each git command." Treat unambiguous go-signals — `go`, `ship it`, `publish`, `do it`, `close the loop`, `push` — as authorizing the whole flow; run `publish.py` and let its preflight be the safety net. Confirm only when intent is genuinely ambiguous (partial work, no version bump in sight, unrelated WIP staged, or the user is mid-thought).
 
 After publish:
 
@@ -157,7 +159,11 @@ python plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py \
 
 **It crawls installPaths, not the working directory.** `generate.py` reads `~/.claude/plugins/installed_plugins.json` and walks each plugin's **`installPath`**, filtered by `marketplace.json`. In a normal session those paths point at the **cache** (`~/.claude/plugins/cache/<mkt>/<plugin>/<version>/`), which only refetches from **master** — so a plain regen before the merge reproduces the *old* page. That constraint is what used to force the regen after the merge.
 
-**Regenerate from the dev tree, BEFORE the merge** — publish step 2. `scripts/dev-tree.py` repoints every plugins-kit installPath at this working copy, so `generate.py` renders the versions and skill roster you are **about to publish**; `normal` restores losslessly. This lands `index.html` *inside* the release commit rather than chasing it, so master is never in a state where its page disagrees with its own `marketplace.json`:
+**At publish time this is `publish.py`'s job — don't hand-run it.** The script repoints installPaths at the working copy via `dev-tree.py`, regenerates, restores in a `finally`, and post-verifies the restore landed. It also lands `index.html` *inside* the release commit, so master is never in a state where its page disagrees with its own `marketplace.json`. The manual sequence below is for **previewing** only.
+
+**This is equivalent to the old post-merge regen, not an approximation** — verified 2026-07-15 on the bootstrap 0.40.0 release by generating both ways and diffing: byte-identical. The dev tree and the freshly-published cache are the same content; only the path differs.
+
+**Always restore dev-tree mode.** Leaving it on silently repoints every plugin at the working copy for all later sessions — a footgun far worse than a stale page. If you run `dev` by hand, run `normal` in the same breath, and confirm with `status`:
 
 ```bash
 uv run python scripts/dev-tree.py dev        # installPaths -> this working copy
@@ -168,19 +174,13 @@ uv run python scripts/dev-tree.py normal     # ALWAYS restore, even if the regen
 uv run python scripts/dev-tree.py status     # confirm: installPaths @ cache: <n>, not 0
 ```
 
-Sanity-check the diff (new versions / changed skill descriptions present), then commit `index.html` together with the version bumps. Because the page ships on the release commit, dev and master hold identical copies by construction and the file never conflicts on the next reconcile.
-
-**This is equivalent to the old post-merge regen, not an approximation** — verified 2026-07-15 on the bootstrap 0.40.0 release by generating both ways and diffing: byte-identical. The dev tree and the freshly-published cache are the same content; only the path differs.
-
-**Always restore dev-tree mode.** Leaving it on silently repoints every plugin at the working copy for all later sessions — a footgun far worse than a stale page. Run `normal` in the same breath as `dev`, and confirm with `status`.
-
-**Skip clause:** skip regeneration only when the release changes nothing the page renders (plugin name/version/description, skill roster, skill descriptions). Since every publish bumps a published plugin's version and versions render on the page, a genuine publish practically always requires the regen; the skip covers dev-only-plugin and non-plugin-infra releases.
-
 **Preview vs publish — same mechanism, different commit rule.** The dev-tree regen above is also how you *preview* the page against dev work (`claude-dev` / `pk-dev` do the same installPath rewrite for a whole session). The two uses differ only in whether the result may be committed: at **publish** time dev is the about-to-be master, so its page is the published page — commit it. **Outside** a publish, dev contains skills and versions that are not going out, so the page renders a marketplace that does not exist yet — look at it, then `git restore index.html`. The rule is not "never commit a dev-tree page"; it is "only commit one whose content is being published in the same commit."
 
 ### Dev-only plugins — do not publish to master
 
 Some plugins live on `dev` for in-development work and must not reach consumers until they are ready. Each such plugin sets `"published": false` in its `plugins/<name>/.claude-plugin/plugin.json`. The marketplace regenerator (`scripts/regen_marketplace.py`) filters those plugins out of `marketplace.json`, so they are excluded structurally — not by memory — even if their files land on master via a cherry-pick.
+
+`publish.py`'s preflight **refuses** when `origin/master..dev` holds commits touching one, naming the commits. That is a backstop for the listing *and* the files; the regenerator only filters the listing. Picking which commits ship stays a human judgement call — branch from master and cherry-pick.
 
 **Current dev-only plugins** (the field, not this list, is load-bearing — this is just a human-readable inventory):
 
