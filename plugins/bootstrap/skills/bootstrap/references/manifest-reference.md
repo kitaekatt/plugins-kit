@@ -458,7 +458,24 @@ current OS into one queue and writes **ONE** remediation script:
 One aggregate `elevation_script` fix-all item names the script path and what it
 will do; the per-item `needs_elevation` failures keep persisting on their own.
 Both clear via the normal re-check on the next session (or `fix-all`) once the
-user has run the script.
+script has run.
+
+**fix-all launches the script itself (Windows).** Typing `fix-all` is user
+consent for elevation: the interactive re-run of the engine carries the
+`--fix-all` flag (`bash <plugin_root>/hooks/sessionstart/session-bootstrap.sh
+--console --fix-all`), and on Windows an engine pass in that mode with a
+non-empty queue **launches the `.bat` itself** via
+`Start-Process -Verb RunAs -Wait` — the UAC prompt is then a direct consequence
+of the user's typed command, not a "go double-click this file" errand. Launching
+elevated up front makes the `.bat`'s own UAC self-relaunch a no-op (its admin
+detect already passes), so the wait covers the real elevated process, with a
+bounded 10-minute timeout. On success the engine spawns a re-check pass
+(without `--fix-all`, so it can never re-prompt) and the elevated items clear
+in the same fix-all cycle; on decline/failure/timeout the item falls back to
+the manual run-it-yourself instruction, prefixed with the launch outcome.
+SessionStart passes never carry `--fix-all` and never launch or prompt.
+Ubuntu/macOS keep the manual instruction even under `fix-all`: the run has no
+TTY, so a foreground `sudo` cannot prompt.
 
 ### Non-Ubuntu Linux fails fast
 

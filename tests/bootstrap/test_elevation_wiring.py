@@ -94,6 +94,176 @@ class TestElevationScriptRendering:
 
 
 # --------------------------------------------------------------------------- #
+# Step 7b fix-all interactive launch (_elevation_step) -- launch is MOCKED
+# --------------------------------------------------------------------------- #
+
+FAKE_BASH = "C:\\Program Files\\Git\\usr\\bin\\bash.exe"
+
+
+def _args(data_dir, fix_all=False, console=False, background=False):
+    import argparse
+    return argparse.Namespace(
+        data_dir=str(data_dir), project_dir=None, verbose=False,
+        console=console, background=background, fix_all=fix_all)
+
+
+def _win_failure():
+    return {"type": "tool", "name": "cap", "install_state": "needs_elevation",
+            "elevation": {"method": "command",
+                          "command": "bash ~/x.sh fix", "os": "windows"}}
+
+
+class TestFixAllInteractiveLaunch:
+    def _pin_bash(self, monkeypatch):
+        monkeypatch.setattr(elev, "resolve_bash", lambda: FAKE_BASH)
+
+    def test_fix_all_launches_waits_and_spawns_recheck(self, tmp_path, monkeypatch, capsys):
+        """fix-all + non-empty queue: launch, wait, then the re-check pass."""
+        self._pin_bash(monkeypatch)
+        launches = []
+        monkeypatch.setattr(
+            elev, "launch_elevation_script",
+            lambda path, current_os, timeout=elev.ELEVATION_LAUNCH_TIMEOUT:
+            (launches.append((path, current_os)),
+             elev.LaunchResult(launched=True, succeeded=True, detail="exit code 0"))[1])
+        rechecks = []
+        monkeypatch.setattr(engine, "_spawn_recheck_pass",
+                            lambda args, plugin_root: rechecks.append(plugin_root))
+
+        failures = [_win_failure()]
+        stopped = engine._elevation_step(
+            failures, "windows", str(tmp_path),
+            _args(tmp_path, fix_all=True, console=True), "/plugin/root")
+
+        assert stopped is True            # caller returns; re-check pass owns output
+        assert len(launches) == 1         # launched exactly once
+        assert launches[0][1] == "windows"
+        assert rechecks == ["/plugin/root"]
+        # Success -> no aggregated elevation_script fallback item.
+        assert all(f["type"] != "elevation_script" for f in failures)
+        # Outcome reported (launched + exit status) on the console run.
+        out = capsys.readouterr().out
+        assert "elevation script completed successfully" in out
+        assert "exit code 0" in out
+
+    def test_decline_falls_back_to_manual_message_no_loop(self, tmp_path, monkeypatch):
+        """UAC declined: fall back to today's message, never re-prompt."""
+        self._pin_bash(monkeypatch)
+        monkeypatch.setattr(
+            elev, "launch_elevation_script",
+            lambda *a, **k: elev.LaunchResult(
+                launched=True, succeeded=False,
+                detail="The operation was canceled by the user"))
+        recheck_calls = []
+        monkeypatch.setattr(engine, "_spawn_recheck_pass",
+                            lambda *a, **k: recheck_calls.append(1))
+
+        failures = [_win_failure()]
+        stopped = engine._elevation_step(
+            failures, "windows", str(tmp_path),
+            _args(tmp_path, fix_all=True, console=True), "/plugin/root")
+
+        assert stopped is False
+        assert recheck_calls == []
+        agg = [f for f in failures if f["type"] == "elevation_script"]
+        assert len(agg) == 1
+        assert agg[0]["user_msg"].startswith(
+            "fix-all launched the elevation script but it did not complete "
+            "(The operation was canceled by the user).")
+        # Manual instruction remains as the fallback.
+        assert "double-click" in agg[0]["agent_msg"]
+
+    def test_timeout_falls_back_to_manual_message(self, tmp_path, monkeypatch):
+        self._pin_bash(monkeypatch)
+        monkeypatch.setattr(
+            elev, "launch_elevation_script",
+            lambda *a, **k: elev.LaunchResult(
+                launched=True, succeeded=False,
+                detail="timed out after 600s waiting for the elevated script"))
+
+        failures = [_win_failure()]
+        stopped = engine._elevation_step(
+            failures, "windows", str(tmp_path),
+            _args(tmp_path, fix_all=True, console=True), "/plugin/root")
+
+        assert stopped is False
+        agg = [f for f in failures if f["type"] == "elevation_script"][0]
+        assert "timed out after 600s" in agg["user_msg"]
+
+    def test_sessionstart_never_launches(self, tmp_path, monkeypatch):
+        """A pass WITHOUT --fix-all (SessionStart/background) must never launch."""
+        self._pin_bash(monkeypatch)
+        monkeypatch.setattr(
+            elev, "launch_elevation_script",
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("SessionStart pass must never launch")))
+
+        failures = [_win_failure()]
+        stopped = engine._elevation_step(
+            failures, "windows", str(tmp_path),
+            _args(tmp_path, fix_all=False, background=True), "/plugin/root")
+
+        assert stopped is False
+        agg = [f for f in failures if f["type"] == "elevation_script"]
+        assert len(agg) == 1
+        # Unlaunched item: no launch-outcome prefix, and the agent_msg carries
+        # the fix-all interactive re-run hint (the consent path).
+        assert "did not complete" not in agg[0]["user_msg"]
+        assert "--console --fix-all" in agg[0]["agent_msg"]
+
+    def test_unix_fix_all_keeps_manual_message_only(self, tmp_path, monkeypatch):
+        """No TTY for sudo in the fix-all run: unix keeps message-only behavior
+        (launch_elevation_script returns None -- exercised for real here)."""
+        failures = [{"type": "tool", "name": "net-tools",
+                     "install_state": "needs_elevation",
+                     "elevation": {"method": "apt", "package": "net-tools",
+                                   "os": "ubuntu"}}]
+        recheck_calls = []
+        monkeypatch.setattr(engine, "_spawn_recheck_pass",
+                            lambda *a, **k: recheck_calls.append(1))
+
+        stopped = engine._elevation_step(
+            failures, "ubuntu", str(tmp_path),
+            _args(tmp_path, fix_all=True, console=True), "/plugin/root")
+
+        assert stopped is False
+        assert recheck_calls == []
+        agg = [f for f in failures if f["type"] == "elevation_script"][0]
+        assert "did not complete" not in agg["user_msg"]
+        assert "sudo bash" in agg["agent_msg"]
+
+    def test_empty_queue_is_noop(self, tmp_path):
+        failures = [{"type": "tool", "name": "x", "install_state": "install_failed"}]
+        stopped = engine._elevation_step(
+            failures, "windows", str(tmp_path),
+            _args(tmp_path, fix_all=True, console=True), "/plugin/root")
+        assert stopped is False
+        assert all(f["type"] != "elevation_script" for f in failures)
+
+
+class TestSpawnRecheckPass:
+    def test_recheck_drops_fix_all_and_carries_mode(self, tmp_path, monkeypatch):
+        """The re-check child re-runs the engine in the same mode WITHOUT
+        --fix-all -- the loop guard against re-prompting."""
+        import subprocess as _sp
+        calls = []
+        monkeypatch.setattr(_sp, "run", lambda cmd, **k: calls.append(cmd))
+
+        args = _args(tmp_path, fix_all=True, console=True)
+        args.project_dir = "/proj"
+        engine._spawn_recheck_pass(args, "/plugin/root")
+
+        assert len(calls) == 1
+        cmd = calls[0]
+        assert "--fix-all" not in cmd
+        assert "--console" in cmd
+        assert "--background" not in cmd
+        assert cmd[cmd.index("--project-dir") + 1] == "/proj"
+        assert cmd[cmd.index("--data-dir") + 1] == str(tmp_path)
+        assert cmd[1].endswith(os.path.join("engine", "bootstrap_engine.py"))
+
+
+# --------------------------------------------------------------------------- #
 # Next-session re-check pickup: stale script removed once the queue empties
 # --------------------------------------------------------------------------- #
 

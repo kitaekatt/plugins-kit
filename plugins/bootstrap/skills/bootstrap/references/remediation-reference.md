@@ -55,6 +55,24 @@ All manual operations represent a blocking condition where auto-configuration ca
 | Config information missing and can't be auto-detected | Check config file for required fields | Ask user for information, write to config file |
 | External app requires config change and/or restart | Modification applied that requires restart | User restarts external application, types `fixed` |
 | Claude Code requires config change and/or restart | Modification applied that requires restart | User restarts Claude Code |
+| Operation needs elevation (sudo/UAC) in a non-interactive pass | Privilege probe (`sudo -n` / admin token) failed when the op ran | Deferred into ONE per-OS remediation script (`elevation_script` item). Windows: a `fix-all` re-run launches the script itself (see below). Unix: user runs it manually, then types `fix-all` |
+
+### fix-all is user consent for elevation (Windows)
+
+A SessionStart pass must never trigger a UAC or sudo prompt. But when the user
+**types `fix-all`**, that is an explicit interactive request for remediation —
+so the fix-all re-run of the engine (invoked with the `--fix-all` flag, e.g.
+`bash <plugin_root>/hooks/sessionstart/session-bootstrap.sh --console
+--fix-all`) handles a non-empty elevation queue by **launching the generated
+`install-elevated.bat` itself**: it starts the script elevated
+(`Start-Process -Verb RunAs -Wait`, so the wait covers the real elevated
+process rather than an unelevated self-relaunch wrapper), lets the UAC prompt
+appear, waits up to 10 minutes, and on success runs a re-check pass (without
+`--fix-all` — it can never loop the prompt) so the elevated items clear in the
+same cycle. If the user declines UAC, a command fails, or the wait times out,
+the engine reports the outcome and falls back to the manual instruction
+(script path + how to run it). On Ubuntu/macOS the fix-all run has no TTY for
+a foreground `sudo`, so the manual instruction remains the only path there.
 
 ## Display Timing
 

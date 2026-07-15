@@ -150,7 +150,7 @@ The engine accepts a `--background` flag. When set, output is written atomically
    - **Agent message**: What needs fixing and how to fix it (e.g. "Ask the user where the `.uproject` file is, then write that information to `{path}` as the value of the `UPROJECT_LOCATION` variable")
    - **User message**: What needs fixing and an instruction to type `fix-all` to remediate
 
-   The user saying `fix-all` signals consent for Claude to gather information and apply results.
+   The user saying `fix-all` signals consent for Claude to gather information and apply results. It is also **consent for elevation**: the interactive re-run of the engine passes `--fix-all` (`bash <plugin_root>/hooks/sessionstart/session-bootstrap.sh --console --fix-all`), and on Windows a `--fix-all` pass with a non-empty elevation queue launches the generated `install-elevated.bat` itself (`Start-Process -Verb RunAs -Wait`, bounded 10-minute wait), then spawns a re-check pass (without `--fix-all`, so it never re-prompts) so the elevated items clear in the same cycle; decline/failure/timeout falls back to the manual instruction with the launch outcome. SessionStart passes never carry `--fix-all` and never launch or prompt; Ubuntu/macOS stay manual (no TTY for a foreground sudo). Details: [remediation-reference.md](remediation-reference.md#fix-all-is-user-consent-for-elevation-windows).
 
 3. **Fixed phase**: After the user performs a manual action (e.g. restarting an external application), they type `fixed`. This signals Claude to re-trigger the bootstrap script, which should complete the remaining steps without requiring a Claude Code restart.
 

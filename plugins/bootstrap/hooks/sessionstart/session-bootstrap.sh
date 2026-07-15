@@ -24,6 +24,11 @@ for arg in "$@"; do
     case "$arg" in
         --verbose) FLAG_VERBOSE=1; ENGINE_FLAGS+=(--verbose) ;;
         --console) FLAG_CONSOLE=1; ENGINE_FLAGS+=(--console) ;;
+        # Interactive fix-all re-run (user consent for elevation): the engine
+        # may launch the elevation script itself. Only ever present on an
+        # explicit invocation -- hooks.json wires SessionStart with no
+        # arguments, so a background pass can never carry it.
+        --fix-all) ENGINE_FLAGS+=(--fix-all) ;;
     esac
 done
 

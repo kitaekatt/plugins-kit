@@ -106,6 +106,12 @@ def _main():
     parser.add_argument("--console", action="store_true", help="Plain text output, no JSON/log writes")
     parser.add_argument("--background", action="store_true",
         help="Write display output to bootstrap_display.json instead of stdout")
+    parser.add_argument("--fix-all", dest="fix_all", action="store_true",
+        help="Interactive remediation run triggered by the user typing "
+             "'fix-all'. This is user consent for elevation: on Windows the "
+             "engine launches the generated elevation script itself (UAC "
+             "prompt), waits for it, then re-runs the checks. NEVER passed by "
+             "the SessionStart hook.")
     args = parser.parse_args()
 
     # --console implies --verbose
@@ -444,6 +450,28 @@ def _main():
             continue
         display_lines.append(f"--- {header}: {'; '.join(actions)} ---")
 
+    # Step 7b: Elevation queue -> ONE per-OS remediation script. Harvest every
+    # `elevation` descriptor deferred during this pass (apt packages, elevated
+    # commands, a missing-brew installer signal), regenerate the script when the
+    # queue is non-empty, and DELETE a stale script when it is empty (the ops
+    # succeeded, so the item clears). When a script was written, append ONE
+    # aggregated fix-all item naming its path + what it will do; the per-item
+    # needs_elevation failures keep persisting on their own. See
+    # bootstrap_lib/elevation.py and analysis-dividing-line.md section 4.3.
+    #
+    # On a --fix-all run (the user TYPED 'fix-all' -- explicit consent for
+    # elevation) the step additionally LAUNCHES the Windows script, waits for
+    # it, and on success spawns a re-check pass so the elevated items clear in
+    # the same fix-all cycle. SessionStart/background passes never launch.
+    # Plain --console debug runs (no --fix-all) skip the step entirely,
+    # preserving their "no file writes" contract.
+    if not args.console or args.fix_all:
+        if _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
+                           bootstrap_label):
+            # Elevated script completed; a re-check pass was spawned and has
+            # emitted its own results -- this pass is done.
+            return
+
     if args.console:
         # Console mode: plain text to stdout, no JSON
         for line in display_lines:
@@ -470,24 +498,6 @@ def _main():
     # docs/planning/bootstrap/tool-resolution-redesign.md.
     from . import tool_paths as _tool_paths
     _tool_paths.export_tool_env_vars(data_dir)
-
-    # Step 7b: Elevation queue -> ONE per-OS remediation script. Harvest every
-    # `elevation` descriptor deferred during this pass (apt packages, elevated
-    # commands, a missing-brew installer signal), regenerate the script when the
-    # queue is non-empty, and DELETE a stale script when it is empty (the ops
-    # succeeded, so the item clears). When a script was written, append ONE
-    # aggregated fix-all item naming its path + what it will do; the per-item
-    # needs_elevation failures keep persisting on their own. See
-    # bootstrap_lib/elevation.py and analysis-dividing-line.md section 4.3.
-    from .elevation import (
-        queue_from_failures, write_or_clear_script, elevation_script_failure,
-    )
-    _elev_queue = queue_from_failures(all_failures, current_os)
-    _elev_path = write_or_clear_script(_elev_queue, data_dir, current_os)
-    if _elev_path:
-        all_failures.append(
-            elevation_script_failure(_elev_queue, current_os, _elev_path)
-        )
 
     # Step 8: Emit results
     output_file = os.path.join(data_dir, "bootstrap_display.pending") if args.background else None
@@ -548,6 +558,108 @@ def _main():
     # references/plugin-reload-lifecycle.md "Single-session update protocol".
     if version:
         global_stamp(data_dir, "engine_ran_version").write(version)
+
+
+def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
+                    label="bootstrap"):
+    """Step 7b: elevation queue -> script (+ interactive launch on fix-all).
+
+    Harvests the pass's elevation descriptors, writes/clears the per-OS
+    remediation script, and appends the aggregated elevation_script failure
+    when a script exists.
+
+    On a --fix-all run (interactive, user-consented) with a non-empty queue,
+    the engine LAUNCHES the script itself and waits (bounded) for it:
+
+    - Windows: `Start-Process -Verb RunAs -Wait` on the .bat -- the UAC
+      prompt is a direct consequence of the user's typed 'fix-all'. On
+      success a re-check pass is spawned (the engine re-runs WITHOUT
+      --fix-all, so it can never loop the prompt) and this function returns
+      True: the caller must return without emitting, the re-check pass owns
+      the output. On decline/failure/timeout the aggregated item falls back
+      to the manual instruction, prefixed with the launch outcome.
+    - Unix: no launch is attempted (launch_elevation_script returns None) --
+      the fix-all run has no TTY for a foreground sudo, so the manual
+      instruction stands unchanged.
+
+    SessionStart/background passes never pass --fix-all, so their behavior is
+    exactly the pre-launch behavior: write the script, surface the item.
+
+    Returns True when a re-check pass was spawned (caller stops), else False.
+    """
+    from .elevation import (
+        queue_from_failures, write_or_clear_script, elevation_script_failure,
+        launch_elevation_script,
+    )
+    queue = queue_from_failures(all_failures, current_os)
+    path = write_or_clear_script(queue, data_dir, current_os)
+    if not path:
+        return False
+
+    launch_detail = None
+    if getattr(args, "fix_all", False):
+        result = launch_elevation_script(path, current_os)
+        if result is not None:
+            if result.succeeded:
+                note = (f"{label} -> elevation script completed successfully "
+                        f"({result.detail}); running re-check pass")
+                if args.console:
+                    print(note)
+                else:
+                    from .log import write_log_block
+                    write_log_block(data_dir, f"{label} elevation", [note])
+                _spawn_recheck_pass(args, plugin_root)
+                return True
+            launch_detail = result.detail
+
+    item = elevation_script_failure(queue, current_os, path,
+                                    launch_detail=launch_detail)
+    if current_os == "windows" and not getattr(args, "fix_all", False):
+        # Tell Claude how a fix-all becomes the consented interactive launch:
+        # re-run the engine with --fix-all and the engine launches the script
+        # itself (the UAC prompt is then a consequence of the user's request).
+        hook = os.path.join(plugin_root, "hooks", "sessionstart",
+                            "session-bootstrap.sh")
+        item["agent_msg"] += (
+            f" ALTERNATIVELY, if the user types 'fix-all', re-run bootstrap "
+            f"interactively with elevation consent: "
+            f"`bash \"{hook}\" --console --fix-all` -- the engine then "
+            f"launches the script itself (a UAC prompt will appear), waits "
+            f"for it, and re-checks in the same run."
+        )
+    all_failures.append(item)
+    return False
+
+
+def _spawn_recheck_pass(args, plugin_root):
+    """Re-run the engine (same mode, WITHOUT --fix-all) after a successful
+    elevated launch, so the elevated items re-check and clear in the same
+    fix-all cycle.
+
+    Dropping --fix-all is the loop guard: even if the re-check still finds a
+    non-empty elevation queue (script "succeeded" but a check still fails),
+    the child writes the script and surfaces the manual item -- it never
+    launches or prompts again. Console output is inherited (Claude sees the
+    re-check results); background mode writes a fresh
+    bootstrap_display.pending. The child also owns the end-of-pass
+    bookkeeping (cooldown clear/restamp, engine_ran_version stamp).
+    """
+    import subprocess
+    cmd = [
+        sys.executable,
+        os.path.join(plugin_root, "engine", "bootstrap_engine.py"),
+        "--plugin-root", plugin_root,
+        "--data-dir", args.data_dir,
+    ]
+    if args.project_dir:
+        cmd += ["--project-dir", args.project_dir]
+    if args.verbose:
+        cmd += ["--verbose"]
+    if args.console:
+        cmd += ["--console"]
+    if args.background:
+        cmd += ["--background"]
+    subprocess.run(cmd)
 
 
 def _plugin_data_dir(data_dir, plugin_info):

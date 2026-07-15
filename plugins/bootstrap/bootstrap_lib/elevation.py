@@ -34,6 +34,18 @@ per pass:
   * :func:`elevation_script_failure` builds the aggregated fix-all item that
     tells the user the script path and what it will do; the per-item
     ``needs_elevation`` failures keep persisting through the existing machinery.
+  * :func:`launch_elevation_script` is the "fix-all is user consent for
+    elevation" half: on an INTERACTIVE fix-all engine run (``--fix-all``,
+    never SessionStart) the engine launches the Windows .bat itself via
+    ``Start-Process -Verb RunAs -Wait`` and blocks (bounded) until the
+    elevated process exits, so the UAC prompt is a direct consequence of the
+    user's typed command. Launching with ``-Verb RunAs`` directly means the
+    .bat's own UAC self-relaunch hop is a no-op (its fsutil admin-detect
+    already passes), avoiding the wrapper-exits-early wait pitfall. Unix has
+    no equivalent: the fix-all run still executes inside a non-interactive
+    hook/Bash-tool subprocess with no TTY, so foreground ``sudo`` would fail
+    (``sudo: a terminal is required``); the function returns None there and
+    the manual instruction stands.
 
 The queue is derived from the failures the pass already funnels into one list --
 the descriptor was designed as the breadcrumb for exactly this step, and 4.3
@@ -45,6 +57,7 @@ Stdlib-only. Imports the privilege probes from :mod:`bootstrap_lib.apt`.
 
 import os
 import re
+import subprocess
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -300,6 +313,13 @@ def _render_windows(queue: ElevationQueue) -> str:
         "",
         "setlocal enableextensions",
         "",
+        "REM When the bootstrap engine launches this script on a fix-all run it",
+        "REM passes /engine as the first argument. The engine is waiting on this",
+        "REM process, so the success path skips its pause (the window closes when",
+        "REM done); failures always pause so errors stay readable.",
+        'set "BOOTSTRAP_ENGINE_LAUNCH="',
+        'if /I "%~1"=="/engine" set "BOOTSTRAP_ENGINE_LAUNCH=1"',
+        "",
         "REM --- Admin detection (fsutil requires admin; redirect noise) ---",
         "fsutil dirty query %SystemDrive% >nul 2>&1",
         "if %errorlevel% neq 0 goto :not_admin",
@@ -336,7 +356,7 @@ def _render_windows(queue: ElevationQueue) -> str:
         "echo Done. Start a new Claude Code session or type 'fix-all'.",
         "echo This script will now delete itself.",
         "echo.",
-        "pause",
+        "if not defined BOOTSTRAP_ENGINE_LAUNCH pause",
         "endlocal",
         'REM Self-delete: (goto) releases the file lock, then del removes this script.',
         '(goto) 2>nul & del "%~f0"',
@@ -404,6 +424,88 @@ def write_or_clear_script(queue: ElevationQueue, data_dir: str,
     return path
 
 
+# --------------------------------------------------------------------------- #
+# Interactive launch (fix-all only -- NEVER SessionStart)
+# --------------------------------------------------------------------------- #
+
+# Generous bounded wait for the elevated script: covers a slow install, but a
+# user who walks away from the UAC prompt cannot hang the fix-all run forever.
+ELEVATION_LAUNCH_TIMEOUT = 600
+
+
+@dataclass
+class LaunchResult:
+    """Outcome of an engine-initiated elevation-script launch."""
+
+    launched: bool
+    succeeded: bool
+    detail: str
+
+
+def _powershell_exe() -> str:
+    """Absolute Windows PowerShell path (hook PATH can be stripped of System32)."""
+    sysroot = os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT") or r"C:\Windows"
+    ps = os.path.join(sysroot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    return ps if os.path.exists(ps) else "powershell.exe"
+
+
+def launch_elevation_script(path: str, current_os: str,
+                            timeout: int = ELEVATION_LAUNCH_TIMEOUT) -> Optional[LaunchResult]:
+    """Launch the remediation script interactively and wait for it (Windows).
+
+    ONLY called on a fix-all engine run -- the user's typed 'fix-all' is the
+    consent that makes the UAC prompt acceptable. SessionStart never calls this.
+
+    Windows: the engine launches the .bat with ``Start-Process -Verb RunAs
+    -Wait -PassThru`` directly. Launching elevated up front means the .bat's
+    own self-elevation relaunch never fires (its fsutil admin-detect passes
+    immediately), so the ``-Wait`` covers the REAL elevated process -- not an
+    unelevated wrapper that relaunches itself and exits early. ``/engine`` is
+    passed so the .bat skips its success-path ``pause`` (the engine, not a
+    human at the console, is the waiter); the failure path still pauses so the
+    window stays visible long enough to read errors. A declined UAC prompt
+    makes ``Start-Process -Verb RunAs`` throw (non-zero powershell exit); a
+    user who walks away hits the bounded ``timeout``.
+
+    Unix (ubuntu/macos): returns None -- no launch is attempted. The fix-all
+    run executes inside a non-interactive hook/Bash-tool subprocess with no
+    TTY, so a foreground ``sudo bash script`` would fail immediately
+    (``sudo: a terminal is required``); the manual instruction remains the
+    only honest path there.
+    """
+    if current_os != "windows":
+        return None
+    # PowerShell single-quoted literal: escape embedded quotes by doubling.
+    ps_path = path.replace("'", "''")
+    ps_cmd = (
+        "$ErrorActionPreference = 'Stop'; "
+        f"$p = Start-Process -FilePath '{ps_path}' -ArgumentList '/engine' "
+        "-Verb RunAs -Wait -PassThru; "
+        "exit $p.ExitCode"
+    )
+    try:
+        proc = subprocess.run(
+            [_powershell_exe(), "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return LaunchResult(
+            launched=True, succeeded=False,
+            detail=f"timed out after {timeout}s waiting for the elevated script",
+        )
+    except OSError as e:
+        return LaunchResult(launched=False, succeeded=False,
+                            detail=f"could not launch: {e}")
+    if proc.returncode == 0:
+        return LaunchResult(launched=True, succeeded=True, detail="exit code 0")
+    stderr = (proc.stderr or "").strip()
+    # A declined UAC prompt surfaces as a powershell error line
+    # ("The operation was canceled by the user"); a failed command inside the
+    # .bat surfaces as its exit code (2 = :failed path).
+    detail = stderr.splitlines()[-1] if stderr else f"exit code {proc.returncode}"
+    return LaunchResult(launched=True, succeeded=False, detail=detail)
+
+
 def _run_instruction(current_os: str, path: str) -> str:
     if current_os == "ubuntu":
         return f'sudo bash "{path}"'
@@ -413,12 +515,18 @@ def _run_instruction(current_os: str, path: str) -> str:
 
 
 def elevation_script_failure(queue: ElevationQueue, current_os: str,
-                             path: str) -> dict:
+                             path: str,
+                             launch_detail: Optional[str] = None) -> dict:
     """Build the aggregated fix-all item naming the script and what it will do.
 
     The per-item ``needs_elevation`` failures keep persisting on their own; this
     one item summarizes the single script the user runs to satisfy all of them
     (mirrors how python_stub renders a focused, manual-only remediation).
+
+    ``launch_detail`` is set when a fix-all run LAUNCHED the script but it did
+    not complete (UAC declined, a command failed, or the bounded wait timed
+    out): the messages then lead with that outcome and fall back to the manual
+    instruction -- the engine never re-prompts in a loop.
     """
     what = []
     if queue.brew_installer:
@@ -442,6 +550,13 @@ def elevation_script_failure(queue: ElevationQueue, current_os: str,
         f"items. Do NOT attempt to run it yourself -- it needs the user's "
         f"credentials."
     )
+    if launch_detail:
+        prefix = (
+            f"fix-all launched the elevation script but it did not complete "
+            f"({launch_detail}). "
+        )
+        user_msg = prefix + user_msg
+        agent_msg = prefix + agent_msg
     return {
         "type": "elevation_script",
         "name": "elevation_script",

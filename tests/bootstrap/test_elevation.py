@@ -286,6 +286,21 @@ class TestRenderWindows:
         with pytest.raises(ValueError):
             elev.render_script(ElevationQueue(commands=["x"]), "plan9", "p")
 
+    def test_engine_launch_arg_gates_success_pause_only(self):
+        # The engine launches the .bat with /engine on a fix-all run and WAITS
+        # on it; the success path must not block on a keypress then. The
+        # failure path always pauses so errors stay readable.
+        out = elev.render_script(ElevationQueue(commands=["x"]), "windows", "p")
+        assert 'if /I "%~1"=="/engine" set "BOOTSTRAP_ENGINE_LAUNCH=1"' in out
+        # Success path: pause is conditional on NOT being engine-launched.
+        assert ("echo This script will now delete itself.\n"
+                "echo.\n"
+                "if not defined BOOTSTRAP_ENGINE_LAUNCH pause\n") in out
+        # Failure path: unconditional pause (window stays visible on errors).
+        failed_section = out.split("\n:failed\n", 1)[1]
+        assert "\npause\n" in failed_section
+        assert "if not defined" not in failed_section
+
 
 # --------------------------------------------------------------------------- #
 # write_or_clear_script: regenerate + cleanup semantics
@@ -372,3 +387,124 @@ class TestElevationScriptFailure:
         q = ElevationQueue(commands=["x"])
         f = elev.elevation_script_failure(q, "windows", "C:/data/elevate/install-elevated.bat")
         assert "double-click" in f["agent_msg"]
+
+    def test_no_launch_detail_leaves_messages_unprefixed(self):
+        f = elev.elevation_script_failure(
+            ElevationQueue(commands=["x"]), "windows", "C:/p.bat")
+        assert "did not complete" not in f["user_msg"]
+        assert "did not complete" not in f["agent_msg"]
+
+    def test_launch_detail_prefixes_fallback_messages(self):
+        # A fix-all run launched the script but it failed (UAC declined /
+        # command failed / timeout): the item leads with the outcome and falls
+        # back to the manual instruction -- never a re-prompt loop.
+        detail = "The operation was canceled by the user"
+        f = elev.elevation_script_failure(
+            ElevationQueue(commands=["x"]), "windows", "C:/p.bat",
+            launch_detail=detail)
+        for key in ("user_msg", "agent_msg", "message"):
+            assert f[key].startswith(
+                "fix-all launched the elevation script but it did not "
+                f"complete ({detail}). ")
+        # Manual instruction still present as the fallback.
+        assert "double-click" in f["agent_msg"]
+        assert f["script_path"] == "C:/p.bat"
+
+
+# --------------------------------------------------------------------------- #
+# launch_elevation_script: the fix-all interactive launch (mocked -- no UAC)
+# --------------------------------------------------------------------------- #
+
+class _FakeProc:
+    def __init__(self, returncode=0, stderr=""):
+        self.returncode = returncode
+        self.stderr = stderr
+
+
+class TestLaunchElevationScript:
+    def test_unix_returns_none_without_launching(self, monkeypatch):
+        # No TTY in the fix-all run -> foreground sudo is not feasible; the
+        # function must not even attempt a launch on ubuntu/macos.
+        monkeypatch.setattr(
+            elev.subprocess, "run",
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not launch on unix")))
+        assert elev.launch_elevation_script("/p.sh", "ubuntu") is None
+        assert elev.launch_elevation_script("/p.sh", "macos") is None
+
+    def test_windows_success_launches_runas_wait(self, monkeypatch):
+        calls = {}
+
+        def fake_run(cmd, **kwargs):
+            calls["cmd"] = cmd
+            calls["kwargs"] = kwargs
+            return _FakeProc(returncode=0)
+
+        monkeypatch.setattr(elev.subprocess, "run", fake_run)
+        r = elev.launch_elevation_script(r"C:\data\elevate\install-elevated.bat", "windows")
+        assert r.launched is True
+        assert r.succeeded is True
+        # The wait covers the REAL elevated process: the engine itself starts
+        # the .bat elevated (-Verb RunAs -Wait -PassThru), so the .bat's UAC
+        # self-relaunch hop never fires (no wrapper-exits-early early return).
+        ps_command = calls["cmd"][-1]
+        assert "-Verb RunAs" in ps_command
+        assert "-Wait" in ps_command
+        assert "-PassThru" in ps_command
+        assert "-ArgumentList '/engine'" in ps_command
+        assert r"C:\data\elevate\install-elevated.bat" in ps_command
+        assert calls["cmd"][0].lower().endswith("powershell.exe")
+        # Bounded wait: a walked-away UAC prompt cannot hang the hook forever.
+        assert calls["kwargs"]["timeout"] == elev.ELEVATION_LAUNCH_TIMEOUT
+
+    def test_windows_uac_decline_reports_stderr_detail(self, monkeypatch):
+        monkeypatch.setattr(
+            elev.subprocess, "run",
+            lambda *a, **k: _FakeProc(
+                returncode=1,
+                stderr="Start-Process : This command cannot be run...\n"
+                       "The operation was canceled by the user"))
+        r = elev.launch_elevation_script("C:/p.bat", "windows")
+        assert r.launched is True
+        assert r.succeeded is False
+        assert "canceled by the user" in r.detail
+
+    def test_windows_failed_command_reports_exit_code(self, monkeypatch):
+        monkeypatch.setattr(elev.subprocess, "run",
+                            lambda *a, **k: _FakeProc(returncode=2))
+        r = elev.launch_elevation_script("C:/p.bat", "windows")
+        assert r.succeeded is False
+        assert "exit code 2" in r.detail
+
+    def test_windows_timeout_is_bounded_not_hung(self, monkeypatch):
+        import subprocess as _sp
+
+        def fake_run(*a, **k):
+            raise _sp.TimeoutExpired(cmd="powershell", timeout=k["timeout"])
+
+        monkeypatch.setattr(elev.subprocess, "run", fake_run)
+        r = elev.launch_elevation_script("C:/p.bat", "windows", timeout=600)
+        assert r.launched is True
+        assert r.succeeded is False
+        assert "timed out after 600s" in r.detail
+
+    def test_windows_oserror_is_not_launched(self, monkeypatch):
+        def fake_run(*a, **k):
+            raise OSError("powershell missing")
+
+        monkeypatch.setattr(elev.subprocess, "run", fake_run)
+        r = elev.launch_elevation_script("C:/p.bat", "windows")
+        assert r.launched is False
+        assert r.succeeded is False
+        assert "could not launch" in r.detail
+
+    def test_windows_path_apostrophe_escaped_for_powershell(self, monkeypatch):
+        calls = {}
+
+        def fake_run(cmd, **kwargs):
+            calls["cmd"] = cmd
+            return _FakeProc(returncode=0)
+
+        monkeypatch.setattr(elev.subprocess, "run", fake_run)
+        elev.launch_elevation_script(r"C:\Users\o'brien\install-elevated.bat", "windows")
+        assert r"C:\Users\o''brien\install-elevated.bat" in calls["cmd"][-1]
