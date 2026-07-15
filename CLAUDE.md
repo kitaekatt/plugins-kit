@@ -132,12 +132,11 @@ claude --plugin-dir ~/Dev/plugins-kit/plugins/my-plugin
    python scripts/regen_marketplace.py
    ```
    `.claude-plugin/marketplace.json` is **derived data** — its `plugins[]` array is rebuilt from each plugin's `plugin.json`, filtered by the `"published"` field (missing = `true`; `false` = excluded from the marketplace). Do not hand-edit marketplace.json plugin entries; the pre-commit hook will reject drift.
-2. Push the version-bumped commit to `origin/dev`.
-3. Merge `dev` to `master` (via PR or fast-forward) and push to `origin/master`.
+2. Regenerate the marketplace landing page `index.html` **from the dev tree** and commit it in the same release commit (see "The marketplace landing page" below for the flow), **unless** the release changes nothing the page renders — the page embeds each published plugin's name, version, description, and skill roster/descriptions, so a version bump of any *published* plugin already qualifies as page-affecting; the skip applies only to releases confined to dev-only (`published: false`) plugins or non-plugin infra.
+3. Push the version-bumped commit to `origin/dev`.
+4. Merge `dev` to `master` (via PR or fast-forward) and push to `origin/master`.
 
-4. Regenerate the marketplace landing page `index.html` and commit it to master (see "The marketplace landing page" below for the in-session flow), **unless** the release changes nothing the page renders — the page embeds each published plugin's name, version, description, and skill roster/descriptions, so a version bump of any *published* plugin already qualifies as page-affecting; the skip applies only to releases confined to dev-only (`published: false`) plugins or non-plugin infra.
-
-A version bump without a master merge is **not** a publish — users still see the old version. A push to `dev` without a master merge is **not** a publish — `master` is the cache source. A master merge without a version bump is **not** a publish — the cache key doesn't change, so consumers don't refetch. Steps 1-3 are always required (plus step 4 unless its skip clause applies); an unambiguous publish go-signal authorizes all of them.
+A version bump without a master merge is **not** a publish — users still see the old version. A push to `dev` without a master merge is **not** a publish — `master` is the cache source. A master merge without a version bump is **not** a publish — the cache key doesn't change, so consumers don't refetch. Steps 1, 3 and 4 are always required (plus step 2 unless its skip clause applies); an unambiguous publish go-signal authorizes all of them.
 
 Publishing is reversible-but-visible: nothing is destroyed, but it goes out to other machines. The bar is "user has expressed publish intent for this work," not "user has reconfirmed each git command." Treat unambiguous go-signals — `go`, `ship it`, `publish`, `do it`, `close the loop`, `push` — as authorizing the **entire** three-step publish flow above. Don't re-prompt for sub-steps once intent is clear; that's procedural friction, not safety. Confirm only when intent is genuinely ambiguous (partial work, no version bump in sight, unrelated WIP staged, or the user is mid-thought).
 
@@ -156,23 +155,28 @@ python plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py \
   --output ./index.html --no-open
 ```
 
-**It crawls the cache, not the dev tree.** `generate.py` reads `~/.claude/plugins/installed_plugins.json` and walks each plugin's **cached `installPath`** (`~/.claude/plugins/cache/<mkt>/<plugin>/<version>/`), filtered by `marketplace.json`. So it reflects the **installed/published** skill roster — **not** unpublished skills sitting on `dev`. Consequence: regenerating `index.html` from a normal session **before** publishing reproduces the *old* landing page (a new skill like `cohesion-audit` won't appear until its plugin version is published and the local cache refetches it).
+**It crawls installPaths, not the working directory.** `generate.py` reads `~/.claude/plugins/installed_plugins.json` and walks each plugin's **`installPath`**, filtered by `marketplace.json`. In a normal session those paths point at the **cache** (`~/.claude/plugins/cache/<mkt>/<plugin>/<version>/`), which only refetches from **master** — so a plain regen before the merge reproduces the *old* page. That constraint is what used to force the regen after the merge.
 
-**Therefore `index.html` regeneration is a publish step, not a dev step** — publish step 4, run in the SAME session right after the master merge (no restart needed; verified live 2026-07-13). A dev-branch skill change is not "done" for the landing page until it is published and the page is regenerated. The in-session sequence:
+**Regenerate from the dev tree, BEFORE the merge** — publish step 2. `scripts/dev-tree.py` repoints every plugins-kit installPath at this working copy, so `generate.py` renders the versions and skill roster you are **about to publish**; `normal` restores losslessly. This lands `index.html` *inside* the release commit rather than chasing it, so master is never in a state where its page disagrees with its own `marketplace.json`:
 
-1. Publish (version bumps + push dev + merge master).
-2. Refresh the local cache in-session — the `claude plugin` CLI works from a Bash tool with the nested-session guard unset:
-   ```bash
-   CLAUDECODE= claude plugin marketplace update plugins-kit
-   CLAUDECODE= claude plugin update <plugin>@plugins-kit   # once per published plugin in the release
-   bash scripts/plugin-versions.sh | grep "VERSION DRIFT"  # must print nothing
-   ```
-3. Run the `generate.py` command above and sanity-check the diff (new versions / changed skill descriptions present).
-4. Commit the refreshed `index.html` to master (where the page is served) and keep dev's copy in sync (same commit merged/cherry-picked to both), so the file never conflicts on the next reconcile.
+```bash
+uv run python scripts/dev-tree.py dev        # installPaths -> this working copy
+python plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py \
+  --marketplace plugins-kit --title "plugins-kit marketplace" \
+  --output ./index.html --no-open
+uv run python scripts/dev-tree.py normal     # ALWAYS restore, even if the regen failed
+uv run python scripts/dev-tree.py status     # confirm: installPaths @ cache: <n>, not 0
+```
+
+Sanity-check the diff (new versions / changed skill descriptions present), then commit `index.html` together with the version bumps. Because the page ships on the release commit, dev and master hold identical copies by construction and the file never conflicts on the next reconcile.
+
+**This is equivalent to the old post-merge regen, not an approximation** — verified 2026-07-15 on the bootstrap 0.40.0 release by generating both ways and diffing: byte-identical. The dev tree and the freshly-published cache are the same content; only the path differs.
+
+**Always restore dev-tree mode.** Leaving it on silently repoints every plugin at the working copy for all later sessions — a footgun far worse than a stale page. Run `normal` in the same breath as `dev`, and confirm with `status`.
 
 **Skip clause:** skip regeneration only when the release changes nothing the page renders (plugin name/version/description, skill roster, skill descriptions). Since every publish bumps a published plugin's version and versions render on the page, a genuine publish practically always requires the regen; the skip covers dev-only-plugin and non-plugin-infra releases.
 
-To **preview** the page against unpublished dev skills without publishing, run the generator under a dev-tree-pointed session (`claude-dev` / `pk-dev`, which rewrite `installed_plugins.json` `installPath`s at the dev tree) — but do not commit a dev-preview page as the published landing page.
+**Preview vs publish — same mechanism, different commit rule.** The dev-tree regen above is also how you *preview* the page against dev work (`claude-dev` / `pk-dev` do the same installPath rewrite for a whole session). The two uses differ only in whether the result may be committed: at **publish** time dev is the about-to-be master, so its page is the published page — commit it. **Outside** a publish, dev contains skills and versions that are not going out, so the page renders a marketplace that does not exist yet — look at it, then `git restore index.html`. The rule is not "never commit a dev-tree page"; it is "only commit one whose content is being published in the same commit."
 
 ### Dev-only plugins — do not publish to master
 
