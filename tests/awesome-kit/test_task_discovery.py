@@ -399,7 +399,19 @@ class TestSkipWithNote:
         assert ids(records) == {"tmp/parent"}
         assert any("non-canonical location" in n for n in notes)
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")
+    # geteuid is POSIX-only; guard with getattr so the class body still
+    # evaluates on Windows (a bare os.geteuid() aborts collection of the
+    # entire file -- and, unignored, the whole suite). The test itself
+    # needs POSIX permission semantics: chmod(0o000) cannot make a file
+    # unreadable on Windows (modes map only to the read-only flag).
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="chmod(0o000) does not deny reads on Windows",
+    )
+    @pytest.mark.skipif(
+        getattr(os, "geteuid", lambda: 1)() == 0,
+        reason="root ignores file modes",
+    )
     def test_unreadable_document_skipped_with_note(self, tmp_path):
         make_task(tmp_path, "tmp/good")
         locked = write_doc(

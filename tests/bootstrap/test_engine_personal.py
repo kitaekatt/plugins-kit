@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+from bootstrap.link_compat import link_tree
+
 BOOTSTRAP_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "plugins", "bootstrap")
 )
@@ -28,9 +30,9 @@ def make_minimal_root(tmp_path):
     fake_root = tmp_path / "bootstrap_minimal"
     fake_root.mkdir(exist_ok=True)
     if not (fake_root / "bootstrap_lib").exists():
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
     if not (fake_root / "engine").exists():
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
     defaults = fake_root / "defaults"
     defaults.mkdir(exist_ok=True)
     config = {

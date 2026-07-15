@@ -157,12 +157,16 @@ class TestRunEnvCommand:
 
 class TestDispatchOrder:
     def _entry(self, home, tmp_path):
+        # Paths are interpolated into bash commands as POSIX form: the bash
+        # shim eats backslashes in a raw Windows path, so a str(WindowsPath)
+        # redirect/touch target silently lands on a mangled filename.
         log = tmp_path / "call.log"
         flag = home / "flag"
         return log, flag, {
             "name": "flag-check",
-            "check": f"echo check >> {log}; test -f {flag}",
-            "fix": f"echo fix >> {log}; touch {flag}; echo created flag",
+            "check": f"echo check >> {log.as_posix()}; test -f {flag.as_posix()}",
+            "fix": f"echo fix >> {log.as_posix()}; touch {flag.as_posix()};"
+                   f" echo created flag",
         }
 
     def test_passing_check_runs_nothing_else(
@@ -217,8 +221,8 @@ class TestDispatchOrder:
     ):
         log = tmp_path / "order.log"
         entries = [
-            {"name": "first", "check": f"echo first >> {log}; true"},
-            {"name": "second", "check": f"echo second >> {log}; true"},
+            {"name": "first", "check": f"echo first >> {log.as_posix()}; true"},
+            {"name": "second", "check": f"echo second >> {log.as_posix()}; true"},
         ]
         _write_json(isolated_home / ".claude" / "env.json",
                     _manifest(env_checks=entries))
@@ -242,7 +246,7 @@ class TestRecheckAuthority:
     ):
         entry = {
             "name": "liar",
-            "check": f"test -f {isolated_home / 'flag'}",
+            "check": f"test -f {(isolated_home / 'flag').as_posix()}",
             "fix": "echo pretended to fix it; true",
         }
         _write_json(isolated_home / ".claude" / "env.json",
@@ -264,8 +268,8 @@ class TestRecheckAuthority:
         flag = isolated_home / "flag"
         entry = {
             "name": "grumpy-fixer",
-            "check": f"test -f {flag}",
-            "fix": f"touch {flag}; echo done anyway; exit 7",
+            "check": f"test -f {flag.as_posix()}",
+            "fix": f"touch {flag.as_posix()}; echo done anyway; exit 7",
         }
         _write_json(isolated_home / ".claude" / "env.json",
                     _manifest(env_checks=[entry]))
@@ -341,7 +345,7 @@ class TestCheckOnly:
         # A check-only entry must never run anything beyond the check --
         # exactly one check invocation, no second (re-check) run either.
         log = tmp_path / "calls.log"
-        entry = {"name": "probe", "check": f"echo ran >> {log}; false",
+        entry = {"name": "probe", "check": f"echo ran >> {log.as_posix()}; false",
                  "description": "manual thing"}
         _write_json(isolated_home / ".claude" / "env.json",
                     _manifest(env_checks=[entry]))
@@ -371,7 +375,7 @@ class TestTimeouts:
     ):
         marker = isolated_home / "fixed"
         entry = {"name": "slow-check", "check": "sleep 3",
-                 "fix": f"touch {marker}", "timeout": 1}
+                 "fix": f"touch {marker.as_posix()}", "timeout": 1}
         _write_json(isolated_home / ".claude" / "env.json",
                     _manifest(env_checks=[entry]))
 
@@ -453,7 +457,7 @@ GPU_FIX = "bash ~/.claude/scripts/env/gpu-stack.sh fix"
 
 class TestElevation:
     def _elevated_entry(self, marker, name="sudoers", fix=SUDOERS_FIX):
-        return {"name": name, "check": f"test -f {marker}",
+        return {"name": name, "check": f"test -f {marker.as_posix()}",
                 "fix": fix, "elevated": True}
 
     def test_missing_privileges_defers_with_descriptor(
@@ -491,7 +495,7 @@ class TestElevation:
         monkeypatch.setattr(engine, "_privileges_available", lambda os_: True)
         marker = isolated_home / "configured"
         entry = self._elevated_entry(
-            marker, fix=f"touch {marker}; echo sudoers configured")
+            marker, fix=f"touch {marker.as_posix()}; echo sudoers configured")
         _write_json(isolated_home / ".claude" / "env.json",
                     _manifest(env_checks=[entry]))
 
@@ -526,8 +530,8 @@ class TestElevation:
             lambda os_: (_ for _ in ()).throw(
                 AssertionError("must not probe privileges for unelevated fix")))
         flag = isolated_home / "flag"
-        entry = {"name": "plain", "check": f"test -f {flag}",
-                 "fix": f"touch {flag}"}
+        entry = {"name": "plain", "check": f"test -f {flag.as_posix()}",
+                 "fix": f"touch {flag.as_posix()}"}
         _write_json(isolated_home / ".claude" / "env.json",
                     _manifest(env_checks=[entry]))
 
@@ -709,12 +713,15 @@ class TestEngineNoWedge:
         monkeypatch.setattr(
             env_features, "subprocess", _fake_subprocess(raising_run))
 
-        source = isolated_home / "src.toml"
-        source.write_text("x")
-        target = isolated_home / ".config" / "starship.toml"
+        # Sibling section: shell_rc, not symlinks -- it converges via pure
+        # Python file edits (no subprocess seam, no symlink privilege), so
+        # the sibling-convergence assertion holds on a stock Windows
+        # machine, where a symlinks sibling would itself defer to elevation
+        # and add a second failure.
+        bashrc = isolated_home / ".bashrc"
         manifest = _manifest(
-            symlinks=[{"name": "starship-config", "source": str(source),
-                       "target": str(target)}],
+            shell_rc=[{"name": "starship-init",
+                       "content": 'eval "$(starship init SHELL_NAME)"'}],
             env_checks=[{"name": "probe", "check": "true", "fix": "true"}],
         )
         _write_json(isolated_home / ".claude" / "env.json", manifest)
@@ -724,8 +731,8 @@ class TestEngineNoWedge:
         assert len(result.failures) == 1
         assert result.failures[0]["type"] == "env_check"
         assert "check could not run" in result.failures[0]["message"]
-        # The symlink section still converged in the same pass.
-        assert target.is_symlink()
+        # The shell_rc section still converged in the same pass.
+        assert "starship init bash" in bashrc.read_text()
         assert read_env_state(str(run_env_pass.data_dir))["last_result"] == "failed"
 
     def test_one_failing_check_never_blocks_the_next(
@@ -734,7 +741,7 @@ class TestEngineNoWedge:
         log = tmp_path / "order.log"
         entries = [
             {"name": "bad", "check": "echo broken; false"},
-            {"name": "good", "check": f"echo good >> {log}; true"},
+            {"name": "good", "check": f"echo good >> {log.as_posix()}; true"},
         ]
         _write_json(isolated_home / ".claude" / "env.json",
                     _manifest(env_checks=entries))

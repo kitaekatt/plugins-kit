@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+from bootstrap.link_compat import link_tree
+
 BOOTSTRAP_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "plugins", "bootstrap")
 )
@@ -27,8 +29,8 @@ def make_fake_bootstrap_root(plugins_dir, manifest=None):
     """Create a fake bootstrap plugin root with symlinked lib/engine and custom defaults."""
     fake_root = plugins_dir / "bootstrap"
     fake_root.mkdir(parents=True, exist_ok=True)
-    (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-    (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+    link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+    link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
     defaults = fake_root / "defaults"
     defaults.mkdir(exist_ok=True)
     config = {

@@ -27,6 +27,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from bootstrap.link_compat import CAN_SYMLINK, link_tree, requires_symlinks
+
 import bootstrap_lib.env_features as env_features
 from bootstrap_lib.engine import _process_env_pass
 from bootstrap_lib.env_features import (
@@ -105,12 +107,15 @@ def run_env_pass(isolated_home, tmp_path):
 # ---------------------------------------------------------------------------
 
 class TestExpandEnvPath:
+    # Compared via Path, not str: expanduser/expandvars keep the manifest's
+    # forward-slash suffix on Windows (e.g. C:\...\home/x.txt), and the
+    # behavior guarded here is WHERE the path resolves, not separator style.
     def test_tilde_expands(self, isolated_home):
-        assert expand_env_path("~/x.txt") == str(isolated_home / "x.txt")
+        assert Path(expand_env_path("~/x.txt")) == isolated_home / "x.txt"
 
     def test_variable_expands(self, isolated_home, monkeypatch):
         monkeypatch.setenv("DEVROOT", str(isolated_home / "Dev"))
-        assert expand_env_path("$DEVROOT/update.sh") == str(
+        assert Path(expand_env_path("$DEVROOT/update.sh")) == (
             isolated_home / "Dev" / "update.sh")
 
     def test_unresolved_variable_is_an_error(self, monkeypatch):
@@ -153,6 +158,7 @@ class TestSymlinks:
         entry.update(overrides)
         return source, target, entry
 
+    @requires_symlinks
     def test_creates_missing_symlink(self, isolated_home, run_env_pass):
         source, target, entry = self._entry(isolated_home)
         source.write_text("data")
@@ -167,6 +173,7 @@ class TestSymlinks:
         assert any("symlink starship-config: linked" in e
                    for e in result.action_entries)
 
+    @requires_symlinks
     def test_correct_symlink_is_idempotent(self, isolated_home, run_env_pass):
         source, target, entry = self._entry(isolated_home)
         source.write_text("data")
@@ -182,6 +189,7 @@ class TestSymlinks:
         assert any("symlink starship-config: ok" in e for e in second.ok_entries)
         assert os.lstat(target).st_mtime_ns == mtime
 
+    @requires_symlinks
     def test_wrong_symlink_is_relinked(self, isolated_home, run_env_pass):
         source, target, entry = self._entry(isolated_home)
         source.write_text("data")
@@ -197,6 +205,7 @@ class TestSymlinks:
         assert result.failures == []
         assert os.path.realpath(target) == os.path.realpath(source)
 
+    @requires_symlinks
     def test_real_file_backed_up_when_backup_true(
         self, isolated_home, run_env_pass
     ):
@@ -216,6 +225,7 @@ class TestSymlinks:
         assert backups[0].read_text() == "precious local edits"
         assert any("backed up" in e for e in result.action_entries)
 
+    @requires_symlinks
     def test_real_file_replaced_without_backup(
         self, isolated_home, run_env_pass
     ):
@@ -231,6 +241,37 @@ class TestSymlinks:
         assert result.failures == []
         assert target.is_symlink()
         assert list(target.parent.glob("*.backup_*")) == []
+
+    @pytest.mark.skipif(
+        CAN_SYMLINK or sys.platform != "win32",
+        reason="covers the unprivileged-Windows deferral branch only",
+    )
+    def test_unprivileged_windows_defers_to_elevation_queue(
+        self, isolated_home, run_env_pass
+    ):
+        """The documented WinError-1314 path: without Developer Mode/admin,
+        the engine defers symlink creation into the elevation queue via a
+        {method: "command"} descriptor instead of surfacing a raw OSError.
+        This is the branch the privilege-skipped tests above cannot cover,
+        locked down on exactly the machines where it fires."""
+        source, target, entry = self._entry(isolated_home)
+        source.write_text("data")
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(symlinks=[entry]))
+
+        result = run_env_pass()
+
+        assert len(result.failures) == 1
+        failure = result.failures[0]
+        assert failure["type"] == "env_symlink"
+        assert failure["persist_across_sessions"] is True
+        assert "requires elevation (WinError 1314)" in failure["message"]
+        assert failure["elevation"]["method"] == "command"
+        assert "ln -sfn" in failure["elevation"]["command"]
+        assert failure["elevation"]["id"] == "symlink:starship-config"
+        assert "Developer Mode" in failure["agent_msg"]
+        # Nothing was created: the fix is deferred, not half-applied.
+        assert not target.exists()
 
     def test_directory_target_is_a_failure(self, isolated_home, run_env_pass):
         source, target, entry = self._entry(isolated_home)
@@ -302,6 +343,7 @@ class TestSymlinks:
         assert len(result.failures) == 1
         assert result.failures[0]["name"] == "(unnamed)"
 
+    @requires_symlinks
     def test_devroot_expansion_via_env_var(
         self, isolated_home, run_env_pass, monkeypatch
     ):
@@ -323,6 +365,7 @@ class TestSymlinks:
 
 
 class TestCheckSymlinkUnit:
+    @requires_symlinks
     def test_dangling_link_to_missing_source_fails(self, tmp_path):
         source = tmp_path / "missing"
         target = tmp_path / "link"
@@ -350,6 +393,7 @@ class TestCheckSymlinkUnit:
         assert path.is_file() and not path.is_symlink()
         assert path.read_text() == "precious"
 
+    @requires_symlinks
     def test_fix_refuses_directory_symlink_alias(self, tmp_path):
         """Textually distinct paths that are the same file (target reaches
         the source through a symlinked ancestor dir) must never destroy the
@@ -369,6 +413,7 @@ class TestCheckSymlinkUnit:
         assert source.is_file() and not source.is_symlink()
         assert source.read_text() == "precious"
 
+    @requires_symlinks
     def test_fix_creates_link_under_symlinked_ancestor_to_other_file(
         self, tmp_path
     ):
@@ -1401,6 +1446,7 @@ class TestSectionShape:
         assert result.failures
         assert read_env_state(str(run_env_pass.data_dir))["last_result"] == "failed"
 
+    @requires_symlinks
     def test_clean_features_stamp_pass_clean(self, isolated_home, run_env_pass):
         source = isolated_home / "src"
         source.write_text("x")
@@ -1430,10 +1476,8 @@ class TestFullEngineEnvE2E:
 
         fake_root = tmp_path / "plugins" / "bootstrap"
         fake_root.mkdir(parents=True)
-        (fake_root / "bootstrap_lib").symlink_to(
-            os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(
-            os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         defaults = fake_root / "defaults"
         defaults.mkdir()
         (defaults / "config.json").write_text(json.dumps({
@@ -1483,6 +1527,7 @@ class TestFullEngineEnvE2E:
             capture_output=True, text=True, env=env,
         )
 
+    @requires_symlinks
     def test_console_pass_applies_features_then_gate_skips(self, tmp_path):
         fake_root, data_dir, home, env, target, bashrc = self._setup(tmp_path)
 
@@ -1512,6 +1557,7 @@ class TestFullEngineEnvE2E:
         assert "env: shell_rc" not in second.stdout
         assert bashrc.read_text() == text
 
+    @requires_symlinks
     def test_console_manifest_edit_reopens_gate(self, tmp_path):
         fake_root, data_dir, home, env, target, bashrc = self._setup(tmp_path)
         assert self._run(fake_root, data_dir, env).returncode == 0

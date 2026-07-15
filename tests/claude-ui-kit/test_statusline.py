@@ -26,9 +26,14 @@ def run_statusline(stdin_text, cwd, extra_env=None):
     env.pop("STATUSLINE_SHOW_MODEL", None)  # test the default unless overridden
     if extra_env:
         env.update(extra_env)
+    # encoding pinned to UTF-8: the statusline emits non-ASCII glyphs
+    # (effort meter blocks, separators); without this, Windows decodes the
+    # pipe as cp1252, the reader thread raises UnicodeDecodeError, and
+    # result.stdout comes back None.
     return subprocess.run(
         ["bash", str(_STATUSLINE)], input=stdin_text, cwd=cwd,
-        env=env, capture_output=True, text=True, timeout=30)
+        env=env, capture_output=True, text=True, timeout=30,
+        encoding="utf-8", errors="replace")
 
 
 @pytest.mark.skipif(not _HAS_TOOLS, reason="bash + jq required")

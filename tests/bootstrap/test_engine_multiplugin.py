@@ -9,6 +9,8 @@ import sys
 
 import pytest
 
+from bootstrap.link_compat import link_tree
+
 
 def _sourced_value(env_file, var):
     """Value of `export <var>=...` from an env file, parsed POSIX-shell style.
@@ -70,8 +72,8 @@ def make_fake_bootstrap_root(tmp_path, manifest=None, self_setup=None):
     """Create a fake bootstrap plugin root with symlinked lib/engine and custom defaults."""
     fake_root = tmp_path / "bootstrap"
     fake_root.mkdir(parents=True)
-    (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-    (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+    link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+    link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
     defaults = fake_root / "defaults"
     defaults.mkdir()
     config = {
@@ -113,8 +115,8 @@ class TestMultiPluginEngine:
 
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -153,8 +155,8 @@ class TestMultiPluginEngine:
 
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -188,8 +190,8 @@ class TestMultiPluginEngine:
 
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -238,8 +240,8 @@ class TestMultiPluginEngine:
 
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -278,8 +280,8 @@ class TestMultiPluginEngine:
 
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -309,8 +311,8 @@ class TestMultiPluginEngine:
 
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -348,8 +350,8 @@ class TestMultiPluginEngine:
 
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -403,8 +405,8 @@ class TestMultiPluginEngine:
 
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -445,8 +447,8 @@ class TestMultiPluginEngine:
 
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -478,8 +480,8 @@ class TestMultiPluginEngine:
         # Simulate cache layout: plugins/cache/mkt/bootstrap/0.5.0/
         cache_dir = tmp_path / "plugins" / "cache" / "mymkt" / "bootstrap" / "0.5.0"
         cache_dir.mkdir(parents=True)
-        (cache_dir / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (cache_dir / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(cache_dir / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(cache_dir / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(cache_dir)
         (cache_dir / "bootstrap.json").write_text(json.dumps({}))
 
@@ -517,8 +519,8 @@ class TestPhase2PluginBootstrap:
         # Set up fake bootstrap root
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
 
         # "installer" plugin: its bootstrap script adds "new-plugin" to the registry
@@ -585,8 +587,8 @@ class TestPhase2PluginBootstrap:
 
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -621,8 +623,8 @@ class TestPhase2PluginBootstrap:
 
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -677,8 +679,8 @@ def _make_dev_layout(tmp_path, plugins):
 
     fake_root = plugins_dir / "bootstrap"
     fake_root.mkdir()
-    (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-    (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+    link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+    link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
     _write_minimal_defaults(fake_root)
     (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -788,8 +790,8 @@ class TestDevLayoutFilter:
         # Use prod_plugins_dir as the plugins_dir for the bootstrap root too
         fake_root = prod_plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -896,8 +898,8 @@ class TestGitDepPinnedCommit:
         plugins_dir.mkdir()
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -945,8 +947,8 @@ class TestMalformedPluginManifest:
 
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -1055,8 +1057,8 @@ class TestCooldownRestamp:
         plugins_dir.mkdir()
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 
@@ -1101,8 +1103,8 @@ class TestScriptContextProjectDir:
 
         fake_root = plugins_dir / "bootstrap"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         _write_minimal_defaults(fake_root)
         (fake_root / "bootstrap.json").write_text(json.dumps({}))
 

@@ -2,8 +2,10 @@
 
 import json
 import os
+import shlex
 import sys
 import types
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -227,14 +229,18 @@ class TestEnvVarsPhase:
         pass resolves the just-exported variable."""
         monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
         marker = tmp_path / "marker"
-        target = str(tmp_path / "devhome")
+        # POSIX-form paths: check/install run through the bash shim, which
+        # eats backslashes in a raw Windows path (the redirect target would
+        # be mangled and the marker never written).
+        marker_sh = marker.as_posix()
+        target = (tmp_path / "devhome").as_posix()
         manifest = {
             "env_vars": [{"name": "BOOTSTRAP_TEST_DEVROOT", "value": target}],
             "tools": [{
                 "name": "fake-ev-tool",
-                "check": f"test -s {marker}",
+                "check": f"test -s {marker_sh}",
                 "install": {
-                    "macos": f'printf %s "$BOOTSTRAP_TEST_DEVROOT" > {marker}',
+                    "macos": f'printf %s "$BOOTSTRAP_TEST_DEVROOT" > {marker_sh}',
                 },
             }],
         }
@@ -253,11 +259,15 @@ class TestEnvVarsPhase:
 
         with patch.dict(os.environ):
             failures, _action, _ok = self._run(manifest, tmp_path)
-            assert os.environ["BOOTSTRAP_TEST_DEVROOT"] == str(isolated_home / "Dev")
+            # Path comparison: expanduser keeps the manifest's "/Dev" suffix
+            # separator on Windows, so a str-equality check is separator-
+            # fragile; the guarded behavior is WHERE the value resolves.
+            exported = os.environ["BOOTSTRAP_TEST_DEVROOT"]
+            assert Path(exported) == isolated_home / "Dev"
 
         assert failures == []
         content = (isolated_home / ".bashrc").read_text()
-        assert export_line("BOOTSTRAP_TEST_DEVROOT", str(isolated_home / "Dev")) in content
+        assert export_line("BOOTSTRAP_TEST_DEVROOT", exported) in content
 
     def test_exports_to_claude_env_file(self, isolated_home, tmp_path, monkeypatch):
         env_file = tmp_path / "claude-env"
@@ -268,8 +278,15 @@ class TestEnvVarsPhase:
             failures, _action, ok_entries = self._run(manifest, tmp_path)
 
         assert failures == []
-        assert f"export BOOTSTRAP_TEST_DEVROOT={isolated_home / 'Dev'}\n" \
-            in env_file.read_text()
+        # The product shlex-quotes the env-file value (intentional -- the
+        # file is sourced by a shell) and the expanded value's separator
+        # style is platform-dependent, so parse the line back instead of
+        # matching a literal string.
+        lines = [l for l in env_file.read_text().splitlines()
+                 if l.startswith("export BOOTSTRAP_TEST_DEVROOT=")]
+        assert len(lines) == 1
+        value = shlex.split(lines[0].split("=", 1)[1])[0]
+        assert Path(value) == isolated_home / "Dev"
         assert any("exported to CLAUDE_ENV_FILE" in e for e in ok_entries)
 
     def test_already_persisted_logs_ok_not_action(

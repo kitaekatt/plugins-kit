@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+from bootstrap.link_compat import link_tree
+
 BOOTSTRAP_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "plugins", "bootstrap")
 )
@@ -48,8 +50,8 @@ class TestEngineIntegration:
         """Create a fake bootstrap root with minimal ecosystem manifest."""
         fake_root = tmp_path / "bootstrap_minimal"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         # Custom defaults with self_setup containing tools
         defaults = fake_root / "defaults"
         defaults.mkdir()
@@ -97,8 +99,8 @@ class TestEngineIntegration:
         """A self_setup with a fake tool should produce JSON failure output."""
         fake_root = tmp_path / "fake_plugin"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         defaults = fake_root / "defaults"
         defaults.mkdir()
         config = {
@@ -128,8 +130,8 @@ class TestEngineIntegration:
         """When install command runs but tool is still missing, failure JSON is emitted."""
         fake_root = tmp_path / "fake_plugin"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
         defaults = fake_root / "defaults"
         defaults.mkdir()
         config = {
@@ -330,9 +332,9 @@ class TestPythonStubIntegration:
         # Build a fake plugin root that injects python_stub_check into self_setup
         fake_root = tmp_path / "bootstrap_minimal"
         fake_root.mkdir()
-        (fake_root / "bootstrap_lib").symlink_to(os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
-        (fake_root / "engine").symlink_to(os.path.join(BOOTSTRAP_ROOT, "engine"))
-        (fake_root / "pyproject.toml").symlink_to(os.path.join(BOOTSTRAP_ROOT, "pyproject.toml"))
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
+        link_tree(fake_root / "pyproject.toml", os.path.join(BOOTSTRAP_ROOT, "pyproject.toml"))
         defaults = fake_root / "defaults"
         defaults.mkdir()
         config = {

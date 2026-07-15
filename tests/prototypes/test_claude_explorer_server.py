@@ -36,7 +36,9 @@ explorer = _load_module()
 @pytest.fixture
 def server(tmp_path):
     """A running server whose project root is a tmp dir (port 0 = ephemeral)."""
-    (tmp_path / "hello.md").write_text("# hi\n", encoding="utf-8")
+    # newline pinned: default text mode translates \n -> \r\n on Windows,
+    # which breaks the byte-exact body assertion downstream.
+    (tmp_path / "hello.md").write_text("# hi\n", encoding="utf-8", newline="\n")
     httpd = explorer.make_server(tmp_path, port=0)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
