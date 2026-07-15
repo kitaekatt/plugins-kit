@@ -452,24 +452,25 @@ def _main():
 
     # Step 7b: Elevation queue -> ONE per-OS remediation script. Harvest every
     # `elevation` descriptor deferred during this pass (apt packages, elevated
-    # commands, a missing-brew installer signal), regenerate the script when the
-    # queue is non-empty, and DELETE a stale script when it is empty (the ops
-    # succeeded, so the item clears). When a script was written, append ONE
-    # aggregated fix-all item naming its path + what it will do; the per-item
-    # needs_elevation failures keep persisting on their own. See
-    # bootstrap_lib/elevation.py and analysis-dividing-line.md section 4.3.
+    # commands, a missing-brew installer signal), regenerate queue.json when the
+    # queue is non-empty, and DELETE a stale queue when it is empty (the ops
+    # succeeded, so the item clears). When a queue was written, append ONE
+    # aggregated fix-all item naming what it covers; the per-item
+    # needs_elevation failures are suppressed by the message layer, which the
+    # aggregate speaks for. See bootstrap_lib/fix_queue.py and
+    # analysis-dividing-line.md section 4.3.
     #
     # On a --fix-all run (the user TYPED 'fix-all' -- explicit consent for
-    # elevation) the step additionally LAUNCHES the Windows script, waits for
-    # it, and on success spawns a re-check pass so the elevated items clear in
-    # the same fix-all cycle. SessionStart/background passes never launch.
-    # Plain --console debug runs (no --fix-all) skip the step entirely,
-    # preserving their "no file writes" contract.
+    # elevation) the step additionally LAUNCHES the fix runner, waits for it,
+    # and on success spawns a re-check pass so the deferred items clear in the
+    # same fix-all cycle. SessionStart/background passes never launch. Plain
+    # --console debug runs (no --fix-all) skip the step entirely, preserving
+    # their "no file writes" contract.
     if not args.console or args.fix_all:
         if _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
                            bootstrap_label):
-            # Elevated script completed; a re-check pass was spawned and has
-            # emitted its own results -- this pass is done.
+            # The runner completed; a re-check pass was spawned and has emitted
+            # its own results -- this pass is done.
             return
 
     if args.console:
@@ -562,46 +563,46 @@ def _main():
 
 def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
                     label="bootstrap"):
-    """Step 7b: elevation queue -> script (+ interactive launch on fix-all).
+    """Step 7b: deferred-op queue -> queue.json (+ interactive launch on fix-all).
 
-    Harvests the pass's elevation descriptors, writes/clears the per-OS
-    remediation script, and appends the aggregated elevation_script failure
-    when a script exists.
+    Harvests the pass's elevation descriptors, writes/clears queue.json and its
+    run-it-yourself shim, and appends the aggregated elevation_script failure
+    when a queue exists.
 
     On a --fix-all run (interactive, user-consented) with a non-empty queue,
-    the engine LAUNCHES the script itself and waits (bounded) for it:
+    the engine LAUNCHES the fix runner itself and waits (bounded) for it:
 
-    - Windows: `Start-Process -Verb RunAs -Wait` on the .bat -- the UAC
-      prompt is a direct consequence of the user's typed 'fix-all'. On
-      success a re-check pass is spawned (the engine re-runs WITHOUT
-      --fix-all, so it can never loop the prompt) and this function returns
-      True: the caller must return without emitting, the re-check pass owns
-      the output. On decline/failure/timeout the aggregated item falls back
-      to the manual instruction, prefixed with the launch outcome.
-    - Unix: no launch is attempted (launch_elevation_script returns None) --
-      the fix-all run has no TTY for a foreground sudo, so the manual
-      instruction stands unchanged.
+    - Windows: `Start-Process -Verb RunAs -Wait` on the engine's interpreter --
+      the UAC prompt is a direct consequence of the user's typed 'fix-all'. On
+      success a re-check pass is spawned (the engine re-runs WITHOUT --fix-all,
+      so it can never loop the prompt) and this function returns True: the
+      caller must return without emitting, the re-check pass owns the output.
+      On decline/failure/timeout the aggregated item falls back to the shim
+      instruction, prefixed with the launch outcome.
+    - Unix: no launch is attempted (launch_fix_runner returns None) -- the
+      fix-all run has no TTY for a sudo or secret prompt, so the shim
+      instruction stands.
 
     SessionStart/background passes never pass --fix-all, so their behavior is
-    exactly the pre-launch behavior: write the script, surface the item.
+    exactly the pre-launch behavior: write the queue, surface the item.
 
     Returns True when a re-check pass was spawned (caller stops), else False.
     """
-    from .elevation import (
-        queue_from_failures, write_or_clear_script, elevation_script_failure,
-        launch_elevation_script,
+    from .fix_queue import (
+        queue_from_failures, write_or_clear_queue, fix_queue_failure,
+        launch_fix_runner,
     )
-    queue = queue_from_failures(all_failures, current_os)
-    path = write_or_clear_script(queue, data_dir, current_os)
+    tasks = queue_from_failures(all_failures, current_os)
+    path = write_or_clear_queue(tasks, data_dir, current_os)
     if not path:
         return False
 
     launch_detail = None
     if getattr(args, "fix_all", False):
-        result = launch_elevation_script(path, current_os)
+        result = launch_fix_runner(path, current_os, tasks=tasks)
         if result is not None:
             if result.succeeded:
-                note = (f"{label} -> elevation script completed successfully "
+                note = (f"{label} -> fix runner completed successfully "
                         f"({result.detail}); running re-check pass")
                 if args.console:
                     print(note)
@@ -612,20 +613,17 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
                 return True
             launch_detail = result.detail
 
-    item = elevation_script_failure(queue, current_os, path,
-                                    launch_detail=launch_detail)
+    item = fix_queue_failure(tasks, current_os, data_dir,
+                             launch_detail=launch_detail)
     if current_os == "windows" and not getattr(args, "fix_all", False):
-        # Tell Claude how a fix-all becomes the consented interactive launch:
-        # re-run the engine with --fix-all and the engine launches the script
-        # itself (the UAC prompt is then a consequence of the user's request).
+        # Name the consented invocation for Claude: on 'fix-all' it re-runs the
+        # engine with --fix-all, and the engine launches the runner itself (so
+        # the UAC prompt is a consequence of the user's request, not a surprise).
         hook = os.path.join(plugin_root, "hooks", "sessionstart",
                             "session-bootstrap.sh")
+        item["fix_all_cmd"] = f'bash "{hook}" --console --fix-all'
         item["agent_msg"] += (
-            f" ALTERNATIVELY, if the user types 'fix-all', re-run bootstrap "
-            f"interactively with elevation consent: "
-            f"`bash \"{hook}\" --console --fix-all` -- the engine then "
-            f"launches the script itself (a UAC prompt will appear), waits "
-            f"for it, and re-checks in the same run."
+            f" The fix-all invocation is: `{item['fix_all_cmd']}`."
         )
     all_failures.append(item)
     return False
@@ -1342,10 +1340,10 @@ def _tool_check(ctx):
 
 
 def _privileges_available(current_os):
-    """Module-level indirection over elevation.privileges_available so the
+    """Module-level indirection over fix_queue.privileges_available so the
     install-command strategy's defer-vs-run decision is monkeypatchable in tests
-    without touching the elevation module's probes."""
-    from .elevation import privileges_available
+    without touching the probes themselves."""
+    from .fix_queue import privileges_available
     return privileges_available(current_os)
 
 
@@ -1439,13 +1437,12 @@ def _strategy_scoop(ctx):
             # None keeps the item off the fix-all path (manual-attention only).
             "install_cmd": None,
             "elevation": {"method": "command", "command": manual_cmd,
-                          "os": ctx.current_os},
+                          "os": ctx.current_os, "id": f"tool:{ctx.name}",
+                          "label": f"Install {ctx.name}"},
             "agent_msg": (
                 f"Installing {ctx.name} (scoop package {pkg}) needs "
                 f"administrator rights, which a background hook must not "
-                f"request. Run the elevated remediation script bootstrap "
-                f"generated (see the elevation item), or run `{manual_cmd}` "
-                f"from an elevated shell, then type 'fix-all'."
+                f"request; bootstrap deferred it into the fix queue."
             ),
             "plugin": ctx.plugin_name,
             "persist_across_sessions": True,
@@ -1665,12 +1662,13 @@ def _strategy_install_command(ctx):
             "message": f"{result.subject} install requires elevation: {manual_cmd}",
             "install_state": "needs_elevation",
             "install_cmd": None,
-            "elevation": {"method": "command", "command": manual_cmd, "os": ctx.current_os},
+            "elevation": {"method": "command", "command": manual_cmd,
+                          "os": ctx.current_os, "id": f"tool:{result.subject}",
+                          "label": f"Install {result.subject}"},
             "agent_msg": (
                 f"Installing {result.subject} needs elevated privileges, which a "
-                f"background hook must not request. Run the elevated remediation "
-                f"script bootstrap generated (see the elevation item), or run "
-                f"`{manual_cmd}` with the needed privileges, then type 'fix-all'."
+                f"background hook must not request; bootstrap deferred it into "
+                f"the fix queue."
             ),
             "plugin": ctx.plugin_name,
             "persist_across_sessions": True,
@@ -3476,17 +3474,20 @@ def _env_phase_symlinks(ctx):
                     f"{name}: creating symlink {tgt} -> {src} requires "
                     f"elevation (WinError 1314)"
                 ),
-                elevation={"method": "command", "command": manual_cmd,
-                           "os": ctx.current_os},
+                elevation={
+                    "method": "command", "command": manual_cmd,
+                    "os": ctx.current_os, "id": f"symlink:{name}",
+                    # The label stands alone in the runner's plan and in the
+                    # session message's item list, so it names the entry rather
+                    # than restating the WinError.
+                    "label": entry.get("description") or f"Link {name}",
+                },
                 agent_msg=(
-                    f"The symlink '{name}' ({tgt} -> {src}) could not be "
-                    f"created: unelevated symlink creation on Windows needs "
-                    f"Developer Mode or administrator rights (WinError "
-                    f"1314). Bootstrap queued it into the elevation "
-                    f"remediation script (see the elevation item). The user "
-                    f"can instead enable Windows Developer Mode (Settings > "
-                    f"System > For developers) and type 'fix-all' to let "
-                    f"bootstrap create it unelevated."
+                    f"The symlink '{name}' ({tgt} -> {src}) needs elevation on "
+                    f"Windows (WinError 1314); bootstrap deferred it into the "
+                    f"fix queue. Enabling Windows Developer Mode (Settings > "
+                    f"System > For developers) would let bootstrap create it "
+                    f"unelevated instead."
                 ),
                 persist_across_sessions=True,
             )
@@ -3923,16 +3924,23 @@ def _env_phase_env_checks(ctx):
                 f"env_check {name}: needs elevation - deferred; run: {fix}",
                 type="env_check", name=name,
                 message=f"{name}: fix requires elevation: {fix}",
-                elevation={"method": "command", "command": fix,
-                           "os": ctx.current_os},
+                elevation={
+                    "method": "command", "command": fix,
+                    "os": ctx.current_os, "id": f"env_check:{name}",
+                    # `description` is the entry's own human phrasing; the name
+                    # is the honest fallback (better a terse slug than an
+                    # invented sentence about what the fix does).
+                    "label": entry.get("description") or name,
+                    # The entry already declares how long its fix may take; the
+                    # engine bounds its fix-all wait by the queue's declarations
+                    # rather than one blanket number.
+                    "timeout": timeout,
+                },
                 agent_msg=(
                     f"The env check '{name}' is not configured and its fix "
                     f"needs elevated privileges, which a background "
-                    f"SessionStart hook must not request. Bootstrap queued "
-                    f"it into the remediation script (see the elevation "
-                    f"item); the user can also run `{fix}` with the needed "
-                    f"privileges, then type 'fix-all' so the re-check "
-                    f"confirms it."
+                    f"SessionStart hook must not request; bootstrap deferred "
+                    f"it into the fix queue."
                 ),
                 persist_across_sessions=True,
             )
@@ -4546,8 +4554,49 @@ _AUTO_FIXABLE_TYPES = frozenset({
 })
 
 
+def _spoken_for(failure):
+    """True when the aggregated elevation_script item covers this failure.
+
+    Every failure carrying an `elevation` descriptor contributed a task to the
+    fix queue, so the aggregate's offer resolves it.
+    """
+    return isinstance(failure.get("elevation"), dict)
+
+
+def _visible_failures(failures):
+    """Drop items the elevation aggregate speaks for, keeping the aggregate.
+
+    No-op when no aggregate is present: without one, nothing else would report
+    those failures and they would vanish silently.
+    """
+    if not any(f.get("type") == "elevation_script" for f in failures):
+        return failures
+    return [f for f in failures if not _spoken_for(f)]
+
+
+def _is_elevation_only(failures):
+    """True when every failure is the elevation aggregate or covered by it.
+
+    The predicate for the focused message: an elevation_script item never
+    arrives alone (the per-task failures it summarizes persist alongside it by
+    design), so "all failures are elevation_script" would never fire.
+    """
+    has_aggregate = any(f.get("type") == "elevation_script" for f in failures)
+    if not has_aggregate:
+        return False
+    return all(f.get("type") == "elevation_script" or _spoken_for(f)
+               for f in failures)
+
+
 def _is_auto_fixable(failure):
     t = failure.get("type")
+    if t == "elevation_script":
+        # fix-all launches the fix runner itself -- but only where that launch
+        # can actually happen. `fix_all_cmd` is set exactly when it can (Windows,
+        # and not already inside a fix-all run), so it doubles as the eligibility
+        # signal: on Unix there is no TTY to prompt on, and re-offering fix-all
+        # during a fix-all run that just failed would loop the prompt.
+        return bool(failure.get("fix_all_cmd"))
     if t == "tool":
         # Tools are fix-all eligible only when we know how to install them
         # AND the install hasn't already run successfully. If install_state
@@ -4617,6 +4666,31 @@ def _emit_unsupported_platform(message, data_dir, args):
         print(json.dumps(response))
 
 
+def _emit_focused(failure, label, output_file, persistent_output_file):
+    """Emit ONE failure's own messages as the whole response.
+
+    Used when every failure shares a single remediation, so the numbered list
+    and fix-all footer would only bury it.
+    """
+    user_msg = failure.get("user_msg", failure.get("message", ""))
+    agent_msg = failure.get("agent_msg", failure.get("message", ""))
+    response = {
+        "continue": True,
+        "suppressOutput": False,
+        "systemMessage": f"{label}: {user_msg}",
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit" if output_file else "SessionStart",
+            "additionalContext": f"{label} -> {agent_msg}",
+        },
+    }
+    if output_file:
+        _write_atomic(output_file, json.dumps(response))
+        if persistent_output_file:
+            _write_atomic(persistent_output_file, json.dumps(response))
+    else:
+        print(json.dumps(response))
+
+
 def emit_failure_response(failures, current_os, log_content, label="bootstrap", output_file=None, persistent_output_file=None):
     """Emit hook JSON with fix-all directives to stdout or file.
 
@@ -4625,6 +4699,14 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
     subsequent sessions can re-prime bootstrap_display.pending from it.
     """
     agent_lines = [f"{label} -> Setup issues found. Fix in order:\n"]
+
+    # Items the aggregated elevation_script item already speaks for are not
+    # listed again: each carries an `elevation` descriptor that IS a task in the
+    # queue the aggregate offers to run, and re-stating the elevation rationale
+    # once per item is what made this output unreadable. Suppression is
+    # conditional on the aggregate actually existing -- if the queue write
+    # failed there is nothing speaking for them, so they must surface raw.
+    failures = _visible_failures(failures)
 
     for i, f in enumerate(failures, 1):
         plugin_tag = f" [{f['plugin']}]" if f.get("plugin", "bootstrap") != "bootstrap" else ""
@@ -4709,9 +4791,9 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
         elif f["type"] == "python_stub":
             agent_lines.append(f"{i}. python stub fix needed{plugin_tag}: {f.get('agent_msg', f.get('message', 'see log'))}")
         elif f["type"] == "elevation_script":
-            # Aggregated remediation: names the ONE per-OS script + what it does.
-            # Manual-only (the user must supply credentials), so not fix-all
-            # eligible -- _AUTO_FIXABLE_TYPES omits it.
+            # Aggregated remediation: names what the ONE fix queue covers.
+            # Fix-all eligible where the engine can actually launch the runner
+            # (Windows, outside an existing fix-all run) -- see _is_auto_fixable.
             agent_lines.append(f"{i}. {f.get('agent_msg', f.get('message', 'run the elevation remediation script'))}{plugin_tag}")
         elif f["type"] == "manifest_parse":
             agent_lines.append(f"{i}. {f.get('agent_msg', f.get('message', 'manifest parse error'))}{plugin_tag}")
@@ -4751,44 +4833,25 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
     agent_lines.append(agent_trailer)
     agent_msg = "\n".join(agent_lines)
 
-    # Special-case: if all failures are python_stub, emit a focused, user-friendly
-    # response (no log_content noise, no "fix-all" boilerplate — the user can't
-    # tell Claude to fix this since it requires admin elevation on their machine).
+    # Focused special-cases: when every failure shares ONE remediation, the
+    # numbered list + fix-all boilerplate above is noise. Emit that item's own
+    # structured messages instead and drop log_content entirely.
+    #
+    # python_stub: Python itself is broken, so there is nothing to enumerate.
+    # elevation-only: one queue, one offer -- the aggregate already names what
+    # it covers, and the per-task items are suppressed above.
+    focus = None
     python_stub_failures = [f for f in failures if f["type"] == "python_stub"]
-    only_python_stub = bool(python_stub_failures) and len(python_stub_failures) == len(failures)
+    if python_stub_failures and len(python_stub_failures) == len(failures):
+        focus = python_stub_failures[0]
+    elif _is_elevation_only(failures):
+        focus = next(f for f in failures if f["type"] == "elevation_script")
 
-    if only_python_stub:
-        # Use the first python_stub failure's structured messages.
-        ps = python_stub_failures[0]
-        focused_user_msg = ps.get("user_msg", ps.get("message", ""))
-        focused_agent_msg = ps.get("agent_msg", ps.get("message", ""))
-        if output_file:
-            response = {
-                "continue": True,
-                "suppressOutput": False,
-                "systemMessage": f"{label}: {focused_user_msg}",
-                "hookSpecificOutput": {
-                    "hookEventName": "UserPromptSubmit",
-                    "additionalContext": f"{label} -> {focused_agent_msg}",
-                },
-            }
-            _write_atomic(output_file, json.dumps(response))
-            if persistent_output_file:
-                _write_atomic(persistent_output_file, json.dumps(response))
-        else:
-            response = {
-                "continue": True,
-                "suppressOutput": False,
-                "systemMessage": f"{label}: {focused_user_msg}",
-                "hookSpecificOutput": {
-                    "hookEventName": "SessionStart",
-                    "additionalContext": f"{label} -> {focused_agent_msg}",
-                },
-            }
-            print(json.dumps(response))
+    if focus is not None:
+        _emit_focused(focus, label, output_file, persistent_output_file)
         return
 
-    # General path: mixed or non-python_stub failures.
+    # General path: mixed failures.
     if output_file:
         # Background mode: consumed by UserPromptSubmit hook.
         # `additionalContext` gives Claude the full log + fix directives,

@@ -180,14 +180,14 @@ def elevated_install_command(package: str) -> str:
 
     Rendered into the Windows remediation .bat, whose queued commands run
     through Git Bash (``"<bash.exe>" -c "<cmd>"`` -- see
-    :func:`bootstrap_lib.elevation._windows_command_line`). ``scoop`` is a
+    :mod:`bootstrap_lib.fix_runner`). ``scoop`` is a
     PowerShell function, so the command shells out to ``powershell -Command``
     explicitly instead of relying on bash resolving the shim; the elevated
     process keeps the invoking user's profile (UAC same-user elevation), so
     the user-PATH ``~/scoop/shims`` entry resolves ``scoop`` there. Single
-    quotes only: the .bat renderer rejects double-quoted commands. The
-    bucket add is included for ``bucket/pkg`` form (idempotent; benign when
-    already added).
+    quotes only: the ``powershell -Command '...'`` wrapper cannot carry an
+    unescaped double quote. The bucket add is included for ``bucket/pkg`` form
+    (idempotent; benign when already added).
     """
     bucket, _pkg = (package.split("/", 1) if "/" in package else (None, package))
     steps = []

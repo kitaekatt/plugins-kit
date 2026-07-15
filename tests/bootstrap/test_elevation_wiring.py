@@ -15,7 +15,7 @@ import os
 
 import bootstrap_lib.engine as engine
 import bootstrap_lib.brew as brew_mod
-import bootstrap_lib.elevation as elev
+import bootstrap_lib.fix_queue as elev
 import bootstrap_lib.path_check as path_check
 import bootstrap_lib.path_repair as path_repair
 import bootstrap_lib.tool_paths as tool_paths
@@ -47,9 +47,9 @@ class TestBrewInstallerSignal:
         )
         assert failure["install_state"] == "brew_failed"
         assert failure["elevation"] == {"method": "brew_installer", "os": "macos"}
-        # And the queue harvests it into the brew_installer flag.
-        q = elev.queue_from_failures([failure], "macos")
-        assert q.brew_installer is True
+        # And the queue harvests it into a brew_installer task.
+        tasks = elev.queue_from_failures([failure], "macos")
+        assert [t.kind for t in tasks] == ["brew_installer"]
 
     def test_present_brew_install_failure_has_no_installer_descriptor(self, monkeypatch):
         # brew present but the formula install fails: NOT a missing-installer case.
@@ -74,23 +74,106 @@ class TestBrewInstallerSignal:
 # --------------------------------------------------------------------------- #
 
 class TestElevationScriptRendering:
-    def test_failure_line_includes_script_path_and_is_manual(self, tmp_path, capsys):
-        path = "/data/elevate/install-elevated.sh"
-        q = elev.ElevationQueue(apt_packages=["net-tools"])
-        agg = elev.elevation_script_failure(q, "ubuntu", path)
-        # Not fix-all eligible: only the user can supply credentials.
+    def _agg(self, current_os, data_dir, fix_all_cmd=None):
+        tasks = elev.queue_from_failures(
+            [{"elevation": {"method": "apt", "package": "net-tools", "os": current_os}}],
+            current_os)
+        agg = elev.fix_queue_failure(tasks, current_os, data_dir)
+        if fix_all_cmd:
+            agg["fix_all_cmd"] = fix_all_cmd
+        return agg
+
+    def test_windows_aggregate_is_fix_all_eligible(self, capsys):
+        """The engine LAUNCHES the runner on fix-all (0.37.0), so the footer must
+        not claim otherwise. Before this, an elevation-only pass printed 'None of
+        these are fix-all eligible' directly above an item saying to type
+        fix-all."""
+        agg = self._agg("windows", "C:/data", fix_all_cmd='bash "hook.sh" --console --fix-all')
+        assert engine._is_auto_fixable(agg) is True
+
+    def test_unix_aggregate_is_not_fix_all_eligible(self):
+        """No fix_all_cmd on Unix: the fix-all run has no TTY to prompt on, so
+        offering it would promise a prompt that cannot be answered."""
+        agg = self._agg("ubuntu", "/data")
         assert engine._is_auto_fixable(agg) is False
 
+    def test_aggregate_during_a_failed_fix_all_does_not_re_offer_fix_all(self):
+        """Loop guard: the re-check pass drops --fix-all, so no fix_all_cmd is
+        attached and the footer cannot invite another prompt."""
+        agg = self._agg("windows", "C:/data")  # no fix_all_cmd
+        assert engine._is_auto_fixable(agg) is False
+
+    def test_elevation_only_pass_emits_the_focused_message(self, capsys):
+        """Two lines, not a numbered policy essay."""
+        agg = self._agg("windows", "C:/data", fix_all_cmd="cmd")
+        engine.emit_failure_response(
+            [agg], current_os="windows", log_content="LOGNOISE",
+            label="plugins-kit:bootstrap@test",
+        )
+        payload = json.loads(capsys.readouterr().out)
+        sm = payload["systemMessage"]
+        assert "Bootstrap found issues that need admin access: Install net-tools." in sm
+        assert "Type 'fix-all' to fix them." in sm
+        assert "You'll be asked to approve an admin prompt." in sm
+        # The focused path drops the log dump and the numbered-list boilerplate.
+        assert "LOGNOISE" not in sm
+        assert "Fix in order:" not in sm
+        assert "'fixed'" not in sm
+
+    def test_unix_focused_message_offers_the_shim(self, capsys):
+        agg = self._agg("ubuntu", "/data")
         engine.emit_failure_response(
             [agg], current_os="ubuntu", log_content="log",
             label="plugins-kit:bootstrap@test",
         )
-        payload = json.loads(capsys.readouterr().out)
-        ac = payload["hookSpecificOutput"]["additionalContext"]
-        assert path in ac
-        assert "sudo bash" in ac
-        # All-manual footer wording (no fix-all-eligible items).
-        assert "None of these are fix-all eligible" in ac
+        sm = json.loads(capsys.readouterr().out)["systemMessage"]
+        assert "bootstrap-fix.sh" in sm
+        assert "Type 'fix-all'" not in sm
+
+    def test_per_task_items_are_suppressed_by_the_aggregate(self, capsys):
+        """The aggregate speaks for them; repeating the elevation rationale once
+        per item is what made the old output unreadable."""
+        per_item = {
+            "type": "env_check", "name": "ssh-server-windows",
+            "message": "m", "agent_msg": "PER_ITEM_PROSE",
+            "elevation": {"method": "command", "command": "bash x.sh fix",
+                          "os": "windows", "label": "ssh-server-windows"},
+        }
+        agg = self._agg("windows", "C:/data", fix_all_cmd="cmd")
+        engine.emit_failure_response(
+            [per_item, agg], current_os="windows", log_content="log",
+            label="plugins-kit:bootstrap@test",
+        )
+        ac = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+        assert "PER_ITEM_PROSE" not in ac
+
+    def test_per_task_items_surface_raw_when_no_aggregate_exists(self, capsys):
+        """If the queue write failed there is nothing speaking for them, so they
+        must not vanish silently."""
+        per_item = {
+            "type": "env_check", "name": "ssh", "message": "m",
+            "agent_msg": "PER_ITEM_PROSE",
+            "elevation": {"method": "command", "command": "x", "os": "windows"},
+        }
+        engine.emit_failure_response(
+            [per_item], current_os="windows", log_content="log",
+            label="plugins-kit:bootstrap@test",
+        )
+        ac = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+        assert "PER_ITEM_PROSE" in ac
+
+    def test_mixed_failures_fall_back_to_the_numbered_list(self, capsys):
+        """A non-elevation failure alongside the aggregate means the focused
+        message would hide it."""
+        other = {"type": "venv", "name": "p4-kit", "message": "venv broken",
+                 "remediation_cmd": "uv sync"}
+        agg = self._agg("windows", "C:/data", fix_all_cmd="cmd")
+        engine.emit_failure_response(
+            [other, agg], current_os="windows", log_content="log",
+            label="plugins-kit:bootstrap@test",
+        )
+        ac = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+        assert "Fix in order:" in ac
 
 
 # --------------------------------------------------------------------------- #
@@ -122,8 +205,8 @@ class TestFixAllInteractiveLaunch:
         self._pin_bash(monkeypatch)
         launches = []
         monkeypatch.setattr(
-            elev, "launch_elevation_script",
-            lambda path, current_os, timeout=elev.ELEVATION_LAUNCH_TIMEOUT:
+            elev, "launch_fix_runner",
+            lambda path, current_os, timeout=elev.LAUNCH_TIMEOUT, tasks=None:
             (launches.append((path, current_os)),
              elev.LaunchResult(launched=True, succeeded=True, detail="exit code 0"))[1])
         rechecks = []
@@ -143,14 +226,14 @@ class TestFixAllInteractiveLaunch:
         assert all(f["type"] != "elevation_script" for f in failures)
         # Outcome reported (launched + exit status) on the console run.
         out = capsys.readouterr().out
-        assert "elevation script completed successfully" in out
+        assert "fix runner completed successfully" in out
         assert "exit code 0" in out
 
     def test_decline_falls_back_to_manual_message_no_loop(self, tmp_path, monkeypatch):
         """UAC declined: fall back to today's message, never re-prompt."""
         self._pin_bash(monkeypatch)
         monkeypatch.setattr(
-            elev, "launch_elevation_script",
+            elev, "launch_fix_runner",
             lambda *a, **k: elev.LaunchResult(
                 launched=True, succeeded=False,
                 detail="The operation was canceled by the user"))
@@ -168,18 +251,18 @@ class TestFixAllInteractiveLaunch:
         agg = [f for f in failures if f["type"] == "elevation_script"]
         assert len(agg) == 1
         assert agg[0]["user_msg"].startswith(
-            "fix-all launched the elevation script but it did not complete "
+            "fix-all launched the fix runner but it did not complete "
             "(The operation was canceled by the user).")
         # Manual instruction remains as the fallback.
-        assert "double-click" in agg[0]["agent_msg"]
+        assert "bootstrap-fix.bat" in agg[0]["agent_msg"]
 
     def test_timeout_falls_back_to_manual_message(self, tmp_path, monkeypatch):
         self._pin_bash(monkeypatch)
         monkeypatch.setattr(
-            elev, "launch_elevation_script",
+            elev, "launch_fix_runner",
             lambda *a, **k: elev.LaunchResult(
                 launched=True, succeeded=False,
-                detail="timed out after 600s waiting for the elevated script"))
+                detail="timed out after 600s waiting for the fix runner"))
 
         failures = [_win_failure()]
         stopped = engine._elevation_step(
@@ -194,7 +277,7 @@ class TestFixAllInteractiveLaunch:
         """A pass WITHOUT --fix-all (SessionStart/background) must never launch."""
         self._pin_bash(monkeypatch)
         monkeypatch.setattr(
-            elev, "launch_elevation_script",
+            elev, "launch_fix_runner",
             lambda *a, **k: (_ for _ in ()).throw(
                 AssertionError("SessionStart pass must never launch")))
 
@@ -230,7 +313,7 @@ class TestFixAllInteractiveLaunch:
         assert recheck_calls == []
         agg = [f for f in failures if f["type"] == "elevation_script"][0]
         assert "did not complete" not in agg["user_msg"]
-        assert "sudo bash" in agg["agent_msg"]
+        assert "bootstrap-fix.sh" in agg["agent_msg"]
 
     def test_empty_queue_is_noop(self, tmp_path):
         failures = [{"type": "tool", "name": "x", "install_state": "install_failed"}]
@@ -274,13 +357,13 @@ class TestNextSessionPickup:
         pass1 = [{"type": "tool", "name": "net-tools", "install_state": "needs_elevation",
                   "elevation": {"method": "apt", "package": "net-tools", "os": "ubuntu"}}]
         q1 = elev.queue_from_failures(pass1, "ubuntu")
-        p1 = elev.write_or_clear_script(q1, data_dir, "ubuntu")
+        p1 = elev.write_or_clear_queue(q1, data_dir, "ubuntu")
         assert p1 and os.path.isfile(p1)
 
         # Pass 2 (next session): the user ran the script, the tool now resolves,
         # so it produces no needs_elevation failure -> empty queue -> script gone.
         pass2 = []
         q2 = elev.queue_from_failures(pass2, "ubuntu")
-        p2 = elev.write_or_clear_script(q2, data_dir, "ubuntu")
+        p2 = elev.write_or_clear_queue(q2, data_dir, "ubuntu")
         assert p2 is None
         assert not os.path.exists(p1)

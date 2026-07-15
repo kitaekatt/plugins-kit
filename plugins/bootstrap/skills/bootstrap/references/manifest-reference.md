@@ -350,12 +350,12 @@ may mix strings and objects freely and every legacy spelling keeps parsing.
 | Form | OS | Meaning |
 |------|----|---------|
 | `{"scoop": "bucket/pkg"}` | windows | Install via Scoop (userspace, no admin). `bucket/pkg` is the existing Scoop grammar. |
-| `{"scoop": "bucket/pkg", "elevated": true}` | windows | A Scoop package whose manifest is admin-gated (a `pre_install` `is_admin` check, e.g. `extras/tailscale`). Without privileges the install is **deferred** into the elevation queue (a `powershell -Command 'scoop install …'` line in the remediation `.bat`), never attempted unelevated. |
+| `{"scoop": "bucket/pkg", "elevated": true}` | windows | A Scoop package whose manifest is admin-gated (a `pre_install` `is_admin` check, e.g. `extras/tailscale`). Without privileges the install is **deferred** into the fix queue (a `powershell -Command 'scoop install …'` task the fix runner executes elevated), never attempted unelevated. |
 | `{"brew": "formula"}` | macos | `brew install <formula>` (string shorthand = formula name). |
 | `{"brew": {"cask": "name"}}` | macos | `brew install --cask <name>`. |
 | `{"brew": {"formula": "name", "tap": "user/repo"}}` | macos | `brew install <tap/>name`; `formula` XOR `cask`, `tap` optional. |
 | `{"apt": "pkg"}` | ubuntu | `apt-get install -y <pkg>` (string package name only; elevation implied). |
-| `{"command": "…", "elevated": true\|false}` | any | Opaque shell command; `elevated: true` routes it through the elevation queue when privileges are missing. |
+| `{"command": "…", "elevated": true\|false}` | any | Opaque shell command; `elevated: true` routes it through the fix queue when privileges are missing. The command is carried as data and reaches `bash -c` as one argument, so it may contain double quotes and may spell `~` / `$HOME` (the runner restores the invoking user's `HOME` inside the sudo, so a tilde means *your* home, not root's). |
 | `"…"` (bare string) | any | Exactly equivalent to `{"command": "…", "elevated": false}`. |
 | `"manual"` (sentinel) | any | No unattended installer: bootstrap **verifies** the tool resolves on PATH but never tries to install it. Not a fix-all item. |
 | `"skip"` (sentinel) | any | Not applicable on this OS: the entry is skipped entirely (no check, no install, verbose-only log line). Use for tools wanted only on some OSes. Omitting the OS key instead means "must already resolve on this OS" and surfaces a FAILED item when it does not. Canonical object form: `{"skip": true}`. Do not declare both `"skip"` and a same-OS `download` block. |
@@ -402,17 +402,17 @@ install attempt the tool is re-checked regardless of the installer's exit code.
   an otherwise-clean install — is reported as a failed install carrying the
   captured scoop error. Admin-gated packages must declare
   `{"scoop": …, "elevated": true}` (see the object forms above) so the install
-  defers to the remediation script instead of failing unelevated.
+  defers to the fix queue instead of failing unelevated.
 - **brew** is **never auto-installed** (`ensure_brew` is detect-only). When brew
   is missing while a brew-backed entry is pending, the entry surfaces a
-  `brew_failed` item AND signals the elevation queue to lead the macOS
-  remediation script with the official Homebrew installer (one user-run step;
-  brew entries then install unattended on the next pass).
+  `brew_failed` item AND signals the fix queue to lead the macOS queue with a
+  `brew_installer` task running the official Homebrew installer (one user-run
+  step; brew entries then install unattended on the next pass).
 - **apt** always needs root — see elevation below. The backend runs `apt-get
   update` **once per pass**, immediately before the first *direct* apt install it
   performs, so a stale/empty package index does not fail an installable package.
   It is a single per-pass guard — not per package, and not on the deferred path
-  (that update instead leads the emitted remediation script).
+  (there the runner's own `apt` task opens with the update instead).
 
 **Declare a `check` command on cask entries.** A GUI cask (e.g.
 `google-chrome`, `kitty`) usually has no CLI binary on PATH, so the resolve step
@@ -436,46 +436,71 @@ Ubuntu/macOS, an admin-token check on Windows.
   `sudo -n` pass, so apt entries install silently in the hook.
 - **Privileges missing** → the strategy **defers** instead of attempting. It
   records a persistent per-item `needs_elevation` failure carrying a structured
-  `elevation` descriptor (`{method: apt|command|brew_installer, …}`).
+  `elevation` descriptor (`{method: apt|command|brew_installer, os, id, label}`).
+
+The descriptor's **`label`** is the one field a human reads — it is what the
+session message lists and what the runner's plan prints, so it must stand alone
+without the surrounding prose. Its source: an entry's optional `description`,
+else the entry's `name` (tools read `Install <name>`).
 
 At the end of the pass the engine harvests every `elevation` descriptor for the
-current OS into one queue and writes **ONE** remediation script:
+current OS into **ONE queue file**, plus a small launcher shim:
 
-- **Location**: `<data_dir>/elevate/install-elevated.{sh|bat}`.
-- **Regenerated every pass** from the current queue, and **deleted** when the
-  queue is empty — the script disappears once the deferred ops succeed.
-- **Ubuntu**: bash, `set -euo pipefail`, a leading `apt-get update` then
-  `apt-get install -y <all queued packages>`, then each deferred elevated
-  `command`. Run with `sudo bash <path>`.
-- **macOS**: bash; installs Homebrew first (official installer) when brew was the
-  missing prerequisite, then any deferred commands. Run with `bash <path>` as
-  the admin user.
-- **Windows**: a self-elevating `.bat` (UAC relaunch via
-  `Start-Process -Verb RunAs`, `fsutil` admin detect, success-only self-delete),
-  written CRLF, containing the deferred commands. Deferred commands are labeled
-  as comments (zero execution surface in the label itself).
+- **Location**: `<data_dir>/elevate/queue.json`, with
+  `<data_dir>/elevate/bootstrap-fix.{sh|bat}` beside it.
+- **Regenerated every pass** from the current descriptors; **both are deleted**
+  when nothing is deferred — the offer disappears once the deferred ops succeed.
+- **Contents**: typed tasks, not shell text. Each carries `id`, `kind`
+  (`command` | `apt` | `brew_installer` | `secret`), `label` and `elevated`,
+  plus its payload (`command`, `packages`, …), and the `bash` path the engine
+  resolved at write time (an elevated console's PATH may lack Git's bin dir).
+  Order: the Homebrew installer first when macOS needs it, then **one** `apt`
+  task carrying all queued packages (a single `apt-get install` resolves
+  co-dependent packages that would fail installed one at a time), then the
+  deferred commands in pass order.
+- **The runnable is `bootstrap_lib/fix_runner.py`**, not a generated script. It
+  prints the plan, executes each task, continues past a failure, and reports a
+  summary. The shim just invokes it. Full behavior — task kinds, the plan, exit
+  codes — is in
+  [remediation-reference.md](./remediation-reference.md#the-fix-queue-and-its-runner).
+- **Privilege is per task, not per run.** On Unix the runner runs **as you** and
+  wraps only `elevated` tasks in `sudo`; on Windows the engine launches the whole
+  runner elevated in one UAC hop (UAC preserves the user profile, so `elevated`
+  is effectively advisory there). `brew_installer` is never elevated — the
+  Homebrew installer refuses to run as root and elevates itself where it needs to.
 
-One aggregate `elevation_script` fix-all item names the script path and what it
-will do; the per-item `needs_elevation` failures keep persisting on their own.
-Both clear via the normal re-check on the next session (or `fix-all`) once the
-script has run.
+Because the commands are **data**, they reach bash as a single argv element
+(`bash -c <command>`) and are parsed exactly once, never spliced into shell text.
+Two constraints of the code generator this replaced are therefore gone: a queued
+command **may contain double quotes** (the old renderer rejected them outright),
+and `~` / `$HOME` are **not** pre-expanded at write time (nothing runs under
+`sudo bash` with `HOME=/root` any more).
 
-**fix-all launches the script itself (Windows).** Typing `fix-all` is user
-consent for elevation: the interactive re-run of the engine carries the
-`--fix-all` flag (`bash <plugin_root>/hooks/sessionstart/session-bootstrap.sh
---console --fix-all`), and on Windows an engine pass in that mode with a
-non-empty queue **launches the `.bat` itself** via
-`Start-Process -Verb RunAs -Wait` — the UAC prompt is then a direct consequence
-of the user's typed command, not a "go double-click this file" errand. Launching
-elevated up front makes the `.bat`'s own UAC self-relaunch a no-op (its admin
-detect already passes), so the wait covers the real elevated process, with a
-bounded 10-minute timeout. On success the engine spawns a re-check pass
-(without `--fix-all`, so it can never re-prompt) and the elevated items clear
-in the same fix-all cycle; on decline/failure/timeout the item falls back to
-the manual run-it-yourself instruction, prefixed with the launch outcome.
-SessionStart passes never carry `--fix-all` and never launch or prompt.
-Ubuntu/macOS keep the manual instruction even under `fix-all`: the run has no
-TTY, so a foreground `sudo` cannot prompt.
+One aggregate `elevation_script` fix-all item names the queued labels and how to
+run them; the per-item `needs_elevation` failures persist alongside it but are
+**suppressed from the message's numbered list** while the aggregate exists — it
+speaks for them. (If no aggregate was written they surface raw, so nothing
+vanishes silently.) All of them clear via the normal re-check on the next session
+once the queue has run. There is **no `fixed` ritual on this path**: a non-clean
+result re-runs the checks every session until they pass, so confirming would be
+redundant.
+
+**fix-all runs the queue itself (Windows).** Typing `fix-all` is user consent for
+elevation: the interactive re-run of the engine carries the `--fix-all` flag
+(`bash <plugin_root>/hooks/sessionstart/session-bootstrap.sh --console
+--fix-all`), and on Windows an engine pass in that mode with a non-empty queue
+**launches the fix runner itself** via `Start-Process -Verb RunAs -Wait` on the
+engine's own interpreter — the UAC prompt is then a direct consequence of the
+user's typed command, not a "go double-click this file" errand. Launching the
+runner elevated up front means the shim's own UAC self-relaunch never fires, so
+the wait covers the real elevated process, with a bounded 10-minute timeout. On
+success the engine spawns a re-check pass (without `--fix-all`, so it can never
+re-prompt) and the elevated items clear in the same fix-all cycle; on
+decline/failure/timeout the item reports the outcome and falls back to the
+run-it-yourself shim. SessionStart passes never carry `--fix-all` and never
+launch or prompt. Ubuntu/macOS keep the shim instruction even under `fix-all`:
+the run has no TTY, so neither a foreground `sudo` nor a secret prompt could be
+answered.
 
 ### Non-Ubuntu Linux fails fast
 
@@ -1046,8 +1071,8 @@ is skipped entirely):
 2. **the merged-manifest hash differs** from the stamp (any layer changed);
 3. **the last result was not `clean`** — any failure, including `needs_elevation`,
    re-runs the phase every session until green, which is what makes the
-   elevation-queue convergence loop work ("run the script, next session's re-check
-   clears it");
+   fix-queue convergence loop work ("run the queue, next session's re-check
+   clears it" — and why that path needs no `fixed` confirmation);
 4. **the engine version changed** — a new engine may understand a section the old
    one ignored, so re-interpret;
 5. **a reset was requested** (below).
@@ -1133,10 +1158,12 @@ refused (it would self-reference).
 
 **Windows elevation (WinError 1314).** Unelevated symlink creation on Windows
 requires Developer Mode (or `SeCreateSymbolicLinkPrivilege`). When creation
-fails with WinError 1314 the entry is **deferred** into the elevation queue —
-the remediation `.bat` creates the link elevated via
-`MSYS=winsymlinks:nativestrict ln -sfn '<source>' '<target>'` — instead of
-surfacing a raw failure. Alternatively the user can enable Developer Mode
+fails with WinError 1314 the entry is **deferred** into the fix queue as a
+`command` task — `MSYS=winsymlinks:nativestrict ln -sfn '<source>' '<target>'`,
+which the runner executes elevated through Git Bash (where
+`winsymlinks:nativestrict` makes `ln -s` create a real Windows symlink rather
+than copy) — instead of surfacing a raw failure. The task's label is the entry's
+`description`, else `Link <name>`. Alternatively the user can enable Developer Mode
 (Settings > System > For developers) and type `fix-all`; the re-check then
 creates the link unelevated.
 
@@ -1263,9 +1290,9 @@ command with an optional `fix` command.
 | `check` | Yes | Command; **exit 0 = configured**, non-zero = not configured. Must be unprivileged and side-effect free |
 | `fix` | No | Command run when the check fails. Omitted = a **check-only** entry (manual-attention only) |
 | `os` / `hosts` | No | The standard entry filters |
-| `elevated` | No (default false) | The fix needs privileges — routed through the elevation queue, never attempted in-pass without privileges |
+| `elevated` | No (default false) | The fix needs privileges — routed through the fix queue, never attempted in-pass without privileges |
 | `timeout` | No (default 600s) | Per-**command** timeout in seconds (positive int). Contract scripts may drive real installs (gpu-stack), so the bound is generous but never absent |
-| `description` | No | The user-facing instruction for a check-only entry's manual-attention item |
+| `description` | No | The user-facing instruction for a check-only entry's manual-attention item. Doubles as the **label** when an `elevated` entry is deferred to the fix queue (else the label is `name`) |
 
 **Dispatch per applicable entry:**
 
@@ -1279,9 +1306,10 @@ command with an optional `fix` command.
    `description` + the check's last output line). It keeps the pass `failed`, so the
    phase re-runs until resolved. (Consumers: cuda-toolkit on RTX5090W, reboot-flag.)
 4. **`elevated: true` and privileges are missing** — the fix is **never attempted**.
-   It is deferred into the elevation queue with the standard
+   It is deferred into the fix queue with the standard
    `{method: "command", command: "<fix>"}` descriptor, so it lands in the same per-OS
-   remediation script `bootstrap.json` already writes (bash / self-elevating `.bat`).
+   `queue.json` the `bootstrap.json` strategies already feed, labeled by the entry's
+   `description` (else its `name`).
    Because a failed pass reopens the gate, the next session's re-check picks up
    out-of-band completion — no new surfacing channel. **Elevated fixes go through the
    queue, never self-elevate in-pass.**

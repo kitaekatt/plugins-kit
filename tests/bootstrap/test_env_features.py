@@ -444,7 +444,7 @@ class TestSymlinkNeedsElevation:
         persistent env_symlink failure carrying the standard
         {method: "command"} descriptor, so the pass's elevation-queue
         harvest lands the creation in the remediation script."""
-        from bootstrap_lib.elevation import queue_from_failures
+        from bootstrap_lib.fix_queue import queue_from_failures
 
         source = isolated_home / "src.toml"
         source.write_text("x")
@@ -466,13 +466,20 @@ class TestSymlinkNeedsElevation:
         expected_cmd = (
             f"MSYS=winsymlinks:nativestrict ln -sfn '{source}' '{target}'"
         )
-        assert failure["elevation"] == {
-            "method": "command", "command": expected_cmd, "os": "windows"}
+        # Subset, not exact equality: the descriptor also carries an id and a
+        # human label (the label is what the session message lists), and
+        # asserting the whole dict makes every additive field a test break.
+        assert failure["elevation"]["method"] == "command"
+        assert failure["elevation"]["command"] == expected_cmd
+        assert failure["elevation"]["os"] == "windows"
+        assert failure["elevation"]["id"] == "symlink:starship-config"
+        assert failure["elevation"]["label"] == "Link starship-config"
         assert "Developer Mode" in failure["agent_msg"]
         assert any("needs elevation" in a for a in result.action_entries)
         # The pass-level harvest picks the command up like any deferred op.
-        queue = queue_from_failures(result.failures, "windows")
-        assert queue.commands == [expected_cmd]
+        tasks = queue_from_failures(result.failures, "windows")
+        assert [t.command for t in tasks] == [expected_cmd]
+        assert tasks[0].elevated is True
 
     def test_non_1314_failure_stays_a_raw_failure(
         self, isolated_home, run_env_pass, monkeypatch

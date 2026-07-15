@@ -26,7 +26,7 @@ import pytest
 
 import bootstrap_lib.engine as engine
 import bootstrap_lib.env_features as env_features
-from bootstrap_lib.elevation import queue_from_failures, write_or_clear_script
+from bootstrap_lib.fix_queue import queue_from_failures, write_or_clear_queue
 from bootstrap_lib.engine import _ENV_PHASES, _env_phase_env_checks, _process_env_pass
 from bootstrap_lib.env_features import ENV_CHECK_DEFAULT_TIMEOUT, run_env_command
 from bootstrap_lib.env_manifest import ENV_STATE_STAMP, read_env_state
@@ -470,10 +470,15 @@ class TestElevation:
         failure = result.failures[0]
         assert failure["type"] == "env_check"
         assert failure["persist_across_sessions"] is True
-        assert failure["elevation"] == {
-            "method": "command", "command": SUDOERS_FIX, "os": "ubuntu"}
+        assert failure["elevation"]["method"] == "command"
+        assert failure["elevation"]["command"] == SUDOERS_FIX
+        assert failure["elevation"]["os"] == "ubuntu"
+        assert failure["elevation"]["label"]
         assert SUDOERS_FIX in failure["message"]
-        assert SUDOERS_FIX in failure["agent_msg"]
+        # agent_msg no longer restates the command: the aggregated item speaks
+        # for this failure, and repeating the elevation rationale once per item
+        # is what made the session message unreadable.
+        assert "deferred it into the fix queue" in failure["agent_msg"]
         # NEVER attempted: nothing created the marker.
         assert not marker.exists()
         # Deferred elevation stamps the pass failed, keeping the gate open
@@ -544,15 +549,22 @@ class TestElevation:
 
         result = run_env_pass()
 
-        queue = queue_from_failures(result.failures, "ubuntu")
-        assert queue.commands == [SUDOERS_FIX, GPU_FIX]
-        assert queue.apt_packages == []
+        tasks = queue_from_failures(result.failures, "ubuntu")
+        assert [t.command for t in tasks] == [SUDOERS_FIX, GPU_FIX]
+        assert all(t.kind == "command" for t in tasks)
 
-    def test_golden_remediation_script_with_queued_env_fix(
+    def test_queued_env_fix_is_an_elevated_command_task(
         self, isolated_home, run_env_pass, monkeypatch, tmp_path
     ):
-        """The queued env fix lands in the per-OS remediation script exactly
-        as an elevated tool command would (spec step 5's named test)."""
+        """The queued env fix lands in the queue exactly as an elevated tool
+        command would (spec step 5's named test).
+
+        Replaces the old golden-script assertion: there is no rendered script to
+        pin any more. The tilde is deliberately NOT pre-expanded -- the old
+        renderer had to rewrite it because the whole script ran under `sudo`
+        (HOME=/root); the runner runs as the user and sudo-s only the individual
+        task, so the shell expands it correctly at run time.
+        """
         monkeypatch.setattr(engine, "_privileges_available", lambda os_: False)
         _write_json(isolated_home / ".claude" / "env.json",
                     _manifest(env_checks=[
@@ -560,25 +572,22 @@ class TestElevation:
 
         result = run_env_pass()
 
-        queue = queue_from_failures(result.failures, "ubuntu")
-        script = write_or_clear_script(queue, str(tmp_path / "elev"), "ubuntu")
-        assert script is not None
-        content = open(script).read()
-        assert content.startswith("#!/usr/bin/env bash\n")
-        assert "set -euo pipefail" in content
-        assert "must never prompt for a sudo password" in content
-        assert f'sudo bash "{script}"' in content
-        # Comment label (zero execution surface) then the command itself,
-        # with ~ pre-expanded to the invoking user's home: the script runs
-        # under `sudo bash` (HOME=/root), so the verbatim ~ of SUDOERS_FIX
-        # would resolve to root's home and abort the script.
-        expanded_fix = f"bash {isolated_home}/.claude/scripts/env/sudoers.sh fix"
-        assert f"# bootstrap-elevate: {expanded_fix}\n{expanded_fix}\n" in content
-        assert "~/.claude" not in content
-        # The queue itself keeps the verbatim command (expansion is render-time).
-        assert queue.commands == [SUDOERS_FIX]
-        # No apt section: the env fix is a plain deferred command.
-        assert "apt-get" not in content
+        tasks = queue_from_failures(result.failures, "ubuntu")
+        assert len(tasks) == 1
+        task = tasks[0]
+        assert task.kind == "command"
+        assert task.elevated is True
+        assert task.command == SUDOERS_FIX
+        assert "~/.claude" in task.command
+        # A label a human can read, not the raw command.
+        assert task.label
+
+        queue = write_or_clear_queue(tasks, str(tmp_path / "elev"), "ubuntu")
+        assert queue is not None
+        body = json.load(open(queue))
+        assert body["tasks"][0]["command"] == SUDOERS_FIX
+        # No apt task: the env fix is a plain deferred command.
+        assert all(t["kind"] != "apt" for t in body["tasks"])
 
     def test_next_session_recheck_clears_queue_and_script(
         self, isolated_home, run_env_pass, monkeypatch, tmp_path
@@ -592,7 +601,7 @@ class TestElevation:
                     _manifest(env_checks=[self._elevated_entry(marker)]))
 
         first = run_env_pass()
-        script = write_or_clear_script(
+        script = write_or_clear_queue(
             queue_from_failures(first.failures, "ubuntu"),
             str(elev_dir), "ubuntu")
         assert script and os.path.isfile(script)
@@ -611,7 +620,7 @@ class TestElevation:
 
         assert failures == []
         assert read_env_state(str(run_env_pass.data_dir))["last_result"] == "clean"
-        cleared = write_or_clear_script(
+        cleared = write_or_clear_queue(
             queue_from_failures(failures, "ubuntu"), str(elev_dir), "ubuntu")
         assert cleared is None
         assert not os.path.exists(script)

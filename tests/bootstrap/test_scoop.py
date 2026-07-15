@@ -141,7 +141,10 @@ class TestElevatedInstallCommand:
             "'scoop install nodejs'"
         )
 
-    def test_no_double_quotes_for_the_bat_renderer(self):
-        # elevation._windows_command_line rejects commands containing a
-        # double quote; the render must stay single-quoted.
+    def test_powershell_command_stays_single_quoted(self):
+        # This used to guard the script renderer's double-quote ban, which is
+        # gone (the queue carries commands as data, so nothing splices them into
+        # shell text). It still guards a real constraint one level down: the
+        # command is itself a `powershell -Command '...'` string, so an
+        # unescaped double quote would break THAT parse.
         assert '"' not in elevated_install_command("extras/tailscale")

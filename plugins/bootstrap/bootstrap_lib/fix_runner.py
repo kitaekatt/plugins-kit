@@ -1,0 +1,337 @@
+"""Interactive remediation runner: executes a bootstrap fix queue.
+
+Bootstrap runs as a NON-INTERACTIVE Claude Code SessionStart hook. That single
+fact is the root constraint behind this module: the hook has no TTY and must
+never prompt for a sudo password, trigger a UAC dialog, or block on any dialog
+at all. Elevation is the first thing that ran into that wall, but it is not the
+only one -- gathering a secret hits the identical wall for a different reason.
+Both need the same thing: a console with the user's attention.
+
+So the engine DEFERS such operations (recording an ``elevation`` descriptor on
+the failure), serializes them into ``<data_dir>/elevate/queue.json``, and this
+runner is the one place that has a TTY to execute them in.
+
+Why a runner + data file instead of a generated script
+------------------------------------------------------
+This module replaces a per-pass shell/batch CODE GENERATOR. That generator
+worked, but splicing commands into shell text cost two hacks that no longer
+exist here:
+
+  * it had to REJECT any command containing a double quote outright, because
+    ``"<bash.exe>" -c "<cmd>"`` had no escaping rule; and
+  * it had to regex-rewrite ``~``/``$HOME`` at render time, because the whole
+    script ran under ``sudo`` where ``HOME=/root``. (The underlying HOME problem
+    is NOT solved by dropping the codegen -- see :meth:`Runner._shell_argv`.)
+
+Here commands are DATA. They reach bash as a single argv element (never
+re-parsed by an outer shell), so quotes are unremarkable; and ``~``/``$HOME``
+survive verbatim because the runner restores the invoking user's HOME *inside*
+the sudo rather than rewriting the command text (see :meth:`Runner._shell_argv`
+-- the home problem is real and does not disappear just because the text is no
+longer spliced).
+
+Privilege model (per-task, not per-script)
+------------------------------------------
+The old script ran wholesale under ``sudo``, which is more privilege than most
+tasks need and actively harmful for one: a secret written under sudo lands
+root-owned in the user's home, so every later unelevated write fails. Here:
+
+  * **Unix**: the runner runs AS THE USER and wraps only ``elevated`` tasks in
+    ``sudo``. Unelevated tasks -- notably secret prompts and their writes --
+    stay the user's, so the files they create are the user's too.
+  * **Windows**: the engine launches the whole runner elevated (one UAC hop).
+    That is safe in a way the Unix case is not: UAC preserves the user profile,
+    so ``HOME`` and file ownership are unchanged. ``elevated`` is therefore
+    advisory on Windows -- everything already has the token it needs.
+
+Auditability
+------------
+The generated script's real virtue was that the user could READ it before
+approving. A data file is more opaque, so the runner prints the plan -- one
+labeled line per task -- before executing. The UAC prompt (or sudo) is the
+consent; the plan is the disclosure.
+
+Stdlib-only, and run as a SCRIPT (``python fix_runner.py <queue.json>``), so it
+must not rely on package-relative imports -- the same trap that made the harvest
+silently no-op in 0.22.0.
+"""
+
+import getpass
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+
+# Exit codes. The engine distinguishes these from a UAC decline (which never
+# reaches the runner at all -- Start-Process itself throws).
+EXIT_OK = 0
+EXIT_TASK_FAILED = 2
+EXIT_BAD_QUEUE = 3
+
+QUEUE_VERSION = 1
+
+# Kinds the runner knows how to execute. A queue naming anything else is a
+# version skew (a newer engine wrote it) -- fail loudly rather than skip
+# silently, since a skipped elevated task looks like success to the re-check.
+KNOWN_KINDS = frozenset({"command", "apt", "brew_installer", "secret"})
+
+# Official Homebrew installer. It prompts and may sudo on its own, which is
+# exactly why the engine never runs it and it lands here instead.
+HOMEBREW_INSTALLER = (
+    '/bin/bash -c "$(curl -fsSL '
+    'https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+)
+
+
+def _bash() -> str:
+    """Resolve bash for command execution.
+
+    Unix always has it. On Windows the runner may be launched from an elevated
+    console whose PATH lacks Git's bin dir, so the queue carries the absolute
+    path the engine resolved at write time (`bash` key); this is only the
+    fallback for a queue written without one.
+    """
+    found = shutil.which("bash")
+    if found:
+        return found
+    raise RuntimeError(
+        "bash not found on PATH. The queued commands are shell strings and "
+        "need Git for Windows (or a system bash) to run."
+    )
+
+
+def _run(argv, label):
+    """Run argv, streaming output to the console the user is watching."""
+    print(f"  $ {label}")
+    try:
+        proc = subprocess.run(argv)
+    except OSError as e:
+        print(f"  ! could not launch: {e}")
+        return False
+    if proc.returncode != 0:
+        print(f"  ! failed (exit {proc.returncode})")
+        return False
+    return True
+
+
+class Runner:
+    """Executes one queue. Holds the resolved bash + OS so tasks stay dumb."""
+
+    def __init__(self, queue):
+        self.os = queue.get("os") or ""
+        self.bash = queue.get("bash") or _bash()
+        self.tasks = queue.get("tasks") or []
+        # The runner runs as the invoking user, so this is the user's home --
+        # captured before any sudo, which is the whole point (see _shell_argv).
+        self.home = os.path.expanduser("~")
+
+    @property
+    def _is_windows(self):
+        return self.os == "windows"
+
+    def _shell_argv(self, command, elevated):
+        """Build argv for a shell command, elevating only when asked.
+
+        The command is passed as ONE argv element to `bash -c`, so it is parsed
+        exactly once (by that bash) and never by an intermediate shell. This is
+        what removes the old renderer's double-quote ban.
+
+        ``env HOME=`` is not incidental. sudo's default ``env_reset`` sets HOME
+        to the TARGET user's home, so a queued fix spelling ``~`` or ``$HOME``
+        -- the documented env_check form, e.g.
+        ``bash ~/.claude/scripts/env/sudoers.sh fix`` -- would resolve against
+        /root and fail. The deleted renderer solved this by rewriting the
+        command TEXT at render time; fixing the ENVIRONMENT instead keeps the
+        command verbatim data (the point of the queue) and puts the correction
+        where the privilege change actually happens. ``env`` runs inside the
+        sudo'd process, after env_reset, so it cannot be undone by sudoers.
+
+        On Windows the runner is already elevated as a whole (UAC has no
+        per-command granularity) and preserves the user profile, so `elevated`
+        needs no action here and HOME is already correct.
+        """
+        argv = [self.bash, "-c", command]
+        if elevated and not self._is_windows:
+            # -n would fail outright with no TTY; the runner HAS a TTY (the user
+            # started it), so an interactive password prompt is correct here.
+            argv = ["sudo", "env", f"HOME={self.home}"] + argv
+        return argv
+
+    def run_command(self, task):
+        return _run(self._shell_argv(task["command"], task.get("elevated", False)),
+                    task["command"])
+
+    def run_apt(self, task):
+        packages = task.get("packages") or []
+        if not packages:
+            return True
+        # Fresh machines can have stale/empty package lists, so refresh first --
+        # an install against a stale list fails on a package that exists.
+        if not _run(["sudo", "apt-get", "update"], "apt-get update"):
+            return False
+        return _run(["sudo", "apt-get", "install", "-y"] + packages,
+                    "apt-get install -y " + " ".join(packages))
+
+    def run_brew_installer(self, task):
+        # Never sudo: the Homebrew installer refuses to run as root and asks
+        # for elevation itself where it needs it.
+        return _run([self.bash, "-c", HOMEBREW_INSTALLER], "install Homebrew")
+
+    def run_secret(self, task):
+        """Prompt for a secret and write it to a file, owned by the user.
+
+        The value is read with echo off and written 0600. It deliberately never
+        passes through the engine, the hook output, or the Claude transcript --
+        the console is the only place it exists. This is why the task must NOT
+        be elevated on Unix: a root-owned secret file breaks every later
+        unelevated write.
+        """
+        target = os.path.expanduser(task["target"])
+        value = getpass.getpass(f"  {task.get('prompt') or task['label']}: ")
+        if not value:
+            print("  ! empty value, skipped")
+            return False
+        parent = os.path.dirname(target)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        # Create with 0600 from the outset rather than chmod-after-write, which
+        # would leave the secret world-readable for the width of the write.
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(value)
+        print(f"  wrote {target}")
+        return True
+
+    def dispatch(self, task):
+        kind = task["kind"]
+        if kind == "command":
+            return self.run_command(task)
+        if kind == "apt":
+            return self.run_apt(task)
+        if kind == "brew_installer":
+            return self.run_brew_installer(task)
+        if kind == "secret":
+            return self.run_secret(task)
+        raise ValueError(f"unknown task kind {kind!r}")
+
+
+def validate(queue):
+    """Return a list of problems; empty means the queue is executable."""
+    problems = []
+    if not isinstance(queue, dict):
+        return ["queue is not a JSON object"]
+    version = queue.get("version")
+    if version != QUEUE_VERSION:
+        problems.append(
+            f"queue version {version!r} is not {QUEUE_VERSION} (a different "
+            f"bootstrap wrote it; start a new session to regenerate it)"
+        )
+    tasks = queue.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        problems.append("queue has no tasks")
+        return problems
+    for i, task in enumerate(tasks):
+        if not isinstance(task, dict):
+            problems.append(f"task {i} is not an object")
+            continue
+        kind = task.get("kind")
+        if kind not in KNOWN_KINDS:
+            problems.append(f"task {i}: unknown kind {kind!r}")
+        if not task.get("label"):
+            problems.append(f"task {i}: missing label")
+        if kind == "command" and not task.get("command"):
+            problems.append(f"task {i}: command task has no command")
+        if kind == "secret" and not task.get("target"):
+            problems.append(f"task {i}: secret task has no target")
+    return problems
+
+
+def print_plan(queue):
+    """Disclose what is about to run, before it runs."""
+    tasks = queue["tasks"]
+    print()
+    print("=" * 62)
+    print("  Bootstrap remediation")
+    print("=" * 62)
+    print()
+    print("  Bootstrap runs in the background with no console, so it could not")
+    print("  do the following without you. Running now:")
+    print()
+    for task in tasks:
+        mark = "admin" if task.get("elevated") else "     "
+        print(f"    [{mark}] {task['label']}")
+    print()
+
+
+def run_queue(queue):
+    """Execute every task, reporting per-task outcome. Returns an exit code.
+
+    Continues past a failure rather than aborting: the tasks are independent,
+    and one broken fix should not block the rest. The engine's re-check pass is
+    the authority on what actually cleared, so a task that fails here simply
+    stays failed there.
+    """
+    runner = Runner(queue)
+    failed = []
+    for task in queue["tasks"]:
+        print(f"  {task['label']}")
+        try:
+            ok = runner.dispatch(task)
+        except Exception as e:  # noqa: BLE001 - one bad task must not kill the run
+            print(f"  ! {e}")
+            ok = False
+        if not ok:
+            failed.append(task["label"])
+        print()
+    print("-" * 62)
+    if failed:
+        print(f"  {len(failed)} of {len(queue['tasks'])} did not complete:")
+        for label in failed:
+            print(f"    - {label}")
+        print()
+        print("  Bootstrap will re-check these on your next session.")
+        return EXIT_TASK_FAILED
+    print(f"  All {len(queue['tasks'])} completed.")
+    return EXIT_OK
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        print("usage: fix_runner.py <queue.json>", file=sys.stderr)
+        return EXIT_BAD_QUEUE
+    path = argv[0]
+    # `--engine` marks an engine-initiated run: the engine is waiting on this
+    # process, so the success path skips the "press a key" hold that a
+    # double-clicking human needs to read the output.
+    engine_launch = "--engine" in argv[1:]
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            queue = json.load(fh)
+    except (OSError, ValueError) as e:
+        print(f"could not read queue {path}: {e}", file=sys.stderr)
+        return EXIT_BAD_QUEUE
+    problems = validate(queue)
+    if problems:
+        print(f"queue {path} is not executable:", file=sys.stderr)
+        for p in problems:
+            print(f"  - {p}", file=sys.stderr)
+        return EXIT_BAD_QUEUE
+
+    print_plan(queue)
+    code = run_queue(queue)
+
+    # Hold the window open when a human is reading it: always on failure (the
+    # errors must stay legible), and on success only when no engine is waiting.
+    if code != EXIT_OK or not engine_launch:
+        try:
+            input("  Press Enter to close. ")
+        except (EOFError, KeyboardInterrupt):
+            pass
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

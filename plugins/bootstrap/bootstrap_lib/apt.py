@@ -132,7 +132,7 @@ def dpkg_installed(pkg: str) -> bool:
 # otherwise-available package. We refresh the lists ONCE, right before the first
 # DIRECT apt install a pass performs -- never per package (wasteful) and never on
 # the deferred/elevation path (that update leads the emitted remediation script,
-# see elevation.py). The engine calls reset_apt_pass_state() at the start of each
+# see fix_queue.py). The engine calls reset_apt_pass_state() at the start of each
 # pass so the next pass refreshes again. This is the whole caching story: a single
 # boolean, no config knob, no persistence.
 _apt_update_ran = False

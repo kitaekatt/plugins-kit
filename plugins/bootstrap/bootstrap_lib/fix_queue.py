@@ -1,0 +1,477 @@
+"""Deferred-operation queue: harvest, serialize, launch.
+
+The engine half of the interactive-remediation system whose executing half is
+:mod:`bootstrap_lib.fix_runner` (read its module docstring first -- it explains
+WHY the work is deferred and why the runner, not a generated script, executes
+it).
+
+This module:
+
+  * :func:`queue_from_failures` harvests the ``elevation`` descriptors the
+    strategies attach to their failures into a list of typed
+    :class:`FixTask` s. Descriptor shapes consumed (all carry ``os``, and only
+    the current OS's are collected -- a pass runs on exactly one OS):
+      - ``{"method": "apt", "package": <pkg>}``      -- deferred apt package;
+      - ``{"method": "command", "command": <cmd>}``  -- deferred elevated command;
+      - ``{"method": "brew_installer"}``             -- Homebrew missing on macOS.
+  * :func:`write_or_clear_queue` regenerates ``<data_dir>/elevate/queue.json``
+    each pass and DELETES a stale queue when nothing is deferred, so the fix-all
+    offer disappears once its operations succeed.
+  * :func:`write_shim` emits a small ``bootstrap-fix.{bat,sh}`` that invokes the
+    runner, preserving the "run it yourself" affordance (double-click on
+    Windows; the only path on Unix -- see below).
+  * :func:`launch_fix_runner` is the "fix-all is user consent" half: on an
+    INTERACTIVE fix-all run the engine launches the runner itself and waits.
+
+Naming: this module used to be ``elevation.py`` and rendered a shell script per
+pass. Both the name and the codegen were narrower than the problem -- elevation
+is one reason an operation needs a console, not the only one.
+
+Stdlib-only.
+"""
+
+import json
+import os
+import subprocess
+import sys
+from dataclasses import dataclass, field, asdict
+from typing import List, Optional
+
+from .apt import sudo_noninteractive_available, windows_admin_available
+from .atomic_write import write_atomic
+from .tool_check import resolve_bash
+from .fix_runner import QUEUE_VERSION
+
+
+def privileges_available(current_os: str) -> bool:
+    """True when this process can run elevated ops WITHOUT prompting, per OS.
+
+    Windows uses the admin-token check; every other OS uses passwordless-sudo /
+    root detection. Callers use this to decide direct-execution vs deferral for
+    an ``elevated: true`` command -- the privileged path runs it directly
+    (unchanged behavior), the unprivileged path queues it.
+    """
+    if current_os == "windows":
+        return windows_admin_available()
+    return sudo_noninteractive_available()
+
+
+@dataclass
+class FixTask:
+    """One deferred operation, as the runner will see it.
+
+    ``label`` is the only field a human reads -- it appears in the runner's
+    plan AND in the session message's item list, so it must stand alone
+    without the surrounding prose.
+    """
+
+    id: str
+    kind: str
+    label: str
+    elevated: bool = False
+    command: Optional[str] = None
+    packages: List[str] = field(default_factory=list)
+    prompt: Optional[str] = None
+    target: Optional[str] = None
+    # How long this task may legitimately take, from the manifest entry that
+    # produced it. The runner does not enforce it (the user is watching); the
+    # ENGINE needs it to bound its wait honestly -- see launch_timeout_for.
+    timeout: Optional[int] = None
+
+    def to_json(self) -> dict:
+        # Drop unset optionals so the queue file stays readable -- it is a
+        # disclosure surface a user may open, not just machine input.
+        return {k: v for k, v in asdict(self).items()
+                if v not in (None, [], False) or k in ("id", "kind", "label")}
+
+
+def queue_from_failures(failures, current_os: str) -> List[FixTask]:
+    """Harvest ``elevation`` descriptors from the pass's failures into tasks.
+
+    Order: the Homebrew installer first when needed (macOS cannot run brew
+    entries without it), then apt as ONE task (a single ``apt-get install``
+    resolves co-dependent packages that would fail installed one at a time),
+    then commands in pass order.
+    """
+    apt_packages: List[str] = []
+    apt_ids: List[str] = []
+    commands: List[FixTask] = []
+    brew = False
+
+    for f in failures:
+        desc = f.get("elevation") if isinstance(f, dict) else None
+        if not isinstance(desc, dict):
+            continue
+        if desc.get("os") != current_os:
+            continue
+        method = desc.get("method")
+        if method == "apt":
+            pkg = desc.get("package")
+            if pkg:
+                apt_packages.append(pkg)
+                apt_ids.append(pkg)
+        elif method == "command":
+            cmd = desc.get("command")
+            if cmd:
+                commands.append(FixTask(
+                    id=desc.get("id") or f"command:{len(commands)}",
+                    kind="command",
+                    label=desc.get("label") or cmd,
+                    elevated=True,
+                    command=cmd,
+                    timeout=desc.get("timeout"),
+                ))
+        elif method == "brew_installer":
+            brew = True
+
+    tasks: List[FixTask] = []
+    if brew:
+        tasks.append(FixTask(
+            id="brew_installer", kind="brew_installer",
+            label="Install Homebrew",
+            # The installer elevates itself where it needs to and refuses to
+            # run as root, so it must NOT be wrapped in sudo.
+            elevated=False,
+        ))
+    if apt_packages:
+        tasks.append(FixTask(
+            id="apt:" + ",".join(apt_ids), kind="apt",
+            label="Install " + ", ".join(apt_packages),
+            elevated=True, packages=apt_packages,
+        ))
+    tasks.extend(commands)
+    return tasks
+
+
+def task_labels(tasks: List[FixTask]) -> List[str]:
+    """The human labels, for the session message's item list."""
+    return [t.label for t in tasks]
+
+
+# --------------------------------------------------------------------------- #
+# Paths
+# --------------------------------------------------------------------------- #
+
+def elevate_dir(data_dir: str) -> str:
+    return os.path.join(data_dir, "elevate")
+
+
+def queue_path(data_dir: str) -> str:
+    return os.path.join(elevate_dir(data_dir), "queue.json")
+
+
+def shim_basename(current_os: str) -> str:
+    return "bootstrap-fix.bat" if current_os == "windows" else "bootstrap-fix.sh"
+
+
+def shim_path(data_dir: str, current_os: str) -> str:
+    return os.path.join(elevate_dir(data_dir), shim_basename(current_os))
+
+
+def runner_path() -> str:
+    """Absolute path to fix_runner.py, resolved from this module's location.
+
+    Not ``${CLAUDE_PLUGIN_ROOT}``: on a version update that variable still
+    points at the OLD cache dir (the harvest bug), whereas __file__ is always
+    the module actually running.
+    """
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "fix_runner.py")
+
+
+# --------------------------------------------------------------------------- #
+# Serialization
+# --------------------------------------------------------------------------- #
+
+def render_queue(tasks: List[FixTask], current_os: str) -> str:
+    """Serialize the queue.
+
+    ``bash`` is baked in at write time because the runner may be launched from
+    an elevated console whose PATH lacks Git's bin dir -- the engine resolves it
+    here, in the session that still has a working PATH, on the machine that will
+    run it.
+    """
+    queue = {
+        "version": QUEUE_VERSION,
+        "os": current_os,
+        "tasks": [t.to_json() for t in tasks],
+    }
+    bash = resolve_bash()
+    if bash:
+        queue["bash"] = bash
+    elif any(t.kind in ("command", "brew_installer") for t in tasks):
+        raise RuntimeError(
+            "cannot write the bootstrap fix queue: bash was not found at write "
+            "time, and the queued command(s) are shell strings that need it. "
+            "Install Git for Windows (or run the session from Git Bash) and "
+            "start a new session."
+        )
+    return json.dumps(queue, indent=2) + "\n"
+
+
+def _render_shim(current_os: str, python: str, runner: str, queue: str) -> str:
+    """A minimal launcher for the run-it-yourself path.
+
+    It carries no logic beyond locating the runner: everything the user needs to
+    understand is printed BY the runner (the plan), so a shim that explained
+    itself would just be a second place to keep in sync.
+    """
+    if current_os == "windows":
+        return "\r\n".join([
+            "@echo off",
+            "REM Bootstrap remediation launcher (generated).",
+            "REM Self-elevates via UAC, then runs the fix queue.",
+            "fsutil dirty query %SystemDrive% >nul 2>&1",
+            "if %errorlevel% neq 0 (",
+            "  powershell -NoProfile -Command \"Start-Process -FilePath '%~f0' -Verb RunAs\" 1>nul 2>nul",
+            "  exit /b",
+            ")",
+            f'"{python}" "{runner}" "{queue}"',
+        ]) + "\r\n"
+    return "\n".join([
+        "#!/usr/bin/env bash",
+        "# Bootstrap remediation launcher (generated).",
+        "# Runs as YOU and sudo-s only the tasks that need it, so files it",
+        "# creates stay yours. Do not run this whole script under sudo.",
+        "set -euo pipefail",
+        f'exec "{python}" "{runner}" "{queue}"',
+    ]) + "\n"
+
+
+def write_or_clear_queue(tasks: List[FixTask], data_dir: str,
+                         current_os: str) -> Optional[str]:
+    """Write queue + shim, or remove both when nothing is deferred.
+
+    Returns the queue path when written, else None. Clearing is what makes the
+    fix-all offer vanish once its operations succeed.
+    """
+    qpath = queue_path(data_dir)
+    spath = shim_path(data_dir, current_os)
+    if not tasks:
+        for stale in (qpath, spath):
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
+        return None
+    write_atomic(qpath, render_queue(tasks, current_os))
+    write_atomic(
+        spath,
+        _render_shim(current_os, sys.executable, runner_path(), qpath),
+        # .bat must be CRLF; the body is already authored with \r\n, so the
+        # writer must not translate again (that yields \r\r\n).
+        newline="",
+    )
+    if current_os != "windows":
+        try:
+            os.chmod(spath, 0o755)
+        except OSError:
+            pass
+    return qpath
+
+
+# --------------------------------------------------------------------------- #
+# Interactive launch (fix-all only -- NEVER SessionStart)
+# --------------------------------------------------------------------------- #
+
+# Floor for the bounded wait, and the grace for answering the UAC prompt itself.
+# A fix-all run happens inside Claude's Bash tool, so an unbounded (or blanket
+# long) wait would hang the user's whole session on a walked-away prompt --
+# hence a bound derived from what the queue actually declares, rather than one
+# big number that is simultaneously too short for a 3GB install and too long for
+# an ignored dialog.
+LAUNCH_TIMEOUT = 600
+UAC_GRACE = 120
+# What a task may take when its manifest entry declared nothing, mirroring the
+# engine's own ENV_CHECK_DEFAULT_TIMEOUT.
+DEFAULT_TASK_TIMEOUT = 600
+
+
+def launch_timeout_for(tasks: List[FixTask]) -> int:
+    """Bound the engine's wait by what the queue's own entries declare.
+
+    A queue of quick tasks stays snappy to fail; a queue containing a genuinely
+    slow install (a multi-GB winget download declaring `timeout: 3600`) gets the
+    room it asked for instead of a spurious "timed out" while it is still
+    working.
+    """
+    total = sum(t.timeout or DEFAULT_TASK_TIMEOUT for t in tasks)
+    return max(LAUNCH_TIMEOUT, total + UAC_GRACE)
+
+
+@dataclass
+class LaunchResult:
+    """Outcome of an engine-initiated runner launch."""
+
+    launched: bool
+    succeeded: bool
+    detail: str
+
+
+def _powershell_exe() -> str:
+    """Absolute Windows PowerShell path (hook PATH can be stripped of System32)."""
+    sysroot = os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT") or r"C:\Windows"
+    ps = os.path.join(sysroot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    return ps if os.path.exists(ps) else "powershell.exe"
+
+
+def launch_fix_runner(queue: str, current_os: str,
+                      timeout: int = LAUNCH_TIMEOUT,
+                      tasks: Optional[List[FixTask]] = None) -> Optional[LaunchResult]:
+    """Launch the runner interactively and wait for it (Windows).
+
+    ONLY called on a fix-all engine run -- the user's typed 'fix-all' is the
+    consent that makes the UAC prompt acceptable. SessionStart never calls this.
+
+    Windows: ``Start-Process -Verb RunAs -Wait -PassThru`` on the engine's own
+    interpreter. Launching elevated up front means the shim's self-elevation
+    hop never fires, so ``-Wait`` covers the REAL process rather than an
+    unelevated wrapper that relaunches itself and exits early. A declined UAC
+    prompt makes ``-Verb RunAs`` throw (non-zero powershell exit); a user who
+    walks away hits the bounded ``timeout``.
+
+    Unix: returns None -- no launch is attempted. The fix-all run executes
+    inside a non-interactive hook/Bash-tool subprocess with NO TTY, so neither
+    a sudo password prompt nor a secret prompt could be answered. The runner
+    needs a console the user is actually sitting at, which only the
+    run-it-yourself shim provides.
+    """
+    if current_os != "windows":
+        return None
+    if tasks:
+        timeout = launch_timeout_for(tasks)
+    # Two DIFFERENT quoting layers, both required -- conflating them is a bug:
+    #
+    #  1. PowerShell parse: single-quoted literals, embedded quotes doubled.
+    #     This is what stops an apostrophe in a path (C:\o'brien\...) from
+    #     breaking out of the literal.
+    #  2. The CHILD's command line: Start-Process joins -ArgumentList elements
+    #     with SPACES and does NOT quote them, so each argument must carry its
+    #     own double quotes or a space in the path (C:\Users\John Doe\...) splits
+    #     the elevated python's argv and it exits before running the runner --
+    #     indistinguishable, from out here, from the runner's own exit code 2.
+    #
+    # -FilePath is exempt from (2): PowerShell quotes it for us.
+    ps_python = sys.executable.replace("'", "''")
+    ps_args = ", ".join(
+        f"'{a}'" for a in (
+            '"' + runner_path().replace("'", "''") + '"',
+            '"' + queue.replace("'", "''") + '"',
+            "--engine",
+        )
+    )
+    ps_cmd = (
+        "$ErrorActionPreference = 'Stop'; "
+        f"$p = Start-Process -FilePath '{ps_python}' -ArgumentList {ps_args} "
+        "-Verb RunAs -Wait -PassThru; "
+        "exit $p.ExitCode"
+    )
+    try:
+        proc = subprocess.run(
+            [_powershell_exe(), "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return LaunchResult(launched=True, succeeded=False,
+                            detail=f"timed out after {timeout}s waiting for the fix runner")
+    except OSError as e:
+        return LaunchResult(launched=False, succeeded=False,
+                            detail=f"could not launch: {e}")
+    if proc.returncode == 0:
+        return LaunchResult(launched=True, succeeded=True, detail="exit code 0")
+    stderr = (proc.stderr or "").strip()
+    # A declined UAC prompt surfaces as a powershell error line ("The operation
+    # was canceled by the user"); a failed task surfaces as the runner's exit
+    # code (2 = at least one task did not complete).
+    detail = stderr.splitlines()[-1] if stderr else f"exit code {proc.returncode}"
+    return LaunchResult(launched=True, succeeded=False, detail=detail)
+
+
+# --------------------------------------------------------------------------- #
+# The aggregated fix-all item
+# --------------------------------------------------------------------------- #
+
+def _run_instruction(current_os: str, data_dir: str) -> str:
+    shim = shim_path(data_dir, current_os)
+    if current_os == "windows":
+        return f'double-click "{shim}" (it self-elevates via UAC)'
+    return f'run `bash "{shim}"` in a terminal'
+
+
+def fix_queue_failure(tasks: List[FixTask], current_os: str, data_dir: str,
+                      launch_detail: Optional[str] = None) -> dict:
+    """Build the aggregated item that offers fix-all and names what it covers.
+
+    This item SPEAKS FOR the per-task ``needs_elevation`` failures it
+    summarizes: the message layer suppresses their individual lines, since
+    repeating the elevation rationale once per item is what made the old output
+    unreadable.
+
+    ``launch_detail`` is set when a fix-all run launched the runner but it did
+    not complete (UAC declined, a task failed, the bounded wait timed out): the
+    messages then lead with that outcome and fall back to the run-it-yourself
+    instruction -- the engine never re-prompts in a loop.
+    """
+    labels = task_labels(tasks)
+    listed = ", ".join(labels)
+    if current_os == "windows" and launch_detail:
+        # The launch already happened and did not complete (declined UAC, a
+        # failed task, a timeout). Re-offering fix-all here would either loop
+        # the prompt or -- on a fix-all run, where no fix_all_cmd is attached --
+        # leave the user with no path at all. The shim is the honest fallback.
+        run = _run_instruction(current_os, data_dir)
+        user_msg = (
+            f"Bootstrap found issues that need admin access: {listed}.\n\n"
+            f"To fix them, {run}."
+        )
+        agent_msg = (
+            f"Bootstrap deferred {len(tasks)} operation(s) that need elevation: "
+            f"{listed}. The consented launch did not complete, so tell the user "
+            f"to {run}. Do NOT run it yourself -- it needs the user's "
+            f"credentials. Bootstrap re-checks automatically on the next "
+            f"session; there is nothing to confirm."
+        )
+    elif current_os == "windows":
+        user_msg = (
+            f"Bootstrap found issues that need admin access: {listed}.\n\n"
+            f"Type 'fix-all' to fix them. You'll be asked to approve an admin "
+            f"prompt."
+        )
+        agent_msg = (
+            f"Bootstrap deferred {len(tasks)} operation(s) that need a console "
+            f"it does not have (elevation and/or an interactive prompt): "
+            f"{listed}. If the user types 'fix-all', re-run bootstrap with "
+            f"elevation consent -- the engine then launches the fix runner "
+            f"itself (a UAC prompt appears), waits for it, and re-checks in the "
+            f"same run. Do NOT run the queued commands yourself."
+        )
+    else:
+        # Unix fix-all has no TTY, so the honest offer is the shim, not fix-all.
+        run = _run_instruction(current_os, data_dir)
+        user_msg = (
+            f"Bootstrap found issues that need admin access: {listed}.\n\n"
+            f"To fix them, {run}. It asks for your password where needed."
+        )
+        agent_msg = (
+            f"Bootstrap deferred {len(tasks)} operation(s) that need a terminal "
+            f"it does not have: {listed}. Tell the user to {run}. Do NOT run it "
+            f"yourself -- it needs the user's credentials and a real TTY, which "
+            f"a Bash tool subprocess does not provide. Bootstrap re-checks "
+            f"automatically on the next session; there is nothing to confirm."
+        )
+    if launch_detail:
+        prefix = (f"fix-all launched the fix runner but it did not complete "
+                  f"({launch_detail}). ")
+        user_msg = prefix + user_msg
+        agent_msg = prefix + agent_msg
+    return {
+        "type": "elevation_script",
+        "name": "elevation_script",
+        "message": user_msg,
+        "user_msg": user_msg,
+        "agent_msg": agent_msg,
+        "script_path": shim_path(data_dir, current_os),
+        "queue_path": queue_path(data_dir),
+        "labels": labels,
+        "plugin": "bootstrap",
+        "persist_across_sessions": True,
+    }

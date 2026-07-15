@@ -66,8 +66,13 @@ class TestElevatedCommandDeferral:
         assert failure["install_state"] == "needs_elevation"
         assert failure["install_cmd"] is None
         assert failure["persist_across_sessions"] is True
-        assert failure["elevation"] == {
-            "method": "command", "command": "curl x | sh", "os": "ubuntu"}
+        # Subset, not exact equality: the descriptor also carries an id and a
+        # human label, and asserting the whole dict makes every additive field a
+        # test break.
+        assert failure["elevation"]["method"] == "command"
+        assert failure["elevation"]["command"] == "curl x | sh"
+        assert failure["elevation"]["os"] == "ubuntu"
+        assert failure["elevation"]["label"]
         assert engine._is_auto_fixable(failure) is False
         assert any("needs elevation" in a for a in action_entries)
 
@@ -198,11 +203,13 @@ class TestElevatedScoopDeferral:
         assert failure["install_cmd"] is None
         assert failure["persist_across_sessions"] is True
         cmd = failure["elevation"]["command"]
-        assert failure["elevation"] == {
-            "method": "command", "command": cmd, "os": "windows"}
-        # The deferred command must be runnable from the .bat's
-        # "<bash.exe>" -c "<cmd>" wrapper: powershell shell-out (scoop is a
-        # PowerShell function) and no double quotes (renderer constraint).
+        assert failure["elevation"]["method"] == "command"
+        assert failure["elevation"]["command"] == cmd
+        assert failure["elevation"]["os"] == "windows"
+        # The deferred command shells out to powershell (scoop is a PowerShell
+        # function). It happens to use single quotes; that is no longer a
+        # requirement -- the queue carries commands as data, so the renderer's
+        # old double-quote ban is gone -- but there is no reason to change it.
         assert cmd == ("powershell -NoProfile -ExecutionPolicy Bypass "
                        "-Command 'scoop bucket add extras; "
                        "scoop install extras/tailscale'")
