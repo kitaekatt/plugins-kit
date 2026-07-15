@@ -94,6 +94,23 @@ class TestAddPathToWindowsRegistry:
         mock_winreg.QueryValueEx.return_value = (current_value, value_type)
         return mock_winreg, mock_key
 
+    def test_the_suite_defaults_to_skipping_registry_writes(self):
+        """REGRESSION GUARD for the conftest fixture, not for path_check.
+
+        BOOTSTRAP_SKIP_REGISTRY used to be opt-IN, and the opt-in was missed:
+        run_engine dodged the registry by pre-seeding ~/.local/bin into PATH,
+        but defaults/config.json declares a SECOND entry
+        (~/.local/share/python-standalone/python) that nothing pre-seeded. So
+        every HOME-isolated engine test appended a tmp path to the developer's
+        REAL Windows PATH -- unique each run, so it accumulated forever (27 dead
+        entries on one machine before anyone noticed).
+
+        tests/conftest.py::_guard_real_user_path now sets this for EVERY test.
+        If that fixture is ever removed, this fails loudly instead of quietly
+        resuming the leak.
+        """
+        assert os.environ.get("BOOTSTRAP_SKIP_REGISTRY") == "1"
+
     def test_skip_registry_env_var(self, monkeypatch):
         monkeypatch.setenv("BOOTSTRAP_SKIP_REGISTRY", "1")
         ok, msg = _add_path_to_windows_registry("~/.local/bin")

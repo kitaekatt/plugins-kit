@@ -506,16 +506,18 @@ def fix_queue_failure(tasks: List[FixTask], current_os: str, data_dir: str,
     """
     labels = task_labels(tasks)
     listed = ", ".join(labels)
+    # The one sentence that states the problem. Shared rather than repeated: it
+    # is BOTH what the user reads and (on Windows) the text Claude must put in
+    # the AskUserQuestion prompt, and those two drifting apart is how a user
+    # ends up answering a question that does not match what they were told.
+    intro = f"Bootstrap found issues that need admin access: {listed}."
     if current_os == "windows" and launch_detail:
         # The launch already happened and did not complete (declined UAC, a
         # failed task, a timeout). Re-offering fix-all here would either loop
         # the prompt or -- on a fix-all run, where no fix_all_cmd is attached --
         # leave the user with no path at all. The shim is the honest fallback.
         run = _run_instruction(current_os, data_dir)
-        user_msg = (
-            f"Bootstrap found issues that need admin access: {listed}.\n\n"
-            f"To fix them, {run}."
-        )
+        user_msg = f"{intro}\n\nTo fix them, {run}."
         agent_msg = (
             f"Bootstrap deferred {len(tasks)} operation(s) that need elevation: "
             f"{listed}. The consented launch did not complete, so tell the user "
@@ -525,17 +527,30 @@ def fix_queue_failure(tasks: List[FixTask], current_os: str, data_dir: str,
         )
     elif current_os == "windows":
         user_msg = (
-            f"Bootstrap found issues that need admin access: {listed}.\n\n"
+            f"{intro}\n\n"
             f"Type 'fix-all' to fix them. You'll be asked to approve an admin "
             f"prompt."
         )
+        # ASK, do not merely mention. A "type fix-all" line buried in session
+        # start scrolls past unread, so the offer only ever lands if the user
+        # happens to notice it -- the fix sits queued for weeks. An
+        # AskUserQuestion is a decision the user actually has to see. It is
+        # still only an OFFER: "Do nothing" leads, so an absent-minded Enter
+        # changes nothing on their machine, and declining costs nothing because
+        # the next session re-checks anyway.
         agent_msg = (
             f"Bootstrap deferred {len(tasks)} operation(s) that need a console "
             f"it does not have (elevation and/or an interactive prompt): "
-            f"{listed}. If the user types 'fix-all', re-run bootstrap with "
-            f"elevation consent -- the engine then launches the fix runner "
-            f"itself (a UAC prompt appears), waits for it, and re-checks in the "
-            f"same run. Do NOT run the queued commands yourself."
+            f"{listed}. Do NOT run the queued commands yourself. Typing "
+            f"'fix-all' is easy to miss, so ASK with the AskUserQuestion tool "
+            f'rather than only mentioning it. Question: "{intro} Fix them '
+            f'now?" Exactly two options, in this order: 1. "Do nothing" '
+            f"(the default -- bootstrap re-checks next session, nothing is "
+            f'lost); 2. "Fix-all" (re-runs bootstrap with elevation consent: a '
+            f"UAC prompt appears, the engine launches the fix runner itself, "
+            f"waits for it, and re-checks in the same run). Run the fix-all "
+            f'invocation ONLY if the user picks "Fix-all" or types fix-all; on '
+            f'"Do nothing", say nothing further and do not re-prompt.'
         )
     else:
         # Unix fix-all has no TTY, so the honest offer is the shim, not fix-all.

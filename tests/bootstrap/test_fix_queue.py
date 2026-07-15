@@ -374,6 +374,40 @@ class TestFixQueueFailure:
         assert "admin prompt" in item["user_msg"]
         assert item["labels"] == ["Link starship-config", "ssh-server-windows"]
 
+    def test_windows_tells_claude_to_ask_rather_than_mention(self):
+        """A 'type fix-all' line at session start scrolls past unread, so the
+        offer only landed if the user happened to notice it. Claude is told to
+        put the decision in front of them with AskUserQuestion."""
+        item = fq.fix_queue_failure(
+            [FixTask(id="a", kind="command", label="CUDA Toolkit")],
+            "windows", "C:/data")
+        agent = item["agent_msg"]
+        assert "AskUserQuestion" in agent
+        assert '"Do nothing"' in agent and '"Fix-all"' in agent
+        # Do-nothing leads, so a reflexive Enter never triggers a UAC prompt.
+        assert agent.index('"Do nothing"') < agent.index('"Fix-all"')
+        assert "Do NOT run the queued commands yourself" in agent
+
+    def test_the_question_repeats_what_the_user_was_told(self):
+        """The question text and the user-facing intro are one string, so a
+        reworded message can never leave the user answering a prompt that says
+        something different from what they just read."""
+        tasks = [FixTask(id="a", kind="command", label="CUDA Toolkit"),
+                 FixTask(id="b", kind="command", label="ssh-server-windows")]
+        item = fq.fix_queue_failure(tasks, "windows", "C:/data")
+        intro = ("Bootstrap found issues that need admin access: "
+                 "CUDA Toolkit, ssh-server-windows.")
+        assert item["user_msg"].startswith(intro)
+        assert f'"{intro} Fix them now?"' in item["agent_msg"]
+
+    def test_no_ask_prompt_after_a_failed_launch(self):
+        """The launch already happened and did not complete. Asking again would
+        loop the UAC prompt -- the shim is the honest fallback."""
+        item = fq.fix_queue_failure(
+            [FixTask(id="a", kind="command", label="x")], "windows", "C:/data",
+            launch_detail="declined")
+        assert "AskUserQuestion" not in item["agent_msg"]
+
     def test_unix_offers_the_shim_not_fix_all(self):
         """Unix fix-all runs in a TTY-less subprocess, so offering fix-all there
         would promise a prompt that cannot be answered."""
