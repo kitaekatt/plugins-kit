@@ -1939,6 +1939,66 @@ def _process_venv_def(venv_def, data_dir, plugin_root, prefix, label, action_ent
     return result
 
 
+def _process_dead_path_entries(data_dir, prefix, ok_entries):
+    """Detect dead Windows User PATH entries; defer their removal to fix-all.
+
+    DETECT ONLY. Deleting PATH entries is destructive with no undo, so it never
+    happens as a side effect of a background SessionStart hook -- it goes in the
+    fix queue, where the user consents to it (and can read the exact entries in
+    queue.json first). This is the one queued operation that needs no privilege;
+    it is queued for consent, not for elevation.
+
+    Silent when clean (an ok entry), a persistent failure when not: the item
+    must survive a declined fix-all, so it re-offers next session instead of
+    being detected once and forgotten. The scan itself is cached on a PATH hash
+    -- see bootstrap_lib.path_prune for why caching the RESULT rather than
+    "already reported" is what makes that work.
+
+    Returns a failure dict, or None when there is nothing to prune.
+    """
+    from .path_prune import scan, stamp_path
+
+    dead = scan(data_dir)
+    if dead is None:
+        # No verdict: nothing to read (not Windows, or the registry is
+        # off-limits). Say nothing rather than report a check that never ran as
+        # a check that passed.
+        return None
+    if not dead:
+        ok_entries.append(f"{prefix}User PATH: no dead entries")
+        return None
+
+    count = len(dead)
+    noun = "entry" if count == 1 else "entries"
+    ok_entries.append(f"{prefix}User PATH: {count} dead {noun} (cached scan)")
+    return {
+        "type": "path_prune",
+        "name": "dead-path-entries",
+        "message": (
+            f"Windows User PATH has {count} dead {noun} (directories that no "
+            f"longer exist)"
+        ),
+        "elevation": {
+            "method": "path_prune",
+            "os": "windows",
+            "id": "path_prune",
+            "label": f"Remove {count} dead PATH {noun}",
+            "entries": dead,
+            "backup": os.path.join(os.path.dirname(stamp_path(data_dir)),
+                                   "path_backup.txt"),
+        },
+        "agent_msg": (
+            f"The Windows User PATH has {count} dead {noun} pointing at "
+            f"directories that no longer exist. Bootstrap deferred the removal "
+            f"into the fix queue rather than doing it unasked -- deleting PATH "
+            f"entries is destructive. The exact entries are listed in the "
+            f"queue file."
+        ),
+        "plugin": "bootstrap",
+        "persist_across_sessions": True,
+    }
+
+
 def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_entries, ok_entries, plugin_name="bootstrap"):
     """Process engine self-setup: tools, path_entries, venv.
 
@@ -1964,6 +2024,13 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
 
     # Check path entries (consolidate adds into one line)
     _process_path_entries(self_setup.get("path_entries", []), p, action_entries, ok_entries)
+
+    # Dead User PATH entries (Windows). AFTER the adds above: those can add an
+    # entry whose directory does not exist yet, and scanning first would report
+    # it as dead in the same breath that bootstrap created it.
+    prune_failure = _process_dead_path_entries(data_dir, p, ok_entries)
+    if prune_failure:
+        failures.append(prune_failure)
 
     # Check for Python stubs shadowing the standalone python (Windows-only check)
     stub_def = self_setup.get("python_stub_check")

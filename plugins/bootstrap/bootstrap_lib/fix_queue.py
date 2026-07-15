@@ -13,7 +13,12 @@ This module:
     the current OS's are collected -- a pass runs on exactly one OS):
       - ``{"method": "apt", "package": <pkg>}``      -- deferred apt package;
       - ``{"method": "command", "command": <cmd>}``  -- deferred elevated command;
-      - ``{"method": "brew_installer"}``             -- Homebrew missing on macOS.
+      - ``{"method": "brew_installer"}``             -- Homebrew missing on macOS;
+      - ``{"method": "path_prune", "entries": [...]}`` -- dead Windows User PATH
+        entries to delete. The one queued operation that needs no privilege at
+        all (HKCU is the user's own hive): it is here for CONSENT, because it
+        deletes things, and the queue is where "needs the user's attention"
+        already lives.
     A ``command`` descriptor may also carry ``cost`` (see :func:`cost_of`),
     which is what lets the queue run the cheap work first.
   * :func:`write_or_clear_queue` regenerates ``<data_dir>/elevate/queue.json``
@@ -85,6 +90,13 @@ class FixTask:
     # "this will take a while" note. Not a duration -- a COARSE class, because
     # the honest input is "does it download", not a number anyone can predict.
     cost: str = COST_QUICK
+    # path_prune only: the exact PATH entries to delete, verbatim as they appear
+    # in the registry. Data rather than a re-derivation in the runner -- see
+    # Runner.run_path_prune. Also what makes queue.json a real disclosure: the
+    # user can read exactly what a fix-all will remove before consenting.
+    entries: List[str] = field(default_factory=list)
+    # path_prune only: where the runner saves the pre-prune PATH value.
+    backup: Optional[str] = None
 
     def to_json(self) -> dict:
         # Drop unset optionals so the queue file stays readable -- it is a
@@ -110,6 +122,10 @@ class FixTask:
         # a `"cost": "quick"` on every line is noise in a file a human may open.
         if self.cost == COST_SLOW:
             out["cost"] = self.cost
+        if self.entries:
+            out["entries"] = self.entries
+        if self.backup is not None:
+            out["backup"] = self.backup
         return out
 
 
@@ -168,6 +184,7 @@ def queue_from_failures(failures, current_os: str) -> List[FixTask]:
     apt_ids: List[str] = []
     commands: List[FixTask] = []
     brew = False
+    prune: Optional[FixTask] = None
 
     for f in failures:
         desc = f.get("elevation") if isinstance(f, dict) else None
@@ -195,6 +212,25 @@ def queue_from_failures(failures, current_os: str) -> List[FixTask]:
                 ))
         elif method == "brew_installer":
             brew = True
+        elif method == "path_prune":
+            entries = [e for e in (desc.get("entries") or []) if isinstance(e, str)]
+            if entries:
+                count = len(entries)
+                prune = FixTask(
+                    id=desc.get("id") or "path_prune",
+                    kind="path_prune",
+                    label=desc.get("label") or (
+                        f"Remove {count} dead PATH entr"
+                        f"{'y' if count == 1 else 'ies'}"
+                    ),
+                    # HKCU is the user's own hive -- no elevation needed. On
+                    # Windows the runner is elevated wholesale anyway, and UAC
+                    # preserves the user profile, so HKCU still resolves to this
+                    # user either way.
+                    elevated=False,
+                    entries=entries,
+                    backup=desc.get("backup"),
+                )
 
     tasks: List[FixTask] = []
     if brew:
@@ -218,6 +254,14 @@ def queue_from_failures(failures, current_os: str) -> List[FixTask]:
             cost=COST_SLOW,
         ))
     tasks.extend(commands)
+    if prune is not None:
+        # Last of the QUICK group (it is COST_QUICK and order_tasks is stable),
+        # so it runs before the slow installs rather than after. That ordering
+        # is safe in either direction and needs no reasoning about what else is
+        # in the queue: run_path_prune re-reads the registry at execution time
+        # and rewrites only `current minus the named entries`, so an install
+        # that adds a PATH entry -- before or after -- is preserved either way.
+        tasks.append(prune)
     return order_tasks(tasks)
 
 

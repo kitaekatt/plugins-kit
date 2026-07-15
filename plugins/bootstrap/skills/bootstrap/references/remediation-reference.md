@@ -72,12 +72,20 @@ disappears when the operations succeed.
 | `apt` | `apt-get update`, then one `apt-get install -y <all queued packages>` |
 | `brew_installer` | Runs the official Homebrew installer. Never elevated — it refuses to run as root and elevates itself where it needs to |
 | `secret` | Prompts with echo off, writes the value 0600 and user-owned. **Available but unwired** — no producer emits one yet |
+| `path_prune` | Removes the task's `entries` from the Windows User PATH, backing the old value up to `entries`' sibling `path_backup.txt` first. **Never elevated** — `HKCU` is the user's own hive; it is queued for *consent*, not privilege, because it deletes things |
 
-The runner **prints the plan** before executing anything — one labeled line per
-task, marked `admin` where elevated. A data file is more opaque than the shell
-script this replaced, whose real virtue was that the user could read it before
-approving; the plan restores that. The UAC (or sudo) prompt is the consent, the
-plan is the disclosure.
+The runner **prints the plan** before executing anything — one numbered line per
+task, quickest first, marked `admin` where elevated and flagged where it
+downloads. A data file is more opaque than the shell script this replaced, whose
+real virtue was that the user could read it before approving; the plan restores
+that. The UAC (or sudo) prompt is the consent, the plan is the disclosure — and
+for `path_prune` the queue file itself is part of that disclosure: it lists every
+entry the prune will delete, verbatim, before the user agrees to anything.
+
+**fix-all is "needs the user", not "needs admin".** `path_prune` is the case that
+makes the distinction concrete: it requires no privilege at all, and rides the
+queue purely because deleting PATH entries must be consented to rather than done
+to someone by a background hook.
 
 It **continues past a failed task** rather than aborting on the first one (the
 old `.bat` aborted): the tasks are independent, and the engine's next re-check —
@@ -93,6 +101,66 @@ user's and `$HOME` is already correct — the old script ran wholesale under `su
 (`HOME=/root`), which is why it had to rewrite `~`. On Windows the engine
 launches the whole runner elevated in one UAC hop; UAC preserves the user
 profile, so `elevated` is effectively advisory there.
+
+### Dead PATH entries: cached scan, uncached finding
+
+`bootstrap_lib/path_prune.py` detects Windows User PATH entries whose directory
+no longer exists. Nothing removes a PATH entry once added, and each dead entry is
+textually unique so nothing collapses them either — they accumulate forever. A
+bloated PATH is not cosmetic: it is what `path_repair.py` exists to survive
+(cmd.exe silently truncates an oversized PATH during venv activation, leaving the
+Python child unable to find its tools).
+
+Scanning probes the filesystem per entry — potentially slow, potentially an
+offline network share — so it is gated on a hash of the raw registry PATH. **What
+is cached is the RESULT, not "did I already report this".** That distinction is
+the whole design:
+
+| Situation | Rescan? | Surfaces? |
+|---|---|---|
+| User declined; PATH unchanged | No (hash hit) | **Yes — every session** |
+| User pruned | Yes (hash miss) | No — result empty, self-clearing |
+| Something added a dead entry | Yes (hash miss) | Yes, naming it |
+
+Cache "already reported" instead and a declined prune is detected once and never
+mentioned again. Caching the result means a skip costs the *scan*, never the
+*finding*; and because a prune changes the PATH, the finding clears itself with no
+"type fixed" ritual.
+
+`scan()` returns `None` for **no verdict** (not Windows, or `BOOTSTRAP_SKIP_REGISTRY`
+set) as distinct from `[]` for **ran and clean** — collapsing the two would let a
+check that never ran report itself as one that passed.
+
+**`BOOTSTRAP_SKIP_REGISTRY` suppresses the read, not just writes.** The registry
+is global state that ignores the HOME isolation tests rely on, so a scan inside a
+test reads the *developer's* PATH — every engine test then inherits whatever dead
+junk that machine has.
+
+**Deciding "dead" is the dangerous part**, and the two obvious ways are both
+wrong. `os.path.isdir` **never raises** — it swallows `OSError` internally and
+returns False — so an offline `\\nas\share` reads as dead. `os.stat` raises, but
+on Windows an offline UNC host, an unmapped `Z:`, and a genuinely missing
+directory all surface as `FileNotFoundError` **winerror 3**; the exception says
+nothing useful. So `fix_runner.is_dead` asks a different question: **is the
+VOLUME reachable?** Only when the drive/share is present does a missing directory
+mean the entry is dead. It also strips surrounding quotes first (cmd.exe does, so
+`"C:\Program Files\Foo"` is a working entry), leaves unresolved `%VAR%` alone,
+and declines to judge driveless entries (`\foo\bar` resolves against whatever
+drive is current). Everything ambiguous is **alive**: a false "alive" costs one
+stale entry nobody notices; a false "dead" silently deletes a directory the user
+needs. All three of those holes shipped once and were caught in review — each has
+a regression test that asks the **real filesystem**, because the original mocked
+`isdir` into raising (something it never does) and so passed while the bug was
+live.
+
+The predicate lives in `fix_runner`, not `path_prune`, and `path_prune` imports it
+back: the runner **re-checks deadness at prune time** and must work as a bare
+script with no package context. That re-check is not belt-and-braces — the
+engine's cache keys on PATH *text* while deadness is a property of the
+*filesystem*, so a tool uninstalled (dead), left unpruned, then reinstalled to the
+same location leaves the PATH text — and the hash — untouched, and the stale
+verdict would delete a live directory. The queue says what to *consider*; the
+filesystem, at prune time, says what to *do*.
 
 **Why a `secret` kind at all.** Elevation is not the only operation that needs a
 console — gathering a secret hits the same wall for a different reason, and the

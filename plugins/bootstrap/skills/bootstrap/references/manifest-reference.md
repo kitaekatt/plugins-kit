@@ -436,7 +436,10 @@ Ubuntu/macOS, an admin-token check on Windows.
   `sudo -n` pass, so apt entries install silently in the hook.
 - **Privileges missing** → the strategy **defers** instead of attempting. It
   records a persistent per-item `needs_elevation` failure carrying a structured
-  `elevation` descriptor (`{method: apt|command|brew_installer, os, id, label}`).
+  `elevation` descriptor (`{method: apt|command|brew_installer|path_prune, os,
+  id, label}`). Not every descriptor is about privilege: `path_prune` needs none
+  (`HKCU` is the user's own hive) and is deferred for **consent**, because it
+  deletes PATH entries.
 
 The descriptor's **`label`** is the one field a human reads — it is what the
 session message lists and what the runner's plan prints, so it must stand alone
@@ -451,9 +454,12 @@ current OS into **ONE queue file**, plus a small launcher shim:
 - **Regenerated every pass** from the current descriptors; **both are deleted**
   when nothing is deferred — the offer disappears once the deferred ops succeed.
 - **Contents**: typed tasks, not shell text. Each carries `id`, `kind`
-  (`command` | `apt` | `brew_installer` | `secret`), `label` and `elevated`,
-  plus its payload (`command`, `packages`, …), and the `bash` path the engine
-  resolved at write time (an elevated console's PATH may lack Git's bin dir).
+  (`command` | `apt` | `brew_installer` | `secret` | `path_prune`), `label` and
+  `elevated`, plus its payload (`command`, `packages`, `entries`, …), and the
+  `bash` path the engine resolved at write time (an elevated console's PATH may
+  lack Git's bin dir). Tasks are ordered **quickest first** (`cost: quick|slow`),
+  so the local config fixes land while the user watches instead of queueing
+  behind a multi-GB download.
   Order: the Homebrew installer first when macOS needs it, then **one** `apt`
   task carrying all queued packages (a single `apt-get install` resolves
   co-dependent packages that would fail installed one at a time), then the

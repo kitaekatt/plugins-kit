@@ -89,7 +89,7 @@ QUEUE_VERSION = 1
 # Kinds the runner knows how to execute. A queue naming anything else is a
 # version skew (a newer engine wrote it) -- fail loudly rather than skip
 # silently, since a skipped elevated task looks like success to the re-check.
-KNOWN_KINDS = frozenset({"command", "apt", "brew_installer", "secret"})
+KNOWN_KINDS = frozenset({"command", "apt", "brew_installer", "secret", "path_prune"})
 
 # How long a task is expected to take, as declared by the engine (see
 # fix_queue.COST_*). The runner uses it for one thing only: telling the user
@@ -129,6 +129,112 @@ def _bash() -> str:
 def is_slow(task):
     """True when the engine flagged this task as a download/install."""
     return task.get("cost") == COST_SLOW
+
+
+def _strip_quotes(entry):
+    """Drop one matched pair of surrounding double quotes.
+
+    cmd.exe strips them when resolving PATH, so ``"C:\\Program Files\\Foo"`` is a
+    working entry -- and quoting is mandatory for any path containing a
+    semicolon. Probing the quoted string finds nothing on disk, which would
+    condemn a live directory (verified: a quoted C:\\WINDOWS was classed dead).
+    """
+    e = entry.strip()
+    if len(e) >= 2 and e[0] == '"' and e[-1] == '"':
+        return e[1:-1]
+    return e
+
+
+def _volume_root(path):
+    """The drive or UNC share `path` lives on; None when it names no volume."""
+    drive, _rest = os.path.splitdrive(path)
+    if not drive:
+        return None
+    # "C:" -> "C:\"; a bare "C:" means "cwd on C", not the root.
+    if len(drive) == 2 and drive[1] == ":":
+        return drive + os.sep
+    return drive  # \\server\share
+
+
+def is_dead(entry):
+    """True when a PATH entry names a directory that is definitively not there.
+
+    Every ambiguous case must resolve to ALIVE. The asymmetry is the whole
+    safety property: a false "alive" leaves one stale entry nobody notices; a
+    false "dead" silently deletes a directory the user needs.
+
+    Getting that right is harder than it looks, and neither obvious approach
+    works:
+
+      * ``os.path.isdir`` NEVER raises -- it swallows OSError internally and
+        returns False. So "unreachable" is indistinguishable from "absent", and
+        an offline share reads as dead.
+      * ``os.stat`` raises, but on Windows an offline UNC host and an unmapped
+        drive both surface as ``FileNotFoundError`` winerror 3 -- the same class
+        as a genuinely missing directory. The exception says nothing useful.
+
+    So ask a different question: is the VOLUME reachable? An unmapped ``Z:``, a
+    disconnected ``\\\\nas\\share``, an empty removable drive -- all fail there,
+    and we decline to judge anything on them. Only when the drive/share IS
+    present does a missing directory mean the entry is genuinely dead.
+
+    Lives here rather than in path_prune because fix_runner is the module that
+    must survive being run as a bare script with no package context, and the
+    runner re-checks this at prune time (a cached verdict can be stale by then).
+    path_prune imports it back -- the same direction fix_queue already borrows
+    this module's constants.
+    """
+    try:
+        expanded = os.path.expandvars(_strip_quotes(entry)).strip()
+    except (TypeError, ValueError):
+        return False
+    if not expanded:
+        return False
+    # An undefined %VAR% survives expandvars verbatim. We cannot know what it
+    # points at, so it is not ours to delete.
+    if "%" in expanded:
+        return False
+    root = _volume_root(expanded)
+    if root is None:
+        # Driveless ("\foo\bar") resolves against whatever the current drive
+        # happens to be, which is not a question with a stable answer. Keep it.
+        return False
+    if not os.path.isdir(root):
+        return False
+    return not os.path.isdir(expanded)
+
+
+def _broadcast_environment_change():
+    """Tell other top-level windows the environment changed (WM_SETTINGCHANGE).
+
+    A registry PATH edit is invisible to already-running processes until they
+    are told; this is what makes a new shell pick it up without a logout, and it
+    matches what .NET's SetEnvironmentVariable does. Deliberately best-effort:
+    the prune already succeeded by the time we get here, so failing to notify
+    must not turn a completed task into a reported failure.
+
+    Reimplemented rather than imported from path_check because this module is
+    stdlib-only and runs as a script with no package context -- the same
+    constraint documented at the top of the file.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except (ImportError, ValueError):
+        return
+    try:
+        HWND_BROADCAST = 0xFFFF
+        WM_SETTINGCHANGE = 0x001A
+        SMTO_ABORTIFHUNG = 0x0002
+        send = ctypes.windll.user32.SendMessageTimeoutW
+        send.argtypes = [
+            wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPCWSTR,
+            wintypes.UINT, wintypes.UINT, ctypes.POINTER(wintypes.DWORD),
+        ]
+        send(HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment",
+             SMTO_ABORTIFHUNG, 5000, ctypes.byref(wintypes.DWORD()))
+    except (AttributeError, OSError):
+        pass
 
 
 def _run(argv, label):
@@ -294,10 +400,110 @@ class Runner:
         print(f"  wrote {target}")
         return True
 
+    def run_path_prune(self, task):
+        """Remove named entries from the Windows User PATH.
+
+        The engine decided WHAT is dead (bootstrap_lib.path_prune) and put the
+        exact strings in the task; this only removes them. That split is not
+        incidental: re-deriving deadness here would duplicate the
+        expand-before-testing rule that keeps `%JAVA_HOME%\\bin` from being
+        condemned, and two copies of that rule is one copy too many. It also
+        makes the queue file honest -- the user can read queue.json and see
+        precisely which entries a fix-all will delete, before consenting.
+
+        Removal is BY TEXT and only for entries still present, so a PATH that
+        changed between detection and consent loses nothing it did not name:
+        anything added meanwhile is simply untouched.
+        """
+        entries = task.get("entries") or []
+        if not entries:
+            return True
+        try:
+            import winreg
+        except ImportError:
+            print("    ! winreg unavailable (not Windows)")
+            return False
+
+        targets = {self._norm_path_entry(e) for e in entries}
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, "Environment", 0,
+                winreg.KEY_READ | winreg.KEY_WRITE,
+            ) as key:
+                try:
+                    current, value_type = winreg.QueryValueEx(key, "Path")
+                except FileNotFoundError:
+                    print("    ! no User PATH value to prune")
+                    return False
+
+                kept, removed, revived = [], [], []
+                for entry in current.split(";"):
+                    if not entry.strip():
+                        continue
+                    if self._norm_path_entry(entry) not in targets:
+                        kept.append(entry)
+                    elif is_dead(entry):
+                        removed.append(entry)
+                    else:
+                        # RE-CHECKED, not trusted. Detection may be sessions old
+                        # (the finding persists until the user consents), and
+                        # deadness is a property of the FILESYSTEM while the
+                        # engine's cache keys on the PATH TEXT. Uninstall a tool
+                        # (entry -> dead), decline the prune, reinstall to the
+                        # same place: the installer sees its PATH entry already
+                        # present and changes nothing, so the text -- and the
+                        # hash -- never move, and the stale verdict would delete
+                        # a live directory. The queue says what to consider; the
+                        # filesystem, now, says what to do.
+                        revived.append(entry)
+                        kept.append(entry)
+
+                for entry in revived:
+                    print(f"    ~ {entry} exists again -- keeping")
+                if not removed:
+                    print("    nothing to remove (PATH changed since detection)")
+                    return True
+
+                backup = task.get("backup")
+                if backup:
+                    # Destructive and not obviously reversible from memory --
+                    # 30 entries is not something a user reconstructs by hand.
+                    with open(backup, "w", encoding="utf-8") as fh:
+                        fh.write(current)
+                    print(f"    backed up previous PATH -> {backup}")
+
+                for entry in removed:
+                    print(f"    - {entry}")
+                # Preserve the value TYPE: a User PATH is normally
+                # REG_EXPAND_SZ, and rewriting it as REG_SZ would stop Windows
+                # expanding every %VAR% in it -- breaking entries this prune was
+                # careful not to even touch.
+                winreg.SetValueEx(key, "Path", 0, value_type, ";".join(kept))
+        except OSError as e:
+            print(f"    ! could not update the User PATH: {e}")
+            return False
+
+        print(f"    removed {len(removed)} dead entr"
+              f"{'y' if len(removed) == 1 else 'ies'}, kept {len(kept)}")
+        _broadcast_environment_change()
+        return True
+
+    @staticmethod
+    def _norm_path_entry(entry):
+        """Compare-key for a PATH entry: case- and trailing-slash-insensitive.
+
+        Windows paths are case-insensitive and `C:\\x` / `C:\\x\\` are the same
+        directory, so a prune must match them as one. Matches the normalization
+        path_check uses when deciding an entry is already present.
+        """
+        return entry.strip().rstrip("\\/").lower()
+
     def dispatch(self, task):
         kind = task["kind"]
         if kind == "command":
             return self.run_command(task)
+        if kind == "path_prune":
+            return self.run_path_prune(task)
         if kind == "apt":
             return self.run_apt(task)
         if kind == "brew_installer":
@@ -335,6 +541,15 @@ def validate(queue):
             problems.append(f"task {i}: command task has no command")
         if kind == "secret" and not task.get("target"):
             problems.append(f"task {i}: secret task has no target")
+        if kind == "path_prune":
+            entries = task.get("entries")
+            # An empty/missing list is a version skew or a writer bug, not a
+            # no-op to shrug at: the plan would promise the user a prune and
+            # then silently do nothing, which reads as success to the re-check.
+            if not isinstance(entries, list) or not entries:
+                problems.append(f"task {i}: path_prune task has no entries")
+            elif not all(isinstance(e, str) and e.strip() for e in entries):
+                problems.append(f"task {i}: path_prune entries must be non-empty strings")
         cost = task.get("cost")
         if cost is not None and cost not in KNOWN_COSTS:
             problems.append(f"task {i}: unknown cost {cost!r}")

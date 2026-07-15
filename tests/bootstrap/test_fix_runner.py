@@ -23,6 +23,7 @@ import json
 import os
 import subprocess
 import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -130,6 +131,186 @@ class TestDispatch:
 # Secret gathering
 # --------------------------------------------------------------------------- #
 
+class TestIsDead:
+    """The predicate that decides whether a PATH entry gets deleted.
+
+    Every ambiguous case must resolve to ALIVE: a false "alive" leaves a stale
+    entry nobody notices; a false "dead" silently deletes a directory the user
+    needs. Review found three ways this was getting that backwards -- each test
+    below marked REGRESSION GUARD is one of them, and each was verified against
+    the real filesystem, not a mock.
+    """
+
+    def test_a_missing_directory_is_dead(self, tmp_path):
+        assert fr.is_dead(str(tmp_path / "nope")) is True
+
+    def test_an_existing_directory_is_alive(self, tmp_path):
+        assert fr.is_dead(str(tmp_path)) is False
+
+    def test_a_file_is_dead_because_a_path_entry_must_be_a_directory(self, tmp_path):
+        f = tmp_path / "f.txt"
+        f.write_text("x")
+        assert fr.is_dead(str(f)) is True
+
+    def test_variables_are_expanded_before_testing(self, tmp_path, monkeypatch):
+        """A Windows User PATH is often REG_EXPAND_SZ, so entries legitimately
+        read `%JAVA_HOME%\\bin`; probing that literal finds nothing on disk."""
+        monkeypatch.setenv("PRUNE_TEST_HOME", str(tmp_path))
+        assert fr.is_dead("%PRUNE_TEST_HOME%") is False
+
+    def test_an_undefined_variable_is_alive(self, monkeypatch):
+        monkeypatch.delenv("PRUNE_TEST_UNSET", raising=False)
+        assert fr.is_dead("%PRUNE_TEST_UNSET%\\bin") is False
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows volume semantics")
+    def test_an_unreachable_volume_is_alive(self):
+        """REGRESSION GUARD #1. os.path.isdir NEVER raises -- it swallows OSError
+        and returns False -- so an offline \\\\nas\\share read as DEAD and was
+        queued for deletion. os.stat is no better: an offline UNC host and an
+        unmapped drive both surface as FileNotFoundError winerror 3, exactly like
+        a genuinely missing directory. Hence the volume-reachability check.
+
+        The original test for this monkeypatched isdir to raise -- something real
+        isdir never does -- so it passed while the bug shipped. It validated
+        fiction. This one asks the real filesystem."""
+        assert fr.is_dead(r"\\no-such-host-xyz123\share\tools") is False
+        assert fr.is_dead(r"Z:\unmapped-drive\tools") is False
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="needs C:\\WINDOWS")
+    def test_a_quoted_live_directory_is_alive(self):
+        """REGRESSION GUARD #2. cmd.exe strips quotes when resolving PATH, so
+        `"C:\\Program Files\\Foo"` is a working entry (and quoting is mandatory
+        for any path containing a semicolon). Probing the quoted string found
+        nothing and condemned it -- verified: a quoted C:\\WINDOWS was classed
+        dead."""
+        assert fr.is_dead('"C:\\WINDOWS"') is False
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows path semantics")
+    def test_a_driveless_entry_is_alive(self):
+        """REGRESSION GUARD #3. `\\from\\local` resolves against whatever the
+        current drive happens to be -- not a question with a stable answer, so
+        not ours to delete."""
+        assert fr.is_dead("\\from\\local") is False
+
+    def test_an_empty_entry_is_not_dead(self):
+        assert fr.is_dead("   ") is False
+
+
+class TestPathPrune:
+    """The destructive task. Every test here fakes winreg -- see
+    tests/conftest.py for why touching the real one is a firing offense."""
+
+    def _fake_winreg(self, current, value_type=2):
+        store = {"Path": (current, value_type)}
+        key = MagicMock()
+        key.__enter__ = MagicMock(return_value=key)
+        key.__exit__ = MagicMock(return_value=False)
+        reg = MagicMock()
+        reg.HKEY_CURRENT_USER = 0
+        reg.KEY_READ = 0
+        reg.KEY_WRITE = 0
+        reg.OpenKey.return_value = key
+        reg.QueryValueEx.side_effect = lambda k, n: store[n]
+        reg.SetValueEx.side_effect = (
+            lambda k, n, r, t, v: store.__setitem__(n, (v, t)))
+        return reg, store
+
+    def _run(self, reg, task, os_name="windows"):
+        """Removal mechanics only: is_dead is stubbed True so these stay about
+        matching and rewriting, and stay meaningful off Windows (a literal
+        `C:\\dead` has no drive on posix, so the real predicate would keep it).
+        The prune-time re-check is covered by _run_real_fs below."""
+        r = fr.Runner({"os": os_name, "bash": "C:/git/bash.exe", "tasks": []})
+        with patch.dict("sys.modules", {"winreg": reg}), \
+             patch.object(fr, "is_dead", lambda entry: True), \
+             patch.object(fr, "_broadcast_environment_change"):
+            return r.run_path_prune(task)
+
+    def _run_real_fs(self, reg, task):
+        """Like _run but WITHOUT stubbing is_dead -- the filesystem decides."""
+        r = fr.Runner({"os": "windows", "bash": "C:/git/bash.exe", "tasks": []})
+        with patch.dict("sys.modules", {"winreg": reg}), \
+             patch.object(fr, "_broadcast_environment_change"):
+            return r.run_path_prune(task)
+
+    def test_an_entry_that_came_back_to_life_is_not_deleted(self, tmp_path):
+        """REGRESSION GUARD. Detection can be sessions old -- the finding
+        persists until the user consents -- and deadness is a property of the
+        FILESYSTEM while the engine's cache keys on the PATH TEXT. Uninstall a
+        tool (entry -> dead), decline the prune, reinstall to the same location:
+        the installer sees its PATH entry already present and changes nothing,
+        so the text never moves, the hash never moves, and the stale verdict
+        would delete a live directory. Verified against a real dir."""
+        revived = tmp_path / "reinstalled"; revived.mkdir()
+        gone = tmp_path / "really-gone"
+        reg, store = self._fake_winreg(f"{revived};{gone}")
+        assert self._run_real_fs(
+            reg, {"label": "x", "entries": [str(revived), str(gone)]}) is True
+        assert store["Path"][0] == str(revived)
+
+    def test_all_entries_revived_removes_nothing(self, tmp_path):
+        alive = tmp_path / "back"; alive.mkdir()
+        reg, store = self._fake_winreg(str(alive))
+        assert self._run_real_fs(reg, {"label": "x", "entries": [str(alive)]}) is True
+        reg.SetValueEx.assert_not_called()
+
+    def test_removes_only_the_named_entries(self):
+        reg, store = self._fake_winreg("C:\\keep;C:\\dead;C:\\also-keep")
+        assert self._run(reg, {"label": "x", "entries": ["C:\\dead"]}) is True
+        assert store["Path"][0] == "C:\\keep;C:\\also-keep"
+
+    def test_an_entry_added_since_detection_survives(self):
+        """The queue names entries; the runner re-reads at execution time. So a
+        PATH that changed between detection and consent loses only what was
+        named -- an install's fresh entry is untouched."""
+        reg, store = self._fake_winreg("C:\\dead;C:\\cuda\\bin")
+        assert self._run(reg, {"label": "x", "entries": ["C:\\dead"]}) is True
+        assert store["Path"][0] == "C:\\cuda\\bin"
+
+    def test_matching_ignores_case_and_trailing_slash(self):
+        """Windows paths are case-insensitive and C:\\x == C:\\x\\ ."""
+        reg, store = self._fake_winreg("C:\\Dead\\;C:\\keep")
+        assert self._run(reg, {"label": "x", "entries": ["c:\\dead"]}) is True
+        assert store["Path"][0] == "C:\\keep"
+
+    def test_the_value_type_is_preserved(self):
+        """REG_EXPAND_SZ (2) must not be rewritten as REG_SZ (1): that would
+        stop Windows expanding every %VAR% in the PATH -- breaking exactly the
+        entries the prune took care not to touch."""
+        reg, store = self._fake_winreg("C:\\dead;%JAVA_HOME%\\bin", value_type=2)
+        self._run(reg, {"label": "x", "entries": ["C:\\dead"]})
+        assert store["Path"] == ("%JAVA_HOME%\\bin", 2)
+
+    def test_the_previous_path_is_backed_up_before_writing(self, tmp_path):
+        """30 entries is not something a user reconstructs by hand."""
+        backup = tmp_path / "path_backup.txt"
+        reg, _ = self._fake_winreg("C:\\dead;C:\\keep")
+        self._run(reg, {"label": "x", "entries": ["C:\\dead"],
+                        "backup": str(backup)})
+        assert backup.read_text() == "C:\\dead;C:\\keep"
+
+    def test_already_pruned_is_success_not_failure(self):
+        """Idempotent: the entries are gone, which is the requested end state."""
+        reg, store = self._fake_winreg("C:\\keep")
+        assert self._run(reg, {"label": "x", "entries": ["C:\\dead"]}) is True
+        assert store["Path"][0] == "C:\\keep"
+
+    def test_no_path_value_is_a_failure_not_a_crash(self):
+        reg, _ = self._fake_winreg("x")
+        reg.QueryValueEx.side_effect = FileNotFoundError()
+        assert self._run(reg, {"label": "x", "entries": ["C:\\dead"]}) is False
+
+    def test_a_registry_error_is_contained(self):
+        reg, _ = self._fake_winreg("C:\\dead")
+        reg.OpenKey.side_effect = OSError("denied")
+        assert self._run(reg, {"label": "x", "entries": ["C:\\dead"]}) is False
+
+    def test_empty_entries_is_a_noop(self):
+        reg, _ = self._fake_winreg("C:\\keep")
+        assert self._run(reg, {"label": "x", "entries": []}) is True
+        reg.SetValueEx.assert_not_called()
+
+
 class TestSecret:
     def test_secret_is_written_0600_and_never_echoed(self, monkeypatch, tmp_path, capsys):
         target = tmp_path / "sub" / "key.txt"
@@ -194,6 +375,22 @@ class TestValidate:
 
     def test_empty_queue_is_reported(self):
         assert any("no tasks" in p for p in fr.validate({"version": 1, "tasks": []}))
+
+    def test_path_prune_without_entries_is_reported(self):
+        """Not a no-op to shrug at: the plan would promise the user a prune and
+        then do nothing, which reads as success to the re-check."""
+        problems = fr.validate({"version": 1, "tasks": [
+            {"kind": "path_prune", "label": "L"}]})
+        assert any("no entries" in p for p in problems)
+
+    def test_path_prune_with_junk_entries_is_reported(self):
+        problems = fr.validate({"version": 1, "tasks": [
+            {"kind": "path_prune", "label": "L", "entries": ["ok", ""]}]})
+        assert any("non-empty strings" in p for p in problems)
+
+    def test_good_path_prune_task_validates(self):
+        assert fr.validate({"version": 1, "tasks": [
+            {"kind": "path_prune", "label": "L", "entries": ["C:\\dead"]}]}) == []
 
     def test_unknown_cost_is_reported(self):
         problems = fr.validate({"version": 1, "tasks": [

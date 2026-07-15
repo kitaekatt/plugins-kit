@@ -145,6 +145,42 @@ class TestQueueFromFailures:
              desc(command="ln -s a b", label="Link")], "ubuntu")
         assert [t.kind for t in tasks] == ["command", "apt"]
 
+    def test_path_prune_descriptor_becomes_an_unelevated_task(self):
+        """The one queued op that needs no privilege: HKCU is the user's own
+        hive. It is queued for CONSENT, because it deletes things."""
+        tasks = fq.queue_from_failures(
+            [desc("path_prune", os_="windows", entries=["C:\\a", "C:\\b"],
+                  label="Remove 2 dead PATH entries")], "windows")
+        assert len(tasks) == 1
+        assert tasks[0].kind == "path_prune"
+        assert tasks[0].elevated is False
+        assert tasks[0].entries == ["C:\\a", "C:\\b"]
+
+    def test_path_prune_entries_reach_the_queue_file_verbatim(self):
+        """queue.json is the disclosure: the user reads exactly what fix-all
+        will delete before consenting. Entries must survive to_json unchanged."""
+        tasks = fq.queue_from_failures(
+            [desc("path_prune", os_="windows", entries=["C:\\dead\\"])], "windows")
+        assert tasks[0].to_json()["entries"] == ["C:\\dead\\"]
+
+    def test_path_prune_without_entries_is_not_queued(self):
+        """Nothing to remove is not a task -- it would offer the user a fix-all
+        that does nothing."""
+        assert fq.queue_from_failures(
+            [desc("path_prune", os_="windows", entries=[])], "windows") == []
+
+    def test_path_prune_label_defaults_to_a_count(self):
+        tasks = fq.queue_from_failures(
+            [desc("path_prune", os_="windows", entries=["C:\\a"])], "windows")
+        assert tasks[0].label == "Remove 1 dead PATH entry"
+
+    def test_path_prune_is_quick_so_it_precedes_the_downloads(self):
+        tasks = fq.queue_from_failures(
+            [desc(command="winget install x", os_="windows", label="CUDA",
+                  cost="slow"),
+             desc("path_prune", os_="windows", entries=["C:\\a"])], "windows")
+        assert [t.kind for t in tasks] == ["path_prune", "command"]
+
     def test_only_current_os_descriptors_collected(self):
         tasks = fq.queue_from_failures(
             [desc(command="linux", os_="ubuntu", label="L"),
