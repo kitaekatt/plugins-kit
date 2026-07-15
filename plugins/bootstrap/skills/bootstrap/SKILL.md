@@ -64,7 +64,7 @@ reference_skill:
       keywords: [auto-remediation, fix-all, two-phase, silent install, remediation flow, autodetect, default values]
       detail: |
         Phase 1 (silent): tool installs (run install command, re-check); config autodetect (plugin manifest's "autodetect" script discovers and fills required fields, e.g. scanning CWD for a .uproject); default values from manifest "default" fields.
-        Phase 2 (fix-all): aggregates remaining failures into a single fix-all message. additionalContext (seen by the agent) carries numbered remediation steps; systemMessage (seen by the user) carries the bootstrap log of what was checked and what failed. User types "fix-all" or "fixed" to re-run bootstrap after remediation.
+        Phase 2 (fix-all): aggregates remaining failures into a single fix-all message. additionalContext (seen by the agent) carries numbered remediation steps; systemMessage (seen by the user) carries the bootstrap log of what was checked and what failed. User types "fix-all" to run the auto-remediation; the failing checks re-run every session until clean, so no separate confirmation is needed after manual fixes.
       example:
         input: A plugin declares uproject and engine_dir as required fields, plus an autodetect script that scans CWD.
         output: Engine copies the default config (empty values), calls autodetect, fills both fields, validates required-field presence, no fix-all needed. If autodetect only finds uproject, engine_dir becomes a fix-all item.

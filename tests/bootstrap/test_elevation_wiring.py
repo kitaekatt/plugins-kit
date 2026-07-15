@@ -177,6 +177,58 @@ class TestElevationScriptRendering:
 
 
 # --------------------------------------------------------------------------- #
+# Summary-first user-facing footer (systemMessage): labels, not index refs.
+# The user never sees the numbered additionalContext list, so "item #2" points
+# at nothing -- a concise label per fix-all item is what actually parses.
+# --------------------------------------------------------------------------- #
+
+class TestFixAllUserMsg:
+    def _agg(self, current_os, data_dir, fix_all_cmd=None):
+        tasks = elev.queue_from_failures(
+            [{"elevation": {"method": "apt", "package": "net-tools", "os": current_os}}],
+            current_os)
+        agg = elev.fix_queue_failure(tasks, current_os, data_dir)
+        if fix_all_cmd:
+            agg["fix_all_cmd"] = fix_all_cmd
+        return agg
+
+    def test_mixed_lists_admin_labels_from_aggregate_and_approval_sentence(self):
+        """The aggregate expands into one [admin] line per queued task, sourced
+        from its `labels` field (not recomputed), plus the admin-approval note."""
+        agg = self._agg("windows", "C:/data", fix_all_cmd="cmd")
+        manual = {"type": "tool", "name": "foo", "install_state": "manual_install"}
+        msg = engine._fix_all_user_msg([manual, agg])
+        assert "[admin] Install net-tools" in msg   # label came from queue task
+        assert "approve admin access" in msg
+        assert "fix-all" in msg
+        # No backwards index references leak into the user-facing copy.
+        assert "#1" not in msg and "#2" not in msg
+
+    def test_all_auto_without_admin_omits_approval_sentence(self):
+        tool = {"type": "tool", "name": "jq", "install_cmd": "winget install jq"}
+        msg = engine._fix_all_user_msg([tool])
+        assert "Install jq" in msg
+        assert "[admin]" not in msg
+        assert "approve admin access" not in msg
+
+    def test_mixed_footer_reaches_system_message_with_manual_sentence(self, tmp_path):
+        """End to end through emit_failure_response (background mode): the label
+        lines, the admin sentence, and a manual-items sentence (no index refs)
+        all land in systemMessage."""
+        agg = self._agg("windows", "C:/data", fix_all_cmd="cmd")
+        manual = {"type": "tool", "name": "foo", "install_state": "manual_install"}
+        out = tmp_path / "pending.json"
+        engine.emit_failure_response(
+            [manual, agg], current_os="windows", log_content="log",
+            label="mkt:bootstrap@test", output_file=str(out))
+        sm = json.loads(out.read_text())["systemMessage"]
+        assert "[admin] Install net-tools" in sm
+        assert "approve admin access" in sm
+        assert "need manual attention" in sm
+        assert "#1" not in sm and "#2" not in sm
+
+
+# --------------------------------------------------------------------------- #
 # Step 7b fix-all interactive launch (_elevation_step) -- launch is MOCKED
 # --------------------------------------------------------------------------- #
 
@@ -322,6 +374,35 @@ class TestFixAllInteractiveLaunch:
             _args(tmp_path, fix_all=True, console=True), "/plugin/root")
         assert stopped is False
         assert all(f["type"] != "elevation_script" for f in failures)
+
+    def test_queue_write_runtime_error_degrades_not_crashes(self, tmp_path, monkeypatch):
+        """render_queue raises when bash can't be resolved and the queue holds
+        shell-string tasks. A background SessionStart pass must DEGRADE (surface
+        the explanation, keep going), never let the exception kill the whole
+        pass's output -- so _elevation_step swallows it into a fallback failure."""
+        boom = RuntimeError(
+            "cannot write the bootstrap fix queue: bash was not found at write "
+            "time... Install Git for Windows and start a new session.")
+        monkeypatch.setattr(
+            elev, "write_or_clear_queue",
+            lambda *a, **k: (_ for _ in ()).throw(boom))
+
+        failures = [_win_failure()]
+        stopped = engine._elevation_step(
+            failures, "windows", str(tmp_path),
+            _args(tmp_path, fix_all=False, background=True), "/plugin/root")
+
+        assert stopped is False
+        # No aggregate: the per-task needs_elevation failures then surface raw.
+        assert all(f["type"] != "elevation_script" for f in failures)
+        # The bash-missing explanation is surfaced, not swallowed.
+        writes = [f for f in failures if f["type"] == "fix_queue_write"]
+        assert len(writes) == 1
+        assert "Install Git for Windows" in writes[0]["agent_msg"]
+        assert writes[0]["plugin"] == "bootstrap"
+        assert writes[0]["persist_across_sessions"] is True
+        # The generic fallback branch renders it and treats it as manual.
+        assert engine._is_auto_fixable(writes[0]) is False
 
 
 class TestSpawnRecheckPass:

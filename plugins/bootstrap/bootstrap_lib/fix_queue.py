@@ -34,7 +34,7 @@ import json
 import os
 import subprocess
 import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 from .apt import sudo_noninteractive_available, windows_admin_available
@@ -80,9 +80,25 @@ class FixTask:
 
     def to_json(self) -> dict:
         # Drop unset optionals so the queue file stays readable -- it is a
-        # disclosure surface a user may open, not just machine input.
-        return {k: v for k, v in asdict(self).items()
-                if v not in (None, [], False) or k in ("id", "kind", "label")}
+        # disclosure surface a user may open, not just machine input. Explicit
+        # per-field logic (not a `v not in (None, [], False)` filter): that
+        # filter compares with `==`, so an int 0 matches False and a meaningful
+        # `timeout: 0` would be silently dropped. Identity (`is not None`) for
+        # the Optional scalars keeps a real 0 in the output.
+        out = {"id": self.id, "kind": self.kind, "label": self.label}
+        if self.elevated:
+            out["elevated"] = self.elevated
+        if self.packages:
+            out["packages"] = self.packages
+        if self.command is not None:
+            out["command"] = self.command
+        if self.prompt is not None:
+            out["prompt"] = self.prompt
+        if self.target is not None:
+            out["target"] = self.target
+        if self.timeout is not None:
+            out["timeout"] = self.timeout
+        return out
 
 
 def queue_from_failures(failures, current_os: str) -> List[FixTask]:
@@ -282,7 +298,10 @@ def write_or_clear_queue(tasks: List[FixTask], data_dir: str,
 LAUNCH_TIMEOUT = 600
 UAC_GRACE = 120
 # What a task may take when its manifest entry declared nothing, mirroring the
-# engine's own ENV_CHECK_DEFAULT_TIMEOUT.
+# engine's own ENV_CHECK_DEFAULT_TIMEOUT by copy (a top-level import of
+# env_features would drag heavy modules into this near-stdlib-only import graph).
+# The mirror can silently skew, so a drift test in test_fix_queue.py asserts the
+# two constants stay equal.
 DEFAULT_TASK_TIMEOUT = 600
 
 
@@ -371,8 +390,14 @@ def launch_fix_runner(queue: str, current_os: str,
             capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired:
+        # The timeout kills only the PowerShell process WAITING on the elevated
+        # runner; the runner itself is a separate elevated process and keeps
+        # going. We accept that orphan: the next session's re-check pass, not
+        # this bounded wait, is the authority on what actually cleared.
         return LaunchResult(launched=True, succeeded=False,
-                            detail=f"timed out after {timeout}s waiting for the fix runner")
+                            detail=f"timed out after {timeout}s waiting for the fix runner; "
+                                   f"it may still be running -- the next session's re-check "
+                                   f"will pick up whatever completed")
     except OSError as e:
         return LaunchResult(launched=False, succeeded=False,
                             detail=f"could not launch: {e}")

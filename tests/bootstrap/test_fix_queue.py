@@ -30,6 +30,39 @@ def desc(method="command", os_="ubuntu", **kw):
 
 
 # --------------------------------------------------------------------------- #
+# FixTask.to_json
+# --------------------------------------------------------------------------- #
+
+class TestFixTaskToJson:
+    def test_zero_timeout_is_preserved(self):
+        """A meaningful `timeout: 0` must survive serialization. The old
+        `v not in (None, [], False)` filter used `==`, so 0 matched False and
+        was dropped -- this guards the identity-check replacement."""
+        out = FixTask(id="t", kind="command", label="L", timeout=0).to_json()
+        assert out["timeout"] == 0
+
+    def test_unset_optionals_are_dropped(self):
+        """Required fields always serialize; unset optionals stay out so the
+        queue file stays readable."""
+        out = FixTask(id="t", kind="command", label="L").to_json()
+        assert out == {"id": "t", "kind": "command", "label": "L"}
+
+
+# --------------------------------------------------------------------------- #
+# Default timeout mirror
+# --------------------------------------------------------------------------- #
+
+class TestDefaultTaskTimeoutMirror:
+    def test_mirrors_env_check_default(self):
+        """DEFAULT_TASK_TIMEOUT is a hand-copy of env_features'
+        ENV_CHECK_DEFAULT_TIMEOUT, not an import (a top-level import would drag
+        heavy modules into fix_queue's near-stdlib-only import graph). The copy
+        can silently skew, so pin the two constants equal here."""
+        import bootstrap_lib.env_features as env_features
+        assert fq.DEFAULT_TASK_TIMEOUT == env_features.ENV_CHECK_DEFAULT_TIMEOUT
+
+
+# --------------------------------------------------------------------------- #
 # Privilege dispatcher
 # --------------------------------------------------------------------------- #
 
@@ -340,6 +373,11 @@ class TestLaunchFixRunner:
         r = fq.launch_fix_runner("C:/data/queue.json", "windows")
         assert r.launched and not r.succeeded
         assert "timed out" in r.detail
+        # The kill reaches only the waiter, not the elevated runner, so the
+        # detail must NOT read as if the work stopped -- it points at the
+        # re-check as the authority on what actually completed.
+        assert "may still be running" in r.detail
+        assert "re-check" in r.detail
 
     def test_launch_failure_reports_not_launched(self, monkeypatch):
         monkeypatch.setattr(fq.subprocess, "run",

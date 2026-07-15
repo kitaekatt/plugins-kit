@@ -593,7 +593,28 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
         launch_fix_runner,
     )
     tasks = queue_from_failures(all_failures, current_os)
-    path = write_or_clear_queue(tasks, data_dir, current_os)
+    try:
+        path = write_or_clear_queue(tasks, data_dir, current_os)
+    except RuntimeError as exc:
+        # render_queue raises when bash can't be resolved at write time and the
+        # queue holds command/brew tasks (shell strings the runner needs bash
+        # for). A background SessionStart hook must DEGRADE, never crash: an
+        # uncaught exception here kills the whole pass's output, so every OTHER
+        # failure's remediation is lost with it. So: don't append the aggregate
+        # (its absence lets _visible_failures surface the per-task needs_elevation
+        # failures raw, with their own agent_msg/manual commands -- designed-for
+        # degradation), and surface the bash-missing explanation itself via a
+        # generic failure the emit_failure_response fallback branch renders (its
+        # text already carries the actionable "Install Git for Windows..." fix).
+        all_failures.append({
+            "type": "fix_queue_write",
+            "plugin": "bootstrap",
+            "message": str(exc),
+            "agent_msg": str(exc),
+            "user_msg": str(exc),
+            "persist_across_sessions": True,
+        })
+        return False
     if not path:
         return False
 
@@ -4618,6 +4639,49 @@ def _format_indexes(idxs):
     return ", ".join(f"#{i}" for i in idxs)
 
 
+def _auto_fix_label_lines(failures):
+    """Summary lines for the fix-all-eligible failures: list[(label, is_admin)].
+
+    The user sees systemMessage, NOT the numbered additionalContext list, so
+    index references there ("item #2") point at a list the user can't see. A
+    concise label per fix-all item is what actually parses. The elevation_script
+    aggregate expands into one line per queued task (its own `labels` field --
+    do not recompute it), each admin-flagged: every queued fix on the fix-all
+    elevation path needs a console the hook lacks. Other auto-fixable types get
+    one short line (tools -> "Install <name>"; else name / first message line).
+    """
+    lines = []
+    for f in failures:
+        if not _is_auto_fixable(f):
+            continue
+        if f.get("type") == "elevation_script":
+            for lbl in f.get("labels") or []:
+                lines.append((lbl, True))
+        elif f.get("type") == "tool":
+            lines.append((f"Install {f.get('name', 'tool')}", False))
+        else:
+            label = f.get("name") or f.get("message") or f.get("type") or "issue"
+            lines.append((str(label).splitlines()[0][:80], False))
+    return lines
+
+
+def _fix_all_user_msg(failures):
+    """User-facing (systemMessage) fix-all footer: labels first, no index refs.
+
+    One line per fix-all-eligible item, '[admin] '-prefixed where it needs
+    elevation, then the offer. The admin-approval sentence is appended ONLY when
+    something is actually admin-flagged, so a no-elevation fix-all stays quiet
+    about a prompt that won't appear.
+    """
+    lines = _auto_fix_label_lines(failures)
+    body = "\n".join(f"[admin] {lbl}" if admin else lbl for lbl, admin in lines)
+    offer = "Tell Claude 'fix-all' to auto-fix these issues."
+    if any(admin for _, admin in lines):
+        offer += (" You'll be prompted to approve admin access for the items "
+                  "flagged [admin].")
+    return f"{body}\n{offer}" if body else offer
+
+
 def _emit_unsupported_platform(message, data_dir, args):
     """Surface an unsupported-platform hard error and stop the pass.
 
@@ -4813,22 +4877,23 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
     manual_idxs = [i for i, f in enumerate(failures, 1) if not _is_auto_fixable(f)]
 
     if auto_idxs and not manual_idxs:
-        agent_trailer = "\nAll items above are fix-all eligible. Run 'fix-all' to resolve them, or type 'fixed' after manual fixes."
-        user_msg = "Tell Claude 'fix-all' to auto-fix, or 'fixed' after manual fixes."
+        agent_trailer = "\nAll items above are fix-all eligible. Run 'fix-all' to resolve them."
+        # Agent keeps index refs (it sees the numbered list); the user sees a
+        # label summary instead (systemMessage carries no numbered list).
+        user_msg = _fix_all_user_msg(failures)
     elif auto_idxs and manual_idxs:
         agent_trailer = (
             f"\nRun 'fix-all' to auto-resolve items {_format_indexes(auto_idxs)}. "
-            f"Items {_format_indexes(manual_idxs)} need manual attention — guide the user "
-            f"through the steps above. Type 'fixed' once everything is resolved."
+            f"Items {_format_indexes(manual_idxs)} need manual attention -- guide the user "
+            f"through the steps above."
         )
         user_msg = (
-            f"Tell Claude 'fix-all' to auto-fix items {_format_indexes(auto_idxs)}; "
-            f"items {_format_indexes(manual_idxs)} need manual attention. "
-            f"Type 'fixed' once done."
+            f"{_fix_all_user_msg(failures)}\n"
+            f"The remaining issues need manual attention -- work through them with Claude."
         )
     else:
-        agent_trailer = "\nNone of these are fix-all eligible — guide the user through the steps above. Type 'fixed' once resolved."
-        user_msg = "These issues need manual attention — work through them with Claude. Type 'fixed' once resolved."
+        agent_trailer = "\nNone of these are fix-all eligible -- guide the user through the steps above."
+        user_msg = "These issues need manual attention -- work through them with Claude."
 
     agent_lines.append(agent_trailer)
     agent_msg = "\n".join(agent_lines)
