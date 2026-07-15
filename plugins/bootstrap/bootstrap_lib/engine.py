@@ -1277,11 +1277,13 @@ class _ToolEntryCtx:
 
     __slots__ = ("tool_def", "name", "install", "install_cmds", "skip", "scoop_pkg",
                  "brew_spec", "apt_pkg", "elevated", "tool_install_path", "check_cmd",
-                 "download_def", "current_os", "prefix", "action_entries",
-                 "ok_entries", "tools_installed", "plugin_name", "result")
+                 "download_def", "requires", "machine_resolver", "current_os",
+                 "prefix", "action_entries", "ok_entries", "tools_installed",
+                 "plugin_name", "result")
 
     def __init__(self, tool_def, current_os, prefix, action_entries,
-                 ok_entries, tools_installed, plugin_name):
+                 ok_entries, tools_installed, plugin_name,
+                 machine_resolver=None):
         self.tool_def = tool_def
         self.name = tool_def["name"]
         # tool_def is already canonicalized by _normalize_tool_entry: every
@@ -1322,6 +1324,18 @@ class _ToolEntryCtx:
         self.tool_install_path = tool_def.get("installPath")
         self.check_cmd = tool_def.get("check")
         self.download_def = _resolve_download_def(tool_def.get("download", {}), current_os)
+        #   requires -- optional machine-property targeting, e.g.
+        #   {"requires": {"dev": true}}: declare a tool once fleet-wide and
+        #   have it fall out on machines whose env.json `machines` entry does
+        #   not satisfy the mapping (a machine PROPERTY, never a hostname
+        #   list). Consumed by the requires strategy, which short-circuits
+        #   the entry before resolve -- exactly like the skip sentinel.
+        #   machine_resolver -- the phase-shared lazy identity lookup
+        #   (env_manifest.MachineRequiresResolver); None when the caller did
+        #   not wire one (self-setup), in which case the requires strategy
+        #   builds its own over the user layers.
+        self.requires = tool_def.get("requires")
+        self.machine_resolver = machine_resolver
         self.current_os = current_os
         self.prefix = prefix
         self.action_entries = action_entries
@@ -1380,6 +1394,84 @@ def _strategy_skip(ctx):
         return _StrategyOutcome(False)
     ctx.ok_entries.append(
         f"{ctx.prefix}{ctx.name}: skipped - not applicable on {ctx.current_os}"
+    )
+    return _StrategyOutcome(True, None)
+
+
+def _strategy_requires(ctx):
+    """Precedence 0b: machine-property targeting via `requires`. A tools[]
+    entry may declare {"requires": {"dev": true, ...}}: it applies iff EVERY
+    (attribute, expected) pair is satisfied by the current machine's entry in
+    the env.json `machines` registry (env_manifest.requires_satisfied) -- so
+    a fleet-wide manifest can exclude a tool from a machine by PROPERTY,
+    never by hostname list. An unsatisfied entry short-circuits exactly like
+    the skip sentinel: before resolve, no check subprocess, no install, no
+    failure dict -- one verbose-only ok line. No `requires` key -> falls
+    through untouched (the overwhelmingly common case).
+
+    Ordering is load-bearing twice over:
+    - AFTER _strategy_skip: skip is decided from the entry alone (no I/O),
+      so an entry the current OS already opted out of never triggers an
+      env.json read.
+    - Identity resolves LAZILY and independently of the env pass: the tools
+      phases (Steps 3/3c) run before _process_env_pass (Step 3e), and the
+      env_state.json stamp gates that PASS, not identity -- so this strategy
+      does its own lookup via the memoized MachineRequiresResolver. A
+      manifest with no `requires` anywhere never reads env.json at all,
+      keeping fresh/standalone machines (and projects without env.json)
+      byte-for-byte unchanged.
+
+    A `requires` on a machine that cannot be identified is a hard failure
+    (Environment Awareness doctrine: unknown machines are a hard error, no
+    fallbacks, no guessing) -- installing a targeted tool on an unvetted
+    machine is exactly what the field exists to prevent."""
+    requires = ctx.requires
+    if not requires:
+        return _StrategyOutcome(False)
+    from .env_manifest import MachineRequiresResolver, requires_satisfied
+    if not isinstance(requires, dict):
+        # Shape validation before any identity work: a scalar/list here is a
+        # manifest bug, and guessing at it would silently mis-target installs.
+        msg = (f"'requires' must be an object mapping machine attribute -> "
+               f"expected value, got {type(requires).__name__} {requires!r}")
+        ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: INVALID 'requires' - {msg}")
+        return _StrategyOutcome(True, {
+            "type": "tool", "name": ctx.name, "message": msg,
+            "install_state": "requires_invalid", "install_cmd": None,
+            "agent_msg": (
+                f"Tool '{ctx.name}' declares an invalid 'requires' field: "
+                f"{msg}. Fix the bootstrap.json entry (e.g. "
+                f"\"requires\": {{\"dev\": true}})."
+            ),
+            "plugin": ctx.plugin_name,
+            "persist_across_sessions": True,
+        })
+    resolver = ctx.machine_resolver or MachineRequiresResolver(None)
+    machine_key, machine, err = resolver.resolve()
+    if err:
+        req = json.dumps(requires, sort_keys=True)
+        msg = f"cannot evaluate requires {req}: {err}"
+        ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: FAILED - {msg}")
+        return _StrategyOutcome(True, {
+            "type": "tool", "name": ctx.name, "message": msg,
+            "install_state": "requires_unresolved", "install_cmd": None,
+            "agent_msg": (
+                f"Tool '{ctx.name}' declares machine requirements {req}, but "
+                f"the current machine could not be resolved: {err}. Add this "
+                f"machine (with the attributes that describe it) to the "
+                f"'machines' registry in ~/.claude/env.json, then re-run "
+                f"bootstrap. No fallbacks: a targeted tool never installs on "
+                f"an unidentified machine."
+            ),
+            "plugin": ctx.plugin_name,
+            "persist_across_sessions": True,
+        })
+    if requires_satisfied(requires, machine):
+        return _StrategyOutcome(False)
+    req = json.dumps(requires, sort_keys=True)
+    ctx.ok_entries.append(
+        f"{ctx.prefix}{ctx.name}: skipped - machine '{machine_key}' does not "
+        f"satisfy requires {req}"
     )
     return _StrategyOutcome(True, None)
 
@@ -1761,6 +1853,7 @@ def _strategy_install_command(ctx):
 # resolves.
 _INSTALL_STRATEGIES = (
     _strategy_skip,
+    _strategy_requires,
     _strategy_resolve,
     _strategy_scoop,
     _strategy_brew,
@@ -1843,7 +1936,8 @@ def _normalize_tool_entry(tool_def, current_os):
 
 
 def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
-                        ok_entries, tools_installed, plugin_name):
+                        ok_entries, tools_installed, plugin_name,
+                        machine_resolver=None):
     """Resolve one tool entry: check -> link-to-PATH -> download -> install.
 
     Shared by _process_self_setup and _process_manifest. Mutates
@@ -1863,10 +1957,16 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
 
     ``data_dir`` is accepted for call-site symmetry; tool paths are recorded
     against the canonical bootstrap data dir (record(None, ...)).
+
+    ``machine_resolver`` is the phase-shared lazy identity lookup for the
+    `requires` strategy (env_manifest.MachineRequiresResolver); callers that
+    never see `requires` entries may omit it (the strategy then builds its
+    own over the user env.json layers).
     """
     tool_def = _normalize_tool_entry(tool_def, current_os)
     ctx = _ToolEntryCtx(tool_def, current_os, prefix, action_entries,
-                        ok_entries, tools_installed, plugin_name)
+                        ok_entries, tools_installed, plugin_name,
+                        machine_resolver=machine_resolver)
     for strategy in _INSTALL_STRATEGIES:
         outcome = strategy(ctx)
         if outcome.terminal:
@@ -2687,12 +2787,19 @@ def _phase_tools(ctx):
 
     Consolidates successful installs into one line; failures stay per-line.
     """
+    from .env_manifest import MachineRequiresResolver
+
+    # One phase-shared identity lookup for `requires` entries. Construction
+    # does no I/O; env.json is read (once, memoized) only if some entry in
+    # this manifest actually declares `requires` -- a manifest without one
+    # never resolves identity at all.
+    machine_resolver = MachineRequiresResolver(ctx.project_dir)
     tools_installed = []
     for tool_def in ctx.manifest.get("tools", []):
         failure = _process_tool_entry(
             tool_def, ctx.current_os, ctx.data_dir, ctx.prefix,
             ctx.action_entries, ctx.ok_entries, tools_installed,
-            plugin_name=ctx.plugin_name,
+            plugin_name=ctx.plugin_name, machine_resolver=machine_resolver,
         )
         if failure:
             ctx.failures.append(failure)

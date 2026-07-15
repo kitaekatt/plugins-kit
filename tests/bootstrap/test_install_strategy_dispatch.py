@@ -33,6 +33,7 @@ class TestStrategyTableShape:
         names = [f.__name__ for f in engine._INSTALL_STRATEGIES]
         assert names == [
             "_strategy_skip",
+            "_strategy_requires",
             "_strategy_resolve",
             "_strategy_scoop",
             "_strategy_brew",

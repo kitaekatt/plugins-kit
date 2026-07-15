@@ -131,6 +131,104 @@ def resolve_machine(machines, hostname):
     return None
 
 
+def requires_satisfied(requires, machine_entry):
+    """Evaluate a tools[] ``requires`` mapping against a machine entry.
+
+    ``requires`` is a bootstrap.json tools[] targeting object mapping
+    machine-attribute name -> expected value; ``machine_entry`` is the
+    resolved machine's dict from the env.json ``machines`` registry. The
+    tool applies iff EVERY pair holds (conjunction; an empty mapping is
+    trivially satisfied). Per pair:
+
+    - ``true``  -> the machine entry must carry the key AND it is truthy.
+    - ``false`` -> the machine entry must omit the key, or it is falsy.
+    - any other value -> ``machine_entry.get(key) == expected``.
+
+    The boolean forms use ``is True`` / ``is False`` deliberately: JSON
+    ``true`` must not be satisfied by an attribute that merely equals ``1``
+    by Python's bool/int coercion -- boolean requires mean presence+truth,
+    equality requires mean equality.
+    """
+    for key, expected in requires.items():
+        actual = machine_entry.get(key)
+        if expected is True:
+            if not actual:
+                return False
+        elif expected is False:
+            if actual:
+                return False
+        elif actual != expected:
+            return False
+    return True
+
+
+class MachineRequiresResolver:
+    """Lazy, memoized machine identity for the tools[] ``requires`` gate.
+
+    The bootstrap tools phase (engine Step 3c) runs BEFORE the env pass
+    (Step 3e), and the ``env_state.json`` stamp gates that PASS, not
+    identity -- so a tool entry carrying ``requires`` needs its own identity
+    lookup. Construction is free of I/O: the env.json layers are loaded and
+    the hostname resolved only on the first ``resolve()`` call, so a
+    manifest with no ``requires`` key anywhere never touches env.json at
+    all (fresh/standalone machines and projects without an env.json keep
+    working exactly as before). The outcome is memoized: one lookup per
+    pass, and every requires-bearing tool sees the same answer.
+
+    ``resolve()`` returns ``(machine_key, machine_entry, error)``: on
+    success ``error`` is None; on failure the first two are None and
+    ``error`` says why identity could not be established (no machines
+    registry, unresolvable hostname, malformed entry). Turning that into a
+    hard failure is the CALLER's job -- this class only reports; no
+    fallbacks, no guessing.
+    """
+
+    def __init__(self, project_dir):
+        self.project_dir = project_dir
+        self._resolved = False
+        self._outcome = (None, None, None)
+
+    def resolve(self):
+        if self._resolved:
+            return self._outcome
+        self._resolved = True
+        merged, parse_errors = load_layered_env_manifests(self.project_dir)
+        machines = merged.get("machines")
+        if not isinstance(machines, dict) or not machines:
+            # Missing env.json is only an error because a `requires` needs
+            # it; mention any unparseable layer, since a broken file and a
+            # missing one look identical from here.
+            detail = ""
+            if parse_errors:
+                broken = ", ".join(pe["path"] for pe in parse_errors)
+                detail = f" (unparseable layer(s): {broken})"
+            self._outcome = (
+                None, None,
+                f"no 'machines' registry found in the env.json layers{detail}",
+            )
+            return self._outcome
+        hostname = current_hostname()
+        key = resolve_machine(machines, hostname)
+        if key is None:
+            known = ", ".join(sorted(machines))
+            self._outcome = (
+                None, None,
+                f"machine '{hostname}' is not in the env.json 'machines' "
+                f"registry (known: {known})",
+            )
+            return self._outcome
+        entry = machines[key]
+        if not isinstance(entry, dict):
+            self._outcome = (
+                None, None,
+                f"machines entry '{key}' must be an object, got "
+                f"{type(entry).__name__}",
+            )
+            return self._outcome
+        self._outcome = (key, entry, None)
+        return self._outcome
+
+
 def validate_entry_filters(merged, machines):
     """Validate every entry-level ``os``/``hosts`` filter in the manifest.
 
