@@ -19,11 +19,15 @@ fi
 # @tsv: tab is IFS whitespace, so bash `read` collapses consecutive tabs and
 # empty fields (e.g. an absent rate-limit window) shift later values left.
 # Non-whitespace IFS chars delimit one field each, preserving empties.
+#
+# .cwd is normalized to forward slashes before splitting: on Windows it arrives
+# as D:\dev\env-config, which split("/") leaves whole, rendering the full path
+# instead of the basename.
 IFS=$'\x1f' read -r MODEL MODEL_ID DIR PCT SESS WEEK SESS_RESET WEEK_RESET EFFORT < <(
     echo "$DATA" | "$JQ" -r '[
         (.model.display_name // "Claude"),
         (try (.model.id // "unknown") catch "unknown"),
-        (.cwd // "~" | split("/") | last),
+        (.cwd // "~" | gsub("\\\\"; "/") | split("/") | map(select(. != "")) | last // "~"),
         (try (
     if (.context_window.remaining_percentage // null) != null then
       .context_window.remaining_percentage | floor
@@ -90,22 +94,34 @@ SESS_RED_AT="${STATUSLINE_SESS_RED_AT:-10}"
 WEEK_ORANGE_AT="${STATUSLINE_WEEK_ORANGE_AT:-30}"
 WEEK_RED_AT="${STATUSLINE_WEEK_RED_AT:-10}"
 
-if   [ "$PCT" -le "$CTX_RED_AT" ];    then CTX_CLR="\033[38;5;196m"
-elif [ "$PCT" -le "$CTX_ORANGE_AT" ]; then CTX_CLR="\033[38;5;208m"
-else                                       CTX_CLR="\033[38;5;250m"
+# Colors are real ESC bytes ($'...'), not "\033" strings: the line is emitted
+# with printf '%s' rather than `echo -e`, because echo -e also interprets
+# backslashes in the DATA -- a Windows cwd like D:\dev\env-config contains \e,
+# which became a literal ESC and ate the following character (rendering
+# "D:\devv-config"). Interpreting escapes at assignment keeps that
+# interpretation off the interpolated values.
+RED=$'\033[38;5;196m'
+ORANGE=$'\033[38;5;208m'
+GRAY=$'\033[38;5;250m'
+RESET=$'\033[0m'
+SEP=$'\033[2m\033[38;5;238m │ \033[0m'
+
+if   [ "$PCT" -le "$CTX_RED_AT" ];    then CTX_CLR="$RED"
+elif [ "$PCT" -le "$CTX_ORANGE_AT" ]; then CTX_CLR="$ORANGE"
+else                                       CTX_CLR="$GRAY"
 fi
 
-SESS_CLR="\033[38;5;250m"
+SESS_CLR="$GRAY"
 if [ -n "$SESS" ] && [ "$SESS" -eq "$SESS" ] 2>/dev/null; then
-    if   [ "$SESS" -le "$SESS_RED_AT" ];    then SESS_CLR="\033[38;5;196m"
-    elif [ "$SESS" -le "$SESS_ORANGE_AT" ]; then SESS_CLR="\033[38;5;208m"
+    if   [ "$SESS" -le "$SESS_RED_AT" ];    then SESS_CLR="$RED"
+    elif [ "$SESS" -le "$SESS_ORANGE_AT" ]; then SESS_CLR="$ORANGE"
     fi
 fi
 
-WEEK_CLR="\033[38;5;250m"
+WEEK_CLR="$GRAY"
 if [ -n "$WEEK" ] && [ "$WEEK" -eq "$WEEK" ] 2>/dev/null; then
-    if   [ "$WEEK" -le "$WEEK_RED_AT" ];    then WEEK_CLR="\033[38;5;196m"
-    elif [ "$WEEK" -le "$WEEK_ORANGE_AT" ]; then WEEK_CLR="\033[38;5;208m"
+    if   [ "$WEEK" -le "$WEEK_RED_AT" ];    then WEEK_CLR="$RED"
+    elif [ "$WEEK" -le "$WEEK_ORANGE_AT" ]; then WEEK_CLR="$ORANGE"
     fi
 fi
 
@@ -134,24 +150,24 @@ fmt_reset() {
 SESS_RESET_STR=$(fmt_reset "$SESS_RESET")
 WEEK_RESET_STR=$(fmt_reset "$WEEK_RESET")
 
-OUT="\033[38;5;250m📁 $DIR\033[0m"
+OUT="${GRAY}📁 $DIR${RESET}"
 if [ "${STATUSLINE_SHOW_MODEL:-1}" != "0" ] && [ -n "$MODEL" ]; then
     MODEL_SEG="$MODEL"
     [ -n "$EFFORT_GLYPH" ] && MODEL_SEG="$EFFORT_GLYPH $MODEL"
-    OUT="$OUT\033[2m\033[38;5;238m │ \033[0m\033[38;5;250m$MODEL_SEG\033[0m"
+    OUT="$OUT$SEP${GRAY}$MODEL_SEG${RESET}"
 fi
-OUT="$OUT\033[2m\033[38;5;238m │ \033[0m${CTX_CLR}🧠 $PCT%\033[0m"
+OUT="$OUT$SEP${CTX_CLR}🧠 $PCT%${RESET}"
 if [ -n "$SESS" ]; then
-    OUT="$OUT\033[2m\033[38;5;238m │ \033[0m${SESS_CLR}🔋 $SESS%"
+    OUT="$OUT$SEP${SESS_CLR}🔋 $SESS%"
     [ -n "$SESS_RESET_STR" ] && OUT="$OUT ($SESS_RESET_STR)"
-    OUT="$OUT\033[0m"
+    OUT="$OUT${RESET}"
 fi
 if [ -n "$WEEK" ]; then
-    OUT="$OUT\033[2m\033[38;5;238m │ \033[0m${WEEK_CLR}📅 $WEEK%"
+    OUT="$OUT$SEP${WEEK_CLR}📅 $WEEK%"
     [ -n "$WEEK_RESET_STR" ] && OUT="$OUT ($WEEK_RESET_STR)"
-    OUT="$OUT\033[0m"
+    OUT="$OUT${RESET}"
 fi
 if [ -n "$SYSMSG" ]; then
-    OUT="$OUT\033[2m\033[38;5;238m │ \033[0m\033[38;5;250m💬 $SYSMSG\033[0m"
+    OUT="$OUT$SEP${GRAY}💬 $SYSMSG${RESET}"
 fi
-echo -e "$OUT"
+printf '%s\n' "$OUT"
