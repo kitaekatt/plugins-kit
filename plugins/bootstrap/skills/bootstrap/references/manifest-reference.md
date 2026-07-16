@@ -1311,6 +1311,7 @@ command with an optional `fix` command.
 | `timeout` | No (default 600s) | Per-**command** timeout in seconds (positive int). Contract scripts may drive real installs (gpu-stack), so the bound is generous but never absent |
 | `cost` | No (inferred) | `quick` or `slow` — whether the **fix** downloads. Orders the fix queue (quick first) and drives the runner's "this can take several minutes" note. **Usually omit it**: an entry whose `timeout` exceeds the 600s default is inferred `slow`, which already classifies a real install correctly. Declare it only to correct that inference |
 | `description` | No | The user-facing instruction for a check-only entry's manual-attention item. Doubles as the **label** when an `elevated` entry is deferred to the fix queue (else the label is `name`) |
+| `agent_instructions` | No | Agent-facing protocol text (non-empty string) surfaced ONLY to Claude on a runtime-state failure of this check. Rides in the hook's `additionalContext` (the message *to the agent*) as the failure's `agent_msg`, combined with the failure detail — the user-facing log is unchanged. Use it to tell Claude how to handle a specific check's failure (investigate, then offer a fix via `AskUserQuestion` with "do nothing" as the default). Attached on the check-could-not-run, check-only-manual, and fix-failed-recheck paths; NOT on manifest-validation errors (those are authoring bugs). Absent = `agent_msg` stays unset and the numbered item falls back to `message` (unchanged) |
 
 **Dispatch per applicable entry:**
 

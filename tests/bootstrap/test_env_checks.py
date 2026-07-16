@@ -340,6 +340,92 @@ class TestRecheckAuthority:
 
 
 # ---------------------------------------------------------------------------
+# agent_instructions: optional agent-facing protocol text surfaced on a
+# runtime-state failure (rides in the hook's message TO the agent via agent_msg)
+# ---------------------------------------------------------------------------
+
+class TestAgentInstructions:
+    INSTR = "Investigate and offer a fix via AskUserQuestion; default do nothing."
+
+    def test_failed_recheck_carries_instructions_plus_detail(
+        self, isolated_home, run_env_pass
+    ):
+        entry = {
+            "name": "broken",
+            "check": "false",
+            "fix": "echo error: no network 1>&2; exit 1",
+            "agent_instructions": self.INSTR,
+        }
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(env_checks=[entry]))
+
+        result = run_env_pass()
+
+        assert len(result.failures) == 1
+        failure = result.failures[0]
+        # message stays the bare detail (user-facing log line, unchanged).
+        assert failure["message"] == "broken: error: no network"
+        # agent_msg combines the detail AND the instructions.
+        assert failure["agent_msg"] == f"broken: error: no network\n{self.INSTR}"
+
+    def test_check_only_failure_carries_instructions(
+        self, isolated_home, run_env_pass
+    ):
+        entry = {
+            "name": "manual-thing",
+            "check": "echo not set; false",
+            "description": "set the thing",
+            "agent_instructions": self.INSTR,
+        }
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(env_checks=[entry]))
+
+        result = run_env_pass()
+
+        assert len(result.failures) == 1
+        assert self.INSTR in result.failures[0]["agent_msg"]
+        assert "manual-thing" in result.failures[0]["agent_msg"]
+
+    def test_absent_instructions_leaves_agent_msg_falsy(
+        self, isolated_home, run_env_pass
+    ):
+        entry = {"name": "broken", "check": "false",
+                 "fix": "echo nope 1>&2; exit 1"}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(env_checks=[entry]))
+
+        result = run_env_pass()
+
+        assert len(result.failures) == 1
+        # No instructions => agent_msg is None so emit_failure_response falls
+        # back to `message` (unchanged behavior for entries without the field).
+        assert result.failures[0].get("agent_msg") is None
+
+    def test_passing_check_never_surfaces_instructions(
+        self, isolated_home, run_env_pass
+    ):
+        entry = {"name": "fine", "check": "true",
+                 "agent_instructions": self.INSTR}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(env_checks=[entry]))
+
+        result = run_env_pass()
+
+        assert result.failures == []
+
+    @pytest.mark.parametrize("bad", [7, "", True])
+    def test_invalid_agent_instructions_is_a_failure(
+        self, isolated_home, run_env_pass, bad
+    ):
+        entry = {"name": "x", "check": "true", "agent_instructions": bad}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(env_checks=[entry]))
+        result = run_env_pass()
+        assert len(result.failures) == 1
+        assert "invalid agent_instructions" in result.failures[0]["message"]
+
+
+# ---------------------------------------------------------------------------
 # Check-only entries (no fix): persistent manual-attention items
 # ---------------------------------------------------------------------------
 

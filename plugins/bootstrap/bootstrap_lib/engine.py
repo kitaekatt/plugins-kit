@@ -4163,6 +4163,29 @@ def _env_phase_env_checks(ctx):
                 persist_across_sessions=True,
             )
             continue
+        # Optional agent-facing protocol text. When present, a runtime-state
+        # failure of this check surfaces it (combined with the failure detail)
+        # as the failure's agent_msg, so the instructions ride in the hook's
+        # message TO the agent rather than only the user-facing log. Used to
+        # tell Claude how to investigate/offer a fix for a specific check (e.g.
+        # repo-sync). Manifest-validation failures above deliberately do NOT
+        # carry it -- those are authoring bugs, not runtime state.
+        instructions = entry.get("agent_instructions")
+        if instructions is not None and not (isinstance(instructions, str) and instructions):
+            ctx.fail(
+                f"env_check {name}: INVALID agent_instructions - must be a non-empty string",
+                type="env_check", name=name,
+                message=f"{name}: invalid agent_instructions: must be a non-empty string",
+                persist_across_sessions=True,
+            )
+            continue
+
+        def _with_instructions(detail):
+            """Combine a failure detail line with this entry's agent_instructions
+            (None when the entry declares none, so callers pass agent_msg=None and
+            emit_failure_response's fallback keeps using `message` unchanged)."""
+            return f"{detail}\n{instructions}" if instructions else None
+
         if not ctx.entry_applies(entry):
             ctx.ok(f"env_check {name}: skipped (os/hosts filter)")
             continue
@@ -4179,6 +4202,9 @@ def _env_phase_env_checks(ctx):
                     f"{name}: check could not run ({detail}). Checks must "
                     f"be cheap and side-effect free; fix the check command "
                     f"or raise the entry's 'timeout'."
+                ),
+                agent_msg=_with_instructions(
+                    f"{name}: check could not run ({detail})."
                 ),
                 persist_across_sessions=True,
             )
@@ -4197,6 +4223,7 @@ def _env_phase_env_checks(ctx):
                 f"env_check {name}: needs manual attention - {'; '.join(parts)}",
                 type="env_check", name=name,
                 message=f"{name}: {'; '.join(parts)}",
+                agent_msg=_with_instructions(f"{name}: {'; '.join(parts)}"),
                 persist_across_sessions=True,
             )
             continue
@@ -4253,6 +4280,7 @@ def _env_phase_env_checks(ctx):
                 f"env_check {name}: FAILED - {fix_detail}",
                 type="env_check", name=name,
                 message=f"{name}: {fix_detail}",
+                agent_msg=_with_instructions(f"{name}: {fix_detail}"),
                 persist_across_sessions=True,
             )
 
