@@ -15,10 +15,37 @@ precisely because this suite once wrote the developer's real PATH 30 times.
 """
 
 import json
+import os
 
 import pytest
 
 import bootstrap_lib.path_prune as pp
+
+
+def _fs_is_dead(entry):
+    """is_dead's rule for an entry on a reachable local volume: no dir, no life.
+
+    Nothing below is about the deadness PREDICATE -- these tests are about the
+    filter, the order, and the cache state machine, all platform-independent.
+    But the real is_dead confirms the entry's VOLUME is reachable first, and a
+    volume is a Windows concept (os.path.splitdrive finds no drive in a posix
+    path), so off Windows it fails safe to ALIVE for every input. Left real, the
+    tests below would not be Windows-specific -- they would be VACUOUS: "no dead
+    entries" is trivially true when nothing can ever be dead, so the cache
+    machinery they exist to guard would silently stop being exercised.
+
+    Substituting the volume gate away is faithful, not a weakening: a tmp_path
+    is on a reachable local volume, so this returns exactly what the real
+    predicate returns on Windows for these entries. The gate itself is tested,
+    win32-only, by TestIsDead in test_fix_runner.py.
+    """
+    return not os.path.isdir(entry)
+
+
+@pytest.fixture
+def fs_deadness(monkeypatch):
+    """Make deadness follow the real filesystem on every platform."""
+    monkeypatch.setattr(pp, "is_dead", _fs_is_dead)
 
 
 class TestReadUserPath:
@@ -50,6 +77,7 @@ class TestSplitEntries:
         assert pp.split_entries("C:\\a;;;C:\\b;") == ["C:\\a", "C:\\b"]
 
 
+@pytest.mark.usefixtures("fs_deadness")
 class TestDeadEntries:
     def test_reports_only_the_dead_in_path_order(self, tmp_path):
         alive1 = tmp_path / "one"; alive1.mkdir()
@@ -58,6 +86,7 @@ class TestDeadEntries:
         assert pp.dead_entries(raw) == [str(tmp_path / "gone")]
 
 
+@pytest.mark.usefixtures("fs_deadness")
 class TestScanCaching:
     """The state machine that makes a declined prune re-offer itself."""
 

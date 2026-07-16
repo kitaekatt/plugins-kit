@@ -29,6 +29,29 @@ import pytest
 
 import bootstrap_lib.fix_runner as fr
 
+# is_dead answers "dead" only after confirming the entry's VOLUME is reachable,
+# and a volume is a Windows concept: os.path.splitdrive finds no drive in a
+# posix path (nor even in a literal "C:\\dead" when running on posix), so
+# _volume_root returns None and the predicate fails safe to ALIVE. That is the
+# design -- path_prune.scan() is win32-only and returns None elsewhere -- so a
+# test asserting a real DEAD verdict can only run on Windows.
+_DEAD_VERDICT_IS_WIN32 = (
+    "is_dead's DEAD verdict needs a reachable volume (win32-only by design; "
+    "fails safe to alive elsewhere)")
+
+
+def _fs_is_dead(entry):
+    """is_dead's rule for an entry on a reachable local volume: no dir, no life.
+
+    Substituted by tests that are about something OTHER than the predicate, so
+    they exercise their own subject on every platform instead of going vacuous
+    off Windows. Faithful, not a weakening: a tmp_path IS on a reachable local
+    volume, so for the entries these tests use this agrees exactly with what the
+    real predicate returns on Windows. The volume gate itself is TestIsDead's
+    job, and stays win32-only there.
+    """
+    return not os.path.isdir(entry)
+
 
 @pytest.fixture
 def runner():
@@ -141,12 +164,14 @@ class TestIsDead:
     the real filesystem, not a mock.
     """
 
+    @pytest.mark.skipif(sys.platform != "win32", reason=_DEAD_VERDICT_IS_WIN32)
     def test_a_missing_directory_is_dead(self, tmp_path):
         assert fr.is_dead(str(tmp_path / "nope")) is True
 
     def test_an_existing_directory_is_alive(self, tmp_path):
         assert fr.is_dead(str(tmp_path)) is False
 
+    @pytest.mark.skipif(sys.platform != "win32", reason=_DEAD_VERDICT_IS_WIN32)
     def test_a_file_is_dead_because_a_path_entry_must_be_a_directory(self, tmp_path):
         f = tmp_path / "f.txt"
         f.write_text("x")
@@ -227,9 +252,18 @@ class TestPathPrune:
             return r.run_path_prune(task)
 
     def _run_real_fs(self, reg, task):
-        """Like _run but WITHOUT stubbing is_dead -- the filesystem decides."""
+        """Like _run but with no FIXED verdict -- the filesystem decides.
+
+        Uses _fs_is_dead rather than the real is_dead so the re-check these
+        tests guard stays live off Windows, where the real predicate can never
+        say "dead" (see _DEAD_VERDICT_IS_WIN32). What is under test is the
+        RUNNER re-probing at prune time instead of trusting the queue's
+        sessions-old verdict -- platform-independent logic, and the thing whose
+        loss would silently delete a live directory.
+        """
         r = fr.Runner({"os": "windows", "bash": "C:/git/bash.exe", "tasks": []})
         with patch.dict("sys.modules", {"winreg": reg}), \
+             patch.object(fr, "is_dead", _fs_is_dead), \
              patch.object(fr, "_broadcast_environment_change"):
             return r.run_path_prune(task)
 
