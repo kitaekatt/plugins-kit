@@ -145,6 +145,30 @@ claude_md:
         pyyaml, consistent with the contract-staged state.
       origin: steam-analysis stress-test feedback gaps 5/7/8 implementation (2026-07-13).
       added: "2026-07-13"
+    - id: references_reachable_document_check
+      keywords: [check_references_reachable_from_skill_md, orphaned reference, load graph, reachability, unlinked member directory, dangling index entry, two-hop reference, index coverage]
+      summary: "Document-level check added 2026-07-15 (home-domain missing-load-graph-edge incident): check_references_reachable_from_skill_md verifies every file under references/ has an edge from SKILL.md (basename or [[stem]] mention; FAIL for a fully-orphaned .md, JUDGMENT for two-hop-only .md and orphaned non-md), every content-bearing member directory is named in SKILL.md (JUDGMENT when not), and every structured index.references[].path / members[].ref path resolves (FAIL when dangling)."
+      detail: |
+        Un-parks audit-framework.yaml::future_rules.references_reachable_from_skill_md,
+        re-homed from references_audit to skill_md_audit (its subject is one skill
+        composition -- the per-skill validator's traversal, not the corpus scanner's).
+        Severity tiers are deliberate: a references/*.md nobody cites is FAIL (the
+        reference_doc surface's designed inbound edge is SKILL.md; an agent with the
+        skill loaded cannot discover the file); everything else is JUDGMENT because a
+        legitimate counter-case exists (a lib/ dir only imported by scripts, a data
+        file consumed by a script and declared via asset_dependencies, a doc reached
+        by an intentional sibling citation). Member refs that are sibling skill names
+        (ref: skill-audit) or slash commands (ref: /md-audit) are skipped by the
+        dangling-path resolution -- only slash-qualified relative refs are treated as
+        paths (checks.check_domain_members_resolve owns skill-name resolution).
+        references/<name>.md-shaped index paths are also skipped there: the universal
+        "references cited in body all exist" row already FAILs them (no double report).
+        Mention detection is generous on purpose (any basename citation counts, YAML
+        blocks included) -- a false negative is cheaper than a false FAIL across the
+        fleet. Taxonomy home: skill-audit category L (L_load_graph_gap); the
+        keyword-adequacy half of that category is judgment-only, not mechanical.
+      origin: home-domain skill audit 2026-07-15 (tmp/home-domain-skill-audit.md LG-1/LG-3/LG-4): a pytest suite and an orphaned reference existed in the skill but nothing pointed at them; the mechanical validator passed every row.
+      added: "2026-07-15"
   conventions:
     - rule: When extending heuristics, modify markdown_heuristics.py first; audit.py and classify.py both import from there.
       keywords: [SSOT, markdown_heuristics, helper extraction, drift]

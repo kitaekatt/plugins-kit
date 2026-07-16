@@ -573,6 +573,235 @@ def check_asset_dependencies_resolve(body_text: str, skill_dir: Path) -> list[Ch
     return results
 
 
+_MEMBER_DIR_EXCLUDES = {"__pycache__", "node_modules", "venv"}
+_MEMBER_FILE_EXCLUDE_SUFFIXES = (".pyc", ".pyo")
+
+
+def _is_excluded_member_dir(d: Path) -> bool:
+    """Directories that are never knowledge surfaces: hidden (VCS / venv /
+    tool state), interpreter or build artifacts."""
+    return (
+        d.name.startswith(".")
+        or d.name in _MEMBER_DIR_EXCLUDES
+        or d.name.endswith(".egg-info")
+    )
+
+
+def _dir_has_content(d: Path) -> bool:
+    """True when the directory holds at least one real file after exclusions
+    (an empty dir, or one holding only __pycache__ / *.pyc, is not a member)."""
+    for p in d.rglob("*"):
+        if not p.is_file():
+            continue
+        rel_parts = p.relative_to(d).parts
+        if any(part.startswith(".") or part in _MEMBER_DIR_EXCLUDES
+               or part.endswith(".egg-info") for part in rel_parts[:-1]):
+            continue
+        name = rel_parts[-1]
+        if name.startswith(".") or name.endswith(_MEMBER_FILE_EXCLUDE_SUFFIXES):
+            continue
+        return True
+    return False
+
+
+def _mentions_file(text: str, f: Path) -> bool:
+    """A load-graph edge to a file: its basename cited anywhere (path or bare),
+    or the wiki-link form [[stem]]. The lookbehind stops a basename matching
+    inside a longer one (state.md inside blind-state.md)."""
+    if re.search(r"(?<![A-Za-z0-9_\-])" + re.escape(f.name), text):
+        return True
+    return f"[[{f.stem}]]" in text
+
+
+def _mentions_dir(text: str, name: str) -> bool:
+    """A load-graph edge to a directory: its name cited path-style (tests/,
+    tests/conftest.py) or as the exact value of a structured ref (ref: tests)."""
+    if re.search(r"(?<![A-Za-z0-9_\-])" + re.escape(name) + r"/", text):
+        return True
+    return bool(re.search(r":\s*" + re.escape(name) + r"\s*$", text, re.MULTILINE))
+
+
+def _structured_index_paths(body_text: str) -> list[tuple[str, str, bool]]:
+    """Collect (row_label, value, is_path) triples from the structured index
+    surfaces of a skill-type unit: index.references[].path (always a path),
+    index.members[].ref and a top-level members[].ref (a path OR a sibling
+    skill / slash-command name -- union-domain skills index other skills).
+    (tools[].tests and asset_dependencies[].path are resolved by
+    check_asset_dependencies_resolve.)"""
+    out: list[tuple[str, str, bool]] = []
+    if not HAVE_YAML:
+        return out
+    units, _ = collect_yaml_units(body_text)
+    for unit_root, block_data in units:
+        if unit_root not in SKILL_TYPE_ROOTS:
+            continue
+        inner = block_data.get(unit_root)
+        if not isinstance(inner, dict):
+            continue
+        index = inner.get("index")
+        if isinstance(index, dict):
+            refs = index.get("references")
+            if isinstance(refs, list):
+                for i, r in enumerate(refs):
+                    if isinstance(r, dict) and isinstance(r.get("path"), str):
+                        out.append((f"index.references[{i}].path", r["path"], True))
+            members = index.get("members")
+            if isinstance(members, list):
+                for i, m in enumerate(members):
+                    if isinstance(m, dict) and isinstance(m.get("ref"), str):
+                        out.append((f"index.members[{i}].ref", m["ref"], False))
+        members = inner.get("members")
+        if isinstance(members, list):
+            for i, m in enumerate(members):
+                if isinstance(m, dict) and isinstance(m.get("ref"), str):
+                    out.append((f"members[{i}].ref", m["ref"], False))
+    return out
+
+
+# Covered by the universal "references cited in body all exist" check (the
+# index path appears literally in the body text and matches its regex); the
+# structured resolution below skips these to avoid double-reporting.
+_BODY_CITATION_COVERED = re.compile(r"references/[a-zA-Z0-9_\-]+\.md$")
+
+
+def check_references_reachable_from_skill_md(body_text: str, skill_dir: Path) -> list[CheckResult]:
+    """Rule references_reachable_from_skill_md (audit-framework registry,
+    skill_md_audit / skill composition): every member of the skill composition
+    is reachable from SKILL.md, and every structured index edge resolves.
+
+    Three detections, all mechanical:
+    - Orphaned reference: a file under references/ reachable from SKILL.md by
+      NO path -- FAIL for .md (the routable knowledge surface whose designed
+      inbound edge is SKILL.md), JUDGMENT for other files (may be
+      script-consumed data whose declaration gap is asset_dependencies' rule).
+    - Two-hop-only reference: an .md under references/ cited only from another
+      reference doc, never from SKILL.md itself -- JUDGMENT (the index cannot
+      route to it; the agent decides whether to add the direct edge).
+    - Unlinked member directory: a content-bearing subdirectory of the skill
+      (tests/, scripts/, templates/, ...) with no edge from SKILL.md at all --
+      JUDGMENT (may be an internal helper dir, e.g. a lib/ only imported by
+      scripts; the agent decides).
+    Plus: a structured index/members path that does not resolve on disk (FAIL,
+    dangling edge), skipping shapes the body-citation check already covers.
+    """
+    results: list[CheckResult] = []
+
+    # -- dangling structured index edges ------------------------------------
+    project_root = _find_project_root(skill_dir)
+    for row_label, raw, is_path in _structured_index_paths(body_text):
+        if _BODY_CITATION_COVERED.search(raw):
+            continue
+        if not is_path:
+            # A members ref is a path only when it is slash-qualified and
+            # relative. A leading slash is a slash-command reference; a bare
+            # name is ambiguous (sibling skill name vs directory) -- both are
+            # skipped here rather than risk a false dangling-edge FAIL
+            # (skill-name resolution belongs to references-audit).
+            if raw.startswith("/") or "/" not in raw:
+                continue
+        rel = raw.replace("${CLAUDE_PLUGIN_ROOT}/", "").lstrip("/").rstrip("/")
+        candidates = [skill_dir / rel]
+        if project_root is not None:
+            candidates.append(project_root / rel)
+        if not any(c.exists() for c in candidates):
+            results.append(CheckResult(
+                f"load-graph: {row_label}",
+                FAIL,
+                f"index entry points at a path that does not exist: {raw}",
+            ))
+
+    # -- reachability of references/ files ----------------------------------
+    refs_dir = skill_dir / "references"
+    ref_files = []
+    if refs_dir.is_dir():
+        ref_files = sorted(
+            p for p in refs_dir.iterdir()
+            if p.is_file() and not p.name.startswith(".")
+            and not p.name.endswith(_MEMBER_FILE_EXCLUDE_SUFFIXES)
+        )
+
+    direct = {p for p in ref_files if _mentions_file(body_text, p)}
+    # Transitive closure over reachable reference docs (only .md docs carry
+    # onward citations; a directly-cited doc may route to a sibling one hop).
+    reachable = set(direct)
+    frontier = [p for p in direct if p.suffix == ".md"]
+    doc_text: dict[Path, str] = {}
+    citer_of: dict[Path, Path] = {}
+    while frontier:
+        doc = frontier.pop()
+        if doc not in doc_text:
+            try:
+                doc_text[doc] = doc.read_text(encoding="utf-8")
+            except OSError:
+                doc_text[doc] = ""
+        text = doc_text[doc]
+        for p in ref_files:
+            if p in reachable:
+                continue
+            if _mentions_file(text, p):
+                reachable.add(p)
+                citer_of[p] = doc
+                if p.suffix == ".md":
+                    frontier.append(p)
+
+    for p in ref_files:
+        rel = f"references/{p.name}"
+        if p in direct:
+            continue
+        if p in reachable:
+            if p.suffix == ".md":
+                citer = citer_of.get(p)
+                via = f"references/{citer.name}" if citer else "a sibling reference"
+                results.append(CheckResult(
+                    f"load-graph: {rel}",
+                    JUDGMENT,
+                    f"not cited or indexed from SKILL.md; reachable only via {via} "
+                    "(two hops -- the index cannot route to it). Add a direct edge "
+                    "or confirm the routing is intentional.",
+                ))
+            continue
+        results.append(CheckResult(
+            f"load-graph: {rel}",
+            FAIL if p.suffix == ".md" else JUDGMENT,
+            "orphaned reference: no edge from SKILL.md or any reachable reference "
+            "points at this file. Add an index entry / citation, or delete it.",
+        ))
+
+    # -- member directories with no SKILL.md edge ---------------------------
+    all_docs_text = body_text + "".join(doc_text.get(p, "") for p in reachable
+                                        if p.suffix == ".md")
+    member_dirs = sorted(
+        d for d in skill_dir.iterdir()
+        if d.is_dir() and d.name != "references" and not _is_excluded_member_dir(d)
+        and _dir_has_content(d)
+    )
+    unlinked = []
+    for d in member_dirs:
+        if _mentions_dir(body_text, d.name):
+            continue
+        note_suffix = ""
+        if _mentions_dir(all_docs_text, d.name):
+            note_suffix = " (it is mentioned from a reference doc -- two hops)"
+        unlinked.append((d, note_suffix))
+    for d, note_suffix in unlinked:
+        results.append(CheckResult(
+            f"load-graph: {d.name}/",
+            JUDGMENT,
+            f"skill member directory has no edge from SKILL.md{note_suffix}. "
+            "An agent cannot discover it; index it (index.members / tools[].tests "
+            "/ a citation) or confirm it is an internal helper.",
+        ))
+
+    if (ref_files or member_dirs) and not results:
+        results.append(CheckResult(
+            "load-graph: members reachable from SKILL.md",
+            PASS,
+            f"{len(ref_files)} reference file(s) reachable "
+            f"({len(direct)} direct), {len(member_dirs)} member dir(s) linked",
+        ))
+    return results
+
+
 def check_claude_md_record_floor(yaml_data: dict) -> CheckResult | None:
     """Document-level floor for claude_md blocks: at least one record across
     the insights/conventions union. The schema no longer requires insights
@@ -672,6 +901,7 @@ def audit(skill_md_path: Path) -> dict[str, Any]:
     body = parse_body(content)
 
     universal = check_universal(fm, body, skill_dir)
+    universal.extend(check_references_reachable_from_skill_md(body.text, skill_dir))
     declared_type = fm.fields.get("skill-type") if fm else None
 
     yaml_data, yaml_err, detected_root = extract_skill_type_unit(body.text)

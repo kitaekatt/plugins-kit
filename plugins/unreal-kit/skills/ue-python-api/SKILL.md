@@ -122,6 +122,10 @@ capability_skill:
       path: references/script-bootstrap.md
       keywords: [two dependency sets, UE-side packages, host-side venv, stdlib constraint, ensure_dependencies internals, interaction flow]
       summary: How ensure_dependencies bootstraps UE-side packages from inside a script.
+    - id: commandlet_safe_init
+      path: references/commandlet-safe-init.md
+      keywords: [commandlet mode, init_unreal.py, LogPython errors, is_trying_to_run_commandlet, find_menu None, UI guard, startup tracebacks, noisy commandlet log]
+      summary: Guarding project init scripts so commandlet runs do not spew UI-API tracebacks.
 ```
 
 ## Vocabulary

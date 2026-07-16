@@ -73,8 +73,8 @@ A named audit, declared by:
 
 Today's audit-kinds:
 
-- **references-audit** -- consumes `md`; traverses `directory`, `skill`, `plugin`, `project`; rule families: resolve-soft-refs, resolve-hard-deps, honor-allow-stale, (skill) references-reachable, (plugin) manifest-declarations-resolve / no-cross-scope-personal-refs.
-- **skill-md-audit** -- consumes `skill_md`, `yaml`; traverses `skill`; rule families: required-frontmatter, description-quality, yaml-contract-block, mixed-type-signal, CCP / CRP / ADP placement, decision-provenance, hygiene-thresholds.
+- **references-audit** -- consumes `md`; traverses `directory`, `skill`, `plugin`, `project`; rule families: resolve-soft-refs, resolve-hard-deps, honor-allow-stale, (plugin, future) manifest-declarations-resolve / no-cross-scope-personal-refs.
+- **skill-md-audit** -- consumes `skill_md`, `yaml`; traverses `skill`; rule families: required-frontmatter, description-quality, yaml-contract-block, mixed-type-signal, CCP / CRP / ADP placement, load-graph reachability (references-reachable-from-skill-md), decision-provenance, hygiene-thresholds.
 
 The framework is open under addition: a new audit-kind declares its primitives, compositions, rule bindings, and taxonomy in `audit-framework.yaml`. No framework-side code change is needed beyond the registry entry.
 

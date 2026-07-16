@@ -62,6 +62,10 @@ domain_skill:
         path: references/example-audit.md
         keywords: [example audit, contract checklist applied, framework friction, real-world audit output, discipline-skill audit, mixed-type case study, verdict, friction observed]
         summary: Worked audit of a real skill, with the friction the framework surfaces about itself.
+      - id: example_verification
+        path: references/example-verification.md
+        keywords: [example verification, verbatim commands, copy-paste examples, wrapper-script arguments, path assumptions, run before shipping, broken example, verification protocol]
+        summary: Verifying every verbatim SKILL.md command against a real environment before shipping -- the failure modes unit tests miss.
       - id: scripts
         path: references/scripts.md
         keywords: [audit, classify, tag, skills_kit_lib, schema_registry.py, skill_hierarchy_report.py, corpus.py, markdown_heuristics.py, scripts, deterministic checks, heuristic detectors, type inference, frontmatter tagging, mixed-type detection, judgment-required, idempotent, calibration, smoke-test, friction, hierarchy report, HTML report, shared discovery, skill enumeration, marketplace grouping, available-skills surface, installed_plugins.json, skill-type tooltip]

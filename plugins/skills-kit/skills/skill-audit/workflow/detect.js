@@ -4,7 +4,7 @@
 // lane runs the mechanical validator (skills_kit_lib.audit) for the Schema
 // group, applies the CCP / CRP / ADP / decision-provenance judgment from the
 // recap embedded in the lane prompt, and classifies every finding into the
-// A-K taxonomy + a remediation bucket. Pure detection — NO file is modified
+// A-L taxonomy + a remediation bucket. Pure detection — NO file is modified
 // here (the skill's `audit_then_self_remediate` anti-pattern keeps detection and
 // remediation in separate phases). Returns structured per-file findings for the
 // main loop to render and dispatch.
@@ -52,7 +52,7 @@ const FILE_FINDINGS_SCHEMA = {
           criterion: { type: 'string', description: 'criterion id or short name, e.g. ccp_placement' },
           message: { type: 'string' },
           line: { type: ['integer', 'null'], description: 'line number in the file, or null' },
-          taxonomy: { type: 'string', description: 'taxonomy id A-K; "none" for PASS/INFO/JUDGMENT that need no remediation' },
+          taxonomy: { type: 'string', description: 'taxonomy id A-L; "none" for PASS/INFO/JUDGMENT that need no remediation' },
           bucket: { type: 'string', enum: ['AUTO', 'DISCUSS', 'SPECIAL', 'NONE'] },
           remediation: { type: 'string', description: 'concrete proposed remediation for AUTO/DISCUSS/SPECIAL; empty for NONE' },
         },
@@ -77,7 +77,7 @@ const refs = input.refs || {}
 
 function lanePrompt(f) {
   const schemaClause = refs.pluginRoot && refs.venvPython
-    ? `Run the mechanical validator via Bash (it is a package module, so cd into the plugin root first):\n    (cd "${refs.pluginRoot}" && "${refs.venvPython}" -m skills_kit_lib.audit "${f.path}" --json)\nMap its rows into Schema-group findings: a universal-rule or YAML-schema FAIL is a Schema FAIL. Specifically: missing/malformed required frontmatter -> taxonomy A (AUTO, mechanical default); description length/directive-form/exclusion-clause FAIL -> taxonomy B (DISCUSS); a YAML contract FAIL (missing required key, wrong type, list below min_len, forbidden key) -> taxonomy E (DISCUSS); a mixed-type signal (>1 canonical root, or the mixed-type heuristic) -> taxonomy D (DISCUSS, unless the orientation-summary exception applies, then JUDGMENT). If the validator is unavailable, emit one Schema finding severity JUDGMENT ("validator unavailable") and continue — never fail a file for that.`
+    ? `Run the mechanical validator via Bash (it is a package module, so cd into the plugin root first):\n    (cd "${refs.pluginRoot}" && "${refs.venvPython}" -m skills_kit_lib.audit "${f.path}" --json)\nMap its rows into Schema-group findings: a universal-rule or YAML-schema FAIL is a Schema FAIL. Specifically: missing/malformed required frontmatter -> taxonomy A (AUTO, mechanical default); description length/directive-form/exclusion-clause FAIL -> taxonomy B (DISCUSS); a YAML contract FAIL (missing required key, wrong type, list below min_len, forbidden key) -> taxonomy E (DISCUSS); a mixed-type signal (>1 canonical root, or the mixed-type heuristic) -> taxonomy D (DISCUSS, unless the orientation-summary exception applies, then JUDGMENT); a load-graph row (orphaned references/ file, unlinked member directory, two-hop-only reference, dangling index entry) -> taxonomy L (DISCUSS), group ADP, keeping the validator's severity (FAIL gates; JUDGMENT does not). If the validator is unavailable, emit one Schema finding severity JUDGMENT ("validator unavailable") and continue — never fail a file for that.`
     : `Validator path was not provided; emit one Schema finding severity JUDGMENT ("validator unavailable") and continue with cohesion judgment only.`
 
   return `You are ONE lane of a SKILL.md audit. Audit exactly one file and return structured findings. This is DETECTION ONLY — do not modify any file.
@@ -93,11 +93,12 @@ Steps:
    - decision_provenance: Dec-N entries, "audit-finding" tags, dated decision-log lines change with audits, not the contract. In a SKILL.md body they are a FAIL — taxonomy I (AUTO), group CCP. Detect Dec-\\d patterns / "audit-finding" / "decision log" markers.
    - CRP (crp_placement): SKILL.md is read together; references/ are loaded on-demand for DISTINCT sub-tasks. Body length over ~500 lines / ~3000 tokens is a SIGNAL to evaluate a split, never a verdict by itself. Only when sections genuinely serve different reading tasks AND the body is over threshold is it taxonomy G (DISCUSS), group CRP, JUDGMENT. A stub whose reference is always co-loaded is a tool-call doubling, not a win — do not propose that split.
    - ADP (adp_back_reference): reference docs under this skill's references/ must be one hop deep from SKILL.md and must NOT cite SKILL.md sections (a back-reference is a cycle). Read each references/*.md (if any) and check for back-citations to this SKILL.md. A back-reference is a FAIL — taxonomy H (AUTO), group ADP.
+   - Load-graph routing (references_reachable_from_skill_md, judgment half): the validator already surfaces missing edges mechanically; the lane adds only the keyword-adequacy call — for content a reference doc owns (its headings, entity names, script names), do the SKILL.md index entry's keywords carry the exact terms a searcher would use? A clear routing gap is taxonomy L (DISCUSS), group ADP, severity JUDGMENT.
 4. Hygiene: body over ~500 lines or ~3000 tokens -> one INFO finding, group Hygiene, taxonomy J (DISCUSS) — a CRP-evaluation prompt, never a FAIL on its own.
 5. Wrong-type signal (taxonomy C): only raise if the validator's type-specific rows or the body shape clearly contradict the declared skill-type. Emit as group Schema, severity JUDGMENT, bucket DISCUSS, and note that classify.py confirmation is deferred to the Q&A gate (the lane does NOT run classify.py).
-6. Classify EVERY non-PASS finding into a taxonomy id (A-K) and bucket:
+6. Classify EVERY non-PASS finding into a taxonomy id (A-L) and bucket:
      - AUTO    = mechanical, safe to auto-apply (A: add missing field with a sensible default; H: rewrite back-citing sentence; I: move Dec-N to co-located CLAUDE.md)
-     - DISCUSS = needs a user decision (B, C, D, E, F, G, J)
+     - DISCUSS = needs a user decision (B, C, D, E, F, G, J, L)
      - SPECIAL = K, unclassified
    PASS / INFO / JUDGMENT findings that need no remediation get taxonomy "none" and bucket "NONE".
    For each AUTO/DISCUSS/SPECIAL finding write a concrete \`remediation\` (what edit you propose, with line refs).

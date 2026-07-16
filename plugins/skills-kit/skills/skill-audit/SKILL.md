@@ -33,7 +33,7 @@ In framework terms, the per-skill audit procedure is:
 - **Primitives consumed:** `skill_md` and `yaml` (the embedded contract block).
 - **Scaffolding:** `python -m skills_kit_lib.audit` (run from the plugin root) for mechanical schema validation; agent judgment for CCP / CRP / ADP placement.
 - **Rules:** canonical definitions live in this skill's own `criteria:` block below (single source of truth per rule). The framework registry at `audit-framework.yaml::audit_kinds.skill_md_audit.rules_per_composition.skill` catalogs the bindings by id only.
-- **Taxonomy + buckets:** the A-K categories below; AUTO / DISCUSS / SPECIAL dispatch in parallel.
+- **Taxonomy + buckets:** the A-L categories below; AUTO / DISCUSS / SPECIAL dispatch in parallel.
 
 The roster and hierarchy procedures share the same corpus subject but do not exercise the findings/remediation machinery -- they are inventory surfaces over the same primitives.
 
@@ -100,6 +100,12 @@ audit_skill:
       summary: "Reference docs in references/ must be one hop deep from SKILL.md and must not cite SKILL.md sections. A back-reference creates a cycle and a context-loading hazard."
       severity: "FAIL"
       detail: "Partially mechanical via audit.py one-hop-deep check; judgment for back-reference detection inside reference body text."
+    - id: "references_reachable_from_skill_md"
+      name: "Load-graph coverage -- every skill member is reachable from SKILL.md"
+      keywords: ["orphaned reference", "load graph", "reachability", "index coverage", "unlinked directory", "dangling index entry", "missing edge", "undiscoverable member"]
+      summary: "Every file under references/ carries an edge from SKILL.md (citation or index entry), every content-bearing member directory (tests/, scripts/, templates/, ...) is named somewhere in SKILL.md, and every structured index path resolves on disk."
+      severity: "FAIL"
+      detail: "Mechanical via audit.py (check_references_reachable_from_skill_md). FAIL: an .md under references/ reachable by NO path (true orphan -- an agent with the skill loaded cannot find it), or a structured index/members path pointing at a missing file. JUDGMENT: an .md reachable only via a sibling reference (two hops -- index keywords cannot route to it), a non-md references/ file with no edge, or a member directory with no SKILL.md edge (may be an internal helper). The judgment half -- whether an index entry's keywords carry the terms a searcher would actually use -- is not mechanically decidable; it is applied by reading (see taxonomy L). Un-parked from audit-framework.yaml::future_rules 2026-07-15 (home-domain incident)."
     - id: "decision_provenance"
       name: "Decision provenance does not bleed into SKILL.md"
       keywords: ["decision provenance", "Dec-N entries", "audit-finding logs", "ccp violation"]
@@ -176,9 +182,15 @@ audit_skill:
     - id: "K_unclassified"
       name: "Unclassified / special case"
       keywords: ["unclassified", "special case", "escape hatch", "K bucket"]
-      detection_signal: "Finding does not match any A-J detection signal after deliberate attempt."
+      detection_signal: "Finding does not match any A-J or L detection signal after deliberate attempt."
       default_remediation: "Surface to the user with the audit row that fired, attempted category matches, and reasons none fit. User proposes strategy."
       bucket: "SPECIAL"
+    - id: "L_load_graph_gap"
+      name: "Load-graph edge gap -- a member exists but SKILL.md cannot route to it"
+      keywords: ["orphaned reference", "unlinked tests dir", "unlinked scripts dir", "index coverage", "keyword routing gap", "dangling index entry", "load graph", "undiscoverable", "missing edge"]
+      detection_signal: "audit.py FAIL or JUDGMENT on a load-graph row (references_reachable_from_skill_md): an orphaned references/ file, a member directory with no SKILL.md edge, a two-hop-only reference, or an index entry pointing at a missing path. Judgment extension (not mechanically decidable): an index entry whose keywords omit the terms a searcher would use for content the doc owns -- test by picking each major contract the doc carries (its headings, entity names, script names) and checking those exact terms against the entry's keywords."
+      default_remediation: "Add the missing edge: an index.references entry (or index.members / tools[].tests for scripts and test suites) with keywords drawn from the member's own headings and identifiers; fix or drop a dangling index path; append the missing searcher-terms to an under-keyworded entry. Deleting the member is the alternative when it is genuinely dead."
+      bucket: "DISCUSS"
   procedures:
     - id: "audit_skill_md"
       name: "Audit one SKILL.md against the framework and dispatch remediations"
@@ -196,7 +208,7 @@ audit_skill:
           expected: "A resolved list of SKILL.md file paths + non_interactive flag."
           on_failure: "If no target resolves, surface cwd and stop. Do not improvise a target."
         - n: 2
-          action: "DETECT phase (before-Q&A). Choose execution mode by file count -- this threshold equalizes the Workflow tool's per-run overhead. ONE file: audit inline in the main loop (run the mechanical validator; apply the embedded skill-md cohesion recap; classify each finding into taxonomy + bucket). TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/skill-audit/workflow/detect.js and args = { files:[{path}], refs:{pluginRoot, venvPython} }. The workflow fans one lane out per file and returns { perFile, totals }. Detection only -- no file is edited in this phase. Cohesion recap (used by both the inline path and the detect.js lane): CCP = SKILL.md content belongs here only when it changes with the skill's contract (project-convention content -> co-located CLAUDE.md, taxonomy F); decision-provenance Dec-N / audit-finding logs are a CCP FAIL (taxonomy I, AUTO); CRP = SKILL.md is read together, references/ load on-demand for distinct sub-tasks, size is a signal not a verdict (taxonomy G/J); ADP = references/*.md are one hop deep and must not cite SKILL.md (back-reference FAIL, taxonomy H, AUTO)."
+          action: "DETECT phase (before-Q&A). Choose execution mode by file count -- this threshold equalizes the Workflow tool's per-run overhead. ONE file: audit inline in the main loop (run the mechanical validator; apply the embedded skill-md cohesion recap; classify each finding into taxonomy + bucket). TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/skill-audit/workflow/detect.js and args = { files:[{path}], refs:{pluginRoot, venvPython} }. The workflow fans one lane out per file and returns { perFile, totals }. Detection only -- no file is edited in this phase. Cohesion recap (used by both the inline path and the detect.js lane): CCP = SKILL.md content belongs here only when it changes with the skill's contract (project-convention content -> co-located CLAUDE.md, taxonomy F); decision-provenance Dec-N / audit-finding logs are a CCP FAIL (taxonomy I, AUTO); CRP = SKILL.md is read together, references/ load on-demand for distinct sub-tasks, size is a signal not a verdict (taxonomy G/J); ADP = references/*.md are one hop deep and must not cite SKILL.md (back-reference FAIL, taxonomy H, AUTO); load-graph rows from the validator (orphaned reference, unlinked member dir, dangling index edge, two-hop-only reference) route to taxonomy L (DISCUSS), as does the judgment call that an index entry's keywords omit the terms a searcher would use."
           tool: "Workflow | inline"
           input: "detect.js args.refs: pluginRoot=${CLAUDE_PLUGIN_ROOT}; venvPython=<plugin venv python>. The validator is run as: (cd ${CLAUDE_PLUGIN_ROOT} && <venvPython> -m skills_kit_lib.audit <path> --json)."
           expected: "Structured per-file findings (group, severity, criterion, message, line, taxonomy, bucket, remediation) + per-file verdict."
@@ -313,11 +325,13 @@ audit_skill:
         procedure: "Propose an L2 -> L3 decomposition with explicit reference-doc paths and triggering criteria per ref. User confirms before splitting; agent applies."
       - category: "J_hygiene_threshold"
         procedure: "Run the CRP test (do the body sections serve different reading tasks?). If yes, escalate to G. If no, INFO stays as-is; the larger SKILL.md is the correct answer."
+      - category: "L_load_graph_gap"
+        procedure: "Propose the concrete edge (index entry / members entry / tools[].tests / citation) with keywords drawn from the member's own headings and identifiers, or propose deleting a genuinely dead member / dangling index path. User confirms -- routing changes discovery behavior, and only the user knows whether an unlinked member is an internal helper."
     special:
       procedure: "Surface the finding to the user with: the audit row that fired, the categories you attempted to match, the reasons none fit. The user proposes a strategy. If the strategy generalizes (mutually exclusive with A-J, recognizable detection signal, default remediation applies broadly), propose adding it as a new category in this taxonomy."
   enforcement:
     gate_kind: "audit-finding"
-    gating_rule: "FAIL findings (categories A, C-class wrong-type with confirmed mismatch, D-mixed-type with confirmed drift, E-schema, H-back-reference, I-decision-provenance) gate compliance. The verdict is NON-COMPLIANT until all FAIL findings are resolved via the dispatched remediations. JUDGMENT findings do not gate compliance but are surfaced for review; INFO findings are advisory only."
+    gating_rule: "FAIL findings (categories A, C-class wrong-type with confirmed mismatch, D-mixed-type with confirmed drift, E-schema, H-back-reference, I-decision-provenance, L-load-graph orphan/dangling-edge FAILs) gate compliance. The verdict is NON-COMPLIANT until all FAIL findings are resolved via the dispatched remediations. JUDGMENT findings do not gate compliance but are surfaced for review; INFO findings are advisory only."
     appeal_process: "JUDGMENT findings are resolved by user confirmation (treat as PASS once the user explicitly accepts the orientation-summary exception or the threshold-violation acceptance). FAIL findings have no bypass; remediation is always available within the taxonomy."
   gotchas:
     - "The corpus discovery (used by the roster and hierarchy procedures) and the cwd-relative discover.py (used by the audit procedure's index-based selection) are different tools. The corpus discovery walks User + Project + installed-Plugin roots; discover.py walks downward from cwd to enumerate nearby SKILL.md for the audit selector."

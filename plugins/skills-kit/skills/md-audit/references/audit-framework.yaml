@@ -231,6 +231,7 @@ audit_kinds:
         - ccp_placement
         - crp_placement
         - adp_back_reference
+        - references_reachable_from_skill_md
         - decision_provenance
         - hygiene_thresholds
     taxonomy_in_skill: 'plugins/skills-kit/skills/skill-audit/SKILL.md (audit_skill.taxonomy)'
@@ -258,10 +259,12 @@ audit_kinds:
 # ---------------------------------------------------------------------------
 
 future_rules:
-  - id: references_reachable_from_skill_md
-    audit_kind: references_audit
-    target_composition: skill
-    intent: 'Every file under a skill''s references/ is reachable from SKILL.md (directly or transitively). Powers orphan-reference detection.'
+  # references_reachable_from_skill_md was un-parked 2026-07-15 (home-domain
+  # missing-load-graph-edge incident). It was originally declared here under
+  # references_audit; its subject is one skill composition, so it shipped in
+  # skill_md_audit's evaluator (skills_kit_lib/audit.py,
+  # check_references_reachable_from_skill_md) with its criteria + taxonomy
+  # category (L) owned by skill-audit's SKILL.md.
   - id: manifest_declarations_resolve
     audit_kind: references_audit
     target_composition: plugin
