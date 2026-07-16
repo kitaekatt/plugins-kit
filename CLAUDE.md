@@ -157,7 +157,7 @@ python plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py \
   --output ./index.html --no-open
 ```
 
-**It crawls installPaths, not the working directory.** `generate.py` reads `~/.claude/plugins/installed_plugins.json` and walks each plugin's **`installPath`**, filtered by `marketplace.json`. In a normal session those paths point at the **cache** (`~/.claude/plugins/cache/<mkt>/<plugin>/<version>/`), which only refetches from **master** — so a plain regen before the merge reproduces the *old* page. That constraint is what used to force the regen after the merge. **Registry v2 caveat:** newer Claude Code keeps that registry at `{"plugins": {}}`, so on such machines a plain regen renders an **empty page** — dev-tree mode is then the only working input for `generate.py` (see the `registry_v2_empty` insight below; a cache-scan fallback inside `generate.py` itself is a known gap).
+**It crawls installPaths, not the working directory.** `generate.py` reads `~/.claude/plugins/installed_plugins.json` and walks each plugin's **`installPath`**, filtered by `marketplace.json`. In a normal session those paths point at the **cache** (`~/.claude/plugins/cache/<mkt>/<plugin>/<version>/`), which only refetches from **master** — so a plain regen before the merge reproduces the *old* page. That constraint is what used to force the regen after the merge. **Registry v2 caveat:** newer Claude Code keeps that registry at `{"plugins": {}}`; since awesome-kit 0.10.0 `generate.py` falls back to scanning the cache layout for refs the registry doesn't record (see the `registry_v2_empty` insight below), so a normal-mode regen renders the machine's cached plugins rather than an empty page.
 
 **At publish time this is `publish.py`'s job — don't hand-run it.** The script repoints installPaths at the working copy via `dev-tree.py` (which, since the 0.47.0 release, also **synthesizes** entries for repo plugins the registry doesn't record — the registry-v2 case), regenerates, restores in a `finally`, and post-verifies the restore landed. It also lands `index.html` *inside* the release commit, so master is never in a state where its page disagrees with its own `marketplace.json`. The manual sequence below is for **previewing** only.
 
@@ -510,9 +510,10 @@ claude_md:
 
         Downstream consumers of the registry hit the same wall: dev-tree.py rewrote 0 entries (fixed --
         it now synthesizes entries for repo plugins, which is how publish.py's index.html regen works on
-        v2 machines; the 0.47.0 release briefly shipped an empty index.html because of this). KNOWN GAP:
-        awesome-kit's generate.py still reads only the registry, so outside dev-tree mode it renders an
-        empty poster on v2 machines. Also note Claude Code still WRITES enabledPlugins entries to the
+        v2 machines; the 0.47.0 release briefly shipped an empty index.html because of this), and
+        awesome-kit's generate.py rendered an empty poster (fixed in awesome-kit 0.10.0:
+        merge_cache_fallback scans the cache for refs the registry omits, registry precedence intact).
+        Also note Claude Code still WRITES enabledPlugins entries to the
         live ~/.claude/settings.json on `claude plugin install` -- uncommitted entries appear there at
         runtime; check `git diff` before assuming settings.json's committed state matches the live file.
         Full mechanics: bootstrap skill references (engine-internals.md, plugin-reload-lifecycle.md).
