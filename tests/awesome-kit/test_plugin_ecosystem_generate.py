@@ -165,3 +165,42 @@ class TestCollectPluginsPhantomFiltering:
         marketplaces = {"mkt": {"poster": {}, "plugin_names": {"p"}}}
         out = generate.collect_plugins(installed, marketplaces, {}, {}, {}, {})
         assert out[0]["description"] == "from poster"
+
+
+class TestMergeCacheFallback:
+    """Registry-v2 fallback: with installed_plugins.json at {"plugins": {}}
+    (newer Claude Code), the poster rendered empty. merge_cache_fallback
+    synthesizes entries from ~/.claude/plugins/cache/<mkt>/<plugin>/<version>/;
+    registry entries keep precedence."""
+
+    def _home(self, tmp_path, monkeypatch, cache=None):
+        home = tmp_path / "home" / ".claude"
+        for ref, versions in (cache or {}).items():
+            name, _, mkt = ref.partition("@")
+            for v in versions:
+                (home / "plugins" / "cache" / mkt / name / v).mkdir(parents=True)
+        monkeypatch.setattr(generate, "home_claude", lambda: home)
+        return home
+
+    def test_empty_registry_synthesizes_from_cache(self, tmp_path, monkeypatch):
+        home = self._home(tmp_path, monkeypatch, cache={"pluga@mkt": ["1.2.0"]})
+        merged = generate.merge_cache_fallback({"version": 2, "plugins": {}})
+        entry = merged["plugins"]["pluga@mkt"][0]
+        assert entry["version"] == "1.2.0"
+        assert entry["installPath"] == str(home / "plugins" / "cache" / "mkt" / "pluga" / "1.2.0")
+
+    def test_registry_entry_takes_precedence(self, tmp_path, monkeypatch):
+        self._home(tmp_path, monkeypatch, cache={"pluga@mkt": ["9.9.9"]})
+        installed = {"plugins": {"pluga@mkt": [{"installPath": "/x", "version": "1.0.0"}]}}
+        merged = generate.merge_cache_fallback(installed)
+        assert merged["plugins"]["pluga@mkt"][0]["version"] == "1.0.0"
+
+    def test_highest_version_wins_numerically(self, tmp_path, monkeypatch):
+        self._home(tmp_path, monkeypatch, cache={"pluga@mkt": ["0.9.0", "0.10.0"]})
+        merged = generate.merge_cache_fallback({"plugins": {}})
+        assert merged["plugins"]["pluga@mkt"][0]["version"] == "0.10.0"
+
+    def test_no_cache_dir_is_noop(self, tmp_path, monkeypatch):
+        self._home(tmp_path, monkeypatch)
+        merged = generate.merge_cache_fallback({"plugins": {}})
+        assert merged["plugins"] == {}

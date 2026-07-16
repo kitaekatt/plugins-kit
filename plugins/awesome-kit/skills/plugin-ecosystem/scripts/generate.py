@@ -89,6 +89,44 @@ def load_installed() -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def _version_key(version: str):
+    """Tolerant ordering key for cache version-dir names: numeric dot-parts
+    compare numerically ("0.10.0" > "0.9.0"); non-numeric names (git-SHA cache
+    keys) sort below any numeric version and tie-break lexically."""
+    parts = re.findall(r"\d+", version)
+    return (1 if parts else 0, tuple(int(p) for p in parts), version)
+
+
+def merge_cache_fallback(installed: dict) -> dict:
+    """Registry-v2 fallback: newer Claude Code keeps installed_plugins.json at
+    {"version": 2, "plugins": {}} for marketplace installs -- the code lives in
+    ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/. Without this the
+    poster renders EMPTY on such machines. Synthesize an entry for every cached
+    plugin the registry does not record, picking the highest version dir (the
+    code Claude Code actually loads). Registry entries keep precedence, and
+    collect_plugins' marketplace.json filter still drops phantoms."""
+    plugins = dict(installed.get("plugins", {}))
+    cache_root = home_claude() / "plugins" / "cache"
+    if cache_root.is_dir():
+        for mkt_dir in sorted(cache_root.iterdir()):
+            if not mkt_dir.is_dir():
+                continue
+            for plugin_dir in sorted(mkt_dir.iterdir()):
+                if not plugin_dir.is_dir():
+                    continue
+                key = f"{plugin_dir.name}@{mkt_dir.name}"
+                if plugins.get(key):
+                    continue
+                versions = [d for d in plugin_dir.iterdir() if d.is_dir()]
+                if not versions:
+                    continue
+                best = max(versions, key=lambda d: _version_key(d.name))
+                plugins[key] = [{"installPath": str(best), "version": best.name}]
+    merged = dict(installed)
+    merged["plugins"] = plugins
+    return merged
+
+
 def load_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -792,7 +830,7 @@ def main(argv: list[str]) -> int:
         m: (meta["poster"].get("states") or {}) for m, meta in marketplaces.items()
     }
 
-    installed = load_installed()
+    installed = merge_cache_fallback(load_installed())
     plugins = collect_plugins(installed, marketplaces, settings_enabled, bs_index, overrides,
                               marketplace_states, defaults_mode=args.defaults)
 
