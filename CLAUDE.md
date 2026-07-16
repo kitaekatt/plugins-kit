@@ -157,9 +157,9 @@ python plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py \
   --output ./index.html --no-open
 ```
 
-**It crawls installPaths, not the working directory.** `generate.py` reads `~/.claude/plugins/installed_plugins.json` and walks each plugin's **`installPath`**, filtered by `marketplace.json`. In a normal session those paths point at the **cache** (`~/.claude/plugins/cache/<mkt>/<plugin>/<version>/`), which only refetches from **master** — so a plain regen before the merge reproduces the *old* page. That constraint is what used to force the regen after the merge.
+**It crawls installPaths, not the working directory.** `generate.py` reads `~/.claude/plugins/installed_plugins.json` and walks each plugin's **`installPath`**, filtered by `marketplace.json`. In a normal session those paths point at the **cache** (`~/.claude/plugins/cache/<mkt>/<plugin>/<version>/`), which only refetches from **master** — so a plain regen before the merge reproduces the *old* page. That constraint is what used to force the regen after the merge. **Registry v2 caveat:** newer Claude Code keeps that registry at `{"plugins": {}}`, so on such machines a plain regen renders an **empty page** — dev-tree mode is then the only working input for `generate.py` (see the `registry_v2_empty` insight below; a cache-scan fallback inside `generate.py` itself is a known gap).
 
-**At publish time this is `publish.py`'s job — don't hand-run it.** The script repoints installPaths at the working copy via `dev-tree.py`, regenerates, restores in a `finally`, and post-verifies the restore landed. It also lands `index.html` *inside* the release commit, so master is never in a state where its page disagrees with its own `marketplace.json`. The manual sequence below is for **previewing** only.
+**At publish time this is `publish.py`'s job — don't hand-run it.** The script repoints installPaths at the working copy via `dev-tree.py` (which, since the 0.47.0 release, also **synthesizes** entries for repo plugins the registry doesn't record — the registry-v2 case), regenerates, restores in a `finally`, and post-verifies the restore landed. It also lands `index.html` *inside* the release commit, so master is never in a state where its page disagrees with its own `marketplace.json`. The manual sequence below is for **previewing** only.
 
 **This is equivalent to the old post-merge regen, not an approximation** — verified 2026-07-15 on the bootstrap 0.40.0 release by generating both ways and diffing: byte-identical. The dev tree and the freshly-published cache are the same content; only the path differs.
 
@@ -485,6 +485,39 @@ claude_md:
         plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md.
       origin: "Built + hardened this session (2026-06-27): single-session protocol added (0.22.0), then live testing on this machine exposed two real bugs only live/script testing could catch -- the --resume session-guard skip (fixed 0.24.0) and the harvest's script-path import failure that meant it had NEVER fired in production (fixed 0.25.0). Verified end-to-end converging 0.26.0 hands-off."
       added: "2026-06-27"
+    - id: registry_v2_empty
+      keywords: [installed_plugins.json, empty registry, registry v2, plugins {}, fresh machine, deleted plugins dir, provisions nothing, rescue, sessionstart missed, sessionstart-rescue, cache fallback, discover_cache_plugins, enabledPlugins, index.html empty, dev-tree synthesize, harvest blind, new machine test]
+      summary: Newer Claude Code keeps installed_plugins.json PERMANENTLY EMPTY ({"version":2,"plugins":{}}) for marketplace installs -- enablement lives in settings enabledPlugins, code in the cache layout. Everything that read the registry needed a cache-scan fallback (bootstrap 0.47.0) and a SessionStart that races the fresh-machine plugin sync is caught by the UserPromptSubmit rescue (0.46.0).
+      detail: |
+        Observed live 2026-07-16 while testing "bootstrap on a new machine" (delete ~/.claude/plugins,
+        restart): Claude Code re-seeds the marketplace from settings extraKnownMarketplaces, refills the
+        cache, and loads/enables everything from enabledPlugins -- but installed_plugins.json stays
+        {"version": 2, "plugins": {}} forever. Two independent failures followed:
+
+        1. SessionStart raced the plugin sync (hook not yet registered when SessionStart fired), so NO
+           provisioning pass ran that session. Fix (bootstrap 0.46.0): the SessionStart-missed RESCUE in
+           bootstrap-display.sh -- session-bootstrap.sh touches sessions/<session_id> at entry; a prompt
+           whose session_id has no marker means no pass ran, and the UserPromptSubmit hook launches
+           session-bootstrap.sh itself (detached, locked one-launch-per-session, hook JSON piped in,
+           normal gates intact). Note the rescue itself needs the UPS hook registered -- if even the
+           FIRST PROMPT races the sync, the rescue simply fires on the next prompt.
+        2. The engine's per-plugin loop iterated the (empty) registry and provisioned nothing but
+           bootstrap itself; the harvest was equally blind. Fix (bootstrap 0.47.0): cache-scan fallback
+           (plugin_resolve.discover_cache_plugins + harvest._cache_installed_bootstrap) -- synthesize
+           (name, version, installPath) from ~/.claude/plugins/cache/<mkt>/<plugin>/<version>/ for
+           ENABLED refs the registry doesn't record; highest version dir wins; registry entries keep
+           precedence; no enablement source -> no fallback.
+
+        Downstream consumers of the registry hit the same wall: dev-tree.py rewrote 0 entries (fixed --
+        it now synthesizes entries for repo plugins, which is how publish.py's index.html regen works on
+        v2 machines; the 0.47.0 release briefly shipped an empty index.html because of this). KNOWN GAP:
+        awesome-kit's generate.py still reads only the registry, so outside dev-tree mode it renders an
+        empty poster on v2 machines. Also note Claude Code still WRITES enabledPlugins entries to the
+        live ~/.claude/settings.json on `claude plugin install` -- uncommitted entries appear there at
+        runtime; check `git diff` before assuming settings.json's committed state matches the live file.
+        Full mechanics: bootstrap skill references (engine-internals.md, plugin-reload-lifecycle.md).
+      origin: "Live fresh-machine testing 2026-07-16 (this machine, wiped ~/.claude/plugins repeatedly); fixed in bootstrap 0.46.0 (rescue) + 0.47.0 (cache fallback) + dev-tree.py synthesis."
+      added: "2026-07-16"
     - id: host_python_via_plugin_venv
       keywords: [host-side python, plugin venv, uv run python, ModuleNotFoundError, foreign cwd, project root, pyyaml, skill examples]
       summary: SKILL.md examples that invoke host-side Python must use the explicit plugin-venv path, not `uv run python`, when the documented cwd is the user's project root.
