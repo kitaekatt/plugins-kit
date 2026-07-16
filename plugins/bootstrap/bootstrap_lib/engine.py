@@ -383,7 +383,16 @@ def _main():
     is_dev_layout = os.path.normpath(registry_path) != prod_registry
     enabled_refs = _load_enabled_refs(args.project_dir) if is_dev_layout else None
 
-    enabled_plugins, cache_changed = list_enabled_plugins(config, registry_path, plugins_dir, enabled_refs)
+    # Registry-v2 fallback filter: newer Claude Code keeps installed_plugins.json
+    # at {"plugins": {}} for marketplace installs, so cache-derived fallback
+    # entries need their own enablement source (settings enabledPlugins). In the
+    # dev layout enabled_refs already carries it; in production load it here.
+    fallback_refs = enabled_refs if enabled_refs is not None else _load_enabled_refs(args.project_dir)
+
+    enabled_plugins, cache_changed = list_enabled_plugins(
+        config, registry_path, plugins_dir, enabled_refs,
+        fallback_enabled_refs=fallback_refs,
+    )
     if cache_changed:
         from .config import save_config
         save_config(data_dir, config)
@@ -411,7 +420,10 @@ def _main():
 
     # Step 4b: Re-scan for plugins installed during Steps 3c/4
     # (e.g. a layered bootstrap.json declared a plugin to install via `claude plugin install`)
-    phase2_plugins, phase2_cache_changed = list_enabled_plugins(config, registry_path, plugins_dir, enabled_refs)
+    phase2_plugins, phase2_cache_changed = list_enabled_plugins(
+        config, registry_path, plugins_dir, enabled_refs,
+        fallback_enabled_refs=fallback_refs,
+    )
     if phase2_cache_changed:
         from .config import save_config
         save_config(data_dir, config)

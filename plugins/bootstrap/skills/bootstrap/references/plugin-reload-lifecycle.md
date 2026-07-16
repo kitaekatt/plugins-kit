@@ -204,6 +204,10 @@ Under `~/.claude/plugins/data/<marketplace>/bootstrap/` unless noted:
 
 - `~/.claude/plugins/installed_plugins.json` → `plugins["bootstrap@<mkt>"]` `version`
   + `installPath`: the **installed/activated** version Claude Code loads next session.
+  **Registry v2 caveat:** newer Claude Code keeps this file at `{"plugins": {}}` for
+  marketplace installs; the installed version is then the highest version dir under
+  `~/.claude/plugins/cache/<mkt>/bootstrap/` (the harvest and the engine's plugin
+  discovery both fall back to that cache scan since 0.47.0).
 - `engine_ran_version` → the bootstrap version whose engine **last completed a pass**.
 - `harvest_launched_version` → the version the harvest last launched (dedup marker).
 - `last_session_id` → the Layer-1 session-id guard stamp.

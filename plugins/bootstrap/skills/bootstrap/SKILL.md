@@ -43,7 +43,10 @@ reference_skill:
       keywords: [update, harvest, single-session, engine_ran_version, installed_plugins.json, claude --resume, restart needed, cooldown status, session-id guard, two skip gates, anomaly, provisioning done, advise user, rescue, sessionstart missed, fresh machine, notice]
       detail: |
         How to read an update and advise the user:
-        - installed version = installed_plugins.json plugins["bootstrap@<mkt>"].version (what loads next session).
+        - installed version = installed_plugins.json plugins["bootstrap@<mkt>"].version (what loads next
+          session). Registry v2 keeps that file EMPTY for marketplace installs; the installed version is then
+          the highest version dir under ~/.claude/plugins/cache/<mkt>/bootstrap/ (engine discovery and the
+          harvest both fall back to that cache scan since 0.47.0).
         - engine_ran_version (stamp in the bootstrap data dir) = the version that last COMPLETED a pass.
         - Convergence: on the next session start the new version is fetched; the SessionStart hook ran the
           OLD engine, then the harvest (UserPromptSubmit) launches the NEW engine in-session when

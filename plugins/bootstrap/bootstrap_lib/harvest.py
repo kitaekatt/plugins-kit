@@ -55,6 +55,40 @@ def _default_registry() -> str:
     return os.path.join(home, ".claude", "plugins", "installed_plugins.json")
 
 
+def _cache_installed_bootstrap(registry_path: str, marketplace: str) -> Tuple[str, str]:
+    """Registry-v2 fallback: derive bootstrap's installed ``(version,
+    install_path)`` from the cache layout when the registry has no entry.
+
+    Newer Claude Code keeps installed_plugins.json at ``{"plugins": {}}`` for
+    marketplace installs; the cache dir with the highest version under
+    ``<plugins>/cache/<marketplace>/bootstrap/`` IS the code Claude Code loads
+    next session, so it is the installed version for harvest purposes.
+    Returns ``("", "")`` when nothing resolvable exists (e.g. test registries
+    in a tmp dir with no cache sibling).
+    """
+    cache_root = os.path.join(os.path.dirname(os.path.abspath(registry_path)), "cache")
+    if marketplace:
+        marketplaces = [marketplace]
+    else:
+        try:
+            marketplaces = sorted(os.listdir(cache_root))
+        except OSError:
+            return "", ""
+    for mkt in marketplaces:
+        plugin_dir = os.path.join(cache_root, mkt, "bootstrap")
+        try:
+            versions = [
+                d for d in os.listdir(plugin_dir)
+                if os.path.isdir(os.path.join(plugin_dir, d))
+            ]
+        except OSError:
+            continue
+        if versions:
+            version = max(versions, key=_parse_semver)
+            return version, os.path.join(plugin_dir, version)
+    return "", ""
+
+
 def read_installed_bootstrap(registry_path: str, marketplace: str) -> Tuple[str, str]:
     """Return ``(version, install_path)`` for the installed bootstrap plugin, or
     ``("", "")`` on any miss.
@@ -62,8 +96,18 @@ def read_installed_bootstrap(registry_path: str, marketplace: str) -> Tuple[str,
     The registry entry key looks like ``"bootstrap@plugins-kit"`` mapping to
     either a dict or a list of per-scope dicts (each with ``version`` /
     ``installPath``). Robust to both shapes; falls back to the first key whose
-    name part is ``bootstrap`` when the marketplace-qualified ref isn't present.
+    name part is ``bootstrap`` when the marketplace-qualified ref isn't present,
+    then to the cache layout (``_cache_installed_bootstrap``) when the registry
+    records nothing at all (Claude Code registry v2).
     """
+    version, path = _registry_installed_bootstrap(registry_path, marketplace)
+    if version and path:
+        return version, path
+    return _cache_installed_bootstrap(registry_path, marketplace)
+
+
+def _registry_installed_bootstrap(registry_path: str, marketplace: str) -> Tuple[str, str]:
+    """The registry half of ``read_installed_bootstrap`` -- ``("", "")`` on any miss."""
     try:
         with open(registry_path) as f:
             plugins = json.load(f).get("plugins", {})

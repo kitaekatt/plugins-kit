@@ -1,7 +1,16 @@
-"""Plugin path resolution from installed_plugins.json registry."""
+"""Plugin path resolution from installed_plugins.json registry.
+
+Registry v2 caveat: newer Claude Code versions keep installed_plugins.json at
+{"version": 2, "plugins": {}} for marketplace installs -- enablement lives in
+settings enabledPlugins and the code lives in the cache layout
+(~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/). Discovery
+therefore falls back to scanning that layout for enabled refs the registry
+does not record; registry entries, when present, always take precedence.
+"""
 
 import json
 import os
+import re
 from typing import List, NamedTuple, Optional
 
 
@@ -68,7 +77,64 @@ def resolve_plugin(registry_path: str, plugin_ref: str, base_dir: str) -> Option
     return PluginInfo(name=name, install_path=install_path, version=version, marketplace=marketplace)
 
 
-def list_enabled_plugins(config: dict, registry_path: str, base_dir: str, enabled_refs=None):
+def _version_sort_key(version: str):
+    """Tolerant ordering key for cache version-dir names: numeric dot-parts
+    compare numerically ("0.10.0" > "0.9.0"); non-numeric names (git-SHA cache
+    keys) sort below any numeric version and tie-break lexically."""
+    parts = re.findall(r"\d+", version)
+    return (1 if parts else 0, tuple(int(p) for p in parts), version)
+
+
+def discover_cache_plugins(plugins_root: str, enabled_refs) -> dict:
+    """Registry-shaped fallback discovery from the plugin cache layout.
+
+    Scans <plugins_root>/cache/<marketplace>/<plugin>/<version>/ and
+    synthesizes {"<name>@<mkt>": [{"installPath", "version"}]} entries for
+    ENABLED refs, picking the highest version dir per plugin -- that dir is the
+    code Claude Code actually loads. ``enabled_refs`` None or empty means
+    enablement is unknowable (or nothing is enabled): return {} rather than
+    provision blindly.
+    """
+    if not enabled_refs:
+        return {}
+    cache_root = os.path.join(plugins_root, "cache")
+    out = {}
+    try:
+        marketplaces = sorted(os.listdir(cache_root))
+    except OSError:
+        return {}
+    for mkt in marketplaces:
+        mkt_dir = os.path.join(cache_root, mkt)
+        if not os.path.isdir(mkt_dir):
+            continue
+        try:
+            names = sorted(os.listdir(mkt_dir))
+        except OSError:
+            continue
+        for name in names:
+            ref = f"{name}@{mkt}"
+            if ref not in enabled_refs:
+                continue
+            plugin_dir = os.path.join(mkt_dir, name)
+            try:
+                versions = [
+                    d for d in os.listdir(plugin_dir)
+                    if os.path.isdir(os.path.join(plugin_dir, d))
+                ]
+            except OSError:
+                continue
+            if not versions:
+                continue
+            version = max(versions, key=_version_sort_key)
+            out[ref] = [{
+                "installPath": os.path.join(plugin_dir, version),
+                "version": version,
+            }]
+    return out
+
+
+def list_enabled_plugins(config: dict, registry_path: str, base_dir: str, enabled_refs=None,
+                         fallback_enabled_refs=None):
     """Auto-discover plugins that have bootstrap.json.
 
     Uses no_bootstrap for opt-out and bootstrap_cache to avoid repeated filesystem scans.
@@ -80,6 +146,11 @@ def list_enabled_plugins(config: dict, registry_path: str, base_dir: str, enable
         enabled_refs: Optional set of normalized plugin refs (plugin@marketplace) to include.
             If None, all registry plugins are considered (production layout behavior).
             If provided, plugins not in the set are skipped (dev layout filter).
+        fallback_enabled_refs: Optional set of normalized refs whose install may be
+            discovered from the cache layout when the registry has no entry for them
+            (Claude Code registry v2 records marketplace installs as an empty
+            "plugins" map). Registry entries always take precedence. None disables
+            the fallback.
 
     Returns:
         Tuple of (List[PluginInfo], cache_changed: bool)
@@ -88,9 +159,23 @@ def list_enabled_plugins(config: dict, registry_path: str, base_dir: str, enable
         with open(registry_path, "r") as f:
             registry = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return [], False
+        registry = {}
 
     plugins = registry.get("plugins", {})
+    if not isinstance(plugins, dict):
+        plugins = {}
+
+    # Registry-v2 fallback: synthesize entries from the cache for enabled
+    # plugins the registry doesn't record. Merged BEFORE the purge below so
+    # fallback-discovered refs are never treated as uninstalled.
+    fallback = discover_cache_plugins(
+        os.path.dirname(os.path.abspath(registry_path)), fallback_enabled_refs,
+    )
+    if fallback:
+        plugins = dict(plugins)
+        for ref, entries in fallback.items():
+            if not plugins.get(ref):
+                plugins[ref] = entries
     no_bootstrap = config.get("no_bootstrap", [])
     bootstrap_cache = config.setdefault("bootstrap_cache", [])
 

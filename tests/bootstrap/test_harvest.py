@@ -272,3 +272,50 @@ class TestMainNeverRaises:
             "--marketplace", "plugins-kit", "--registry", str(tmp_path / "r.json"),
         ])
         assert rc == 0
+
+
+class TestCacheFallbackInstalledBootstrap:
+    """Registry-v2 fallback for the harvest: with installed_plugins.json empty
+    ({"plugins": {}}), the installed bootstrap version/installPath is derived
+    from the highest version dir under <plugins>/cache/<mkt>/bootstrap/."""
+
+    def _scaffold(self, tmp_path, versions, registry_plugins=None):
+        root = tmp_path / "plugins-root"
+        reg = root / "installed_plugins.json"
+        root.mkdir()
+        reg.write_text(
+            json.dumps({"version": 2, "plugins": registry_plugins or {}}), encoding="utf-8"
+        )
+        for v in versions:
+            (root / "cache" / "plugins-kit" / "bootstrap" / v).mkdir(parents=True)
+        return str(reg)
+
+    def test_empty_registry_falls_back_to_cache(self, tmp_path):
+        reg = self._scaffold(tmp_path, ["0.46.0"])
+        version, path = read_installed_bootstrap(reg, "plugins-kit")
+        assert version == "0.46.0"
+        assert path.endswith("0.46.0")
+
+    def test_highest_version_wins_numerically(self, tmp_path):
+        reg = self._scaffold(tmp_path, ["0.9.0", "0.10.0"])
+        version, _ = read_installed_bootstrap(reg, "plugins-kit")
+        assert version == "0.10.0"
+
+    def test_registry_entry_takes_precedence(self, tmp_path):
+        reg = self._scaffold(
+            tmp_path, ["9.9.9"],
+            registry_plugins={"bootstrap@plugins-kit": [{"version": "1.0.0", "installPath": "/x"}]},
+        )
+        version, path = read_installed_bootstrap(reg, "plugins-kit")
+        assert version == "1.0.0"
+        assert path == "/x"
+
+    def test_no_cache_no_registry_is_miss(self, tmp_path):
+        reg = tmp_path / "installed_plugins.json"
+        reg.write_text(json.dumps({"version": 2, "plugins": {}}), encoding="utf-8")
+        assert read_installed_bootstrap(str(reg), "plugins-kit") == ("", "")
+
+    def test_unknown_marketplace_scans_all(self, tmp_path):
+        reg = self._scaffold(tmp_path, ["0.46.0"])
+        version, _ = read_installed_bootstrap(reg, "")
+        assert version == "0.46.0"
