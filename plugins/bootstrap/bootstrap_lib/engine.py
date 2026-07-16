@@ -452,28 +452,29 @@ def _main():
     # plugins at session start, before this hook installed them). We detect them by
     # diffing the registry (before Step 3c vs now), NOT Step 4b's new_plugins, which
     # misses layered installs absorbed by Step 4. A plugin merely updated at session
-    # start was already loaded by the restart that updated it, so it is not nagged.
+    # start was already loaded by the restart that updated it, so it is not noticed.
+    # These are informational display lines, NOT action-required items: whether and
+    # when to restart is the user's call, so the notice rides in the normal display
+    # output with no relay directive telling Claude to surface it.
     # Toggle off via config "notify_reload_needed".
-    action_required = []
     if config.get("notify_reload_needed", True):
         newly_installed = _resolve_newly_installed(
             installed_refs_before, _read_installed_plugins(_registry_for_diff),
         )
-        action_required = [a for a in (
+        notices = [a for a in (
             _reload_advice(newly_installed),
             # Bootstrap self-staleness: a newer bootstrap is cached but this session
             # loaded the old one. /reload-plugins won't re-fire its SessionStart pass.
             _bootstrap_stale_advice(version, boot_plugin_name, marketplace_name, prod_registry),
         ) if a]
-        # action_required is ALSO passed to emit_success_response so the Claude-facing
-        # additionalContext leads with a relay directive (systemMessage isn't reliably
-        # shown, so we instruct the session's Claude to tell the user). Still added to
-        # the display + log here so console mode and bootstrap.log get it too.
-        for advice in action_required:
-            advice_label = f"{bootstrap_label} action required"
+        for advice in notices:
+            advice_label = f"{bootstrap_label} notice"
             display_sections.append((advice_label, [advice], []))
             if not args.console:
-                write_log_block(data_dir, advice_label, [advice], start_time=start_time)
+                # Deferred to Step 6 (like plugin logs): writing now would leak
+                # the block back through Step 5's shell_content read and the
+                # notice would appear twice in the emitted display.
+                deferred_plugin_logs.append((data_dir, advice_label, [advice]))
 
     # Step 5: Read shell log entries BEFORE writing any engine entries to the log.
     # Plugin log writes are deferred to step 6 to avoid the bootstrap plugin's
@@ -574,10 +575,9 @@ def _main():
         # rather than waiting out the throttle window.
         _clear_project_cooldown(data_dir, args.project_dir)
     else:
-        if display_content or action_required:
+        if display_content:
             emit_success_response(
                 display_content, label=bootstrap_label, output_file=output_file,
-                action_required=action_required,
             )
         # else: nothing to show — silent exit (no file written in background mode)
 
@@ -1056,8 +1056,9 @@ def _resolve_newly_installed(before_refs, after_map):
 
 
 def _reload_advice(newly_installed):
-    """User-facing reload/restart nag for plugins that ENTERED the registry during
-    this pass, or None when there is nothing to advise.
+    """User-facing reload/restart notice (informational, not action-required) for
+    plugins that ENTERED the registry during this pass, or None when there is
+    nothing to advise.
 
     Claude Code loads plugins at session start -- before this SessionStart hook ran
     and installed these -- so they are not active yet. This is the one case
@@ -1078,7 +1079,7 @@ def _reload_advice(newly_installed):
     if needs_restart:
         return (
             f"bootstrap installed new plugin(s): {names}. "
-            f"Restart Claude (or your IDE) to start using them."
+            f"They will load next time you restart Claude (or your IDE)."
         )
     return (
         f"bootstrap installed new plugin(s): {names}. "
@@ -1087,8 +1088,8 @@ def _reload_advice(newly_installed):
 
 
 def _bootstrap_stale_advice(running_version, plugin_name, marketplace_name, registry_path):
-    """Restart nag when the registry records a NEWER bootstrap than the one running
-    this session, else None.
+    """Restart notice (informational, not action-required) when the registry
+    records a NEWER bootstrap than the one running this session, else None.
 
     autoUpdate caches the new bootstrap and rewrites ``installed_plugins.json`` at
     session start, but the session already loaded the OLD hook -- and
@@ -1118,8 +1119,8 @@ def _bootstrap_stale_advice(running_version, plugin_name, marketplace_name, regi
     if not _version_greater(registry_version, running_version):
         return None
     return (
-        f"bootstrap was updated to {registry_version}. "
-        f"Restart Claude (or your IDE) to load it."
+        f"bootstrap was updated to {registry_version}; "
+        f"it will load next time you restart Claude (or your IDE)."
     )
 
 
@@ -4781,35 +4782,26 @@ def _extract_timestamp(line):
     return ""
 
 
-def emit_success_response(log_content, label="bootstrap", output_file=None, action_required=None):
+def emit_success_response(log_content, label="bootstrap", output_file=None):
     """Emit hook JSON showing bootstrap log to user and agent.
 
-    ``action_required`` is a list of user-facing instructions (reload/restart
-    nags). They're already in ``log_content``, but the user does NOT reliably see
-    systemMessage, so we ALSO lead the Claude-facing additionalContext with an
-    explicit directive telling the session's Claude to relay them to the user --
-    the one channel confirmed to always reach Claude. See plugin-reload-lifecycle.md.
+    Reload/restart notices ride inside ``log_content`` as ordinary display
+    lines. Deliberately NO relay directive in additionalContext: whether and
+    when to restart after a plugin update is the user's call, and an
+    "ACTION REQUIRED -- surface this now" preamble made the session's Claude
+    treat a routine update notice as urgent. See plugin-reload-lifecycle.md.
     """
-    action_required = action_required or []
     if output_file:
         # Background mode: consumed by UserPromptSubmit hook.
         # `systemMessage` is user-facing, `additionalContext` is Claude-facing.
         body = f"{label} -> bootstrap complete:\n{log_content}"
-        add_ctx = body
-        if action_required:
-            bullets = "\n".join(f"- {a}" for a in action_required)
-            add_ctx = (
-                "ACTION REQUIRED — bootstrap needs the user to do something, and they "
-                "will NOT see it unless you tell them. Surface this to the user now, in "
-                f"your reply:\n{bullets}\n\n{body}"
-            )
         response = {
             "continue": True,
             "suppressOutput": False,
             "systemMessage": body,
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
-                "additionalContext": add_ctx,
+                "additionalContext": body,
             },
         }
         _write_atomic(output_file, json.dumps(response))

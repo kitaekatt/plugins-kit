@@ -75,8 +75,10 @@ class TestReloadAdvice:
         ]
         msg = _reload_advice(plugins)
         assert msg is not None
-        assert "Restart Claude" in msg
+        assert "restart Claude" in msg
         assert "your IDE" in msg
+        # Informational phrasing -- the user decides when to restart.
+        assert "ACTION" not in msg
         # Plain instruction -- no confusing internals.
         assert "SessionStart" not in msg and "re-fire" not in msg
         # Both names listed.
@@ -90,7 +92,7 @@ class TestReloadAdvice:
         msg = _reload_advice(plugins)
         assert msg is not None
         assert "/reload-plugins" in msg
-        assert "Restart Claude" not in msg
+        assert "restart Claude" not in msg
 
 
 class TestResolveNewlyInstalled:
@@ -141,11 +143,11 @@ class TestBootstrapStaleAdvice:
         )
         return str(reg)
 
-    def test_nags_when_registry_newer(self, tmp_path):
+    def test_notices_when_registry_newer(self, tmp_path):
         msg = _bootstrap_stale_advice("0.14.0", "bootstrap", "plugins-kit", self._registry(tmp_path, "0.15.0"))
         assert msg is not None
         assert "0.15.0" in msg
-        assert "Restart Claude" in msg
+        assert "restart Claude" in msg
         # Plain instruction -- no confusing internals about SessionStart re-firing.
         assert "SessionStart" not in msg and "reload-plugins" not in msg
 
@@ -167,31 +169,31 @@ class TestBootstrapStaleAdvice:
         assert _bootstrap_stale_advice("", "bootstrap", "plugins-kit", self._registry(tmp_path, "0.15.0")) is None
 
 
-class TestEmitRelayDirective:
-    """emit_success_response must lead the Claude-facing additionalContext with a
-    relay directive when there are action-required nags, so the session's Claude
-    reliably tells the user (systemMessage isn't reliably shown in the terminal)."""
+class TestEmitNoRelayDirective:
+    """emit_success_response must NOT wrap reload/restart notices in an
+    'ACTION REQUIRED -- surface this now' relay directive. The directive made the
+    session's Claude present a routine update notice as urgent; whether and when
+    to restart is the user's call, so notices ride in the body as ordinary
+    display lines (visible in systemMessage and additionalContext alike)."""
 
-    def _emit(self, tmp_path, action_required):
+    def _emit(self, tmp_path, log_content="some bootstrap log"):
         from bootstrap_lib.engine import emit_success_response
         out = tmp_path / "pending.json"
         emit_success_response(
-            "some bootstrap log", label="mkt:bootstrap@1.0",
-            output_file=str(out), action_required=action_required,
+            log_content, label="mkt:bootstrap@1.0", output_file=str(out),
         )
         return json.loads(out.read_text(encoding="utf-8"))
 
-    def test_relay_directive_leads_additional_context(self, tmp_path):
-        r = self._emit(tmp_path, ["bootstrap installed new plugin(s): cache-kit. Run /reload-plugins to start using them."])
-        ac = r["hookSpecificOutput"]["additionalContext"]
-        assert ac.startswith("ACTION REQUIRED")
-        assert "surface this to the user" in ac.lower()
-        assert "cache-kit. Run /reload-plugins" in ac
-        # The full log still rides along after the directive.
-        assert "some bootstrap log" in ac
-
-    def test_no_directive_when_no_action_required(self, tmp_path):
-        r = self._emit(tmp_path, [])
+    def test_notice_rides_in_body_without_directive(self, tmp_path):
+        notice = "--- mkt:bootstrap@1.0 notice: bootstrap was updated to 9.9.9; it will load next time you restart Claude (or your IDE). ---"
+        r = self._emit(tmp_path, f"{notice}\nsome bootstrap log")
         ac = r["hookSpecificOutput"]["additionalContext"]
         assert "ACTION REQUIRED" not in ac
+        assert "surface this to the user" not in ac.lower()
+        assert notice in ac
+        assert notice in r["systemMessage"]
+
+    def test_additional_context_matches_system_message(self, tmp_path):
+        r = self._emit(tmp_path)
+        assert r["hookSpecificOutput"]["additionalContext"] == r["systemMessage"]
         assert r["systemMessage"].startswith("mkt:bootstrap@1.0 -> bootstrap complete")

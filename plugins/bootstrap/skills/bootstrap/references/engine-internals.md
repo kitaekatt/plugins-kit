@@ -61,7 +61,7 @@ This is the engine-side half of "provision everything in one pass." The shell-si
 
 ### Step 4d: Reload/restart advisory
 
-The two fixes above let bootstrap provision a plugin's deps/libs/venv in a single pass. The one thing bootstrap **cannot** do in-session is make Claude Code load plugin *code & hooks* — Claude Code loads plugins at session start, before this SessionStart hook runs. So when a pass can **prove** the running session is missing a plugin's code, it nags the user.
+The two fixes above let bootstrap provision a plugin's deps/libs/venv in a single pass. The one thing bootstrap **cannot** do in-session is make Claude Code load plugin *code & hooks* — Claude Code loads plugins at session start, before this SessionStart hook runs. So when a pass can **prove** the running session is missing a plugin's code, it emits a notice. The notice is **informational, not action-required**: it rides in the normal display output (label `<mkt>:bootstrap@<v> notice`) with **no relay directive** in `additionalContext` — whether and when to restart is the user's call (the old "ACTION REQUIRED — surface this now" preamble made Claude present routine update notices as urgent; removed 2026-07-16).
 
 The provable case: a plugin that **entered the registry during this pass** — a layered `plugins:` install (Step 3c), a per-plugin install, or a bootstrap script's `install_plugin` (Step 4b). Claude Code loaded plugins *before* this hook installed those, so they aren't active yet. The engine detects them by **diffing the installed-plugins registry** (snapshot before Step 3c vs after Step 4b: `_read_installed_plugins` + `_resolve_newly_installed`) — **not** Step 4b's `new_plugins`, which silently misses a layered `plugins:` install (that lands in the registry *before* Step 4's scan, so Step 4 absorbs it and it never appears in `new_plugins` — the gap the cache-kit end-to-end test surfaced). `_reload_advice(newly_installed)` then builds a one-line, user-facing advisory, branching on whether the new plugin registers a **`SessionStart`** hook (`_plugin_ships_sessionstart_hook`):
 
@@ -70,7 +70,9 @@ The provable case: a plugin that **entered the registry during this pass** — a
 
 The `SessionStart`-specific branch is deliberate and **measured** (not the old "any hook → restart" folklore): `/reload-plugins` *does* reload hook **registrations** in-session, and a hook's **script content** is read live from disk every run. The only thing a reload can't do is re-*fire* `SessionStart`. Full rule + the probe method: [plugin-reload-lifecycle.md](plugin-reload-lifecycle.md).
 
-Crucially, a plugin merely **updated** at session start is **not** nagged: the restart that applied the update already loaded its new code, and Parts 1+2 provisioned its deps in that same pass — nagging there would be noise on every publish. The advisory is gated behind config `notify_reload_needed` (default `true`); set it `false` to silence it.
+Crucially, a plugin merely **updated** at session start gets **no notice**: the restart that applied the update already loaded its new code, and Parts 1+2 provisioned its deps in that same pass — a notice there would be noise on every publish. The advisory is gated behind config `notify_reload_needed` (default `true`); set it `false` to silence it.
+
+The inverse failure — a SessionStart pass that never ran at all because Claude Code was still syncing the marketplace when SessionStart fired (fresh machine) — is handled hook-side by the **SessionStart-missed rescue** in `bootstrap-display.sh`: see [plugin-reload-lifecycle.md](plugin-reload-lifecycle.md).
 
 #### Declarative reload policy (proposed — not yet implemented)
 

@@ -20,6 +20,16 @@ MARKETPLACE_NAME="$(basename "$(cd "$PLUGIN_ROOT/../.." && pwd)")"
 DATA_DIR="${HOME}/.claude/plugins/data/${MARKETPLACE_NAME}/bootstrap"
 PENDING="${DATA_DIR}/bootstrap_display.pending"
 
+# --- Capture hook input (UserPromptSubmit JSON on stdin) ---
+# Needed by the SessionStart-missed rescue below to learn this session's id.
+# TTY-guarded so a manual terminal invocation doesn't block; read -t caps a
+# pathological open-but-silent stdin pipe at 10s (a bare cat would hang until
+# the hook timeout); -d '' reads the whole JSON regardless of newlines.
+HOOK_INPUT=""
+if [ ! -t 0 ]; then
+    IFS= read -r -t 10 -d '' HOOK_INPUT 2>/dev/null || true
+fi
+
 # --- Single-session update harvest (Part 2) ---
 # Claude Code's auto-updater can fetch a NEWER bootstrap mid-session: the new
 # code lands on disk and installed_plugins.json is repointed, but the
@@ -43,12 +53,88 @@ else
     _BOOT_PY="${HOME}/.local/bin/python3"
 fi
 [ -x "$_BOOT_PY" ] || _BOOT_PY="$(command -v python3 2>/dev/null || true)"
-if [ -n "$_BOOT_PY" ] && [ -f "$PLUGIN_ROOT/bootstrap_lib/harvest.py" ]; then
+_run_harvest() {
+    [ -n "$_BOOT_PY" ] && [ -f "$PLUGIN_ROOT/bootstrap_lib/harvest.py" ] || return 0
     "$_BOOT_PY" "$PLUGIN_ROOT/bootstrap_lib/harvest.py" \
         --data-dir "$DATA_DIR" \
         --project-dir "$PWD" \
         --marketplace "$MARKETPLACE_NAME" \
         >/dev/null 2>&1 || true
+}
+
+# --- SessionStart-missed rescue ---
+# On a fresh machine (or after a mid-session plugin install) Claude Code can
+# still be syncing the marketplace when SessionStart fires, so bootstrap's
+# SessionStart hook isn't registered yet and the provisioning pass never runs
+# this session. UserPromptSubmit re-fires every prompt, so detect the miss
+# here. Pure bash by necessity: on a fresh machine Python doesn't exist yet --
+# session-bootstrap.sh is what installs it.
+#
+# Detection signal: session-bootstrap.sh touches sessions/<session_id> at ENTRY
+# (before its gates), so a marker missing for THIS prompt's session_id means no
+# SessionStart pass was invoked for this session. Deliberately NOT the Layer-1
+# last_session_id guard stamp: that is a single global slot (a second concurrent
+# session overwrites it -- comparing against it ping-pongs rescues between
+# sessions forever) and bootstrap-reset-cooldown deletes it (which must re-arm
+# the NEXT SessionStart, not fire a mid-session pass on the next prompt).
+#
+# Launch discipline (the detached subshell; never delays the prompt):
+#   1. sleep, then re-check the marker -- a genuinely-firing SessionStart pass
+#      (fast-start / claude -p race) touches it within milliseconds of starting,
+#      so the rescue stands down. Stand-down runs the harvest this prompt would
+#      otherwise have skipped, so a single-prompt session still converges a
+#      pending update.
+#   2. stand down if ANY per-project cooldown stamp is fresh (<120s): a pass
+#      stamped it at entry moments ago -- covers a SessionStart pass that
+#      received no stdin (documented mode) and so never wrote a marker.
+#   3. atomic one-launch-per-session lock (noclobber create): at most ONE rescue
+#      launch per session_id, ever, even across overlapping prompts.
+#   4. launch session-bootstrap.sh with the hook JSON piped in, so it writes
+#      this session's marker and its normal gates (session guard, per-project
+#      cooldown, registry bypass) apply unchanged.
+_RESCUE_LAUNCHED=""
+_SB="$PLUGIN_ROOT/hooks/sessionstart/session-bootstrap.sh"
+_RESCUE_DELAY="${BOOTSTRAP_RESCUE_DELAY:-2}"
+if [ -n "$HOOK_INPUT" ] && [ -f "$_SB" ]; then
+    # session_id extraction: keep byte-identical to session-bootstrap.sh's
+    # _GUARD_SID pipeline (drift test: tests/bootstrap/test_sessionstart_rescue.py).
+    _SID=$(echo "$HOOK_INPUT" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"' || true)
+    _SID=$(printf '%s' "$_SID" | tr -cd 'A-Za-z0-9._-')
+    _SESS_MARKER="$DATA_DIR/sessions/$_SID"
+    _RESCUE_LOCK="$DATA_DIR/sessions/rescue_launched.$_SID"
+    if [ -n "$_SID" ] && [ ! -e "$_SESS_MARKER" ] && [ ! -e "$_RESCUE_LOCK" ]; then
+        _RESCUE_LAUNCHED=1
+        (
+            sleep "$_RESCUE_DELAY"
+            if [ -e "$_SESS_MARKER" ]; then
+                # A SessionStart pass claimed this session while we slept: it
+                # owns provisioning. Run the harvest skipped in the foreground.
+                _run_harvest
+                exit 0
+            fi
+            if [ -n "$(find "$DATA_DIR/cooldowns" -type f -newermt '-120 seconds' 2>/dev/null | head -n 1)" ]; then
+                # A pass stamped a cooldown moments ago (possibly a no-stdin
+                # SessionStart still running): don't race it. Re-evaluated on
+                # the next prompt.
+                _run_harvest
+                exit 0
+            fi
+            mkdir -p "$DATA_DIR/sessions"
+            ( set -C; : > "$_RESCUE_LOCK" ) 2>/dev/null || exit 0
+            {
+                echo "--- Shell $(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo unknown-time) ---"
+                echo "sessionstart-rescue: no SessionStart pass ran for session $_SID; launching session-bootstrap.sh"
+            } >> "$DATA_DIR/bootstrap.log"
+            printf '%s' "$HOOK_INPUT" | bash "$_SB"
+        ) >/dev/null 2>&1 &
+    fi
+fi
+
+# Run the per-prompt harvest unless the rescue armed this prompt (its subshell
+# either launches a full pass or runs the harvest itself on stand-down -- never
+# two engine launches from one prompt).
+if [ -z "$_RESCUE_LAUNCHED" ]; then
+    _run_harvest
 fi
 
 # --- Display relay (unchanged) ---

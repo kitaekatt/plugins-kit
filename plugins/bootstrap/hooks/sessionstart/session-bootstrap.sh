@@ -83,6 +83,24 @@ _COOLDOWN_FILE="$_COOLDOWN_DIR/last_run_epoch.$_PROJECT_KEY"
 _COOLDOWN_SECS=3600  # 60-minute per-project cooldown; reset via bootstrap-reset-cooldown
 mkdir -p "$PLUGIN_DATA" "$_COOLDOWN_DIR"
 
+# --- Per-session marker (SessionStart-missed rescue's detection signal) ---
+# Touch sessions/<session_id> at ENTRY -- before the gates, so even a gate-
+# skipped invocation records "a pass was invoked for this session". The
+# UserPromptSubmit rescue in bootstrap-display.sh keys on this marker: missing
+# for the prompt's session_id means SessionStart never fired this session
+# (fresh machine mid-sync) and it launches this script itself. Entry-time (not
+# completion-time) so a fast first prompt (claude -p) sees it within
+# milliseconds and stands down instead of double-launching. Old markers are
+# pruned after the gates below. Not the Layer-1 guard stamp: that's a single
+# global slot that a concurrent session overwrites, and bootstrap-reset-cooldown
+# deletes it (a reset must re-arm the NEXT SessionStart, not a mid-session run).
+if [ -n "${_GUARD_SID:-}" ]; then
+    _SID_SAFE=$(printf '%s' "$_GUARD_SID" | tr -cd 'A-Za-z0-9._-')
+    if [ -n "$_SID_SAFE" ]; then
+        mkdir -p "$PLUGIN_DATA/sessions" && : > "$PLUGIN_DATA/sessions/$_SID_SAFE" 2>/dev/null || true
+    fi
+fi
+
 # Registry files Claude Code rewrites whenever a plugin is installed/updated/
 # rescoped (installed_plugins.json) or a marketplace is added/refreshed
 # (known_marketplaces.json). PLUGIN_DATA is
@@ -159,6 +177,10 @@ if [ -f "$_COOLDOWN_FILE" ] && [ ! -f "$_ALERT_FILE" ] \
     fi
 fi
 printf '%s' "$HOOK_START_EPOCH" > "$_COOLDOWN_FILE"
+
+# Prune stale per-session markers (and rescue locks) on real passes only --
+# session ids are never reused, so week-old markers are dead weight.
+find "$PLUGIN_DATA/sessions" -type f -mtime +7 -delete 2>/dev/null || true
 
 # --- Emit hook JSON immediately (fire-and-forget) ---
 # In normal mode, emit JSON now so Claude Code doesn't block waiting for engine output.

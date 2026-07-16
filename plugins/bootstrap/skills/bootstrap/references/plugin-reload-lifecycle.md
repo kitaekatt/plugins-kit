@@ -4,8 +4,8 @@ When you edit or update a plugin, *what* you changed decides whether the running
 Claude session already has it, needs `/reload-plugins`, or needs a full restart.
 This reference is the measured ground truth (don't trust folklore like "hooks
 always need a restart" — it's wrong as a blanket rule). Load it when reasoning
-about the reload/restart nag (engine `_reload_advice`, Step 4d) or when telling a
-user what to do after a publish.
+about the reload/restart notice (engine `_reload_advice`, Step 4d) or when telling
+a user what to do after a publish.
 
 ## The three layers
 
@@ -77,7 +77,7 @@ Caveat: docs describe the contract; a specific Claude Code build may differ. Our
   Most marketplace plugins here carry a SessionStart hook (bootstrap, and anything
   depending on it), so a restart is the simple, correct default after a real update.
 
-## How the nag (Step 4d) uses this
+## How the notice (Step 4d) uses this
 
 `_reload_advice` fires for any plugin that **entered the registry during the pass**
 — detected by a registry before/after diff (`_resolve_newly_installed`), so it
@@ -86,8 +86,19 @@ alike (an earlier version keyed on Step 4b's `new_plugins` and missed layered
 installs — caught by the cache-kit end-to-end test). It branches on whether that
 plugin registers a **SessionStart** hook (`_plugin_ships_sessionstart_hook`):
 
-- **SessionStart hook present** → advise **restart** (only a fresh session re-fires it).
-- **otherwise** (only skills/commands/event-hooks) → advise **`/reload-plugins`**.
+- **SessionStart hook present** → note it loads on the next **restart** (only a
+  fresh session re-fires it).
+- **otherwise** (only skills/commands/event-hooks) → note **`/reload-plugins`**
+  activates it in-session.
+
+**These are informational notices, not action-required items.** They ride in the
+normal display output (label `<mkt>:bootstrap@<v> notice`) and are visible in both
+`systemMessage` and `additionalContext`, but `emit_success_response` deliberately
+adds **no relay directive** telling the session's Claude to surface them: an
+"ACTION REQUIRED — surface this now" preamble (removed 2026-07-16) made Claude
+present a routine update notice as urgent, when whether and *when* to restart is
+the user's call. The same applies to the bootstrap self-staleness notice
+(`_bootstrap_stale_advice`).
 
 ## Single-session update protocol (the harvest)
 
@@ -138,6 +149,49 @@ applies to every update **after** this protocol ships. (There is no way around
 this: a session is already running the pre-harvest `UserPromptSubmit` hook code,
 which has no harvest logic to run.)
 
+## SessionStart-missed rescue (fresh-machine first session)
+
+The harvest handles "SessionStart ran the *old* engine"; the rescue handles
+"SessionStart never ran **at all**". Observed live (2026-07-16): on a fresh
+machine (or after deleting `~/.claude/plugins/`), Claude Code is still seeding
+the marketplace from `extraKnownMarketplaces` and populating the cache when
+SessionStart fires — bootstrap's SessionStart hook isn't registered yet, so no
+provisioning pass runs that session, even though `/plugin` shows everything
+installed and skills/UserPromptSubmit hooks load fine moments later.
+
+**Mechanism** (pure bash in `bootstrap-display.sh` — on a fresh machine Python
+does not exist yet; `session-bootstrap.sh` is what installs it):
+
+1. `session-bootstrap.sh` touches a per-session marker `sessions/<session_id>`
+   at **entry** — before its gates, so even a gate-skipped invocation records
+   "a pass was invoked for this session" within milliseconds of firing.
+   (Deliberately NOT the Layer-1 `last_session_id` stamp: that is a single
+   global slot — a second concurrent session overwrites it, which would
+   ping-pong rescues between sessions forever — and `bootstrap-reset-cooldown`
+   deletes it, which must re-arm the *next* SessionStart, not fire a
+   mid-session pass.)
+2. The `UserPromptSubmit` display hook extracts `session_id` from its stdin hook
+   JSON (byte-identical extraction pipeline in both scripts, pinned by a drift
+   test). A missing marker for this session means no SessionStart pass was
+   invoked → arm the rescue.
+3. The detached subshell (the prompt is never delayed) sleeps
+   `BOOTSTRAP_RESCUE_DELAY` (default 2s) and **stands down** if (a) the marker
+   appeared — a genuinely-firing SessionStart pass claimed the session
+   (fast-start / `claude -p` race) — or (b) **any** per-project cooldown stamp is
+   fresh (<120s) — a pass stamped it at entry moments ago, covering a
+   SessionStart pass that received no stdin and so wrote no marker. Both
+   stand-down paths run the **harvest** this prompt's foreground skipped, so a
+   single-prompt session still converges a pending update.
+4. Otherwise it takes an atomic **one-launch-per-session lock** (noclobber
+   create of `sessions/rescue_launched.<session_id>`) — at most one rescue
+   launch per session, ever — appends a `sessionstart-rescue:` audit line to
+   `bootstrap.log`, and launches `session-bootstrap.sh` **with the hook JSON
+   piped in**, so the pass writes this session's marker and its normal gates
+   (session guard, per-project cooldown, registry bypass) apply unchanged.
+5. The foreground harvest is skipped on a prompt where the rescue armed (the
+   subshell either launches the full pass or runs the harvest itself — never
+   two engine launches from one prompt). Real passes prune week-old markers.
+
 ## Advising on a bootstrap update (read the state, tell the user, spot anomalies)
 
 After a bootstrap version is published, this is how to read a consumer machine's
@@ -153,6 +207,9 @@ Under `~/.claude/plugins/data/<marketplace>/bootstrap/` unless noted:
 - `engine_ran_version` → the bootstrap version whose engine **last completed a pass**.
 - `harvest_launched_version` → the version the harvest last launched (dedup marker).
 - `last_session_id` → the Layer-1 session-id guard stamp.
+- `sessions/<session_id>` → entry-time per-session markers (the
+  SessionStart-missed rescue's detection signal) plus
+  `sessions/rescue_launched.<session_id>` one-launch locks; pruned after 7 days.
 - `cooldowns/last_run_epoch.<sha1-of-cwd>` → the Layer-2 per-project cooldown stamp.
 - `bootstrap.log` → per-run headers `--- bootstrap@<version> <ISO-ts> ---` and harvest
   audit lines (`--- bootstrap harvest … --- / harvest: launched bootstrap <v> engine`).
@@ -186,10 +243,11 @@ Under `~/.claude/plugins/data/<marketplace>/bootstrap/` unless noted:
   bytes) into the running session — Claude Code binds those at session load. For an
   engine-only / provisioning change, the harvest already did the work and a restart
   is **optional**.
-- **The "restart to load it" nag is emitted by the *old* engine** *before* the harvest
-  runs. If `engine_ran_version` has since reached the installed version, provisioning
-  is done and the nag is **moot** — a restart then only refreshes loaded code. Say so
-  rather than parroting "you must restart."
+- **The "it will load next time you restart" notice is emitted by the *old* engine**
+  *before* the harvest runs. If `engine_ran_version` has since reached the installed
+  version, provisioning is done and the notice is **moot** — a restart then only
+  refreshes loaded code. Say so rather than parroting "you must restart." (The notice
+  is informational by design — no relay directive; the user decides when to restart.)
 - **`claude --resume` works after an update:** both guards bypass on a newer registry
   file, so the resumed pass runs (it does **not** silently skip), and the harvest
   converges it. **No manual cooldown clear is needed in the normal case.**
