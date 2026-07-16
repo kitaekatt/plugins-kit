@@ -128,10 +128,36 @@ def cmd_dev() -> int:
         plugins[ref] = [template]
         rewritten += 1
 
+    # Registry-v2 fallback: newer Claude Code keeps installed_plugins.json at
+    # {"plugins": {}} for marketplace installs, so the rewrite loop above finds
+    # nothing to repoint and dev-tree mode silently no-ops (this is how the
+    # 0.47.0 publish shipped an EMPTY index.html -- generate.py crawled the
+    # empty registry). Synthesize an entry for every repo plugin the registry
+    # does not record, pointing at the dev tree. Restore stays lossless: the
+    # backup taken above snapshots the (empty) original.
+    synthesized = 0
+    for plugin_dir in sorted(PLUGINS_DIR.iterdir()):
+        if not plugin_dir.is_dir():
+            continue
+        name = plugin_dir.name
+        ref = f"{name}@{MARKETPLACE_NAME}"
+        if plugins.get(ref):
+            continue  # real (or rewritten) entry takes precedence
+        if not (plugin_dir / ".claude-plugin" / "plugin.json").is_file():
+            continue
+        plugins[ref] = [{
+            "installPath": str(plugin_dir).replace("/", os.sep),
+            "version": _dev_plugin_version(name),
+        }]
+        synthesized += 1
+    data["plugins"] = plugins
+
     _save_installed(data)
     cleared = _clear_cooldowns()
 
     print(f"  rewrote {rewritten} plugin entries (collapsed {collapsed} duplicate version entries)")
+    if synthesized:
+        print(f"  synthesized {synthesized} entries missing from the registry (registry v2)")
     if skipped:
         print(f"  skipped: {', '.join(skipped)}")
     print(f"  cleared {cleared} cooldown stamps")
