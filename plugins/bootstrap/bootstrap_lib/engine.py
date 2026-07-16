@@ -4976,6 +4976,36 @@ def _fix_all_user_msg(failures):
     return f"{body}\n{offer}" if body else offer
 
 
+def _manual_attention_label_lines(failures):
+    """Summary lines for the NOT-auto-fixable failures: list[str].
+
+    The manual-attention counterpart to _auto_fix_label_lines. The user sees
+    systemMessage, NOT the numbered additionalContext list, so a manual item
+    referenced only as "the steps above" points at a list the user cannot see.
+    Naming each one is what makes the message actionable. Prefer the descriptive
+    `message` (a manual item needs describing, unlike a self-evident "Install
+    <tool>"), falling back to name/type; first line, capped for a footer.
+    """
+    lines = []
+    for f in failures:
+        if _is_auto_fixable(f):
+            continue
+        label = f.get("message") or f.get("name") or f.get("type") or "issue"
+        lines.append(str(label).splitlines()[0][:100])
+    return lines
+
+
+def _manual_attention_user_msg(failures, lead):
+    """User-facing (systemMessage) manual-attention block: named items + `lead`.
+
+    Mirrors _fix_all_user_msg's shape (one line per item, then the instruction),
+    so the auto and manual halves of a mixed message read the same way. `lead`
+    is the closing instruction sentence (it differs by case: all-manual vs the
+    remaining-after-auto tail)."""
+    body = "\n".join(_manual_attention_label_lines(failures))
+    return f"{body}\n{lead}" if body else lead
+
+
 def _emit_unsupported_platform(message, data_dir, args):
     """Surface an unsupported-platform hard error and stop the pass.
 
@@ -5183,11 +5213,17 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
         )
         user_msg = (
             f"{_fix_all_user_msg(failures)}\n"
-            f"The remaining issues need manual attention -- work through them with Claude."
+            + _manual_attention_user_msg(
+                failures,
+                "The issues above need manual attention -- work through them with Claude.",
+            )
         )
     else:
         agent_trailer = "\nNone of these are fix-all eligible -- guide the user through the steps above."
-        user_msg = "These issues need manual attention -- work through them with Claude."
+        user_msg = _manual_attention_user_msg(
+            failures,
+            "These issues need manual attention -- work through them with Claude.",
+        )
 
     agent_lines.append(agent_trailer)
     agent_msg = "\n".join(agent_lines)
