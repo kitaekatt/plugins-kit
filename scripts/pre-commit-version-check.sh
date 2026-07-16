@@ -28,3 +28,9 @@ fi
 # (escape hatch: PLUGINS_KIT_SKIP_BUMP_CHECK=1, or --no-verify). Details and
 # rationale in the script header.
 "$REPO_ROOT/scripts/check-staged-version-bump.sh"
+
+# Companion to the gate above: that one forces plugin.json to be bumped, and
+# nothing pulled pyproject.toml along with it -- which is how bootstrap's stated
+# version drifted across five releases while a test that would have caught it
+# sat un-run. Same escape hatch. Rationale in the script header.
+uv run python "$REPO_ROOT/scripts/check_pyproject_sync.py"
