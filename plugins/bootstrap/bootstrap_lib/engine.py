@@ -43,15 +43,69 @@ def main():
         _main()
     except (SystemExit, KeyboardInterrupt):
         raise
-    except Exception:
+    except Exception as exc:
         import traceback
         tb = traceback.format_exc()
         try:
-            _emit_engine_crash(tb)
+            if _is_transient_import_crash(exc):
+                # Partial-download race: stay SILENT and retry, never report.
+                _defer_transient_retry(tb)
+            else:
+                _emit_engine_crash(tb)
         except Exception:
             pass  # crash reporting must never mask the original traceback
         sys.stderr.write(tb)
         sys.exit(1)
+
+
+# First-party packages the engine (and its shared libs) import. A partial plugin
+# cache download can land some of a package's modules before others, so the
+# SessionStart hook may import one of these and hit a submodule that has not been
+# written YET -- a ModuleNotFoundError that self-heals once the download finishes.
+_FIRST_PARTY_LIBS = ("bootstrap_lib", "skills_kit_lib", "openrouter_kit")
+
+
+def _is_transient_import_crash(exc) -> bool:
+    """True for a ModuleNotFoundError/ImportError on a first-party package whose
+    submodule has not landed yet -- the signature of a SessionStart hook racing a
+    mid-flight plugin cache download. Such a crash self-heals on the next pass, so
+    it is handled silently (see _defer_transient_retry) rather than surfaced.
+
+    Scoped to first-party packages on purpose: a genuinely missing THIRD-party
+    dependency (a real config gap) is NOT transient and keeps the loud crash path.
+    """
+    if not isinstance(exc, ImportError):
+        return False
+    name = getattr(exc, "name", None) or ""
+    return any(name == lib or name.startswith(lib + ".") for lib in _FIRST_PARTY_LIBS)
+
+
+def _defer_transient_retry(tb):
+    """Handle a transient first-party import crash (partial-download race).
+
+    Stay SILENT -- write NO user-facing message; a ModuleNotFoundError traceback
+    only confuses, and it self-heals. Instead: mark a retry pending and clear the
+    cooldown so the next SessionStart re-runs. The UserPromptSubmit harvest
+    (bootstrap_lib/harvest.py) relaunches within the SAME session off the pending
+    marker, so the user rarely has to do anything. The traceback still reaches
+    engine_output.log via main()'s stderr write, so the evidence is not lost. A
+    completed pass clears the markers (engine._main). No-op in --console mode and
+    when --data-dir is unavailable (nowhere to write), matching _emit_engine_crash.
+    """
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--data-dir", default=None)
+    parser.add_argument("--project-dir", default=None)
+    parser.add_argument("--console", action="store_true")
+    args, _ = parser.parse_known_args()
+    if args.console or not args.data_dir:
+        return
+    from .stamps import global_stamp
+    global_stamp(args.data_dir, "import_retry_pending").write("1")
+    # Void the in-flight guard: THIS attempt crashed, so the harvest may relaunch
+    # once more. (Set by harvest on launch, cleared here on crash -> at most one
+    # retry pass in flight at a time, retrying until the download completes.)
+    global_stamp(args.data_dir, "import_retry_launched").clear()
+    _clear_project_cooldown(args.data_dir, args.project_dir)
 
 
 def _emit_engine_crash(tb):
@@ -559,6 +613,12 @@ def _main():
     # references/plugin-reload-lifecycle.md "Single-session update protocol".
     if version:
         global_stamp(data_dir, "engine_ran_version").write(version)
+
+    # A pass COMPLETED, so any transient partial-download import race has resolved.
+    # Clear the retry markers so the UserPromptSubmit harvest stops relaunching
+    # (set by _defer_transient_retry / harvest.run_harvest on a crash+relaunch).
+    global_stamp(data_dir, "import_retry_pending").clear()
+    global_stamp(data_dir, "import_retry_launched").clear()
 
 
 def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,

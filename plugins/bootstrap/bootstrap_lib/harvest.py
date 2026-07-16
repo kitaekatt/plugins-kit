@@ -175,6 +175,25 @@ def run_harvest(
     if not installed_version or not install_path:
         return None
 
+    # Transient import-crash retry (fires even WITHOUT a version bump). A partial
+    # plugin cache download can race the SessionStart hook: the engine imports a
+    # first-party submodule that has not landed yet and crashes. engine._defer_
+    # transient_retry marks a retry pending and stays silent; we relaunch the pass
+    # here, once per crash (the launched guard is voided by each crash), until a
+    # completed pass clears the markers (engine._main). Checked before the version
+    # gate because the crashing and installed versions are usually equal.
+    if global_stamp(data_dir, "import_retry_pending").read():
+        launched = global_stamp(data_dir, "import_retry_launched")
+        if launched.read():
+            return None  # a retry pass is already in flight; no double-spawn
+        launched.write("1")
+        if not launch_new_engine(install_path, project_dir, data_dir):
+            return None
+        return (
+            f"import-retry: relaunched bootstrap {installed_version} after a "
+            "transient import crash"
+        )
+
     ran_version = global_stamp(data_dir, "engine_ran_version").read()
     if not should_harvest(installed_version, ran_version):
         return None
