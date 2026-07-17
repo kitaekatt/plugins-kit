@@ -527,10 +527,17 @@ def launch_fix_runner(queue: str, current_os: str,
     if proc.returncode == 0:
         return LaunchResult(launched=True, succeeded=True, detail="exit code 0")
     stderr = (proc.stderr or "").strip()
-    # A declined UAC prompt surfaces as a powershell error line ("The operation
-    # was canceled by the user"); a failed task surfaces as the runner's exit
-    # code (2 = at least one task did not complete).
-    detail = stderr.splitlines()[-1] if stderr else f"exit code {proc.returncode}"
+    # A declined (or unanswered -- the secure-desktop prompt auto-cancels after
+    # ~2 minutes) UAC prompt surfaces as a powershell error RECORD, whose FIRST
+    # line is the message ("Start-Process : This command cannot be run due to
+    # the error: The operation was canceled by the user."); the trailing lines
+    # are position/category noise ending in FullyQualifiedErrorId. Taking the
+    # LAST line here reported that noise and hid the cause (observed live,
+    # 0.50.0: an unanswered UAC read as a bare "InvalidOperationException").
+    # A failed task, by contrast, surfaces as the runner's exit code with no
+    # stderr (2 = at least one task did not complete).
+    first = next((ln.strip() for ln in stderr.splitlines() if ln.strip()), "")
+    detail = first or f"exit code {proc.returncode}"
     return LaunchResult(launched=True, succeeded=False, detail=detail)
 
 

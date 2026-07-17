@@ -530,6 +530,26 @@ class TestLaunchFixRunner:
         assert r.launched and not r.succeeded
         assert "canceled by the user" in r.detail
 
+    def test_detail_is_the_error_message_not_the_error_id(self, monkeypatch):
+        """REGRESSION GUARD. A powershell error RECORD is multi-line: message
+        first, then position/category noise ending in FullyQualifiedErrorId.
+        Reporting the LAST line hid an unanswered UAC prompt behind a bare
+        'InvalidOperationException,...StartProcessCommand' (observed live,
+        0.50.0) -- the one string in the record with no diagnostic value."""
+        record = (
+            "Start-Process : This command cannot be run due to the error: "
+            "The operation was canceled by the user.\n"
+            "At line:1 char:39\n"
+            "+ ... Stop'; $p = Start-Process -FilePath 'x' ...\n"
+            "    + CategoryInfo          : InvalidOperation: (:) [Start-Process], InvalidOperationException\n"
+            "    + FullyQualifiedErrorId : InvalidOperationException,Microsoft.PowerShell.Commands.StartProcessCommand"
+        )
+        monkeypatch.setattr(fq.subprocess, "run", lambda *a, **k: type(
+            "P", (), {"returncode": 1, "stderr": record})())
+        r = fq.launch_fix_runner("C:/data/queue.json", "windows")
+        assert "canceled by the user" in r.detail
+        assert "FullyQualifiedErrorId" not in r.detail
+
     def test_task_failure_surfaces_exit_code(self, monkeypatch):
         monkeypatch.setattr(fq.subprocess, "run", lambda *a, **k: type(
             "P", (), {"returncode": 2, "stderr": ""})())
