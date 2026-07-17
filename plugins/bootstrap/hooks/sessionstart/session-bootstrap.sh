@@ -111,18 +111,18 @@ _PLUGINS_ROOT="$(cd "$PLUGIN_DATA/../../.." 2>/dev/null && pwd)"
 _INSTALLED_PLUGINS="$_PLUGINS_ROOT/installed_plugins.json"
 _KNOWN_MARKETPLACES="$_PLUGINS_ROOT/known_marketplaces.json"
 
-# --- Re-prime pending display from persistent alert (runs every session) ---
+# --- Persistent alert (bootstrap_alert.json) ---
 # The bootstrap engine writes bootstrap_alert.json when there's an unresolved
 # user-actionable failure (e.g. a python stub on the system PATH). The alert
-# file lives until the engine confirms the fix on a later run. We always copy
-# it to bootstrap_display.pending here so the UserPromptSubmit hook surfaces
-# it once per session — independent of the engine cooldown below. This is the
-# "show the alert each session until resolved" behavior.
+# file lives until the engine confirms the fix on a later run. Its presence
+# bypasses BOTH skip gates below, so a full pass re-checks every session and
+# re-emits fresh results to bootstrap_display.pending itself — that is the
+# "show the alert each session until resolved" behavior. Deliberately NOT
+# copied to the pending file here: an entry-time copy raced the pass it
+# triggers (an early prompt consumed the stale copy, a later prompt consumed
+# the pass's fresh emission — the same failure displayed twice per session,
+# sometimes after it was already fixed).
 _ALERT_FILE="$PLUGIN_DATA/bootstrap_alert.json"
-_PENDING_FILE="$PLUGIN_DATA/bootstrap_display.pending"
-if [ -f "$_ALERT_FILE" ]; then
-    cp -f "$_ALERT_FILE" "$_PENDING_FILE" 2>/dev/null || true
-fi
 
 # Layer 1: session_id guard (works when stdin is available). Skip a repeat of
 # the SAME session_id — UNLESS a plugin registry file is newer than the guard
