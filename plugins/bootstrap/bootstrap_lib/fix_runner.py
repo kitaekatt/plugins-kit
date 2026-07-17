@@ -76,6 +76,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 
 # Exit codes. The engine distinguishes these from a UAC decline (which never
@@ -124,6 +125,34 @@ def _bash() -> str:
         "bash not found on PATH. The queued commands are shell strings and "
         "need Git for Windows (or a system bash) to run."
     )
+
+
+def _child_env(bash: str) -> dict:
+    """The task subprocess environment: our env, bash's own dir first on PATH.
+
+    The queue baking in an absolute bash path (see _bash) solved only HALF the
+    fresh-environment problem. On Windows the engine launches this runner via
+    ``Start-Process -Verb RunAs``, and an elevated process does NOT inherit the
+    caller's environment -- it gets the user's default env block, whose PATH has
+    no Git ``usr/bin``. ``bash -c`` is a non-login shell, so msys never prepends
+    ``/usr/bin`` itself either. Net effect (observed live, bootstrap 0.49.0):
+    EVERY queued command died instantly with exit 127 -- ``ln: command not
+    found`` for a symlink task, ``bash: command not found`` for an env_check fix
+    that re-invokes bash by name -- while the runner itself launched fine.
+
+    Prepending the bash binary's own directory fixes all of it in one move:
+    that directory IS msys ``usr/bin`` (ln, coreutils, bash itself), and msys
+    converts the Windows PATH entry to ``/usr/bin`` for the child. Prepended
+    unconditionally -- a duplicate PATH entry in a per-task env is harmless,
+    while a normalization-based dedup is another thing to get wrong. On Unix the
+    dir is ``/usr/bin``-ish and already present; sudo's env_reset replaces PATH
+    with secure_path anyway.
+    """
+    env = dict(os.environ)
+    bash_dir = os.path.dirname(os.path.abspath(bash))
+    path = env.get("PATH", "")
+    env["PATH"] = bash_dir + os.pathsep + path if path else bash_dir
+    return env
 
 
 def is_slow(task):
@@ -237,21 +266,45 @@ def _broadcast_environment_change():
         pass
 
 
-def _run(argv, label):
-    """Run argv, streaming output to the console the user is watching."""
+def _run(argv, label, env=None):
+    """Run argv, streaming output to the console the user is watching.
+
+    The child's output is PUMPED through our own stdout rather than inherited:
+    this console is ephemeral (an elevated window that closes on keypress), and
+    the transcript log (see main) can only capture what flows through
+    ``sys.stdout``. Without the pump, the one piece of evidence a failure
+    leaves -- the child's error line -- died with the window; a fix-all that
+    failed elevated was undiagnosable after the fact (the 0.49.0 exit-127
+    failure was reconstructed from scratch for exactly this reason).
+
+    The pump reads raw chunks, not lines: an installer's prompt has no trailing
+    newline, so a line-buffered pump would hold it back and the run would look
+    hung on an invisible question. stdin stays the console, so such prompts
+    remain answerable.
+    """
     print(f"    $ {label}")
-    # The child inherits this stdout and writes to the fd directly, so anything
-    # still sitting in OUR buffer would surface AFTER the child's output --
-    # narration printed after the thing it narrates. A TTY hides this (line
-    # buffering); a pipe (the runner tee'd to a log) does not.
+    # Anything still sitting in OUR buffer would surface AFTER the child's
+    # output -- narration printed after the thing it narrates.
     sys.stdout.flush()
     try:
-        proc = subprocess.run(argv)
+        proc = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
     except OSError as e:
         print(f"    ! could not launch: {e}")
         return False
-    if proc.returncode != 0:
-        print(f"    ! exited {proc.returncode}")
+    fd = proc.stdout.fileno()
+    while True:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        sys.stdout.write(chunk.decode(errors="replace"))
+        sys.stdout.flush()
+    returncode = proc.wait()
+    if returncode != 0:
+        print(f"    ! exited {returncode}")
         return False
     return True
 
@@ -322,6 +375,9 @@ class Runner:
         # The runner runs as the invoking user, so this is the user's home --
         # captured before any sudo, which is the whole point (see _shell_argv).
         self.home = os.path.expanduser("~")
+        # Every task subprocess runs with bash's dir on PATH -- see _child_env
+        # for the elevated-fresh-environment failure this repairs.
+        self.env = _child_env(self.bash)
 
     @property
     def _is_windows(self):
@@ -357,7 +413,7 @@ class Runner:
 
     def run_command(self, task):
         return _run(self._shell_argv(task["command"], task.get("elevated", False)),
-                    task["command"])
+                    task["command"], env=self.env)
 
     def run_apt(self, task):
         packages = task.get("packages") or []
@@ -365,15 +421,16 @@ class Runner:
             return True
         # Fresh machines can have stale/empty package lists, so refresh first --
         # an install against a stale list fails on a package that exists.
-        if not _run(["sudo", "apt-get", "update"], "apt-get update"):
+        if not _run(["sudo", "apt-get", "update"], "apt-get update", env=self.env):
             return False
         return _run(["sudo", "apt-get", "install", "-y"] + packages,
-                    "apt-get install -y " + " ".join(packages))
+                    "apt-get install -y " + " ".join(packages), env=self.env)
 
     def run_brew_installer(self, task):
         # Never sudo: the Homebrew installer refuses to run as root and asks
         # for elevation itself where it needs it.
-        return _run([self.bash, "-c", HOMEBREW_INSTALLER], "install Homebrew")
+        return _run([self.bash, "-c", HOMEBREW_INSTALLER], "install Homebrew",
+                    env=self.env)
 
     def run_secret(self, task):
         """Prompt for a secret and write it to a file, owned by the user.
@@ -619,12 +676,84 @@ def run_queue(queue):
     return EXIT_OK
 
 
+LOG_BASENAME = "fix-runner.log"
+
+
+class _Tee:
+    """Duplicate stream writes to the console and the transcript log.
+
+    The elevated runner window is the ONLY place its output ever appears, and
+    it closes on a keypress -- so before this existed, a failed fix-all left no
+    evidence at all (the engine sees just the exit code). The log must never be
+    the thing that fails the run: every file write is best-effort.
+    """
+
+    def __init__(self, console, logfile):
+        self._console = console
+        self._logfile = logfile
+
+    def write(self, s):
+        self._console.write(s)
+        try:
+            self._logfile.write(s)
+        except (OSError, ValueError):
+            pass
+
+    def flush(self):
+        self._console.flush()
+        try:
+            self._logfile.flush()
+        except (OSError, ValueError):
+            pass
+
+    def isatty(self):
+        return self._console.isatty()
+
+
+def _open_transcript(queue_path):
+    """The transcript log, next to the queue -- or None, silently.
+
+    Overwrites each run: the file answers "what happened the LAST time the
+    runner executed", which is the diagnosis question; an append-forever log
+    in a data dir answers nothing extra and grows unbounded.
+    """
+    log_path = os.path.join(
+        os.path.dirname(os.path.abspath(queue_path)), LOG_BASENAME)
+    try:
+        logfile = open(log_path, "w", encoding="utf-8", errors="replace")
+        logfile.write(f"# fix-runner transcript {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        logfile.write(f"# queue: {queue_path}\n")
+        return logfile
+    except OSError:
+        return None
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
         print("usage: fix_runner.py <queue.json>", file=sys.stderr)
         return EXIT_BAD_QUEUE
     path = argv[0]
+    # Tee everything the runner (and, via _run's pump, its children) prints
+    # into a transcript beside the queue, so the window's content survives the
+    # window. stdin/getpass are untouched -- secrets never reach the log.
+    transcript = _open_transcript(path)
+    saved_stdout, saved_stderr = sys.stdout, sys.stderr
+    if transcript is not None:
+        sys.stdout = _Tee(sys.stdout, transcript)
+        sys.stderr = _Tee(sys.stderr, transcript)
+    try:
+        return _main_teed(path, argv)
+    finally:
+        sys.stdout, sys.stderr = saved_stdout, saved_stderr
+        if transcript is not None:
+            try:
+                transcript.close()
+            except OSError:
+                pass
+
+
+def _main_teed(path, argv):
     # `--engine` marks an engine-initiated run. It no longer gates the hold (the
     # window always waits for the user); it only changes what the hold SAYS, so
     # the user knows whether a key resumes their Claude session or just closes a

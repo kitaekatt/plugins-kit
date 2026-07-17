@@ -547,7 +547,16 @@ def _main():
         if all_failures:
             print(f"\n{bootstrap_label} -> {len(all_failures)} failure(s):")
             for f in all_failures:
-                print(f"  - [{f['type']}] {f.get('name', f.get('message', ''))}")
+                print(f"  - [{f['type']}] {f.get('name') or ''}")
+                # The message is where the actionable detail lives -- for the
+                # elevation_script item on a fix-all run it carries the launch
+                # OUTCOME (UAC declined / runner exit code / timed out), which
+                # this summary used to drop entirely: a failed fix-all printed
+                # nothing but the item's own name, leaving the conversation
+                # blind to WHY (observed live, 0.49.0).
+                detail = f.get("message") or f.get("user_msg") or ""
+                for line in detail.splitlines():
+                    print(f"      {line}")
         return
 
     # Build final display: shell entries + section entries

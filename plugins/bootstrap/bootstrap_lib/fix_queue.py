@@ -290,6 +290,17 @@ def shim_path(data_dir: str, current_os: str) -> str:
     return os.path.join(elevate_dir(data_dir), shim_basename(current_os))
 
 
+def transcript_path(data_dir: str) -> str:
+    """Where the runner writes its transcript (fix_runner.LOG_BASENAME).
+
+    Mirrored by name rather than imported as a constant expression to keep the
+    coupling obvious: the runner derives it from the queue path it is handed,
+    so both sides land in elevate_dir by construction.
+    """
+    from .fix_runner import LOG_BASENAME
+    return os.path.join(elevate_dir(data_dir), LOG_BASENAME)
+
+
 def runner_path() -> str:
     """Absolute path to fix_runner.py, resolved from this module's location.
 
@@ -612,7 +623,9 @@ def fix_queue_failure(tasks: List[FixTask], current_os: str, data_dir: str,
         )
     if launch_detail:
         prefix = (f"fix-all launched the fix runner but it did not complete "
-                  f"({launch_detail}). ")
+                  f"({launch_detail}). The runner's transcript -- written when "
+                  f"it actually started -- is at "
+                  f"{transcript_path(data_dir)}. ")
         user_msg = prefix + user_msg
         agent_msg = prefix + agent_msg
     return {

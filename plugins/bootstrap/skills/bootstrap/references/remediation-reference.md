@@ -102,6 +102,23 @@ user's and `$HOME` is already correct — the old script ran wholesale under `su
 launches the whole runner elevated in one UAC hop; UAC preserves the user
 profile, so `elevated` is effectively advisory there.
 
+**Tasks run with bash's own dir prepended to PATH.** An elevated process gets
+the user's *default* environment (`Start-Process -Verb RunAs` does not inherit
+the caller's), whose PATH has no Git `usr/bin`; `bash -c` is non-login, so msys
+never adds `/usr/bin` either. Before this (0.49.0, observed live) every queued
+command died with exit 127 — `ln: command not found`, `bash: command not
+found` — while the runner itself launched fine off the queue's baked absolute
+bash path. `fix_runner._child_env` prepends the bash binary's directory to the
+task subprocess PATH, which is msys `usr/bin` itself.
+
+**Everything the runner prints is tee'd to `<data_dir>/elevate/fix-runner.log`**
+(overwritten per run), including child output — the pump in `fix_runner._run`
+routes task stdout+stderr through the runner's own stdout precisely so the
+transcript captures it. The elevated window closes on a keypress; the transcript
+is the only account of a failure that survives it, and the `elevation_script`
+failure message names it after a launch that did not complete. Secrets never
+reach it (`getpass` bypasses stdout).
+
 ### Dead PATH entries: cached scan, uncached finding
 
 `bootstrap_lib/path_prune.py` detects Windows User PATH entries whose directory

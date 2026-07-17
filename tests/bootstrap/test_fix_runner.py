@@ -115,10 +115,50 @@ class TestPerTaskPrivilege:
     def test_brew_installer_is_never_sudo_wrapped(self, monkeypatch):
         """Homebrew's installer refuses to run as root."""
         seen = {}
-        monkeypatch.setattr(fr, "_run", lambda argv, label: seen.update(argv=argv) or True)
+        monkeypatch.setattr(fr, "_run",
+                            lambda argv, label, env=None: seen.update(argv=argv) or True)
         r = fr.Runner({"os": "macos", "bash": "/bin/bash", "tasks": []})
         r.run_brew_installer({"label": "Install Homebrew"})
         assert seen["argv"][0] != "sudo"
+
+
+# --------------------------------------------------------------------------- #
+# Child environment
+# --------------------------------------------------------------------------- #
+
+class TestChildEnv:
+    def test_bash_dir_leads_the_child_path(self):
+        """REGRESSION GUARD. On Windows the engine launches the runner via
+        `Start-Process -Verb RunAs`, and an elevated process does NOT inherit
+        the caller's environment -- it gets the user's default env block, whose
+        PATH has no Git usr/bin. `bash -c` is non-login, so msys never prepends
+        /usr/bin itself. Result (live, 0.49.0): every queued command died with
+        exit 127 -- `ln: command not found` for the symlink task, `bash:
+        command not found` for an env_check fix -- while the runner itself
+        (absolute bash path baked into the queue) launched fine. The queue's
+        baked bash path fixed only what launches BASH, not what bash launches.
+        """
+        env = fr._child_env(os.path.join("C:", "git", "usr", "bin", "bash.exe"))
+        first = env["PATH"].split(os.pathsep)[0]
+        assert first == os.path.abspath(os.path.join("C:", "git", "usr", "bin"))
+
+    def test_the_rest_of_the_environment_survives(self, monkeypatch):
+        """The fix is a prepend, not a replacement: scoop shims, TEMP, the
+        user profile -- everything else the tasks rely on stays intact."""
+        monkeypatch.setenv("FIXRUNNER_CANARY", "alive")
+        env = fr._child_env("/usr/bin/bash")
+        assert env["FIXRUNNER_CANARY"] == "alive"
+        assert os.environ.get("PATH", "") in env["PATH"]
+
+    def test_run_command_passes_the_child_env(self, monkeypatch, win_runner):
+        seen = {}
+        monkeypatch.setattr(
+            fr, "_run",
+            lambda argv, label, env=None: seen.update(env=env) or True)
+        win_runner.run_command({"command": "x", "label": "x"})
+        assert seen["env"] is win_runner.env
+        assert seen["env"]["PATH"].split(os.pathsep)[0] == \
+            os.path.dirname(os.path.abspath(win_runner.bash))
 
 
 # --------------------------------------------------------------------------- #
@@ -136,17 +176,19 @@ class TestDispatch:
         """A fresh machine can have stale/empty lists, so an install against
         them fails on a package that exists."""
         calls = []
-        monkeypatch.setattr(fr, "_run", lambda argv, label: calls.append(argv) or True)
+        monkeypatch.setattr(fr, "_run",
+                            lambda argv, label, env=None: calls.append(argv) or True)
         runner.run_apt({"packages": ["net-tools", "tmux"], "label": "x"})
         assert calls[0] == ["sudo", "apt-get", "update"]
         assert calls[1] == ["sudo", "apt-get", "install", "-y", "net-tools", "tmux"]
 
     def test_apt_does_not_install_when_update_fails(self, monkeypatch, runner):
-        monkeypatch.setattr(fr, "_run", lambda argv, label: False)
+        monkeypatch.setattr(fr, "_run", lambda argv, label, env=None: False)
         assert runner.run_apt({"packages": ["x"], "label": "x"}) is False
 
     def test_apt_with_no_packages_is_a_noop(self, monkeypatch, runner):
-        monkeypatch.setattr(fr, "_run", lambda argv, label: pytest.fail("must not run"))
+        monkeypatch.setattr(fr, "_run",
+                            lambda argv, label, env=None: pytest.fail("must not run"))
         assert runner.run_apt({"packages": [], "label": "x"}) is True
 
 
@@ -616,6 +658,69 @@ class TestHold:
         assert fr._accepted("\r")
         assert fr._accepted("\n")
         assert not fr._accepted("q")
+
+
+class TestTranscript:
+    """The elevated window is the only console the runner ever has, and it
+    closes on a keypress -- the transcript is what makes a failed fix-all
+    diagnosable afterwards."""
+
+    def _queue(self, tmp_path, tasks):
+        p = tmp_path / "queue.json"
+        p.write_text(json.dumps({"version": 1, "os": "ubuntu",
+                                 "bash": "/usr/bin/bash", "tasks": tasks}))
+        return str(p)
+
+    def test_transcript_lands_next_to_the_queue(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(fr.Runner, "dispatch", lambda self, task: True)
+        monkeypatch.setattr(fr, "wait_for_key", lambda prompt: None)
+        path = self._queue(tmp_path, [{"kind": "command", "label": "alpha",
+                                       "command": "x"}])
+        assert fr.main([path, "--engine"]) == fr.EXIT_OK
+        log = (tmp_path / fr.LOG_BASENAME).read_text()
+        assert "Bootstrap remediation" in log   # the plan
+        assert "alpha" in log
+        assert "-> done" in log                 # the verdict
+
+    def test_child_output_flows_through_stdout_and_so_into_the_transcript(
+            self, capsys):
+        """REGRESSION GUARD. The child used to inherit the console fd directly,
+        so its output -- the ONE line that explains a failure, e.g. `ln:
+        command not found` -- bypassed any tee and died with the window. The
+        pump routes it through sys.stdout, which is what the transcript wraps.
+        """
+        ok = fr._run([sys.executable, "-c",
+                      "import sys; print('marker-out'); "
+                      "print('marker-err', file=sys.stderr)"], "child")
+        out = capsys.readouterr().out
+        assert ok is True
+        assert "marker-out" in out
+        assert "marker-err" in out   # stderr is folded into the same stream
+
+    def test_a_failing_child_reports_its_exit_code(self, capsys):
+        ok = fr._run([sys.executable, "-c", "raise SystemExit(127)"], "child")
+        assert ok is False
+        assert "! exited 127" in capsys.readouterr().out
+
+    def test_an_unwritable_transcript_never_fails_the_run(
+            self, monkeypatch, tmp_path):
+        """Logging is a courtesy; the fixes are the job."""
+        monkeypatch.setattr(fr, "_open_transcript", lambda path: None)
+        monkeypatch.setattr(fr.Runner, "dispatch", lambda self, task: True)
+        monkeypatch.setattr(fr, "wait_for_key", lambda prompt: None)
+        path = self._queue(tmp_path, [{"kind": "command", "label": "a",
+                                       "command": "x"}])
+        assert fr.main([path, "--engine"]) == fr.EXIT_OK
+
+    def test_streams_are_restored_after_main(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(fr.Runner, "dispatch", lambda self, task: True)
+        monkeypatch.setattr(fr, "wait_for_key", lambda prompt: None)
+        before_out, before_err = sys.stdout, sys.stderr
+        path = self._queue(tmp_path, [{"kind": "command", "label": "a",
+                                       "command": "x"}])
+        fr.main([path, "--engine"])
+        assert sys.stdout is before_out
+        assert sys.stderr is before_err
 
 
 class TestScriptInvocation:

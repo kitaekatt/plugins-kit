@@ -472,6 +472,19 @@ class TestFixQueueFailure:
         assert item["user_msg"].startswith("fix-all launched the fix runner but it did not complete")
         assert item["agent_msg"].startswith("fix-all launched the fix runner but it did not complete")
 
+    def test_failed_launch_names_the_runner_transcript(self):
+        """The elevated window closes on a keypress; the transcript is the only
+        surviving account of what its tasks printed. A failure message that
+        does not name it sends the diagnosis back to guesswork (the 0.49.0
+        exit-127 failure had to be reconstructed by simulating the elevated
+        environment from scratch)."""
+        item = fq.fix_queue_failure(
+            [FixTask(id="a", kind="command", label="x")], "windows", "C:/data",
+            launch_detail="exit code 2")
+        expected = fq.transcript_path("C:/data")
+        assert expected in item["user_msg"]
+        assert expected in item["agent_msg"]
+
     def test_item_persists_across_sessions(self):
         item = fq.fix_queue_failure(
             [FixTask(id="a", kind="command", label="x")], "windows", "C:/data")
