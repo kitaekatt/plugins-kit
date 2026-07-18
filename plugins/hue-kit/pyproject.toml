@@ -1,6 +1,6 @@
 [project]
 name = "hue-kit"
-version = "0.4.0"
+version = "0.5.0"
 description = "Host-side dependencies for the hue-kit plugin (Philips Hue layered scene framework)."
 requires-python = ">=3.10"
 
@@ -12,4 +12,5 @@ dependencies = [
   "requests",
   "pyyaml",
   "urllib3",
+  "zeroconf",  # local mDNS bridge discovery (fallback when the cloud service is down / rate-limited)
 ]

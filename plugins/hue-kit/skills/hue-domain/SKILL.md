@@ -132,9 +132,10 @@ domain_skill:
       keywords: [find bridge, discovery, bridge ip, no ip, locate bridge,
                  meethue, which bridge, network scan]
       description: >-
-        Find Hue bridges on the network via discovery.meethue.com and cache the
-        IP. There is NO default bridge -- verbs auto-discover a single bridge, or
-        the user sets HUE_BRIDGE_IP. Read-only, stdlib (no venv needed).
+        Find Hue bridges: the cloud service (discovery.meethue.com) with an
+        automatic local-mDNS fallback when it is down or rate-limited (HTTP 429,
+        reported to the user), then cache the IP. There is NO default bridge --
+        verbs auto-discover a single bridge, or the user sets HUE_BRIDGE_IP.
       operation: hue-kit discover
       tool: scripts/hue_kit_cli.py
       reference_section: hue-bridge-basics.md (Connecting)

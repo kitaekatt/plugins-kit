@@ -59,8 +59,9 @@ PAIRED_KEY_FILE = data_dir("hue-kit") / "app-key.txt"
 BRIDGE_IP_CACHE = data_dir("hue-kit") / "bridge-ip.txt"
 
 
-def _discover_bridges(timeout: int = 10) -> list[dict]:
-    """Query discovery.meethue.com. Returns [{id, ip, port}]. stdlib-only."""
+def _discover_via_cloud(timeout: int = 10) -> list[dict]:
+    """Query discovery.meethue.com (returns LAN bridges by public-IP match).
+    Raises on HTTP/network error (incl. HTTP 429 rate-limit). stdlib-only."""
     import json
     import urllib.request
     req = urllib.request.Request(DISCOVERY_URL, headers={"Accept": "application/json"})
@@ -68,6 +69,77 @@ def _discover_bridges(timeout: int = 10) -> list[dict]:
         data = json.loads(r.read().decode())
     return [{"id": b.get("id"), "ip": b.get("internalipaddress"), "port": b.get("port")}
             for b in data if b.get("internalipaddress")]
+
+
+def _discover_via_mdns(timeout: float = 4.0) -> list[dict]:
+    """Local mDNS discovery of `_hue._tcp` bridges -- no cloud, no rate limit.
+    Returns [] when zeroconf is unavailable (pre-venv) or nothing responds."""
+    try:
+        from zeroconf import ServiceBrowser, Zeroconf
+    except Exception:
+        return []
+    import time
+    found: dict[str, dict] = {}
+
+    def _collect(zc, type_, name):
+        try:
+            info = zc.get_service_info(type_, name, timeout=int(timeout * 1000))
+        except Exception:
+            return
+        if not info:
+            return
+        ipv4 = [a for a in info.parsed_addresses() if ":" not in a]
+        if not ipv4:
+            return
+        props = info.properties or {}
+        bid = props.get(b"bridgeid") or props.get(b"id")
+        bid = bid.decode() if isinstance(bid, (bytes, bytearray)) else (bid or name.split(".")[0])
+        found[ipv4[0]] = {"id": bid, "ip": ipv4[0], "port": info.port or 443}
+
+    class _Listener:
+        def add_service(self, zc, type_, name):
+            _collect(zc, type_, name)
+
+        def update_service(self, zc, type_, name):
+            _collect(zc, type_, name)
+
+        def remove_service(self, zc, type_, name):
+            pass
+
+    try:
+        zc = Zeroconf()  # opens sockets / enumerates interfaces -- can raise
+    except Exception:
+        return []  # no usable network -- exactly the fallback's failure case
+    try:
+        ServiceBrowser(zc, "_hue._tcp.local.", _Listener())
+        time.sleep(timeout)
+    finally:
+        zc.close()
+    return list(found.values())
+
+
+def _discover_bridges(timeout: int = 10):
+    """Find Hue bridges: try the cloud discovery service first (fast when it
+    works), then fall back to local mDNS (rate-limit-free) on any failure.
+    Returns (bridges, cloud_error): a list of {id, ip, port} deduped by IP, plus
+    the cloud exception if the cloud path failed (None on cloud success). A
+    non-None cloud_error WITH a non-empty list means mDNS rescued the lookup --
+    callers surface that to the user (e.g. 'cloud was rate-limited')."""
+    results: list[dict] = []
+    cloud_err: Exception | None = None
+    try:
+        results = _discover_via_cloud(timeout)
+    except Exception as e:  # HTTP 429, offline, DNS, TLS -- fall back to mDNS
+        cloud_err = e
+    if not results:
+        results = _discover_via_mdns()
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for b in results:
+        if b.get("ip") and b["ip"] not in seen:
+            seen.add(b["ip"])
+            deduped.append(b)
+    return deduped, cloud_err
 
 
 def _cache_bridge_ip(ip: str) -> None:
@@ -91,24 +163,29 @@ def _resolve_bridge_ip() -> str:
             cached = ""
         if cached:
             return cached
-    try:
-        bridges = _discover_bridges()
-    except Exception as e:  # network / service failure (incl. rate-limit)
-        raise SystemExit(
-            f"hue-kit: HUE_BRIDGE_IP is not set and discovery failed ({e}). "
-            "Set HUE_BRIDGE_IP=<bridge ip> (find it in the Hue app or your "
-            "router) and retry.")
+    bridges, cloud_err = _discover_bridges()
     if not bridges:
+        if cloud_err is not None:
+            raise SystemExit(
+                f"hue-kit: HUE_BRIDGE_IP is not set and auto-discovery found no "
+                f"bridge (cloud: {cloud_err}; local mDNS: nothing). Make sure "
+                "you're on the same LAN as the bridge, or set HUE_BRIDGE_IP="
+                "<bridge ip> (from the Hue app or your router) and retry.")
         raise SystemExit(
-            "hue-kit: no Hue bridge found via discovery.meethue.com. Set "
-            "HUE_BRIDGE_IP=<bridge ip> manually and retry.")
+            "hue-kit: no Hue bridge found (tried discovery.meethue.com + local "
+            "mDNS). Set HUE_BRIDGE_IP=<bridge ip> manually and retry.")
     if len(bridges) > 1:
         listing = "\n".join(f"  {b['ip']}  (id {b['id']})" for b in bridges)
         raise SystemExit(
             "hue-kit: multiple bridges found -- set HUE_BRIDGE_IP to the one "
             f"you want:\n{listing}")
     b = bridges[0]
-    print(f"hue-kit: discovered bridge at {b['ip']} (id {b['id']})", file=sys.stderr)
+    via = " via local mDNS" if cloud_err is not None else ""
+    if cloud_err is not None:
+        print(f"hue-kit: discovery.meethue.com unavailable ({cloud_err}) -- "
+              "used local mDNS instead.", file=sys.stderr)
+    print(f"hue-kit: discovered bridge at {b['ip']} (id {b['id']}){via}",
+          file=sys.stderr)
     _cache_bridge_ip(b["ip"])
     return b["ip"]
 
@@ -135,16 +212,16 @@ def _run_scene_layers(flags: list[str], workdir: Path) -> int:
 
 
 def _cmd_discover(args) -> int:
-    try:
-        bridges = _discover_bridges()
-    except Exception as e:  # network / rate-limit
-        print(f"hue-kit: discovery failed ({e}). The discovery service needs "
-              "internet and is rate-limited -- if it persists, find the IP in "
-              "the Hue app or your router and set HUE_BRIDGE_IP.", file=sys.stderr)
-        return 1
+    bridges, cloud_err = _discover_bridges()
+    if cloud_err is not None:
+        # Report the cloud failure even when mDNS rescued the lookup.
+        rate = " (rate-limited)" if "429" in str(cloud_err) else ""
+        note = "falling back to local mDNS" if bridges else "and local mDNS found nothing"
+        print(f"hue-kit: discovery.meethue.com unavailable{rate}: {cloud_err} -- "
+              f"{note}.", file=sys.stderr)
     if not bridges:
-        print("no Hue bridges found on your network (via discovery.meethue.com).",
-              file=sys.stderr)
+        print("no Hue bridges found (tried discovery.meethue.com + local mDNS). "
+              "Set HUE_BRIDGE_IP=<bridge ip> manually.", file=sys.stderr)
         return 1
     for b in bridges:
         print(f"{b['ip']}\t{b['id']}\tport {b.get('port') or 443}")

@@ -10,7 +10,7 @@
     }
   ],
   "venv": {
-    "check_imports": ["requests", "yaml", "urllib3"]
+    "check_imports": ["requests", "yaml", "urllib3", "zeroconf"]
   },
   "script": {
     "path": "custom_bootstrap.py",

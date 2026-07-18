@@ -9,13 +9,19 @@ of this is specific to one home; it applies to every bridge.
 **There is no default bridge.** The tool never ships or assumes an IP -- it
 either uses `HUE_BRIDGE_IP`, a cached discovery result, or auto-discovers.
 
-- **Bridge IP (discovery).** `hue-kit discover` queries
-  <https://discovery.meethue.com> (which returns LAN bridges keyed to the
-  caller's public IP) and caches the result; verbs auto-discover a single bridge
-  when `HUE_BRIDGE_IP` is unset. Discovery needs internet and is rate-limited, so
-  the IP is cached user-scoped after the first hit. If discovery fails or finds
-  more than one bridge, set `HUE_BRIDGE_IP` explicitly (find it in the Hue app or
-  your router). mDNS (`_hue._tcp`) is the offline alternative for finding the IP.
+- **Bridge IP (discovery).** `hue-kit discover` finds bridges two ways and
+  caches the result; verbs auto-discover a single bridge when `HUE_BRIDGE_IP` is
+  unset:
+    1. the cloud service <https://discovery.meethue.com> (returns LAN bridges
+       keyed to the caller's public IP) -- fast, but needs internet and is
+       **rate-limited** (HTTP 429 after repeated calls);
+    2. **local mDNS** (`_hue._tcp`, via zeroconf) as an automatic fallback when
+       the cloud path fails -- LAN-only, no rate limit.
+  When the cloud service is rate-limited but mDNS succeeds, the tool says so and
+  carries on. The resolved IP is cached user-scoped after the first hit, so
+  repeat calls never touch the network. If both methods fail or more than one
+  bridge is found, set `HUE_BRIDGE_IP` explicitly (from the Hue app or router).
+  Delete the cache file (printed in the message) to force re-discovery.
 - **Application key (pairing / app authentication).** The bridge authenticates
   every request with a `hue-application-key` header, and the key **cannot be
   auto-detected** -- minting one requires pressing the physical link button.
