@@ -20,7 +20,10 @@ that higher layers overpaint, so "everything-except-X" groups never need to
 exist. A solver finds the **smallest** group vocabulary that can express all your
 scenes (a certified minimum), and every scene becomes a short, readable stack.
 
-See [`scene-layers.md`](scene-layers.md) for the full model + command reference.
+See [`skills/hue-domain/references/scene-layers.md`](skills/hue-domain/references/scene-layers.md)
+for the full model + command reference, and
+[`skills/hue-domain/references/hue-bridge-basics.md`](skills/hue-domain/references/hue-bridge-basics.md)
+for Hue CLIP v2 fundamentals.
 
 ## Install
 

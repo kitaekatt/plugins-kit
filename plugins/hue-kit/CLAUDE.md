@@ -3,7 +3,9 @@
 Guidance for an AI agent working in this plugin. hue-kit models Philips Hue
 scenes with the **LAYERED** (painter's-algorithm) model and syncs them with a
 bridge. A user may say **"set this up on my bridge"** or **"make Reading
-warmer"** -- this file says how. `scene-layers.md` is the full model + verb spec;
+warmer"** -- this file says how. `skills/hue-domain/references/scene-layers.md`
+is the full model + verb spec (and `hue-bridge-basics.md` beside it the CLIP v2
+fundamentals);
 `README.md` is the human quickstart.
 
 ## What this is
@@ -84,7 +86,8 @@ bar in Movie night"):
   expecting them to take effect -- edit `xy`.
 - After changing scenes, re-run `hue-kit report` -- if the group vocabulary is no
   longer minimal, or a template's stack order flipped (the solver orders layers
-  by brightness), update `scene-groups.yaml` (see scene-layers.md "Template names").
+  by brightness), update `scene-groups.yaml` (see
+  skills/hue-domain/references/scene-layers.md "Template names").
 
 ## Maintenance notes
 
