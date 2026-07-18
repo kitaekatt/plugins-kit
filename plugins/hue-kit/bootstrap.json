@@ -11,5 +11,9 @@
   ],
   "venv": {
     "check_imports": ["requests", "yaml", "urllib3"]
+  },
+  "script": {
+    "path": "custom_bootstrap.py",
+    "entry_point": "bootstrap"
   }
 }
