@@ -44,9 +44,11 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Bridge address is env-configurable so the tool runs on any Hue bridge; the
-# default is the author's bridge (set HUE_BRIDGE_IP=<your-bridge-ip> to override).
-BRIDGE = "https://" + os.environ.get("HUE_BRIDGE_IP", "192.168.0.246")
+# Bridge address comes from HUE_BRIDGE_IP -- there is NO default (a general tool
+# must not ship one home's IP). The hue-kit CLI sets it, resolving via
+# `hue-kit discover` when unset. Standalone callers must export it themselves.
+BRIDGE_IP = os.environ.get("HUE_BRIDGE_IP", "").strip()
+BRIDGE = "https://" + BRIDGE_IP if BRIDGE_IP else ""
 
 BRI_TOL = 1.5      # percent
 XY_TOL = 0.006     # CIE xy euclidean distance
@@ -56,6 +58,10 @@ MIREK_TOL = 10     # mired
 # ---------------------------------------------------------------- bridge I/O
 
 def clip_get(session: requests.Session, resource: str) -> list[dict]:
+    if not BRIDGE:
+        raise SystemExit(
+            "error: no bridge address -- set HUE_BRIDGE_IP=<your-bridge-ip> "
+            "(or run `hue-kit discover` / `hue-kit pair`).")
     r = session.get(f"{BRIDGE}/clip/v2/resource/{resource}", timeout=10)
     r.raise_for_status()
     return r.json()["data"]

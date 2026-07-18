@@ -128,6 +128,26 @@ domain_skill:
           CLI verbs -- the two config files, the report/export/validate/apply
           operations, the authoring workflow, and template-name maintenance.
   capabilities:
+    - id: discover
+      keywords: [find bridge, discovery, bridge ip, no ip, locate bridge,
+                 meethue, which bridge, network scan]
+      description: >-
+        Find Hue bridges on the network via discovery.meethue.com and cache the
+        IP. There is NO default bridge -- verbs auto-discover a single bridge, or
+        the user sets HUE_BRIDGE_IP. Read-only, stdlib (no venv needed).
+      operation: hue-kit discover
+      tool: scripts/hue_kit_cli.py
+      reference_section: hue-bridge-basics.md (Connecting)
+    - id: pair
+      keywords: [pair, application key, app key, authenticate, link button,
+                 credential, first run, no key, generateclientkey]
+      description: >-
+        Mint an application key: press the bridge link button, POST
+        generateclientkey, store the key user-scoped. The app-authentication
+        step -- required once per bridge; the key cannot be auto-detected.
+      operation: hue-kit pair
+      tool: scripts/hue_kit_cli.py
+      reference_section: hue-bridge-basics.md (Connecting)
     - id: report
       keywords: [read scenes, analyse, solve, minimal groups, meta-groups,
                  report, layer stacks, what scenes]

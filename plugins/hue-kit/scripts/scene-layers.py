@@ -108,7 +108,7 @@ def _cfg_file(name, env_var):
     layout)."""
     override = os.environ.get(env_var)
     if override:
-        return Path(override)
+        return Path(override).expanduser()
     ref = SCRIPT_DIR.parent / "references" / name
     return ref if ref.exists() else SCRIPT_DIR / name
 
@@ -139,7 +139,7 @@ def bridge_session() -> requests.Session:
     secrets/hue-bridge-key.txt -- so it runs on any bridge (see README)."""
     key = os.environ.get("HUE_APP_KEY")
     if not key:
-        kf = Path(os.environ.get("HUE_KEY_FILE", str(KEY_FILE)))
+        kf = Path(os.environ.get("HUE_KEY_FILE", str(KEY_FILE))).expanduser()
         if not kf.exists():
             raise SystemExit(
                 "error: no Hue application key -- set HUE_APP_KEY, or put the "

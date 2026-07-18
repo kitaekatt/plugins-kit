@@ -6,19 +6,32 @@ of this is specific to one home; it applies to every bridge.
 
 ## Connecting
 
-- **Bridge IP.** Find it in the Hue app, your router's client list, or the
-  discovery endpoint <https://discovery.meethue.com> (returns the bridge's LAN
-  IP). Set `HUE_BRIDGE_IP`.
-- **Application key.** The bridge authenticates every request with a
-  `hue-application-key` header. Create one by pressing the round link button on
-  the bridge, then within ~30s POSTing to `/api`:
+**There is no default bridge.** The tool never ships or assumes an IP -- it
+either uses `HUE_BRIDGE_IP`, a cached discovery result, or auto-discovers.
+
+- **Bridge IP (discovery).** `hue-kit discover` queries
+  <https://discovery.meethue.com> (which returns LAN bridges keyed to the
+  caller's public IP) and caches the result; verbs auto-discover a single bridge
+  when `HUE_BRIDGE_IP` is unset. Discovery needs internet and is rate-limited, so
+  the IP is cached user-scoped after the first hit. If discovery fails or finds
+  more than one bridge, set `HUE_BRIDGE_IP` explicitly (find it in the Hue app or
+  your router). mDNS (`_hue._tcp`) is the offline alternative for finding the IP.
+- **Application key (pairing / app authentication).** The bridge authenticates
+  every request with a `hue-application-key` header, and the key **cannot be
+  auto-detected** -- minting one requires pressing the physical link button.
+  `hue-kit pair` does the flow: discover the bridge, prompt for the button press,
+  POST `generateclientkey` to `/api`, and store the key user-scoped (0600). The
+  underlying call:
   ```bash
   curl -k -X POST https://<BRIDGE_IP>/api \
     -H 'Content-Type: application/json' \
     -d '{"devicetype":"hue-kit#tool","generateclientkey":true}'
   ```
-  The response's `"username"` value is the key. Set `HUE_APP_KEY`, or put it in a
-  file named by `HUE_KEY_FILE`. **A key is a credential -- never commit it.**
+  The response's `"username"` value IS the key. Instead of pairing you may set
+  `HUE_APP_KEY` directly, or point `HUE_KEY_FILE` at a file holding it. **A key
+  is a credential -- never commit it.** There is no unauthenticated bypass: only
+  bridge discovery and this initial key-creation POST work without a key; every
+  `/clip/v2/resource/*` call requires one.
 - **TLS.** The bridge serves HTTPS with a self-signed certificate, so clients
   disable cert verification for LAN calls (`curl -k`; the tool does the
   equivalent and silences the urllib3 warning). CLIP v2 lives under

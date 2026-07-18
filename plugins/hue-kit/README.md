@@ -34,22 +34,33 @@ so the `hue-kit` command works from any directory.
 
 ## Point it at your bridge
 
-1. **Find your bridge IP** -- the Hue app, your router, or
-   <https://discovery.meethue.com>.
-2. **Create an application key** -- press the round link button on the bridge,
-   then within 30s:
-   ```bash
-   curl -k -X POST https://<BRIDGE_IP>/api \
-     -H 'Content-Type: application/json' \
-     -d '{"devicetype":"hue-kit#tool","generateclientkey":true}'
-   ```
-   The response contains `"username":"<KEY>"` -- that string is your key.
-3. **Export both** (add to your shell rc to persist):
-   ```bash
-   export HUE_BRIDGE_IP=<BRIDGE_IP>
-   export HUE_APP_KEY=<KEY>
-   ```
-   (Alternatively put the key in a file and set `HUE_KEY_FILE=/path/to/key`.)
+There is **no default bridge** -- set it up once and the tool remembers:
+
+```bash
+hue-kit discover     # find your bridge on the network (caches the IP)
+hue-kit pair         # press the bridge link button when prompted; mints +
+                     #   stores the application key user-scoped (0600)
+```
+
+After that, every verb just works -- `hue-kit discover` caches the IP and
+`hue-kit pair` stores the key, both under
+`~/.claude/plugins/data/plugins-kit/hue-kit/`.
+
+**Manual override** (CI, multiple bridges, or if discovery is blocked): set the
+env vars instead, and they win over the cached/paired values.
+
+```bash
+export HUE_BRIDGE_IP=<BRIDGE_IP>     # skip discovery
+export HUE_APP_KEY=<KEY>             # or HUE_KEY_FILE=/path/to/key -- skip pairing
+```
+
+To create a key by hand: press the round link button on the bridge, then within
+30s POST to it (the `"username"` in the response is your key):
+```bash
+curl -k -X POST https://<BRIDGE_IP>/api \
+  -H 'Content-Type: application/json' \
+  -d '{"devicetype":"hue-kit#tool","generateclientkey":true}'
+```
 
 ## The CLI
 
@@ -57,6 +68,9 @@ Run from the directory where you want your `scene-groups.yaml`,
 `scene-designs.yaml`, and `index.html` to live (or pass `--dir`).
 
 ```bash
+hue-kit discover          # find your bridge on the network (caches the IP)
+hue-kit pair              # mint + store the app key (press the link button)
+
 hue-kit report            # read the bridge; print the minimal group family
                           #   + each scene as a layer stack (read-only)
 hue-kit groups            # write a starter scene-groups.yaml (placeholder
@@ -102,9 +116,9 @@ differ beyond tolerance, and verifies by re-reading. It changes scene
 
 | var | meaning | default |
 |---|---|---|
-| `HUE_BRIDGE_IP` | your bridge's IP | `192.168.0.246` (the example home) |
+| `HUE_BRIDGE_IP` | your bridge's IP | none -- auto-discovered + cached (`hue-kit discover`) |
 | `HUE_APP_KEY` | the application key (value) | -- |
-| `HUE_KEY_FILE` | path to a file holding the key | `secrets/hue-bridge-key.txt` |
+| `HUE_KEY_FILE` | path to a file holding the key | the paired key (`hue-kit pair`) if present |
 | `HUE_GROUPS_FILE` | path to the registry | `<dir>/scene-groups.yaml` |
 | `HUE_DESIGNS_FILE` | path to the design | `<dir>/scene-designs.yaml` |
 
