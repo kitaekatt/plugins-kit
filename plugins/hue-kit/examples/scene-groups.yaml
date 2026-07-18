@@ -1,0 +1,61 @@
+# Layered scene-group registry -- the meta-group vocabulary for the LAYERED
+# (painter's-algorithm) scene model. Source of truth for group MEMBERSHIP;
+# consumed by scene-layers.py (the layered sync + design exporter).
+#
+# Each group = a NAME + the bridge ZONES whose light-union defines it. A scene
+# is an ordered stack of LAYERS, each painting one of these groups; the topmost
+# layer covering a light wins, over a default of OFF. A lower layer's group may
+# be a SUPERSET of what it ultimately shows -- higher layers overpaint the
+# excess -- so complement / "everything-except-X" groups never need to exist.
+#
+# This 6-group family is a CERTIFIED MINIMUM (scene-layers.py: no 5-group family
+# can express the live scenes; every group here is a whole-zone union, so the
+# minimum is also fully nameable -- interpretability cost 0). Names DECIDED by
+# Christina 2026-07-18. Re-run `scene-layers.py` after adding/restyling scenes
+# to confirm the family is still minimal; edit this file to rename or re-scope a
+# group, then re-run the design exporter to re-verify + re-materialise.
+#
+# Zones are bridge-zone names (see naming-conventions.md); a group's light set
+# is the union of its zones' lights. Order below = largest first (documentation
+# only; the solver is order-independent).
+groups:
+  - name: ALL
+    # whole home (42) -- forced by every single-colour scene
+    zones: [Accent Lights, Bar Lights, Guest Bathroom, Kitchen Lights,
+            Living Room Lights, Master, Sconce Lights, Shower Lights,
+            Throne Light, Vanity Lights]
+  - name: PRIMARY
+    # 20 -- the living space + bedroom behind the bar/kitchen line
+    zones: [Living Room Lights, Master, Shower Lights, Throne Light]
+  - name: SECONDARY
+    # 19 -- the surround lit during a dinner (bar/sconce + bedroom + bathroom)
+    zones: [Bar Lights, Sconce Lights, Master, Guest Bathroom, Shower Lights,
+            Throne Light, Vanity Lights]
+  - name: MOOD
+    # 9 -- the accent/bar/sconce mood layer (= the 'Mood Lights' aggregate zone)
+    zones: [Accent Lights, Bar Lights, Sconce Lights]
+  - name: KITCHEN
+    # 8
+    zones: [Kitchen Lights]
+  - name: BATHROOM
+    # 8 -- the four bathroom sub-zones (= the 'Bathroom' aggregate zone)
+    zones: [Guest Bathroom, Shower Lights, Throne Light, Vanity Lights]
+
+# Template names -- a TEMPLATE is a distinct layer-stack SEQUENCE (the ordered
+# list of groups a scene paints, bottom -> top). Christina's names 2026-07-18.
+# The report groups scenes by their stack and labels each group with this name;
+# `stack` must match the group sequence exactly (order matters: Night and
+# Theater share {BATHROOM, MOOD} but in opposite order, so they are distinct).
+templates:
+  - name: Monochromatic
+    stack: [ALL]
+  - name: Tri-Color
+    stack: [ALL, PRIMARY, MOOD]
+  - name: Night
+    stack: [BATHROOM, MOOD]
+  - name: Theater
+    stack: [MOOD, BATHROOM]
+  - name: Dining
+    stack: [MOOD, SECONDARY]
+  - name: Kitchen
+    stack: [MOOD, KITCHEN]

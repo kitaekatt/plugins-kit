@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# hue-kit -- shim that launches the bundled CLI. The CLI re-execs itself under
+# the plugin's bootstrap-provisioned venv (requests/pyyaml/urllib3), so this
+# only needs any Python to get started.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CLI="$PLUGIN_ROOT/scripts/hue_kit_cli.py"
+
+# Prefer the standalone Python bootstrap installs; the CLI re-execs into the
+# plugin venv itself, so this launcher just needs any working interpreter.
+OS="$(uname -s 2>/dev/null || echo Unknown)"
+if [[ "$OS" == MINGW* ]] || [[ "$OS" == MSYS* ]] || [[ "$OS" == CYGWIN* ]]; then
+    PY="${HOME}/.local/share/python-standalone/python/python.exe"
+else
+    PY="${HOME}/.local/share/python-standalone/python/bin/python3"
+fi
+
+if [ ! -x "$PY" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+        PY="python3"
+    elif command -v python >/dev/null 2>&1; then
+        PY="python"
+    else
+        echo "hue-kit: no Python interpreter found" >&2
+        exit 1
+    fi
+fi
+
+exec "$PY" "$CLI" "$@"

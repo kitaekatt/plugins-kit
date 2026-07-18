@@ -1,0 +1,15 @@
+{
+  "tools": [
+    {
+      "name": "uv",
+      "install": {
+        "macos": "curl -LsSf https://astral.sh/uv/install.sh | sh",
+        "windows": "powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"",
+        "ubuntu": "curl -LsSf https://astral.sh/uv/install.sh | sh"
+      }
+    }
+  ],
+  "venv": {
+    "check_imports": ["requests", "yaml", "urllib3"]
+  }
+}
