@@ -118,6 +118,18 @@ def _discover_via_mdns(timeout: float = 4.0) -> list[dict]:
     return list(found.values())
 
 
+def _mdns_available() -> bool:
+    """True if the zeroconf dependency (the mDNS fallback) is importable. It is a
+    bootstrap-provisioned dep, so this is False until the plugin's venv exists --
+    a state that must be reported distinctly from 'mDNS ran and found nothing',
+    lest a fresh, un-provisioned install be told its live bridge does not exist."""
+    try:
+        import zeroconf  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def _discover_bridges(timeout: int = 10):
     """Find Hue bridges: try the cloud discovery service first (fast when it
     works), then fall back to local mDNS (rate-limit-free) on any failure.
@@ -165,6 +177,13 @@ def _resolve_bridge_ip() -> str:
             return cached
     bridges, cloud_err = _discover_bridges()
     if not bridges:
+        if not _mdns_available():
+            raise SystemExit(
+                "hue-kit: HUE_BRIDGE_IP is not set and the local mDNS fallback is "
+                "unavailable because the plugin's dependencies are not provisioned "
+                "yet (zeroconf missing). Restart your Claude Code session so "
+                "bootstrap builds the venv, then retry -- or set HUE_BRIDGE_IP="
+                "<bridge ip> (from the Hue app or your router) to proceed now.")
         if cloud_err is not None:
             raise SystemExit(
                 f"hue-kit: HUE_BRIDGE_IP is not set and auto-discovery found no "
@@ -213,13 +232,26 @@ def _run_scene_layers(flags: list[str], workdir: Path) -> int:
 
 def _cmd_discover(args) -> int:
     bridges, cloud_err = _discover_bridges()
+    mdns_ok = _mdns_available()
     if cloud_err is not None:
         # Report the cloud failure even when mDNS rescued the lookup.
         rate = " (rate-limited)" if "429" in str(cloud_err) else ""
-        note = "falling back to local mDNS" if bridges else "and local mDNS found nothing"
+        if bridges:
+            note = "falling back to local mDNS"
+        elif not mdns_ok:
+            note = "and the local mDNS fallback is unavailable (zeroconf not installed yet)"
+        else:
+            note = "and local mDNS found nothing"
         print(f"hue-kit: discovery.meethue.com unavailable{rate}: {cloud_err} -- "
               f"{note}.", file=sys.stderr)
     if not bridges:
+        if not mdns_ok:
+            print("hue-kit: the plugin's dependencies are not provisioned yet, so "
+                  "the local mDNS fallback cannot run (zeroconf missing). Restart "
+                  "your Claude Code session so bootstrap builds the venv, then "
+                  "retry -- or set HUE_BRIDGE_IP=<bridge ip> manually to proceed "
+                  "now.", file=sys.stderr)
+            return 1
         print("no Hue bridges found (tried discovery.meethue.com + local mDNS). "
               "Set HUE_BRIDGE_IP=<bridge ip> manually.", file=sys.stderr)
         return 1
