@@ -160,6 +160,34 @@ class TestChildEnv:
         assert seen["env"]["PATH"].split(os.pathsep)[0] == \
             os.path.dirname(os.path.abspath(win_runner.bash))
 
+    def test_home_is_the_msys_profile_on_windows(self, monkeypatch):
+        """REGRESSION GUARD. `bash -c` is non-login, so an elevated fresh bash
+        defaults $HOME to the msys /home/<user>, not the Windows profile -- a
+        queued `bash ~/.claude/scripts/env/ssh-server-windows.sh fix` then
+        resolves to a path that does not exist and dies with exit 127 (observed
+        live: 2060W, bootstrap 0.50.2). _child_env hands bash the real profile
+        in login-Git-Bash form so `~` resolves as in a normal session."""
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setattr(os.path, "expanduser", lambda p: "C:\\Users\\truff")
+        env = fr._child_env(os.path.join("C:", "git", "usr", "bin", "bash.exe"))
+        assert env["HOME"] == "/c/Users/truff"
+
+    def test_home_untouched_off_windows(self, monkeypatch):
+        """On Unix the invoking user's HOME is already the right one (and the
+        sudo path in _shell_argv restores it inside the elevation), so
+        _child_env must not rewrite it."""
+        monkeypatch.setattr(os, "name", "posix")
+        monkeypatch.setenv("HOME", "/home/christina")
+        env = fr._child_env("/usr/bin/bash")
+        assert env["HOME"] == "/home/christina"
+
+    def test_msys_home_converts_drive_paths(self):
+        """C:\\Users\\you -> /c/Users/you; a driveless value just gets its
+        separators flipped rather than a bogus leading slash."""
+        assert fr._msys_home("C:\\Users\\truff") == "/c/Users/truff"
+        assert fr._msys_home("D:\\dev\\x") == "/d/dev/x"
+        assert fr._msys_home("\\\\server\\share") == "//server/share"
+
 
 # --------------------------------------------------------------------------- #
 # Dispatch

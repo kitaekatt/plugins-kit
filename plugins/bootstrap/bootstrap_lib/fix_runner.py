@@ -152,7 +152,33 @@ def _child_env(bash: str) -> dict:
     bash_dir = os.path.dirname(os.path.abspath(bash))
     path = env.get("PATH", "")
     env["PATH"] = bash_dir + os.pathsep + path if path else bash_dir
+    # HOME needs the same repair, for the same reason. `bash -c` is a non-login
+    # shell that never runs the profile scripts which set HOME to the Windows
+    # profile, so a fresh elevated bash defaults $HOME to the msys /home/<user>
+    # -- NOT where ~/.claude lives. A queued `~`/`$HOME` fix (the documented
+    # env_check form, e.g. `bash ~/.claude/scripts/env/ssh-server-windows.sh
+    # fix`) then resolves to a path that does not exist and dies with exit 127
+    # (observed live: 2060W, bootstrap 0.50.2). Hand bash the real profile in
+    # login-shell form (`/c/Users/you`) so `~` resolves as in a normal session.
+    # nt-only: on Unix HOME is already the invoking user's, and the sudo path in
+    # Runner._shell_argv restores it inside the elevation via `env HOME=`.
+    if os.name == "nt":
+        env["HOME"] = _msys_home(os.path.expanduser("~"))
     return env
+
+
+def _msys_home(win_home: str) -> str:
+    """A Windows home path in the `/c/Users/you` form Git bash's `~` uses.
+
+    `os.path.expanduser("~")` yields native `C:\\Users\\you`; handing that to
+    bash as HOME leaves a `~/.claude` expansion full of backslashes that msys
+    path conversion mangles. The login-Git-Bash form resolves cleanly. Drive
+    detection is done by hand (not os.path.splitdrive) so the result is
+    deterministic off-Windows too, where the test suite runs.
+    """
+    if len(win_home) >= 2 and win_home[1] == ":":
+        return "/" + win_home[0].lower() + win_home[2:].replace("\\", "/")
+    return win_home.replace("\\", "/")
 
 
 def is_slow(task):
@@ -402,7 +428,10 @@ class Runner:
 
         On Windows the runner is already elevated as a whole (UAC has no
         per-command granularity) and preserves the user profile, so `elevated`
-        needs no action here and HOME is already correct.
+        needs no action here. HOME is NOT already correct, though: the elevated
+        console's bash defaults $HOME to the msys /home/<user>, so the queued
+        `~`/`$HOME` is repaired through the child environment in _child_env
+        (Windows has no sudo hop to carry an `env HOME=` prefix).
         """
         argv = [self.bash, "-c", command]
         if elevated and not self._is_windows:
