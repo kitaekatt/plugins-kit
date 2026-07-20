@@ -335,6 +335,190 @@ class TestWarnings:
         assert not any("dangling" in w for w in result.warnings)
 
 
+def _filler(n: int) -> str:
+    """n lines of section-free filler."""
+    return "".join(f"line {i}\n" for i in range(n))
+
+
+def _sectioned(sections: list[tuple[str, int]]) -> str:
+    """A doc of ## sections; each (title, total) counts its heading line."""
+    parts = []
+    for title, total in sections:
+        parts.append(f"## {title}\n" + "".join("x\n" for _ in range(total - 1)))
+    return "".join(parts)
+
+
+def _write(folder: Path, name: str, text: str) -> None:
+    (folder / name).write_text(text, encoding="utf-8")
+
+
+class TestDocSizeBudgets:
+    """The two-tier document-size budgets (validate.py constants):
+    note at the healthy target, blocking warning at the ceiling;
+    log.md/log-*.md exempt; dominant-section + diary notes."""
+
+    def test_claude_md_over_ceiling_warns_with_remedy(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        _write(
+            folder,
+            "CLAUDE.md",
+            _sectioned([("Where we are today", 300), ("Protocols", 80), ("Behaviors", 30)]),
+        )
+        result = v("tmp/foo", tmp_path)
+        assert not result.clean
+        (warning,) = [w for w in result.warnings if "oversized document" in w]
+        assert "tmp/foo/CLAUDE.md is 410 lines (ceiling 400)" in warning
+        # Remedy clause: the largest sections with individual line counts.
+        assert "'## Where we are today' 300" in warning
+        assert "'## Protocols' 80" in warning
+        assert "'## Behaviors' 30" in warning
+        assert "handoff-template.md" in warning
+        assert "Rotation strategy" in warning
+
+    def test_claude_md_at_ceiling_notes_but_does_not_warn(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        _write(folder, "CLAUDE.md", _filler(400))
+        result = v("tmp/foo", tmp_path)
+        assert result.clean  # over target, at ceiling: note only
+        (note,) = [n for n in result.notes if "approaching budget" in n]
+        assert "tmp/foo/CLAUDE.md is 400 lines (healthy target 250, ceiling 400)" in note
+        assert "rotate now while it is cheap" in note
+
+    def test_claude_md_just_over_target_notes(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        _write(folder, "CLAUDE.md", _filler(251))
+        result = v("tmp/foo", tmp_path)
+        assert result.clean
+        assert any("approaching budget" in n for n in result.notes)
+
+    def test_claude_md_at_target_fully_clean(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        _write(folder, "CLAUDE.md", _filler(250))
+        result = v("tmp/foo", tmp_path)
+        assert result.clean
+        assert result.notes == []
+
+    def test_plan_md_tiers(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        # plan.md keeps its task_items block; filler goes after it.
+        _write(folder, "plan.md", PLAN_MD_SCAFFOLD + _filler(300))
+        result = v("tmp/foo", tmp_path)
+        assert result.clean
+        (note,) = [n for n in result.notes if "approaching budget" in n]
+        assert "tmp/foo/plan.md" in note
+        assert "healthy target 300, ceiling 400" in note
+
+        _write(folder, "plan.md", PLAN_MD_SCAFFOLD + _filler(400))
+        result = v("tmp/foo", tmp_path)
+        assert any(
+            "oversized document: tmp/foo/plan.md" in w and "(ceiling 400)" in w
+            for w in result.warnings
+        )
+
+    def test_other_doc_ceiling_800_no_note_tier(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        _write(folder, "notes.md", _filler(800))
+        result = v("tmp/foo", tmp_path)
+        assert result.clean
+        assert result.notes == []  # reference docs have no note tier
+
+        _write(folder, "notes.md", _filler(801))
+        result = v("tmp/foo", tmp_path)
+        (warning,) = [w for w in result.warnings if "oversized document" in w]
+        assert "tmp/foo/notes.md is 801 lines (ceiling 800)" in warning
+
+    def test_log_md_exempt(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        _write(folder, "log.md", _filler(5000))
+        result = v("tmp/foo", tmp_path)
+        assert result.clean
+        assert result.notes == []
+
+    def test_split_log_files_exempt(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        _write(folder, "log-decisions.md", _filler(1200))
+        _write(folder, "log-dead-ends.md", _filler(900))
+        result = v("tmp/foo", tmp_path)
+        assert result.clean
+        assert result.notes == []
+
+    def test_dominant_section_notes(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        _write(
+            folder,
+            "CLAUDE.md",
+            _sectioned([("Where we are today", 100), ("Rest", 50)]),
+        )
+        result = v("tmp/foo", tmp_path)
+        assert result.clean  # note tier only -- never blocks
+        (note,) = [n for n in result.notes if "dominant section" in n]
+        assert "'## Where we are today' is 100 of 150 lines" in note
+        assert "over half the document" in note
+
+    def test_dominant_section_below_floor_silent(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        _write(
+            folder,
+            "CLAUDE.md",
+            _sectioned([("Where we are today", 99), ("Rest", 50)]),
+        )
+        result = v("tmp/foo", tmp_path)  # 149 lines: under the 150 floor
+        assert not any("dominant section" in n for n in result.notes)
+
+    def test_balanced_sections_no_dominance_note(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        _write(
+            folder,
+            "CLAUDE.md",
+            _sectioned([("A", 75), ("B", 75), ("C", 50)]),
+        )
+        result = v("tmp/foo", tmp_path)
+        assert not any("dominant section" in n for n in result.notes)
+
+    def test_no_dominance_check_on_other_docs(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        _write(folder, "notes.md", _sectioned([("Huge", 400), ("Tiny", 10)]))
+        result = v("tmp/foo", tmp_path)
+        assert not any("dominant section" in n for n in result.notes)
+
+    def test_heading_inside_code_fence_not_a_section(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        # One real 60-line section; a fenced 100-line block containing '## '
+        # lines that must not be parsed as headings (else they'd dominate).
+        fenced = "## Real\n" + "x\n" * 59 + "```\n" + "## fake heading\n" * 98 + "```\n"
+        _write(folder, "CLAUDE.md", fenced)
+        result = v("tmp/foo", tmp_path)
+        assert not any("'## fake heading'" in n for n in result.notes)
+        # The real section holds every non-heading line incl. the fence: dominant.
+        assert any("'## Real'" in n for n in result.notes if "dominant section" in n)
+
+    def test_diary_detector_notes_over_three_markers(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        diary = "".join(
+            f"**2026-07-{10 + i}** did a thing.\n\nfiller\n" for i in range(4)
+        )
+        _write(folder, "CLAUDE.md", diary)
+        result = v("tmp/foo", tmp_path)
+        assert result.clean
+        (note,) = [n for n in result.notes if "session diary" in n]
+        assert "4 dated session-narrative markers" in note
+        assert "log.md" in note
+
+    def test_diary_detector_three_markers_silent(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        diary = "".join(f"**2026-07-{10 + i}** note\n" for i in range(3))
+        _write(folder, "CLAUDE.md", diary)
+        result = v("tmp/foo", tmp_path)
+        assert not any("session diary" in n for n in result.notes)
+
+    def test_diary_detector_only_on_claude_md(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        diary = "".join(f"**2026-07-{10 + i}** note\n" for i in range(6))
+        _write(folder, "notes.md", diary)
+        result = v("tmp/foo", tmp_path)
+        assert not any("session diary" in n for n in result.notes)
+
+
 class TestStubResolution:
     def test_unique_stub_resolves(self, tmp_path):
         make_task(tmp_path, "tmp/uniq")
@@ -422,6 +606,39 @@ class TestCLI:
         assert proc.returncode != 0
         assert proc.stdout.strip() == "invalid"
         assert "error: missing scaffolding file: plan.md" in proc.stderr
+
+    def test_note_only_exits_zero(self, tmp_path):
+        # Advisory tier: a doc over its healthy target (but under the
+        # ceiling) prints a note: line yet does not count as a finding.
+        folder = make_task(tmp_path, "tmp/foo")
+        (folder / "CLAUDE.md").write_text(_filler(300), encoding="utf-8")
+        proc = run_cli(["validate", "tmp/foo", "--root", str(tmp_path)], tmp_path)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip() == "active"
+        assert "note: approaching budget: tmp/foo/CLAUDE.md" in proc.stderr
+        assert "warning:" not in proc.stderr
+
+    def test_update_surfaces_oversized_doc_warning(self, tmp_path):
+        # The update verb re-validates and its exit code reflects findings
+        # (fix-forward: the write persists) -- the size warning must surface
+        # at write time.
+        folder = make_task(tmp_path, "tmp/foo")
+        (folder / "CLAUDE.md").write_text(_filler(401), encoding="utf-8")
+        pointer = tmp_path / "pointer"
+        proc = run_cli(
+            [
+                "update",
+                "tmp/foo",
+                "--root",
+                str(tmp_path),
+                "--pointer",
+                str(pointer),
+            ],
+            tmp_path,
+        )
+        assert proc.returncode != 0
+        assert proc.stdout.strip() == "active"
+        assert "warning: oversized document: tmp/foo/CLAUDE.md is 401 lines" in proc.stderr
 
     def test_warning_only_exits_nonzero(self, tmp_path):
         # Orphaned tmp reference: no errors, one warning -- still blocks.

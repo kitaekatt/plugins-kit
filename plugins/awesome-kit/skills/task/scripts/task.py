@@ -8,7 +8,10 @@ task-items design adds ``items``, the item-level read op.
 
 Conventions (spec 7.1): exit 0 on success, non-zero on failure/block;
 findings print to stderr. ``validate`` exits 0 iff there are no errors AND no
-warnings; the classification prints to stdout. ``init`` prints the created
+warnings; the classification prints to stdout. Advisory ``note:`` lines
+(the document-size approaching-budget / dominant-section / session-diary
+signals) also print to stderr but are NOT findings -- they never affect the
+exit code. ``init`` prints the created
 folder path to stdout on success; on failure the reason/findings go to
 stderr (and no partial folder is left behind).
 
@@ -146,11 +149,19 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     root = (args.root if args.root is not None else Path.cwd()).resolve()
     result = validate_ref(args.ref, root)
     print(result.classification)
+    _print_findings(result)
+    return 0 if result.clean else 1
+
+
+def _print_findings(result) -> None:
+    """Findings (errors + warnings) then advisory notes, all to stderr.
+    Notes are not findings: they never affect the exit code."""
     for msg in result.errors:
         print(f"error: {msg}", file=sys.stderr)
     for msg in result.warnings:
         print(f"warning: {msg}", file=sys.stderr)
-    return 0 if result.clean else 1
+    for msg in result.notes:
+        print(f"note: {msg}", file=sys.stderr)
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
@@ -430,10 +441,7 @@ def _cmd_update(args: argparse.Namespace) -> int:
         return 1
     validation = result.validation
     print(validation.classification)
-    for msg in validation.errors:
-        print(f"error: {msg}", file=sys.stderr)
-    for msg in validation.warnings:
-        print(f"warning: {msg}", file=sys.stderr)
+    _print_findings(validation)
     # The write persisted either way; the exit code reports the findings
     # (consistent with the validate verb).
     return 0 if validation.clean else 1
@@ -459,10 +467,7 @@ def _cmd_reopen(args: argparse.Namespace) -> int:
         return 1
     validation = result.validation
     print(validation.classification)
-    for msg in validation.errors:
-        print(f"error: {msg}", file=sys.stderr)
-    for msg in validation.warnings:
-        print(f"warning: {msg}", file=sys.stderr)
+    _print_findings(validation)
     return 0 if validation.clean else 1
 
 
@@ -523,6 +528,10 @@ def _cmd_status(args: argparse.Namespace) -> int:
             print(f"  warning: {msg}")
     else:
         print("findings: none")
+    if result.notes:
+        print("notes:")
+        for msg in result.notes:
+            print(f"  note: {msg}")
     if result.canonical is not None and result.classification != "remote":
         folder = root / result.canonical
         if folder.is_dir():

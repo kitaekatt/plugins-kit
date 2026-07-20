@@ -33,6 +33,46 @@ The folder slug should be the natural scope of the work-unit (phase or
 project), not session-scoped. Example: `atoms-17-phase2` (phase) or
 `loc-pipeline` (project) -- not `atoms-22` (one session within the phase).
 
+## Document size budgets (enforced by `validate`)
+
+Length is a context budget, and it is enforced, not advisory: `validate`
+(and every verb that re-validates -- `update`, `reopen`, the `work` gate)
+applies role-based line budgets to every top-level `*.md` in the folder.
+Budgets are measured in lines so you can self-check with `wc -l`:
+
+| Document           | Healthy target (note) | Ceiling (warning) |
+|--------------------|-----------------------|-------------------|
+| CLAUDE.md          | 250                   | 400               |
+| plan.md            | 300                   | 400               |
+| log.md, log-*.md   | exempt                | exempt            |
+| any other `*.md`   | (none)                | 800               |
+
+Two tiers:
+
+- **Note** (advisory: not a finding, exit code unaffected) at the healthy
+  target -- "approaching budget": rotate now while it is cheap.
+- **Warning** (a real finding: warnings gate `work` like any other) at the
+  ceiling -- "oversized document": the fix is decomposition per the rotation
+  strategy below (rotate history to log.md, split detail into referenced
+  docs), not trimming.
+
+Every length finding names the doc, its line count, the threshold, and the
+largest `##` sections with their individual line counts -- it tells you what
+to move. Two further advisory notes:
+
+- **Dominant section** (CLAUDE.md/plan.md, docs of 150+ lines): a single
+  `##` section over half the document -- the "Where we are today" /
+  "Accomplished" accretion pattern, caught long before the file ceiling.
+- **Session diary** (CLAUDE.md only): more than 3 dated narrative markers
+  (paragraphs opening with a bold date, `**YYYY-MM-DD`). CLAUDE.md is live
+  state, not history; dated narrative belongs in log.md.
+
+Why log.md is exempt: it is the append-only history sink that rotation
+TARGETS -- a big log is the system working, and it is only loaded on demand.
+Why other docs get a loose 800-line ceiling and no note tier: decomposition
+needs somewhere cheap to put content; a tight gate on reference docs would
+just chase displaced content around.
+
 ## `CLAUDE.md` -- continuation prompt + guide
 
 Auto-loaded every session. This is the agent's first 60 seconds of
@@ -157,11 +197,13 @@ have to open a file to discover whether to open it.
 
 ### Length
 
-**Soft target: up to 400 lines.** The shape is "every section has what it
+**Enforced budget: note at 250 lines, blocking warning at 400** (see
+"Document size budgets" above). The shape is "every section has what it
 needs, nothing has accumulated unnecessarily." A section that keeps growing
 is a signal its content belongs in a referenced doc and CLAUDE.md should just
 link to it. CLAUDE.md is auto-loaded every session, so length is a context
-budget; 400 lines is the comfortable ceiling, not a goal. Land lower when the
+budget; 400 lines is the ceiling `validate` warns at (and warnings gate
+`work`), not a goal. Land at or under the 250-line healthy target when the
 work allows.
 
 ## `plan.md` -- the plan
@@ -239,9 +281,10 @@ kill.
    warning, no stale item references -- is the definition of conversion
    done; do not end the pass with findings outstanding.
 
-**Soft target: up to 400 lines** (verify with `wc -l plan.md`). plan.md is
-read on turn 1 of every session, so length is a context budget; 400 lines is
-the comfortable ceiling, not a goal.
+**Enforced budget: note at 300 lines, blocking warning at 400** (verify with
+`wc -l plan.md`; see "Document size budgets" above). plan.md is read on turn
+1 of every session, so length is a context budget; 400 lines is the ceiling
+`validate` warns at (and warnings gate `work`), not a goal.
 
 Apply rotation by default to stay under this target -- it is not a fallback
 that activates only when over the limit, it is the standing discipline.
@@ -281,7 +324,9 @@ state:
 
 ## `log.md` -- history
 
-On-demand only. Holds:
+On-demand only. Exempt from the document size budgets -- it is the sink
+rotation targets, and growth here is the system working (split logs,
+`log-*.md`, inherit the exemption). Holds:
 
 - Approaches tried that didn't work, with reasons -- **but only if the reason
   would re-bite a fresh agent.** A superseded approach whose reasoning is now
@@ -303,7 +348,8 @@ Named per the work; CLAUDE.md indexes them with one-line purposes. Common
 patterns: `parent-plan.md` (multi-phase context), `step-N-details.md`,
 `step-N-completed.md`, design docs, glossaries, snapshots. No prescribed
 names. The rule: every doc in the folder is named in CLAUDE.md's index with a
-one-line purpose.
+one-line purpose. Budget: an 800-line ceiling (warning), no note tier -- see
+"Document size budgets" above.
 
 ## Rotation discipline (the update passes)
 

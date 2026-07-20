@@ -2,7 +2,10 @@
 
 Checks a task against its Task Type schema and the structural rules,
 classifies it, and emits findings. Errors make the task ``invalid``; warnings
-do not, but both gate ``work`` (later step).
+do not, but both gate ``work`` (later step). A third, advisory tier --
+``notes`` -- carries the early document-size signals (approaching-budget,
+dominant-section, session-diary; constants below): notes are not findings,
+never gate anything, and leave the exit code untouched.
 
 Classification outcomes:
 - ``remote``   -- tmp path + non-matching host on the ref. SHORT-CIRCUITS:
@@ -51,6 +54,40 @@ from . import resolve
 from .task_items import read_task_items, stale_priority_refs
 from .types import DEFAULT_TYPE_NAME, TaskType, get_type
 
+# --- document-size budgets (handoff-template.md, enforced here) --------------
+# Role-based line budgets, two tiers. NOTE at the healthy target (advisory:
+# not a finding, exit code unaffected -- "rotate now while it is cheap");
+# WARNING at the ceiling (a real finding: gates ``work`` like any other
+# warning). Measured in lines so an agent can self-check with ``wc -l``.
+# EXEMPT: log.md and split logs (log-*.md) -- the log is the append-only
+# history sink that rotation TARGETS; a big log is the system working, and it
+# is only loaded on demand.
+# Other markdown docs (on-demand reference docs) get a ceiling only, and a
+# loose one: decomposition needs somewhere cheap to put content -- a tight
+# gate on reference docs would just chase displaced content around.
+CLAUDE_MD_TARGET = 250
+CLAUDE_MD_CEILING = 400
+PLAN_MD_TARGET = 300
+PLAN_MD_CEILING = 400
+OTHER_DOC_CEILING = 800
+_DOC_BUDGETS: dict[str, tuple[int | None, int]] = {
+    "CLAUDE.md": (CLAUDE_MD_TARGET, CLAUDE_MD_CEILING),
+    "plan.md": (PLAN_MD_TARGET, PLAN_MD_CEILING),
+}
+# A single ``##`` section dominating CLAUDE.md/plan.md is the accretion
+# pattern ("Where we are today" / "Accomplished" growing without rotation) --
+# note (advisory) when one section exceeds half the document, once the doc is
+# past the floor (below it, halves are noise). Catches the metastasis long
+# before the file ceiling.
+SECTION_NOTE_MIN_DOC_LINES = 150
+_SECTION_CHECKED_DOCS = ("CLAUDE.md", "plan.md")
+# Diary detector: dated session-narrative markers in CLAUDE.md (paragraphs
+# opening with a bold date, e.g. ``**2026-07-18...``). More than the cap ->
+# advisory note naming the session-diary anti-pattern (history -> log.md).
+DIARY_MARKER_MAX = 3
+_DIARY_RE = re.compile(r"^\s*\*\*\s?20\d{2}-\d{2}-\d{2}")
+_LOG_EXEMPT_RE = re.compile(r"^log(-[A-Za-z0-9._-]+)?\.md$")
+
 
 @dataclass
 class ValidationResult:
@@ -59,6 +96,10 @@ class ValidationResult:
     canonical: str | None = None
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Advisory only -- NOT findings. Notes never gate work and never affect
+    # the exit code; they surface early doc-size drift (the two-tier budget
+    # above) while acting on it is still cheap.
+    notes: list[str] = field(default_factory=list)
 
     @property
     def clean(self) -> bool:
@@ -91,6 +132,102 @@ def is_uncommitted(folder: Path) -> bool:
     and the refusal can never diverge."""
     out = _git_status_porcelain(folder)
     return out is None or out.strip() != ""
+
+
+def _doc_sections(lines: list[str]) -> list[tuple[str, int]]:
+    """``(title, line count)`` per ``##`` section, in document order. A
+    section runs from its heading to the next ``#``/``##`` heading (deeper
+    headings belong to it); the heading line counts. Fenced code blocks are
+    opaque (a ``##`` inside one is not a heading)."""
+    sections: list[tuple[str, int]] = []
+    fence = False
+    title: str | None = None
+    count = 0
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            fence = not fence
+        if not fence and line.startswith("#"):
+            if line.startswith("## ") or line.rstrip() == "##":
+                if title is not None:
+                    sections.append((title, count))
+                title = line[2:].strip()
+                count = 1
+                continue
+            if not line.startswith("###"):  # a top-level # heading ends it
+                if title is not None:
+                    sections.append((title, count))
+                title, count = None, 0
+                continue
+        if title is not None:
+            count += 1
+    if title is not None:
+        sections.append((title, count))
+    return sections
+
+
+def _largest_sections(sections: list[tuple[str, int]], k: int = 3) -> str:
+    """The remedy clause: the k largest ``##`` sections with line counts, so
+    a length finding says exactly what to move where."""
+    top = sorted(sections, key=lambda s: s[1], reverse=True)[:k]
+    return ", ".join(f"'## {title}' {count}" for title, count in top)
+
+
+def _doc_size_findings(
+    folder: Path, canonical: str
+) -> tuple[list[str], list[str]]:
+    """The document-size budgets (constants above): ``(warnings, notes)``
+    over every top-level ``*.md`` in the folder, log.md/log-*.md exempt."""
+    warnings: list[str] = []
+    notes: list[str] = []
+    for path in sorted(folder.glob("*.md")):
+        name = path.name
+        if _LOG_EXEMPT_RE.match(name):
+            continue  # the history sink rotation targets -- never budgeted
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        n = len(lines)
+        target, ceiling = _DOC_BUDGETS.get(name, (None, OTHER_DOC_CEILING))
+        sections = _doc_sections(lines)
+        top = _largest_sections(sections)
+        detail = f"; largest sections: {top}" if top else ""
+        if n > ceiling:
+            warnings.append(
+                f"oversized document: {canonical}/{name} is {n} lines "
+                f"(ceiling {ceiling}){detail} -- decompose, do not just "
+                "trim: rotate history to log.md and split detail into "
+                "referenced docs (task skill references/handoff-template.md, "
+                "'Rotation strategy')"
+            )
+        elif target is not None and n > target:
+            notes.append(
+                f"approaching budget: {canonical}/{name} is {n} lines "
+                f"(healthy target {target}, ceiling {ceiling}){detail} -- "
+                "rotate now while it is cheap (task skill "
+                "references/handoff-template.md, 'Rotation strategy')"
+            )
+        if name in _SECTION_CHECKED_DOCS and n >= SECTION_NOTE_MIN_DOC_LINES:
+            for title, count in sections:
+                if count * 2 > n:
+                    notes.append(
+                        f"dominant section: {canonical}/{name} '## {title}' "
+                        f"is {count} of {n} lines (over half the document) "
+                        "-- rotate its history to log.md or split it into a "
+                        "referenced doc (task skill "
+                        "references/handoff-template.md, 'Rotation strategy')"
+                    )
+        if name == "CLAUDE.md":
+            marks = sum(1 for line in lines if _DIARY_RE.match(line))
+            if marks > DIARY_MARKER_MAX:
+                notes.append(
+                    f"session diary in CLAUDE.md: {canonical}/CLAUDE.md has "
+                    f"{marks} dated session-narrative markers (**YYYY-MM-DD) "
+                    "-- CLAUDE.md is live state, not history; move dated "
+                    "narrative to log.md (task skill "
+                    "references/handoff-template.md, 'log.md -- history')"
+                )
+    return warnings, notes
 
 
 def _dangling_reason(entry: object, project_root: Path) -> str | None:
@@ -245,6 +382,10 @@ def validate_ref(
                 f"uncommitted dev/tasks folder: {resolved.canonical} has unsaved "
                 "durable work; archive refuses until committed"
             )
+
+    size_warnings, size_notes = _doc_size_findings(folder, resolved.canonical)
+    warnings.extend(size_warnings)
+    result.notes.extend(size_notes)
 
     for field_name in ("depends_on", "blocked_by"):
         entries = task_block.get(field_name)

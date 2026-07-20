@@ -501,6 +501,14 @@ block, state outside the item vocabulary, priority outside the type pattern, non
 | orphaned tmp reference | a tmp ref (local host) whose folder is absent (§4) |
 | no `task_items` block in plan.md | pre-contract folder; prompts the one-time forward conversion (§2.7) |
 | stale item reference in CLAUDE.md | a backticked hyphenated id under Immediate Priorities matching no item |
+| oversized document | a top-level `*.md` over its line ceiling (CLAUDE.md/plan.md 400, other docs 800; log.md and `log-*.md` exempt — the history sink rotation targets). The finding names the largest `##` sections; the fix is decomposition per the rotation strategy, not trimming (2026-07-20) |
+
+**Notes (advisory third tier, added 2026-07-20; NOT findings — never gate, never affect exit codes):**
+approaching-budget (a doc past its healthy target: CLAUDE.md 250 lines, plan.md 300),
+dominant-section (a single `##` section over half of a 150+-line CLAUDE.md/plan.md — the accretion
+pattern caught before the ceiling), and session-diary (more than 3 `**YYYY-MM-DD` narrative markers in
+CLAUDE.md). Thresholds and remedies: the task skill's `references/handoff-template.md`, "Document size
+budgets"; constants at the top of `scripts/task_system/validate.py`.
 
 **Reuse of audit machinery.** `validate` is intended to run the **same typed-unit schema validation**
 skills-kit uses for embedded YAML (the `task`/`task_list` units registered as schemas). *Resolved (§10):
