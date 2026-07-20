@@ -310,18 +310,20 @@ class TestPythonStubIntegration:
         # UserPromptSubmit hook event name (background mode)
         assert payload["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
 
-    def test_all_manual_user_msg_names_the_issues(self, tmp_path):
-        """All-manual failures: systemMessage NAMES each issue (not just a vague
-        'work through them with Claude'), mirroring the fix-all label format."""
+    def test_ask_user_msg_names_the_issues(self, tmp_path):
+        """ASK failures (needing the user first): systemMessage NAMES each issue
+        and says Claude will ask -- there is no vague 'work through it manually'
+        third outcome; the two-outcome contract routes these through
+        AskUserQuestion (agent side) and names them (user side)."""
         sys.path.insert(0, BOOTSTRAP_ROOT)
         from bootstrap_lib.engine import emit_failure_response
 
         out_pending = tmp_path / "bootstrap_display.pending"
         failures = [
-            {"type": "env_check", "name": "repo-sync",
+            {"type": "env_check", "name": "repo-sync", "ask_reason": "action",
              "message": "repo-sync: still not in sync: env-config (dirty)",
              "plugin": "env", "persist_across_sessions": True},
-            {"type": "env_check", "name": "sudoers",
+            {"type": "env_check", "name": "sudoers", "ask_reason": "elevation",
              "message": "sudoers: NOPASSWD rule missing",
              "plugin": "env", "persist_across_sessions": True},
         ]
@@ -335,11 +337,15 @@ class TestPythonStubIntegration:
 
         payload = json.loads(out_pending.read_text())
         sysmsg = payload["systemMessage"]
-        # Each manual issue is named in the USER-facing message.
+        # Each ASK issue is named in the USER-facing message.
         assert "repo-sync: still not in sync: env-config (dirty)" in sysmsg
         assert "sudoers: NOPASSWD rule missing" in sysmsg
-        # And the closing manual-attention instruction is retained.
-        assert "need manual attention" in sysmsg
+        # The two-outcome lead: Claude will ask, not "work through it manually".
+        assert "Claude will ask" in sysmsg
+        assert "manual attention" not in sysmsg
+        # Agent side mandates AskUserQuestion.
+        ac = payload["hookSpecificOutput"]["additionalContext"]
+        assert "AskUserQuestion" in ac
 
     def test_engine_writes_and_clears_persistent_alert(self, data_dir, tmp_path, monkeypatch):
         """Engine writes bootstrap_alert.json on python_stub failure and

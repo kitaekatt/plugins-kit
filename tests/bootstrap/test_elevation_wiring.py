@@ -192,40 +192,48 @@ class TestFixAllUserMsg:
             agg["fix_all_cmd"] = fix_all_cmd
         return agg
 
-    def test_mixed_lists_admin_labels_from_aggregate_and_approval_sentence(self):
-        """The aggregate expands into one [admin] line per queued task, sourced
-        from its `labels` field (not recomputed), plus the admin-approval note."""
+    def test_ask_user_msg_expands_aggregate_labels_with_reason(self):
+        """The elevation aggregate (an ASK item) expands into one line per queued
+        task, sourced from its `labels` field (not recomputed), each tagged with
+        its ask reason -- and no backwards index refs leak into user-facing copy."""
         agg = self._agg("windows", "C:/data", fix_all_cmd="cmd")
         manual = {"type": "tool", "name": "foo", "install_state": "manual_install"}
-        msg = engine._fix_all_user_msg([manual, agg])
-        assert "[admin] Install net-tools" in msg   # label came from queue task
-        assert "approve admin access" in msg
-        assert "fix-all" in msg
+        msg = engine._ask_user_msg([manual, agg])
+        assert "net-tools" in msg                    # label came from queue task
+        assert "needs admin access" in msg           # elevation reason blurb
+        assert "Claude will ask" in msg              # the two-outcome ask lead
         # No backwards index references leak into the user-facing copy.
         assert "#1" not in msg and "#2" not in msg
 
-    def test_all_auto_without_admin_omits_approval_sentence(self):
+    def test_auto_user_msg_is_fixing_and_names_the_tool(self):
+        """An auto-installable tool (no elevation) is AUTO: the user-facing copy
+        names it and says it is being fixed automatically -- no admin/approval
+        language, no ask."""
         tool = {"type": "tool", "name": "jq", "install_cmd": "winget install jq"}
-        msg = engine._fix_all_user_msg([tool])
+        msg = engine._auto_user_msg([tool])
         assert "Install jq" in msg
-        assert "[admin]" not in msg
-        assert "approve admin access" not in msg
+        assert "fixing these automatically" in msg
+        assert "admin" not in msg
+        assert "Claude will ask" not in msg
 
-    def test_mixed_footer_reaches_system_message_with_manual_sentence(self, tmp_path):
-        """End to end through emit_failure_response (background mode): the label
-        lines, the admin sentence, and a manual-items sentence (no index refs)
-        all land in systemMessage."""
+    def test_mixed_ask_reaches_system_message_without_index_refs(self, tmp_path):
+        """End to end through emit_failure_response (background mode): both ASK
+        items (a manual-install tool + the elevation aggregate) land named in
+        systemMessage with the ask lead and no index refs; the agent side
+        mandates AskUserQuestion."""
         agg = self._agg("windows", "C:/data", fix_all_cmd="cmd")
         manual = {"type": "tool", "name": "foo", "install_state": "manual_install"}
         out = tmp_path / "pending.json"
         engine.emit_failure_response(
             [manual, agg], current_os="windows", log_content="log",
             label="mkt:bootstrap@test", output_file=str(out))
-        sm = json.loads(out.read_text())["systemMessage"]
-        assert "[admin] Install net-tools" in sm
-        assert "approve admin access" in sm
-        assert "need manual attention" in sm
+        payload = json.loads(out.read_text())
+        sm = payload["systemMessage"]
+        assert "net-tools" in sm
+        assert "Claude will ask" in sm
+        assert "manual attention" not in sm
         assert "#1" not in sm and "#2" not in sm
+        assert "AskUserQuestion" in payload["hookSpecificOutput"]["additionalContext"]
 
 
 # --------------------------------------------------------------------------- #

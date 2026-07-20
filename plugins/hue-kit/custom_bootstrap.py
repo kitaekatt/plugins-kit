@@ -36,28 +36,25 @@ def bootstrap(ctx: Any) -> None:
     ctx.add_failure(
         "hue_bridge_pairing",
         field="HUE_APP_KEY",
-        user_msg=(
-            "hue-kit isn't paired with a Hue bridge yet. Ask Claude to "
-            "'fix-all', or run `hue-kit discover` then `hue-kit pair` (you'll "
-            "press the bridge's link button)."
-        ),
+        # ASK, not AUTO: pairing needs the user to physically press the bridge's
+        # link button -- a user action bootstrap cannot perform. The framework
+        # turns this into an AskUserQuestion prompt (see the bootstrap plugin's
+        # two-outcome contract, engine._ask_reason).
+        ask_reason="action",
+        user_msg="hue-kit wants to pair with your Hue bridge",
         agent_msg=(
-            "hue-kit has no application key configured. Give the user this "
-            "prepared statement, verbatim:\n\n"
-            "  > hue-kit isn't set up on this machine yet. Two steps:\n"
-            "  >   1. Find your bridge:   hue-kit discover\n"
-            "  >   2. Pair (interactive -- press the bridge's round LINK BUTTON "
-            "when asked):\n"
-            "  >        ! hue-kit pair\n"
-            "  > The `!` runs it in your prompt so the button-press + key "
-            "creation happen locally; the minted key is stored 0600 and this "
-            "nag clears.\n\n"
-            "You (Claude) MAY run `hue-kit discover` yourself (non-interactive), "
-            "but `hue-kit pair` needs the physical link-button press, so the "
-            "USER must run the bang-prefixed form. Alternatively the user can "
-            "set HUE_APP_KEY or HUE_KEY_FILE to an existing key -- either also "
-            "clears this. If the user does not use hue-kit, they can ignore "
-            "this nudge."
+            "hue-kit has no application key yet, so it needs to pair with the "
+            "user's Hue bridge. Pairing needs a PHYSICAL button press, so this "
+            "is an ASK -- the framework will have you confirm via AskUserQuestion "
+            "first. After the user agrees:\n"
+            "  1. You MAY run `hue-kit discover` yourself (non-interactive) to "
+            "find the bridge.\n"
+            "  2. The user runs `! hue-kit pair` in their prompt and presses the "
+            "bridge's round LINK BUTTON when asked -- the `!` runs it locally so "
+            "the button-press + key creation happen on their machine; the minted "
+            "key is stored 0600 and this nudge clears.\n"
+            "Alternatively the user can set HUE_APP_KEY or HUE_KEY_FILE to an "
+            "existing key. If they do not use hue-kit, they can decline."
         ),
     )
-    ctx.log("hue-kit: no application key -- pairing needed")
+    ctx.log("hue-kit wants to pair with your Hue bridge")

@@ -331,7 +331,7 @@ if [ -z "$PYTHON" ]; then
         log_entry "python3: FAILED - unsupported platform for auto-install ($OS)"
         flush_log
         mkdir -p "$PLUGIN_DATA"
-        printf '{"continue": true, "suppressOutput": false, "systemMessage": "%s -> python3 not found and platform not supported for auto-install. Install Python 3 manually.\\n\\n%s -> CRITICAL: python3 not found. Unsupported platform. Install Python 3.x manually."}\n' "${BOOTSTRAP_LABEL}" "${BOOTSTRAP_LABEL}" > "$PLUGIN_DATA/bootstrap_display.pending"
+        printf '{"continue": true, "suppressOutput": false, "systemMessage": "%s -> Python 3 is not installed and this platform has no unattended installer. Claude will ask if you want help installing it.", "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "%s -> ASK THE USER before doing anything: Python 3 is missing and this platform (%s) has no unattended installer, so bootstrap cannot run until Python 3.x is on PATH. Installing Python needs the user, so use the AskUserQuestion tool (do not merely mention it). Ask whether to install Python 3 now, with exactly two options in order: Do nothing (the default -- bootstrap re-checks next session), and Install Python (help them install Python 3.x for their OS and get it on PATH). Act only if they pick Install Python."}}\n' "${BOOTSTRAP_LABEL}" "${BOOTSTRAP_LABEL}" "${OS}" > "$PLUGIN_DATA/bootstrap_display.pending"
         exit 0
     fi
 
@@ -346,7 +346,7 @@ if [ -z "$PYTHON" ]; then
         log_entry "python3: FAILED - download error"
         flush_log
         mkdir -p "$PLUGIN_DATA"
-        printf '{"continue": true, "suppressOutput": false, "systemMessage": "%s -> python3 auto-install failed (download error). Install Python 3 manually.\\n\\n%s -> CRITICAL: python3 not found. Auto-install download failed. Install Python 3.x manually."}\n' "${BOOTSTRAP_LABEL}" "${BOOTSTRAP_LABEL}" > "$PLUGIN_DATA/bootstrap_display.pending"
+        printf '{"continue": true, "suppressOutput": false, "systemMessage": "%s -> Automatic Python 3 install failed (download error). Claude will ask if you want help installing it.", "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "%s -> ASK THE USER: bootstrap tried to auto-install Python 3 but the download failed, so bootstrap cannot run until Python 3.x is on PATH. Installing Python needs the user, so use the AskUserQuestion tool (do not merely mention it). Ask whether to install Python 3 now, with exactly two options in order: Do nothing (the default -- bootstrap retries next session), and Install Python (help them install Python 3.x for their OS -- retry the download or use the OS package manager -- and get it on PATH). Act only if they pick Install Python."}}\n' "${BOOTSTRAP_LABEL}" "${BOOTSTRAP_LABEL}" > "$PLUGIN_DATA/bootstrap_display.pending"
         exit 0
     fi
     rm -f "$_dl_tmp"

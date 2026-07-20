@@ -1,0 +1,146 @@
+"""The two-outcome contract: every surfaced issue is AUTO (fix now, no prompt)
+or ASK (AskUserQuestion first). There is no third 'manual attention / work
+through it with Claude' outcome.
+
+AUTO is the fleet-management default -- including installing non-elevated
+software. ASK fires only when the fix needs elevation, a user action, or info
+only the user has (see engine._ask_reason).
+"""
+
+import json
+
+import bootstrap_lib.engine as engine
+
+
+# --------------------------------------------------------------------------- #
+# _ask_reason: the classifier
+# --------------------------------------------------------------------------- #
+
+class TestAskReason:
+    def test_plain_types_are_auto(self):
+        for t in ("venv", "git_dep", "json", "pypi", "marketplace",
+                  "plugin", "sync_to_data", "ini", "path"):
+            assert engine._ask_reason({"type": t}) is None
+            assert engine._needs_user({"type": t}) is False
+
+    def test_tool_install_is_auto(self):
+        # Installing non-elevated software is AUTO on a fleet.
+        f = {"type": "tool", "name": "jq", "install_cmd": "winget install jq"}
+        assert engine._ask_reason(f) is None
+
+    def test_explicit_ask_reason_wins(self):
+        for reason in ("elevation", "action", "info"):
+            assert engine._ask_reason({"type": "venv", "ask_reason": reason}) == reason
+
+    def test_bogus_explicit_reason_ignored(self):
+        assert engine._ask_reason({"type": "venv", "ask_reason": "nonsense"}) is None
+
+    def test_derived_elevation(self):
+        assert engine._ask_reason({"type": "tool", "install_state": "needs_elevation"}) == "elevation"
+        assert engine._ask_reason({"type": "python_stub"}) == "elevation"
+        assert engine._ask_reason({"type": "elevation_script"}) == "elevation"
+
+    def test_derived_action(self):
+        assert engine._ask_reason({"type": "tool", "install_state": "manual_install"}) == "action"
+        assert engine._ask_reason({"type": "bootstrap_outdated"}) == "action"
+
+    def test_derived_info(self):
+        assert engine._ask_reason({"type": "tool", "install_state": "installed_but_path_stale"}) == "info"
+        assert engine._ask_reason({"type": "config"}) == "info"
+        assert engine._ask_reason({"type": "project_config"}) == "info"
+
+    def test_unfixable_unmarked_falls_to_ask(self):
+        # Not fix-all-eligible, no runnable command, not explicitly marked: must
+        # ASK, never be handed a bogus AUTO 'fix now' with nothing to run.
+        assert engine._ask_reason({"type": "env_check", "message": "sudoers missing"}) == "info"
+        assert engine._ask_reason({"type": "tool", "name": "x"}) == "info"  # no install_cmd
+
+    def test_unfixable_but_runnable_is_auto(self):
+        # A non-fix-all type WITH a runnable command is genuinely AUTO.
+        assert engine._ask_reason({"type": "env_check", "remediation_cmd": "systemctl x"}) is None
+
+
+# --------------------------------------------------------------------------- #
+# emit_failure_response: the two outcomes end to end (background mode)
+# --------------------------------------------------------------------------- #
+
+def _emit(failures, tmp_path, current_os="ubuntu"):
+    out = tmp_path / "bootstrap_display.pending"
+    engine.emit_failure_response(
+        failures, current_os=current_os, log_content="log",
+        label="mkt:bootstrap@test", output_file=str(out))
+    payload = json.loads(out.read_text())
+    return (payload["systemMessage"],
+            payload["hookSpecificOutput"]["additionalContext"])
+
+
+class TestTwoOutcomeEmission:
+    def test_all_auto_fixes_now_never_asks(self, tmp_path):
+        failures = [
+            {"type": "venv", "remediation_cmd": "python -m venv .venv"},
+            {"type": "git_dep", "name": "dep", "remediation_cmd": "git clone x"},
+        ]
+        sysmsg, ac = _emit(failures, tmp_path)
+        assert "FIX NOW" in ac
+        assert "AskUserQuestion" not in ac
+        assert "fixing these automatically" in sysmsg
+        assert "Claude will ask" not in sysmsg
+
+    def test_all_ask_uses_askuserquestion_never_auto(self, tmp_path):
+        failures = [
+            {"type": "config", "name": "api-key", "agent_msg": "set OPENAI_API_KEY",
+             "message": "OPENAI_API_KEY is not set"},
+            {"type": "tool", "name": "vpn", "install_state": "manual_install",
+             "message": "install the VPN client"},
+        ]
+        sysmsg, ac = _emit(failures, tmp_path)
+        assert "AskUserQuestion" in ac
+        assert "FIX NOW" not in ac
+        assert "Claude will ask" in sysmsg
+        # No third-outcome language anywhere.
+        assert "manual attention" not in (sysmsg + ac)
+        assert "work through" not in (sysmsg + ac)
+
+    def test_mixed_has_both_directives(self, tmp_path):
+        failures = [
+            {"type": "venv", "remediation_cmd": "python -m venv .venv"},
+            {"type": "config", "name": "api-key", "agent_msg": "set OPENAI_API_KEY",
+             "message": "OPENAI_API_KEY is not set"},
+        ]
+        sysmsg, ac = _emit(failures, tmp_path)
+        assert "FIX NOW" in ac
+        assert "AskUserQuestion" in ac
+        assert "fixing these automatically" in sysmsg
+        assert "Claude will ask" in sysmsg
+
+    def test_custom_failure_can_declare_ask(self, tmp_path):
+        # A plugin custom_bootstrap failure that needs a user ACTION declares it
+        # via ask_reason; its friendly user_msg reaches the user verbatim.
+        failures = [{
+            "type": "hue_bridge_pairing",
+            "plugin": "hue-kit",
+            "ask_reason": "action",
+            "user_msg": "hue-kit wants to pair with your Hue bridge",
+            "agent_msg": "run `hue-kit pair`; the user presses the bridge button",
+            "message": "hue-kit: no application key -- pairing needed",
+        }]
+        sysmsg, ac = _emit(failures, tmp_path)
+        assert "hue-kit wants to pair with your Hue bridge" in sysmsg
+        assert "Claude will ask" in sysmsg
+        assert "AskUserQuestion" in ac
+        assert "manual attention" not in (sysmsg + ac)
+
+    def test_no_forbidden_third_outcome_language(self, tmp_path):
+        # Whatever the mix, the retired phrasings never appear.
+        failures = [
+            {"type": "venv", "remediation_cmd": "c"},
+            {"type": "config", "name": "k", "message": "m", "agent_msg": "a"},
+            {"type": "tool", "name": "t", "install_state": "manual_install", "message": "m"},
+        ]
+        sysmsg, ac = _emit(failures, tmp_path)
+        blob = sysmsg + "\n" + ac
+        for forbidden in ("need manual attention", "needs manual attention",
+                          "work through them with Claude",
+                          "guide the user through the steps",
+                          "fix-all eligible"):
+            assert forbidden not in blob

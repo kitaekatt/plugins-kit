@@ -2,6 +2,23 @@
 
 Detailed check methods and remediation actions for all condition categories the bootstrap engine can handle. For a summary table, see the SKILL.md "Remediable Condition Categories" section.
 
+## Two outcomes: auto-fix or ask
+
+Every issue bootstrap surfaces resolves to **exactly one of two outcomes** — there is no third "guide the user through it / work through it with Claude" path.
+
+- **AUTO — fix it now, no prompt.** This is the **default**, because bootstrap manages a fleet. Claude fixes it immediately: runs the install/clone/merge command, edits the manifest, whatever the remediation is. **Installing software is AUTO** — bootstrap will install non-elevated packages unattended without asking. Do not wait for the user to say "fix-all".
+
+- **ASK — get the user's go-ahead via the `AskUserQuestion` tool first.** Only when the fix needs one of exactly three things the user alone can provide:
+  - **`elevation`** — admin / root / UAC / `sudo` that a background hook cannot obtain.
+  - **`action`** — a physical or out-of-band act only the user can perform: press a device's button (e.g. a Hue bridge link button), restart the IDE, install a GUI app that has no unattended installer.
+  - **`info`** — a value only the user holds: an API key or secret, which machine in the fleet this is.
+
+  The `AskUserQuestion` prompt is always a single question with exactly two options, "Do nothing" leading (an absent-minded Enter changes nothing; bootstrap re-checks next session) and "Fix" second. Claude acts only on "Fix", and never re-prompts.
+
+**How the outcome is decided:** `engine._ask_reason(failure)` returns `elevation` / `action` / `info` (→ ASK) or `None` (→ AUTO). An explicit `ask_reason` on the failure wins — that is how a check or a plugin `custom_bootstrap` (via `ctx.add_failure(..., ask_reason="action")`) declares it needs the user. Otherwise the reason is derived from signals the engine already records (`install_state == "needs_elevation"`, `type in {python_stub, elevation_script}`, `manual_install`, `bootstrap_outdated`, `config`, ...). **Anything not marked is AUTO.**
+
+**Authoring a `custom_bootstrap` failure:** if the fix is runnable without the user, give it a remediation and leave it AUTO. If it needs the user, set `ask_reason` to the matching category and a friendly `user_msg` (the plain-language line the user sees, e.g. "hue-kit wants to pair with your Hue bridge") plus an `agent_msg` describing the post-consent steps.
+
 ## Configuration Conditions
 
 | Condition | Check Method | Remediation |
@@ -48,7 +65,7 @@ While a marketplace is pinned, `alwaysUpdate` is skipped (a one-line "alwaysUpda
 
 ## Manual Operations (Blocking Conditions)
 
-All manual operations represent a blocking condition where auto-configuration cannot complete without user intervention. These generate fix-all directives via the messaging protocol.
+These are the **ASK** category (see [Two outcomes](#two-outcomes-auto-fix-or-ask)): auto-configuration cannot complete without the user, because the fix needs elevation, a user action, or information only they have. Claude surfaces each via the `AskUserQuestion` tool (elevation items are batched into one aggregate offer). They are *not* a separate "manual, work-through-it" outcome — the only two outcomes are auto-fix and ask.
 
 | Condition | Check Method | Remediation |
 |-----------|-------------|-------------|
@@ -204,10 +221,10 @@ On Ubuntu/macOS the fix-all run has no TTY for a foreground `sudo` (or a secret
 prompt), so the shim remains the only path there. That asymmetry is **encoded,
 not remembered**: the engine attaches a `fix_all_cmd` to the aggregate item
 exactly when the launch can happen (Windows, and not already inside a fix-all
-run — which doubles as the loop guard), and `_is_auto_fixable` reads that field
-as the eligibility signal. So the item is genuinely fix-all eligible wherever it
-is offered — the footer can no longer print "None of these are fix-all eligible"
-directly above an item telling the user to type `fix-all`.
+run — which doubles as the loop guard). Elevation is always an **ASK** outcome
+(`_ask_reason` returns `elevation` for the aggregate), so Claude offers it via
+`AskUserQuestion`; the `fix_all_cmd` only decides what "Fix" *does* — on Windows
+it launches the runner in the same pass, on Unix it points at the shim.
 
 ### What the user sees when elevation is the only issue
 

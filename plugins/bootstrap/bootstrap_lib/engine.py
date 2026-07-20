@@ -4937,82 +4937,184 @@ def _is_auto_fixable(failure):
     return t in _AUTO_FIXABLE_TYPES
 
 
+# The two-outcome contract (fleet-management policy). Every surfaced issue is
+# exactly ONE of:
+#   AUTO -- fix it now, no prompt. This is the DEFAULT, because bootstrap
+#           manages a fleet: it will happily INSTALL SOFTWARE and edit manifests
+#           unattended, as long as the fix needs none of the three things below.
+#   ASK  -- get the user's go-ahead via the AskUserQuestion tool FIRST, because
+#           the fix requires one of exactly three things only the user can give:
+#             "elevation" -- admin / root / UAC / sudo a background hook cannot
+#                            obtain;
+#             "action"    -- a physical or out-of-band act only the user can
+#                            perform (press a device button, restart the IDE,
+#                            install a GUI app with no unattended installer);
+#             "info"      -- a value only the user holds (an API key/secret,
+#                            which machine in the fleet this is).
+# There is no third "guide the user through it / work through it manually"
+# outcome. See skills/bootstrap/references/remediation-reference.md
+# ("Two outcomes: auto-fix or ask") for the authored criteria and rationale.
+_ASK_REASONS = ("elevation", "action", "info")
+
+
+def _ask_reason(failure):
+    """Why this failure must ASK the user first: 'elevation' | 'action' | 'info',
+    or None when it is AUTO-fixable (the fleet default).
+
+    An explicit `ask_reason` on the failure wins -- that is how a check
+    (`env_check`, a plugin `custom_bootstrap` via `ctx.add_failure`, ...) declares
+    it needs the user. Otherwise the reason is derived from signals the engine
+    already records, so the common cases need no per-site annotation.
+    """
+    explicit = failure.get("ask_reason")
+    if explicit in _ASK_REASONS:
+        return explicit
+    t = failure.get("type")
+    state = failure.get("install_state")
+    # Elevation: admin/UAC/sudo the hook cannot obtain.
+    if state == "needs_elevation" or t in ("python_stub", "elevation_script"):
+        return "elevation"
+    # Action: something only the user can physically do.
+    if state == "manual_install" or t == "bootstrap_outdated":
+        return "action"
+    # Info: a value only the user can supply, or a diagnostic only they can run.
+    if state == "installed_but_path_stale" or t in ("config", "project_config"):
+        return "info"
+    # Safety net: AUTO means "fix it now" and hands Claude a run-this directive,
+    # so an item bootstrap CANNOT actually auto-fix (no runnable command/edit and
+    # not fix-all-eligible) must not be routed there -- it would be told to "run
+    # the command shown" with nothing to run. Surface it to the user instead
+    # (ASK/info). Phase 2 either gives such an item a real remediation (-> AUTO)
+    # or a precise ask reason; until then, asking is the safe default.
+    if not _auto_fixable_now(failure):
+        return "info"
+    return None
+
+
+def _auto_fixable_now(failure):
+    """True when Claude can carry the fix out with NO user input: a fix-all-
+    eligible type, or an explicit runnable command on the failure. Distinct from
+    `_is_auto_fixable` (fix-all-runnable specifically) -- an AUTO item may also be
+    a plain command Claude runs itself or a manifest edit it makes."""
+    if _is_auto_fixable(failure):
+        return True
+    return bool(failure.get("install_cmd") or failure.get("remediation_cmd")
+                or failure.get("remediation"))
+
+
+def _needs_user(failure):
+    """True when the failure is ASK (needs the user before we touch the machine),
+    False when it is AUTO (fix it now)."""
+    return _ask_reason(failure) is not None
+
+
 def _format_indexes(idxs):
     """Render a sorted index list as '#1, #2, #4' for footer copy."""
     return ", ".join(f"#{i}" for i in idxs)
 
 
-def _auto_fix_label_lines(failures):
-    """Summary lines for the fix-all-eligible failures: list[(label, is_admin)].
+_ASK_REASON_BLURB = {
+    "elevation": "needs admin access",
+    "action": "needs you to do something",
+    "info": "needs a detail from you",
+}
 
-    The user sees systemMessage, NOT the numbered additionalContext list, so
-    index references there ("item #2") point at a list the user can't see. A
-    concise label per fix-all item is what actually parses. The elevation_script
-    aggregate expands into one line per queued task (its own `labels` field --
-    do not recompute it), each admin-flagged: every queued fix on the fix-all
-    elevation path needs a console the hook lacks. Other auto-fixable types get
-    one short line (tools -> "Install <name>"; else name / first message line).
+
+def _short_label(f):
+    """A friendly one-line label for a failure's systemMessage summary.
+
+    Prefer the plugin/check-authored `user_msg` (that is where a friendly,
+    plain-language phrasing like 'hue-kit wants to pair with your Hue bridge'
+    lives), then `message`, then name/type. First line, capped for a footer.
+    """
+    label = f.get("user_msg") or f.get("message") or f.get("name") or f.get("type") or "issue"
+    return str(label).splitlines()[0][:100]
+
+
+def _auto_label_lines(auto):
+    """User-facing labels for the AUTO (fix-now) items: list[str].
+
+    Tools get the self-evident "Install <name>"; everything else uses its short
+    label. No index refs -- the user never sees the numbered additionalContext.
     """
     lines = []
-    for f in failures:
-        if not _is_auto_fixable(f):
-            continue
+    for f in auto:
+        if f.get("type") == "tool":
+            lines.append(f"Install {f.get('name', 'tool')}")
+        else:
+            lines.append(_short_label(f))
+    return lines
+
+
+def _ask_label_lines(ask):
+    """User-facing labels for the ASK items: list[(label, reason)].
+
+    The elevation_script aggregate expands into one line per queued task (its
+    own `labels` field -- do not recompute), each an elevation reason; every
+    other ASK item contributes its short label + its own ask reason.
+    """
+    lines = []
+    for f in ask:
         if f.get("type") == "elevation_script":
             for lbl in f.get("labels") or []:
-                lines.append((lbl, True))
-        elif f.get("type") == "tool":
-            lines.append((f"Install {f.get('name', 'tool')}", False))
+                lines.append((lbl, "elevation"))
         else:
-            label = f.get("name") or f.get("message") or f.get("type") or "issue"
-            lines.append((str(label).splitlines()[0][:80], False))
+            lines.append((_short_label(f), _ask_reason(f) or "info"))
     return lines
 
 
-def _fix_all_user_msg(failures):
-    """User-facing (systemMessage) fix-all footer: labels first, no index refs.
-
-    One line per fix-all-eligible item, '[admin] '-prefixed where it needs
-    elevation, then the offer. The admin-approval sentence is appended ONLY when
-    something is actually admin-flagged, so a no-elevation fix-all stays quiet
-    about a prompt that won't appear.
-    """
-    lines = _auto_fix_label_lines(failures)
-    body = "\n".join(f"[admin] {lbl}" if admin else lbl for lbl, admin in lines)
-    offer = "Tell Claude 'fix-all' to auto-fix these issues."
-    if any(admin for _, admin in lines):
-        offer += (" You'll be prompted to approve admin access for the items "
-                  "flagged [admin].")
-    return f"{body}\n{offer}" if body else offer
-
-
-def _manual_attention_label_lines(failures):
-    """Summary lines for the NOT-auto-fixable failures: list[str].
-
-    The manual-attention counterpart to _auto_fix_label_lines. The user sees
-    systemMessage, NOT the numbered additionalContext list, so a manual item
-    referenced only as "the steps above" points at a list the user cannot see.
-    Naming each one is what makes the message actionable. Prefer the descriptive
-    `message` (a manual item needs describing, unlike a self-evident "Install
-    <tool>"), falling back to name/type; first line, capped for a footer.
-    """
-    lines = []
-    for f in failures:
-        if _is_auto_fixable(f):
-            continue
-        label = f.get("message") or f.get("name") or f.get("type") or "issue"
-        lines.append(str(label).splitlines()[0][:100])
-    return lines
-
-
-def _manual_attention_user_msg(failures, lead):
-    """User-facing (systemMessage) manual-attention block: named items + `lead`.
-
-    Mirrors _fix_all_user_msg's shape (one line per item, then the instruction),
-    so the auto and manual halves of a mixed message read the same way. `lead`
-    is the closing instruction sentence (it differs by case: all-manual vs the
-    remaining-after-auto tail)."""
-    body = "\n".join(_manual_attention_label_lines(failures))
+def _auto_user_msg(auto):
+    """systemMessage block for AUTO items: named items + a fixing-now line."""
+    body = "\n".join(_auto_label_lines(auto))
+    lead = "Bootstrap is fixing these automatically -- no action needed from you."
     return f"{body}\n{lead}" if body else lead
+
+
+def _ask_user_msg(ask):
+    """systemMessage block for ASK items: named items (with why) + a will-ask line."""
+    lines = _ask_label_lines(ask)
+    body = "\n".join(f"{lbl} ({_ASK_REASON_BLURB.get(reason, 'needs your input')})"
+                     for lbl, reason in lines)
+    lead = ("Claude will ask before changing anything here -- nothing happens "
+            "unless you say so.")
+    return f"{body}\n{lead}" if body else lead
+
+
+def _ask_agent_directive(failures, ask_idxs):
+    """The additionalContext directive for ASK items: mandate AskUserQuestion.
+
+    Generalizes the compliant elevation-aggregate template (fix_queue.py): state
+    the problem once, require a single AskUserQuestion with exactly two options
+    ("Do nothing" leading, then "Fix"), act only on "Fix", never re-prompt.
+    """
+    labels = _ask_label_lines([failures[i - 1] for i in ask_idxs])
+    listed = "; ".join(lbl for lbl, _ in labels)
+    reasons = sorted({reason for _, reason in labels})
+    return (
+        f"ASK THE USER before touching items {_format_indexes(ask_idxs)} -- they "
+        f"need {', '.join(reasons)} (elevation = admin/UAC/sudo a background hook "
+        f"cannot obtain; action = something only the user can do, e.g. press a "
+        f"device button, restart the IDE, install a GUI app; info = a value only "
+        f"the user has, e.g. an API key or which machine this is). Do NOT run "
+        f"their fixes yet. A queued 'fix-all' line is easy to miss, so ASK with "
+        f"the AskUserQuestion tool -- do not merely mention it. Question: "
+        f'"Bootstrap needs your OK to fix: {listed}. Go ahead?" Exactly two '
+        f'options, in this order: 1. "Do nothing" (the default -- bootstrap '
+        f're-checks next session, nothing is lost); 2. "Fix" (carry out the '
+        f'per-item steps above). Act ONLY if the user picks "Fix" (or says so); '
+        f'on "Do nothing", say nothing further and do not re-prompt.'
+    )
+
+
+def _auto_agent_directive(auto_idxs):
+    """The additionalContext directive for AUTO items: fix now, do not ask."""
+    return (
+        f"FIX NOW, automatically, without asking the user -- items "
+        f"{_format_indexes(auto_idxs)}. This is fleet policy: installing "
+        f"non-elevated software and editing manifests unattended is expected. "
+        f"Run the command shown for each item, or make the described edit "
+        f"yourself. Do NOT wait for the user to say 'fix-all'."
+    )
 
 
 def _emit_unsupported_platform(message, data_dir, args):
@@ -5068,9 +5170,19 @@ def _emit_focused(failure, label, output_file, persistent_output_file):
 
     Used when every failure shares a single remediation, so the numbered list
     and fix-all footer would only bury it.
+
+    Two-outcome contract still holds here: a focused ASK failure must direct
+    Claude through AskUserQuestion. The elevation_script aggregate already builds
+    that directive itself (fix_queue.py), so it is passed through untouched; any
+    other ASK-type focused failure (e.g. python_stub -- UAC elevation) is wrapped
+    so its agent-facing text mandates the AskUserQuestion prompt instead of a
+    bare 'walk them through it'.
     """
     user_msg = failure.get("user_msg", failure.get("message", ""))
     agent_msg = failure.get("agent_msg", failure.get("message", ""))
+    if _needs_user(failure) and failure.get("type") != "elevation_script":
+        directive = _ask_agent_directive([failure], [1])
+        agent_msg = f"{directive}\n\nAfter the user picks \"Fix\", the steps are:\n{agent_msg}"
     response = {
         "continue": True,
         "suppressOutput": False,
@@ -5204,38 +5316,32 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
             generic = f.get("agent_msg") or f.get("user_msg") or f.get("message") or f"{f['type']}: see log"
             agent_lines.append(f"{i}. {generic}{plugin_tag}")
 
-    # Classify each item as fix-all eligible vs manual-only so the footer
-    # matches reality. Three cases: all auto, mixed, all manual.
-    auto_idxs = [i for i, f in enumerate(failures, 1) if _is_auto_fixable(f)]
-    manual_idxs = [i for i, f in enumerate(failures, 1) if not _is_auto_fixable(f)]
+    # Two outcomes only (the fleet-management contract -- see _ask_reason): each
+    # item is either AUTO (fix now, no prompt -- the default, and it covers
+    # installing non-elevated software) or ASK (get the user's go-ahead via the
+    # AskUserQuestion tool first, because the fix needs elevation, a user action,
+    # or info only the user has). There is no third "manual attention" outcome.
+    auto = [f for f in failures if not _needs_user(f)]
+    ask = [f for f in failures if _needs_user(f)]
+    auto_idxs = [i for i, f in enumerate(failures, 1) if not _needs_user(f)]
+    ask_idxs = [i for i, f in enumerate(failures, 1) if _needs_user(f)]
 
-    if auto_idxs and not manual_idxs:
-        agent_trailer = "\nAll items above are fix-all eligible. Run 'fix-all' to resolve them."
-        # Agent keeps index refs (it sees the numbered list); the user sees a
-        # label summary instead (systemMessage carries no numbered list).
-        user_msg = _fix_all_user_msg(failures)
-    elif auto_idxs and manual_idxs:
-        agent_trailer = (
-            f"\nRun 'fix-all' to auto-resolve items {_format_indexes(auto_idxs)}. "
-            f"Items {_format_indexes(manual_idxs)} need manual attention -- guide the user "
-            f"through the steps above."
-        )
-        user_msg = (
-            f"{_fix_all_user_msg(failures)}\n"
-            + _manual_attention_user_msg(
-                failures,
-                "The issues above need manual attention -- work through them with Claude.",
-            )
-        )
-    else:
-        agent_trailer = "\nNone of these are fix-all eligible -- guide the user through the steps above."
-        user_msg = _manual_attention_user_msg(
-            failures,
-            "These issues need manual attention -- work through them with Claude.",
-        )
-
-    agent_lines.append(agent_trailer)
+    trailer_parts = []
+    if auto_idxs:
+        trailer_parts.append(_auto_agent_directive(auto_idxs))
+    if ask_idxs:
+        trailer_parts.append(_ask_agent_directive(failures, ask_idxs))
+    agent_lines.append("\n" + "\n\n".join(trailer_parts))
     agent_msg = "\n".join(agent_lines)
+
+    # User-facing (systemMessage) summary: the AUTO half says what is being fixed
+    # for them; the ASK half names what Claude will ask about first.
+    user_parts = []
+    if auto:
+        user_parts.append(_auto_user_msg(auto))
+    if ask:
+        user_parts.append(_ask_user_msg(ask))
+    user_msg = "\n\n".join(user_parts)
 
     # Focused special-cases: when every failure shares ONE remediation, the
     # numbered list + fix-all boilerplate above is noise. Emit that item's own
