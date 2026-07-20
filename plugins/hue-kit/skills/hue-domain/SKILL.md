@@ -146,7 +146,15 @@ domain_skill:
         Mint an application key: press the bridge link button, POST
         generateclientkey, store the key user-scoped. The app-authentication
         step -- required once per bridge; the key cannot be auto-detected.
-      operation: hue-kit pair
+        AGENT FLOW (you run it; the user only presses the button): confirm
+        readiness via AskUserQuestion ("Ready to pair the bridge? Confirm and
+        you will have ~30 seconds to press the button." / "I'm ready to pair" /
+        "I'm not ready to pair"), then start `hue-kit pair --no-wait` IN THE
+        BACKGROUND and IMMEDIATELY say "press the round button on top of the
+        bridge now" -- the command blocks up to 30s polling, so the instruction
+        must not wait on it. Bare `hue-kit pair` keeps the interactive
+        press-Enter prompt for humans in a terminal.
+      operation: hue-kit pair [--no-wait]
       tool: scripts/hue_kit_cli.py
       reference_section: hue-bridge-basics.md (Connecting)
     - id: report

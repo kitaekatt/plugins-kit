@@ -42,6 +42,10 @@ hue-kit pair         # press the bridge link button when prompted; mints +
                      #   stores the application key user-scoped (0600)
 ```
 
+`pair` also takes `--no-wait`, which skips the press-Enter prompt and starts
+the ~30s poll immediately -- for agents driving the flow, which confirm you are
+ready first and then tell you to press the button.
+
 After that, every verb just works -- `hue-kit discover` caches the IP and
 `hue-kit pair` stores the key, both under
 `~/.claude/plugins/data/plugins-kit/hue-kit/`.

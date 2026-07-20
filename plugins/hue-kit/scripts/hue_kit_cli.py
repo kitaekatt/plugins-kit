@@ -282,12 +282,19 @@ def _cmd_pair(args) -> int:
                   file=sys.stderr)
             return 0
     print(f"Pairing with the bridge at {ip}.", file=sys.stderr)
-    print("Press the round LINK BUTTON on top of the bridge, then press Enter "
-          "here (you have ~30s after pressing)...", file=sys.stderr)
-    try:
-        input()
-    except EOFError:
-        pass
+    if args.no_wait:
+        # Non-interactive: the caller (an agent) has already confirmed the user
+        # is ready, so poll immediately -- the press can land any time in the
+        # window below. Keeps the flow runnable without a terminal on stdin.
+        print("Press the round button on top of the bridge now "
+              "(~30s window)...", file=sys.stderr)
+    else:
+        print("Press the round button on top of the bridge, then press Enter "
+              "here (you have ~30s after pressing)...", file=sys.stderr)
+        try:
+            input()
+        except EOFError:
+            pass
     body = {"devicetype": "hue-kit#user", "generateclientkey": True}
     deadline = time.monotonic() + 30
     while True:
@@ -363,6 +370,10 @@ def main(argv: list[str] | None = None) -> int:
                                          "link button (app authentication).")
     p_pair.add_argument("--force", action="store_true",
                         help="mint a new key even if one is already configured")
+    p_pair.add_argument("--no-wait", action="store_true",
+                        help="skip the Enter prompt and start polling at once "
+                             "(for agents: confirm readiness first, then tell "
+                             "the user to press the button)")
     sub.add_parser("report", help="Read the bridge; print the minimal group "
                                   "family + each scene as a layer stack.")
     p_groups = sub.add_parser("groups", help="Write a starter scene-groups.yaml "
