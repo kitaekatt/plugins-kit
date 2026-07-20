@@ -222,3 +222,98 @@ class TestReadmeRoleHint:
         inbound = pd.build_inbound_index(tmp_path, [doc])
         rec = pd.describe(doc, inbound, tmp_path)
         assert rec["role_hint"] == "readme"
+
+
+class TestPluginCacheCiterScanning:
+    """A repo doc referenced only by an INSTALLED plugin-cache skill is not an
+    orphan. The inbound scan must index plugin-cache skills (SKILL.md +
+    references) from <config>/plugins/cache, which live outside the project tree.
+    """
+
+    def _make_cache_skill(self, config_dir: Path, marketplace: str, plugin: str,
+                          version: str, body: str) -> Path:
+        skill = (config_dir / "plugins" / "cache" / marketplace / plugin
+                 / version / "skills" / plugin / "SKILL.md")
+        _write(skill, body)
+        return skill
+
+    def test_doc_cited_only_by_plugin_cache_skill_is_not_orphan(self, tmp_path):
+        project = tmp_path / "project"
+        (project / ".git").mkdir(parents=True)
+        doc = project / ".claude" / "docs" / "cozy-ui-architecture.md"
+        _write(doc, "# Cozy UI architecture\n")
+
+        config_dir = tmp_path / "cfg"
+        self._make_cache_skill(
+            config_dir, "spryfox-plugins", "prototype-ui", "0.3.0",
+            "---\nname: prototype-ui\n---\nSee .claude/docs/cozy-ui-architecture.md for the layout.\n",
+        )
+
+        # Baseline: project-tree-only scan reports the doc as an orphan.
+        base = pd.build_inbound_index(project, [doc])
+        assert pd.describe(doc, base, project)["inbound_citations"] == 0
+
+        # With plugin-cache citers indexed, it is no longer an orphan.
+        extra = list(pd.plugin_cache_citer_files(config_dir, project_root=project))
+        assert extra, "expected the plugin-cache SKILL.md to be discovered"
+        inbound = pd.build_inbound_index(project, [doc], extra_citer_files=extra)
+        rec = pd.describe(doc, inbound, project)
+        assert rec["inbound_citations"] >= 1
+
+    def test_reference_doc_in_plugin_cache_counts_as_citer(self, tmp_path):
+        project = tmp_path / "p"
+        (project / ".git").mkdir(parents=True)
+        doc = project / "Docs" / "arch.md"
+        _write(doc, "# arch\n")
+        config_dir = tmp_path / "cfg"
+        ref = (config_dir / "plugins" / "cache" / "mkt" / "plug" / "1.0.0"
+               / "skills" / "plug" / "references" / "deep.md")
+        _write(ref, "Detailed notes; cross-links Docs/arch.md in the repo.\n")
+        extra = list(pd.plugin_cache_citer_files(config_dir, project_root=project))
+        inbound = pd.build_inbound_index(project, [doc], extra_citer_files=extra)
+        assert pd.describe(doc, inbound, project)["inbound_citations"] >= 1
+
+    def test_highest_version_dir_is_chosen(self, tmp_path):
+        config_dir = tmp_path / "cfg"
+        self._make_cache_skill(config_dir, "m", "plug", "0.1.0", "old\n")
+        self._make_cache_skill(config_dir, "m", "plug", "0.2.0", "cites target.md\n")
+        files = list(pd.plugin_cache_citer_files(config_dir, project_root=None))
+        # Only the highest version dir's skill is scanned.
+        assert files
+        assert all("0.2.0" in str(f) for f in files)
+        assert not any("0.1.0" in str(f) for f in files)
+
+    def test_missing_cache_root_yields_nothing(self, tmp_path):
+        # No plugins/cache under the config dir -> empty, no error.
+        assert list(pd.plugin_cache_citer_files(tmp_path / "cfg", project_root=None)) == []
+
+    def test_enabled_filter_selects_named_plugin(self, tmp_path):
+        project = tmp_path / "p"
+        (project / ".claude").mkdir(parents=True)
+        (project / ".claude" / "settings.json").write_text(
+            '{"enabledPlugins": {"prototype-ui@spryfox-plugins": true}}', encoding="utf-8")
+        config_dir = tmp_path / "cfg"
+        self._make_cache_skill(config_dir, "spryfox-plugins", "prototype-ui", "1.0.0", "a\n")
+        self._make_cache_skill(config_dir, "other-mkt", "unrelated", "1.0.0", "b\n")
+        files = list(pd.plugin_cache_citer_files(config_dir, project_root=project))
+        assert any("prototype-ui" in str(f) for f in files)
+        assert not any("unrelated" in str(f) for f in files)
+
+    def test_unresolvable_enabled_set_includes_all_plugins(self, tmp_path):
+        # No settings anywhere -> enabled set empty -> fall back to every plugin.
+        config_dir = tmp_path / "cfg"
+        self._make_cache_skill(config_dir, "m", "one", "1.0.0", "a\n")
+        self._make_cache_skill(config_dir, "m", "two", "1.0.0", "b\n")
+        files = list(pd.plugin_cache_citer_files(config_dir, project_root=None))
+        assert any("one" in str(f) for f in files)
+        assert any("two" in str(f) for f in files)
+
+    def test_read_enabled_parses_list_and_nested_forms(self, tmp_path):
+        cfg = tmp_path / "cfg"
+        cfg.mkdir()
+        (cfg / "settings.json").write_text(
+            '{"enabledPlugins": ["a@mkt", "b@mkt"]}', encoding="utf-8")
+        assert pd._read_enabled_plugin_names(cfg, None) == {"a", "b"}
+        (cfg / "settings.json").write_text(
+            '{"enabledPlugins": {"mkt": {"c": true, "d": false}}}', encoding="utf-8")
+        assert pd._read_enabled_plugin_names(cfg, None) == {"c"}

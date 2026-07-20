@@ -30,7 +30,11 @@ For each candidate it emits mechanical signals the audit lanes consume:
     lines             effective line count
     approx_tokens     ~chars/4
     inbound_citations number of OTHER text files that mention this doc by name
-                      (0 == orphan: nothing in the load graph points here)
+                      (0 == orphan: nothing in the load graph points here). The
+                      scan covers the project tree AND installed plugin-cache
+                      skills (SKILL.md + references) from the harness plugin
+                      cache, so a doc referenced only by an installed plugin
+                      skill is NOT reported as an orphan.
     cited_by          up to a few example citing paths (orphan triage)
 
 Stdlib-only; degrades gracefully without skills_kit_lib.
@@ -38,6 +42,7 @@ Stdlib-only; degrades gracefully without skills_kit_lib.
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -152,6 +157,101 @@ def find_project_root(start: Path) -> Path | None:
         current = current.parent
 
 
+def _config_dir() -> Path:
+    """The harness config dir: $CLAUDE_CONFIG_DIR if set, else ~/.claude."""
+    env = os.environ.get("CLAUDE_CONFIG_DIR")
+    if env:
+        return Path(env).expanduser()
+    return Path.home() / ".claude"
+
+
+def _read_enabled_plugin_names(config_dir: Path, project_root: Path | None) -> set[str]:
+    """Best-effort set of ENABLED plugin names from settings.json files.
+
+    Reads `enabledPlugins` from the user (`<config>/settings.json`) and project
+    (`<project>/.claude/settings.json` + `settings.local.json`) settings. The
+    field's shape has varied across harness versions, so accept all of:
+        {"name@marketplace": true, ...}
+        ["name@marketplace", ...]
+        {"marketplace": {"name": true, ...}, ...}
+    Returns bare plugin names (the part before any '@'). An EMPTY result means
+    "could not determine" -- the caller then falls back to every cached plugin
+    (over-inclusion only ever removes a false orphan, never adds one).
+    """
+    names: set[str] = set()
+    setting_files = [config_dir / "settings.json"]
+    if project_root is not None:
+        setting_files += [
+            project_root / ".claude" / "settings.json",
+            project_root / ".claude" / "settings.local.json",
+        ]
+    for sf in setting_files:
+        try:
+            data = json.loads(sf.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        ep = data.get("enabledPlugins") if isinstance(data, dict) else None
+        if isinstance(ep, dict):
+            for key, val in ep.items():
+                if isinstance(val, dict):
+                    for name, flag in val.items():
+                        if flag:
+                            names.add(str(name).split("@", 1)[0])
+                elif val:
+                    names.add(str(key).split("@", 1)[0])
+        elif isinstance(ep, list):
+            for key in ep:
+                names.add(str(key).split("@", 1)[0])
+    return names
+
+
+def _highest_version_dir(plugin_dir: Path) -> Path | None:
+    """The highest-version subdir of a cached plugin (lexical sort proxy)."""
+    version_dirs = [d for d in plugin_dir.iterdir() if d.is_dir()]
+    if not version_dirs:
+        return None
+    version_dirs.sort(key=lambda d: d.name)
+    return version_dirs[-1]
+
+
+def plugin_cache_citer_files(config_dir: Path, project_root: Path | None):
+    """Yield citer files from installed plugin-cache skills.
+
+    Harness cache layout: `<config>/plugins/cache/<marketplace>/<plugin>/<version>/`.
+    For each plugin the highest version dir is scanned; its skills/ subtree (or
+    the whole install if there is no skills/) contributes SKILL.md + reference
+    docs as inbound-citation sources. When an enabled-plugin set is resolvable
+    it filters to those; otherwise every cached plugin is included. Cached
+    plugins come from the harness's configured marketplaces by construction.
+    """
+    cache_root = config_dir / "plugins" / "cache"
+    if not cache_root.is_dir():
+        return
+    enabled = _read_enabled_plugin_names(config_dir, project_root)
+    try:
+        mkt_dirs = sorted(d for d in cache_root.iterdir() if d.is_dir())
+    except OSError:
+        return
+    for mkt_dir in mkt_dirs:
+        try:
+            plugin_dirs = sorted(d for d in mkt_dir.iterdir() if d.is_dir())
+        except OSError:
+            continue
+        for plugin_dir in plugin_dirs:
+            if enabled and plugin_dir.name not in enabled:
+                continue
+            chosen = _highest_version_dir(plugin_dir)
+            if chosen is None:
+                continue
+            skills_root = chosen / "skills"
+            base = skills_root if skills_root.is_dir() else chosen
+            for f in _walk_files(base):
+                if f.suffix.lower() in _CITER_EXT or f.name.lower().endswith(
+                    MARKDEEP_SUFFIX
+                ):
+                    yield f
+
+
 def is_doc_file(name: str) -> bool:
     """True when a filename looks like a project document by extension."""
     lower = name.lower()
@@ -237,13 +337,42 @@ def collect_candidates(root: Path) -> list[Path]:
     return out
 
 
-def build_inbound_index(root: Path, candidates: list[Path]) -> dict[str, list[Path]]:
+def _index_citer(
+    path: Path,
+    basenames: set[str],
+    candidate_paths: set[str],
+    inbound: dict[str, set[str]],
+) -> None:
+    """Record which candidate basenames a single citer file mentions."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return
+    spath = str(path)
+    for name in basenames:
+        if name in text:
+            # Exclude the doc citing itself.
+            if spath in candidate_paths and Path(spath).name == name:
+                continue
+            inbound[name].add(spath)
+
+
+def build_inbound_index(
+    root: Path,
+    candidates: list[Path],
+    extra_citer_files=None,
+) -> dict[str, list[Path]]:
     """One pass over citer files: map each candidate basename -> citing files.
 
     A candidate is "cited" when its basename appears verbatim in another text
     file (a CLAUDE.md pointer, a SKILL.md reference, a doc-to-doc link, a config
     entry). Self-mentions are excluded. This is the orphan signal: an empty
-    list means nothing in the scanned tree points at the doc.
+    list means nothing points at the doc.
+
+    Citer sources are the project tree under `root` PLUS `extra_citer_files` --
+    files outside the project tree (installed plugin-cache skills) that are still
+    part of the load graph. A doc referenced only by an installed plugin skill is
+    therefore NOT an orphan.
     """
     basenames = {p.name for p in candidates}
     # Map basename -> set of citing paths.
@@ -257,17 +386,13 @@ def build_inbound_index(root: Path, candidates: list[Path]) -> dict[str, list[Pa
             continue
         if _has_skipped_segment(path, root):
             continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        spath = str(path)
-        for name in basenames:
-            if name in text:
-                # Exclude the doc citing itself.
-                if spath in candidate_paths and Path(spath).name == name:
-                    continue
-                inbound[name].add(spath)
+        _index_citer(path, basenames, candidate_paths, inbound)
+
+    # Extra citers live OUTSIDE the project tree (plugin cache), so the
+    # in-tree skip-segment check does not apply -- index them directly.
+    for path in extra_citer_files or ():
+        _index_citer(path, basenames, candidate_paths, inbound)
+
     return {name: sorted(Path(s) for s in paths) for name, paths in inbound.items()}
 
 
@@ -309,6 +434,13 @@ def main() -> int:
                              "citations from CLAUDE.md / skills elsewhere in the project.")
     parser.add_argument("--path", action="append", default=None,
                         help="classify only this file (repeatable); skips the candidate tree walk")
+    parser.add_argument("--skip-plugin-cache", action="store_true",
+                        help="do NOT index installed plugin-cache skills as citation sources "
+                             "(default: index them, so a doc referenced only by an installed "
+                             "plugin skill is not falsely reported as an orphan)")
+    parser.add_argument("--config-dir", default=None,
+                        help="harness config dir holding plugins/cache (default: $CLAUDE_CONFIG_DIR "
+                             "or ~/.claude). Rarely needed; mainly for testing.")
     args = parser.parse_args()
 
     root = Path(args.root).resolve() if args.root else Path.cwd().resolve()
@@ -331,7 +463,16 @@ def main() -> int:
         # would under-count citations and false-flag orphans.
         citer_root = find_project_root(anchor) or Path.cwd().resolve()
 
-    inbound = build_inbound_index(citer_root, candidates)
+    # Installed plugin-cache skills are part of the load graph but live outside
+    # the project tree, so scan them as additional citation sources (unless
+    # disabled). A repo doc referenced only by an installed plugin skill is not
+    # an orphan.
+    extra_citers = None
+    if not args.skip_plugin_cache:
+        config_dir = Path(args.config_dir).expanduser() if args.config_dir else _config_dir()
+        extra_citers = list(plugin_cache_citer_files(config_dir, project_root=citer_root))
+
+    inbound = build_inbound_index(citer_root, candidates, extra_citer_files=extra_citers)
     records = [describe(p, inbound, citer_root) for p in candidates]
 
     if args.json:
