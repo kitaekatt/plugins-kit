@@ -34,3 +34,9 @@ fi
 # version drifted across five releases while a test that would have caught it
 # sat un-run. Same escape hatch. Rationale in the script header.
 uv run python "$REPO_ROOT/scripts/check_pyproject_sync.py"
+
+# Manifest invariant: a plugin that ships a bootstrap.json must declare
+# "bootstrap" in its plugin.json dependencies (CLAUDE.md, "Plugin dependencies
+# on bootstrap") -- otherwise a user can install it without bootstrap and its
+# manifest is never processed. Same escape hatch. Rationale in the script header.
+uv run python "$REPO_ROOT/scripts/check_bootstrap_dependency.py"
