@@ -441,6 +441,44 @@ def _main():
             engine_version=version,
         )
 
+    # Step 4b2: Self-register bootstrap-dependent plugins for auto-update.
+    # _phase_plugins only manages DECLARED plugins[] entries; everything else
+    # fell back to Claude Code's own autoUpdate, which reads the marketplace
+    # clone BEFORE this pass refreshes it -- one restart behind every publish.
+    # Any processed plugin that ships a bootstrap.json but has no plugins[]
+    # entry anywhere (merged layers or another plugin's manifest) is appended
+    # to ~/.claude/bootstrap.local.json with install: "manual" (update-only:
+    # an uninstalled plugin stays uninstalled; uninstalling is the only
+    # opt-out, and a deleted entry is re-added next pass). Entries take effect
+    # from the NEXT pass -- the plugin was just provisioned this one, so
+    # nothing is stale in the gap. Rationale + write-target choice:
+    # bootstrap_lib/self_register.py module docstring.
+    from .self_register import declared_plugin_ids, ensure_self_registration
+    sr_declared_refs, sr_declared_names = declared_plugin_ids(layered_manifest)
+    sr_candidates = []
+    for pi in enabled_plugins + new_plugins:
+        pi_manifest_path = os.path.join(pi.install_path, "bootstrap.json")
+        if not pi.marketplace or not os.path.isfile(pi_manifest_path):
+            continue
+        sr_candidates.append(f"{pi.marketplace}:{pi.name}")
+        try:
+            with open(pi_manifest_path, "r") as f:
+                p_refs, p_names = declared_plugin_ids(json.load(f))
+            sr_declared_refs |= p_refs
+            sr_declared_names |= p_names
+        except (json.JSONDecodeError, OSError):
+            pass  # parse failure already surfaced by the per-plugin pass
+    sr_actions, sr_oks = ensure_self_registration(
+        os.path.join(home, ".claude", "bootstrap.local.json"),
+        sr_candidates, sr_declared_refs, sr_declared_names,
+    )
+    if sr_actions or sr_oks:
+        sr_label = f"{bootstrap_label} self-register"
+        display_sections.append((sr_label, sr_actions, sr_oks))
+        sr_log = sr_actions + (sr_oks if log_success else [])
+        if sr_log and not args.console:
+            write_log_block(data_dir, sr_label, sr_log, start_time=start_time)
+
     # Step 4c: Shared-lib convergence sweep. Every owner has now published (Steps
     # 4 + 4b), so re-link all consumers in one go -- a consumer processed before
     # its owner no longer waits for the next session. Silent in steady state

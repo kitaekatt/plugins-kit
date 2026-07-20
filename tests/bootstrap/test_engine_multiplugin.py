@@ -222,12 +222,21 @@ class TestMultiPluginEngine:
         assert "logged-plugin@2.3.0" in content
         assert "git" in content
 
-        # Bootstrap's own log should NOT contain plugin entries
+        # Bootstrap's own log should NOT contain the plugin's PROVISIONING
+        # entries (its run header / tool checks). Bootstrap-owned actions that
+        # merely name the plugin ref -- e.g. the Step 4b2 self-register line --
+        # legitimately live in bootstrap's log.
         bootstrap_log = os.path.join(data_dir, "bootstrap.log")
         if os.path.exists(bootstrap_log):
             with open(bootstrap_log) as f:
                 bootstrap_content = f.read()
-            assert "logged-plugin" not in bootstrap_content
+            assert "logged-plugin@2.3.0" not in bootstrap_content
+            # None of the plugin's own provisioning lines (the ones naming its
+            # git tool check) leaked into bootstrap's log.
+            plugin_lines = [ln for ln in content.splitlines() if "git" in ln]
+            assert plugin_lines  # vacuity guard
+            for ln in plugin_lines:
+                assert ln not in bootstrap_content
 
         # But the hook response should still show plugin entries to the user
         response = json.loads(result.stdout)
@@ -1151,3 +1160,75 @@ class TestScriptContextProjectDir:
         assert result.returncode == 0, result.stderr
         assert marker.exists(), f"script did not run; stdout={result.stdout!r} stderr={result.stderr!r}"
         assert marker.read_text() == "__NONE__"
+
+
+class TestSelfRegistrationWiring:
+    """End-to-end coverage of engine Step 4b2: an installed plugin that ships
+    a bootstrap.json but is declared in no plugins[] list gets an
+    install: "manual" entry appended to ~/.claude/bootstrap.local.json."""
+
+    def _setup(self, tmp_path, *, declare_in_user_manifest=False):
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+
+        fake_root = plugins_dir / "bootstrap"
+        fake_root.mkdir()
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
+        _write_minimal_defaults(fake_root)
+        (fake_root / "bootstrap.json").write_text(json.dumps({}))
+
+        plugin_dir = plugins_dir / "dep-plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "bootstrap.json").write_text(json.dumps({}))
+
+        registry = {"plugins": {"kit:dep-plugin": [
+            {"installPath": "./dep-plugin", "version": "1.0.0"}]}}
+        (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
+
+        data_dir = str(tmp_path / "data" / "kit" / "bootstrap")
+        os.makedirs(data_dir)
+        config = {"schema_version": 3, "enabled_plugins": ["kit:dep-plugin"],
+                  "log_level": "info", "log_success_shell": False,
+                  "log_success_checks": False}
+        with open(os.path.join(data_dir, "config.json"), "w") as f:
+            json.dump(config, f)
+
+        env = _isolated_env(tmp_path)
+        claude_home = os.path.join(env["HOME"], ".claude")
+        os.makedirs(claude_home, exist_ok=True)
+        if declare_in_user_manifest:
+            with open(os.path.join(claude_home, "bootstrap.json"), "w") as f:
+                json.dump({"plugins": [{"ref": "kit:dep-plugin",
+                                        "install": "manual"}]}, f)
+        return fake_root, data_dir, env, os.path.join(
+            claude_home, "bootstrap.local.json")
+
+    def test_undeclared_plugin_gets_manual_entry(self, tmp_path):
+        fake_root, data_dir, env, local_path = self._setup(tmp_path)
+        result = run_engine(data_dir, plugin_root=str(fake_root), env=env)
+        assert result.returncode == 0, result.stderr
+
+        with open(local_path) as f:
+            data = json.load(f)
+        assert data["plugins"] == [{"ref": "kit:dep-plugin", "install": "manual"}]
+
+    def test_second_run_is_idempotent(self, tmp_path):
+        fake_root, data_dir, env, local_path = self._setup(tmp_path)
+        run_engine(data_dir, plugin_root=str(fake_root), env=env)
+        with open(local_path) as f:
+            first = json.load(f)
+        result = run_engine(data_dir, plugin_root=str(fake_root), env=env)
+        assert result.returncode == 0, result.stderr
+        with open(local_path) as f:
+            second = json.load(f)
+        assert second == first
+        assert len(second["plugins"]) == 1
+
+    def test_declared_plugin_is_not_registered(self, tmp_path):
+        fake_root, data_dir, env, local_path = self._setup(
+            tmp_path, declare_in_user_manifest=True)
+        result = run_engine(data_dir, plugin_root=str(fake_root), env=env)
+        assert result.returncode == 0, result.stderr
+        # Declared in ~/.claude/bootstrap.json -> no local entry is written.
+        assert not os.path.exists(local_path)

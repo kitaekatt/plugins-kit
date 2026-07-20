@@ -786,6 +786,17 @@ plugin spryfox-plugins:claude-admin: updated 0.1.0 -> 0.2.0 (install: manual)
 - `enabled` and `scope` are ignored when `install: "manual"` — the user owns those decisions.
 - `min_version` is currently honored only for `install: "auto"` entries. If you need a minimum version on a manual plugin, that constraint has to be communicated to the user out-of-band; the engine does not force-update a manual plugin to satisfy it (would defeat the purpose of "user owns install").
 
+### Self-registration (automatic `install: "manual"` entries)
+
+You normally do not have to write `plugins[]` entries for auto-update at all. The engine only manages plugins DECLARED in a `plugins[]` list; undeclared plugins used to fall back to Claude Code's own autoUpdate, which reads the marketplace clone at session start *before* bootstrap refreshes it — so every publish converged one restart late. Since bootstrap 0.52.0 the engine closes this itself: after the per-plugin pass, every processed plugin that ships a `bootstrap.json` but has no `plugins[]` entry anywhere (merged user/project layers or another plugin's manifest) is appended to `~/.claude/bootstrap.local.json` as `{"ref": "<mkt>:<name>", "install": "manual"}`.
+
+- **Update-only, never install**: the entries use `install: "manual"`, so an uninstalled plugin stays uninstalled. Uninstalling is the only opt-out — a hand-deleted entry is re-added on the next pass (deliberate: no tombstones).
+- **Write target is the per-machine local file**, never the tracked `~/.claude/bootstrap.json`: re-registration is unconditional, and an unconditional writer to a git-synced file would keep it permanently dirty across machines. Each machine self-heals independently; nothing enters git.
+- **Non-destructive and quiet**: unrelated keys and existing entries in `bootstrap.local.json` are preserved; an unparseable file is left untouched; steady state emits only a verbose-level ok line. A written entry takes effect from the next pass (the plugin was just provisioned in the current one, so nothing is stale in the gap).
+- Hand-written entries anywhere in the layer hierarchy take precedence — self-registration only fills gaps, so declaring a plugin yourself (e.g. with `install: "auto"` or a `min_version`) suppresses the automatic entry.
+
+Mechanism and rationale: `bootstrap_lib/self_register.py` (module docstring).
+
 ### `min_version`
 
 Declares that the installed plugin must be at least this version. When the constraint is not satisfied, the engine runs `claude plugin update <ref>` and rechecks. If the update succeeds and the installed version now satisfies the constraint, processing continues. If the constraint remains unsatisfied (e.g. the marketplace does not yet have a version new enough), the engine records a failure that surfaces as a fix-all item.
