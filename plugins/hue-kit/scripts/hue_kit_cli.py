@@ -18,9 +18,11 @@ Subcommands (the common operations):
                 and index.html into a directory so you can overwrite them with
                 your own.
 
-By default the YAML/HTML working files live in the current directory:
-scene-groups.yaml, scene-designs.yaml, index.html. Point elsewhere with
---dir, or per file with the HUE_GROUPS_FILE / HUE_DESIGNS_FILE env vars.
+The YAML/HTML working files (scene-groups.yaml, scene-designs.yaml,
+index.html) live in the plugin data directory
+(~/.claude/plugins/data/plugins-kit/hue-kit) -- a single source of truth
+regardless of where you run from. Point elsewhere with --dir, or per file
+with the HUE_GROUPS_FILE / HUE_DESIGNS_FILE env vars.
 
 Bridge connection (see the plugin README): set HUE_BRIDGE_IP and either
 HUE_APP_KEY or HUE_KEY_FILE.
@@ -57,6 +59,9 @@ PAIRED_KEY_FILE = data_dir("hue-kit") / "app-key.txt"
 # Cached discovered bridge IP, so we do not re-hit the rate-limited discovery
 # service on every verb (env var still wins; delete the file to re-discover).
 BRIDGE_IP_CACHE = data_dir("hue-kit") / "bridge-ip.txt"
+# Default home of the working files (scene-groups.yaml / scene-designs.yaml /
+# index.html), so every verb sees the same files no matter the invocation cwd.
+DEFAULT_WORKDIR = data_dir("hue-kit")
 
 
 def _discover_via_cloud(timeout: int = 10) -> list[dict]:
@@ -226,6 +231,15 @@ def _run_scene_layers(flags: list[str], workdir: Path) -> int:
     env = os.environ
     env.setdefault("HUE_GROUPS_FILE", str(workdir / "scene-groups.yaml"))
     env.setdefault("HUE_DESIGNS_FILE", str(workdir / "scene-designs.yaml"))
+    # A user-set relative path must keep meaning "relative to where I ran from",
+    # so absolutize before the chdir below.
+    for var in ("HUE_GROUPS_FILE", "HUE_DESIGNS_FILE", "HUE_KEY_FILE"):
+        if env.get(var):
+            env[var] = str(Path(env[var]).resolve())
+    # scene-layers.py writes its relative paths (the tmp/ apply backups) to the
+    # cwd, so anchor the process in the working dir before handing over.
+    workdir.mkdir(parents=True, exist_ok=True)
+    os.chdir(workdir)
     argv = [sys.executable, str(SCENE_LAYERS), *flags]
     os.execve(sys.executable, argv, env)  # replaces this process
 
@@ -365,9 +379,9 @@ def main(argv: list[str] | None = None) -> int:
         prog="hue-kit",
         description="Layered Hue scene framework -- read, analyse, and sync "
                     "scenes with your bridge.")
-    parser.add_argument("--dir", default=".", metavar="PATH",
+    parser.add_argument("--dir", default=str(DEFAULT_WORKDIR), metavar="PATH",
                         help="working directory for the YAML/HTML files "
-                             "(default: current directory)")
+                             f"(default: the plugin data dir, {DEFAULT_WORKDIR})")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("discover", help="Find Hue bridges on your network "
@@ -401,7 +415,8 @@ def main(argv: list[str] | None = None) -> int:
     p_init = sub.add_parser("init", help="Copy the example YAML + HTML into a "
                                          "directory to overwrite with your own.")
     p_init.add_argument("init_dir", nargs="?", default=None, metavar="DIR",
-                        help="destination directory (default: --dir, else current)")
+                        help="destination directory (default: --dir, else the "
+                             "plugin data dir)")
     p_init.add_argument("--force", action="store_true",
                         help="overwrite existing files")
 
@@ -424,12 +439,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "report":
         return _run_scene_layers([], workdir)
     if args.cmd == "groups":
-        out = args.path or str(workdir / "scene-groups.yaml")
+        # User paths resolve against the invocation cwd, BEFORE the chdir into
+        # the working dir that _run_scene_layers performs.
+        out = str(Path(args.path).resolve()) if args.path else str(workdir / "scene-groups.yaml")
         return _run_scene_layers(["--export-groups", out], workdir)
     if args.cmd == "export":
         return _run_scene_layers(["--export-designs", str(workdir / "scene-designs.yaml")], workdir)
     if args.cmd == "render":
-        out = args.path or str(workdir / "index.html")
+        out = str(Path(args.path).resolve()) if args.path else str(workdir / "index.html")
         return _run_scene_layers(["--html", out], workdir)
     if args.cmd == "validate":
         return _run_scene_layers(["--validate-design"], workdir)

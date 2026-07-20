@@ -34,8 +34,10 @@ group vocabulary that expresses every scene (a certified minimum).
 
 `hue-kit <verb>` (from PATH), or
 `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hue_kit_cli.py <verb>`. Working files
-(`scene-groups.yaml`, `scene-designs.yaml`, `index.html`) default to the current
-directory; pass `--dir PATH` to relocate. Verbs map to scene-layers.py flags:
+(`scene-groups.yaml`, `scene-designs.yaml`, `index.html`) default to the plugin
+data dir (`~/.claude/plugins/data/plugins-kit/hue-kit`) -- one source of truth
+regardless of invocation cwd; pass `--dir PATH` to relocate. Verbs map to
+scene-layers.py flags:
 `report` (default report), `groups` (`--export-groups`), `export`
 (`--export-designs`), `render` (`--html`), `validate` (`--validate-design`),
 `apply [--yes]` (`--apply`).
@@ -81,7 +83,7 @@ bar in Movie night"):
 - Scene edits change *definitions* only -- visible on the scene's next
   activation, nothing actuates live.
 - `apply` writes per-scene JSON backups to `tmp/scene-backup-*-layered-*.json`
-  (the revert path).
+  under the working dir (default: the plugin data dir) -- the revert path.
 - Colour is **xy-authoritative**; do not hand-edit the `# hsl(...)` annotations
   expecting them to take effect -- edit `xy`.
 - After changing scenes, re-run `hue-kit report` -- if the group vocabulary is no

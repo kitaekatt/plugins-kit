@@ -68,8 +68,10 @@ curl -k -X POST https://<BRIDGE_IP>/api \
 
 ## The CLI
 
-Run from the directory where you want your `scene-groups.yaml`,
-`scene-designs.yaml`, and `index.html` to live (or pass `--dir`).
+Your `scene-groups.yaml`, `scene-designs.yaml`, and `index.html` live in the
+plugin data dir (`~/.claude/plugins/data/plugins-kit/hue-kit`) by default, so
+every verb sees the same files no matter where you run from (pass `--dir` to
+relocate).
 
 ```bash
 hue-kit discover          # find your bridge on the network (caches the IP)
@@ -86,7 +88,7 @@ hue-kit apply             # DRY-RUN: show what would change on the bridge
 hue-kit apply --yes       # actually write to the bridge
 
 hue-kit init [DIR]        # drop the shipped example YAML + HTML into DIR to
-                          #   overwrite with your own (default: current dir)
+                          #   overwrite with your own (default: the data dir)
 ```
 
 Typical first run: `report` -> `groups` (rename the groups) -> `export` ->

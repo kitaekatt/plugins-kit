@@ -30,9 +30,10 @@ family of groups can express every scene.
   **xy is AUTHORITATIVE** (exact Hue gamut) with a trailing `# hsl(...)`
   annotation for readability; `ct: <mirek>` = tunable white; `bri` = percent.
 
-The `hue-kit` CLI resolves both files in the current working directory by
-default (override with `--dir`, or the `HUE_GROUPS_FILE` / `HUE_DESIGNS_FILE`
-env vars).
+The `hue-kit` CLI resolves both files in the plugin data dir
+(`~/.claude/plugins/data/plugins-kit/hue-kit`) by default -- a single source of
+truth regardless of invocation cwd (override with `--dir`, or the
+`HUE_GROUPS_FILE` / `HUE_DESIGNS_FILE` env vars).
 
 ## The tool -- scene-layers.py (via `hue-kit`)
 
