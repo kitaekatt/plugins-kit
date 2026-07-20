@@ -83,7 +83,8 @@ domain_skill:
       - Route by artifact -- do not run a SKILL.md audit on a CLAUDE.md (or vice-versa); each member's contract is artifact-specific.
       - Dispatch loads ONE member at a time (union, not nest). Do not co-load all members' content on a bare invocation; show the menu and wait for the pick.
       - Detection and remediation are separate phases. The audit pass produces a verdict; it does not silently mutate the subject. Remediation is dispatched after, as its own work.
-      - Size is a SIGNAL, not a verdict. An over-threshold file prompts a CRP evaluation (do sections serve different reading tasks?), never an automatic split. Defer to cohesion-principles and the CRP test.
+      - Findings carry a four-disposition classification (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL), assigned instance-level by each member's detect.js classifier -- the taxonomy `bucket` is only the default. The report contract every member follows, in this order and with no hedging: SERIOUS summarized at the TOP (never auto-fixed), FIX as an applied count that lands in a reviewable CL, IMPROVE as a count + one-line pitches (opt-in discussion), SILENT omitted entirely. references-audit retains the legacy AUTO / DISCUSS / SPECIAL lanes.
+      - Size is a SIGNAL, not a verdict. An over-threshold file prompts a CRP evaluation (do sections serve different reading tasks?), never an automatic split -- and a split is offered (IMPROVE) only with a named extraction candidate, else it stays SILENT. Defer to cohesion-principles and the CRP test.
   index:
     references:
       - id: audit_framework

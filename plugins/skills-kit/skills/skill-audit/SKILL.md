@@ -33,7 +33,7 @@ In framework terms, the per-skill audit procedure is:
 - **Primitives consumed:** `skill_md` and `yaml` (the embedded contract block).
 - **Scaffolding:** `python -m skills_kit_lib.audit` (run from the plugin root) for mechanical schema validation; agent judgment for CCP / CRP / ADP placement.
 - **Rules:** canonical definitions live in this skill's own `criteria:` block below (single source of truth per rule). The framework registry at `audit-framework.yaml::audit_kinds.skill_md_audit.rules_per_composition.skill` catalogs the bindings by id only.
-- **Taxonomy + buckets:** the A-L categories below; AUTO / DISCUSS / SPECIAL dispatch in parallel.
+- **Taxonomy + dispositions:** the A-L categories below; each finding is dispositioned instance-level FIX / SERIOUS / IMPROVE / SILENT (K -> SPECIAL) by the detect.js classifier.
 
 The roster and hierarchy procedures share the same corpus subject but do not exercise the findings/remediation machinery -- they are inventory surfaces over the same primitives.
 
@@ -46,7 +46,7 @@ audit_skill:
       - "auditing a single SKILL.md against its declared type contract (schema validation via audit.py)"
       - "auditing a SKILL.md against CCP / CRP / ADP placement rules (judgment-based from cohesion-principles)"
       - "auditing description hygiene (length, directive form, exclusion clause) and decision-provenance leakage"
-      - "categorizing per-file findings into remediation buckets (AUTO / DISCUSS / SPECIAL)"
+      - "classifying each per-file finding into one of four dispositions instance-level (FIX auto-applied / SERIOUS surfaced-at-top / IMPROVE count-plus-one-liners / SILENT not-surfaced; K -> SPECIAL)"
       - "listing all SKILL.md files visible from cwd (the cwd-relative discover.py helper for index-based selection)"
       - "generating a corpus-wide markdown roster grouped by location and skill-type (the roster procedure)"
       - "generating an interactive HTML hierarchy of the corpus with frontmatter columns and skill-type tooltips (the hierarchy procedure)"
@@ -123,62 +123,62 @@ audit_skill:
       name: "Missing or malformed required frontmatter field"
       keywords: ["missing frontmatter", "required field", "frontmatter fail", "mechanical fix"]
       detection_signal: "audit.py FAIL on a universal-rules row (frontmatter.name, frontmatter.description, skill-type value, name charset, etc.)."
-      default_remediation: "Add the missing field with a sensible default (e.g. derive name from directory). If the value requires authorial judgment (description), surface to the user."
-      bucket: "AUTO"
+      default_remediation: "Add the missing field with a sensible default (e.g. derive name from directory) -- decidable by convention -> FIX. A field requiring authorial judgment (description) routes to IMPROVE (offer as a one-liner)."
+      bucket: "FIX"
     - id: "B_description_quality"
       name: "Description fails directive-form / exclusion-clause / length checks"
       keywords: ["description", "directive form", "use when", "exclusion clause", "160 char limit"]
       detection_signal: "audit.py FAIL on description length (>160 chars), missing 'Use when' / 'Invoke when' prefix, or missing 'Do NOT use for' exclusion clause."
-      default_remediation: "Rewrite the description via a background agent to fit the directive form, name the trigger condition, and exclude a contrasting neighbor. User reviews the proposed text."
-      bucket: "DISCUSS"
+      default_remediation: "Rewrite the description via a background agent to fit the directive form, name the trigger condition, and exclude a contrasting neighbor. Authorial content -> IMPROVE (offer the proposed text as a one-liner; user opts in)."
+      bucket: "IMPROVE"
     - id: "C_wrong_skill_type"
       name: "Declared skill-type does not match content shape"
       keywords: ["wrong type", "skill-type mismatch", "classify.py", "single-type suggestion"]
       detection_signal: "Run classify.py; suggested type differs from declared skill-type with single-type confidence >= 2."
-      default_remediation: "Propose the classify.py suggestion to the user with rationale; user confirms the type change. If user agrees, re-run audit against the new type's contract."
-      bucket: "DISCUSS"
+      default_remediation: "Propose the classify.py suggestion to the user with rationale; user confirms the type change. If user agrees, re-run audit against the new type's contract. A genuine authorial choice -> IMPROVE (one-line pitch; user opts in)."
+      bucket: "IMPROVE"
     - id: "D_mixed_type_signal"
       name: "Multiple contract root keys or cross-type content drift"
       keywords: ["mixed-type", "drift", "boundary split", "multiple roots"]
       detection_signal: "detect_mixed_type_yaml returns >1 canonical root, OR mixed-type heuristic score >= 2 from audit.py."
-      default_remediation: "Surface the cross-type signals to the user. Propose a split along the type boundary (e.g. extract the technique-flavored section into a sibling technique-skill). User decides whether to split or to apply the orientation-summary exception."
-      bucket: "DISCUSS"
+      default_remediation: "Surface the cross-type signals to the user. Propose a split along the type boundary (e.g. extract the technique-flavored section into a sibling technique-skill). Structural move -> IMPROVE (one-line pitch; user decides whether to split or apply the orientation-summary exception)."
+      bucket: "IMPROVE"
     - id: "E_schema_validation_failure"
       name: "Body YAML block fails schema validation"
       keywords: ["schema fail", "yaml validation", "required key missing", "forbidden key"]
       detection_signal: "audit.py reports YAML contract validation failure: missing required key, wrong type, list below min_len, forbidden key present."
-      default_remediation: "Surface the specific failing rows to the user; remediation depends on which row failed. Missing fields can be added (AUTO sub-case); forbidden keys indicate mixed-type drift (treat as D)."
-      bucket: "DISCUSS"
+      default_remediation: "Surface the specific failing rows; remediation depends on which row failed. A missing field with a sensible default -> FIX (add it). An authorial-choice row -> IMPROVE. A forbidden key indicates mixed-type drift (treat as D, IMPROVE)."
+      bucket: "FIX"
     - id: "F_ccp_misallocation"
       name: "CCP violation -- project-convention content in SKILL.md"
       keywords: ["ccp", "project convention", "wrong home", "claude.md", "content allocation"]
       detection_signal: "Agent judgment from cohesion-principles per_artifact_role.skill_md.audit_rules. Body section changes with project conventions (e.g. local code-review rules, project-specific tool preferences) rather than the skill's contract."
-      default_remediation: "Propose moving the misallocated section into the co-located CLAUDE.md (or the project root CLAUDE.md if the convention is project-wide). User confirms the move."
-      bucket: "DISCUSS"
+      default_remediation: "Propose moving the misallocated section into the co-located CLAUDE.md (or the project root CLAUDE.md if the convention is project-wide). Structural move -> IMPROVE (one-line pitch; user opts in)."
+      bucket: "IMPROVE"
     - id: "G_crp_violation"
       name: "CRP violation -- SKILL.md should split into references/"
       keywords: ["crp", "reference split", "progressive disclosure", "different reading tasks"]
       detection_signal: "Agent judgment. Body sections serve genuinely different reading tasks (e.g. usage docs + worked examples + deep-mechanic reference); body length is over thresholds; a CRP-passing split exists."
-      default_remediation: "Propose an L2 -> L3 decomposition with concrete reference-doc paths and a triggering criterion per ref. User confirms before splitting."
-      bucket: "DISCUSS"
+      default_remediation: "Propose an L2 -> L3 decomposition with concrete reference-doc paths and a triggering criterion per ref. Offerable (IMPROVE) only with a NAMED extraction candidate; a bare over-threshold nudge with none is SILENT. One-line pitch; user opts in before splitting."
+      bucket: "IMPROVE"
     - id: "H_adp_back_reference"
       name: "Reference doc cites its own SKILL.md sections"
       keywords: ["adp", "back-reference", "cycle", "one-hop"]
       detection_signal: "Audit detects a `..in skills-kit:<this-skill>` reference inside a doc under this skill's references/ directory."
-      default_remediation: "Rewrite the reference doc to not cite the SKILL.md (the load-graph flows one way: SKILL.md -> references). Inline the relevant context if the reference truly needs it."
-      bucket: "AUTO"
+      default_remediation: "Rewrite the reference doc to not cite the SKILL.md (the load-graph flows one way: SKILL.md -> references). Inline the relevant context if the reference truly needs it. Mechanical convention fix -> FIX."
+      bucket: "FIX"
     - id: "I_decision_provenance"
       name: "Dec-N entries or audit-finding logs in SKILL.md body"
       keywords: ["decision provenance", "Dec-N", "audit history", "ccp violation", "wrong home"]
       detection_signal: "Body contains Dec-N patterns (`Dec-1:`, `Dec-2:` etc.), 'audit-finding-N' tags, or decision-log entries dated by audit pass."
-      default_remediation: "Move the Dec-N entries to the co-located CLAUDE.md (or create one if missing). The SKILL.md retains only the resulting rule, not the audit history that produced it."
-      bucket: "AUTO"
+      default_remediation: "Move the Dec-N entries to the co-located CLAUDE.md (or create one if missing). The SKILL.md retains only the resulting rule, not the audit history that produced it. Mechanical CCP fix -> FIX."
+      bucket: "FIX"
     - id: "J_hygiene_threshold"
       name: "Body over line / token threshold (CRP evaluation prompt)"
       keywords: ["hygiene", "line count", "token count", "size threshold"]
       detection_signal: "audit.py reports line count > 500 or token count > 3000. This is INFO severity -- a prompt to evaluate CRP, not a verdict."
-      default_remediation: "Run the CRP test: do the body sections serve different reading tasks? If yes, route to G. If no, the larger SKILL.md is the correct answer."
-      bucket: "DISCUSS"
+      default_remediation: "Run the CRP test: do the body sections serve different reading tasks? If yes, route to G. If no, the larger SKILL.md is the correct answer (a bare over-threshold nudge with no named extraction candidate is SILENT)."
+      bucket: "IMPROVE"
     - id: "K_unclassified"
       name: "Unclassified / special case"
       keywords: ["unclassified", "special case", "escape hatch", "K bucket"]
@@ -189,13 +189,13 @@ audit_skill:
       name: "Load-graph edge gap -- a member exists but SKILL.md cannot route to it"
       keywords: ["orphaned reference", "unlinked tests dir", "unlinked scripts dir", "index coverage", "keyword routing gap", "dangling index entry", "load graph", "undiscoverable", "missing edge"]
       detection_signal: "audit.py FAIL or JUDGMENT on a load-graph row (references_reachable_from_skill_md): an orphaned references/ file, a member directory with no SKILL.md edge, a two-hop-only reference, or an index entry pointing at a missing path. Judgment extension (not mechanically decidable): an index entry whose keywords omit the terms a searcher would use for content the doc owns -- test by picking each major contract the doc carries (its headings, entity names, script names) and checking those exact terms against the entry's keywords."
-      default_remediation: "Add the missing edge: an index.references entry (or index.members / tools[].tests for scripts and test suites) with keywords drawn from the member's own headings and identifiers; fix or drop a dangling index path; append the missing searcher-terms to an under-keyworded entry. Deleting the member is the alternative when it is genuinely dead."
-      bucket: "DISCUSS"
+      default_remediation: "Add the missing edge: an index.references entry (or index.members / tools[].tests for scripts and test suites) with keywords drawn from the member's own headings and identifiers; fix or drop a dangling index path; append the missing searcher-terms to an under-keyworded entry. Deleting the member is the alternative when it is genuinely dead. IMPROVE by default (adding edges/keywords is a judgment); a dangling index path with an identified correct target is a mechanical FIX. An accepted orphan (internal helper, historical member) is SILENT."
+      bucket: "IMPROVE"
   procedures:
     - id: "audit_skill_md"
       name: "Audit one SKILL.md against the framework and dispatch remediations"
       keywords: ["audit", "single-file audit", "namesake operation", "dispatch", "compliance verdict"]
-      goal: "For each target SKILL.md, run mechanical and judgment-based checks against the framework's contract, classify findings into the taxonomy, dispatch remediations to AUTO/DISCUSS/SPECIAL buckets, and emit a per-file compliance verdict (COMPLIANT or NON-COMPLIANT)."
+      goal: "For each target SKILL.md, run mechanical and judgment-based checks against the framework's contract, classify findings into the taxonomy, assign each a disposition (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL), and emit a per-file compliance verdict (COMPLIANT or NON-COMPLIANT)."
       preconditions:
         - "The mechanical validator (skills_kit_lib.audit) is reachable via the plugin venv."
         - "The skill-md cohesion recap (CCP / CRP / ADP / decision-provenance) is embedded in the DETECT step and the detect.js lane prompt; no separate cohesion-principles load is required for the audit path."
@@ -214,17 +214,17 @@ audit_skill:
           expected: "Structured per-file findings (group, severity, criterion, message, line, taxonomy, bucket, remediation) + per-file verdict."
           on_failure: "If the validator is unavailable, mark the Schema group JUDGMENT ('validator unavailable') and continue with cohesion judgment only -- never fail a file for that."
         - n: 3
-          action: "Render the per-file report (output_template) from the collected findings: per-file verdict blocks followed by an overall summary with bucket counts. This is the before-Q&A surface the user reads."
-          expected: "Markdown report in the user's chat with compliance verdicts and AUTO/DISCUSS/SPECIAL counts."
+          action: "Render the per-file report (output_template), then the REPORT CONTRACT summary in three visible sections IN THIS ORDER, no hedging: (1) SERIOUS -- 'Found <N> serious issue(s) that require fixing' + a one-line summary each; never auto-fixed, never buried. (2) FIX -- the count auto-applied and landing in the reviewable remediation CL. (3) IMPROVE -- 'Audit found <N> improvement opportunit(ies). Do you want to discuss them?' + one one-line pitch each. SILENT findings do NOT appear. Omit a section whose count is zero."
+          expected: "Markdown report: per-file verdicts, then SERIOUS (summarized, top) / FIX (applied count) / IMPROVE (count + one-liners); SILENT omitted."
         - n: 4
-          action: "Q&A GATE. If non_interactive is FALSE (default): for each DISCUSS and SPECIAL finding, ask the user for a decision (apply as-proposed / skip / a refined instruction). Surface one decision at a time or a tight grouped set; do not dump a giant list. For category C (wrong skill-type), this is where classify.py is run to confirm the suggestion before any type change. If non_interactive is TRUE: infer each decision from the taxonomy's default_remediation plus the file content and proceed WITHOUT prompting -- record each inferred decision in the final summary. AUTO findings need no decision (they apply by definition)."
-          expected: "A decision (explicit or inferred) attached to every AUTO/DISCUSS/SPECIAL finding."
+          action: "Q&A GATE. If non_interactive is FALSE (default): SERIOUS findings are surfaced summarized at the top, never auto-fixed; for each IMPROVE and SPECIAL finding the user opted to discuss, ask for a decision (apply as-proposed / skip / a refined instruction). Surface a tight grouped set; do not dump a giant list. For category C (wrong skill-type), this is where classify.py is run to confirm the suggestion before any type change. A declined IMPROVE is recorded in the SKILL.md's `md-audit-declined:` frontmatter so a re-audit does not re-pitch it. If non_interactive is TRUE: apply FIX findings, surface SERIOUS, and infer each IMPROVE/SPECIAL decision from the taxonomy's default_remediation plus the file content -- record each inferred decision in the final summary. FIX findings need no decision (they apply by definition); SILENT findings are never surfaced."
+          expected: "SERIOUS summarized; a decision (explicit or inferred) attached to every IMPROVE/SPECIAL the user engaged; FIX applied."
         - n: 5
-          action: "REMEDIATE phase (after-Q&A). Assemble per-file remediation lists from the decided findings (AUTO=apply; DISCUSS/SPECIAL=per decision; drop skips). Choose mode by how many FILES carry remediation work. ONE file: apply inline with Edit. TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/skill-audit/workflow/remediate.js and args = { perFile:[{path,remediations:[{criterion,taxonomy,bucket,line,instruction,decision}]}] }. One lane per file (disjoint skills never conflict; taxonomy H edits a references/*.md and taxonomy I moves Dec-N into the co-located CLAUDE.md, both under the same skill dir)."
+          action: "REMEDIATE phase (after-Q&A). Assemble per-file remediation lists from the decided findings (FIX=apply; IMPROVE/SPECIAL=per decision; SERIOUS never auto-applied; drop skips). Choose mode by how many FILES carry remediation work. ONE file: apply inline with Edit. TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/skill-audit/workflow/remediate.js and args = { perFile:[{path,remediations:[{criterion,taxonomy,bucket,line,instruction,decision}]}] }. One lane per file (disjoint skills never conflict; taxonomy H edits a references/*.md and taxonomy I moves Dec-N into the co-located CLAUDE.md, both under the same skill dir)."
           tool: "Workflow | inline"
           expected: "Edits applied to the target files; per-file applied/skipped/failed summary."
         - n: 6
-          action: "Render the final summary: what was applied per file, what was skipped, any failures, and the bucket totals. Remind the user that re-running the audit should now reproduce a clean (or reduced-FAIL) verdict -- detection and remediation are separate passes, so the re-run is the verification step. Scope the verification re-run to the files that were actually MODIFIED by remediation -- results for untouched files stand; re-auditing them wastes runs."
+          action: "Render the final summary: FIX applied per file, IMPROVE decisions, SERIOUS still-open (never auto-applied), any failures. Remind the user that re-running the audit should now reproduce a clean (or reduced-FAIL) verdict -- detection and remediation are separate passes, so the re-run is the verification step. Scope the verification re-run to the files that were actually MODIFIED by remediation -- results for untouched files stand; re-auditing them wastes runs."
           expected: "Closing summary; user can re-run /md-audit skill on the modified files to verify FAILs cleared."
       output_template: |
         ## <skill name> (<skill-type>) -- <file path>
@@ -250,7 +250,17 @@ audit_skill:
 
         <P> PASS / <F> FAIL / <I> INFO / <J> JUDGMENT-REQUIRED
         Verdict: COMPLIANT | NON-COMPLIANT
-        Remediation routed: AUTO=<N>, DISCUSS=<N>, SPECIAL=<N>
+
+        ## Report (SERIOUS -> FIX -> IMPROVE; SILENT omitted, no hedging)
+
+        ### SERIOUS -- Found <N> serious issue(s) that require fixing
+        - <one-line summary per issue>   (never auto-fixed)
+
+        ### FIX -- <N> applied (in the reviewable remediation CL)
+        - <criterion>: <what was corrected>
+
+        ### IMPROVE -- Audit found <N> improvement opportunit(ies). Do you want to discuss them?
+        - <criterion>: <one-line pitch>
       gotchas:
         - "audit.py is the canonical mechanical validator. Do not re-implement its checks here; consume its JSON output and present it under the Schema group. The cohesion-principle judgment (CCP/CRP/ADP) is what this skill adds on top."
         - "CCP for SKILL.md asks: does this content change with the skill's contract, or with project conventions? Project-convention content bleeding into SKILL.md is a CCP-fail; the content belongs in the co-located CLAUDE.md."
@@ -299,34 +309,41 @@ audit_skill:
         - "Column union is per-section, not corpus-wide. A frontmatter key used by only one project skill (e.g. `allowed-tools`) appears in the Project-skills table only."
         - "Built-in slash commands without on-disk SKILL.md (e.g. /loop, /init, /review) do not appear in the hierarchy. This is correct -- they are not authored skills under any discovery root."
         - "The hierarchy does NOT apply the per-type implied-frontmatter convention from the roster -- every frontmatter key is shown as its own column."
+  # Disposition mapping (four-disposition model): structural lanes retained for
+  # schema stability across audit members. auto = FIX categories (auto-applied;
+  # land in the reviewable CL). discuss = SERIOUS (surfaced at top, never auto) +
+  # IMPROVE (count + one-liners, opt-in) categories, disposition noted per entry.
+  # special = K escape hatch. The final per-finding disposition is assigned
+  # instance-level by the detect.js classifier; these defaults are the start.
   remediations:
     auto:
       - category: "A_missing_required_frontmatter"
-        procedure: "Add the missing field with a sensible default. For 'name', derive from the directory; for 'skill-type', use classify.py's suggestion if single-type. Description and other authorial fields are NOT AUTO -- route to B / DISCUSS."
+        procedure: "[FIX default] Add the missing field with a sensible default. For 'name', derive from the directory; for 'skill-type', use classify.py's suggestion if single-type. Description and other authorial fields are NOT FIX -- route to B / IMPROVE."
         agent_template: "Background agent receives file path + missing field name + default value; applies the edit; reports back."
       - category: "H_adp_back_reference"
-        procedure: "Open the cited reference doc; rewrite the back-citing sentence to inline the necessary context instead of referencing back to SKILL.md. Confirm the load-graph flows one way after the edit."
+        procedure: "[FIX] Open the cited reference doc; rewrite the back-citing sentence to inline the necessary context instead of referencing back to SKILL.md. Confirm the load-graph flows one way after the edit."
         agent_template: "Background agent receives reference doc path + back-citing line; rewrites to remove the back-reference; reports back."
       - category: "I_decision_provenance"
-        procedure: "Identify Dec-N entries / audit-finding tags in SKILL.md. Move them to the co-located CLAUDE.md (create the CLAUDE.md if absent). Retain only the resulting rule in SKILL.md, not the audit history."
+        procedure: "[FIX] Identify Dec-N entries / audit-finding tags in SKILL.md. Move them to the co-located CLAUDE.md (create the CLAUDE.md if absent). Retain only the resulting rule in SKILL.md, not the audit history."
         agent_template: "Background agent receives SKILL.md path + Dec-N line ranges; cuts from SKILL.md, appends to CLAUDE.md; reports back."
+      - category: "E_schema_validation_failure"
+        procedure: "[FIX default] Add a missing field with a sensible default (decidable by convention). An authorial-choice row -> IMPROVE; a forbidden key indicates mixed-type drift -> treat as D (IMPROVE). Route per row."
+        agent_template: "Background agent receives the failing rows; adds missing-default fields; reports authorial / forbidden-key rows back for the IMPROVE lane."
     discuss:
       - category: "B_description_quality"
-        procedure: "Background agent proposes a rewritten description. User reviews and either accepts or directs a different angle. Apply only after user confirmation."
+        procedure: "[IMPROVE] Background agent proposes a rewritten description. Offer as a one-line pitch; apply only after user opts in."
       - category: "C_wrong_skill_type"
-        procedure: "Surface classify.py's suggestion with rationale. Ask user to confirm the type change; if confirmed, re-run audit against the new type's contract before finalizing."
+        procedure: "[IMPROVE] Surface classify.py's suggestion with rationale. One-line pitch; if the user opts in, confirm the type change and re-run audit against the new type's contract before finalizing."
       - category: "D_mixed_type_signal"
-        procedure: "Surface the cross-type signals (which root keys, which structural markers). Propose a split along the type boundary OR confirm the orientation-summary exception applies (a domain-skill's orientation may include one technique-flavored summary). User decides."
-      - category: "E_schema_validation_failure"
-        procedure: "Show the specific failing schema rows. Some are AUTO (missing optional default), some are DISCUSS (genuine authorial choice). Route per row."
+        procedure: "[IMPROVE] Surface the cross-type signals (which root keys, which structural markers). Propose a split along the type boundary OR confirm the orientation-summary exception applies (a domain-skill's orientation may include one technique-flavored summary). One-line pitch; user decides."
       - category: "F_ccp_misallocation"
-        procedure: "Propose the destination (co-located CLAUDE.md or project root CLAUDE.md). User confirms the move; agent applies."
+        procedure: "[IMPROVE] Propose the destination (co-located CLAUDE.md or project root CLAUDE.md). One-line pitch; user opts in, agent applies."
       - category: "G_crp_violation"
-        procedure: "Propose an L2 -> L3 decomposition with explicit reference-doc paths and triggering criteria per ref. User confirms before splitting; agent applies."
+        procedure: "[IMPROVE] Propose an L2 -> L3 decomposition with explicit reference-doc paths and triggering criteria per ref -- offerable only with a NAMED extraction candidate (else SILENT). One-line pitch; user opts in before splitting."
       - category: "J_hygiene_threshold"
-        procedure: "Run the CRP test (do the body sections serve different reading tasks?). If yes, escalate to G. If no, INFO stays as-is; the larger SKILL.md is the correct answer."
+        procedure: "[IMPROVE] Run the CRP test (do the body sections serve different reading tasks?). If yes and a concrete extraction candidate can be named, escalate to G; if no candidate, SILENT (the larger SKILL.md is correct)."
       - category: "L_load_graph_gap"
-        procedure: "Propose the concrete edge (index entry / members entry / tools[].tests / citation) with keywords drawn from the member's own headings and identifiers, or propose deleting a genuinely dead member / dangling index path. User confirms -- routing changes discovery behavior, and only the user knows whether an unlinked member is an internal helper."
+        procedure: "[IMPROVE default] Propose the concrete edge (index entry / members entry / tools[].tests / citation) with keywords drawn from the member's own headings and identifiers, or propose deleting a genuinely dead member. A dangling index path with an identified correct target is a mechanical FIX; an accepted internal-helper orphan is SILENT. One-line pitch for the judgment cases; user opts in."
     special:
       procedure: "Surface the finding to the user with: the audit row that fired, the categories you attempted to match, the reasons none fit. The user proposes a strategy. If the strategy generalizes (mutually exclusive with A-J, recognizable detection signal, default remediation applies broadly), propose adding it as a new category in this taxonomy."
   enforcement:
@@ -344,7 +361,7 @@ audit_skill:
       keywords: ["self-remediation", "single-pass", "verdict-and-fix"]
       why_it_seems_right: "It seems efficient to audit one file and apply remediations in the same pass -- one tool call, fewer round trips."
       why_it_is_wrong: "Mixing detection and remediation in one pass invalidates the idempotency contract. The verdict and the remediation are separate phases; conflating them prevents re-runs from producing the same findings and lets the agent silently mutate the subject without surfacing the change to the user."
-      alternative: "Run the audit procedure to completion. Render the verdict. Dispatch remediations as separate AUTO (background agent) and DISCUSS (foreground Q&A) work units. Re-run the audit after remediation to verify."
+      alternative: "Run the audit procedure to completion. Render the verdict. Dispatch remediations as separate FIX (auto-applied) and IMPROVE (opt-in Q&A) work units; surface SERIOUS at the top. Re-run the audit after remediation to verify."
     - id: "hygiene_as_verdict"
       name: "Treat hygiene thresholds as FAIL verdicts"
       keywords: ["hygiene threshold", "line count fail", "auto-split", "premature split"]
@@ -361,7 +378,7 @@ Per-skill audit (the namesake procedure):
 - `list` -- show numbered list of SKILL.md files under cwd; do not audit.
 - `<path>` -- audit a specific SKILL.md.
 - `<numbers>` -- audit files by index from the most recent `list` output (e.g. `3 7`).
-- `fast` / `--fast` / `--yes` / `-y` -- non-interactive: skip the Q&A round and infer every DISCUSS/SPECIAL decision. Combine with any selector, e.g. `/md-audit skill 3 7 fast`. Prose intent ("audit these and just apply everything, don't ask me") sets the same flag.
+- `fast` / `--fast` / `--yes` / `-y` -- non-interactive: skip the Q&A round and infer every IMPROVE/SPECIAL decision; FIX applies by definition, SERIOUS is surfaced. Combine with any selector, e.g. `/md-audit skill 3 7 fast`. Prose intent ("audit these and just apply everything, don't ask me") sets the same flag.
 
 Corpus-wide reports:
 
@@ -402,7 +419,7 @@ Both accept `args` as an object or JSON string. Pass absolute `refs` paths (they
 
 ## Non-interactive mode
 
-When the non-interactive flag is set (argument token or expressed intent), the Q&A gate does not prompt. Instead, infer each DISCUSS/SPECIAL decision from the taxonomy's `default_remediation` plus the file content, apply them, and **list every inferred decision in the final summary** so the user can see and reverse them. AUTO findings apply regardless. FAIL findings are still gated by the verdict; non-interactive only changes how the *decisions* are obtained, not the audit contract.
+When the non-interactive flag is set (argument token or expressed intent), the Q&A gate does not prompt. Instead, infer each IMPROVE/SPECIAL decision from the taxonomy's `default_remediation` plus the file content, apply them, and **list every inferred decision in the final summary** so the user can see and reverse them. FIX findings apply regardless; SERIOUS findings are surfaced summarized at the top and never auto-applied; SILENT findings are never surfaced. FAIL findings are still gated by the verdict; non-interactive only changes how the *decisions* are obtained, not the audit contract.
 
 ## Decision rules (per-skill audit verdict)
 

@@ -67,6 +67,20 @@ reference_skill:
       summary: Knowledge matures inline-in-CLAUDE.md -> project reference doc -> skill; project references are the escape-hatch / nursery, not the default home for reference content.
       keywords: [skill maturation, project reference, nursery, escape hatch, graduate to skill]
       detail: An inline tip grows into a project reference (cited from CLAUDE.md), then graduates into a structured skill once the content fits a skill type. The default home for reference content is a skill's references/, not a standalone project reference. See skill_maturation_pipeline.
+    - id: summarize_and_reference
+      summary: Facts live in one place (SSOT); elsewhere you reference. The canonical compact form is REMINDER PLUS REFERENCE together -- an inline summary that spares the reader loading the target, plus the reference that names the SSOT and makes it checkable.
+      keywords: [summarize and reference, reminder plus reference, ssot pointer, dedup, cross-reference budget, collapse to pointer, guardrail plus pointer]
+      detail: |
+        When the same fact would otherwise be restated across files, keep it in ONE place and
+        reference it from the others. The compact form is a reminder PLUS a reference:
+        "Never p4 submit without user approval -- see /submit." Rule: summarize-and-reference is
+        OK when the referenced fact fits in roughly a dozen tokens or less, so the reader does not
+        need to load the target. Beyond that budget: reference only, no restatement (a longer
+        restatement just re-creates the drift the SSOT was meant to prevent). This is the authoring
+        side of the same convention the md-audit skills enforce as a FIX (dedup under the
+        summarize-and-reference rule); the loss-free-deletion guard applies -- fold any local delta
+        into the SSOT or the summary line before deleting the duplicate. See summarize_and_reference
+        in the framework block.
 ```
 
 ## The placement framework
@@ -557,6 +571,29 @@ content_allocation:
       for graduation by the audit. The flag is not a FAIL -- the doc is doing useful work
       where it sits -- but the framework prefers structured skills over unstructured
       project references when the content shape supports it.
+
+  summarize_and_reference:
+    description: |
+      The compact form of a cross-file reference. Facts live in one place (the SSOT); every
+      other surface REFERENCES rather than restates. The canonical form is REMINDER PLUS
+      REFERENCE together: the inline reminder spares the reader from loading the target for a
+      fact they can hold in a phrase; the reference names the SSOT and keeps the claim
+      checkable. This is the mechanism CCP's "collapse to a pointer" and "use cross-references
+      for terminology, not content" alternatives invoke; this convention gives it a budget.
+    rule: |
+      Summarize-and-reference (keep the inline reminder) is OK when the referenced fact fits in
+      roughly a dozen tokens or less -- short enough that the reader need not load the target.
+      Beyond that budget: reference ONLY, no restatement, because a longer inline copy re-creates
+      the drift the SSOT exists to prevent.
+    example: '"Never p4 submit without user approval -- see /submit." (reminder + reference, within budget)'
+    loss_free_guard: |
+      Before collapsing a duplicate to a reference, fold any local delta -- an extra fact, a
+      directory-specific anchor the surviving copy lacks -- into the SSOT (or the reminder line)
+      FIRST. Only then delete the proven-redundant remainder.
+    audit_link: |
+      The md-audit skills enforce this convention from the audit side: cross-file / skill-content
+      duplication is a FIX (dedup under the summarize-and-reference rule), applied with the same
+      loss-free-deletion guard. Authoring to this rule is what keeps that audit green.
 
   worked_examples:
     - id: claude_md_placement

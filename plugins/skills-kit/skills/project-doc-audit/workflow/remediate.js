@@ -23,7 +23,7 @@
 //   perFile: [ {
 //     path: string,
 //     remediations: [ {
-//       criterion: string, taxonomy: string, bucket: "AUTO"|"DISCUSS"|"SPECIAL",
+//       criterion: string, taxonomy: string, bucket: "FIX"|"SERIOUS"|"IMPROVE"|"SILENT"|"SPECIAL",
 //       line: integer|null,
 //       instruction: string,          // the concrete edit/move to make
 //       decision: "apply"|"skip"|string  // user/inferred decision; free-text = a

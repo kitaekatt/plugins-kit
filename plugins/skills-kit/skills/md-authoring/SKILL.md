@@ -89,6 +89,7 @@ domain_skill:
       - Route by artifact -- skill vs claude-md. Do not apply SKILL.md type contracts to a CLAUDE.md or vice-versa.
       - Dispatch loads ONE sub-domain at a time (union, not nest). On a bare invocation show the menu and wait; do not co-load skill-authoring and claude-md-authoring together.
       - Defer placement to cohesion-principles and content-shape to content-authoring; this domain routes and owns the shared references, it does not re-derive those frameworks.
+      - Summarize-and-reference, do not restate: keep a fact in its SSOT and reference it elsewhere; the compact form is a reminder plus a reference, and only when the fact fits ~a dozen tokens -- beyond that, reference only. See cohesion-principles `summarize_and_reference` for the rule and its loss-free-deletion guard (this is the authoring side of the dedup the md-audit skills apply as a FIX).
       - Do not author a recommended pattern -- only required, conditionally required, prohibited (inherited from skill-authoring's discipline).
   index:
     references:

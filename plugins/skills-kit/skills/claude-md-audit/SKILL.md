@@ -31,8 +31,8 @@ audit_skill:
       - "applying the role-to-criteria map (root / ancestor / child / local roles have different applicable rules)"
       - "schema validation when a `claude_md:` YAML contract block is present in the file"
       - "the code-directory insight-validation dimension (CD-1..CD-6) for files flagged `dimension: code-directory` by discover.py -- anchor-modality classification, fidelity-to-code, and the what-we-care-about value filter (self-contained in references/code-dir-insight-filter.md)"
-      - "the opt-in density lens (DD-1..DD-4) -- verbosity-in-place, extract-to-reference, intra-file redundancy, value-earns-tokens; advisory only (JUDGMENT/DISCUSS, never FAIL/AUTO); self-contained in references/density-criteria.md; runs only when the `density` argument or equivalent intent is given"
-      - "categorizing findings into remediation buckets (AUTO / DISCUSS / SPECIAL)"
+      - "the opt-in density lens (DD-1..DD-4) -- verbosity-in-place, extract-to-reference, intra-file redundancy, value-earns-tokens; advisory only (JUDGMENT, disposition IMPROVE, never FAIL); self-contained in references/density-criteria.md; runs only when the `density` argument or equivalent intent is given"
+      - "classifying each finding into one of four dispositions instance-level (FIX auto-applied / SERIOUS surfaced-at-top / IMPROVE count-plus-one-liners / SILENT not-surfaced; K -> SPECIAL) per the detect.js classifier"
       - "listing CLAUDE.md files visible from cwd (the cwd-relative discover.py helper for index-based selection)"
     excludes:
       - "auditing SKILL.md files (use /md-audit skill)"
@@ -101,19 +101,19 @@ audit_skill:
       keywords: ["code-directory", "line drift", "line anchor", "re-anchor", "symbol coupled"]
       summary: "When a claim cites a line number, find the enclosing symbol it names; if the symbol resolves but is >~30 lines from the cited number, flag I2_line_drift (drop the number, keep the symbol). Stay silent if the author supplied a recovery hint."
       severity: "JUDGMENT"
-      detail: "Coupled to symbol resolution; never fires when no line number is cited. Bucket AUTO (the remediation is the mechanical removal of the stale number)."
+      detail: "Coupled to symbol resolution; never fires when no line number is cited. Disposition FIX (the remediation is the mechanical removal of the stale number -- a convention-violation fix)."
     - id: "cd_fidelity_claim_holds"
       name: "CodeDir -- claim still matches the code in kind"
       keywords: ["code-directory", "claim drift", "stale claim", "in kind", "counted magnitude"]
       summary: "Read the anchored code; if the claim no longer holds in kind (god-object now decomposed, TODO now resolved, bypass now gone) flag I_claim_drift. Counted magnitudes ('7200-line', '12 files') are intentionally fuzzy -- never FAIL on the number; flag only on kind-inversion."
       severity: "JUDGMENT"
-      detail: "Never auto-FAIL: the audit cannot perfectly re-derive the gotcha, it flags divergence for a human. Bucket DISCUSS."
+      detail: "Never auto-FAIL. Disposition FIX when the audit verified the actual behavior from the code reading (the code reading is evidence; intent re-derivation is not a blocker); IMPROVE only when no fact decides the correct claim."
     - id: "cd_value_insight_earns_place"
       name: "CodeDir -- section earns its place under the what-we-care-about filter"
       keywords: ["code-directory", "value filter", "earns place", "low value", "inventory", "carve-out"]
       summary: "Each section must pass the value lattice (silent-failure > blast-radius > deliberately-wrong > safety > perf > ownership). Linter-caught / default / bare-inventory / pure-restatement sections are low-value (J). Honor every carve-out: annotated Files/Schema blocks, SSOT-pointing catalogs, safety-rail cheatsheets, topology tables are NOT low-value."
       severity: "JUDGMENT"
-      detail: "Bucket DISCUSS; deletion of a genuinely bare un-annotated inventory may be AUTO. Carve-outs are load-bearing -- both maintainer-agents required them."
+      detail: "Disposition FIX for a bare un-annotated inventory / default / restatement (delete, be aggressive); IMPROVE for a trim of true content passing the one-line test; SILENT for a validator artifact or accepted structural pattern. Carve-outs are load-bearing -- both maintainer-agents required them."
     - id: "cd_silent_failure_preserved"
       name: "CodeDir -- highest-value content still present"
       keywords: ["code-directory", "silent failure preserved", "erosion signal", "value erosion"]
@@ -125,134 +125,134 @@ audit_skill:
       keywords: ["density", "verbosity", "tighten", "ceremony", "over-explanation", "token reduction"]
       summary: "A section that is correctly placed and carries real value but says in N words what materially fewer would carry (redundant restatement, hedging/ceremony preamble, over-explanation of the obvious). Remediation tightens IN PLACE; never moves or deletes. Honors carve-outs (load-bearing nuance, teaching examples, labeled safety-rail repetition)."
       severity: "JUDGMENT"
-      detail: "Opt-in density lens, loaded only on the `density` request. Advisory: never FAIL, never AUTO. Self-contained in references/density-criteria.md (DD-1). Bucket DISCUSS; remediation must route tokens (tighten in place)."
+      detail: "Opt-in density lens, loaded only on the `density` request. Advisory: never FAIL. Self-contained in references/density-criteria.md (DD-1). Disposition IMPROVE; remediation must route tokens (tighten in place)."
     - id: "dd_extract_to_reference"
       name: "Density -- self-contained block should be disclosed to a reference"
       keywords: ["density", "disclosure", "extract to reference", "progressive disclosure", "L1 to L3", "on-demand block"]
       summary: "A self-contained block serving an on-demand/narrow reading task, large enough that inlining taxes every reader, should move to a references/*.md (or SKILL.md for on-task procedure) leaving a one-line pointer. Disclosure-level move, not scope-level -- distinct from crp_role_appropriate (wrong file) and finer than C_crp_split_candidate (whole-file split)."
       severity: "JUDGMENT"
-      detail: "Opt-in density lens (DD-2). Advisory: never FAIL, never AUTO. Bucket DISCUSS; remediation names the destination reference and the pointer left behind."
+      detail: "Opt-in density lens (DD-2). Advisory: never FAIL. Disposition IMPROVE; remediation names the destination reference and the pointer left behind."
     - id: "dd_intra_file_redundancy"
       name: "Density -- same fact stated more than once within one file"
       keywords: ["density", "intra-file duplication", "redundancy", "state once", "cross-reference"]
-      summary: "The same fact stated multiple times within THIS file (distinct from ccp_cross_file_duplication, which is across the role chain and FAIL/AUTO). Keep the single best statement; replace the others with a cross-reference."
+      summary: "The same fact stated multiple times within THIS file (distinct from ccp_cross_file_duplication, which is across the role chain and FAIL/FIX). Keep the single best statement; replace the others with a cross-reference."
       severity: "JUDGMENT"
-      detail: "Opt-in density lens (DD-3). Advisory: never FAIL, never AUTO. Bucket DISCUSS; remediation names which statement survives."
+      detail: "Opt-in density lens (DD-3). Advisory: never FAIL. Disposition IMPROVE; remediation names which statement survives."
     - id: "dd_value_earns_tokens"
       name: "Density -- section does not earn its tokens (classic-file value filter)"
       keywords: ["density", "value filter", "earns tokens", "low value verbose", "downgrade"]
       summary: "The classic-file generalization of the code-directory value filter: a section that does not earn its tokens under the value lattice AND is verbose about it. Defers the ranking + carve-outs to code-dir-insight-filter.md Step 4 (SSOT). Does NOT double-count with CD-5/J -- on a code-directory file, value findings stay in CD-5."
       severity: "JUDGMENT"
-      detail: "Opt-in density lens (DD-4). Advisory: never FAIL, never AUTO. Bucket DISCUSS; remediation proposes downgrade-to-a-line or confirmed deletion of a contentless section."
+      detail: "Opt-in density lens (DD-4). Advisory: never FAIL. Disposition IMPROVE; remediation proposes downgrade-to-a-line or confirmed deletion of a contentless section."
   taxonomy:
     - id: "A_wrong_role_content"
       name: "Content sits at the wrong role in the CLAUDE.md hierarchy"
       keywords: ["wrong role", "wrong scope", "child rule in root", "root rule in child"]
       detection_signal: "Agent judgment from cohesion-principles role-to-criteria map. Body section's scope is narrower or broader than the file's role allows."
       default_remediation: "Propose moving the section to the correct-scope CLAUDE.md (e.g. narrow root rule -> subdirectory CLAUDE.md; broad subdir rule -> project root CLAUDE.md). User confirms the move."
-      bucket: "DISCUSS"
+      bucket: "IMPROVE"
     - id: "B_ccp_cross_file_duplication"
       name: "Rule restated from parent CLAUDE.md"
       keywords: ["duplication", "parent rule", "inheritance violation", "redundant"]
       detection_signal: "Body restates a rule already present in an ancestor CLAUDE.md (read during the audit's role-walk phase)."
-      default_remediation: "Delete the restated rule from the child file. The parent rule is loaded automatically when the agent descends into the child."
-      bucket: "AUTO"
+      default_remediation: "Delete the restated rule from the child file (the parent rule loads automatically when the agent descends into the child). Apply the loss-free-deletion guard first: diff the restated rule against the parent copy and fold any child-local delta into the parent SSOT (or a REMINDER-PLUS-REFERENCE summary line of a dozen tokens or less naming it) before deleting."
+      bucket: "FIX"
     - id: "C_crp_split_candidate"
       name: "Body sections serve different reading tasks (CRP split warranted)"
       keywords: ["crp split", "different reading tasks", "progressive disclosure", "decomposition"]
       detection_signal: "Body over size threshold AND agent judgment that sections genuinely serve different reading tasks (e.g. setup-time rules + on-task triggers + reference glossary)."
       default_remediation: "Propose an L1 -> L2 / L3 decomposition: move on-task content to a SKILL.md (L2); move reference content to a reference doc (L3). User confirms before splitting."
-      bucket: "DISCUSS"
+      bucket: "IMPROVE"
     - id: "D_adp_forward_dependency"
       name: "Parent CLAUDE.md depends on descendant content"
       keywords: ["adp", "forward dependency", "graph cycle", "wrong load order"]
       detection_signal: "Body references or assumes content from a descendant CLAUDE.md (e.g. 'see subsystem/CLAUDE.md for the rule')."
       default_remediation: "Either inline the descendant content into the parent (if the rule is truly parent-scoped) or remove the forward reference (if the rule is descendant-scoped and the parent has no business assuming it). User confirms."
-      bucket: "DISCUSS"
+      bucket: "IMPROVE"
     - id: "E_schema_failure"
       name: "claude_md: YAML block fails schema validation"
       keywords: ["schema fail", "claude_md schema", "yaml validation", "contract block"]
       detection_signal: "audit.py reports schema validation failure for the file's claude_md: YAML block (missing required key, wrong type, forbidden key)."
-      default_remediation: "Surface the failing rows. Missing fields with sensible defaults are AUTO sub-cases; authorial fields are DISCUSS."
-      bucket: "DISCUSS"
+      default_remediation: "Surface the failing rows. A missing field with a sensible default is decidable by convention -> FIX (add it). A field requiring authorial judgment -> IMPROVE (offer it as a one-liner)."
+      bucket: "FIX"
     - id: "F_hygiene_threshold"
       name: "Body over size threshold (CRP-evaluation prompt)"
       keywords: ["hygiene", "size threshold", "line count", "token count"]
       detection_signal: "Mechanical INFO finding: body line count > 500 or token count > 3000."
       default_remediation: "Run the CRP test (do sections serve different reading tasks?). If yes, escalate to C. If no, INFO stays as-is."
-      bucket: "DISCUSS"
+      bucket: "IMPROVE"
     - id: "G_descendant_role_mismatch"
       name: "Local file (.local) carries non-local content"
       keywords: [".local", "personal scope", "machine-specific", "wrong file"]
       detection_signal: "CLAUDE.local.md body contains project-conventional content that should be in the checked-in CLAUDE.md instead of a personal override."
       default_remediation: "Propose moving the project-conventional content to the checked-in CLAUDE.md (so all collaborators see it). User confirms before moving."
-      bucket: "DISCUSS"
+      bucket: "IMPROVE"
     - id: "P_stale_factual_claim"
       name: "A numeric count or checkable factual claim is contradicted by current repo state"
       keywords: ["stale count", "stale claim", "factual drift", "wrong number", "A-3 classic home"]
       detection_signal: "A-3 stale-reference hit: a numeric count or other checkable factual claim in a classic (non-code-directory) CLAUDE.md (e.g. 'the six unittest suites') is contradicted by current repo state (e.g. seven test files exist)."
-      default_remediation: "AUTO when the fix is a mechanical count/value update with unambiguous ground truth (recount and correct the number). DISCUSS when the discrepancy might be intentional (e.g. the count is aspirational or the claim is ambiguous). User confirms in the DISCUSS case."
-      bucket: "DISCUSS"
+      default_remediation: "FIX when the fix is a mechanical count/value update with unambiguous ground truth (recount and correct the number; prefer the information-preserving fix -- correct the count AND add the missing entry). IMPROVE when the discrepancy might be intentional (the count is aspirational or the claim is ambiguous) -- offer it as a one-liner."
+      bucket: "FIX"
     - id: "Q_skill_content_duplication"
       name: "CLAUDE.md restates content a skill owns"
       keywords: ["skill duplication", "C-6", "skill content in CLAUDE.md", "trim to guardrail", "pointer"]
       detection_signal: "C-6 hit: a substantial block in a CLAUDE.md (or a project reference doc it cites) restates content owned by a skill or skill reference (verbatim or near-verbatim). NOT B, which is ancestor-CLAUDE.md restatement."
-      default_remediation: "Trim to a one-line guardrail naming the rule or failure mode plus a pointer to the skill (per C-5/A-4); the skill carries the depth. An authorial judgment -- user confirms what the guardrail line keeps."
-      bucket: "DISCUSS"
+      default_remediation: "Trim to a one-line guardrail naming the rule or failure mode plus a pointer to the skill (per C-5/A-4); the skill carries the depth. This is dedup under the summarize-and-reference rule (REMINDER PLUS REFERENCE): keep an inline reminder of a dozen tokens or less plus the pointer to the SSOT skill, reference-only beyond that budget. Apply the loss-free-deletion guard first -- fold any local delta into the guardrail line before trimming."
+      bucket: "FIX"
     - id: "H_stale_anchor"
       name: "CodeDir: requires-present anchor no longer resolves"
       keywords: ["code-directory", "stale anchor", "broken symbol", "missing sibling", "fidelity"]
       detection_signal: "A `requires-present` anchor (symbol / file / sibling / field the claim says should exist) is absent after a repo-wide check, and is not classified external / generated / template / vendored."
-      default_remediation: "Re-anchor the claim to the current symbol/path, or delete the claim if the code it describes is gone. User confirms."
-      bucket: "DISCUSS"
+      default_remediation: "Re-anchor the claim to the current symbol/path (FIX -- the target mechanism was found), or delete the claim if the code it describes is gone (FIX -- deleting falsified content loses nothing). SERIOUS instead when the stale anchor is a protective rail with NO surviving mechanism -- the real finding is the unprotected invariant."
+      bucket: "FIX"
     - id: "H2_inverted_absence"
       name: "CodeDir: requires-absent thing is now present"
       keywords: ["code-directory", "negative existence", "tracked secret", "forbidden present", "invariant violated"]
       detection_signal: "A `requires-absent` claim's asserted-absent thing now exists (a tracked file under a gitignored SSOT path; a FORBIDDEN name that now resolves)."
-      default_remediation: "Surface loudly -- the invariant the claim guards is violated. The fix is in the code/repo, not the CLAUDE.md. User decides."
-      bucket: "DISCUSS"
+      default_remediation: "Surface loudly at the TOP of the report as a SERIOUS finding -- the invariant the claim guards is violated; the doc problem reveals a real-world problem. The fix is in the code/repo, not the CLAUDE.md. Never auto-fixed."
+      bucket: "SERIOUS"
     - id: "I_claim_drift"
       name: "CodeDir: claim no longer matches the code in kind"
       keywords: ["code-directory", "claim drift", "stale claim", "in kind"]
       detection_signal: "Reading the anchored code contradicts the claim in kind (decomposed god-object, resolved TODO, bypass now gone). NOT a counted-magnitude difference."
-      default_remediation: "Re-validate with the user; update the mechanism/magnitude or retire the claim."
-      bucket: "DISCUSS"
+      default_remediation: "Update the mechanism/magnitude or retire the claim. FIX when the audit verified the actual behavior from the code reading -- intent re-derivation is not a blocker, the code reading is evidence. IMPROVE only when the correct claim cannot be decided from a fact (offer as a one-liner)."
+      bucket: "FIX"
     - id: "I2_line_drift"
       name: "CodeDir: cited line number drifted from its symbol"
       keywords: ["code-directory", "line drift", "re-anchor", "drop line number"]
       detection_signal: "The enclosing symbol the claim names resolves but is >~30 lines from the cited number, and the author gave no recovery hint."
-      default_remediation: "Drop the line number; keep the symbol anchor."
-      bucket: "AUTO"
+      default_remediation: "Drop the line number; keep the symbol anchor. Mechanical convention-violation fix."
+      bucket: "FIX"
     - id: "J_low_value_insight"
       name: "CodeDir: section fails the what-we-care-about value filter"
       keywords: ["code-directory", "low value", "bare inventory", "restatement", "value filter"]
       detection_signal: "A section is linter-caught / a language default / a bare un-annotated inventory / a pure schema restatement -- AND not protected by a carve-out (annotated Files/Schema, SSOT-pointing catalog, safety-rail cheatsheet, topology table)."
-      default_remediation: "Propose deletion (bare inventory) or downgrade. User confirms; bare-inventory deletion may be AUTO."
-      bucket: "DISCUSS"
+      default_remediation: "FIX for a bare un-annotated inventory / language default / pure restatement / linter-caught content -- delete it (be aggressive; a default trim is decidable). IMPROVE when the section carries TRUE content that passes the one-line test (offer the trim as a one-liner). SILENT for a validator detection artifact or an accepted structural pattern (historical record, agent-definition file). Apply the loss-free-deletion guard before any deletion."
+      bucket: "FIX"
     - id: "L_verbose_in_place"
       name: "Density: correctly-placed section is over-worded"
       keywords: ["density", "verbose", "tighten in place", "ceremony", "token reduction"]
       detection_signal: "Density lens (DD-1): a valuable, correctly-scoped section uses materially more words than its information content requires, and is not protected by a carve-out (teaching example, load-bearing nuance, labeled safety-rail repetition)."
-      default_remediation: "Propose a tightened rewrite (or the specific sentences to compress) IN PLACE, with an approximate token-savings figure. Never move or delete. User confirms."
-      bucket: "DISCUSS"
+      default_remediation: "Propose a tightened rewrite (or the specific sentences to compress) IN PLACE, with an approximate token-savings figure. Never move or delete. Offer as a one-liner (trim of true content passing the one-line test)."
+      bucket: "IMPROVE"
     - id: "M_extract_to_reference"
       name: "Density: self-contained block should move to a reference"
       keywords: ["density", "disclosure", "extract to reference", "pointer", "progressive disclosure"]
       detection_signal: "Density lens (DD-2): a self-contained on-demand block is large enough to tax every reader who does not need it; it belongs one disclosure level deeper (references/*.md or a SKILL.md) within the same scope."
-      default_remediation: "Propose moving the block to a named reference doc and leaving a one-line pointer behind, with an approximate token-savings figure. User confirms before extracting."
-      bucket: "DISCUSS"
+      default_remediation: "Propose moving the block to a named reference doc and leaving a one-line pointer behind, with an approximate token-savings figure. A structural (disclosure-level) move -- offer as a one-liner."
+      bucket: "IMPROVE"
     - id: "N_intra_file_redundancy"
       name: "Density: same fact stated more than once within one file"
       keywords: ["density", "intra-file duplication", "redundancy", "state once"]
       detection_signal: "Density lens (DD-3): a fact is restated in multiple sections of THIS file (not across the role chain -- that is B)."
-      default_remediation: "Propose keeping the single best statement and replacing the others with a cross-reference. User confirms which survives."
-      bucket: "DISCUSS"
+      default_remediation: "Propose keeping the single best statement and replacing the others with a cross-reference (the summarize-and-reference rule, within one file). Offer as a one-liner; the density lens stays advisory."
+      bucket: "IMPROVE"
     - id: "O_low_value_verbose"
       name: "Density: section does not earn its tokens (classic-file value filter)"
       keywords: ["density", "low value", "value filter", "downgrade", "earns tokens"]
       detection_signal: "Density lens (DD-4): a classic-file section fails the value lattice (code-dir-insight-filter.md Step 4) AND is verbose. Not run on code-directory files (CD-5/J owns value there)."
-      default_remediation: "Propose downgrade (compress to a line) or, for a contentless section, deletion. User confirms; this lens never auto-deletes."
-      bucket: "DISCUSS"
+      default_remediation: "Propose downgrade (compress to a line) or, for a contentless section, deletion. Offer as a one-liner; this opt-in lens stays IMPROVE and never auto-deletes."
+      bucket: "IMPROVE"
     - id: "K_unclassified"
       name: "Unclassified / special case"
       keywords: ["unclassified", "special case", "escape hatch", "K bucket"]
@@ -263,7 +263,7 @@ audit_skill:
     - id: "audit_claude_md"
       name: "Audit one CLAUDE.md and dispatch remediations"
       keywords: ["audit", "claude.md", "single-file audit", "compliance verdict", "dispatch"]
-      goal: "For each target CLAUDE.md, run mechanical and judgment-based checks against the framework's contract, classify findings into the taxonomy, dispatch remediations to AUTO/DISCUSS/SPECIAL buckets, and emit a per-file compliance verdict."
+      goal: "For each target CLAUDE.md, run mechanical and judgment-based checks against the framework's contract, classify findings into the taxonomy, assign each a disposition (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL), and emit a per-file compliance verdict."
       preconditions:
         - "audit.py is reachable (mechanical schema validator -- only needed if a claude_md: YAML block is present)."
         - "references/audit-criteria.md is loadable (the self-contained classic criteria doc; the upstream cohesion-principles is its derivation and is NOT loaded by the audit path)."
@@ -284,17 +284,17 @@ audit_skill:
           expected: "Structured per-file findings (group incl. CodeDir and Density, severity, criterion, message, line, taxonomy, bucket, remediation) + per-file verdict."
           on_failure: "If the Workflow tool is not available in this environment (subagent contexts do not expose it), fall back to the ONE-file inline detect procedure run sequentially per file -- detection and remediation stay separate passes. If the schema validator is unavailable, the lane marks the Schema group JUDGMENT ('validator unavailable') and continues -- never fail a file for that. If an anchor cannot be classified or resolved cheaply, mark it external-unverifiable/INFO rather than FAIL."
         - n: 3
-          action: "Render the per-file report (output_template) from the collected findings: per-file verdict blocks followed by an overall summary with bucket counts. This is the before-Q&A surface the user reads."
-          expected: "Markdown report in the user's chat with compliance verdicts and AUTO/DISCUSS/SPECIAL counts."
+          action: "Render the per-file report (output_template) from the collected findings, then the REPORT CONTRACT summary in three visible sections IN THIS ORDER, no hedging: (1) SERIOUS -- lead with 'Found <N> serious issue(s) that require fixing' and a one-line summary per issue (secrets, fictional protective rails, doc problems that reveal a real-world problem); never auto-fixed, never buried. (2) FIX -- the count that will be auto-applied and land in the reviewable remediation CL. (3) IMPROVE -- 'Audit found <N> improvement opportunit(ies). Do you want to discuss them?' plus one one-line pitch each. SILENT findings do NOT appear. If a section's count is zero, omit that section."
+          expected: "Markdown report: per-file verdicts, then SERIOUS (summarized, top) / FIX (applied count) / IMPROVE (count + one-liners); SILENT omitted."
         - n: 4
-          action: "Q&A GATE. If non_interactive is FALSE (default): for each DISCUSS and SPECIAL finding, ask the user for a decision (apply as-proposed / skip / a refined instruction). Surface one decision at a time or a tight grouped set; do not dump a giant list. If non_interactive is TRUE: infer each decision from the taxonomy's default_remediation plus the file content and proceed WITHOUT prompting -- record each inferred decision in the final summary so the user can see and reverse them. AUTO findings need no decision (they apply by definition)."
-          expected: "A decision (explicit or inferred) attached to every AUTO/DISCUSS/SPECIAL finding."
+          action: "Q&A GATE. If non_interactive is FALSE (default): SERIOUS findings are surfaced summarized at the top and never auto-fixed (the user decides the real-world fix); for each IMPROVE and SPECIAL finding the user opted to discuss, ask for a decision (apply as-proposed / skip / a refined instruction). Surface a tight grouped set; do not dump a giant list. A declined IMPROVE is recorded in the file's `md-audit-declined:` frontmatter so a re-audit does not re-pitch it. If non_interactive is TRUE: apply FIX findings, surface SERIOUS, and infer each IMPROVE/SPECIAL decision from the taxonomy's default_remediation plus the file content -- record each inferred decision in the final summary so the user can see and reverse them. FIX findings need no decision (they apply by definition); SILENT findings are never surfaced."
+          expected: "SERIOUS summarized; a decision (explicit or inferred) attached to every IMPROVE/SPECIAL the user engaged; FIX applied."
         - n: 5
-          action: "REMEDIATE phase (after-Q&A). Assemble per-file remediation lists from the decided findings (AUTO=apply; DISCUSS/SPECIAL=per decision; drop skips). Choose mode by how many FILES carry remediation work. ONE file: apply inline with Edit. TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/claude-md-audit/workflow/remediate.js and args = { perFile:[{path,role,remediations:[{criterion,taxonomy,bucket,line,instruction,decision}]}] }. One lane per file (disjoint files never conflict)."
+          action: "REMEDIATE phase (after-Q&A). Assemble per-file remediation lists from the decided findings (FIX=apply; IMPROVE/SPECIAL=per decision; SERIOUS never auto-applied; drop skips). Choose mode by how many FILES carry remediation work. ONE file: apply inline with Edit. TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/claude-md-audit/workflow/remediate.js and args = { perFile:[{path,role,remediations:[{criterion,taxonomy,bucket,line,instruction,decision}]}] }. One lane per file (disjoint files never conflict)."
           tool: "Workflow | inline"
           expected: "Edits applied to the target files; per-file applied/skipped/failed summary."
         - n: 6
-          action: "Render the final summary: what was applied per file, what was skipped, any failures, and the bucket totals. Remind the user that re-running the audit should now reproduce a clean (or reduced-FAIL) verdict -- detection and remediation are separate passes, so the re-run is the verification step. Scope the verification re-run to the files that were actually MODIFIED by remediation -- results for untouched files stand; re-auditing them wastes runs."
+          action: "Render the final summary: FIX applied per file, IMPROVE decisions, SERIOUS still-open (never auto-applied), any failures. Remind the user that re-running the audit should now reproduce a clean (or reduced-FAIL) verdict -- detection and remediation are separate passes, so the re-run is the verification step. Scope the verification re-run to the files that were actually MODIFIED by remediation -- results for untouched files stand; re-auditing them wastes runs."
           expected: "Closing summary; user can re-run /md-audit claude-md on the modified files to verify FAILs cleared."
       output_template: |
         ## <file path> (<role>)
@@ -326,47 +326,71 @@ audit_skill:
 
         <P> PASS / <F> FAIL / <I> INFO / <J> JUDGMENT-REQUIRED
         Verdict: COMPLIANT | NON-COMPLIANT
-        Remediation routed: AUTO=<N>, DISCUSS=<N>, SPECIAL=<N>
+
+        ## Report (SERIOUS -> FIX -> IMPROVE; SILENT omitted, no hedging)
+
+        ### SERIOUS -- Found <N> serious issue(s) that require fixing
+        - <one-line summary per issue>   (never auto-fixed; the fix is a real-world action)
+
+        ### FIX -- <N> applied (in the reviewable remediation CL)
+        - <criterion>: <what was corrected>
+
+        ### IMPROVE -- Audit found <N> improvement opportunit(ies). Do you want to discuss them?
+        - <criterion>: <one-line pitch>
       gotchas:
         - "Role classification is anchored on cwd (the directory claude was launched in). The cwd CLAUDE.md is `root` only when no CLAUDE.md exists above it; if an ancestor CLAUDE.md is found, the cwd file is classified `child` so the project-root-only hygiene checks (H1/H2/H3) do not fire on a subordinate file and the parent-child duplication check runs against the ancestor."
         - "INFO findings are advisory (size signals, migration opportunities). They do NOT escalate to FAIL on subsequent runs even if unaddressed."
         - "When auditing a child CLAUDE.md, the parent must be read for CCP duplication checks. If the parent cannot be located (e.g. standalone file with no project context), report 'parent unavailable' for parent-relative criteria rather than failing them silently."
         - "For role=local (CLAUDE.local.md), only D-group criteria apply (see role-to-criteria map). Hygiene and ADP rules are skipped because the file is by design personal-scoped."
-        - "The density lens (DD-1..DD-4, group Density) is OPT-IN and ADVISORY: it loads references/density-criteria.md only when density_lens is true, every finding is JUDGMENT/DISCUSS, and it never produces FAIL or AUTO. A density-only run is always COMPLIANT -- the lens surfaces token-efficiency opportunities, it never gates. Density findings do not change the verdict and do not escalate on re-runs."
-        - "Density vs the classic criteria -- do not double-count: O_low_value_verbose (DD-4) is the CLASSIC-file value filter and must not fire on a code-directory file (CD-5/J owns value there); M_extract_to_reference (DD-2) is a disclosure-level move within one scope, distinct from A_wrong_role_content (different file) and finer than C_crp_split_candidate (whole-file split); N_intra_file_redundancy (DD-3) is within one file, distinct from B (across the role chain, FAIL/AUTO)."
+        - "The density lens (DD-1..DD-4, group Density) is OPT-IN and ADVISORY: it loads references/density-criteria.md only when density_lens is true, every finding is JUDGMENT with disposition IMPROVE, and it never produces FAIL. A density-only run is always COMPLIANT -- the lens surfaces token-efficiency improvement opportunities, it never gates. Density findings do not change the verdict and do not escalate on re-runs."
+        - "Density vs the classic criteria -- do not double-count: O_low_value_verbose (DD-4) is the CLASSIC-file value filter and must not fire on a code-directory file (CD-5/J owns value there); M_extract_to_reference (DD-2) is a disclosure-level move within one scope, distinct from A_wrong_role_content (different file) and finer than C_crp_split_candidate (whole-file split); N_intra_file_redundancy (DD-3) is within one file, distinct from B (across the role chain, FAIL/FIX)."
+        - "Disposition is instance-level, not a fixed property of the taxonomy id: the `bucket` field is only the DEFAULT starting point; the detect.js step-8 classifier assigns FIX / SERIOUS / IMPROVE / SILENT per finding against the explicit predicates. Same file, same finding -> same disposition (idempotent)."
+  # Disposition mapping (four-disposition model): the structural lanes below are
+  # retained for schema stability across all audit members. auto = FIX categories
+  # (auto-applied; land in the reviewable CL). discuss = SERIOUS (surfaced at top,
+  # summarized, NEVER auto) + IMPROVE (count + one-liners, opt-in) categories,
+  # disposition noted per entry. special = K escape hatch. The FINAL per-finding
+  # disposition is assigned instance-level by the detect.js step-8 classifier;
+  # these defaults are the starting point.
   remediations:
     auto:
       - category: "B_ccp_cross_file_duplication"
-        procedure: "Delete the restated rule from the child file. The parent rule loads automatically when the agent descends into the child directory."
-        agent_template: "Background agent receives child CLAUDE.md path + duplicated-rule line range + parent rule reference. Applies the deletion and confirms the parent rule is still present."
+        procedure: "[FIX] Delete the restated rule from the child file (the parent rule loads automatically when the agent descends into the child directory). Loss-free-deletion guard first: fold any child-local delta into the parent SSOT or a REMINDER-PLUS-REFERENCE summary line before deleting."
+        agent_template: "Background agent receives child CLAUDE.md path + duplicated-rule line range + parent rule reference. Folds any local delta into the parent, applies the deletion, confirms the parent rule is still present."
       - category: "I2_line_drift"
-        procedure: "Remove the stale line number from the claim, keeping the symbol anchor. The symbol resolves; only the number rotted."
+        procedure: "[FIX] Remove the stale line number from the claim, keeping the symbol anchor. The symbol resolves; only the number rotted."
         agent_template: "Background agent receives the claim line + the cited (drifted) line number + the resolved symbol location. Strips the number, leaves the symbol reference intact."
-    discuss:
-      - category: "H_stale_anchor"
-        procedure: "Surface the unresolved requires-present anchor. Re-anchor to the current symbol/path the user identifies, or delete the claim if the code is gone."
-      - category: "H2_inverted_absence"
-        procedure: "Surface the violated invariant (the asserted-absent thing is now present). The remediation is in the repo, not the CLAUDE.md; confirm whether the claim should escalate to a code-review finding."
-      - category: "I_claim_drift"
-        procedure: "Show the claim and the contradicting code read. User updates the mechanism/magnitude or retires the claim. Counted magnitudes alone are never flagged."
-      - category: "J_low_value_insight"
-        procedure: "Show the low-value section and why it fails the value filter (after carve-outs). User confirms deletion or downgrade; a genuinely bare inventory may be deleted as AUTO."
-      - category: "A_wrong_role_content"
-        procedure: "Propose moving the misplaced section to the correct-scope CLAUDE.md. Show the destination and the line range to move. User confirms before applying."
-      - category: "C_crp_split_candidate"
-        procedure: "Propose an L1 -> L2/L3 decomposition: which sections move to a SKILL.md, which become reference docs, and the triggering criteria per reference. User confirms before splitting."
-      - category: "D_adp_forward_dependency"
-        procedure: "Surface the forward reference. Ask user: inline the descendant content (rule is parent-scoped) or remove the reference (rule is descendant-scoped)? Apply the user's choice."
       - category: "E_schema_failure"
-        procedure: "Show the failing schema rows. AUTO sub-cases (missing optional defaults) can be applied immediately; authorial-choice rows wait for the user."
-      - category: "F_hygiene_threshold"
-        procedure: "Run the CRP test (do body sections serve different reading tasks?). If yes, escalate to C. If no, INFO stays; the larger CLAUDE.md is correct."
-      - category: "G_descendant_role_mismatch"
-        procedure: "Propose moving project-conventional content from .local file into the checked-in CLAUDE.md (so all collaborators see it). User confirms before applying."
+        procedure: "[FIX default] Add a missing field with a sensible default (decidable by convention). An authorial-judgment field routes to IMPROVE (offer as a one-liner)."
+        agent_template: "Background agent receives the failing schema rows; adds each missing-default field; reports authorial rows back for the IMPROVE lane."
       - category: "P_stale_factual_claim"
-        procedure: "Show the stale count/claim and current ground truth. AUTO sub-case (unambiguous mechanical correction) can be applied immediately; ambiguous cases (discrepancy might be intentional) wait for the user."
+        procedure: "[FIX default] Recount and correct the number against unambiguous ground truth; prefer the information-preserving fix (correct the count AND add the missing entry). An ambiguous / possibly-intentional discrepancy routes to IMPROVE (offer as a one-liner)."
+        agent_template: "Background agent receives the stale claim + current ground truth; applies the mechanical correction; reports ambiguous cases back for the IMPROVE lane."
       - category: "Q_skill_content_duplication"
-        procedure: "Show the restated block and the owning skill/reference. Propose trimming to a one-line guardrail plus a pointer to the skill (per C-5/A-4); the skill carries the depth. User confirms what the guardrail line keeps."
+        procedure: "[FIX] Trim to a one-line guardrail naming the rule/failure mode plus a pointer to the owning skill (per C-5/A-4) -- dedup under the summarize-and-reference rule (REMINDER PLUS REFERENCE, a dozen tokens or less, else reference-only). Loss-free-deletion guard first: fold any local delta into the guardrail line."
+        agent_template: "Background agent receives the restated block + owning skill/reference; folds any local delta into a guardrail line, replaces the block with reminder-plus-pointer."
+      - category: "H_stale_anchor"
+        procedure: "[FIX default] Re-anchor the claim to the found current symbol/path, or delete it if the code is gone (falsified content). SERIOUS instead when the anchor guards a protective rail with NO surviving mechanism -- surface the unprotected invariant at the top, do not auto-fix."
+        agent_template: "Background agent receives the unresolved anchor + the found target (or absence proof); re-anchors or deletes; escalates a no-surviving-mechanism rail to the SERIOUS surface."
+      - category: "I_claim_drift"
+        procedure: "[FIX default] Update the mechanism/magnitude or retire the claim when the actual behavior was verified from the code reading (the code reading is evidence). IMPROVE only when no fact decides. Counted magnitudes alone are never flagged."
+        agent_template: "Background agent receives the claim + the contradicting code read; applies the verified correction."
+      - category: "J_low_value_insight"
+        procedure: "[FIX default] Delete a bare un-annotated inventory / default / restatement (be aggressive), after the loss-free-deletion guard. A trim of TRUE content passing the one-line test -> IMPROVE; a validator artifact / historical record / accepted pattern -> SILENT (not surfaced)."
+        agent_template: "Background agent receives the low-value section + the value-filter reasoning; deletes bare inventory after folding any local delta; routes true-content trims to IMPROVE."
+    discuss:
+      - category: "H2_inverted_absence"
+        procedure: "[SERIOUS] Surface at the TOP of the report, summarized -- the invariant the claim guards is violated (the asserted-absent thing is now present); the doc problem reveals a real-world problem. The remediation is in the repo, not the CLAUDE.md. NEVER auto-fixed."
+      - category: "A_wrong_role_content"
+        procedure: "[IMPROVE] Propose moving the misplaced section to the correct-scope CLAUDE.md. Show the destination and the line range to move. One-line pitch; user opts in."
+      - category: "C_crp_split_candidate"
+        procedure: "[IMPROVE] Propose an L1 -> L2/L3 decomposition: which sections move to a SKILL.md, which become reference docs, and the triggering criteria per reference. One-line pitch; user opts in before splitting."
+      - category: "D_adp_forward_dependency"
+        procedure: "[IMPROVE] Surface the forward reference. Ask user: inline the descendant content (rule is parent-scoped) or remove the reference (rule is descendant-scoped)? One-line pitch; apply the user's choice."
+      - category: "F_hygiene_threshold"
+        procedure: "[IMPROVE] Run the CRP test (do body sections serve different reading tasks?). If yes, escalate to C. If no, INFO stays; the larger CLAUDE.md is correct."
+      - category: "G_descendant_role_mismatch"
+        procedure: "[IMPROVE] Propose moving project-conventional content from .local file into the checked-in CLAUDE.md (so all collaborators see it). One-line pitch; user opts in before applying."
       - category: "L_verbose_in_place"
         procedure: "Show the over-worded section and a tightened rewrite (or the sentences to compress) with an approximate token-savings figure. Tighten IN PLACE only -- never move or delete. User confirms; honor carve-outs (teaching examples, load-bearing nuance, labeled safety-rail repetition)."
       - category: "M_extract_to_reference"
@@ -392,7 +416,7 @@ audit_skill:
       keywords: ["self-remediation", "single-pass", "idempotency"]
       why_it_seems_right: "Auditing one file and applying remediations in the same pass seems efficient -- one tool call, fewer round trips."
       why_it_is_wrong: "Mixing detection and remediation in one pass breaks idempotency. The verdict and remediation are separate phases; conflating them prevents re-runs from producing the same findings."
-      alternative: "Run the audit procedure to completion. Render the verdict. Dispatch remediations as separate AUTO + DISCUSS work units. Re-run the audit after remediation to verify."
+      alternative: "Run the audit procedure to completion. Render the verdict. Dispatch remediations as separate FIX (auto-applied) + IMPROVE (opt-in) work units, surface SERIOUS at the top. Re-run the audit after remediation to verify."
     - id: "duplicate_parent_rule_for_convenience"
       name: "Restate a parent rule in a child file 'for convenience'"
       keywords: ["duplication", "parent rule", "child file", "ccp violation"]
@@ -407,8 +431,8 @@ audit_skill:
 - `list` -- show numbered list of CLAUDE.md files visible from cwd; do not audit.
 - `<path>` -- audit a specific CLAUDE.md or CLAUDE.local.md.
 - `<numbers>` -- audit files by index from the most recent `list` output (e.g. `3 7 9`).
-- `fast` / `--fast` / `--yes` / `-y` -- non-interactive: skip the Q&A round and infer every DISCUSS/SPECIAL decision (see Non-interactive mode). Combine with any selector, e.g. `/md-audit claude-md 3 7 fast`. Prose intent ("audit these and just apply everything, don't ask me") sets the same flag.
-- `density` / `--density` -- add the opt-in density lens (DD-1..DD-4: verbosity-in-place, extract-to-reference, intra-file redundancy, value-earns-tokens). Advisory only -- all findings are JUDGMENT/DISCUSS, never FAIL/AUTO, so a density-only run is always COMPLIANT. Combine with any selector, e.g. `/md-audit claude-md 3 density`. Prose intent ("is this CLAUDE.md too verbose", "can anything move to a reference", "audit for token efficiency") sets the same flag. Off by default; the lens never runs unless requested.
+- `fast` / `--fast` / `--yes` / `-y` -- non-interactive: skip the Q&A round and infer every IMPROVE/SPECIAL decision (see Non-interactive mode); FIX applies by definition, SERIOUS is surfaced. Combine with any selector, e.g. `/md-audit claude-md 3 7 fast`. Prose intent ("audit these and just apply everything, don't ask me") sets the same flag.
+- `density` / `--density` -- add the opt-in density lens (DD-1..DD-4: verbosity-in-place, extract-to-reference, intra-file redundancy, value-earns-tokens). Advisory only -- all findings are JUDGMENT, disposition IMPROVE, never FAIL, so a density-only run is always COMPLIANT. Combine with any selector, e.g. `/md-audit claude-md 3 density`. Prose intent ("is this CLAUDE.md too verbose", "can anything move to a reference", "audit for token efficiency") sets the same flag. Off by default; the lens never runs unless requested.
 
 Typical workflow: `/md-audit claude-md list` to see what's available, then `/md-audit claude-md 3 7` to audit specific files. Add `density` to also surface token-efficiency opportunities: `/md-audit claude-md 3 density`.
 
@@ -436,7 +460,7 @@ Both accept `args` as an object or JSON string. Pass absolute `refs` paths (they
 
 ## Non-interactive mode
 
-When the non-interactive flag is set (argument token or expressed intent), the Q&A gate does not prompt. Instead, infer each DISCUSS/SPECIAL decision from the taxonomy's `default_remediation` plus the file content, apply them, and **list every inferred decision in the final summary** so the user can see and reverse them. AUTO findings apply regardless. FAIL findings are still gated by the verdict; non-interactive only changes how the *decisions* are obtained, not the audit contract. Interactive mode is the default; non-interactive is opt-in per the rule above.
+When the non-interactive flag is set (argument token or expressed intent), the Q&A gate does not prompt. Instead, infer each IMPROVE/SPECIAL decision from the taxonomy's `default_remediation` plus the file content, apply them, and **list every inferred decision in the final summary** so the user can see and reverse them. FIX findings apply regardless; SERIOUS findings are surfaced summarized at the top and never auto-applied; SILENT findings are never surfaced. FAIL findings are still gated by the verdict; non-interactive only changes how the *decisions* are obtained, not the audit contract. Interactive mode is the default; non-interactive is opt-in per the rule above.
 
 ## Decision rules
 

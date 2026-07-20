@@ -141,7 +141,7 @@ CLAUDE_MD_HEADER = f"""\
 //     path: string,
 //     role: string,
 //     remediations: [ {{
-//       criterion: string, taxonomy: string, bucket: "AUTO"|"DISCUSS"|"SPECIAL",
+//       criterion: string, taxonomy: string, bucket: "FIX"|"SERIOUS"|"IMPROVE"|"SILENT"|"SPECIAL",
 //       line: integer|null,
 //       instruction: string,          // the concrete edit to make
 //       decision: "apply"|"skip"|string  // user/inferred decision; free-text = a
@@ -197,7 +197,7 @@ SKILL_AUDIT_HEADER = f"""\
 //   perFile: [ {{
 //     path: string,
 //     remediations: [ {{
-//       criterion: string, taxonomy: string, bucket: "AUTO"|"DISCUSS"|"SPECIAL",
+//       criterion: string, taxonomy: string, bucket: "FIX"|"SERIOUS"|"IMPROVE"|"SILENT"|"SPECIAL",
 //       line: integer|null,
 //       instruction: string,          // the concrete edit to make
 //       decision: "apply"|"skip"|string  // user/inferred decision; free-text = a
@@ -309,7 +309,7 @@ PROJECT_DOC_HEADER = f"""\
 //   perFile: [ {{
 //     path: string,
 //     remediations: [ {{
-//       criterion: string, taxonomy: string, bucket: "AUTO"|"DISCUSS"|"SPECIAL",
+//       criterion: string, taxonomy: string, bucket: "FIX"|"SERIOUS"|"IMPROVE"|"SILENT"|"SPECIAL",
 //       line: integer|null,
 //       instruction: string,          // the concrete edit/move to make
 //       decision: "apply"|"skip"|string  // user/inferred decision; free-text = a
@@ -442,14 +442,16 @@ DETECT_TOTALS_CHUNK = """\
 const results = perFile.filter(Boolean)
 const totals = results.reduce((acc, r) => {
   for (const fnd of r.findings) {
-    if (fnd.bucket === 'AUTO') acc.auto++
-    else if (fnd.bucket === 'DISCUSS') acc.discuss++
+    if (fnd.bucket === 'FIX') acc.fix++
+    else if (fnd.bucket === 'SERIOUS') acc.serious++
+    else if (fnd.bucket === 'IMPROVE') acc.improve++
+    else if (fnd.bucket === 'SILENT') acc.silent++
     else if (fnd.bucket === 'SPECIAL') acc.special++
     if (fnd.severity === 'FAIL') acc.fail++
   }
   if (r.verdict === 'NON-COMPLIANT') acc.nonCompliant++
   return acc
-}, { auto: 0, discuss: 0, special: 0, fail: 0, nonCompliant: 0 })
+}, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0 })
 """
 
 SHARED_CHUNK_TARGETS = {

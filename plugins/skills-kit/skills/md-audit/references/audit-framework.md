@@ -26,7 +26,7 @@ The cardinality axis of an audit-skill's subject, declared in the SKILL.md's `au
 
 A named operation declared in an audit-skill's `audit_skill.procedures` block. An audit-skill hosts:
 
-- **One+ findings-bearing procedure** -- the namesake audit operation. Runs the scaffolding, classifies findings into the taxonomy, dispatches AUTO / DISCUSS / SPECIAL.
+- **One+ findings-bearing procedure** -- the namesake audit operation. Runs the scaffolding, classifies findings into the taxonomy, assigns each a disposition (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL -- legacy AUTO / DISCUSS / SPECIAL for references-audit).
 - **Zero+ supporting procedures** -- inventory or report procedures over the shared subject (e.g. skill-audit's `roster` and `hierarchy`). Share the subject; do not exercise the findings/remediation machinery.
 
 Procedures within a skill share the subject but do not have to share rules; the framework permits multiple distinct audit-kinds inside one audit-skill if their procedures share a meaningful subject.
@@ -102,13 +102,17 @@ A per-audit-kind categorization of findings into remediation-shaped groups (typi
 
 ### bucket
 
-How a category dispatches for remediation:
+A category's DEFAULT disposition (a starting point); the final per-finding disposition is assigned instance-level by the audit's detect/classify lane against explicit predicates. The md-artifact audits (skill-md, claude-md, project-doc) use the **four-disposition model**:
 
-- **AUTO** -- mechanical edit; safe to apply via a background agent given a per-finding before/after payload.
-- **DISCUSS** -- requires user input on a sub-case or mapping; surfaces in a foreground Q&A round.
-- **SPECIAL** -- the escape hatch (typically category K); the finding did not fit any other category and the user proposes a strategy.
+- **FIX** -- decidable by a verified fact plus a documented convention; auto-applied and lands in a reviewable CL (a correction against a verified fact, deletion of falsified content, a convention-violation fix, dedup under the summarize-and-reference rule, a default/obvious trim). The bar: would a reasonable owner accept this diff in CL review without discussion?
+- **SERIOUS** -- surfaced summarized at the TOP of the report, never auto-fixed, never buried: secrets, a protective rail whose documented mechanism is fictional (the real finding is the unprotected invariant), or a doc problem that reveals a real-world problem.
+- **IMPROVE** -- reported as a count + one-line pitches; discussion is opt-in. Structural moves (graduate / fold / absorb / split / orphan-link / placement) and trims of true content that pass the one-line test. Declined IMPROVEs are recorded per-file (`md-audit-declined:` frontmatter) so re-audits do not re-pitch them.
+- **SILENT** -- not surfaced at all, no hedging: do-nothing conclusions, validator detection artifacts, accepted structural patterns (agent-definition files with zero inbound citations, historical records, companion-source PDFs).
+- **SPECIAL** -- the escape hatch (category K); the finding did not fit any other category and the user proposes a strategy.
 
-AUTO and DISCUSS dispatch in parallel. The user's foreground answers do not gate the background agent's AUTO edits; both merge at the end.
+Report contract: SERIOUS (summarized, top) -> FIX (applied count + CL) -> IMPROVE (count + one-liners, opt-in); SILENT omitted. FIX and IMPROVE dispatch in parallel; the user's foreground IMPROVE answers do not gate the background FIX edits; both merge at the end.
+
+The **legacy AUTO / DISCUSS / SPECIAL** lanes (mechanical / judgment-required / escape-hatch) are still in use by the `references-audit` member and remain the structural `remediations` lane names in every audit-skill's YAML contract (auto = FIX, discuss = SERIOUS + IMPROVE + SILENT-default, special = K). AUTO maps to FIX; DISCUSS splits into SERIOUS + IMPROVE under the four-disposition model.
 
 ### corpus
 
@@ -128,9 +132,9 @@ Scaffolding is the load-bearing convention this framework rests on. Any operatio
 ## Principles
 
 - **Scaffolding over inference.** Any operation that requires multiple tool calls to perform as one repeatable step, or any decision tree that would otherwise be inference-based, belongs in a Python script. Skills describe when to run the scaffolding and how to interpret its output; they do not re-derive rules per session.
-- **Idempotency.** Same input produces the same verdict. Rules, severities, taxonomy categories, and bucket assignments are fixed; do not re-rank or re-order findings session-to-session. The auditor must be able to re-run the audit after remediation and see only the findings the remediation did not resolve.
+- **Idempotency.** Same input produces the same verdict. Rules, severities, taxonomy categories, and disposition predicates are fixed; the same finding gets the same disposition every run (the `bucket` default plus the classifier predicates are deterministic). Do not re-rank or re-order findings session-to-session. The auditor must be able to re-run the audit after remediation and see only the findings the remediation did not resolve.
 - **Compositional discovery.** What rules apply to a subtree is decided by what marker is at the subtree's root. Compositions stack rather than override; a plugin containing skills runs plugin rules over the plugin and skill rules over each skill.
-- **Severity is intrinsic; bucket is dispatch.** Whether a finding is FAIL / JUDGMENT / INFO is part of the rule. Whether the remediation is AUTO / DISCUSS / SPECIAL is part of the taxonomy. The two are independent axes; a FAIL finding can be AUTO (mechanical fix) or DISCUSS (judgment-required mapping). Do not collapse them.
+- **Severity is intrinsic; disposition is dispatch.** Whether a finding is FAIL / JUDGMENT / INFO is part of the rule. Whether the remediation is FIX / SERIOUS / IMPROVE / SILENT (legacy AUTO / DISCUSS / SPECIAL for references-audit) is assigned by the lane classifier; the taxonomy's `bucket` is only the default. The two are independent axes; a FAIL finding can be FIX (mechanical fix) or IMPROVE (judgment-required mapping). Do not collapse them.
 - **Detection and remediation are separate phases.** An audit pass produces findings. A remediation pass consumes findings. Mixing the two in one procedure breaks idempotency -- the audit must produce the same findings on rerun, regardless of which remediations have been applied in between.
 - **Rules live where they are owned.** Each rule's canonical definition (id, severity, summary, detail) lives in the SKILL.md `criteria:` block of the audit-skill that owns it. The framework registry references rule ids; it does not redefine them. A rule change touches one file, not two.
 - **Open under addition.** Primitives, compositions, audit-kinds, and rule bindings grow as needed. Each addition is a registry entry (in `audit-framework.yaml`) plus the rule definition in the owning SKILL.md; no framework-side refactor.
@@ -156,7 +160,7 @@ Operationalizes the **skill-md-audit** audit-kind (plus two corpus-wide inventor
 
 1. Picks one or more **subjects** of type `skill_md` (one `SKILL.md` per file).
 2. Runs the **scaffolding** (`python -m skills_kit_lib.audit`, from the plugin root) for mechanical schema validation, plus agent-judgment passes for CCP / CRP / ADP placement.
-3. Classifies findings into its **taxonomy** (A missing required, B description quality, ... K unclassified) and dispatches AUTO / DISCUSS / SPECIAL **buckets** in parallel.
+3. Classifies findings into its **taxonomy** (A missing required, B description quality, ... K unclassified) and assigns each a **disposition** (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL) instance-level.
 4. Renders a per-file COMPLIANT / NON-COMPLIANT verdict from the FAIL findings.
 
 In framework terms: the subject is `skill_md` inside a `skill` composition; the primitives consumed are `skill_md` and `yaml` (the embedded contract block); rules come from the audit-kind's bindings table. The skill's existing `criteria:` block names the same rules that the framework's bindings table references -- the YAML and the SKILL.md must stay in sync.
@@ -168,7 +172,7 @@ Operationalizes the **project-doc-audit** audit-kind. The skill:
 1. Picks one or more **subjects** of type `plain_md` -- standalone project documents (`Docs/`, `.claude/docs/`, `<subsystem>/docs/`, READMEs, design notes) that sit outside any skill's `references/` folder and outside the CLAUDE.md hierarchy.
 2. Runs the **scaffolding** (`discover.py`) to enumerate candidates and compute the mechanical signals (effective lines, approx tokens, inbound-citation count); the orphan signal is `inbound_citations == 0`.
 3. Applies the cohesion-principles `project_reference_md` role + `skill_maturation_pipeline` via agent-judgment lanes: Placement (graduate / fold / absorb), CRP (single reading task), ADP (discoverability + one-hop + no-back-reference), CCP (no skill-content duplication).
-4. Classifies findings into its **taxonomy** (A misclassified, B graduate, ... K unclassified) and dispatches DISCUSS / SPECIAL **buckets** (this audit has no AUTO -- every remediation is a structural move or a confirmed judgment).
+4. Classifies findings into its **taxonomy** (A misclassified, B graduate, ... K unclassified, plus the mechanical FIX ids N-R) and assigns each a **disposition** (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL). This audit is NO LONGER blanket no-AUTO: the mechanical convention checks (N broken-link-with-target, O non-ASCII, P foreign-abs-path, Q line-drift, R stale-anchor) plus I dedup are FIX; placement/maturation ids stay IMPROVE.
 5. Renders a per-file COMPLIANT / NON-COMPLIANT verdict from the FAIL findings.
 
 In framework terms: the subject is `plain_md` over the `directory` / `project` compositions; the only mechanical step is `discover.py` (there is no separate evaluator binary -- the lanes do the judgment); rules come from the audit-kind's bindings table. Skill-attached `reference_doc` is audited transitively via `skill_md_audit`; `claude_md` via `claude_md_audit` -- this audit owns only the standalone project document.

@@ -363,7 +363,10 @@ AUDIT_SKILL_SCHEMA = {
                 "detection_signal": {"type": "string", "required": True},
                 "default_remediation": {"type": "string", "required": True},
                 "bucket": {"type": "string", "required": True,
-                           "note": "AUTO | DISCUSS | SPECIAL"},
+                           "note": "default disposition per id: FIX | SERIOUS | IMPROVE | SILENT | SPECIAL "
+                                   "(the final per-finding disposition is assigned instance-level by the "
+                                   "detect.js lane classifier against explicit predicates; value is a free "
+                                   "string, not enum-constrained here)"},
                 "examples": {"type": "list", "required": False, "items": {"keys": {
                     "before": {"type": "string", "required": True},
                     "after": {"type": "string", "required": True},
@@ -388,6 +391,13 @@ AUDIT_SKILL_SCHEMA = {
         "remediations": {
             "type": "dict",
             "required": True,
+            # Structural lanes retained for schema stability across all audit
+            # members (incl. references-audit). Disposition mapping under the
+            # four-disposition model: auto = FIX categories (auto-applied);
+            # discuss = SERIOUS + IMPROVE + SILENT-default categories (surfaced
+            # for a decision or deliberately not surfaced, per-entry noted);
+            # special = K / unclassified escape hatch. Per-finding disposition
+            # is instance-level (the detect.js classifier), not fixed by lane.
             "keys": {
                 "auto": {"type": "list", "required": True, "items": {"keys": {
                     "category": {"type": "string", "required": True},

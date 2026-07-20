@@ -24,7 +24,7 @@ The audit is idempotent: same input produces the same findings; addressing all F
 ```yaml
 audit_skill:
   _schema_version: "1"
-  identity: "Audit project documents (standalone reference docs outside any skill's references/ and outside the CLAUDE.md hierarchy) against the cohesion-principles project_reference_md role + the skill-maturation pipeline. Classify findings into a taxonomy and dispatch remediations by bucket."
+  identity: "Audit project documents (standalone reference docs outside any skill's references/ and outside the CLAUDE.md hierarchy) against the cohesion-principles project_reference_md role + the skill-maturation pipeline. Classify findings into a taxonomy and assign each a disposition (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL) instance-level -- placement/maturation ids stay IMPROVE, the mechanical convention checks (N-R) are FIX."
   scope:
     covers:
       - "auditing a standalone project document (Docs/, .claude/docs/, <subsystem>/docs/, README/design/plan docs) against the cohesion-principles project_reference_md role"
@@ -103,90 +103,126 @@ audit_skill:
       summary: "Body length is a CRP-evaluation signal (over ~500 lines / 3000 tokens prompts the unitary-reading-task check). Outbound file-path references must resolve. Broken SKILL-link / cross-reference integrity is delegated to /md-audit references, not re-checked here."
       severity: "INFO"
       detail: "Mechanical: line/token count (from discover.py) and file-path resolution. Cross-reference (skill-link) integrity is out of scope -- references-audit owns it."
+    - id: "mechanical_convention_hygiene"
+      name: "Hygiene -- mechanical convention violations (FIX-eligible)"
+      keywords: ["broken link identified target", "non-ascii", "foreign absolute path", "line drift", "stale anchor", "mechanical fix", "convention violation"]
+      summary: "Mechanical, fact-or-convention-decidable defects that a reasonable owner would accept in CL review without discussion: a broken outbound link with an identifiable target; a non-ASCII look-alike where ASCII-only is the convention; a hardcoded foreign/machine-specific absolute path (or backslash path); a drifted cited line number; a stale anchor re-pointable to a found mechanism. These are the project-doc audit's FIX-eligible checks -- additive to the historically placement-only taxonomy."
+      severity: "INFO"
+      detail: "Each maps to a FIX taxonomy id (N broken-link-with-target, O non-ASCII, P foreign-abs-path / backslash, Q line-drift, R stale-anchor). Decidable by verified facts + documented conventions; the disposition classifier assigns FIX (or SERIOUS for a stale anchor guarding a rail with no surviving mechanism). A generator-owned path absent from the checkout is NOT a broken link -- annotating it auto-generated is FIX, repoint/delete is IMPROVE."
   taxonomy:
     - id: "A_misclassified_skill_ref"
       name: "Selected target is actually a skill reference"
       keywords: ["skill reference", "wrong auditor", "references folder", "misrouted"]
       detection_signal: "discover.py classified the path `skill_reference` (it sits inside a `*/skills/*/references/` folder)."
-      default_remediation: "Skip the file in this audit and note it is covered by /md-audit skill (the SKILL.md that owns the references/ folder audits it transitively). No edit to the file."
-      bucket: "DISCUSS"
+      default_remediation: "Skip the file in this audit and note it is covered by /md-audit skill (the SKILL.md that owns the references/ folder audits it transitively). No edit to the file -- a routing conclusion, not a finding against the doc."
+      bucket: "SILENT"
     - id: "B_graduate_to_skill"
       name: "Matured content should graduate to a skill"
       keywords: ["graduate", "skill type", "technique", "discipline", "reference skill", "capability", "maturation"]
       detection_signal: "The doc's content has stabilized into a recognizable skill-typed shape (procedure / rule+counter / lookup table / tool wrapper) with a clear trigger -- the graduation_signal in the skill_maturation_pipeline."
-      default_remediation: "Propose graduating the doc into a skill of the matching type: name the type, the trigger, and whether the doc content becomes structured SKILL.md content or moves into the skill's references/. User confirms (this is a new-skill authoring task -- /md-authoring skill)."
-      bucket: "DISCUSS"
+      default_remediation: "Propose graduating the doc into a skill of the matching type: name the type, the trigger, and whether the doc content becomes structured SKILL.md content or moves into the skill's references/. Structural maturation move -> IMPROVE (one-line pitch; user opts in -- this is a new-skill authoring task, /md-authoring skill)."
+      bucket: "IMPROVE"
     - id: "C_fold_into_claude_md"
       name: "Small load-bearing content should fold into a CLAUDE.md"
       keywords: ["fold", "inline", "claude.md insight", "small tip", "guardrail"]
       detection_signal: "The doc is small (a tip, a single fact, a one-line guardrail) and load-bearing in a way that justifies ambient cost -- stage 1 of the maturation pipeline, currently over-promoted to a standalone doc."
-      default_remediation: "Propose folding the content into the owning CLAUDE.md (as an insight or convention) and deleting the standalone doc. User confirms the destination CLAUDE.md."
-      bucket: "DISCUSS"
+      default_remediation: "Propose folding the content into the owning CLAUDE.md (as an insight or convention) and deleting the standalone doc. Structural move -> IMPROVE (one-line pitch; user confirms the destination CLAUDE.md)."
+      bucket: "IMPROVE"
     - id: "D_move_into_existing_skill"
       name: "Content belongs in an existing skill's references/"
       keywords: ["move to skill", "existing skill", "references folder", "wrong home"]
       detection_signal: "An existing skill already owns the doc's topic; the content belongs inside that skill's references/ rather than as a parallel project doc."
-      default_remediation: "Propose moving the doc into the owning skill's references/ folder and leaving a pointer (or nothing) behind. User confirms the target skill."
-      bucket: "DISCUSS"
+      default_remediation: "Propose moving the doc into the owning skill's references/ folder and leaving a pointer (or nothing) behind. Structural move -> IMPROVE (one-line pitch; user confirms the target skill)."
+      bucket: "IMPROVE"
     - id: "E_crp_split"
       name: "Doc serves multiple reading tasks (CRP split warranted)"
       keywords: ["crp split", "multiple reading tasks", "decomposition", "unitary"]
       detection_signal: "Over the size signal AND the lane judges sections serve genuinely different sub-triggers (setup + reference table + troubleshooting)."
-      default_remediation: "Propose a CRP decomposition: which sections split out, and the destination scope for each (a skill, a CLAUDE.md, or a separate sibling doc). User confirms before splitting."
-      bucket: "DISCUSS"
+      default_remediation: "Propose a CRP decomposition: which sections split out, and the destination scope for each (a skill, a CLAUDE.md, or a separate sibling doc). Offerable (IMPROVE) only with a NAMED extraction candidate; a bare over-threshold nudge with none is SILENT. One-line pitch; user confirms before splitting."
+      bucket: "IMPROVE"
     - id: "F_chained_reference"
       name: "Cross-reference chain deeper than one hop"
       keywords: ["chained reference", "one hop", "transitive reference", "reference chain"]
       detection_signal: "The doc requires following a citation to a sibling doc that itself requires following a further citation (A -> B -> C reading path)."
-      default_remediation: "Flatten to one hop: inline the second-hop content the reader needs, or restructure so each doc is understandable after one citation. User confirms."
-      bucket: "DISCUSS"
+      default_remediation: "Flatten to one hop: inline the second-hop content the reader needs, or restructure so each doc is understandable after one citation. Structural move -> IMPROVE (one-line pitch; user confirms)."
+      bucket: "IMPROVE"
     - id: "G_claude_md_back_reference"
       name: "Doc cites CLAUDE.md section content as a dependency"
       keywords: ["back reference", "claude.md citation", "reverse edge", "load order"]
       detection_signal: "The body cites specific CLAUDE.md section content as required reading (reversing load order), beyond a permitted orientation mention."
-      default_remediation: "Remove the back-citation, or inline the small fact the doc actually needs. Keep orientation mentions ('see the root CLAUDE.md') that do not depend on CLAUDE.md content. User confirms."
-      bucket: "DISCUSS"
+      default_remediation: "Remove the back-citation, or inline the small fact the doc actually needs. Keep orientation mentions ('see the root CLAUDE.md') that do not depend on CLAUDE.md content. Structural move -> IMPROVE (one-line pitch; user confirms)."
+      bucket: "IMPROVE"
     - id: "H_orphan"
       name: "Orphan -- nothing in the load graph points at the doc"
       keywords: ["orphan", "no inbound citation", "unreachable", "dangling", "discoverability"]
       detection_signal: "discover.py reports inbound_citations == 0 -- no CLAUDE.md / SKILL.md / sibling doc references the file by name."
-      default_remediation: "Either add a one-line pointer from the owning CLAUDE.md (so the doc loads on demand for agents) or, if the doc is dead, retire it. If the doc is intentionally human-only (a published design record), confirm and mark it as accepted (PASS). User decides."
-      bucket: "DISCUSS"
+      default_remediation: "Either add a one-line pointer from the owning CLAUDE.md (so the doc loads on demand for agents) or, if the doc is dead, retire it. IMPROVE by default (orphan-linking is a structural judgment; one-line pitch). An intentionally human-only doc -- a published design record, historical record, companion-source PDF, an agent-definition file with zero inbound citations -- is an accepted structural pattern -> SILENT (not surfaced)."
+      bucket: "IMPROVE"
     - id: "I_duplicates_skill"
       name: "Doc duplicates content already owned by a skill"
       keywords: ["duplication", "ssot", "parallel reference", "skill content", "collapse to pointer"]
       detection_signal: "A skill covers the doc's topic and the doc restates (rather than points at) that skill's content."
-      default_remediation: "Collapse the doc to a pointer ('for X, invoke /skill-name') so the skill's references/ stays the SSOT. User confirms before deleting the duplicated content."
-      bucket: "DISCUSS"
+      default_remediation: "Collapse the doc to a pointer ('for X, invoke /skill-name') so the skill's references/ stays the SSOT -- dedup under the summarize-and-reference rule (REMINDER PLUS REFERENCE, a dozen tokens or less, else reference-only). Cross-file duplication -> FIX. Loss-free-deletion guard first: fold any doc-local delta into the pointer/SSOT before deleting. (Dedup never waits on a larger relocation, which stays a separate IMPROVE.)"
+      bucket: "FIX"
     - id: "J_size_signal"
       name: "Body over size threshold (CRP-evaluation prompt)"
       keywords: ["size signal", "line count", "token count", "crp evaluation"]
       detection_signal: "Mechanical INFO: effective lines > 500 or approx tokens > 3000."
-      default_remediation: "Run the CRP test (do sections serve different reading tasks?). If yes, escalate to E. If no, INFO stays -- a large single-task doc is correct."
-      bucket: "DISCUSS"
+      default_remediation: "Run the CRP test (do sections serve different reading tasks?). If yes AND a concrete extraction candidate can be named, escalate to E (IMPROVE). If no named candidate, SILENT -- a large single-task doc is correct and a bare over-threshold nudge is not offered."
+      bucket: "IMPROVE"
     - id: "L_readme_stranded_fact"
       name: "Agent-relevant fact stranded in README"
       keywords: ["readme", "stranded fact", "unreachable command", "ssot", "derived brief"]
       detection_signal: "The doc is a README (role_hint == readme) and carries a command, convention, or schema that is not reachable through the CLAUDE.md / skill graph."
-      default_remediation: "Move the fact's SSOT into the agent-facing graph (the owning CLAUDE.md or skill) and keep README as the derived brief; README may keep a human-facing copy once the graph owns the fact. User confirms the destination."
-      bucket: "DISCUSS"
+      default_remediation: "Move the fact's SSOT into the agent-facing graph (the owning CLAUDE.md or skill) and keep README as the derived brief; README may keep a human-facing copy once the graph owns the fact. Structural move -> IMPROVE (one-line pitch; user confirms the destination)."
+      bucket: "IMPROVE"
     - id: "M_generated_missing_provenance"
       name: "Claimed-generated doc without a provenance signal"
       keywords: ["generated", "missing provenance", "no sidecar", "no marker", "unverifiable"]
       detection_signal: "The doc is claimed/presented as generated output but discover.py found neither a generation-record sidecar nor an in-file generation marker (generated == false)."
-      default_remediation: "Add a machine-readable generation record -- a <name>.params.json sidecar recording exactly how to regenerate (the proven shape) -- or an in-file marker naming the generator/session. User confirms which."
-      bucket: "DISCUSS"
+      default_remediation: "Add a machine-readable generation record -- a <name>.params.json sidecar recording exactly how to regenerate (the proven shape) -- or an in-file marker naming the generator/session. Needs the generator identity -> IMPROVE (one-line pitch; user confirms which)."
+      bucket: "IMPROVE"
+    - id: "N_broken_link_identified_target"
+      name: "Broken outbound link with an identified target"
+      keywords: ["broken link", "identified target", "moved file", "dead link", "mechanical fix"]
+      detection_signal: "An outbound file-path / doc link does not resolve, AND the intended target is identifiable (the file moved to a findable path, or the link is a typo of an existing path). NOT a generator-owned path absent from the checkout (that is not broken -- see the generated_artifact rules)."
+      default_remediation: "Re-point the link to the found target -- a correction against a verified fact. FIX. (If no target can be found, the link cites content that is gone: deleting the falsified reference is FIX; a structural re-home is IMPROVE.)"
+      bucket: "FIX"
+    - id: "O_non_ascii_lookalike"
+      name: "Non-ASCII look-alike character in the body"
+      keywords: ["non-ascii", "smart quote", "em dash", "unicode look-alike", "ascii only", "convention violation"]
+      detection_signal: "The body contains a non-ASCII look-alike (smart quote, em dash, fullwidth char, non-breaking space) where the project convention is ASCII-only."
+      default_remediation: "Replace the look-alike with its ASCII equivalent -- a documented-convention fix that loses nothing. FIX."
+      bucket: "FIX"
+    - id: "P_foreign_absolute_path"
+      name: "Hardcoded foreign / machine-specific absolute path"
+      keywords: ["absolute path", "foreign path", "machine-specific", "hardcoded path", "convention violation", "backslash path"]
+      detection_signal: "The body hardcodes a machine-specific / foreign absolute path (a drive letter, a home dir, a per-machine root) where a project-relative path or a variable is the convention; or a backslash path where forward slashes are the convention."
+      default_remediation: "Rewrite to the project-relative / conventional form (and backslash paths to forward slashes). Convention-violation fix -> FIX. (A validator artifact becomes FIX exactly here: the edit is also a genuine convention fix.)"
+      bucket: "FIX"
+    - id: "Q_line_drift"
+      name: "Cited line number drifted from its symbol/anchor"
+      keywords: ["line drift", "stale line number", "drop line number", "re-anchor", "convention violation"]
+      detection_signal: "A claim cites a line number; the enclosing symbol/section it names resolves but is far from the cited number, and the author gave no recovery hint."
+      default_remediation: "Drop the stale line number, keeping the symbol/section anchor. Mechanical convention-violation fix -> FIX."
+      bucket: "FIX"
+    - id: "R_stale_anchor"
+      name: "Stale anchor re-pointable to a found mechanism"
+      keywords: ["stale anchor", "broken anchor", "re-point", "found mechanism", "verified fact"]
+      detection_signal: "A concrete anchor a claim makes (a symbol / heading / path the doc says should exist) is absent as cited but the current equivalent is findable. NOT a generator-owned absent path."
+      default_remediation: "Re-point the anchor to the found current mechanism -- a correction against a verified fact. FIX. (When the anchor guards a protective rail with NO surviving mechanism, it is SERIOUS -- surface the unprotected invariant, do not auto-fix.)"
+      bucket: "FIX"
     - id: "K_unclassified"
       name: "Unclassified / special case"
       keywords: ["unclassified", "special case", "escape hatch", "K bucket"]
-      detection_signal: "Finding does not match any A-J / L / M detection signal after a deliberate attempt."
+      detection_signal: "Finding does not match any A-J / L / M / N-R detection signal after a deliberate attempt."
       default_remediation: "Surface to the user with the audit row that fired, attempted matches, and reasons none fit. User proposes strategy."
       bucket: "SPECIAL"
   procedures:
     - id: "audit_project_doc"
       name: "Audit project documents and dispatch remediations"
       keywords: ["audit", "project doc", "single-file audit", "compliance verdict", "dispatch"]
-      goal: "For each target project document, run mechanical and judgment-based checks against the cohesion-principles project_reference_md role + maturation pipeline, classify findings into the taxonomy, dispatch remediations to AUTO/DISCUSS/SPECIAL buckets, and emit a per-file compliance verdict."
+      goal: "For each target project document, run mechanical and judgment-based checks against the cohesion-principles project_reference_md role + maturation pipeline, classify findings into the taxonomy, assign each a disposition (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL) -- this audit is no longer blanket no-AUTO: the mechanical convention checks (N-R) are FIX -- and emit a per-file compliance verdict."
       preconditions:
         - "discover.py is reachable (enumerates candidate project docs + the mechanical orphan/size signals)."
         - "references/audit-criteria.md is loadable (the self-contained criteria doc; the upstream cohesion-principles is its derivation and is NOT loaded by the audit path)."
@@ -205,17 +241,17 @@ audit_skill:
           expected: "Structured per-file findings (group, severity, criterion, message, line, taxonomy, bucket, remediation) + per-file verdict."
           on_failure: "If the Workflow tool is not available in this environment (subagent contexts do not expose it), fall back to the ONE-file inline detect procedure run sequentially per file -- detection and remediation stay separate passes. If a maturation/duplication judgment cannot be made cheaply (e.g. the candidate skill is ambiguous), mark it JUDGMENT/DISCUSS rather than FAIL."
         - n: 3
-          action: "Render the per-file report (output_template): per-file verdict blocks followed by an overall summary with bucket counts. This is the before-Q&A surface the user reads."
-          expected: "Markdown report with compliance verdicts and AUTO/DISCUSS/SPECIAL counts."
+          action: "Render the per-file report (output_template), then the REPORT CONTRACT summary in three visible sections IN THIS ORDER, no hedging: (1) SERIOUS -- 'Found <N> serious issue(s) that require fixing' + a one-line summary each; never auto-fixed. (2) FIX -- the count auto-applied and landing in the reviewable remediation CL (the mechanical N-R convention fixes + I dedup). (3) IMPROVE -- 'Audit found <N> improvement opportunit(ies). Do you want to discuss them?' + one one-line pitch each. SILENT findings do NOT appear. Omit a section whose count is zero."
+          expected: "Markdown report: per-file verdicts, then SERIOUS (summarized, top) / FIX (applied count) / IMPROVE (count + one-liners); SILENT omitted."
         - n: 4
-          action: "Q&A GATE. If non_interactive is FALSE (default): for each DISCUSS and SPECIAL finding, ask the user for a decision (apply as-proposed / skip / a refined instruction). Surface a tight grouped set; do not dump a giant list. If non_interactive is TRUE: infer each decision from the taxonomy's default_remediation plus the doc content and proceed WITHOUT prompting -- record each inferred decision in the final summary. AUTO findings need no decision."
-          expected: "A decision (explicit or inferred) attached to every AUTO/DISCUSS/SPECIAL finding."
+          action: "Q&A GATE. If non_interactive is FALSE (default): SERIOUS findings are surfaced summarized at the top, never auto-fixed; for each IMPROVE and SPECIAL finding the user opted to discuss, ask for a decision (apply as-proposed / skip / a refined instruction). Surface a tight grouped set; do not dump a giant list. A declined IMPROVE is recorded in the doc's `md-audit-declined:` frontmatter so a re-audit does not re-pitch it. If non_interactive is TRUE: apply FIX findings, surface SERIOUS, and infer each IMPROVE/SPECIAL decision from the taxonomy's default_remediation plus the doc content -- record each inferred decision in the final summary. FIX findings need no decision; SILENT findings are never surfaced."
+          expected: "SERIOUS summarized; a decision (explicit or inferred) attached to every IMPROVE/SPECIAL the user engaged; FIX applied."
         - n: 5
-          action: "REMEDIATE phase (after-Q&A). Assemble per-file remediation lists from the decided findings (AUTO=apply; DISCUSS/SPECIAL=per decision; drop skips). ONE file: apply inline with Edit. TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/project-doc-audit/workflow/remediate.js and args = { perFile:[{path, remediations:[{criterion, taxonomy, bucket, line, instruction, decision}]}] }. One lane per file (disjoint files never conflict). NOTE: graduation (B), fold-into-CLAUDE.md (C), and move-into-skill (D) remediations are multi-file structural moves -- the lane applies the move it is instructed to make; new-skill authoring beyond a simple move should be handed to /md-authoring skill rather than performed blind."
+          action: "REMEDIATE phase (after-Q&A). Assemble per-file remediation lists from the decided findings (FIX=apply; IMPROVE/SPECIAL=per decision; SERIOUS never auto-applied; drop skips). ONE file: apply inline with Edit. TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/project-doc-audit/workflow/remediate.js and args = { perFile:[{path, remediations:[{criterion, taxonomy, bucket, line, instruction, decision}]}] }. One lane per file (disjoint files never conflict). NOTE: graduation (B), fold-into-CLAUDE.md (C), and move-into-skill (D) remediations are multi-file structural moves -- the lane applies the move it is instructed to make; new-skill authoring beyond a simple move should be handed to /md-authoring skill rather than performed blind."
           tool: "Workflow | inline"
           expected: "Edits applied; per-file applied/skipped/failed summary."
         - n: 6
-          action: "Render the final summary: what was applied per file, what was skipped, any failures, and the bucket totals. Remind the user that re-running the audit should reproduce a clean (or reduced-FAIL) verdict -- detection and remediation are separate passes, so the re-run is the verification step. Scope the verification re-run to the files that were actually MODIFIED by remediation -- results for untouched files stand; re-auditing them wastes runs."
+          action: "Render the final summary: FIX applied per file, IMPROVE decisions, SERIOUS still-open (never auto-applied), any failures. Remind the user that re-running the audit should reproduce a clean (or reduced-FAIL) verdict -- detection and remediation are separate passes, so the re-run is the verification step. Scope the verification re-run to the files that were actually MODIFIED by remediation -- results for untouched files stand; re-auditing them wastes runs."
           expected: "Closing summary; user can re-run /md-audit project-doc on the modified files to verify FAILs cleared."
       output_template: |
         ## <file path> (<kind>, <lines>L, <inbound_citations> inbound)
@@ -241,7 +277,17 @@ audit_skill:
 
         <P> PASS / <F> FAIL / <I> INFO / <J> JUDGMENT-REQUIRED
         Verdict: COMPLIANT | NON-COMPLIANT
-        Remediation routed: AUTO=<N>, DISCUSS=<N>, SPECIAL=<N>
+
+        ## Report (SERIOUS -> FIX -> IMPROVE; SILENT omitted, no hedging)
+
+        ### SERIOUS -- Found <N> serious issue(s) that require fixing
+        - <one-line summary per issue>   (never auto-fixed)
+
+        ### FIX -- <N> applied (in the reviewable remediation CL)
+        - <criterion>: <what was corrected>
+
+        ### IMPROVE -- Audit found <N> improvement opportunit(ies). Do you want to discuss them?
+        - <criterion>: <one-line pitch>
       gotchas:
         - "discover.py classifies skill-attached references (*/skills/*/references/*.md) as `skill_reference` and CLAUDE.md/SKILL.md as `other_claude_artifact`. The audit only evaluates `project_doc`; a selected non-project-doc target produces a single A_misclassified_skill_ref INFO routing it to the right auditor."
         - "Orphan (H) is a JUDGMENT, never an auto-FAIL. A project doc can legitimately serve human readers outside the agent load graph (a published design record, a runbook a person opens). The audit surfaces the orphan; the user decides whether to add a pointer, retire it, or accept it."
@@ -255,36 +301,59 @@ audit_skill:
           keywords: ["self-remediation", "single-pass", "idempotency"]
           why_it_seems_right: "Auditing one doc and applying remediations in the same pass seems efficient -- one tool call, fewer round trips."
           why_it_is_wrong: "Mixing detection and remediation breaks idempotency. The verdict and remediation are separate phases; conflating them prevents re-runs from producing the same findings."
-          alternative: "Run the audit to completion. Render the verdict. Dispatch remediations as separate AUTO + DISCUSS work units after the Q&A gate. Re-run the audit to verify."
+          alternative: "Run the audit to completion. Render the verdict. Dispatch remediations as separate FIX (auto-applied) + IMPROVE (opt-in) work units after the Q&A gate, surface SERIOUS at the top. Re-run the audit to verify."
         - id: "flag_every_orphan_for_deletion"
           name: "Treat every orphan as dead weight"
           keywords: ["orphan", "delete", "human-only doc", "false positive"]
           why_it_seems_right: "An orphan has zero inbound citations, so nothing loads it -- looks like dead weight to remove."
           why_it_is_wrong: "Many project docs serve human readers who open them directly (design records, runbooks, onboarding). Zero agent-load-graph citations does not mean zero value. Deleting them destroys human-facing documentation."
           alternative: "Surface the orphan as a JUDGMENT. Offer three paths: add a CLAUDE.md pointer (make it agent-reachable), retire it (genuinely dead), or accept it (intentionally human-only). The user picks."
+  # Disposition mapping (four-disposition model): structural lanes retained for
+  # schema stability across audit members. auto = FIX categories (auto-applied;
+  # land in the reviewable CL) -- this audit is NO LONGER blanket no-AUTO: the
+  # mechanical convention checks N-R plus I dedup are FIX. discuss = SERIOUS
+  # (never auto) + IMPROVE (opt-in) + SILENT-default (A routing) categories,
+  # disposition noted per entry. special = K. The final per-finding disposition
+  # is assigned instance-level by the detect.js classifier.
   remediations:
-    auto: []
+    auto:
+      - category: "I_duplicates_skill"
+        procedure: "[FIX] Collapse the doc to a pointer at the owning skill so the skill's references/ stays SSOT -- dedup under the summarize-and-reference rule (REMINDER PLUS REFERENCE). Loss-free-deletion guard first: fold any doc-local delta into the pointer/SSOT before deleting. The dedup happens now even if a larger relocation is also pending (that stays a separate IMPROVE)."
+        agent_template: "Background agent receives the duplicated block + owning skill; folds any local delta into the SSOT, replaces the block with a reminder-plus-pointer."
+      - category: "N_broken_link_identified_target"
+        procedure: "[FIX] Re-point the broken outbound link to the found target (a verified fact). If no target exists, deleting the falsified reference is FIX; a structural re-home is IMPROVE. A generator-owned absent path is NOT broken -- annotate it 'auto-generated (present after doc-gen)' (FIX), or repoint/delete (IMPROVE)."
+        agent_template: "Background agent receives the broken link + the identified target (or absence/generator proof); re-points, annotates, or deletes accordingly."
+      - category: "O_non_ascii_lookalike"
+        procedure: "[FIX] Replace the non-ASCII look-alike with its ASCII equivalent (documented ASCII-only convention). Byte-safe replacement."
+        agent_template: "Background agent receives the offending character + line; replaces with the ASCII equivalent."
+      - category: "P_foreign_absolute_path"
+        procedure: "[FIX] Rewrite the hardcoded foreign/machine-specific absolute path to the project-relative/conventional form, and backslash paths to forward slashes."
+        agent_template: "Background agent receives the path + line; rewrites to the conventional form."
+      - category: "Q_line_drift"
+        procedure: "[FIX] Drop the stale cited line number, keeping the symbol/section anchor."
+        agent_template: "Background agent receives the claim line + drifted number + resolved anchor; strips the number."
+      - category: "R_stale_anchor"
+        procedure: "[FIX default] Re-point the stale anchor to the found current mechanism (a verified fact). SERIOUS instead when the anchor guards a protective rail with NO surviving mechanism -- surface the unprotected invariant, do not auto-fix."
+        agent_template: "Background agent receives the stale anchor + found target (or no-surviving-mechanism proof); re-points, or escalates a rail to the SERIOUS surface."
     discuss:
       - category: "A_misclassified_skill_ref"
-        procedure: "Note the file is a skill reference and is audited via /md-audit skill (its owning SKILL.md). Skip it here; no edit."
+        procedure: "[SILENT] Note the file is a skill reference and is audited via /md-audit skill (its owning SKILL.md). Skip it here; no edit. A routing conclusion, not surfaced as a finding against the doc (mention only in the operational skipped-files line)."
       - category: "B_graduate_to_skill"
-        procedure: "Propose the skill type + trigger and whether content becomes SKILL.md body or references/. Hand the actual authoring to /md-authoring skill. User confirms the graduation."
+        procedure: "[IMPROVE] Propose the skill type + trigger and whether content becomes SKILL.md body or references/. Hand the actual authoring to /md-authoring skill. One-line pitch; user opts in."
       - category: "C_fold_into_claude_md"
-        procedure: "Propose folding the small load-bearing content into the owning CLAUDE.md and deleting the standalone doc. User confirms the destination CLAUDE.md."
+        procedure: "[IMPROVE] Propose folding the small load-bearing content into the owning CLAUDE.md and deleting the standalone doc. One-line pitch; user confirms the destination CLAUDE.md."
       - category: "D_move_into_existing_skill"
-        procedure: "Propose moving the doc into the owning skill's references/ folder. User confirms the target skill."
+        procedure: "[IMPROVE] Propose moving the doc into the owning skill's references/ folder. One-line pitch; user confirms the target skill."
       - category: "E_crp_split"
-        procedure: "Propose the decomposition: which sections split and the destination scope for each. User confirms before splitting."
+        procedure: "[IMPROVE] Propose the decomposition: which sections split and the destination scope for each -- offerable only with a NAMED extraction candidate (else SILENT). One-line pitch; user confirms before splitting."
       - category: "F_chained_reference"
-        procedure: "Flatten the reference chain to one hop (inline the second-hop content the reader needs). User confirms."
+        procedure: "[IMPROVE] Flatten the reference chain to one hop (inline the second-hop content the reader needs). One-line pitch; user confirms."
       - category: "G_claude_md_back_reference"
-        procedure: "Remove the back-citation or inline the small fact the doc needs; keep permitted orientation mentions. User confirms."
+        procedure: "[IMPROVE] Remove the back-citation or inline the small fact the doc needs; keep permitted orientation mentions. One-line pitch; user confirms."
       - category: "H_orphan"
-        procedure: "Offer: add a CLAUDE.md pointer (make agent-reachable), retire the doc (dead), or accept as human-only (PASS). User picks."
-      - category: "I_duplicates_skill"
-        procedure: "Collapse the doc to a pointer at the owning skill so the skill's references/ stays SSOT. User confirms before deleting duplicated content."
+        procedure: "[IMPROVE default] Offer: add a CLAUDE.md pointer (make agent-reachable) or retire the doc (dead). One-line pitch. An intentionally human-only / historical / companion-source doc is an accepted pattern -> SILENT (not surfaced)."
       - category: "J_size_signal"
-        procedure: "Run the CRP test (do sections serve different reading tasks?). If yes, escalate to E. If no, INFO stays; the large single-task doc is correct."
+        procedure: "[IMPROVE default] Run the CRP test (do sections serve different reading tasks?). If yes AND a concrete extraction candidate can be named, escalate to E. If no named candidate, SILENT (the large single-task doc is correct)."
     special:
       procedure: "Surface the finding with the audit row that fired, attempted categories, and reasons none fit. User proposes strategy. Generalizable strategies become new taxonomy categories in references/audit-criteria.md."
   enforcement:
@@ -305,7 +374,7 @@ audit_skill:
 - `<dir>` -- audit every project doc under a directory (e.g. `/md-audit project-doc .claude/docs`).
 - `<file>` -- audit a specific project doc.
 - `<numbers>` -- audit docs by index from the most recent `list` output (e.g. `3 7 9`).
-- `fast` / `--fast` / `--yes` / `-y` -- non-interactive: skip the Q&A round and infer every DISCUSS/SPECIAL decision. Combine with any selector. Prose intent ("audit these and just apply everything, don't ask") sets the same flag.
+- `fast` / `--fast` / `--yes` / `-y` -- non-interactive: skip the Q&A round and infer every IMPROVE/SPECIAL decision; FIX applies by definition, SERIOUS is surfaced. Combine with any selector. Prose intent ("audit these and just apply everything, don't ask") sets the same flag.
 
 Typical workflow: `/md-audit project-doc .claude/docs` to audit a whole doc home, or `/md-audit project-doc list` then `/md-audit project-doc 3 7` for specific files.
 
@@ -333,7 +402,7 @@ Both accept `args` as an object or JSON string. Pass absolute `refs` paths (they
 
 ## Non-interactive mode
 
-When the non-interactive flag is set (argument token or expressed intent), the Q&A gate does not prompt. Instead, infer each DISCUSS/SPECIAL decision from the taxonomy's `default_remediation` plus the doc content, apply them, and **list every inferred decision in the final summary** so the user can see and reverse them. FAIL findings are still gated by the verdict; non-interactive only changes how the *decisions* are obtained. Interactive mode is the default.
+When the non-interactive flag is set (argument token or expressed intent), the Q&A gate does not prompt. Instead, infer each IMPROVE/SPECIAL decision from the taxonomy's `default_remediation` plus the doc content, apply them, and **list every inferred decision in the final summary** so the user can see and reverse them. FIX findings apply regardless; SERIOUS findings are surfaced summarized at the top and never auto-applied; SILENT findings are never surfaced. FAIL findings are still gated by the verdict; non-interactive only changes how the *decisions* are obtained. Interactive mode is the default.
 
 ## Decision rules
 
