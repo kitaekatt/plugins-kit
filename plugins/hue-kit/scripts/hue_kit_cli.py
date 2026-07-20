@@ -282,7 +282,13 @@ def _cmd_pair(args) -> int:
                   file=sys.stderr)
             return 0
     print(f"Pairing with the bridge at {ip}.", file=sys.stderr)
-    if args.no_wait:
+    # Non-interactive whenever there is no terminal on stdin (an agent running
+    # this in the background), so the flow never depends on a FLAG the caller's
+    # CLI might predate: a session's PATH keeps pointing at the version dir it
+    # started with, so a mid-session update can leave `hue-kit` older than the
+    # instructions telling an agent how to call it. --no-wait stays as an
+    # explicit override for a TTY.
+    if args.no_wait or not sys.stdin.isatty():
         # Non-interactive: the caller (an agent) has already confirmed the user
         # is ready, so poll immediately -- the press can land any time in the
         # window below. Keeps the flow runnable without a terminal on stdin.
