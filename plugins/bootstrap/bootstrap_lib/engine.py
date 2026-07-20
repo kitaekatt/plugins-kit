@@ -641,6 +641,19 @@ def _main():
     global_stamp(data_dir, "import_retry_pending").clear()
     global_stamp(data_dir, "import_retry_launched").clear()
 
+    # Absorb the installed/enabled plugin-set snapshot this pass just provisioned
+    # (bootstrap_lib/plugins_snapshot.py). The UserPromptSubmit mid-session
+    # install relaunch (harvest.run_registry_relaunch) compares live state
+    # against this stamp, so writing it at COMPLETION (a) seeds the mechanism on
+    # the first pass after it ships and (b) keeps bootstrap-authored registry
+    # writes during the pass from self-triggering a relaunch -- the same
+    # rationale as _restamp_project_cooldown above. Best-effort by design.
+    try:
+        from .plugins_snapshot import stamp_plugins_state
+        stamp_plugins_state(data_dir)
+    except Exception:
+        pass
+
 
 def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
                     label="bootstrap"):

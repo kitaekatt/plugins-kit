@@ -274,6 +274,208 @@ class TestMainNeverRaises:
         assert rc == 0
 
 
+class TestRunRegistryRelaunch:
+    """The mid-session install relaunch (third trigger) with launch_new_engine
+    mocked — assert when a launch fires and the once-per-change dedup."""
+
+    def _setup(self, tmp_path, monkeypatch, plugins, enabled, seed_hash="auto"):
+        from bootstrap_lib.plugins_snapshot import STATE_STAMP, plugins_state_hash
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir(exist_ok=True)
+        reg = _registry(tmp_path, plugins)
+        st = tmp_path / "settings.json"
+        st.write_text(json.dumps({"enabledPlugins": enabled}), encoding="utf-8")
+        if seed_hash == "auto":
+            seed_hash = plugins_state_hash(reg, str(st))
+        if seed_hash:
+            global_stamp(str(data_dir), STATE_STAMP).write(seed_hash)
+        calls = []
+        monkeypatch.setattr(
+            harvest, "launch_new_engine",
+            lambda ip, pd, dd: calls.append((ip, pd, dd)) or True,
+        )
+        return str(data_dir), reg, str(st), calls
+
+    def _relaunch(self, data_dir, reg, st):
+        return harvest.run_registry_relaunch(
+            data_dir, "/proj", reg, "plugins-kit", settings_path=st,
+        )
+
+    def test_no_seed_never_launches(self, tmp_path, monkeypatch):
+        # Unseeded stamp = no completed pass has absorbed state; the engine
+        # seeds it. Launching here would fire a spurious pass on every machine
+        # that adopts this version.
+        data_dir, reg, st, calls = self._setup(
+            tmp_path, monkeypatch, {}, {"hue-kit@plugins-kit": True}, seed_hash="",
+        )
+        assert self._relaunch(data_dir, reg, st) is None
+        assert calls == []
+
+    def test_unchanged_state_does_not_launch(self, tmp_path, monkeypatch):
+        data_dir, reg, st, calls = self._setup(
+            tmp_path, monkeypatch,
+            {"hue-kit@plugins-kit": [{"version": "0.5.1", "installPath": "/h"}]},
+            {"hue-kit@plugins-kit": True},
+        )
+        assert self._relaunch(data_dir, reg, st) is None
+        assert calls == []
+
+    def test_registry_change_launches_installed_engine(self, tmp_path, monkeypatch):
+        # Seed the pre-install state, then "install" hue-kit into the registry.
+        data_dir, _, st, calls = self._setup(
+            tmp_path, monkeypatch,
+            {"bootstrap@plugins-kit": [{"version": "1.0.0", "installPath": "/cache/bootstrap/1.0.0"}]},
+            {},
+        )
+        reg2 = _registry(tmp_path, {
+            "bootstrap@plugins-kit": [{"version": "1.0.0", "installPath": "/cache/bootstrap/1.0.0"}],
+            "hue-kit@plugins-kit": [{"version": "0.5.1", "installPath": "/cache/hue-kit/0.5.1"}],
+        })
+        status = self._relaunch(data_dir, reg2, st)
+        assert status is not None and "registry-change" in status
+        assert len(calls) == 1
+        # Relaunched via the installed bootstrap's installPath.
+        assert calls[0][0] == "/cache/bootstrap/1.0.0"
+
+    def test_enabled_only_change_launches(self, tmp_path, monkeypatch):
+        # The registry-v2-EMPTY machine: installs never touch the registry,
+        # only settings.json's enabledPlugins.
+        data_dir, reg, _, calls = self._setup(tmp_path, monkeypatch, {}, {})
+        st2 = tmp_path / "settings2.json"
+        st2.write_text(
+            json.dumps({"enabledPlugins": {"hue-kit@plugins-kit": True}}), encoding="utf-8",
+        )
+        status = self._relaunch(data_dir, reg, str(st2))
+        assert status is not None
+        assert len(calls) == 1
+        # No registry installPath -> falls back to the running plugin root.
+        assert calls[0][0] == harvest._PLUGIN_ROOT
+
+    def test_dedup_blocks_second_launch_for_same_state(self, tmp_path, monkeypatch):
+        from bootstrap_lib.plugins_snapshot import LAUNCHED_STAMP
+
+        data_dir, reg, _, calls = self._setup(tmp_path, monkeypatch, {}, {})
+        st2 = tmp_path / "settings2.json"
+        st2.write_text(
+            json.dumps({"enabledPlugins": {"hue-kit@plugins-kit": True}}), encoding="utf-8",
+        )
+        self._relaunch(data_dir, reg, str(st2))
+        assert self._relaunch(data_dir, reg, str(st2)) is None
+        assert len(calls) == 1, "must not relaunch for the same plugin-set state"
+        assert global_stamp(data_dir, LAUNCHED_STAMP).exists()
+
+    def test_engine_absorb_resets_trigger(self, tmp_path, monkeypatch):
+        # After the launched pass completes (stamp_plugins_state), the same
+        # state no longer triggers — and a FURTHER change triggers again.
+        from bootstrap_lib.plugins_snapshot import stamp_plugins_state
+
+        data_dir, reg, _, calls = self._setup(tmp_path, monkeypatch, {}, {})
+        st2 = tmp_path / "settings2.json"
+        st2.write_text(
+            json.dumps({"enabledPlugins": {"hue-kit@plugins-kit": True}}), encoding="utf-8",
+        )
+        self._relaunch(data_dir, reg, str(st2))
+        stamp_plugins_state(data_dir, reg, str(st2))  # what the engine does at completion
+        assert self._relaunch(data_dir, reg, str(st2)) is None
+        st3 = tmp_path / "settings3.json"
+        st3.write_text(
+            json.dumps({"enabledPlugins": {"hue-kit@plugins-kit": False}}), encoding="utf-8",
+        )
+        assert self._relaunch(data_dir, reg, str(st3)) is not None
+        assert len(calls) == 2
+
+    def test_launch_failure_returns_none(self, tmp_path, monkeypatch):
+        data_dir, reg, _, calls = self._setup(tmp_path, monkeypatch, {}, {})
+        monkeypatch.setattr(harvest, "launch_new_engine", lambda ip, pd, dd: False)
+        st2 = tmp_path / "settings2.json"
+        st2.write_text(
+            json.dumps({"enabledPlugins": {"hue-kit@plugins-kit": True}}), encoding="utf-8",
+        )
+        assert self._relaunch(data_dir, reg, str(st2)) is None
+
+
+class TestMainTriggerSequencing:
+    def test_relaunch_skipped_when_harvest_launches(self, tmp_path, monkeypatch):
+        # One prompt, at most one pass: a version-harvest launch suppresses the
+        # registry-change trigger for that prompt.
+        monkeypatch.setattr(harvest, "run_harvest", lambda *a, **k: "harvest: launched")
+        relaunch_calls = []
+        monkeypatch.setattr(
+            harvest, "run_registry_relaunch",
+            lambda *a, **k: relaunch_calls.append(1) or "registry-change: relaunched",
+        )
+        monkeypatch.setattr(harvest, "_log_launch", lambda *a, **k: None)
+        rc = harvest.main([
+            "--data-dir", str(tmp_path), "--project-dir", "/proj",
+            "--marketplace", "plugins-kit", "--registry", str(tmp_path / "r.json"),
+        ])
+        assert rc == 0
+        assert relaunch_calls == []
+
+    def test_relaunch_runs_when_harvest_quiet(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(harvest, "run_harvest", lambda *a, **k: None)
+        relaunch_calls = []
+        monkeypatch.setattr(
+            harvest, "run_registry_relaunch",
+            lambda *a, **k: relaunch_calls.append(1) or None,
+        )
+        rc = harvest.main([
+            "--data-dir", str(tmp_path), "--project-dir", "/proj",
+            "--marketplace", "plugins-kit", "--registry", str(tmp_path / "r.json"),
+        ])
+        assert rc == 0
+        assert relaunch_calls == [1]
+
+
+class TestRelaunchScriptInvocation:
+    """The relaunch trigger must also be reachable under SCRIPT execution
+    (`python harvest.py`) — the regression class TestScriptInvocation exists
+    for, extended to the third trigger."""
+
+    def test_script_run_reaches_relaunch_logic(self, tmp_path):
+        from bootstrap_lib.plugins_snapshot import (
+            LAUNCHED_STAMP, STATE_STAMP, plugins_state_hash,
+        )
+
+        dd = tmp_path / "data"
+        dd.mkdir()
+        # A bootstrap entry with a FAKE installPath: keeps the version harvest
+        # quiet (installed == engine_ran_version) and — critically — makes the
+        # relaunch's launch attempt fail fast instead of falling back to the
+        # real dev-tree plugin root and spawning a genuine pass.
+        reg = _registry(tmp_path, {
+            "bootstrap@plugins-kit": [
+                {"version": "0.0.1", "installPath": str(tmp_path / "no-such-install")}
+            ]
+        })
+        st = tmp_path / "settings.json"
+        st.write_text(json.dumps({"enabledPlugins": {}}), encoding="utf-8")
+        # Seed a DIFFERENT pre-change state so the script sees a change.
+        global_stamp(str(dd), STATE_STAMP).write("old-state-hash")
+        global_stamp(str(dd), "engine_ran_version").write("0.0.1")
+
+        result = subprocess.run(
+            [sys.executable, str(HARVEST_PY),
+             "--data-dir", str(dd),
+             "--project-dir", str(tmp_path),
+             "--marketplace", "plugins-kit",
+             "--registry", reg,
+             "--settings", str(st)],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        # run_registry_relaunch writes the dedup marker BEFORE the launch
+        # attempt (which fails here — no session-bootstrap.sh anywhere useful);
+        # its presence proves the trigger logic ran under script execution.
+        marker = global_stamp(str(dd), LAUNCHED_STAMP)
+        assert marker.exists(), (
+            "harvest.py run as a script did not reach the relaunch logic. "
+            f"stderr={result.stderr!r}"
+        )
+        assert marker.read() == plugins_state_hash(reg, str(st))
+
+
 class TestCacheFallbackInstalledBootstrap:
     """Registry-v2 fallback for the harvest: with installed_plugins.json empty
     ({"plugins": {}}), the installed bootstrap version/installPath is derived

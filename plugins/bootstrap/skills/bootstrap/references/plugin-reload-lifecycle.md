@@ -192,6 +192,44 @@ does not exist yet; `session-bootstrap.sh` is what installs it):
    subshell either launches the full pass or runs the harvest itself — never
    two engine launches from one prompt). Real passes prune week-old markers.
 
+## Mid-session install relaunch (plugin installed without a restart)
+
+The harvest handles "a newer **bootstrap** landed mid-session"; the rescue
+handles "SessionStart never fired"; this third trigger handles "**some other
+plugin** was installed/uninstalled/updated mid-session". Observed live
+(hue-kit, 2026-07): `/plugin install` + `/reload-plugins` loads the new
+plugin's skills, but its **venv is never provisioned** — SessionStart already
+ran and won't re-fire — so every command of the new plugin fails until a full
+restart. (`/reload-plugins` reloads registration only; it fires no hook.)
+
+**Mechanism** (`harvest.run_registry_relaunch` + `bootstrap_lib/plugins_snapshot.py`,
+same `UserPromptSubmit` driver; runs only on prompts where neither harvest
+trigger fired, so a prompt launches at most one pass):
+
+1. **The engine absorbs a plugin-set snapshot at pass completion** — a global
+   stamp `plugins_state_hash`: a content hash of `installed_plugins.json`'s
+   `plugins` map **plus** `settings.json`'s `enabledPlugins`. Both signals are
+   needed (verified empirically 2026-07-20 by uninstall/reinstall under a live
+   session): a populated registry v2 rewrites `installed_plugins.json` on
+   install, but the registry-v2-**empty** variant only writes `enabledPlugins`.
+   Content-hash, not mtime — `settings.json`'s mtime churns for unrelated
+   reasons (statusline rewrite, model change). Stamping at *completion* is what
+   keeps bootstrap-authored registry writes during a pass from self-triggering,
+   and it seeds the stamp on the first pass after this version ships (an
+   unseeded stamp never triggers).
+2. **Each prompt compares live state against the stamp.** Unchanged → nothing
+   (one stamp read + two small JSON reads). Changed → write a once-per-change
+   dedup marker (`plugins_relaunch_hash`, cleared by the engine on completion),
+   then relaunch `session-bootstrap.sh` — the newest on-disk engine per the
+   registry/cache, falling back to the running plugin root — detached, empty
+   stdin, cooldown cleared first (same launch discipline as the harvest). The
+   forced pass provisions the new plugin's venv/config in-session.
+3. **Net user experience:** install a plugin, run `/reload-plugins` as the
+   install flow suggests, and by the prompt after next its commands work — no
+   restart. A pass takes a few seconds detached; a command fired instantly
+   after install may still race it (retry, don't restart). Uninstalls and
+   enable/disable flips also re-arm a pass; its checks simply pass clean.
+
 ## Advising on a bootstrap update (read the state, tell the user, spot anomalies)
 
 After a bootstrap version is published, this is how to read a consumer machine's

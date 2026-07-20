@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Single-session bootstrap update harvest (Part 2 of the single-session update
-protocol).
+protocol), plus the mid-session install relaunch.
 
 Runs on UserPromptSubmit (via hooks/userpromptsubmit/bootstrap-display.sh). When
 Claude Code's auto-updater has fetched a NEWER bootstrap mid-session -- the new
@@ -21,6 +21,18 @@ already contain this harvest hook to harvest a newer version. The version that
 FIRST ships the protocol cannot harvest itself -- that one transition still needs
 the old two-restart path. Single-session convergence applies to every update
 AFTER this ships.
+
+THIRD TRIGGER -- mid-session install relaunch (run_registry_relaunch): a plugin
+installed/uninstalled/updated mid-session (`/plugin` + /reload-plugins) loads
+its skills but never gets its venv provisioned -- SessionStart won't re-fire, so
+every command of the new plugin fails until a restart. On each prompt, compare
+the installed/enabled plugin-set hash (bootstrap_lib/plugins_snapshot.py:
+registry "plugins" map + settings.json "enabledPlugins", covering both the
+populated- and empty-registry v2 variants) against the stamp the last COMPLETED
+pass absorbed; on a change, relaunch session-bootstrap.sh once per change (the
+launch clears the project cooldown, so the pass always runs and provisions the
+new plugin in-session). The engine re-stamps the snapshot at completion, so
+bootstrap-authored registry writes never self-trigger.
 """
 
 from __future__ import annotations
@@ -260,6 +272,64 @@ def run_harvest(
     )
 
 
+def run_registry_relaunch(
+    data_dir: str,
+    project_dir: str,
+    registry_path: str,
+    marketplace: str,
+    settings_path: str = "",
+) -> Optional[str]:
+    """Mid-session install relaunch: launch a full pass when the installed/
+    enabled plugin set changed since the last COMPLETED pass. Returns a status
+    string on a launch, else ``None``. Best-effort, runs on every prompt.
+
+    Only ever called when neither harvest trigger fired (main() sequences the
+    three triggers), so a prompt launches at most ONE pass. Decision order keeps
+    the common path cheap: one stamp read first; the two-JSON-file hash only
+    when a stamp exists.
+    """
+    from bootstrap_lib.plugins_snapshot import (
+        LAUNCHED_STAMP,
+        STATE_STAMP,
+        plugins_state_hash,
+    )
+    from bootstrap_lib.stamps import global_stamp
+
+    stored = global_stamp(data_dir, STATE_STAMP).read()
+    if not stored:
+        # No pass has absorbed state yet (first session on this bootstrap
+        # version, or a wiped data dir). The engine seeds the stamp at its next
+        # completion; launching against an unknown baseline would fire a
+        # spurious pass on every machine that adopts this version.
+        return None
+    current = plugins_state_hash(registry_path, settings_path)
+    if current == stored:
+        return None
+
+    # Once per detected state: several prompts in the seconds before the
+    # launched pass re-stamps the snapshot must not spawn concurrent passes.
+    # Written BEFORE the launch attempt (mirrors harvest_launched_version); the
+    # engine clears it on completion.
+    launched = global_stamp(data_dir, LAUNCHED_STAMP)
+    if launched.read() == current:
+        return None
+    launched.write(current)
+
+    # Relaunch the newest on-disk engine (registry/cache installPath), falling
+    # back to the running plugin root. launch_new_engine clears the project
+    # cooldown, so the pass runs even when only enabledPlugins changed (the
+    # empty-registry machines the shell gates' -nt bypass cannot see).
+    _, install_path = read_installed_bootstrap(registry_path, marketplace)
+    if not install_path:
+        install_path = _PLUGIN_ROOT
+    if not launch_new_engine(install_path, project_dir, data_dir):
+        return None
+    return (
+        "registry-change: relaunched bootstrap pass "
+        "(installed/enabled plugin set changed mid-session)"
+    )
+
+
 def _log_launch(data_dir: str, status: str) -> None:
     """Append a single audit line to bootstrap.log on a launch (never on a no-op
     prompt). Honors the 'every action logs its outcome' principle without adding
@@ -277,11 +347,17 @@ def main(argv=None) -> int:
     parser.add_argument("--project-dir", default="", help="project root (CWD at prompt time)")
     parser.add_argument("--marketplace", default="", help="bootstrap's marketplace name")
     parser.add_argument("--registry", default="", help="installed_plugins.json path")
+    parser.add_argument("--settings", default="", help="settings.json path (enabledPlugins)")
     args = parser.parse_args(argv)
 
     registry = args.registry or _default_registry()
     try:
         status = run_harvest(args.data_dir, args.project_dir, registry, args.marketplace)
+        if status is None:
+            status = run_registry_relaunch(
+                args.data_dir, args.project_dir, registry, args.marketplace,
+                settings_path=args.settings,
+            )
     except Exception:
         return 0  # best-effort: a harvest failure must never break the prompt
     if status:

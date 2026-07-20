@@ -40,7 +40,7 @@ reference_skill:
         - Healthy bootstrap is invisible -- no output means everything checked clean, not that bootstrap is broken. Verify by checking each plugin's log at ~/.claude/plugins/data/<marketplace>/<plugin>/bootstrap.log. If the log doesn't exist, bootstrap never reached that plugin.
     - id: update_lifecycle
       summary: A published bootstrap update converges in ONE session via the harvest; provisioning is done when engine_ran_version == the installed version, and a restart is needed only to load new plugin CODE. Both session-bootstrap.sh skip gates bypass on a registry change, so `claude --resume` re-runs after an update. A SessionStart that never fired at all (fresh machine mid-sync) is caught by the UserPromptSubmit rescue.
-      keywords: [update, harvest, single-session, engine_ran_version, installed_plugins.json, claude --resume, restart needed, cooldown status, session-id guard, two skip gates, anomaly, provisioning done, advise user, rescue, sessionstart missed, fresh machine, notice]
+      keywords: [update, harvest, single-session, engine_ran_version, installed_plugins.json, claude --resume, restart needed, cooldown status, session-id guard, two skip gates, anomaly, provisioning done, advise user, rescue, sessionstart missed, fresh machine, notice, mid-session install, plugin install no restart, venv not provisioned, reload-plugins, plugins_state_hash, registry relaunch]
       detail: |
         How to read an update and advise the user:
         - installed version = installed_plugins.json plugins["bootstrap@<mkt>"].version (what loads next
@@ -61,6 +61,12 @@ reference_skill:
           SessionStart fired, so the hook wasn't registered): the UserPromptSubmit rescue detects that no
           sessions/<session_id> entry-time marker exists for the prompt's session and launches
           session-bootstrap.sh itself -- detached, one launch per session (atomic lock), gates intact.
+        - A plugin installed/uninstalled MID-SESSION (`/plugin` + /reload-plugins) is provisioned WITHOUT a
+          restart: the UserPromptSubmit mid-session install relaunch compares a content hash of the registry
+          plugins map + settings.json enabledPlugins (plugins_state_hash, absorbed by the engine at pass
+          completion) and relaunches session-bootstrap.sh once per change. Commands of the just-installed
+          plugin work a prompt or two later; a command fired instantly after install may race the detached
+          pass -- retry, don't restart.
         Full operational guide (state files, healthy flow, anomaly checklist): references/plugin-reload-lifecycle.md.
       gotchas:
         - ANOMALY -- engine_ran_version staying BEHIND installed after a restart + a couple prompts means the
