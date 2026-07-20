@@ -64,9 +64,24 @@ reference_skill:
       keywords: [size threshold, signal not verdict, crp split, 500 lines 3000 tokens, progressive disclosure]
       detail: Over-threshold prompts evaluation; CRP is the test (do sections serve different reading tasks?). If no decomposition passes CRP, keep the monolith. See crp_reader_set.note_on_size_threshold and skill-authoring framework.md "CRP is the test for L2 -> L3 splits".
     - id: skill_maturation_pipeline
-      summary: Knowledge matures inline-in-CLAUDE.md -> project reference doc -> skill; project references are the escape-hatch / nursery, not the default home for reference content.
-      keywords: [skill maturation, project reference, nursery, escape hatch, graduate to skill]
-      detail: An inline tip grows into a project reference (cited from CLAUDE.md), then graduates into a structured skill once the content fits a skill type. The default home for reference content is a skill's references/, not a standalone project reference. See skill_maturation_pipeline.
+      summary: Knowledge matures out of an inline CLAUDE.md tip into a structured home once it stabilizes; the mature home follows the trigger shape (task-shaped -> skill, location-shaped -> directory CLAUDE.md), NOT "always a skill". Project references are the escape-hatch / nursery for still-emerging content.
+      keywords: [skill maturation, project reference, nursery, escape hatch, graduate to skill, trigger shape]
+      detail: An inline tip grows into a project reference (cited from CLAUDE.md) while the concept is still emerging, then matures into its trigger-appropriate home -- a skill when the trigger is task-shaped (a verb), or a directory CLAUDE.md reference when the trigger is location-shaped (working under a directory). Not all mature reference content belongs in a skill. See skill_maturation_pipeline and placement_follows_trigger_shape.
+    - id: placement_follows_trigger_shape
+      summary: The home for mature knowledge follows its natural trigger. TASK-shaped trigger (a verb -- "authoring a .fbs", "classifying a CL") -> skill. LOCATION-shaped trigger (working under a directory) -> referenced from that directory's CLAUDE.md, which auto-loads when files beneath it are touched. Both shapes -> prefer the location home; a skill may point at it.
+      keywords: [trigger shape, task-shaped, location-shaped, graduate to skill, directory-scoped knowledge, when to make a skill, not everything is a skill, claude.md home]
+      detail: |
+        NOT all mature documentation graduates to a skill -- that stance is too opinionated. The
+        placement question for mature knowledge is: what is the natural trigger for needing it?
+        A TASK-shaped trigger is a verb the session performs (authoring a schema, running an
+        evaluator, classifying a changelist); its content is loaded by matching the session-wide
+        skill list, so a SKILL.md is the right home. A LOCATION-shaped trigger is "working under
+        this directory" (a config subtree, quest source dirs); a directory CLAUDE.md auto-loads
+        when ANY file beneath it is touched -- the exactly-right trigger, at zero session-wide
+        context cost -- so directory-scoped knowledge belongs referenced from (or moved adjacent
+        to) that CLAUDE.md, NOT graduated to a skill. Knowledge with BOTH shapes: prefer the
+        location home and let a skill point at it via summarize-and-reference. See
+        placement_follows_trigger_shape in the framework block.
     - id: summarize_and_reference
       summary: Facts live in one place (SSOT); elsewhere you reference. The canonical compact form is REMINDER PLUS REFERENCE together -- an inline summary that spares the reader loading the target, plus the reference that names the SSOT and makes it checkable.
       keywords: [summarize and reference, reminder plus reference, ssot pointer, dedup, cross-reference budget, collapse to pointer, guardrail plus pointer]
@@ -497,10 +512,10 @@ content_allocation:
           rule: file path is NOT inside any <skill-dir>/references/ folder. Project references live at project-level paths (<project>/docs/, <project>/.claude/docs/, <subsystem>/docs/, etc.).
           test: scan path; if it matches `*/skills/*/references/*`, this is a skill reference, not a project reference. Mis-classified file -- update the audit role.
           severity: FAIL if mis-classified (a fix to the audit, not a fix to the file).
-        - id: prefer_skill_reference
-          rule: project references are the escape hatch / nursery, not the default. The default home for reference content is a skill's references/ folder.
-          test: ask "could this content live in an existing skill's references/, or motivate a new skill?" If the content is structured procedural / contract / lookup material that fits a skill type, it should be in a skill.
-          severity: INFO -- migration opportunity. Promote to skill when the concept matures (see "Skill-maturation pipeline").
+        - id: prefer_mature_home_by_trigger_shape
+          rule: project references are the escape hatch / nursery for still-emerging content, not a permanent home. When content stabilizes, it moves to its TRIGGER-APPROPRIATE mature home -- a skill (task-shaped trigger) or a directory CLAUDE.md reference (location-shaped trigger). Skills are NOT the default home for all reference content; see placement_follows_trigger_shape.
+          test: ask "what is the natural trigger for this content?" If a VERB the session performs (task-shaped), it fits a skill. If WORKING UNDER A DIRECTORY (location-shaped), it belongs referenced from that directory's CLAUDE.md, not a skill. Both shapes -> prefer the directory CLAUDE.md home and let a skill point at it.
+          severity: INFO -- migration opportunity toward the trigger-appropriate home. Do not recommend skill-graduation for location-scoped knowledge (see placement_follows_trigger_shape and skill_maturation_pipeline).
         - id: crp_unitary_reading_task
           rule: all sections fire on the same sub-trigger (same as skill_reference_md).
           severity: FAIL on multi-trigger references.
@@ -563,14 +578,43 @@ content_allocation:
         example: ".claude/docs/python-tips.md collecting Python gotchas the team has hit."
         graduation_signal: when the content stabilizes into a procedure (technique-skill candidate), a rule + counter pattern (discipline-skill candidate), a lookup table (reference-skill candidate), or a wrapper around an external tool (capability-skill candidate), it is ready to graduate.
       - n: 3
-        location: skill (SKILL.md + references/)
-        when: the concept has matured into a recognizable skill type with a clear trigger and audit surface. The project reference doc is migrated into the skill's references/ or replaced by structured SKILL.md content.
-        example: ".claude/docs/python-tips.md graduates into a /python-coding skill with steps, gotchas, and a trigger."
+        location: the trigger-appropriate mature home -- a skill (task-shaped trigger) OR a directory CLAUDE.md reference (location-shaped trigger). See placement_follows_trigger_shape; "always a skill" is the wrong default.
+        when: the concept has stabilized and its natural trigger is clear. If the trigger is a VERB the session performs, it graduates to a skill (SKILL.md + references/, migrated or replaced from the project reference). If the trigger is WORKING UNDER A DIRECTORY, it homes to that directory's CLAUDE.md (moved adjacent, or referenced), which auto-loads on file access beneath it -- no skill.
+        example: 'task-shaped: ".claude/docs/python-tips.md graduates into a /python-coding skill". location-shaped: quest-source review notes move into quests/CLAUDE.md rather than a skill.'
     audit_implication: |
-      A project reference doc that has matured into a recognizable skill type is INFO-flagged
-      for graduation by the audit. The flag is not a FAIL -- the doc is doing useful work
-      where it sits -- but the framework prefers structured skills over unstructured
-      project references when the content shape supports it.
+      A project reference doc that has stabilized is INFO-flagged for its trigger-appropriate
+      home by the audit: skill-graduation ONLY when the trigger is task-shaped; a directory
+      CLAUDE.md reference when it is location-shaped (see placement_follows_trigger_shape). The
+      flag is not a FAIL -- the doc is doing useful work where it sits -- and the framework does
+      NOT prefer skills for directory-scoped knowledge; it prefers the location home.
+
+  placement_follows_trigger_shape:
+    description: |
+      The razor for where MATURE knowledge lives. Skills-kit is NOT of the view that all mature
+      documentation graduates to a skill -- that stance is too opinionated. The placement
+      question is: what is the natural TRIGGER for needing this knowledge?
+    razor:
+      - shape: task-shaped
+        trigger: a VERB the session performs -- "authoring a .fbs", "classifying a CL", "running the Lens evaluator".
+        home: a skill (SKILL.md). Loaded by matching the session-wide skill list; the right home when the need is triggered by an activity, wherever in the tree it happens.
+      - shape: location-shaped
+        trigger: WORKING UNDER A DIRECTORY -- a config subtree, quest source dirs, a package.
+        home: referenced from (or moved adjacent to) that directory's CLAUDE.md. A directory CLAUDE.md auto-loads when ANY file beneath it is touched (by cwd or by path) -- the exactly-right trigger for directory-scoped knowledge, at ZERO session-wide context cost. Do NOT graduate location-scoped knowledge to a skill.
+      - shape: both
+        trigger: the knowledge is needed both by an activity AND when working in a place.
+        home: prefer the LOCATION home (the directory CLAUDE.md); a skill may point at it via summarize-and-reference rather than duplicating it.
+    why: |
+      A skill spends session-wide context budget (its description sits in every session's skill
+      list) and fires by description match. A directory CLAUDE.md spends nothing until the
+      session touches files beneath it, then loads exactly when its readers appear. Matching the
+      home to the trigger shape puts directory-scoped knowledge where it costs nothing and loads
+      precisely, and reserves skills for activity-triggered knowledge that must be reachable from
+      anywhere.
+    audit_link: |
+      project-doc-audit routes its maturation recommendations by this razor: recommend
+      skill-graduation (taxonomy B) ONLY for task-shaped knowledge; recommend folding into /
+      referencing from a directory CLAUDE.md (taxonomy C) for location-shaped knowledge -- the
+      PREFERRED destination for directory-scoped content, not a lesser fallback.
 
   summarize_and_reference:
     description: |

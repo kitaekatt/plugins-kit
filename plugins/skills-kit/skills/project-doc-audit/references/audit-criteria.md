@@ -18,7 +18,7 @@ This audit enforces the **generic** cohesion framework. It does NOT impose a spe
 
 ## Placement findings (maturation / home)
 
-Project references are the **escape-hatch / nursery**, not the default home for reference content. The default home is a skill's `references/` folder. The placement criteria check whether the content has matured past a standalone doc.
+Project references are the **escape-hatch / nursery** for still-emerging content, not a permanent home. When content stabilizes it moves to its **trigger-appropriate mature home** -- and a skill is **NOT** the default home for all reference content. The placement question is: what is the natural TRIGGER for needing this knowledge (cohesion-principles `placement_follows_trigger_shape`)? A **task-shaped** trigger (a verb the session performs) homes to a skill; a **location-shaped** trigger (knowledge scoped to a directory) homes to that directory's CLAUDE.md -- the preferred home for directory-scoped knowledge, since a CLAUDE.md auto-loads when any file beneath it is touched, at zero session-wide context cost. The placement criteria check whether the content has stabilized past the nursery stage and, if so, route it by trigger shape.
 
 ### PD-1. Genuine project doc, not a mis-placed skill reference
 
@@ -30,17 +30,19 @@ Project references are the **escape-hatch / nursery**, not the default home for 
 
 ### PD-2. Content earns its place as a project doc (maturation)
 
-**Rule:** the doc's content should not have matured past the project-doc stage. Three maturation signals, in order of leverage:
+**Rule:** if the doc's content has stabilized past the nursery stage, route it to its trigger-appropriate mature home. Match the home to the natural TRIGGER SHAPE (not "always a skill"):
 
-1. **Graduate to a skill** (taxonomy B) -- content has stabilized into a skill-typed shape: a procedure (technique-skill), a rule + counter (discipline-skill), a lookup table (reference-skill), or a wrapper around an external tool/API (capability-skill), with a clear trigger. This is the highest-leverage destination -- a discoverable trigger, an audit surface, a typed contract.
-2. **Fold into a CLAUDE.md** (taxonomy C) -- content is small and load-bearing (a tip, a single fact, a one-line guardrail). Stage 1 of the maturation pipeline; it was over-promoted to a standalone doc.
-3. **Move into an existing skill** (taxonomy D) -- an existing skill already owns the topic; the content belongs in that skill's `references/`, not as a parallel project doc.
+1. **Graduate to a skill** (taxonomy B) -- ONLY when the trigger is **task-shaped**: a VERB the session performs (authoring an X, running an evaluator, classifying a CL), needed wherever in the tree the activity happens, and the content fits a skill type (procedure -> technique; rule+counter -> discipline; lookup table -> reference; tool/API wrapper -> capability). A skill is loaded by matching the session-wide skill list -- the right home for activity-triggered knowledge.
+2. **Fold into / reference from a directory CLAUDE.md** (taxonomy C) -- the **preferred** home for **location-shaped** knowledge (scoped to a directory: a config subtree, source dirs, a package) and for small load-bearing tips. A directory CLAUDE.md auto-loads when any file beneath it is touched -- the exactly-right trigger for directory-scoped knowledge, at zero session-wide context cost. This is preferred over B/D when the trigger is location-shaped, **not** a lesser fallback.
+3. **Move into an existing skill** (taxonomy D) -- an existing (task-shaped) skill already owns the topic; the content belongs in that skill's `references/`, not as a parallel project doc.
 
-**Why:** `prefer_skill_reference` + `skill_maturation_pipeline`. Structured procedural / rule / lookup / wrapper content has more leverage as a skill; leaving it as an unstructured project reference forfeits the trigger, the audit surface, and the typed contract.
+Knowledge with BOTH shapes: prefer the **location home** (C); a skill may point at it via summarize-and-reference.
 
-**Test:** read the doc; ask which (if any) maturation signal fires. If the content is still genuinely unstructured / emerging, none fires and the doc is correctly a project doc (PASS).
+**Why:** `placement_follows_trigger_shape` + `skill_maturation_pipeline`. A skill spends session-wide context budget and fires by description match; a directory CLAUDE.md spends nothing until the session works under the directory, then loads precisely. Matching the home to the trigger shape puts directory-scoped knowledge where it costs nothing and loads exactly, and reserves skills for activity-triggered knowledge. Skills-kit is NOT of the view that all mature documentation graduates to a skill.
 
-**Severity:** JUDGMENT (INFO-level). A project doc doing useful work where it sits is COMPLIANT -- graduation is an opportunity, never a defect.
+**Test:** read the doc; ask "what is the natural trigger for needing this?" A verb -> task-shaped (skill, B). Working under a directory -> location-shaped (directory CLAUDE.md, C). Do NOT recommend skill-graduation for location-scoped knowledge. If the content is still genuinely unstructured / emerging, no signal fires and the doc is correctly a project doc (PASS).
+
+**Severity:** JUDGMENT (INFO-level). A project doc doing useful work where it sits is COMPLIANT -- reaching the mature home is an opportunity, never a defect.
 
 ## CRP findings (single reading task)
 
