@@ -128,6 +128,18 @@ domain_skill:
           CLI verbs -- the two config files, the report/export/validate/apply
           operations, the authoring workflow, and template-name maintenance.
   capabilities:
+    - id: start
+      keywords: [default, bare invocation, no arguments, get started, set up,
+                 first run, show me my lights, my scenes, has anything changed,
+                 open the report, what do my lights look like]
+      description: >-
+        THE DEFAULT ENTRY POINT -- run this for a bare invocation, or any opening
+        request that does not already name a specific operation. Detects which of
+        three states the user is in and reports a machine-readable
+        `hue-kit-verdict:` line. Read-only except on first run.
+      operation: hue-kit start [--no-open] [--accept]
+      tool: scripts/hue_kit_cli.py
+      reference_section: scene-layers.md (Sync)
     - id: discover
       keywords: [find bridge, discovery, bridge ip, no ip, locate bridge,
                  meethue, which bridge, network scan]
@@ -217,9 +229,51 @@ domain_skill:
       operation: hue-kit init [DIR]
       tool: scripts/hue_kit_cli.py
       reference_section: scene-layers.md (The two config files)
+  default_flow:
+    trigger: >-
+      A bare invocation, or any opening request that does not already name a
+      specific operation ("show me my lights", "what are my scenes"). Do NOT
+      open with `report` -- that prints solver internals at a user who asked to
+      see their lights. Run `hue-kit start` and branch on its verdict.
+    command: hue-kit start
+    note: >-
+      The state detection is the script's job, not yours: it decides between the
+      three cases below and prints `hue-kit-verdict: <state>` as its last line.
+      Branch on that line; do not re-derive the state by inspecting files.
+    verdicts:
+      - verdict: first-run
+        meaning: Nothing existed yet; it built the registry + design, rendered the
+          report, and opened it in the browser.
+        do: >-
+          Tell the user what was set up and that the report is open. Then offer
+          the natural next step: the group names are placeholders (G1, G2, ...),
+          and renaming them to meaningful names is what makes the YAML readable.
+      - verdict: clean
+        meaning: The bridge matches the local design; a report exists.
+        do: >-
+          Ask (AskUserQuestion) whether they want to view the report or change a
+          scene. To view, open the index.html path the command printed. This is
+          the ONLY verdict that asks -- the other two already have an obvious
+          next move.
+      - verdict: changed
+        meaning: >-
+          The bridge and the local YAML disagree -- in SHAPE (a light, zone, or
+          scene added/removed/renamed) or in COLOUR, both named in the output.
+          Nothing was written.
+        do: >-
+          Surface WHAT differs, then ask which direction to sync -- the two are
+          destructive in opposite directions and only the user knows which side
+          is the real work. Pull (`hue-kit export`, bridge -> YAML) discards
+          local edits; push (`hue-kit apply`, YAML -> bridge) overwrites the
+          bridge, so dry-run it first and only then `--yes`. For a reviewed shape
+          change they do not want mirrored locally, `hue-kit start --accept`
+          re-baselines without touching the YAML.
+      - verdict: bridge-unreachable
+        meaning: The bridge could not be read.
+        do: Route to discover / pair; do not fall through to other verbs.
   tools:
     - name: hue-kit
-      command: hue-kit <report|groups|export|render|validate|apply|init> [--dir PATH]
+      command: hue-kit <start|report|groups|export|render|validate|apply|init> [--dir PATH]
       description: >-
         The verb CLI over the layered scene tool. PATH shims at bin/hue-kit(.cmd)
         put it on PATH; or run scripts/hue_kit_cli.py. Re-execs under the plugin's
@@ -259,8 +313,12 @@ asset_dependencies:
 
 ## When to invoke
 
-- Setting up scene management on a Hue bridge for the first time
-  (`report` -> `groups` -> `export` -> `render`).
+- **Bare invocation, or any opening request that names no specific operation**
+  ("show me my lights", "what are my scenes") -- run `hue-kit start` and branch
+  on its `hue-kit-verdict:` line (see `default_flow` above). This covers both
+  first-time setup and the has-anything-changed check; do not hand-run the
+  `report` -> `groups` -> `export` -> `render` chain, and do not open with
+  `report`, which prints solver internals at someone who asked to see a picture.
 - Changing a scene's colour/brightness ("make Reading warmer", "dim the bar in
   Movie night") -- edit YAML -> `validate` -> `apply`.
 - Seeing or regenerating the HTML report, or exporting the current bridge

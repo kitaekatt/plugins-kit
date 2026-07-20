@@ -40,7 +40,9 @@ regardless of invocation cwd; pass `--dir PATH` to relocate. Verbs map to
 scene-layers.py flags:
 `report` (default report), `groups` (`--export-groups`), `export`
 (`--export-designs`), `render` (`--html`), `validate` (`--validate-design`),
-`apply [--yes]` (`--apply`).
+`apply [--yes]` (`--apply`). `start` is the exception: it composes several of
+these, so it runs them as SUBPROCESSES (`_call_scene_layers`) rather than via
+the `os.execve` runner the single-verb commands use -- exec never returns.
 
 ## First: environment
 
@@ -49,7 +51,31 @@ The user provides the bridge connection (README "Point it at your bridge"):
 key. If `HUE_APP_KEY` is unset the tool falls back to `HUE_KEY_FILE` then
 `secrets/hue-bridge-key.txt`.
 
-## Setting it up on a NEW bridge (in order)
+## The default entry point: `hue-kit start`
+
+**Run this first for any opening request that does not already name an
+operation** -- including a bare skill invocation. It replaces hand-running the
+setup chain, and it decides between three states rather than making you infer
+them. It prints `hue-kit-verdict: <state>` as its last line; branch on that.
+
+- `first-run` -- nothing existed, so it built `scene-groups.yaml` +
+  `scene-designs.yaml`, rendered `index.html`, and opened it. This is the ONLY
+  state that writes without asking (nothing existed to overwrite). Follow up by
+  helping the user rename the placeholder groups (`G1..`) to meaningful names.
+- `clean` -- bridge matches the local design. Ask whether to view the report or
+  change a scene.
+- `changed` -- they disagree, in SHAPE (light/zone/scene added, removed, or
+  renamed -- caught by the stored fingerprint) or in COLOUR (caught by
+  `validate`). **Nothing is written.** Surface what differs and ask which way to
+  sync: a diff cannot distinguish "the bridge moved" from "the YAML holds
+  unapplied edits", and pulling vs pushing destroys opposite work. `hue-kit
+  start --accept` re-baselines a reviewed shape change without touching YAML.
+
+`bridge-fingerprint.txt` in the working dir stores the bridge's shape (lights,
+zone membership, scene names). `export` re-baselines it -- that is what closes
+the loop after a shape change, so do not remove that coupling.
+
+### Setting it up manually (what `start` automates)
 
 1. `hue-kit report` -- read-only; confirms the bridge is reachable and prints the
    certified-minimum group family + each scene as a layer stack.
@@ -59,6 +85,10 @@ key. If `HUE_APP_KEY` is unset the tool falls back to `HUE_KEY_FILE` then
 3. `hue-kit export` -- materialises `scene-designs.yaml` from their live scene
    colours + the registry. Verifies the family expresses AND bakes every scene.
 4. `hue-kit render` -- renders `index.html`.
+
+Never re-run `groups` over an existing registry to "refresh" it: it writes
+placeholder names and would destroy the user's renames. A changed group
+vocabulary is a conversation, not a regeneration.
 
 ## Making scene changes from a conversation
 
@@ -86,6 +116,12 @@ bar in Movie night"):
   under the working dir (default: the plugin data dir) -- the revert path.
 - Colour is **xy-authoritative**; do not hand-edit the `# hsl(...)` annotations
   expecting them to take effect -- edit `xy`.
+- A dark light may be stored as `on: true, brightness: 0` rather than
+  `on: false` (the Hue app writes some scenes this way). `_effectively_off()`
+  in scene-layers.py treats both as off, which is what lets `export` ->
+  `validate` round-trip cleanly. Before that guard existed, such a scene
+  reported the same discrepancies on every run and no amount of `apply` could
+  silence it. Keep the analyzer and the diff agreeing on what "dark" means.
 - After changing scenes, re-run `hue-kit report` -- if the group vocabulary is no
   longer minimal, or a template's stack order flipped (the solver orders layers
   by brightness), update `scene-groups.yaml` (see

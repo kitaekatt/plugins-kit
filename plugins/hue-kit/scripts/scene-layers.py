@@ -756,16 +756,32 @@ def _color_mode(act):
     return "none"
 
 
+def _effectively_off(action) -> bool:
+    """Is this action dark? True for on:false, for an absent action (a light the
+    scene never sets), AND for on:true at brightness 0.
+
+    That last case is the Hue app's own way of writing "off" for some scenes --
+    the bulb is nominally on but emits nothing. The analyzer already reads it as
+    off (a zero-brightness cell contributes no light, so such a scene reports as
+    all-OFF and exports to `layers: []`), so the diff has to agree. When it did
+    not, a scene holding these actions could never validate clean: export wrote
+    "off", validate compared against the raw on:true, and reported the same
+    discrepancies on every run no matter how many times it was applied."""
+    if not action.get("on", {}).get("on"):
+        return True
+    bri = action.get("dimming", {}).get("brightness")
+    return bri is not None and bri <= 0.0
+
+
 def _action_diff(live, target):
     """Beyond-tolerance difference description, or None. Proven scene-schema
     logic incl. the colour-mode-none guard (a target colour vs a live action
     with no colour is a real difference, not a match)."""
-    lon = live.get("on", {}).get("on")
-    ton = target.get("on", {}).get("on")
-    if bool(lon) != bool(ton):
-        return f"on {lon} -> {ton}"
-    if not ton:
-        return None  # both off
+    loff, toff = _effectively_off(live), _effectively_off(target)
+    if loff != toff:
+        return f"on {not loff} -> {not toff}"
+    if toff:
+        return None  # both dark (off, or on at zero brightness)
     lb = live.get("dimming", {}).get("brightness")
     tb = target.get("dimming", {}).get("brightness")
     if tb is not None and (lb is None or abs(lb - tb) > smg.BRI_TOL):
@@ -825,6 +841,31 @@ def _scene_pending(session, design, only):
                    if _action_diff(rid2live.get(rid, {}), t) is not None}
         plan.append((ds["name"], live, pending))
     return plan, rid2name
+
+
+def bridge_fingerprint(data: dict) -> str:
+    """A stable hash of the bridge's SHAPE: which lights exist, how the zones
+    carve them up, and which scenes are defined.
+
+    This is the half of "have the lights changed?" that --validate-design cannot
+    see: validate iterates the scenes in the DESIGN, so it catches colour drift
+    on a known scene but is silent about a light that was added, a zone that was
+    re-scoped, or a whole scene that appeared on the bridge. Deliberately covers
+    shape ONLY -- no colours or brightness -- so the two checks stay independent
+    and a caller can tell a structural change from a restyle.
+
+    Light NAMES are the identity here, matching the framework's naming contract
+    (extract_from_bridge fails loud on duplicates), so a rename reads as a change
+    -- which is correct: the YAML refers to lights by name."""
+    import hashlib
+    shape = {
+        "universe": sorted(data.get("universe", [])),
+        "zone_lightsets": {k: sorted(v) for k, v
+                           in sorted((data.get("zone_lightsets") or {}).items())},
+        "scenes": sorted(s["name"] for s in data.get("scenes", [])),
+    }
+    blob = json.dumps(shape, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode()).hexdigest()
 
 
 def validate_design(session, design, only):
@@ -977,6 +1018,10 @@ def main() -> int:
                     const=str(DESIGNS_YAML),
                     help="materialise the layered scene-designs.yaml (default "
                     f"{DESIGNS_YAML}) from live colours + scene-groups.yaml, then exit")
+    ap.add_argument("--fingerprint", action="store_true",
+                    help="print a stable hash of the bridge's SHAPE (lights, "
+                    "zone membership, scene set) and exit -- structural change "
+                    "detection, complementary to --validate-design's colour diff")
     ap.add_argument("--validate-design", action="store_true",
                     help="diff the layered scene-designs.yaml against the live "
                     "bridge (report only) and exit")
@@ -1037,6 +1082,10 @@ def main() -> int:
 
     data = json.loads(Path(args.cells).read_text()) if args.cells \
         else extract_from_bridge()
+
+    if args.fingerprint:
+        print(bridge_fingerprint(data))
+        return 0
 
     if args.export_groups:
         text = export_groups(data)

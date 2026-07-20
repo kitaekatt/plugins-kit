@@ -1,6 +1,6 @@
 {
   "name": "hue-kit",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "description": "Philips Hue layered scene framework: read scenes from the bridge, solve the minimal meta-group vocabulary, sync scene definitions bi-directionally with editable YAML, and render a self-contained HTML report. Ships a hue-kit CLI plus example data to overwrite with your own.",
   "author": {
     "name": "Christina"

@@ -2,6 +2,9 @@
 
 Subcommands (the common operations):
 
+    start       THE DEFAULT. First run: build the registry + design, render the
+                report, open it. Afterwards: check whether the bridge still
+                matches the local YAML, and stop for a decision if it does not.
     report      Read the live bridge, solve the SMALLEST meta-group vocabulary,
                 and print each scene as a layer stack. Read-only. Start here.
     groups      Write a starter group registry (scene-groups.yaml) with
@@ -223,25 +226,48 @@ def _resolve_key_file() -> None:
         os.environ["HUE_KEY_FILE"] = str(PAIRED_KEY_FILE)
 
 
-def _run_scene_layers(flags: list[str], workdir: Path) -> int:
-    """Resolve the bridge + key, point scene-layers.py at the working dir's YAML,
-    then exec it under the current (already venv-resolved) interpreter."""
+def _scene_layers_env(workdir: Path) -> dict:
+    """Resolve the bridge + key and point scene-layers.py at the working dir's
+    YAML. Shared by the exec and subprocess runners below."""
     os.environ["HUE_BRIDGE_IP"] = _resolve_bridge_ip()
     _resolve_key_file()
     env = os.environ
     env.setdefault("HUE_GROUPS_FILE", str(workdir / "scene-groups.yaml"))
     env.setdefault("HUE_DESIGNS_FILE", str(workdir / "scene-designs.yaml"))
     # A user-set relative path must keep meaning "relative to where I ran from",
-    # so absolutize before the chdir below.
+    # so absolutize before any chdir.
     for var in ("HUE_GROUPS_FILE", "HUE_DESIGNS_FILE", "HUE_KEY_FILE"):
         if env.get(var):
             env[var] = str(Path(env[var]).resolve())
+    workdir.mkdir(parents=True, exist_ok=True)
+    return env
+
+
+def _run_scene_layers(flags: list[str], workdir: Path) -> int:
+    """Single-shot runner: exec scene-layers.py in place of this process. Used by
+    the one-verb commands, where handing over the tty (and never returning) is
+    exactly right."""
+    env = _scene_layers_env(workdir)
     # scene-layers.py writes its relative paths (the tmp/ apply backups) to the
     # cwd, so anchor the process in the working dir before handing over.
-    workdir.mkdir(parents=True, exist_ok=True)
     os.chdir(workdir)
     argv = [sys.executable, str(SCENE_LAYERS), *flags]
     os.execve(sys.executable, argv, env)  # replaces this process
+
+
+def _call_scene_layers(flags: list[str], workdir: Path, *,
+                       capture: bool = False):
+    """Chainable runner: run scene-layers.py as a SUBPROCESS and come back.
+
+    `start` composes several scene-layers runs in one invocation, which the exec
+    runner above cannot do -- it never returns. Returns (returncode, stdout);
+    stdout is None unless capture."""
+    import subprocess
+    env = _scene_layers_env(workdir)
+    argv = [sys.executable, str(SCENE_LAYERS), *flags]
+    proc = subprocess.run(argv, env=env, cwd=str(workdir),
+                          capture_output=capture, text=True)
+    return proc.returncode, (proc.stdout if capture else None)
 
 
 def _cmd_discover(args) -> int:
@@ -354,6 +380,133 @@ def _cmd_pair(args) -> int:
         raise SystemExit(f"hue-kit: pairing error: {err or resp}")
 
 
+def _open_report(path: Path) -> bool:
+    """Open the rendered report in the user's default browser. Returns False if
+    no browser could be launched (headless box, sandbox) -- a non-fatal outcome
+    the caller reports, since the file is written either way."""
+    import webbrowser
+    try:
+        return webbrowser.open(path.as_uri())
+    except Exception:
+        return False
+
+
+def _cmd_start(args) -> int:
+    """The default entry point: get the user to a current report in one command.
+
+    Three states, distinguished by what already exists and whether the bridge
+    still matches it:
+
+      first-run  nothing here yet -> build the registry, materialise the design,
+                 render, open. Nothing exists to overwrite, so this is the one
+                 branch that writes without asking.
+      changed    the bridge no longer matches the local YAML -> report WHAT
+                 differs and stop. Deliberately does not auto-export: a diff is
+                 ambiguous between "the bridge changed" and "the user edited the
+                 YAML and has not applied it yet", and guessing wrong destroys
+                 whichever side was the real work. The caller asks which way to
+                 sync.
+      clean      bridge matches -> ensure a report exists; the caller offers to
+                 view it or to make changes.
+
+    The final `hue-kit-verdict: <state>` line is the machine-readable handoff."""
+    # Our prints interleave with those of the scene-layers.py subprocesses, which
+    # write straight to the shared fd. Without this our output is block-buffered
+    # when piped and lands after theirs, so the progress lines describe steps
+    # that already scrolled past.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+    workdir = Path(args.dir).resolve()
+    groups_f = workdir / "scene-groups.yaml"
+    designs_f = workdir / "scene-designs.yaml"
+    report_f = workdir / "index.html"
+    fp_f = workdir / "bridge-fingerprint.txt"
+
+    def verdict(state: str, rc: int = 0) -> int:
+        print(f"\nhue-kit-verdict: {state}")
+        return rc
+
+    rc, fp_now = _call_scene_layers(["--fingerprint"], workdir, capture=True)
+    if rc != 0:
+        print("hue-kit: could not read the bridge -- run `hue-kit discover` / "
+              "`hue-kit pair` and check the connection.", file=sys.stderr)
+        return verdict("bridge-unreachable", 1)
+    fp_now = (fp_now or "").strip()
+
+    if args.accept:
+        # Re-baseline without touching the YAML. The escape hatch for a shape
+        # change the user has reviewed and does not want reflected locally --
+        # otherwise `start` would keep reporting it, since a shape change cannot
+        # be resolved by `apply` (that writes colours, it cannot create a light).
+        fp_f.write_text(fp_now + "\n")
+        print(f"Accepted the bridge's current shape as the reference "
+              f"({workdir / 'bridge-fingerprint.txt'}).")
+        return verdict("accepted")
+
+    # ---- first run: nothing local to lose, so build the whole chain ----------
+    if not groups_f.is_file() or not designs_f.is_file():
+        print("No working files yet -- setting up from your bridge.\n")
+        for label, flags in (
+                ("registry (scene-groups.yaml)", ["--export-groups", str(groups_f)]),
+                ("design (scene-designs.yaml)", ["--export-designs", str(designs_f)]),
+                ("report (index.html)", ["--html", str(report_f)])):
+            print(f"  building the {label} ...")
+            rc, _ = _call_scene_layers(flags, workdir)
+            if rc != 0:
+                print(f"hue-kit: failed while building the {label}.",
+                      file=sys.stderr)
+                return verdict("setup-failed", rc)
+        fp_f.write_text(fp_now + "\n")
+        opened = _open_report(report_f) if args.open else False
+        print(f"\nSet up in {workdir}")
+        print(f"Report: {report_f}"
+              + ("  (opened in your browser)" if opened else ""))
+        if args.open and not opened:
+            print("  (could not launch a browser -- open the path above manually)")
+        print("\nThe group names are placeholders (G1, G2, ...) -- renaming them "
+              "to something meaningful is the natural next step.")
+        return verdict("first-run")
+
+    # ---- established: has anything moved since we last looked? --------------
+    fp_old = fp_f.read_text().strip() if fp_f.is_file() else ""
+    shape_changed = bool(fp_old) and fp_old != fp_now
+    if not fp_old:
+        # Working files predate fingerprinting (or it was deleted). Establish the
+        # baseline rather than crying "changed" on no evidence; the colour diff
+        # below still covers this run.
+        fp_f.write_text(fp_now + "\n")
+
+    print("Checking your bridge against the local design ...\n")
+    drift_rc, drift_out = _call_scene_layers(["--validate-design"], workdir,
+                                             capture=True)
+    print((drift_out or "").rstrip())
+    colours_changed = drift_rc != 0
+
+    if shape_changed or colours_changed:
+        print("\nYour bridge no longer matches the local design:")
+        if shape_changed:
+            print("  - the SHAPE changed (a light, zone, or scene was added, "
+                  "removed, or renamed)")
+        if colours_changed:
+            print("  - scene colours/brightness differ (see the per-light diff "
+                  "above)")
+        print("\nNot changing anything yet: a difference can mean the bridge "
+              "moved, OR that\nthe local YAML holds edits that were never "
+              "applied. Those need opposite fixes.")
+        return verdict("changed")
+
+    if not report_f.is_file():
+        print("Report missing -- re-rendering it.")
+        rc, _ = _call_scene_layers(["--html", str(report_f)], workdir)
+        if rc != 0:
+            return verdict("render-failed", rc)
+
+    print(f"\nBridge matches the local design. Report: {report_f}")
+    return verdict("clean")
+
+
 def _cmd_init(args) -> int:
     # The init positional wins if given; otherwise fall back to the shared --dir.
     dest = Path(args.init_dir or args.dir).resolve()
@@ -394,6 +547,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="skip the Enter prompt and start polling at once "
                              "(for agents: confirm readiness first, then tell "
                              "the user to press the button)")
+    p_start = sub.add_parser("start", help="Default entry point: set up on "
+                                           "first run, else check the bridge "
+                                           "for changes. Renders + opens the "
+                                           "report.")
+    p_start.add_argument("--no-open", dest="open", action="store_false",
+                         help="render the report but do not launch a browser")
+    p_start.add_argument("--accept", action="store_true",
+                         help="record the bridge's current shape as the "
+                              "reference without changing any YAML (clears a "
+                              "reviewed 'shape changed' report)")
     sub.add_parser("report", help="Read the bridge; print the minimal group "
                                   "family + each scene as a layer stack.")
     p_groups = sub.add_parser("groups", help="Write a starter scene-groups.yaml "
@@ -436,6 +599,8 @@ def main(argv: list[str] | None = None) -> int:
 
     workdir = Path(args.dir).resolve()
 
+    if args.cmd == "start":
+        return _cmd_start(args)
     if args.cmd == "report":
         return _run_scene_layers([], workdir)
     if args.cmd == "groups":
@@ -444,7 +609,17 @@ def main(argv: list[str] | None = None) -> int:
         out = str(Path(args.path).resolve()) if args.path else str(workdir / "scene-groups.yaml")
         return _run_scene_layers(["--export-groups", out], workdir)
     if args.cmd == "export":
-        return _run_scene_layers(["--export-designs", str(workdir / "scene-designs.yaml")], workdir)
+        # Re-baseline the shape fingerprint alongside the design: export IS the
+        # pull, so afterwards the local files reflect the bridge as it is now.
+        # Without this a shape change stays reported forever -- the user fixes
+        # it the only way they can, and `start` keeps insisting it is broken.
+        rc, _ = _call_scene_layers(
+            ["--export-designs", str(workdir / "scene-designs.yaml")], workdir)
+        if rc == 0:
+            frc, fp = _call_scene_layers(["--fingerprint"], workdir, capture=True)
+            if frc == 0 and (fp or "").strip():
+                (workdir / "bridge-fingerprint.txt").write_text(fp.strip() + "\n")
+        return rc
     if args.cmd == "render":
         out = str(Path(args.path).resolve()) if args.path else str(workdir / "index.html")
         return _run_scene_layers(["--html", out], workdir)

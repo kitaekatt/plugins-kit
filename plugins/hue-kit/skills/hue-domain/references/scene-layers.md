@@ -37,6 +37,20 @@ truth regardless of invocation cwd (override with `--dir`, or the
 
 ## The tool -- scene-layers.py (via `hue-kit`)
 
+Entry point -- `hue-kit start`:
+
+- The verb to reach for when no specific operation was named. On a first run it
+  composes `groups` -> `export` -> `render` and opens the report; afterwards it
+  reports whether the bridge still matches the local YAML. Prints
+  `hue-kit-verdict: first-run|clean|changed|accepted|bridge-unreachable` as its
+  last line.
+- It writes without asking ONLY in the `first-run` case, where no local file
+  exists to overwrite. On any difference it reports and stops: a diff cannot
+  distinguish "the bridge moved" from "the YAML holds unapplied edits", and
+  pulling (`export`) vs pushing (`apply`) destroy opposite work.
+- `--no-open` skips the browser; `--accept` re-baselines a reviewed shape change
+  without touching the YAML.
+
 Solver (read-only) -- `hue-kit report`:
 
 - print the minimum group family + per-scene stacks + bake verification.
@@ -55,7 +69,14 @@ Sync (over the two files above):
   expresses AND bakes every scene before writing (fail loud), so the design is
   always faithful.
 - `hue-kit validate` (`--validate-design`) -- diff the design against the live
-  bridge (report only, analyzer tolerances). `0 discrepancies` = match.
+  bridge (report only, analyzer tolerances). `0 discrepancies` = match. Note it
+  iterates the scenes in the DESIGN, so it sees colour drift on a known scene
+  but NOT a light, zone, or scene that appeared on the bridge -- that is the
+  fingerprint's job (below), and the two together are what `start` checks.
+- `bridge-fingerprint.txt` (`--fingerprint`) -- a hash of the bridge's SHAPE
+  (light names, zone membership, scene names; no colours). `start` compares it to
+  detect structural change; `export` re-baselines it, which is what clears a
+  shape change once the user has pulled. Keep that coupling.
 - `hue-kit apply` (`--apply`) -- bake the layer stacks onto the bridge.
   **Dry-run unless `--yes`.** Resolves every targeted scene first (atomic -- a
   parse error writes nothing), writes ONLY beyond-tolerance lights (in-tolerance

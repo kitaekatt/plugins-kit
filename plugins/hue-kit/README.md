@@ -77,6 +77,12 @@ relocate).
 hue-kit discover          # find your bridge on the network (caches the IP)
 hue-kit pair              # mint + store the app key (press the link button)
 
+hue-kit start             # START HERE. First run: build the YAML, render the
+                          #   report, open it. After that: check whether the
+                          #   bridge still matches your YAML. Add --no-open to
+                          #   skip the browser, --accept to re-baseline after a
+                          #   reviewed change.
+
 hue-kit report            # read the bridge; print the minimal group family
                           #   + each scene as a layer stack (read-only)
 hue-kit groups            # write a starter scene-groups.yaml (placeholder
@@ -91,8 +97,14 @@ hue-kit init [DIR]        # drop the shipped example YAML + HTML into DIR to
                           #   overwrite with your own (default: the data dir)
 ```
 
-Typical first run: `report` -> `groups` (rename the groups) -> `export` ->
-`render` -> `apply --yes`.
+Typical first run: just `hue-kit start` -- it does `groups` -> `export` ->
+`render` and opens the report. Then rename the placeholder groups (`G1..`) in
+`scene-groups.yaml` to something meaningful.
+
+Re-running `start` later checks the bridge against your YAML. If they differ it
+reports what changed and stops rather than guessing: a difference can mean the
+bridge moved, or that your YAML holds edits you never applied, and the fixes are
+opposite. Pull with `export`, push with `apply`.
 
 ## Author + apply changes
 
