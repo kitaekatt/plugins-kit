@@ -235,6 +235,24 @@ if [ -n "$FLAG_VERBOSE" ] || [ -n "$FLAG_CONSOLE" ]; then
     LOG_SUCCESS_SHELL="true"
 fi
 
+# --- Provisioning: everything below runs DETACHED in normal mode ---
+# MEASURED (2026-07-20, synthetic SessionStart hooks + timed `claude -p`):
+# Claude Code blocks session readiness on the SessionStart hook's COMPLETION,
+# where completion = process exit AND stdout-pipe EOF -- a background child
+# that merely inherits the hook's stdout holds the session exactly as long as
+# foreground work would, while a child with stdin/stdout/stderr redirected
+# costs zero. So the foreground path above stays at "read stdin + gates + emit
+# JSON" (tens of ms), and every remaining step -- PATH setup, reset-script
+# install, Python ensure (including the cold-start standalone download), the
+# Windows registry PATH writes (two PowerShell invocations), and the engine
+# launch -- lives in _provision, spawned detached with all fds redirected.
+# User-facing output is unaffected: it always flowed through
+# bootstrap_display.pending -> the UserPromptSubmit display hook, never
+# through SessionStart stdout. Console mode runs _provision synchronously in
+# the main shell (its engine `exec` at the end replaces the process, exactly
+# as before).
+_provision() {
+
 # --- Ensure required dirs are at front of PATH ---
 # ~/.local/bin: tools installed by bootstrap (uv, git wrappers, etc.)
 # ~/.local/share/python-standalone/python: standalone Python + DLLs (Windows needs this for DLL resolution)
@@ -445,4 +463,22 @@ else
         --hook-start-epoch "$HOOK_START_EPOCH" \
         --project-dir "$PWD" \
         "${ENGINE_FLAGS[@]}"
+fi
+
+}
+
+# --- Dispatch _provision (see the MEASURED note at its definition) ---
+# Normal mode: detached, ALL fds redirected -- </dev/null so the child never
+# holds the hook's stdin, >/dev/null 2>&1 so it never holds the stdout pipe
+# Claude Code waits on (the engine inside re-redirects its own output to
+# engine_output.log; user-facing content flows via bootstrap_display.pending).
+# The backgrounded subshell does not inherit the EXIT trap (bash resets traps
+# in subshells), so the trap can't double-fire; the failure paths inside
+# _provision write bootstrap_display.pending explicitly, which is the channel
+# that actually reaches the user. Console mode: synchronous, same shell, so
+# output prints and the engine exec behaves exactly as it always has.
+if [ -n "$FLAG_CONSOLE" ]; then
+    _provision
+else
+    _provision </dev/null >/dev/null 2>&1 &
 fi

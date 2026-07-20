@@ -43,6 +43,23 @@ arg to a file, across edit → `/reload-plugins` → restart:
 | …then `/reload-plugins` | `reg=REGB`, **same session**, no restart | `/reload-plugins` reloads the registration in-session |
 | restart | (baseline — every session loads all registrations + fires SessionStart) | restart carries everything |
 
+Probed 2026-07-20 (macOS, synthetic SessionStart hooks in a scratch project +
+timed `claude -p` against a no-hook baseline): **Claude Code blocks session
+readiness on the SessionStart hook's completion**, and completion means
+*process exit AND stdout-pipe EOF* — a background child that merely inherits
+the hook's stdout (`sleep 6 &`) delayed the session exactly like foreground
+`sleep 6`, while a child with stdin/stdout/stderr redirected
+(`(sleep 20 >/dev/null 2>&1 &)`) added zero. This is why `session-bootstrap.sh`
+keeps only "read stdin + gates + emit JSON" on the foreground path (~tens of
+ms) and runs all provisioning — Python ensure/download, Windows registry PATH
+writes, engine launch — inside a `_provision` subshell dispatched
+`</dev/null >/dev/null 2>&1 &` (contract pinned by
+`tests/bootstrap/test_sessionstart_detach.py`). The historical "can't type for
+5–10 s at startup" complaint was foreground provisioning work in this hook;
+user-facing output is unaffected because it flows through
+`bootstrap_display.pending` → the UserPromptSubmit display hook, never through
+SessionStart stdout (which VS Code doesn't show anyway).
+
 ## Documented behavior (official docs)
 
 The probe above matches Claude Code's documented contract (https://code.claude.com/docs/en/discover-plugins, .../plugins-reference):

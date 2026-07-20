@@ -6,7 +6,7 @@ How the bootstrap engine discovers, processes, and remediates plugin dependencie
 
 Bootstrap uses a fire-and-forget model to avoid blocking session start:
 
-1. **SessionStart hook** (instant): Emits `{"continue": true, "suppressOutput": true}` immediately, then forks the engine to the background with `--background`. The shell script exits and Claude Code becomes interactive within milliseconds.
+1. **SessionStart hook** (instant): Runs only the skip gates on the foreground path, emits `{"continue": true, "suppressOutput": true}`, then dispatches ALL provisioning work — PATH setup, Python ensure/download, Windows registry PATH writes, the engine launch (`--background`) — as a detached `_provision` subshell with every fd redirected. The redirection is load-bearing, not hygiene: Claude Code blocks session readiness on the hook's process exit AND stdout-pipe EOF (measured 2026-07-20; a child that inherits stdout blocks exactly like foreground work). Foreground cost is ~tens of ms on every path, including cold start; contract pinned by `tests/bootstrap/test_sessionstart_detach.py`.
 
 2. **Engine (background)**: Runs all checks (tools, venv, marketplace, plugins, etc.), writes results to `bootstrap.log`, and — if there's anything to display — writes display JSON atomically to `bootstrap_display.pending` in the data directory. When everything passes silently, no pending file is created.
 
