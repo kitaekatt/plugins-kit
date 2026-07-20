@@ -465,8 +465,9 @@ def _cmd_start(args) -> int:
               + ("  (opened in your browser)" if opened else ""))
         if args.open and not opened:
             print("  (could not launch a browser -- open the path above manually)")
-        print("\nThe group names are placeholders (G1, G2, ...) -- renaming them "
-              "to something meaningful is the natural next step.")
+        print("\nThe group names are placeholders (G1, G2, ...). They work as-is; "
+              "rename them in\nscene-groups.yaml whenever a better name suggests "
+              "itself.")
         return verdict("first-run")
 
     # ---- established: has anything moved since we last looked? --------------

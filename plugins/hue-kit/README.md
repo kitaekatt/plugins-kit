@@ -98,8 +98,9 @@ hue-kit init [DIR]        # drop the shipped example YAML + HTML into DIR to
 ```
 
 Typical first run: just `hue-kit start` -- it does `groups` -> `export` ->
-`render` and opens the report. Then rename the placeholder groups (`G1..`) in
-`scene-groups.yaml` to something meaningful.
+`render` and opens the report. The groups come out named `G1..`; that works
+fine, and you can rename them in `scene-groups.yaml` whenever a better name
+occurs to you.
 
 Re-running `start` later checks the bridge against your YAML. If they differ it
 reports what changed and stops rather than guessing: a difference can mean the

@@ -105,6 +105,16 @@ domain_skill:
         Never write to the bridge through the read-only primitives library
         (scene-meta-groups.py); writes go through `hue-kit apply` (backup + PUT +
         verify).
+      - >-
+        Do not ask the user to name the meta-groups, and do not propose names for
+        them. The placeholders (G1, G2, ...) are a working default, not a defect
+        to clear before proceeding -- nothing downstream needs them renamed. A
+        good name for "29 lights minus kitchen and the baths" is a judgement
+        about how a home is actually lived in; it comes from the user unprompted,
+        weeks later, not from a light-count table presented at setup. Tabulating
+        the groups and asking "what should these be called?" hands the user a
+        question the data cannot answer, and a suggested name is worse: it is a
+        guess about their home dressed as a recommendation, and it sticks.
   index:
     references:
       - id: hue-bridge-basics
@@ -245,9 +255,11 @@ domain_skill:
         meaning: Nothing existed yet; it built the registry + design, rendered the
           report, and opened it in the browser.
         do: >-
-          Tell the user what was set up and that the report is open. Then offer
-          the natural next step: the group names are placeholders (G1, G2, ...),
-          and renaming them to meaningful names is what makes the YAML readable.
+          Tell the user what was set up and that the report is open, and stop.
+          Mention in ONE line that the group names are placeholders they can
+          rename in scene-groups.yaml whenever they like. Do NOT ask them to name
+          the groups now, and do NOT propose names or tabulate the groups to help
+          them decide -- see the naming guardrail in behavioral_guardrails.
       - verdict: clean
         meaning: The bridge matches the local design; a report exists.
         do: >-

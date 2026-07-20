@@ -60,8 +60,10 @@ them. It prints `hue-kit-verdict: <state>` as its last line; branch on that.
 
 - `first-run` -- nothing existed, so it built `scene-groups.yaml` +
   `scene-designs.yaml`, rendered `index.html`, and opened it. This is the ONLY
-  state that writes without asking (nothing existed to overwrite). Follow up by
-  helping the user rename the placeholder groups (`G1..`) to meaningful names.
+  state that writes without asking (nothing existed to overwrite). Report it and
+  stop: the placeholder group names (`G1..`) are a working default, and asking
+  the user to name them at setup -- or proposing names -- hands them a question
+  their data cannot answer (see the naming guardrail in the domain skill).
 - `clean` -- bridge matches the local design. Ask whether to view the report or
   change a scene.
 - `changed` -- they disagree, in SHAPE (light/zone/scene added, removed, or
@@ -80,8 +82,8 @@ the loop after a shape change, so do not remove that coupling.
 1. `hue-kit report` -- read-only; confirms the bridge is reachable and prints the
    certified-minimum group family + each scene as a layer stack.
 2. `hue-kit groups` -- writes a starter `scene-groups.yaml` with placeholder
-   names (`G1..`, `ALL`). **Then help the user rename** the groups to meaningful
-   names (optionally add a `templates:` block naming each stack sequence).
+   names (`G1..`, `ALL`). Leave them; rename only when the USER asks (optionally
+   adding a `templates:` block naming each stack sequence).
 3. `hue-kit export` -- materialises `scene-designs.yaml` from their live scene
    colours + the registry. Verifies the family expresses AND bakes every scene.
 4. `hue-kit render` -- renders `index.html`.
