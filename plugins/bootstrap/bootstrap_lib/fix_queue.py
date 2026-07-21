@@ -20,7 +20,10 @@ This module:
         deletes things, and the queue is where "needs the user's attention"
         already lives.
     A ``command`` descriptor may also carry ``cost`` (see :func:`cost_of`),
-    which is what lets the queue run the cheap work first.
+    which is what lets the queue run the cheap work first, and ``command`` /
+    ``path_prune`` descriptors may carry ``opportunistic`` -- piggyback-only
+    housekeeping that rides the queue but never justifies surfacing it alone
+    (see :func:`has_actionable`).
   * :func:`write_or_clear_queue` regenerates ``<data_dir>/elevate/queue.json``
     each pass and DELETES a stale queue when nothing is deferred, so the fix-all
     offer disappears once its operations succeed.
@@ -90,6 +93,12 @@ class FixTask:
     # "this will take a while" note. Not a duration -- a COARSE class, because
     # the honest input is "does it download", not a number anyone can predict.
     cost: str = COST_QUICK
+    # Piggyback-only housekeeping: worth fixing, never worth its own nag. An
+    # opportunistic task stays in the queue so it rides along whenever a
+    # non-opportunistic task launches the runner, but a queue containing ONLY
+    # opportunistic tasks surfaces nothing -- see engine._elevation_step and
+    # has_actionable below.
+    opportunistic: bool = False
     # path_prune only: the exact PATH entries to delete, verbatim as they appear
     # in the registry. Data rather than a re-derivation in the runner -- see
     # Runner.run_path_prune. Also what makes queue.json a real disclosure: the
@@ -122,6 +131,10 @@ class FixTask:
         # a `"cost": "quick"` on every line is noise in a file a human may open.
         if self.cost == COST_SLOW:
             out["cost"] = self.cost
+        # Same rationale as cost: emitted only when set, so the disclosure file
+        # explains why THIS task was queued without ever nagging about it.
+        if self.opportunistic:
+            out["opportunistic"] = True
         if self.entries:
             out["entries"] = self.entries
         if self.backup is not None:
@@ -209,6 +222,7 @@ def queue_from_failures(failures, current_os: str) -> List[FixTask]:
                     command=cmd,
                     timeout=desc.get("timeout"),
                     cost=cost_of(desc),
+                    opportunistic=bool(desc.get("opportunistic")),
                 ))
         elif method == "brew_installer":
             brew = True
@@ -230,6 +244,7 @@ def queue_from_failures(failures, current_os: str) -> List[FixTask]:
                     elevated=False,
                     entries=entries,
                     backup=desc.get("backup"),
+                    opportunistic=bool(desc.get("opportunistic")),
                 )
 
     tasks: List[FixTask] = []
@@ -263,6 +278,17 @@ def queue_from_failures(failures, current_os: str) -> List[FixTask]:
         # that adds a PATH entry -- before or after -- is preserved either way.
         tasks.append(prune)
     return order_tasks(tasks)
+
+
+def has_actionable(tasks: List[FixTask]) -> bool:
+    """True when the queue is worth surfacing to the user at all.
+
+    A queue whose every task is opportunistic (e.g. only the dead-PATH prune)
+    is housekeeping: the engine leaves it on disk so the work rides along the
+    next time a real deferral needs the runner, but it must not generate an
+    admin nag of its own -- that is the whole point of the flag.
+    """
+    return any(not t.opportunistic for t in tasks)
 
 
 def task_labels(tasks: List[FixTask]) -> List[str]:

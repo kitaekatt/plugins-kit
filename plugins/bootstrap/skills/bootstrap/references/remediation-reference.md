@@ -104,6 +104,18 @@ makes the distinction concrete: it requires no privilege at all, and rides the
 queue purely because deleting PATH entries must be consented to rather than done
 to someone by a background hook.
 
+**Opportunistic tasks: worth fixing, never worth their own nag.** A `command` or
+`path_prune` descriptor may carry `opportunistic: true` (a `FixTask.opportunistic`
+flag, serialized into `queue.json`). Such a task rides the queue and executes
+whenever the runner is launched for *other* work — but a queue containing **only**
+opportunistic tasks surfaces nothing: no `elevation_script` aggregate, no
+AskUserQuestion prompt, no fix-all launch, and the covered per-item failures are
+dropped from the pass (`engine._elevation_step`, gated on
+`fix_queue.has_actionable`). The queue and shim still stay on disk, so the work
+piggybacks on the next real deferral or a by-hand shim run. The dead-PATH prune
+is the built-in opportunistic task (housekeeping — valuable, not urgent); an
+`env_checks` entry can opt in with `opportunistic: true` alongside `elevated`.
+
 It **continues past a failed task** rather than aborting on the first one (the
 old `.bat` aborted): the tasks are independent, and the engine's next re-check —
 not the runner — is the authority on what actually cleared, so a task that fails
@@ -152,7 +164,7 @@ the whole design:
 
 | Situation | Rescan? | Surfaces? |
 |---|---|---|
-| User declined; PATH unchanged | No (hash hit) | **Yes — every session** |
+| User declined; PATH unchanged | No (hash hit) | **Yes — every session** (into the queue; see below) |
 | User pruned | Yes (hash miss) | No — result empty, self-clearing |
 | Something added a dead entry | Yes (hash miss) | Yes, naming it |
 
@@ -160,6 +172,12 @@ Cache "already reported" instead and a declined prune is detected once and never
 mentioned again. Caching the result means a skip costs the *scan*, never the
 *finding*; and because a prune changes the PATH, the finding clears itself with no
 "type fixed" ritual.
+
+"Surfaces" here means the finding re-enters the fix queue each session. Whether
+the *user* sees a nag is a separate, later gate: the prune descriptor is
+**opportunistic** (see above), so it only appears in the fix-all offer when a
+non-opportunistic task is queued alongside it — a prune-only queue logs one
+verbose line and stays silent.
 
 `scan()` returns `None` for **no verdict** (not Windows, or `BOOTSTRAP_SKIP_REGISTRY`
 set) as distinct from `[]` for **ran and clean** — collapsing the two would let a

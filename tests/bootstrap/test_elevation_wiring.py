@@ -383,6 +383,58 @@ class TestFixAllInteractiveLaunch:
         assert stopped is False
         assert all(f["type"] != "elevation_script" for f in failures)
 
+    def test_opportunistic_only_queue_surfaces_nothing(self, tmp_path, monkeypatch):
+        """A queue holding only opportunistic housekeeping (the dead-PATH prune
+        case) must not nag: no aggregate, no per-item fallback, no launch even
+        on fix-all -- but the queue file stays on disk so the work rides along
+        the next time a real deferral needs the runner."""
+        self._pin_bash(monkeypatch)
+        monkeypatch.setattr(
+            elev, "launch_fix_runner",
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("an opportunistic-only queue must never launch")))
+
+        failures = [
+            {"type": "path_prune", "name": "dead-path-entries",
+             "elevation": {"method": "path_prune", "os": "windows",
+                           "entries": ["C:\\dead"], "opportunistic": True}},
+            {"type": "venv", "message": "unrelated"},
+        ]
+        stopped = engine._elevation_step(
+            failures, "windows", str(tmp_path),
+            _args(tmp_path, fix_all=True, console=True), "/plugin/root")
+
+        assert stopped is False
+        # The opportunistic failure is dropped outright (surfacing it raw would
+        # recreate the nag); unrelated failures are untouched.
+        assert [f["type"] for f in failures] == ["venv"]
+        # The queue + shim persist for piggybacking / a by-hand run.
+        assert os.path.exists(elev.queue_path(str(tmp_path)))
+        body = json.load(open(elev.queue_path(str(tmp_path))))
+        assert body["tasks"][0]["opportunistic"] is True
+
+    def test_opportunistic_task_rides_along_with_a_real_deferral(self, tmp_path, monkeypatch):
+        """One actionable task re-arms the whole offer: the aggregate surfaces,
+        names BOTH tasks, and the opportunistic per-item failure is spoken for
+        (suppressed by the aggregate) rather than dropped."""
+        self._pin_bash(monkeypatch)
+        prune = {"type": "path_prune", "name": "dead-path-entries",
+                 "elevation": {"method": "path_prune", "os": "windows",
+                               "entries": ["C:\\dead"],
+                               "label": "Remove 1 dead PATH entry",
+                               "opportunistic": True}}
+        failures = [prune, _win_failure()]
+        stopped = engine._elevation_step(
+            failures, "windows", str(tmp_path),
+            _args(tmp_path, fix_all=False, background=True), "/plugin/root")
+
+        assert stopped is False
+        assert prune in failures                  # kept, not dropped
+        agg = [f for f in failures if f["type"] == "elevation_script"]
+        assert len(agg) == 1
+        assert "Remove 1 dead PATH entry" in agg[0]["labels"]
+        assert engine._spoken_for(prune) is True  # aggregate speaks for it
+
     def test_queue_write_runtime_error_degrades_not_crashes(self, tmp_path, monkeypatch):
         """render_queue raises when bash can't be resolved and the queue holds
         shell-string tasks. A background SessionStart pass must DEGRADE (surface

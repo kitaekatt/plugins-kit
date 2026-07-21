@@ -441,6 +441,13 @@ Ubuntu/macOS, an admin-token check on Windows.
   (`HKCU` is the user's own hive) and is deferred for **consent**, because it
   deletes PATH entries.
 
+A `command` or `path_prune` descriptor may also carry **`opportunistic: true`**:
+piggyback-only housekeeping. The task rides the queue and executes whenever the
+runner is launched for other work, but a queue containing only opportunistic
+tasks surfaces **no nag at all** (no aggregate item, no fix-all offer) — the
+queue just waits on disk for the next real deferral. The dead-PATH prune is the
+built-in example; see the fix-queue section of remediation-reference.md.
+
 The descriptor's **`label`** is the one field a human reads — it is what the
 session message lists and what the runner's plan prints, so it must stand alone
 without the surrounding prose. Its source: an entry's optional `description`,
@@ -1319,6 +1326,7 @@ command with an optional `fix` command.
 | `fix` | No | Command run when the check fails. Omitted = a **check-only** entry (manual-attention only) |
 | `os` / `hosts` | No | The standard entry filters |
 | `elevated` | No (default false) | The fix needs privileges — routed through the fix queue, never attempted in-pass without privileges |
+| `opportunistic` | No (default false) | Piggyback-only housekeeping: when the fix is deferred to the queue, it rides along with the next real deferral but never generates an admin nag on its own (a queue of only opportunistic tasks surfaces nothing). Use for tidy-ups worth doing under elevation but not worth interrupting the user for |
 | `timeout` | No (default 600s) | Per-**command** timeout in seconds (positive int). Contract scripts may drive real installs (gpu-stack), so the bound is generous but never absent |
 | `cost` | No (inferred) | `quick` or `slow` — whether the **fix** downloads. Orders the fix queue (quick first) and drives the runner's "this can take several minutes" note. **Usually omit it**: an entry whose `timeout` exceeds the 600s default is inferred `slow`, which already classifies a real install correctly. Declare it only to correct that inference |
 | `description` | No | The user-facing instruction for a check-only entry's manual-attention item. Doubles as the **label** when an `elevated` entry is deferred to the fix queue (else the label is `name`) |

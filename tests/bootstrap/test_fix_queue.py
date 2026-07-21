@@ -47,6 +47,24 @@ class TestFixTaskToJson:
         out = FixTask(id="t", kind="command", label="L").to_json()
         assert out == {"id": "t", "kind": "command", "label": "L"}
 
+    def test_opportunistic_is_emitted_only_when_set(self):
+        """queue.json is a disclosure surface: an opportunistic task must say
+        so (it explains why the queue exists without a nag), and a normal task
+        must not carry noise."""
+        assert FixTask(id="t", kind="path_prune", label="L",
+                       opportunistic=True).to_json()["opportunistic"] is True
+        assert "opportunistic" not in FixTask(id="t", kind="command",
+                                              label="L").to_json()
+
+    def test_the_runner_accepts_an_opportunistic_task(self):
+        """Cross-module contract: the flag is engine-side metadata; the runner
+        must execute the task like any other."""
+        import bootstrap_lib.fix_runner as fr
+        t = FixTask(id="t", kind="command", label="L", command="x",
+                    opportunistic=True)
+        assert fr.validate({"version": fq.QUEUE_VERSION,
+                            "tasks": [t.to_json()]}) == []
+
 
 # --------------------------------------------------------------------------- #
 # Default timeout mirror
@@ -192,6 +210,33 @@ class TestQueueFromFailures:
         can read, not a KeyError."""
         tasks = fq.queue_from_failures([desc(command="bash x.sh fix")], "ubuntu")
         assert tasks[0].label == "bash x.sh fix"
+
+    def test_opportunistic_survives_harvest_for_prune_and_command(self):
+        """The flag travels descriptor -> task for both kinds that can carry
+        it; a descriptor that says nothing stays actionable."""
+        tasks = fq.queue_from_failures(
+            [desc("path_prune", os_="windows", entries=["C:\\a"],
+                  opportunistic=True),
+             desc(command="tidy", os_="windows", label="Tidy",
+                  opportunistic=True),
+             desc(command="install x", os_="windows", label="Install x")],
+            "windows")
+        by_label = {t.label: t.opportunistic for t in tasks}
+        assert by_label["Remove 1 dead PATH entry"] is True
+        assert by_label["Tidy"] is True
+        assert by_label["Install x"] is False
+
+    def test_has_actionable_is_false_only_for_an_all_opportunistic_queue(self):
+        """The predicate _elevation_step gates the nag on: one real task makes
+        the whole queue worth surfacing (the opportunistic work rides along);
+        housekeeping alone never does."""
+        opp = FixTask(id="p", kind="path_prune", label="Prune",
+                      entries=["C:\\a"], opportunistic=True)
+        real = FixTask(id="c", kind="command", label="Install", command="x")
+        assert fq.has_actionable([opp]) is False
+        assert fq.has_actionable([opp, real]) is True
+        assert fq.has_actionable([real]) is True
+        assert fq.has_actionable([]) is False
 
     def test_task_labels_are_the_message_item_list(self):
         tasks = fq.queue_from_failures(
