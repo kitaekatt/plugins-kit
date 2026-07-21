@@ -2018,3 +2018,171 @@ class TestFetchFiletypeAndSize:
             assert pr.fetch_filetype("//d/x", "1", "9", False, True) is None
             assert pr.fetch_file_size("//d/x", "1", "9", False, True) is None
         assert mock.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# --claim: arg parsing, pre-image materialization, build_bundle exclusion
+# ---------------------------------------------------------------------------
+
+
+class TestParseArgs:
+    def test_cl_only(self):
+        assert pr._parse_args(["12345"]) == (["12345"], [])
+
+    def test_claim_flags_collected(self):
+        pos, claims = pr._parse_args(["12345", "--claim", "**/CLAUDE.md", "--claim", "**/SKILL.md"])
+        assert pos == ["12345"]
+        assert claims == ["**/CLAUDE.md", "**/SKILL.md"]
+
+    def test_claim_equals_form(self):
+        assert pr._parse_args(["12345", "--claim=**/SKILL.md"]) == (["12345"], ["**/SKILL.md"])
+
+    def test_claim_without_value_raises(self):
+        with pytest.raises(ValueError):
+            pr._parse_args(["12345", "--claim"])
+
+
+class TestMaterializePreimageP4:
+    def test_add_action_yields_none_without_p4_call(self, tmp_path):
+        with patch.object(pr, "run_p4") as mock:
+            assert pr.materialize_preimage("//depot/x/CLAUDE.md", "add", tmp_path) is None
+        assert mock.call_count == 0
+
+    def test_edit_prints_have_revision(self, tmp_path):
+        captured = {}
+
+        def fake_run_p4(args):
+            captured["args"] = args
+            # p4 print -q -o <dest> <spec>: write the file it was told to.
+            Path(args[3]).parent.mkdir(parents=True, exist_ok=True)
+            Path(args[3]).write_text("have content\n", encoding="utf-8")
+            return (0, "", "")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            dest = pr.materialize_preimage("//depot/x/CLAUDE.md", "edit", tmp_path)
+
+        assert dest is not None
+        assert captured["args"][:3] == ["print", "-q", "-o"]
+        assert captured["args"][4] == "//depot/x/CLAUDE.md#have"
+        assert Path(dest).read_text(encoding="utf-8") == "have content\n"
+
+    def test_print_failure_yields_none(self, tmp_path):
+        with patch.object(pr, "run_p4", return_value=(1, "", "no such file")):
+            assert pr.materialize_preimage("//depot/x/CLAUDE.md", "edit", tmp_path) is None
+
+
+class TestBuildBundleClaims:
+    def _describe(self):
+        return (
+            "Change 999 by user@client on 2026/01/01 12:00:00 *pending*\n"
+            "\n"
+            "\tEdit rules and code\n"
+            "\n"
+            "Affected files ...\n"
+            "... //depot/src/CLAUDE.md#3 edit\n"
+            "... //depot/src/foo.cpp#1 edit\n"
+            "\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/src/CLAUDE.md#3 (text) ====\n"
+            "@@ -1 +1 @@\n"
+            "-old rule\n"
+            "+new rule\n"
+            "\n"
+            "==== //depot/src/foo.cpp#1 (text) ====\n"
+            "@@ -1 +1 @@\n"
+            "-int x = 0;\n"
+            "+int x = 1;\n"
+        )
+
+    def test_claimed_claude_md_excluded_and_preimage_materialized(self, tmp_path):
+        ws = tmp_path / "ws"
+        src = ws / "src"
+        src.mkdir(parents=True)
+        (ws / "CLAUDE.md").write_text("workspace rule\n", encoding="utf-8")
+        claude = src / "CLAUDE.md"
+        claude.write_text("new rule\n", encoding="utf-8")
+        foo = src / "foo.cpp"
+        foo.write_text("int x = 1;\n", encoding="utf-8")
+
+        where_out = (
+            "... depotFile //depot/src/CLAUDE.md\n"
+            f"... path {claude}\n"
+            "\n"
+            "... depotFile //depot/src/foo.cpp\n"
+            f"... path {foo}\n"
+        )
+        info_out = f"... clientRoot {ws}\n"
+
+        def fake_run_p4(args):
+            if args[:2] == ["describe", "-du"]:
+                return (0, self._describe(), "")
+            if args[:2] == ["-ztag", "where"]:
+                return (0, where_out, "")
+            if args[:2] == ["-ztag", "info"]:
+                return (0, info_out, "")
+            if args[:3] == ["-ztag", "reconcile", "-n"]:
+                return (1, "", "no file(s) to reconcile.\n")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            if args[:3] == ["print", "-q", "-o"]:
+                Path(args[3]).parent.mkdir(parents=True, exist_ok=True)
+                Path(args[3]).write_text("old rule\n", encoding="utf-8")
+                return (0, "", "")
+            return (1, "", "")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            bundle = pr.build_bundle(
+                "999", tmp_path / "bundle", claim_globs=["**/CLAUDE.md", "**/SKILL.md"]
+            )
+
+        # foo.cpp reviewed generically; CLAUDE.md claimed.
+        assert [f["depot"] for f in bundle["changed_files"]] == ["//depot/src/foo.cpp"]
+        assert len(bundle["claimed_files"]) == 1
+        claimed = bundle["claimed_files"][0]
+        assert claimed["depot"] == "//depot/src/CLAUDE.md"
+        assert claimed["action"] == "edit"
+        assert Path(claimed["pre_image"]).read_text(encoding="utf-8") == "old rule\n"
+        assert claimed["claude_mds"]  # nearest-first, includes self
+        # Claimed file's diff excluded from chunks; generic file present.
+        diff = _concat_diff_from_chunks(bundle)
+        assert "//depot/src/foo.cpp" in diff
+        assert "//depot/src/CLAUDE.md" not in diff
+        # Claimed file still contributes to the ruleset collection.
+        assert any("CLAUDE.md" in c for c in bundle["unique_claude_mds"])
+
+    def test_no_claim_flag_has_no_claimed_files_key(self, tmp_path):
+        ws = tmp_path / "ws"
+        src = ws / "src"
+        src.mkdir(parents=True)
+        claude = src / "CLAUDE.md"
+        claude.write_text("new rule\n", encoding="utf-8")
+        foo = src / "foo.cpp"
+        foo.write_text("int x = 1;\n", encoding="utf-8")
+        where_out = (
+            "... depotFile //depot/src/CLAUDE.md\n"
+            f"... path {claude}\n"
+            "\n"
+            "... depotFile //depot/src/foo.cpp\n"
+            f"... path {foo}\n"
+        )
+        info_out = f"... clientRoot {ws}\n"
+
+        def fake_run_p4(args):
+            if args[:2] == ["describe", "-du"]:
+                return (0, self._describe(), "")
+            if args[:2] == ["-ztag", "where"]:
+                return (0, where_out, "")
+            if args[:2] == ["-ztag", "info"]:
+                return (0, info_out, "")
+            if args[:3] == ["-ztag", "reconcile", "-n"]:
+                return (1, "", "no file(s) to reconcile.\n")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            return (1, "", "")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            bundle = pr.build_bundle("999", tmp_path / "bundle")
+
+        assert "claimed_files" not in bundle
+        assert len(bundle["changed_files"]) == 2

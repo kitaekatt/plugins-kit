@@ -46,6 +46,8 @@ GIT_SKILL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md"
 P4_SKILL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md"
 GIT_SUBMIT_GATES = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/submit-gates.md"
 P4_SUBMIT_GATES = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/submit-gates.md"
+GIT_MD_AUDIT_REVIEW = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/md-audit-review.md"
+P4_MD_AUDIT_REVIEW = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/md-audit-review.md"
 
 # Non-ASCII glyphs the rendered files use, escaped so THIS source stays ASCII
 # (matching gen_workflow_js.py's EM convention).
@@ -81,6 +83,78 @@ DISPATCH = """\
             the validator wave to the Workflow tool instead of launching inline. Same
             reviewers, same validators, same output either way -- only the dispatch
             mechanism changes."""
+
+
+# ===========================================================================
+# SUBJECT-LENS md-audit CONTRIBUTOR (deliverable of this phase, shared).
+# ---------------------------------------------------------------------------
+# When skills-kit's md-audit skill is available, the code-review skills hand it
+# the changed CLAUDE.md / SKILL.md files as a SUBJECT-lens reviewer: those files
+# are claimed out of the generic fan-out (via prepare's `--claim`) and audited
+# by skills-kit's headless detect.js Workflow, whose findings render as their own
+# labeled section. When md-audit is absent, behavior is exactly today's -- the md
+# files get thin generic data_only coverage. All three regions below are SHARED
+# verbatim by both VCS skills. The heavy args/plugin-root/fallback detail lives in
+# the generated references/md-audit-review.md so the step prose stays legible.
+# ===========================================================================
+
+# Injected into step 2's action (the prepare invocation) via the STEP2 fragments.
+# Uses a plain-text sentinel (__CLAIM_PROBE__) substituted at module-def time so
+# it never collides with the @TOKEN@ render pass.
+CLAIM_PROBE = """\
+            Claim probe -- decide the `--claim` flags BEFORE invoking prepare, and invoke prepare
+            only ONCE. Check whether skills-kit's md-audit skill is available in this session (it
+            appears in the available-skills list as `skills-kit:md-audit`). If it IS available, add
+            `--claim '**/CLAUDE.md' --claim '**/SKILL.md'` to the prepare invocation below so those
+            files are held back from the generic reviewers and returned under `bundle.claimed_files`
+            (each with a materialized `pre_image`) for the subject-lens md-audit pass in step 6. If it
+            is NOT available, invoke prepare with NO `--claim` flags -- degrade silently to today's
+            behavior (the md files get thin generic data_only coverage), noting the degradation in one
+            line. Do NOT run prepare twice."""
+
+# Inserted into step 6's action, right after the dispatch rule.
+MD_AUDIT_LAUNCH = """\
+            Subject-lens md-audit pass -- run ONLY when `bundle.claimed_files` is non-empty; skip this
+            entire paragraph otherwise. In the SAME message that launches the reviewer subagents (or the
+            reviewer Workflow, per the dispatch rule above), ALSO invoke the Workflow tool with
+            skills-kit's headless detect.js for the claimed files: one Workflow call for the claimed
+            `**/CLAUDE.md` files (claude-md-audit's `workflow/detect.js`) and, only if any `**/SKILL.md`
+            files are claimed, a second Workflow call for those (skill-audit's `workflow/detect.js`) --
+            at most two Workflow calls. Pass `review: true` and, per claimed file, `preImagePath` = its
+            `pre_image` from the bundle (null for an add), with role / dimension / parentPath /
+            ancestorClaudeMdPaths resolved from each claimed file's `claude_mds` per
+            references/md-audit-review.md. Resolve the skills-kit plugin root and venvPython defensively
+            per that reference; if detect.js or the documented args contract is not found where expected
+            (version skew), FALL BACK cleanly: emit a one-line warning and re-run prepare_review.py
+            WITHOUT any `--claim` flags so the claimed files rejoin the generic review, then proceed with
+            the normal fan-out. This probe-and-fallback is the version-coupling safety valve. When it
+            runs, the md-audit Workflow executes in PARALLEL with the reviewer fan-out; keep its
+            `{perFile, totals, review}` for step 9's labeled section."""
+
+# Inserted into step 9's action, right after the unresolved-work section.
+MD_AUDIT_REPORT = """\
+            - When the md-audit subject-lens pass ran (bundle.claimed_files was non-empty and the
+              Workflow did NOT fall back), render its results as a distinct, clearly LABELED section
+              titled `## md-audit (subject-lens) findings`, kept SEPARATE from the code-review issue
+              list -- never merge the two. For each file in the md-audit `perFile` result, show its
+              verdict (DIFF-CLEAN or NON-COMPLIANT) and, beneath it, each finding's severity, bucket,
+              attributable flag, message, and remediation proposal. A SINGLE decision pass covers BOTH
+              this section and the code-review issues; accepted md-audit remediations are applied as
+              normal edits AFTER decisions. If the md-audit pass fell back to the generic review, do NOT
+              render this section (the md files were reviewed as ordinary subjects).
+            - Ruleset self-reference notice: if any claimed CLAUDE.md with a pending or accepted md-audit
+              change lies on the ancestor chain of OTHER changed files in this review -- a cheap
+              path-prefix check of that CLAUDE.md's directory against bundle.unique_claude_mds and the
+              other changed files' paths -- print a one-line notice: "ruleset changed -- findings for
+              <files> were judged against the working-tree version; consider a re-run." Keep it to one
+              line; it is advisory, not a blocker."""
+
+# Appended to both gotcha blocks (plain text -- no f-string braces).
+MD_AUDIT_GOTCHAS = """
+        - md-audit findings are a SEPARATE, labeled section -- never interleave them with the code-review issue list. They come from skills-kit's detect.js (a subject-lens reviewer), not from the generic reviewer/validator subagents, so they are not filtered by the validators.
+        - The claim decision happens ONCE, at the step-2 probe, and controls whether prepare gets `--claim`. Do not run prepare a second time just to add claims -- the only re-run is the version-skew FALLBACK, which re-runs WITHOUT `--claim`.
+        - When skills-kit md-audit is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-audit section -- the md files get today's thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
+        - The Workflow tool is unavailable inside subagents. Launch the md-audit detect.js Workflow from the MAIN session (the same message that fans out the reviewers), never from within a reviewer subagent."""
 
 
 # ===========================================================================
@@ -146,6 +220,7 @@ technique_skill:
             of `bundle.changed_files`, and pick the most appropriate profile. Default to `code`
             when uncertain.
 @DISPATCH@
+@MD_AUDIT_LAUNCH@
             Then launch one subagent per (reviewer @X@ chunk) pair in parallel via
             a single message with R @X@ K Agent calls, where R = len(profile.reviewers) and
             K = len(bundle.diff_chunks). Each subagent gets the chunk's absolute diff path
@@ -170,6 +245,7 @@ technique_skill:
             - When `bundle.submit_gates` is non-empty, prepend a `## Submit checklist`
               section (confirmed and unconfirmed gates both rendered).
 @STEP9_TAIL@
+@MD_AUDIT_REPORT@
             Group the review body by file.
 @STEP10@      checklist:
 @CHECKLIST@
@@ -393,23 +469,31 @@ P4_STEP1 = """\
 
 GIT_STEP2 = """\
         - n: 2
-          action: Run prepare_review.py to fetch the diff, partition it into chunked .diff fragments on disk, enumerate changed files via `git diff --name-status`, map ancestor CLAUDE.md files for each, detect untracked-or-unstaged files in the directories the diff touches, detect unresolved merge conflicts, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this range.
+          action: |
+__CLAIM_PROBE__
+            Then run prepare_review.py to fetch the diff, partition it into chunked .diff fragments on disk, enumerate changed files via `git diff --name-status`, map ancestor CLAUDE.md files for each, detect untracked-or-unstaged files in the directories the diff touches, detect unresolved merge conflicts, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this range.
           tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
-          input: "<range or argument from step 1>"
+          input: "<range or argument from step 1>  (append `--claim '**/CLAUDE.md' --claim '**/SKILL.md'` when md-audit is available, per the claim probe)"
           expected: |
-            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
-          on_failure: Surface the stderr message to the user and stop. No retry."""
+            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
+          on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
+    "__CLAIM_PROBE__", CLAIM_PROBE
+)
 
 P4_STEP2 = """\
         - n: 2
-          action: Run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
+          action: |
+__CLAIM_PROBE__
+            Then run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
-          input: "<CL>"
+          input: "<CL>  (append `--claim '**/CLAUDE.md' --claim '**/SKILL.md'` when md-audit is available, per the claim probe)"
           expected: |
-            JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
+            JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
             Surface the stderr message to the user and stop. No retry.
-            Launch note: ALWAYS invoke with an explicit `python3` interpreter (as shown in `tool:`), never as a bare path. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any python3 launcher is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success."""
+            Launch note: ALWAYS invoke with an explicit `python3` interpreter (as shown in `tool:`), never as a bare path. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any python3 launcher is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
+    "__CLAIM_PROBE__", CLAIM_PROBE
+)
 
 GIT_STEP3 = """\
         - n: 3
@@ -485,7 +569,8 @@ GIT_CHECKLIST = f"""\
         - Reviewers launched in parallel (single message, R {X} K Agent calls -- one per (reviewer {X} chunk) pair, where K = len(bundle.diff_chunks))
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
-        - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merge conflicts section prepended when bundle.merge_conflicts is non-empty)"""
+        - md-audit subject-lens pass launched for bundle.claimed_files when skills-kit md-audit is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-audit is absent
+        - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merge conflicts section prepended when bundle.merge_conflicts is non-empty; separate `## md-audit (subject-lens) findings` section when the md-audit pass ran)"""
 
 P4_CHECKLIST = f"""\
         - CL number resolved
@@ -497,7 +582,8 @@ P4_CHECKLIST = f"""\
         - Reviewers launched in parallel (single message, R {X} K Agent calls -- one per (reviewer {X} chunk) pair, where K = len(bundle.diff_chunks))
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
-        - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merges section prepended when bundle.unresolved is non-empty)
+        - md-audit subject-lens pass launched for bundle.claimed_files when skills-kit md-audit is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-audit is absent
+        - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merges section prepended when bundle.unresolved is non-empty; separate `## md-audit (subject-lens) findings` section when the md-audit pass ran)
         - Auto-shelf cleanup invoked when bundle.auto_shelved is true (`prepare_review.py --cleanup <bundle_dir>`)"""
 
 GIT_GOTCHAS = f"""\
@@ -514,7 +600,7 @@ GIT_GOTCHAS = f"""\
         - Unconfirmed submit gates are NOT errors. Render them with {CRS} so they're visible, but do not block the review or refuse to render the rest.
         - Merge conflicts are NOT findings -- they do NOT go through reviewer subagents. They are detected deterministically by prepare_review.py (`git ls-files -u`). The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the merge-conflicts section is a separate informational warning to the user.
         - Auto-detect is convenient, not authoritative. Always restate the chosen range in the step-1 narration line; a user reviewing the wrong branch will catch it there before subagents spawn.
-        - Detached HEAD with no main/master fallback is a real failure mode; surface the error and ask for an explicit range. Do not guess at a "probably right" base."""
+        - Detached HEAD with no main/master fallback is a real failure mode; surface the error and ask for an explicit range. Do not guess at a "probably right" base.""" + MD_AUDIT_GOTCHAS
 
 P4_GOTCHAS = f"""\
         - Always quote the exact CLAUDE.md rule text when flagging a claude_md issue. If you cannot quote it verbatim, do not flag it.
@@ -529,7 +615,7 @@ P4_GOTCHAS = f"""\
         - The submit-gates AskUserQuestion fires once, regardless of gate count. multiSelect bundles all gates into one prompt. Re-prompting per gate is rude and adds no value -- the author's response is final either way.
         - Unconfirmed submit gates are NOT errors. Render them with {CRS} so they're visible, but do not block the review or refuse to render the rest.
         - Unresolved merges are NOT findings -- they do NOT go through reviewer or validator subagents. They are detected deterministically by prepare_review.py (`p4 resolve -n -c <CL>`) and rendered verbatim in a separate output section. The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the unresolved section is a separate informational warning to the user.
-        - Auto-shelf cleanup (step 10) must run whenever `bundle.auto_shelved` is true, no matter what happened in steps 3-9. The cleanup script is deterministic and safe (it only deletes the shelf when the live fingerprint exactly matches what we recorded), so there is no scenario where skipping it is the right call. Skipping leaves an orphan shelf the author didn't ask for."""
+        - Auto-shelf cleanup (step 10) must run whenever `bundle.auto_shelved` is true, no matter what happened in steps 3-9. The cleanup script is deterministic and safe (it only deletes the shelf when the live fingerprint exactly matches what we recorded), so there is no scenario where skipping it is the right call. Skipping leaves an orphan shelf the author didn't ask for.""" + MD_AUDIT_GOTCHAS
 
 GIT_NARRATION_TEMPLATES = f"""\
       - when: "Before step 2"
@@ -774,9 +860,12 @@ FRAGMENTS = {
     },
 }
 
-# Shared tokens (identical for both VCS): the dispatch rule and the glyphs.
+# Shared tokens (identical for both VCS): the dispatch rule, the md-audit
+# contributor regions, and the glyphs.
 _SHARED = {
     "DISPATCH": DISPATCH,
+    "MD_AUDIT_LAUNCH": MD_AUDIT_LAUNCH,
+    "MD_AUDIT_REPORT": MD_AUDIT_REPORT,
     "X": X,
     "CHK": CHK,
     "CRS": CRS,
@@ -784,6 +873,7 @@ _SHARED = {
 
 _SKILL_TOKEN_ORDER = [
     "DISPATCH",  # multi-line, contains no other @tokens@; substitute first
+    "MD_AUDIT_LAUNCH", "MD_AUDIT_REPORT",  # shared, no nested @tokens@
     "NAME", "DESC", "TITLE", "INTRO", "IDENTITY",
     "SCOPE_COVERS_HEAD", "SCOPE_EXCLUDES", "KEYWORDS", "GOAL", "PRECONDITIONS",
     "STEP1", "STEP2", "STEP3", "STEP5_PHRASE", "STEP9_TAIL", "STEP10",
@@ -869,6 +959,130 @@ def render_submit_gates(vcs: str) -> str:
     return out
 
 
+# ===========================================================================
+# md-audit-review.md -- one parameterized source rendering both references.
+# The full args/plugin-root/fallback detail the SKILL step-6/step-9 prose points
+# at, kept out of the drift-tested SKILL body so that body stays legible.
+# ===========================================================================
+MD_AUDIT_REVIEW_TEMPLATE = """\
+# Subject-lens md-audit contributor
+
+When skills-kit's md-audit skill is available in the session, `@SKILL_NAME@` treats it
+as the SUBJECT-lens reviewer for the changed `**/CLAUDE.md` and `**/SKILL.md` files. Those
+files are CLAIMED out of the generic reviewer fan-out (prepare_review.py's `--claim` flag)
+and audited by skills-kit's headless `detect.js` Workflow instead; its findings render as a
+separate labeled section. When md-audit is ABSENT the mechanism degrades silently -- no
+`--claim`, no claimed files, the md files get the ordinary thin data_only coverage. This doc
+is the operational detail behind step 6 (launch) and step 9 (render); the SKILL body carries
+the decision flow.
+
+## When it runs
+
+Only when `bundle.claimed_files` is non-empty (i.e. the step-2 probe found md-audit available
+AND at least one CLAUDE.md/SKILL.md changed). Otherwise skip everything here.
+
+## Resolve the skills-kit plugin root and venvPython (defensively)
+
+md-audit's `detect.js` is a native Workflow script; the code-review skill (running in the main
+session) invokes it via the Workflow tool. Locate the INSTALLED skills-kit plugin:
+
+- Plugin root (`<root>`): the newest version directory under the plugins cache for this
+  marketplace -- `~/.claude/plugins/cache/plugins-kit/skills-kit/<version>/` (pick the highest
+  semver dir present). `${CLAUDE_PLUGIN_ROOT}` of the CURRENT skill is NOT it -- that points at
+  git-kit / p4-kit, not skills-kit.
+- detect.js entry points: `<root>/skills/claude-md-audit/workflow/detect.js` (for CLAUDE.md
+  subjects) and `<root>/skills/skill-audit/workflow/detect.js` (for SKILL.md subjects).
+- venvPython: skills-kit's provisioned venv, which lives in the version-independent DATA dir --
+  `~/.claude/plugins/data/plugins-kit/skills-kit/.venv/Scripts/python.exe` on Windows,
+  `~/.claude/plugins/data/plugins-kit/skills-kit/.venv/bin/python` on macOS/Linux.
+
+**Version-coupling safety valve (the fallback).** If `<root>` cannot be located, either detect.js
+entry point is missing, or its documented args contract is not what this doc describes (a
+skills-kit major/contract skew), do NOT guess: emit a one-line warning and RE-RUN
+prepare_review.py WITHOUT any `--claim` flags. That returns the md files to `changed_files` so
+they get generic review, and the whole md-audit section is skipped for this run. This is the only
+sanctioned second prepare invocation.
+
+## The two Workflow calls
+
+At most two, in the SAME message that launches the reviewer fan-out (or the reviewer Workflow):
+
+1. **claude-md-audit** -- one call for every claimed file whose basename is `CLAUDE.md`.
+   `scriptPath = <root>/skills/claude-md-audit/workflow/detect.js`, `args` =
+   `{ files: [...], review: true, refs: { criteria: <root>/skills/claude-md-audit/references/audit-criteria.md, codeDirFilter: <root>/skills/claude-md-audit/references/code-dir-insight-filter.md, densityCriteria: <root>/skills/claude-md-audit/references/density-criteria.md, pluginRoot: <root>, venvPython: <venvPython> } }`.
+2. **skill-audit** -- one call for every claimed file whose basename is `SKILL.md` (only if any).
+   `scriptPath = <root>/skills/skill-audit/workflow/detect.js`, `args` =
+   `{ files: [...], review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
+
+`args` may be passed as an object or a JSON string; all `refs` paths must be ABSOLUTE (the
+Workflow runs from the session cwd, not the skill dir). `review: true` forces the model pin and
+per-file diff attribution; keep it true.
+
+## Building `files[]` from `bundle.claimed_files`
+
+Each claimed-file entry carries `local` (absolute path), `pre_image` (absolute path to the
+materialized before-image via @PREIMAGE_ORIGIN@, or `null` for an add), and `claude_mds` (the
+nearest-ancestor-first CLAUDE.md chain, which for a CLAUDE.md subject INCLUDES the subject itself
+as its first element).
+
+Derive, per claimed file:
+
+- `ancestorClaudeMdPaths` = `claude_mds` with the subject's OWN `local` removed (drop the
+  self-entry a CLAUDE.md subject carries; a SKILL.md subject has nothing to drop). Nearest-ancestor
+  first, excluding the subject -- exactly md-audit's H-11 / M ancestor-convention input.
+- `preImagePath` = the entry's `pre_image` (pass `null` through unchanged -- an add is fully
+  attributable).
+
+For a **CLAUDE.md** file (claude-md-audit `files[]`):
+- `path` = `local`.
+- `role` = `"child"` when `ancestorClaudeMdPaths` is non-empty, else `"root"` (a standalone file
+  with no ancestor CLAUDE.md audits as its natural role). Use `"local"` for a `CLAUDE.local.md`.
+- `dimension` = `"classic"` by default; `"code-directory"` only if the file has code/yaml/csv
+  siblings and no `claude_md:` block (skills-kit's discover.py heuristic). When unsure, `"classic"`.
+- `parentPath` = the FIRST entry of `ancestorClaudeMdPaths` (the nearest ancestor CLAUDE.md), else
+  `null`.
+- `parentPreImagePath` = if that `parentPath` is ITSELF a claimed file (it changed in this review),
+  its `pre_image`; else `null` (judge against the current parent).
+
+For a **SKILL.md** file (skill-audit `files[]`):
+- `path` = `local`.
+- `skillType` = omit (let detect.js read it from the frontmatter) unless you already know it.
+- `ancestorClaudeMdPaths`, `preImagePath` as above. (No `role` / `dimension` / `parentPath` /
+  `density` in the skill-audit contract.)
+
+## Consuming the result
+
+Each Workflow returns `{ perFile, totals, review }`. `perFile[i]` carries `verdict`
+(`DIFF-CLEAN` = the change introduced no failure, or `NON-COMPLIANT`), and `findings[]` each with
+`severity`, `bucket`, `group`, `taxonomy`, `attributable`, `message`, `remediation`. Render these
+in the SKILL's step-9 `## md-audit (subject-lens) findings` section -- separate from the
+code-review issues, one decision pass over both. Accepted remediations are applied as normal edits
+after decisions. See the step-9 action for the ruleset self-reference notice.
+
+Scope: this integration is v1 and hardcoded to skills-kit's md-audit (claude-md-audit + skill-audit
+members). It targets skills-kit's 0.30.0 contract; the defensive probe above is what keeps a later
+skills-kit version skew from breaking the review.
+"""
+
+MD_AUDIT_REVIEW_FRAGMENTS = {
+    "git": {
+        "SKILL_NAME": "git-code-review",
+        "PREIMAGE_ORIGIN": "`git show <range-base>:<path>`",
+    },
+    "p4": {
+        "SKILL_NAME": "p4-code-review",
+        "PREIMAGE_ORIGIN": "`p4 print -q -o <dest> //depot/path#have`",
+    },
+}
+
+
+def render_md_audit_review(vcs: str) -> str:
+    out = MD_AUDIT_REVIEW_TEMPLATE
+    for token, value in MD_AUDIT_REVIEW_FRAGMENTS[vcs].items():
+        out = out.replace(f"@{token}@", value)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Targets + write/check driver.
 # ---------------------------------------------------------------------------
@@ -880,6 +1094,8 @@ def targets() -> dict[Path, str]:
         P4_SKILL: render_skill("p4"),
         GIT_SUBMIT_GATES: render_submit_gates("git"),
         P4_SUBMIT_GATES: render_submit_gates("p4"),
+        GIT_MD_AUDIT_REVIEW: render_md_audit_review("git"),
+        P4_MD_AUDIT_REVIEW: render_md_audit_review("p4"),
     }
 
 

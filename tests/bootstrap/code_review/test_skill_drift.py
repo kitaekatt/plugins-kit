@@ -67,6 +67,47 @@ class TestDispatchRulePresent:
             assert "Workflow tool" in body
 
 
+class TestMdAuditContributorPresent:
+    """The subject-lens md-audit wiring must reach BOTH skills verbatim."""
+
+    def test_both_skills_carry_probe_and_fallback(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            # step-2 claim probe
+            assert "Claim probe" in body
+            assert "skills-kit:md-audit" in body
+            assert "--claim '**/CLAUDE.md' --claim '**/SKILL.md'" in body
+            # step-6 launch + version-skew fallback
+            assert "Subject-lens md-audit pass" in body
+            assert "version-coupling safety valve" in body
+            assert "WITHOUT any `--claim` flags" in body
+
+    def test_both_skills_carry_labeled_section_and_notice(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            assert "## md-audit (subject-lens) findings" in body
+            assert "never merge the two" in body
+            assert "ruleset changed" in body            # self-reference notice
+
+    def test_both_md_audit_references_render(self):
+        git_ref = gen.render_md_audit_review("git")
+        p4_ref = gen.render_md_audit_review("p4")
+        for ref in (git_ref, p4_ref):
+            assert "# Subject-lens md-audit contributor" in ref
+            assert "claude-md-audit/workflow/detect.js" in ref
+            assert "skill-audit/workflow/detect.js" in ref
+            assert "venvPython" in ref
+            assert "ancestorClaudeMdPaths" in ref
+        # per-VCS pre-image origin seam
+        assert "git show" in git_ref and "p4 print" not in git_ref
+        assert "p4 print" in p4_ref and "git show" not in p4_ref
+
+    def test_md_audit_reference_targets_exist(self):
+        # The generated references are part of the drift-checked target set.
+        target_names = {p.name for p in gen.targets()}
+        assert "md-audit-review.md" in target_names
+
+
 class TestVcsSeamsRendered:
     """The per-VCS seams the substitution table exists for must actually land."""
 

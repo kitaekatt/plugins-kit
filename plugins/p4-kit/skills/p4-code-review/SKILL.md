@@ -40,11 +40,21 @@ technique_skill:
           input: "p4 -ztag changes -s pending -u $(p4 set -q P4USER | cut -d= -f2) -m 20"
           expected: A single integer CL number confirmed by the user.
         - n: 2
-          action: Run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
+          action: |
+            Claim probe -- decide the `--claim` flags BEFORE invoking prepare, and invoke prepare
+            only ONCE. Check whether skills-kit's md-audit skill is available in this session (it
+            appears in the available-skills list as `skills-kit:md-audit`). If it IS available, add
+            `--claim '**/CLAUDE.md' --claim '**/SKILL.md'` to the prepare invocation below so those
+            files are held back from the generic reviewers and returned under `bundle.claimed_files`
+            (each with a materialized `pre_image`) for the subject-lens md-audit pass in step 6. If it
+            is NOT available, invoke prepare with NO `--claim` flags -- degrade silently to today's
+            behavior (the md files get thin generic data_only coverage), noting the degradation in one
+            line. Do NOT run prepare twice.
+            Then run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
-          input: "<CL>"
+          input: "<CL>  (append `--claim '**/CLAUDE.md' --claim '**/SKILL.md'` when md-audit is available, per the claim probe)"
           expected: |
-            JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
+            JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
             Surface the stderr message to the user and stop. No retry.
             Launch note: ALWAYS invoke with an explicit `python3` interpreter (as shown in `tool:`), never as a bare path. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any python3 launcher is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.
@@ -87,6 +97,22 @@ technique_skill:
             the validator wave to the Workflow tool instead of launching inline. Same
             reviewers, same validators, same output either way -- only the dispatch
             mechanism changes.
+            Subject-lens md-audit pass -- run ONLY when `bundle.claimed_files` is non-empty; skip this
+            entire paragraph otherwise. In the SAME message that launches the reviewer subagents (or the
+            reviewer Workflow, per the dispatch rule above), ALSO invoke the Workflow tool with
+            skills-kit's headless detect.js for the claimed files: one Workflow call for the claimed
+            `**/CLAUDE.md` files (claude-md-audit's `workflow/detect.js`) and, only if any `**/SKILL.md`
+            files are claimed, a second Workflow call for those (skill-audit's `workflow/detect.js`) --
+            at most two Workflow calls. Pass `review: true` and, per claimed file, `preImagePath` = its
+            `pre_image` from the bundle (null for an add), with role / dimension / parentPath /
+            ancestorClaudeMdPaths resolved from each claimed file's `claude_mds` per
+            references/md-audit-review.md. Resolve the skills-kit plugin root and venvPython defensively
+            per that reference; if detect.js or the documented args contract is not found where expected
+            (version skew), FALL BACK cleanly: emit a one-line warning and re-run prepare_review.py
+            WITHOUT any `--claim` flags so the claimed files rejoin the generic review, then proceed with
+            the normal fan-out. This probe-and-fallback is the version-coupling safety valve. When it
+            runs, the md-audit Workflow executes in PARALLEL with the reviewer fan-out; keep its
+            `{perFile, totals, review}` for step 9's labeled section.
             Then launch one subagent per (reviewer × chunk) pair in parallel via
             a single message with R × K Agent calls, where R = len(profile.reviewers) and
             K = len(bundle.diff_chunks). Each subagent gets the chunk's absolute diff path
@@ -114,6 +140,21 @@ technique_skill:
               section listing each unresolved file with its resolve type. This is
               informational, not a finding -- the CL is not submittable until the
               user runs `p4 resolve` on each entry, but the review still renders.
+            - When the md-audit subject-lens pass ran (bundle.claimed_files was non-empty and the
+              Workflow did NOT fall back), render its results as a distinct, clearly LABELED section
+              titled `## md-audit (subject-lens) findings`, kept SEPARATE from the code-review issue
+              list -- never merge the two. For each file in the md-audit `perFile` result, show its
+              verdict (DIFF-CLEAN or NON-COMPLIANT) and, beneath it, each finding's severity, bucket,
+              attributable flag, message, and remediation proposal. A SINGLE decision pass covers BOTH
+              this section and the code-review issues; accepted md-audit remediations are applied as
+              normal edits AFTER decisions. If the md-audit pass fell back to the generic review, do NOT
+              render this section (the md files were reviewed as ordinary subjects).
+            - Ruleset self-reference notice: if any claimed CLAUDE.md with a pending or accepted md-audit
+              change lies on the ancestor chain of OTHER changed files in this review -- a cheap
+              path-prefix check of that CLAUDE.md's directory against bundle.unique_claude_mds and the
+              other changed files' paths -- print a one-line notice: "ruleset changed -- findings for
+              <files> were judged against the working-tree version; consider a re-run." Keep it to one
+              line; it is advisory, not a blocker.
             Group the review body by file.
         - n: 10
           action: |
@@ -143,7 +184,8 @@ technique_skill:
         - Reviewers launched in parallel (single message, R × K Agent calls -- one per (reviewer × chunk) pair, where K = len(bundle.diff_chunks))
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
-        - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merges section prepended when bundle.unresolved is non-empty)
+        - md-audit subject-lens pass launched for bundle.claimed_files when skills-kit md-audit is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-audit is absent
+        - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merges section prepended when bundle.unresolved is non-empty; separate `## md-audit (subject-lens) findings` section when the md-audit pass ran)
         - Auto-shelf cleanup invoked when bundle.auto_shelved is true (`prepare_review.py --cleanup <bundle_dir>`)
       gotchas:
         - Always quote the exact CLAUDE.md rule text when flagging a claude_md issue. If you cannot quote it verbatim, do not flag it.
@@ -159,6 +201,10 @@ technique_skill:
         - Unconfirmed submit gates are NOT errors. Render them with ✗ so they're visible, but do not block the review or refuse to render the rest.
         - Unresolved merges are NOT findings -- they do NOT go through reviewer or validator subagents. They are detected deterministically by prepare_review.py (`p4 resolve -n -c <CL>`) and rendered verbatim in a separate output section. The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the unresolved section is a separate informational warning to the user.
         - Auto-shelf cleanup (step 10) must run whenever `bundle.auto_shelved` is true, no matter what happened in steps 3-9. The cleanup script is deterministic and safe (it only deletes the shelf when the live fingerprint exactly matches what we recorded), so there is no scenario where skipping it is the right call. Skipping leaves an orphan shelf the author didn't ask for.
+        - md-audit findings are a SEPARATE, labeled section -- never interleave them with the code-review issue list. They come from skills-kit's detect.js (a subject-lens reviewer), not from the generic reviewer/validator subagents, so they are not filtered by the validators.
+        - The claim decision happens ONCE, at the step-2 probe, and controls whether prepare gets `--claim`. Do not run prepare a second time just to add claims -- the only re-run is the version-skew FALLBACK, which re-runs WITHOUT `--claim`.
+        - When skills-kit md-audit is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-audit section -- the md files get today's thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
+        - The Workflow tool is unavailable inside subagents. Launch the md-audit detect.js Workflow from the MAIN session (the same message that fans out the reviewers), never from within a reviewer subagent.
   narration:
     note: Reviews involve long silent stretches (batched file reads, parallel subagents that take 30s+). Post one short status line per step using these templates verbatim, filling in the bracketed counts. Do not paraphrase, omit, or add extras.
     templates:

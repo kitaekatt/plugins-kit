@@ -81,6 +81,12 @@ Output schema:
          "resolve_type": "<p4 resolveType, e.g. content/branch/delete>",
          "from_file": "<source depot path, may be empty>"}
       ],
+      "claimed_files": [                      # present only when --claim was passed
+        {"identifier": "<depot path>", "depot": "<depot path>",
+         "local": "<local path>", "action": "add"|"edit"|"delete"|...,
+         "pre_image": "<local path to materialized #have pre-image, or null for an add>",
+         "claude_mds": ["<absolute path>", ...]}   # nearest-ancestor-first; includes self for a CLAUDE.md subject
+      ],
       "submit_gates": [
         {"source": "<absolute path to CLAUDE.md>",
          "summary": "<one-line imperative>",
@@ -98,6 +104,14 @@ diff fetchable. `shelf_fingerprint` is the {depot: digest} map of the resulting
 shelf -- captured so a subsequent `--cleanup <bundle_dir>` invocation can verify
 the shelf still matches what we created before deleting it. Empty when
 `auto_shelved` is false (we did not create the shelf and must not touch it).
+
+A `<CL>` invocation also accepts `--claim <glob>` (repeatable). A changed file
+whose depot path matches a claim glob is held back from the generic reviewer
+fan-out (its diff is excluded from the chunks and it is dropped from
+`changed_files`) and surfaced under `claimed_files` instead, with its `#have`
+pre-image materialized to `<bundle_dir>/pre-images/<name>`. Claimed files still
+contribute to `unique_claude_mds` and the submit-gate scan. With no `--claim`
+the bundle is byte-identical to today's (no `claimed_files` key).
 
 Modes:
 - `prepare_review.py <CL>` -- gather context, emit bundle JSON on stdout.
@@ -145,6 +159,8 @@ try:
     from bootstrap_lib.code_review.pipeline import (  # noqa: E402
         assemble_bundle,
         emit_bundle,
+        matches_claim,
+        preimage_relpath,
         run_vcs,
         split_sections,
     )
@@ -166,10 +182,12 @@ repair_path()
 # resolution -> resolve_target, extract_diff (over fetch_describe) -> fetch_diff,
 # _parse_p4_header -> parse_header, _p4_diff_to_sections -> diff_to_sections,
 # parse_file_actions + resolve_local_paths -> enumerate_changed_files,
-# find_unreconciled -> hygiene_unincluded, find_unresolved -> hygiene_unresolved.
-# p4 DOES implement the optional capability: auto_shelve_cl +
-# fetch_shelf_fingerprint -> snapshot_change, cleanup_auto_shelve -> cleanup. See
-# the protocol docstring for the full contract before changing any of these shapes.
+# find_unreconciled -> hygiene_unincluded, find_unresolved -> hygiene_unresolved,
+# materialize_preimage -> materialize_preimage. p4 DOES implement the auto-shelve
+# optional capability: auto_shelve_cl + fetch_shelf_fingerprint -> snapshot_change,
+# cleanup_auto_shelve -> cleanup, AND materialize_preimage (used by the claim
+# mechanism). See the protocol docstring for the full contract before changing
+# any of these shapes.
 
 
 # Captures (depot, rev, filetype). The filetype (e.g. `text`, `binary`,
@@ -892,7 +910,27 @@ def get_workspace_root() -> Optional[Path]:
     return None
 
 
-def build_bundle(cl: str, bundle_dir: Path) -> dict:
+def materialize_preimage(depot: str, action: str, bundle_dir: Path) -> Optional[str]:
+    """Write `depot`'s #have (pre-edit) content into the bundle; return its path.
+
+    An add-style action (add / branch / move/add / import) has no prior
+    content, so returns None -- the subject-lens reviewer treats every finding
+    as attributable. For an edit/delete/integrate the `#have` revision is the
+    workspace's synced copy, i.e. the file as it was before this CL touched it.
+    """
+    if action in _ADD_ACTIONS:
+        return None
+    dest = bundle_dir / preimage_relpath(depot)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    rc, _, _ = run_p4(["print", "-q", "-o", str(dest), f"{depot}#have"])
+    if rc != 0:
+        return None
+    return str(dest)
+
+
+def build_bundle(
+    cl: str, bundle_dir: Path, claim_globs: Optional[list[str]] = None
+) -> dict:
     """Gather CL context, partition diff into chunks on disk, return the index bundle.
 
     Writes per-file diff fragments under `<bundle_dir>/chunks/chunk-NNN.diff`
@@ -905,7 +943,14 @@ def build_bundle(cl: str, bundle_dir: Path) -> dict:
     the diff is fetchable, records `auto_shelved=True` plus the resulting
     shelf fingerprint, and expects a later `--cleanup <bundle_dir>` invocation
     to delete the shelf iff its fingerprint still matches.
+
+    When `claim_globs` is non-empty, changed files whose depot path matches a
+    claim pattern are held back from the generic reviewers (see
+    assemble_bundle): their pre-image is materialized into the bundle and they
+    are surfaced under a top-level `claimed_files` list instead of
+    `changed_files`. When empty the bundle is byte-identical to today's.
     """
+    claim_globs = claim_globs or []
     auto_shelved = False
     try:
         describe, is_shelved = fetch_describe(cl)
@@ -939,6 +984,15 @@ def build_bundle(cl: str, bundle_dir: Path) -> dict:
         {"identifier": depot, "depot": depot, "local": local_map.get(depot)}
         for depot in depot_files
     ]
+    # Materialize pre-images for claimed files BEFORE assembly so the front-half
+    # keeps the VCS-specific mechanics; assemble_bundle only routes/excludes.
+    # `action` is attached to claimed entries only, so non-claimed changed_files
+    # stay byte-identical to the no-claim contract.
+    for f in files:
+        if matches_claim(f["identifier"], claim_globs):
+            action = actions.get(f["identifier"], ("", ""))[1]
+            f["action"] = action
+            f["pre_image"] = materialize_preimage(f["depot"], action, bundle_dir)
     core = assemble_bundle(
         preamble=preamble,
         sections=sections,
@@ -946,6 +1000,7 @@ def build_bundle(cl: str, bundle_dir: Path) -> dict:
         bundle_dir=bundle_dir,
         max_chunk_bytes=MAX_CHUNK_BYTES,
         workspace_root=workspace_root,
+        claim_globs=claim_globs,
     )
     changed_files = core["changed_files"]
 
@@ -955,7 +1010,7 @@ def build_bundle(cl: str, bundle_dir: Path) -> dict:
     unreconciled = find_unreconciled(minimal_dirs)
     unresolved = find_unresolved(cl)
 
-    return {
+    bundle: dict = {
         "cl": cl,
         "description": description,
         "bundle_dir": core["bundle_dir"],
@@ -968,6 +1023,9 @@ def build_bundle(cl: str, bundle_dir: Path) -> dict:
         "auto_shelved": auto_shelved,
         "shelf_fingerprint": shelf_fingerprint,
     }
+    if claim_globs:
+        bundle["claimed_files"] = core.get("claimed_files", [])
+    return bundle
 
 
 def cleanup_auto_shelve(bundle_dir: Path) -> int:
@@ -1023,21 +1081,56 @@ def cleanup_auto_shelve(bundle_dir: Path) -> int:
     return 0
 
 
+def _parse_args(args: list[str]) -> tuple[list[str], list[str]]:
+    """Split argv[1:] into (positionals, claim_globs).
+
+    `--claim <glob>` (repeatable) and `--claim=<glob>` collect claim patterns;
+    everything else (the CL number) is a positional. Raises ValueError on a
+    `--claim` with no value.
+    """
+    positionals: list[str] = []
+    claim_globs: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--claim":
+            if i + 1 >= len(args):
+                raise ValueError("--claim requires a glob argument")
+            claim_globs.append(args[i + 1])
+            i += 2
+        elif a.startswith("--claim="):
+            claim_globs.append(a[len("--claim="):])
+            i += 1
+        else:
+            positionals.append(a)
+            i += 1
+    return positionals, claim_globs
+
+
+def _usage() -> int:
+    print(
+        "Usage: prepare_review.py <CL> [--claim <glob> ...]\n"
+        "       prepare_review.py --cleanup <bundle_dir>",
+        file=sys.stderr,
+    )
+    return 2
+
+
 def main(argv: list[str]) -> int:
     if len(argv) == 3 and argv[1] == "--cleanup":
         return cleanup_auto_shelve(Path(argv[2]))
-    if len(argv) != 2 or argv[1].startswith("-"):
-        print(
-            "Usage: prepare_review.py <CL>\n"
-            "       prepare_review.py --cleanup <bundle_dir>",
-            file=sys.stderr,
-        )
+    try:
+        positionals, claim_globs = _parse_args(argv[1:])
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
         return 2
-    cl = argv[1]
+    if len(positionals) != 1 or positionals[0].startswith("-"):
+        return _usage()
+    cl = positionals[0]
     bundle_dir = DEFAULT_BUNDLE_ROOT / cl
     bundle_dir.mkdir(parents=True, exist_ok=True)
     try:
-        bundle = build_bundle(cl, bundle_dir)
+        bundle = build_bundle(cl, bundle_dir, claim_globs=claim_globs)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1

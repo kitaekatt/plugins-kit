@@ -866,3 +866,107 @@ class TestMain:
         bundle = json.loads(capsys.readouterr().out)
         assert bundle["range"] == "__staged__"
         assert bundle["description"] == "(staged-but-uncommitted changes)"
+
+
+# ---------------------------------------------------------------------------
+# --claim: exclusion + claimed_files + pre-image materialization
+# ---------------------------------------------------------------------------
+
+
+class TestParseArgs:
+    def test_positionals_only(self):
+        assert pr._parse_args(["main..HEAD"]) == (["main..HEAD"], [])
+
+    def test_claim_flag_collects_globs(self):
+        pos, claims = pr._parse_args(["main..HEAD", "--claim", "**/CLAUDE.md", "--claim", "**/SKILL.md"])
+        assert pos == ["main..HEAD"]
+        assert claims == ["**/CLAUDE.md", "**/SKILL.md"]
+
+    def test_claim_equals_form(self):
+        assert pr._parse_args(["--claim=**/CLAUDE.md"]) == ([], ["**/CLAUDE.md"])
+
+    def test_sentinel_flags_stay_positional(self):
+        assert pr._parse_args(["--staged", "--claim", "**/CLAUDE.md"]) == (
+            ["--staged"], ["**/CLAUDE.md"]
+        )
+
+    def test_claim_without_value_raises(self):
+        with pytest.raises(ValueError):
+            pr._parse_args(["main..HEAD", "--claim"])
+
+
+class TestRangeBase:
+    def test_double_dot_takes_left(self):
+        assert pr._range_base("origin/main..HEAD") == "origin/main"
+
+    def test_sentinels_use_head(self):
+        for s in ("__working_tree__", "__staged__", "__merge_in_progress__", "__rebase_in_progress__"):
+            assert pr._range_base(s) == "HEAD"
+
+
+class TestMaterializePreimageGit:
+    def test_edit_yields_base_content(self, git_repo, tmp_path):
+        git_repo.commit_file("CLAUDE.md", "base rules\n", "base")
+        (git_repo.path / "CLAUDE.md").write_text("changed rules\n", encoding="utf-8")
+        git_repo.commit_file("CLAUDE.md", "changed rules\n", "change")
+
+        dest = pr.materialize_preimage("HEAD~1..HEAD", "CLAUDE.md", tmp_path / "b")
+
+        assert dest is not None
+        assert Path(dest).read_text(encoding="utf-8") == "base rules\n"
+
+    def test_added_file_yields_none(self, git_repo, tmp_path):
+        git_repo.commit_file("seed.txt", "x\n", "seed")
+        git_repo.commit_file("CLAUDE.md", "new file\n", "add claude")
+
+        # CLAUDE.md did not exist at HEAD~1 -> no pre-image.
+        assert pr.materialize_preimage("HEAD~1..HEAD", "CLAUDE.md", tmp_path / "b") is None
+
+
+class TestBuildBundleClaims:
+    def test_claimed_claude_md_held_back_with_preimage(self, git_repo, tmp_path):
+        git_repo.commit_file("CLAUDE.md", "base rules\n", "base claude")
+        (git_repo.path / "src").mkdir()
+        git_repo.commit_file("src/app.py", "print(1)\n", "base app")
+        (git_repo.path / "CLAUDE.md").write_text("new rules\n", encoding="utf-8")
+        (git_repo.path / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
+        git_repo.git("add", "-A")
+        git_repo.git("commit", "-qm", "edit both")
+
+        bundle = pr.build_bundle(
+            "HEAD~1..HEAD", tmp_path / "bundle", claim_globs=["**/CLAUDE.md", "**/SKILL.md"]
+        )
+
+        # CLAUDE.md is claimed, app.py stays in the generic review.
+        assert [f["path"] for f in bundle["changed_files"]] == ["src/app.py"]
+        assert len(bundle["claimed_files"]) == 1
+        claimed = bundle["claimed_files"][0]
+        assert claimed["path"] == "CLAUDE.md"
+        assert claimed["status"] == "M"
+        assert Path(claimed["pre_image"]).read_text(encoding="utf-8") == "base rules\n"
+        assert claimed["claude_mds"]  # nearest-first chain, includes self
+        # The claimed file's diff is not in any chunk.
+        diff = _concat_diff_from_chunks(bundle)
+        assert "app.py" in diff
+        assert "new rules" not in diff
+
+    def test_no_claim_flag_leaves_bundle_without_claimed_files(self, git_repo, tmp_path):
+        git_repo.commit_file("CLAUDE.md", "base\n", "base")
+        git_repo.commit_file("CLAUDE.md", "changed\n", "change")
+
+        bundle = pr.build_bundle("HEAD~1..HEAD", tmp_path / "bundle")
+
+        assert "claimed_files" not in bundle
+        assert [f["path"] for f in bundle["changed_files"]] == ["CLAUDE.md"]
+
+    def test_main_with_claim_emits_claimed_files(self, git_repo, tmp_path, monkeypatch, capsys):
+        git_repo.commit_file("CLAUDE.md", "base\n", "base")
+        git_repo.commit_file("CLAUDE.md", "changed\n", "change")
+        monkeypatch.setattr(pr, "DEFAULT_BUNDLE_ROOT", tmp_path / "bundles")
+
+        rc = pr.main(["prepare_review.py", "HEAD~1..HEAD", "--claim", "**/CLAUDE.md"])
+
+        assert rc == 0
+        bundle = json.loads(capsys.readouterr().out)
+        assert [c["path"] for c in bundle["claimed_files"]] == ["CLAUDE.md"]
+        assert bundle["changed_files"] == []

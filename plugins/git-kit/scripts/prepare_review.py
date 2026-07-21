@@ -8,6 +8,14 @@ Usage:
     prepare_review.py --staged          # review index vs HEAD
     prepare_review.py --working         # review working tree vs HEAD (uncommitted)
 
+Any invocation also accepts `--claim <glob>` (repeatable). A changed file whose
+repo-relative path matches a claim glob is held back from the generic reviewer
+fan-out (its diff is excluded from the chunks and it is dropped from
+`changed_files`) and surfaced under `claimed_files` instead, with its pre-image
+materialized to `<bundle_dir>/pre-images/<name>`. Claimed files still contribute
+to `unique_claude_mds` and the submit-gate scan. With no `--claim` the bundle is
+byte-identical to today's (no `claimed_files` key).
+
 Auto-detect resolution order:
     1. Mid-merge (MERGE_HEAD present)            -> review the in-progress merge
     2. Mid-rebase (rebase-merge/-apply present)  -> review the in-progress rebase
@@ -55,6 +63,12 @@ Output schema:
       "merge_conflicts": [
         {"path": "<repo-relative>", "local": "<absolute path>"}
       ],
+      "claimed_files": [                      # present only when --claim was passed
+        {"identifier": "<repo-relative path>", "path": "<repo-relative path>",
+         "local": "<absolute path>", "status": "A"|"M"|"D"|...,
+         "pre_image": "<absolute path to materialized pre-image, or null for an add>",
+         "claude_mds": ["<absolute path>", ...]}   # nearest-ancestor-first; includes self for a CLAUDE.md subject
+      ],
       "submit_gates": [
         {"source": "<absolute path to CLAUDE.md>",
          "summary": "<one-line imperative>",
@@ -93,6 +107,8 @@ try:
     from bootstrap_lib.code_review.pipeline import (  # noqa: E402
         assemble_bundle,
         emit_bundle,
+        matches_claim,
+        preimage_relpath,
         run_vcs,
         split_sections,
     )
@@ -114,9 +130,11 @@ repair_path()
 # / parse_range_arg -> resolve_target, fetch_diff, _parse_git_header ->
 # parse_header, _git_diff_to_sections -> diff_to_sections, fetch_changed_files ->
 # enumerate_changed_files, find_untracked_or_unstaged -> hygiene_unincluded,
-# find_merge_conflicts -> hygiene_unresolved. Git implements neither optional
-# capability (snapshot_change/cleanup) -- its range is always diffable. See the
-# protocol docstring for the full contract before changing any of these shapes.
+# find_merge_conflicts -> hygiene_unresolved, materialize_preimage ->
+# materialize_preimage. Git implements neither auto-shelve optional capability
+# (snapshot_change/cleanup) -- its range is always diffable -- but DOES implement
+# materialize_preimage (used by the claim mechanism). See the protocol docstring
+# for the full contract before changing any of these shapes.
 
 
 # Mirror p4-kit's choice for the same reason -- Read tool refuses files
@@ -582,8 +600,64 @@ def parse_range_arg(arg: str) -> str:
     return f"{arg}..HEAD"
 
 
-def build_bundle(range_spec: str, bundle_dir: Path, auto_reason: Optional[str] = None) -> dict:
-    """Gather context for `range_spec`, write chunks to disk, return the index bundle."""
+def _range_base(range_spec: str) -> Optional[str]:
+    """The revision the pre-image of a changed file should be read from.
+
+    For a normal `<a>..HEAD` / `<a>..<b>` range the base is the left side. For
+    a symmetric `<a>...<b>` range git diffs from the merge-base, so the base is
+    `git merge-base a b`. Working-tree / staged / merge / rebase modes are all
+    diffed against HEAD, so HEAD is their natural base. Returns None when no
+    base can be resolved (the caller then treats the file as an add).
+    """
+    if range_spec in (
+        "__working_tree__", "__staged__",
+        "__merge_in_progress__", "__rebase_in_progress__",
+    ):
+        return "HEAD"
+    if "..." in range_spec:
+        a, b = range_spec.split("...", 1)
+        rc, out, _ = run_git(["merge-base", a or "HEAD", b or "HEAD"])
+        return out.strip() if rc == 0 and out.strip() else None
+    if ".." in range_spec:
+        a = range_spec.split("..", 1)[0]
+        return a or "HEAD"
+    return None
+
+
+def materialize_preimage(range_spec: str, path: str, bundle_dir: Path) -> Optional[str]:
+    """Write `path`'s content at the range base into the bundle; return its path.
+
+    `git show <base>:<path>` fails when the file did not exist at the base
+    (an add, or the post-rename side of a rename); that case returns None so
+    the subject-lens reviewer treats every finding as attributable.
+    """
+    base = _range_base(range_spec)
+    if base is None:
+        return None
+    rc, out, _ = run_git(["show", f"{base}:{path}"])
+    if rc != 0:
+        return None
+    dest = bundle_dir / preimage_relpath(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(out, encoding="utf-8")
+    return str(dest)
+
+
+def build_bundle(
+    range_spec: str,
+    bundle_dir: Path,
+    auto_reason: Optional[str] = None,
+    claim_globs: Optional[list[str]] = None,
+) -> dict:
+    """Gather context for `range_spec`, write chunks to disk, return the index bundle.
+
+    When `claim_globs` is non-empty, changed files whose repo-relative path
+    matches a claim pattern are held back from the generic reviewers (see
+    assemble_bundle): their pre-image is materialized into the bundle and they
+    are surfaced under a top-level `claimed_files` list instead of
+    `changed_files`. When empty the bundle is byte-identical to today's.
+    """
+    claim_globs = claim_globs or []
     repo_root = get_repo_root()
     if repo_root is None:
         raise ValueError("not inside a git repository")
@@ -606,6 +680,11 @@ def build_bundle(range_spec: str, bundle_dir: Path, auto_reason: Optional[str] =
         }
         for status, path in changed
     ]
+    # Materialize pre-images for claimed files BEFORE assembly so the front-half
+    # keeps the VCS-specific mechanics; assemble_bundle only routes/excludes.
+    for f in files:
+        if matches_claim(f["identifier"], claim_globs):
+            f["pre_image"] = materialize_preimage(range_spec, f["path"], bundle_dir)
     core = assemble_bundle(
         preamble=preamble,
         sections=sections,
@@ -613,6 +692,7 @@ def build_bundle(range_spec: str, bundle_dir: Path, auto_reason: Optional[str] =
         bundle_dir=bundle_dir,
         max_chunk_bytes=MAX_CHUNK_BYTES,
         workspace_root=repo_root,
+        claim_globs=claim_globs,
     )
     changed_files = core["changed_files"]
 
@@ -644,22 +724,57 @@ def build_bundle(range_spec: str, bundle_dir: Path, auto_reason: Optional[str] =
     }
     if auto_reason:
         bundle["auto_detected_reason"] = auto_reason
+    if claim_globs:
+        bundle["claimed_files"] = core.get("claimed_files", [])
     return bundle
 
 
+def _parse_args(args: list[str]) -> tuple[list[str], list[str]]:
+    """Split argv[1:] into (positionals, claim_globs).
+
+    `--claim <glob>` (repeatable) and `--claim=<glob>` collect claim patterns;
+    everything else (a range/ref, `--staged`, `--working`) is a positional.
+    Raises ValueError on a `--claim` with no value.
+    """
+    positionals: list[str] = []
+    claim_globs: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--claim":
+            if i + 1 >= len(args):
+                raise ValueError("--claim requires a glob argument")
+            claim_globs.append(args[i + 1])
+            i += 2
+        elif a.startswith("--claim="):
+            claim_globs.append(a[len("--claim="):])
+            i += 1
+        else:
+            positionals.append(a)
+            i += 1
+    return positionals, claim_globs
+
+
 def main(argv: list[str]) -> int:
+    try:
+        positionals, claim_globs = _parse_args(argv[1:])
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
+
     auto_reason: Optional[str] = None
-    if len(argv) == 1:
+    if len(positionals) == 0:
         try:
             range_spec, auto_reason = detect_default_range()
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
-    elif len(argv) == 2:
-        range_spec = parse_range_arg(argv[1])
+    elif len(positionals) == 1:
+        range_spec = parse_range_arg(positionals[0])
     else:
         print(
-            "Usage: prepare_review.py [<ref>|<a>..<b>|<a>...<b>|--staged|--working]",
+            "Usage: prepare_review.py [<ref>|<a>..<b>|<a>...<b>|--staged|--working] "
+            "[--claim <glob> ...]",
             file=sys.stderr,
         )
         return 2
@@ -667,7 +782,9 @@ def main(argv: list[str]) -> int:
     bundle_dir = DEFAULT_BUNDLE_ROOT / _safe_dir_name(range_spec)
     bundle_dir.mkdir(parents=True, exist_ok=True)
     try:
-        bundle = build_bundle(range_spec, bundle_dir, auto_reason=auto_reason)
+        bundle = build_bundle(
+            range_spec, bundle_dir, auto_reason=auto_reason, claim_globs=claim_globs
+        )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
