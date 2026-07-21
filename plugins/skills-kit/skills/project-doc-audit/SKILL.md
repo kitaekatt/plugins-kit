@@ -162,8 +162,8 @@ audit_skill:
       name: "Doc duplicates content already owned by a skill"
       keywords: ["duplication", "ssot", "parallel reference", "skill content", "collapse to pointer"]
       detection_signal: "A skill covers the doc's topic and the doc restates (rather than points at) that skill's content."
-      default_remediation: "Collapse the doc to a pointer ('for X, invoke /skill-name') so the skill's references/ stays the SSOT -- dedup under the summarize-and-reference rule (REMINDER PLUS REFERENCE, a dozen tokens or less, else reference-only). Cross-file duplication -> FIX. Loss-free-deletion guard first: fold any doc-local delta into the pointer/SSOT before deleting. (Dedup never waits on a larger relocation, which stays a separate IMPROVE.)"
-      bucket: "FIX"
+      default_remediation: "Collapse the doc to a pointer ('for X, invoke /skill-name') so the skill's references/ stays the SSOT -- dedup under the summarize-and-reference rule (REMINDER PLUS REFERENCE, a dozen tokens or less, else reference-only). Loss-free-deletion guard first: fold any doc-local delta into the pointer/SSOT before deleting. That fold is a judgment no auto-apply pass can satisfy, so this is IMPROVE (opt-in one-line pitch), NOT FIX."
+      bucket: "IMPROVE"
     - id: "J_size_signal"
       name: "Body over size threshold (CRP-evaluation prompt)"
       keywords: ["size signal", "line count", "token count", "crp evaluation"]
@@ -311,15 +311,14 @@ audit_skill:
   # Disposition mapping (four-disposition model): structural lanes retained for
   # schema stability across audit members. auto = FIX categories (auto-applied;
   # land in the reviewable CL) -- this audit is NO LONGER blanket no-AUTO: the
-  # mechanical convention checks N-R plus I dedup are FIX. discuss = SERIOUS
+  # mechanical convention checks N-R are FIX. I dedup is IMPROVE, not FIX: its
+  # loss-free precondition (fold the doc's unique deltas into the skill BEFORE
+  # removal) is a judgment no auto-apply pass can satisfy. discuss = SERIOUS
   # (never auto) + IMPROVE (opt-in) + SILENT-default (A routing) categories,
   # disposition noted per entry. special = K. The final per-finding disposition
   # is assigned instance-level by the detect.js classifier.
   remediations:
     auto:
-      - category: "I_duplicates_skill"
-        procedure: "[FIX] Collapse the doc to a pointer at the owning skill so the skill's references/ stays SSOT -- dedup under the summarize-and-reference rule (REMINDER PLUS REFERENCE). Loss-free-deletion guard first: fold any doc-local delta into the pointer/SSOT before deleting. The dedup happens now even if a larger relocation is also pending (that stays a separate IMPROVE)."
-        agent_template: "Background agent receives the duplicated block + owning skill; folds any local delta into the SSOT, replaces the block with a reminder-plus-pointer."
       - category: "N_broken_link_identified_target"
         procedure: "[FIX] Re-point the broken outbound link to the found target (a verified fact). If no target exists, deleting the falsified reference is FIX; a structural re-home is IMPROVE. A generator-owned absent path is NOT broken -- annotate it 'auto-generated (present after doc-gen)' (FIX), or repoint/delete (IMPROVE)."
         agent_template: "Background agent receives the broken link + the identified target (or absence/generator proof); re-points, annotates, or deletes accordingly."
@@ -352,6 +351,8 @@ audit_skill:
         procedure: "[IMPROVE] Remove the back-citation or inline the small fact the doc needs; keep permitted orientation mentions. One-line pitch; user confirms."
       - category: "H_orphan"
         procedure: "[IMPROVE default] Offer: add a CLAUDE.md pointer (make agent-reachable) or retire the doc (dead). One-line pitch. An intentionally human-only / historical / companion-source doc is an accepted pattern -> SILENT (not surfaced)."
+      - category: "I_duplicates_skill"
+        procedure: "[IMPROVE] Collapse the doc to a pointer at the owning skill so the skill's references/ stays SSOT -- dedup under the summarize-and-reference rule (REMINDER PLUS REFERENCE). Loss-free-deletion guard: fold any doc-local delta into the pointer/SSOT before deleting. That fold is a judgment no auto-apply pass can satisfy, so this is opt-in (one-line pitch; user confirms the fold and pointer), NOT FIX."
       - category: "J_size_signal"
         procedure: "[IMPROVE default] Run the CRP test (do sections serve different reading tasks?). If yes AND a concrete extraction candidate can be named, escalate to E. If no named candidate, SILENT (the large single-task doc is correct)."
     special:

@@ -56,9 +56,13 @@ const FILE_FINDINGS_SCHEMA = {
           criterion: { type: 'string', description: 'criterion id or short name, e.g. ccp_placement' },
           message: { type: 'string' },
           line: { type: ['integer', 'null'], description: 'line number in the file, or null' },
-          taxonomy: { type: 'string', description: 'taxonomy id A-L; "none" for PASS/INFO/JUDGMENT that need no remediation' },
+          taxonomy: {
+            type: 'string',
+            enum: ['A_missing_required_frontmatter', 'B_description_quality', 'C_wrong_skill_type', 'D_mixed_type_signal', 'E_schema_validation_failure', 'F_ccp_misallocation', 'G_crp_violation', 'H_adp_back_reference', 'I_decision_provenance', 'J_hygiene_threshold', 'K_unclassified', 'L_load_graph_gap', 'none'],
+            description: 'canonical suffixed taxonomy id (see the SKILL.md taxonomy table); "none" for PASS/INFO/JUDGMENT that need no remediation',
+          },
           bucket: { type: 'string', enum: ['FIX', 'SERIOUS', 'IMPROVE', 'SILENT', 'SPECIAL', 'NONE'], description: 'per-finding disposition assigned instance-level by the classifier (step 6)' },
-          remediation: { type: 'string', description: 'concrete proposed remediation for AUTO/DISCUSS/SPECIAL; empty for NONE' },
+          remediation: { type: 'string', description: 'concrete proposed remediation for FIX/SERIOUS/IMPROVE/SPECIAL; empty for SILENT/NONE' },
         },
         required: ['group', 'severity', 'criterion', 'message', 'line', 'taxonomy', 'bucket', 'remediation'],
       },
@@ -119,7 +123,7 @@ Steps:
    4. A CRP/size split is offerable (IMPROVE) only when you can NAME a concrete extraction candidate; a bare over-threshold nudge with no named candidate is SILENT (mirror of the one-line trim test).
    5. A validator detection artifact is SILENT only when placating the validator needs no real doc change. If the same edit is ALSO a genuine project-convention fix (e.g. backslash paths -> forward slashes), it is FIX.
 
-   Declined-opportunity ledger: if the SKILL.md frontmatter carries an \`md-audit-declined:\` list (bare taxonomy ids or short finding keys), do NOT re-raise an IMPROVE finding the user already declined for that file -- honor it exactly like references-audit honors \`references-audit-allow-stale\`. A new or materially different finding still fires.
+   Declined-opportunity ledger: if the SKILL.md frontmatter carries an \`md-audit-declined:\` list (suffixed taxonomy ids or short finding keys), do NOT re-raise an IMPROVE finding the user already declined for that file -- honor it exactly like references-audit honors \`references-audit-allow-stale\`. A new or materially different finding still fires.
    PASS / INFO / JUDGMENT findings that need no remediation get taxonomy "none" and bucket "NONE".
    For each FIX/SERIOUS/IMPROVE/SPECIAL finding write a concrete \`remediation\` (FIX = the edit it will apply; SERIOUS = the one-line top-of-report summary; IMPROVE = the single one-line pitch), with line refs.
 7. Verdict: NON-COMPLIANT if ANY finding has severity FAIL; otherwise COMPLIANT. INFO/JUDGMENT never gate. Disposition is orthogonal to the verdict.

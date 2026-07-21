@@ -70,9 +70,13 @@ const FILE_FINDINGS_SCHEMA = {
           criterion: { type: 'string', description: 'criterion id or short name, e.g. ccp_cross_file_duplication' },
           message: { type: 'string' },
           line: { type: ['integer', 'null'], description: 'line number in the file, or null' },
-          taxonomy: { type: 'string', description: 'taxonomy id A-G, P, Q, or K; "none" for PASS/INFO/JUDGMENT that need no remediation' },
+          taxonomy: {
+            type: 'string',
+            enum: ['A_wrong_role_content', 'B_ccp_cross_file_duplication', 'C_crp_split_candidate', 'D_adp_forward_dependency', 'E_schema_failure', 'F_hygiene_threshold', 'G_descendant_role_mismatch', 'H_stale_anchor', 'H2_inverted_absence', 'I_claim_drift', 'I2_line_drift', 'J_low_value_insight', 'K_unclassified', 'L_verbose_in_place', 'M_extract_to_reference', 'N_intra_file_redundancy', 'O_low_value_verbose', 'P_stale_factual_claim', 'Q_skill_content_duplication', 'none'],
+            description: 'canonical suffixed taxonomy id (see the SKILL.md taxonomy table); "none" for PASS/INFO/JUDGMENT that need no remediation',
+          },
           bucket: { type: 'string', enum: ['FIX', 'SERIOUS', 'IMPROVE', 'SILENT', 'SPECIAL', 'NONE'], description: 'per-finding disposition assigned instance-level by the classifier (step 8)' },
-          remediation: { type: 'string', description: 'concrete proposed remediation for AUTO/DISCUSS/SPECIAL; empty for NONE' },
+          remediation: { type: 'string', description: 'concrete proposed remediation for FIX/SERIOUS/IMPROVE/SPECIAL; empty for SILENT/NONE' },
         },
         required: ['group', 'severity', 'criterion', 'message', 'line', 'taxonomy', 'bucket', 'remediation'],
       },
@@ -151,7 +155,7 @@ Steps:
    5. A validator detection artifact is SILENT only when placating the validator needs no real doc change. If the same edit is ALSO a genuine project-convention fix (e.g. backslash paths -> forward slashes), it is FIX.
 
    Classic-dimension findings use taxonomy A-G/P/Q/K; CodeDir-group findings use H_stale_anchor / H2_inverted_absence / I_claim_drift / I2_line_drift / J_low_value_insight (or K); Density-group findings use L_verbose_in_place / M_extract_to_reference / N_intra_file_redundancy / O_low_value_verbose.
-   Declined-opportunity ledger: if the target's frontmatter carries an \`md-audit-declined:\` list (bare taxonomy ids or short finding keys), do NOT re-raise an IMPROVE finding the user already declined for that file -- honor it exactly like references-audit honors \`references-audit-allow-stale\`. A new or materially different finding still fires.
+   Declined-opportunity ledger: if the target's frontmatter carries an \`md-audit-declined:\` list (suffixed taxonomy ids or short finding keys), do NOT re-raise an IMPROVE finding the user already declined for that file -- honor it exactly like references-audit honors \`references-audit-allow-stale\`. A new or materially different finding still fires.
    PASS / INFO / JUDGMENT findings that need no remediation get taxonomy "none" and bucket "NONE".
    For each FIX/SERIOUS/IMPROVE/SPECIAL finding write a concrete \`remediation\` (what edit you propose, with line refs); FIX writes the edit it will apply, SERIOUS writes the one-line summary for the top-of-report block, IMPROVE writes the single one-line pitch.
 9. Verdict: NON-COMPLIANT if ANY finding has severity FAIL; otherwise COMPLIANT. INFO/JUDGMENT never gate. (A CodeDir CD-2 H/H2 FAIL gates exactly like a classic FAIL. Density findings are JUDGMENT only and never affect the verdict.) Disposition is orthogonal to the verdict -- a FIX still lands in the remediation CL, a SERIOUS still gates via its FAIL severity if it carries one.

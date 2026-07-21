@@ -24,7 +24,7 @@ Project references are the **escape-hatch / nursery** for still-emerging content
 
 **Rule:** the target is classified `project_doc` by discover.py. A file inside a `*/skills/*/references/` folder is a skill reference, audited via `/md-audit skill`; a `CLAUDE.md` / `SKILL.md` is audited by its own member.
 
-**Test:** read discover.py `kind`. If `skill_reference` or `other_claude_artifact`, emit one routing finding (taxonomy A) and skip the rest.
+**Test:** read discover.py `kind`. If `skill_reference` or `other_claude_artifact`, emit one routing finding (taxonomy A_misclassified_skill_ref) and skip the rest.
 
 **Severity:** INFO (a routing note, not a defect in the file).
 
@@ -32,11 +32,11 @@ Project references are the **escape-hatch / nursery** for still-emerging content
 
 **Rule:** if the doc's content has stabilized past the nursery stage, route it to its trigger-appropriate mature home. Match the home to the natural TRIGGER SHAPE (not "always a skill"):
 
-1. **Graduate to a skill** (taxonomy B) -- ONLY when the trigger is **task-shaped**: a VERB the session performs (authoring an X, running an evaluator, classifying a CL), needed wherever in the tree the activity happens, and the content fits a skill type (procedure -> technique; rule+counter -> discipline; lookup table -> reference; tool/API wrapper -> capability). A skill is loaded by matching the session-wide skill list -- the right home for activity-triggered knowledge.
-2. **Fold into / reference from a directory CLAUDE.md** (taxonomy C) -- the **preferred** home for **location-shaped** knowledge (scoped to a directory: a config subtree, source dirs, a package) and for small load-bearing tips. A directory CLAUDE.md auto-loads when any file beneath it is touched -- the exactly-right trigger for directory-scoped knowledge, at zero session-wide context cost. This is preferred over B/D when the trigger is location-shaped, **not** a lesser fallback.
-3. **Move into an existing skill** (taxonomy D) -- an existing (task-shaped) skill already owns the topic; the content belongs in that skill's `references/`, not as a parallel project doc.
+1. **Graduate to a skill** (taxonomy B_graduate_to_skill) -- ONLY when the trigger is **task-shaped**: a VERB the session performs (authoring an X, running an evaluator, classifying a CL), needed wherever in the tree the activity happens, and the content fits a skill type (procedure -> technique; rule+counter -> discipline; lookup table -> reference; tool/API wrapper -> capability). A skill is loaded by matching the session-wide skill list -- the right home for activity-triggered knowledge.
+2. **Fold into / reference from a directory CLAUDE.md** (taxonomy C_fold_into_claude_md) -- the **preferred** home for **location-shaped** knowledge (scoped to a directory: a config subtree, source dirs, a package) and for small load-bearing tips. A directory CLAUDE.md auto-loads when any file beneath it is touched -- the exactly-right trigger for directory-scoped knowledge, at zero session-wide context cost. This is preferred over B/D when the trigger is location-shaped, **not** a lesser fallback.
+3. **Move into an existing skill** (taxonomy D_move_into_existing_skill) -- an existing (task-shaped) skill already owns the topic; the content belongs in that skill's `references/`, not as a parallel project doc.
 
-Knowledge with BOTH shapes: prefer the **location home** (C); a skill may point at it via summarize-and-reference.
+Knowledge with BOTH shapes: prefer the **location home** (C_fold_into_claude_md); a skill may point at it via summarize-and-reference.
 
 **Why:** `placement_follows_trigger_shape` + `skill_maturation_pipeline`. A skill spends session-wide context budget and fires by description match; a directory CLAUDE.md spends nothing until the session works under the directory, then loads precisely. Matching the home to the trigger shape puts directory-scoped knowledge where it costs nothing and loads exactly, and reserves skills for activity-triggered knowledge. Skills-kit is NOT of the view that all mature documentation graduates to a skill.
 
@@ -56,7 +56,7 @@ CRP says: every reader who lands on the doc should need all of it.
 
 **Test:** enumerate the doc's sections; for each, judge whether it loads in the same situation as the others. Size (discover.py `lines` / `approx_tokens`) is a SIGNAL that prompts this evaluation, never a verdict.
 
-**Severity:** JUDGMENT. Split (taxonomy E) only when a CRP-passing decomposition genuinely exists.
+**Severity:** JUDGMENT. Split (taxonomy E_crp_split) only when a CRP-passing decomposition genuinely exists.
 
 ### PD-7 (CRP size signal). Body over threshold
 
@@ -64,7 +64,7 @@ CRP says: every reader who lands on the doc should need all of it.
 
 **Test:** mechanical, from discover.py. Triggers the PD-3 unitary-reading-task check.
 
-**Severity:** INFO (taxonomy J). Size alone is never FAIL; a large single-task doc that passes CRP is correct.
+**Severity:** INFO (taxonomy J_size_signal). Size alone is never FAIL; a large single-task doc that passes CRP is correct.
 
 ## ADP findings (load-graph direction + discoverability)
 
@@ -78,7 +78,7 @@ ADP says: file references run downward in load order, and the doc must be reacha
 
 **Test:** discover.py `inbound_citations == 0`.
 
-**Severity:** JUDGMENT (taxonomy H). NEVER auto-FAIL: a project doc can legitimately serve human readers who open it directly (a published design record, a runbook, onboarding material). The audit surfaces the orphan; the user decides among: add a CLAUDE.md pointer (make it agent-reachable), retire it (dead), or accept it (intentionally human-only -> PASS).
+**Severity:** JUDGMENT (taxonomy H_orphan). NEVER auto-FAIL: a project doc can legitimately serve human readers who open it directly (a published design record, a runbook, onboarding material). The audit surfaces the orphan; the user decides among: add a CLAUDE.md pointer (make it agent-reachable), retire it (dead), or accept it (intentionally human-only -> PASS).
 
 ### PD-5. One-hop-deep cross-references
 
@@ -88,7 +88,7 @@ ADP says: file references run downward in load order, and the doc must be reacha
 
 **Test:** scan outbound doc-to-doc citations; verify the cited doc is understandable without requiring a further citation.
 
-**Severity:** FAIL (taxonomy F) on chains deeper than one hop.
+**Severity:** FAIL (taxonomy F_chained_reference) on chains deeper than one hop.
 
 ### PD-6. No back-reference into CLAUDE.md sections
 
@@ -98,7 +98,7 @@ ADP says: file references run downward in load order, and the doc must be reacha
 
 **Test:** scan for `CLAUDE.md` mentions that cite specific section content as required reading. Pure orientation mentions ("see the root CLAUDE.md for project setup") are permitted.
 
-**Severity:** FAIL (taxonomy G) on dependency back-citations.
+**Severity:** FAIL (taxonomy G_claude_md_back_reference) on dependency back-citations.
 
 ## CCP findings (no duplication of skill content)
 
@@ -112,7 +112,7 @@ CCP/SSOT says: when a skill owns a topic, its `references/` is the single source
 
 **Test:** check whether a skill covers the doc's topic and whether the doc restates (rather than points at) that skill's content.
 
-**Severity:** FAIL (taxonomy I) on live parallel duplication. INFO when the project ref predates the skill and graduation is in progress.
+**Severity:** FAIL (taxonomy I_duplicates_skill) on live parallel duplication. INFO when the project ref predates the skill and graduation is in progress. (FAIL is the compliance severity; the remediation disposition is IMPROVE -- opt-in -- because the loss-free precondition below is a judgment no auto-apply pass can satisfy.)
 
 ## Named-role findings (README, generated artifacts)
 
@@ -129,7 +129,7 @@ Two per-artifact roles from cohesion-principles override the generic project-doc
 
 **Test:** for each command block / convention / schema in the README, verify the fact (or its SSOT) is reachable from a CLAUDE.md or skill surface.
 
-**Severity:** FAIL (taxonomy L) on stranded agent-relevant facts; INFO on overlap past the identity-sentence grain.
+**Severity:** FAIL (taxonomy L_readme_stranded_fact) on stranded agent-relevant facts; INFO on overlap past the identity-sentence grain.
 
 ### PD-10. Generated artifacts: provenance only (generated_artifact role)
 
@@ -137,11 +137,11 @@ Two per-artifact roles from cohesion-principles override the generic project-doc
 
 **Minimum marker content:** an in-file generation marker qualifies as provenance ONLY if it names the generator (tool, script, model, or session) or states the regeneration command/recipe. A bare assertion of generated-ness (e.g. "this document is generated analysis") does NOT qualify -- it asserts generated-ness without establishing provenance. A generation-record sidecar always qualifies (it is machine-readable by construction).
 
-**The FAIL case:** a doc that *claims* to be generated (title/header says "generated", user asserts it) but carries neither a sidecar nor a qualifying in-file marker -- unverifiable provenance (taxonomy M). This includes a bare generated-assertion with no named generator. Remediation: add a machine-readable generation record (the sidecar pattern -- a `<name>.params.json` recording exactly how to regenerate -- is the proven shape) or an explicit in-file marker naming the generator.
+**The FAIL case:** a doc that *claims* to be generated (title/header says "generated", user asserts it) but carries neither a sidecar nor a qualifying in-file marker -- unverifiable provenance (taxonomy M_generated_missing_provenance). This includes a bare generated-assertion with no named generator. Remediation: add a machine-readable generation record (the sidecar pattern -- a `<name>.params.json` recording exactly how to regenerate -- is the proven shape) or an explicit in-file marker naming the generator.
 
 **Test:** mechanical, from discover.py `generated` / `generation_record`. When `generation_record` is marker-type (in-file, not sidecar), the lane additionally verifies the marker meets the minimum-content bar above -- a marker signal alone does not end the check.
 
-**Severity:** PASS with provenance (all other criteria skipped); FAIL (taxonomy M) on claimed-generated without a signal, including a signal that fails the minimum-content bar.
+**Severity:** PASS with provenance (all other criteria skipped); FAIL (taxonomy M_generated_missing_provenance) on claimed-generated without a signal, including a signal that fails the minimum-content bar.
 
 ## Hygiene findings (universal)
 
@@ -164,14 +164,14 @@ Broken `/skill-name` and `skill: "..."` references are NOT checked here -- `/md-
 
 ### Placement (maturation / home)
 [PASS]     PD-2: content is genuinely emerging; correctly a project doc
-[JUDGMENT] PD-2: content is a stabilized procedure -> graduate to a technique-skill (taxonomy B)
+[JUDGMENT] PD-2: content is a stabilized procedure -> graduate to a technique-skill (taxonomy B_graduate_to_skill)
 
 ### CRP (single reading task)
-[JUDGMENT] PD-3: sections "Setup" and "Troubleshooting" fire on different sub-triggers -> split candidate (E)
+[JUDGMENT] PD-3: sections "Setup" and "Troubleshooting" fire on different sub-triggers -> split candidate (E_crp_split)
 
 ### ADP (load-graph direction + discoverability)
-[JUDGMENT] PD-4: 0 inbound citations -- orphan; add a CLAUDE.md pointer, retire, or accept as human-only (H)
-[FAIL]     PD-6: line 41 cites "the Insights section of the root CLAUDE.md" as required reading (G)
+[JUDGMENT] PD-4: 0 inbound citations -- orphan; add a CLAUDE.md pointer, retire, or accept as human-only (H_orphan)
+[FAIL]     PD-6: line 41 cites "the Insights section of the root CLAUDE.md" as required reading (G_claude_md_back_reference)
 
 ### CCP (no duplication of skill content)
 [PASS]     PD-8: no skill owns this topic

@@ -28,17 +28,17 @@ In framework terms, references-audit (reached via `/md-audit references`) is:
 - **Discovery:** walks the scan tree; activates plugin rules when it hits `.claude-plugin/plugin.json`, skill rules when it hits `SKILL.md`, directory rules otherwise. Rules stack rather than override.
 - **Scaffolding:** `scripts/references_audit.py` -- the one repeatable invocation that replaces what would otherwise be agent inference over every file.
 - **Rules per composition:** the bindings table in `audit-framework.yaml::audit_kinds.references_audit.rules_per_composition`. Canonical rule definitions (id, severity, summary, detail) live in this skill's own `criteria:` block below -- the framework registry only catalogs which rule ids bind to which compositions. Today's implemented set: `hard_dep_missing`, `soft_ref_missing`, `name_mismatch`, `shadowing`. Tracked in `audit-framework.yaml::future_rules`: `manifest_declarations_resolve`, `no_cross_scope_personal_refs`. (The formerly-parked `references_reachable_from_skill_md` shipped 2026-07-15 under `skill_md_audit` -- its subject is one skill composition, so it lives in the per-skill validator, not this corpus scanner.)
-- **Taxonomy + buckets:** the A-K categories below classify findings; AUTO / DISCUSS / SPECIAL dispatch them in parallel (background agent for AUTO, foreground Q&A for the rest).
+- **Taxonomy + dispositions:** the A-K categories below classify findings; each finding gets one of the ratified four dispositions -- FIX (auto-applied) / SERIOUS (summarized at top) / IMPROVE (count + one-liners, opt-in) / SILENT (not surfaced); K -> SPECIAL. FIX runs on a background agent, IMPROVE/SPECIAL go through a foreground Q&A, SERIOUS is surfaced at the top, SILENT is omitted.
 
 ```yaml
 audit_skill:
   _schema_version: "1"
-  identity: "Scan markdown files for broken Claude Code skill cross-references, classify each finding into a taxonomy category, and dispatch the remediation to the appropriate bucket (AUTO mechanical fix, DISCUSS user judgment, SPECIAL escape hatch)."
+  identity: "Scan markdown files for broken Claude Code skill cross-references, classify each finding into a taxonomy category, and assign each a disposition instance-level under the ratified four-disposition contract (FIX auto-applied / SERIOUS summarized at top / IMPROVE opt-in one-liners / SILENT not surfaced; K -> SPECIAL). The taxonomy default is a starting point; the classifier decides per finding against the master razor."
   scope:
     covers:
       - "scanning SKILL.md, reference docs (references/*.md, in-skill CLAUDE.md), and arbitrary markdown for broken `/example:skill-name` references and `skill: \"...\"` hard-dep invocations"
       - "classifying findings into categories A-K (renamed / retired / merged / scope-violating / false positives / illustrative / proposed / unclassified)"
-      - "bucketing findings into AUTO (mechanical fix via background agent), DISCUSS (foreground Q&A on options), or SPECIAL (escape hatch for unanticipated cases)"
+      - "assigning each finding a disposition -- FIX (mechanical fix via background agent), SERIOUS (surfaced summarized at the top, never auto-fixed), IMPROVE (opt-in one-liners via foreground Q&A), or SILENT (not surfaced); SPECIAL (K escape hatch for unanticipated cases)"
       - "re-running the audit after remediation to verify no new findings surfaced from the fixes"
     excludes:
       - "single-skill contract validation (use /md-audit skill)"
@@ -54,32 +54,32 @@ audit_skill:
       keywords: ["hard dep", "skill invocation", "runtime failure", "ERROR finding", "skill tool"]
       summary: "A Skill-tool invocation (`skill: \"...\"`) in scanned source targets a skill that does not exist in the resolved skill pool."
       severity: "FAIL"
-      detail: "Will fail at runtime when the code path fires. Surfaced by the scanner as ERROR. This is the only severity that gates exit code 1."
+      detail: "Will fail at runtime when the code path fires. Surfaced by the scanner as ERROR. This is the only severity that gates exit code 1. Disposition: FIX when a mechanical re-point/prefix resolves it (known rename, example:/proposed: escape); SERIOUS when the invoked skill is genuinely gone with no replacement and no escape -- a live runtime-crash path with no surviving mechanism, surfaced summarized at the top, never auto-fixed."
     - id: "soft_ref_missing"
       name: "Prose reference to a non-existent skill"
       keywords: ["soft ref", "prose reference", "slash reference", "WARNING finding"]
       summary: "A `/example:skill-name` reference in scanned prose does not resolve against the skill pool."
       severity: "INFO"
-      detail: "Misleading to readers but not a runtime failure. Surfaced by the scanner as WARNING. The taxonomy below categorizes the *why* and remediates accordingly."
+      detail: "Misleading to readers but not a runtime failure. Surfaced by the scanner as WARNING. The taxonomy below categorizes the *why* and remediates accordingly. Disposition: FIX by default (decidable against the verified skill pool + escape-prefix / code-fence conventions), refined per taxonomy category -- retired (B non-incidental), scope (D), and harness (H) refine to IMPROVE."
     - id: "name_mismatch"
       name: "Frontmatter name diverges from directory name"
       keywords: ["name mismatch", "frontmatter name", "directory name", "inconsistency"]
       summary: "A SKILL.md's frontmatter `name:` field does not match the directory the file lives in."
       severity: "INFO"
-      detail: "May cause confusion when looking up the skill. Surfaced by the scanner as WARNING. Usually a rename leftover."
+      detail: "May cause confusion when looking up the skill. Surfaced by the scanner as WARNING. Usually a rename leftover. Disposition: FIX (align frontmatter name and directory) after verifying which side inbound refs use -- loss-free guard; IMPROVE when inbound refs disagree on the canonical name (renaming would break real refs)."
     - id: "shadowing"
       name: "User skill shadows a project skill"
       keywords: ["shadowing", "user skill", "project skill", "override", "precedence"]
       summary: "A user-level skill (`~/.claude/skills/<name>`) has the same name as a project-level skill and overrides it at runtime."
       severity: "INFO"
-      detail: "Intentional in some workflows (personal overrides), accidental in others. Surfaced by the scanner as INFO; the agent surfaces but does not remediate without user direction."
+      detail: "Intentional in some workflows (personal overrides), accidental in others. Surfaced by the scanner as INFO; the agent surfaces but does not remediate without user direction. Disposition: IMPROVE when it looks accidental (one-line 'user skill X shadows project skill X -- intended?'); SILENT when confirmed an intentional personal override (an accepted structural pattern). A precedence relationship is never auto-edited."
   taxonomy:
     - id: "A_renamed"
       name: "Renamed skill (1:1 replacement exists)"
       keywords: ["renamed", "rename map", "mechanical replacement", "find-and-replace"]
       detection_signal: "WARNING `/example:old-name` (or ERROR `skill: \"example:old-name\"`); a current skill `/example:new-name` clearly covers the same responsibility (confirmable from upstream CHANGELOG, the new skill's description, or an explicit 'renamed from' line)."
-      default_remediation: "Mechanical find/replace of the old name with the new name within the file. If the surrounding sentence describes old behavior, also update the prose so it matches the new skill."
-      bucket: "AUTO"
+      default_remediation: "Mechanical find/replace of the old name with the new name within the file. If the surrounding sentence describes old behavior, also update the prose so it matches the new skill. FIX when the 1:1 mapping is known (decidable against the skill pool); IMPROVE when it is not (offer the best-guess new name as a one-liner)."
+      bucket: "FIX"
       examples:
         - before: "references using this prefix are not flagged as `/skill-deps`"
           after: "references using this prefix are not flagged as `/references-audit`"
@@ -87,14 +87,14 @@ audit_skill:
       name: "Retired or deleted skill (no replacement)"
       keywords: ["retired", "deleted", "no replacement", "demote to backtick", "allow-stale"]
       detection_signal: "WARNING `/example:old-name`; no current skill covers the responsibility. The reference is often the subject of a whole section or paragraph."
-      default_remediation: "Four sub-cases by structural context -- (1) reference is the subject of a section: delete the section; (2) incidental clause: delete the clause, keep the surrounding sentence; (3) historical context inside a mixed-live-and-stale doc: demote to backticked literal; (4) whole doc is a historical artifact: add to `references-audit-allow-stale` frontmatter list with an editor's note."
-      bucket: "DISCUSS"
+      default_remediation: "Four sub-cases by structural context -- (1) reference is the subject of a section: delete the section; (2) incidental clause: delete the clause, keep the surrounding sentence; (3) historical context inside a mixed-live-and-stale doc: demote to backticked literal; (4) whole doc is a historical artifact: add to `references-audit-allow-stale` frontmatter list with an editor's note. IMPROVE by default (the sub-case protects surrounding true content; loss-free-deletion guard applies). FIX only in sub-case 2: a broken incidental clause whose removal loses nothing is falsified-content deletion."
+      bucket: "IMPROVE"
     - id: "C_merged"
       name: "Merged skill (subskill folded into parent)"
       keywords: ["merged", "folded", "parent skill", "sub-skill", "dispatch alias"]
       detection_signal: "WARNING `/example:parent-sub`; current skill `/example:parent` exists; release notes or SKILL.md document the merge."
-      default_remediation: "In prose: rewrite the slash form (`/example:parent-sub`) to the new dispatch form (`/example:parent sub`). In dispatch alias tables / synonyms lists: keep the literal name in backticks (not a callable slash reference)."
-      bucket: "AUTO"
+      default_remediation: "In prose: rewrite the slash form (`/example:parent-sub`) to the new dispatch form (`/example:parent sub`). In dispatch alias tables / synonyms lists: keep the literal name in backticks (not a callable slash reference). FIX -- both are mechanical convention fixes decidable from the documented merge."
+      bucket: "FIX"
       examples:
         - before: "Via `/playtest preflight` (or the legacy `/playtest-preflight`) for standalone validation"
           after: "Via `/playtest preflight` (or the legacy `playtest-preflight` argument) for standalone validation"
@@ -102,14 +102,14 @@ audit_skill:
       name: "Scope-violating cross-reference (project / personal boundary)"
       keywords: ["scope violation", "personal skill", "project skill", "shipped plugin", "cross-scope"]
       detection_signal: "WARNING `/example:ref-name`; the referenced skill exists but in the opposite scope (project skill referencing a personal skill, or a shipped plugin skill referencing a project-only skill)."
-      default_remediation: "Project / plugin -> personal: delete the cross-reference (a shipped skill cannot assume the personal skill is installed). Personal -> project: usually fine; only flag if the personal skill is meant to be portable."
-      bucket: "DISCUSS"
+      default_remediation: "Project / plugin -> personal: delete the cross-reference (a shipped skill cannot assume the personal skill is installed). Personal -> project: usually fine; only flag if the personal skill is meant to be portable. IMPROVE by default -- deleting a cross-scope reference may drop true comparison content (loss-free guard); FIX only for an incidental, purely-misleading mention whose removal loses nothing."
+      bucket: "IMPROVE"
     - id: "E_compound_adjective"
       name: "Compound-adjective false positive (slash as punctuation)"
       keywords: ["false positive", "compound adjective", "punctuation slash", "prose rewrite"]
       detection_signal: "WARNING `/example:word-foo`; the literal text contains `X-/Y-thing` (compound adjective with embedded slash) or other prose where a slash appears as punctuation, not as a skill reference."
-      default_remediation: "Reword the prose to eliminate the slash; preserve the technical meaning (the rewrite is 'express the same idea differently', not 'escape the scanner')."
-      bucket: "AUTO"
+      default_remediation: "Reword the prose to eliminate the slash; preserve the technical meaning (the rewrite is 'express the same idea differently', not 'escape the scanner'). FIX -- a false positive; rewording loses nothing."
+      bucket: "FIX"
       examples:
         - before: "Slack file downloads are bot-/user-token-gated."
           after: "Slack file downloads are gated by bot or user token scopes."
@@ -117,26 +117,26 @@ audit_skill:
       name: "Non-skill CLI flag false positive"
       keywords: ["false positive", "cli flag", "devenv", "msbuild", "shell command", "code fence"]
       detection_signal: "WARNING `/example:flag-name`; surrounding text is a shell or CLI invocation (binary name + flags). Common with MSBuild, `devenv`, `cl.exe`, the linker, and other Windows-native tools."
-      default_remediation: "Wrap the whole command in a fenced code block. The scanner masks fenced regions, so refs inside them produce no findings."
-      bucket: "AUTO"
+      default_remediation: "Wrap the whole command in a fenced code block. The scanner masks fenced regions, so refs inside them produce no findings. FIX -- a false positive; fencing loses nothing."
+      bucket: "FIX"
     - id: "G_xml_template"
       name: "XML or template placeholder false positive"
       keywords: ["false positive", "xml tag", "html tag", "template placeholder", "angle brackets"]
       detection_signal: "WARNING `/example:tag-name`; surrounding text contains XML or HTML closing tags (such as `</example:foo>`) or template placeholders inside angle brackets."
-      default_remediation: "Wrap the XML or template example in a fenced code block. Same scanner masking as category F."
-      bucket: "AUTO"
+      default_remediation: "Wrap the XML or template example in a fenced code block. Same scanner masking as category F. FIX -- a false positive; fencing loses nothing."
+      bucket: "FIX"
     - id: "H_harness_transcript"
       name: "Harness transcript false positive"
       keywords: ["false positive", "harness transcript", "session log", "ignore-dir", "claude feedback"]
       detection_signal: "Many WARNINGs in the same file or directory; references match Claude-harness vocabulary (`/example:command-args`, `/example:system-reminder`, `/example:task-id`, `/example:tool-use-id`, `/example:command-name`, `/example:command-message`, etc.)."
-      default_remediation: "Add the directory to the scanner's `--ignore-dir` flag in the project's invocation wrapper (one config entry, no per-file edits)."
-      bucket: "DISCUSS"
+      default_remediation: "Add the directory to the scanner's `--ignore-dir` flag in the project's invocation wrapper (one config entry, no per-file edits). IMPROVE -- a batch config decision recommended once as a one-liner; it edits the invocation wrapper (out of the scanned files), so the user confirms the mechanism and location."
+      bucket: "IMPROVE"
     - id: "I_illustrative"
       name: "Illustrative example in a design doc"
       keywords: ["illustrative", "meta-descriptive", "design doc", "syntax example", "example prefix"]
       detection_signal: "WARNING `/example:foo` or ERROR `skill: \"example:foo\"`; the surrounding sentence is describing skill-reference syntax in the abstract -- the doc is about references, not making one."
-      default_remediation: "Add the `example:` prefix to the slash-form, and likewise to any `skill: \"...\"` hard-dep literal. Both are documented escape prefixes that the scanner ignores."
-      bucket: "AUTO"
+      default_remediation: "Add the `example:` prefix to the slash-form, and likewise to any `skill: \"...\"` hard-dep literal. Both are documented escape prefixes that the scanner ignores. FIX when the sentence is clearly meta-descriptive (your verified reading discharges the hedge); IMPROVE when the ref sits inside a live procedure (it could be a real, currently-broken instruction)."
+      bucket: "FIX"
       examples:
         - before: "soft references (`/name` in documentation text that mislead)"
           after: "soft references (`/example:name` in documentation text that mislead)"
@@ -144,14 +144,15 @@ audit_skill:
       name: "Forward-looking or proposed skill"
       keywords: ["forward-looking", "proposed", "future", "planned", "aspirational", "proposed prefix"]
       detection_signal: "WARNING `/example:foo`; no current skill named `foo`; surrounding prose frames it as 'planned', 'future', 'we should build', 'today: <legacy approach>'."
-      default_remediation: "Add the `proposed:` prefix to the slash-form (a documented escape prefix). Optionally append a one-line '(planned, not built)' note if the context isn't already explicit."
-      bucket: "AUTO"
+      default_remediation: "Add the `proposed:` prefix to the slash-form (a documented escape prefix). Optionally append a one-line '(planned, not built)' note if the context isn't already explicit. FIX when the prose explicitly cues 'planned'/'future'/'proposed'; IMPROVE if ambiguous (could be a real ref to a deleted skill)."
+      bucket: "FIX"
     - id: "K_unclassified"
       name: "Unclassified / special case"
       keywords: ["unclassified", "special case", "escape hatch", "K bucket", "surface to user"]
       detection_signal: "None of A-J fit cleanly after a deliberate attempt."
       default_remediation: "Surface the finding to the user with the report line, what you tried to match, and why none of A-J fit. The user decides the strategy."
       bucket: "SPECIAL"
+      note: "K is the only SPECIAL. All other categories resolve to FIX / SERIOUS / IMPROVE / SILENT per the master razor; SERIOUS is reserved for a hard_dep_missing invocation to a genuinely-gone skill with no surviving mechanism."
   procedures:
     - id: "scan_and_report"
       name: "Scan markdown corpus for broken cross-references"
@@ -182,22 +183,22 @@ audit_skill:
         - "The NON_SKILL_WORDS exclusion list can filter a legitimate skill name colliding with a common path segment (e.g. a skill literally named `build`). Inspect the exclusion list in references_audit.py if a real ref is mis-reported as missing."
     - id: "classify_and_dispatch"
       name: "Categorize findings per taxonomy and dispatch by bucket"
-      keywords: ["classify", "categorize", "taxonomy", "bucket", "dispatch", "AUTO DISCUSS SPECIAL"]
-      goal: "For each finding from the scan, assign exactly one category from A-K and its bucket (AUTO / DISCUSS / SPECIAL), then remediate in two phases split by a Q&A gate: classify (fan-out), gather DISCUSS/SPECIAL decisions, remediate (fan-out). The Workflow tool fans both the classification and the remediation out across files; the scan itself stays a single script run."
+      keywords: ["classify", "categorize", "taxonomy", "disposition", "dispatch", "FIX SERIOUS IMPROVE SILENT"]
+      goal: "For each finding from the scan, assign exactly one category from A-K and one of the four dispositions (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL), then remediate in two phases split by a Q&A gate: classify (fan-out), gather IMPROVE/SPECIAL decisions, remediate (fan-out). FIX applies by definition; SERIOUS is surfaced summarized at the top; SILENT is omitted. The Workflow tool fans both the classification and the remediation out across files; the scan itself stays a single script run."
       preconditions:
         - "The scan procedure has completed; findings are available as JSON."
         - "workflow/classify.js and workflow/remediate.js are present (used for the 2+-file fan-out)."
       steps:
         - n: 1
-          action: "Group the scanner's findings by containing file. CLASSIFY phase (no edits). Choose mode by how many FILES carry findings -- this threshold equalizes the Workflow tool's per-run overhead. ONE file: classify inline in the main loop (read the file around each cited line; match each finding to a taxonomy category A-K; assign its bucket; for AUTO compute the exact before/after). TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/references-audit/workflow/classify.js and args = { files:[{file, findings:[{severity,line,ref}]}], refs:{taxonomyDoc} }. One lane per file; returns { perFile, totals }. No edits in this phase."
+          action: "Group the scanner's findings by containing file. CLASSIFY phase (no edits). Choose mode by how many FILES carry findings -- this threshold equalizes the Workflow tool's per-run overhead. ONE file: classify inline in the main loop (read the file around each cited line; match each finding to a taxonomy category A-K; assign its disposition FIX/SERIOUS/IMPROVE/SILENT (K -> SPECIAL) instance-level against the master razor; for a before/after FIX compute the exact before/after). TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/references-audit/workflow/classify.js and args = { files:[{file, findings:[{severity,line,ref}]}], refs:{taxonomyDoc} }. One lane per file; returns { perFile, totals }. No edits in this phase."
           tool: "Workflow | inline"
           input: "classify.js args.refs: taxonomyDoc=${CLAUDE_PLUGIN_ROOT}/skills/references-audit/references/finding-taxonomy.md."
-          expected: "Every finding has exactly one category (A-K) + bucket (AUTO/DISCUSS/SPECIAL); AUTO findings carry before/after text."
+          expected: "Every finding has exactly one category (A-K) + a disposition (FIX/SERIOUS/IMPROVE/SILENT; K -> SPECIAL); FIX before/after findings carry before/after text."
         - n: 2
-          action: "Q&A GATE. AUTO findings need no decision (mechanical -- apply by definition). For DISCUSS + SPECIAL findings, batch them all into ONE foreground question round (a numbered list with category, options, and a recommendation) and collect the user's decisions. Do NOT per-finding round-trip."
-          expected: "A decision attached to every DISCUSS/SPECIAL finding; AUTO findings ready to apply."
+          action: "Q&A GATE. FIX findings need no decision (mechanical -- apply by definition). SERIOUS findings are surfaced summarized at the TOP of the report (never auto-fixed). SILENT findings are omitted. For IMPROVE + SPECIAL findings, batch them all into ONE foreground question round (a numbered list with category, options, and a recommendation) and collect the user's decisions. Do NOT per-finding round-trip."
+          expected: "A decision attached to every IMPROVE/SPECIAL finding; FIX findings ready to apply; SERIOUS surfaced at the top."
         - n: 3
-          action: "REMEDIATE phase (after-Q&A). Assemble per-file edit lists (AUTO=apply; DISCUSS/SPECIAL=per decision; drop skips). Choose mode by how many FILES carry edits. ONE file: apply inline with Edit. TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/references-audit/workflow/remediate.js and args = { perFile:[{file, edits:[{category,bucket,line,before,after,instruction,decision}]}] }. One lane per file (disjoint files never conflict)."
+          action: "REMEDIATE phase (after-Q&A). Assemble per-file edit lists (FIX=apply; IMPROVE/SPECIAL=per decision; SERIOUS and SILENT never enter the edit lists; drop skips). Choose mode by how many FILES carry edits. ONE file: apply inline with Edit. TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/references-audit/workflow/remediate.js and args = { perFile:[{file, edits:[{category,bucket,line,before,after,instruction,decision}]}] }. One lane per file (disjoint files never conflict)."
           tool: "Workflow | inline"
           expected: "Edits applied; per-file applied/skipped/failed summary."
         - n: 4
@@ -210,10 +211,11 @@ audit_skill:
         Files: <N scanned>
         Skills pool: <project N> / <user N> / <plugin N>
 
-        ## Findings by bucket
+        ## Report (SERIOUS -> FIX -> IMPROVE; SILENT omitted, no hedging)
 
-        AUTO (N): [list with file:line + category + before/after]
-        DISCUSS (N): [list with file:line + category + options + recommendation]
+        SERIOUS (N): Found N serious issue(s) that require fixing [per-issue one-line summary; file:line + why the invocation has no surviving mechanism]
+        FIX (N applied, in the reviewable remediation CL): [list with file:line + category + before/after]
+        IMPROVE (N): Audit found N improvement opportunit(ies). Do you want to discuss them? [list with file:line + category + options + recommendation]
         SPECIAL (N): [list with file:line + rationale]
 
         ## Remediation results
@@ -223,45 +225,56 @@ audit_skill:
         Outstanding (newly surfaced or unclassifiable): <N>
       gotchas:
         - "Do not reclassify findings the taxonomy has already settled. The lane's job is the category match + judgment on OPTIONS within a category, not second-guessing the taxonomy."
-        - "The remediate lanes do not classify -- they apply edits from the decided list. Carry exact before/after text for AUTO; a lane records 'failed' (not a guess) when the before-text no longer matches."
+        - "The remediate lanes do not classify -- they apply edits from the decided list. Carry exact before/after text for a before/after FIX; a lane records 'failed' (not a guess) when the before-text no longer matches."
         - "Re-running the audit after remediation is required; newly-surfaced findings often appear (e.g. a backticked literal reveals another broken ref nearby that was previously masked)."
-        - "Detection and remediation are separate phases split by the Q&A gate. AUTO findings need no decision, but they are still applied in the REMEDIATE phase (alongside the decided DISCUSS edits), not during classification -- this keeps the scan idempotent so a re-run reproduces the same findings."
+        - "Detection and remediation are separate phases split by the Q&A gate. FIX findings need no decision, but they are still applied in the REMEDIATE phase (alongside the decided IMPROVE edits), not during classification -- this keeps the scan idempotent so a re-run reproduces the same findings. SERIOUS and SILENT never enter the edit lists."
+  # Disposition mapping (four-disposition model): the auto / discuss / special
+  # lanes are retained for schema stability across audit members. auto = FIX
+  # categories (auto-applied via the background agent). discuss = the categories
+  # whose disposition is IMPROVE (opt-in one-liner) or SERIOUS (surfaced at top,
+  # never auto) -- disposition tagged per entry. special = K. The final
+  # per-finding disposition is assigned instance-level by classify.js against the
+  # master razor; these are the taxonomy defaults.
   remediations:
     auto:
       - category: "A_renamed"
-        procedure: "Mechanical find/replace old-name -> new-name in the file. Update surrounding prose if it describes old behavior."
+        procedure: "[FIX] Mechanical find/replace old-name -> new-name in the file (known 1:1 mapping). Update surrounding prose if it describes old behavior. Unknown mapping -> IMPROVE (offer the best guess)."
         agent_template: "See references/finding-taxonomy.md 'Background-agent brief template'."
       - category: "C_merged"
-        procedure: "Rewrite `/example:parent-sub` prose to `/example:parent sub`. In dispatch alias tables, demote to backticked literal instead."
+        procedure: "[FIX] Rewrite `/example:parent-sub` prose to `/example:parent sub`. In dispatch alias tables, demote to backticked literal instead."
         agent_template: "See references/finding-taxonomy.md 'Background-agent brief template'."
       - category: "E_compound_adjective"
-        procedure: "Reword prose to eliminate the slash; preserve technical meaning."
+        procedure: "[FIX] Reword prose to eliminate the slash; preserve technical meaning."
         agent_template: "See references/finding-taxonomy.md 'Background-agent brief template'."
       - category: "F_cli_flag"
-        procedure: "Wrap the entire command in a fenced code block."
+        procedure: "[FIX] Wrap the entire command in a fenced code block."
         agent_template: "See references/finding-taxonomy.md 'Background-agent brief template'."
       - category: "G_xml_template"
-        procedure: "Wrap the XML or template example in a fenced code block."
+        procedure: "[FIX] Wrap the XML or template example in a fenced code block."
         agent_template: "See references/finding-taxonomy.md 'Background-agent brief template'."
       - category: "I_illustrative"
-        procedure: "Add `example:` prefix to slash-form refs and `skill: \"example:...\"` literals."
+        procedure: "[FIX default] Add `example:` prefix to slash-form refs and `skill: \"example:...\"` literals. IMPROVE when the ref sits in a live procedure (could be a real broken instruction)."
         agent_template: "See references/finding-taxonomy.md 'Background-agent brief template'."
       - category: "J_forward_looking"
-        procedure: "Add `proposed:` prefix to the slash-form. Optionally append a '(planned, not built)' note."
+        procedure: "[FIX default] Add `proposed:` prefix to the slash-form. Optionally append a '(planned, not built)' note. IMPROVE if the cue is ambiguous."
         agent_template: "See references/finding-taxonomy.md 'Background-agent brief template'."
     discuss:
+      - category: "hard_dep_missing (no surviving mechanism)"
+        procedure: "[SERIOUS] A `skill: \"...\"` invocation to a genuinely-gone skill with no replacement and no mechanical escape is a live runtime-crash path. Surface it summarized at the TOP of the report -- the unguarded invocation is the finding. Never auto-fix, never bury."
       - category: "A_renamed"
-        procedure: "(Sub-case: mapping unknown.) Ask once for the whole audit: 'I see refs to `/example:old-name`. Best guess `/example:new-name`. Apply?' Batch response covers all old-name refs."
+        procedure: "[IMPROVE] (Sub-case: mapping unknown.) Ask once for the whole audit: 'I see refs to `/example:old-name`. Best guess `/example:new-name`. Apply?' Batch response covers all old-name refs."
       - category: "B_retired"
-        procedure: "Ask per finding which sub-case applies: delete section / delete clause / demote to backtick / add to allow-stale. Surrounding structural context determines the best choice."
+        procedure: "[IMPROVE default] Offer the sub-case as a one-liner: delete section / delete clause / demote to backtick / add to allow-stale. Surrounding structural context determines the best choice; loss-free-deletion guard applies. FIX only for a purely-incidental broken clause whose removal loses nothing."
       - category: "C_merged"
-        procedure: "(Sub-case: dispatch alias table.) Ask: keep as backticked literal for dispatch, or update to the new form? Table context matters."
+        procedure: "[FIX] (Sub-case: dispatch alias table.) Demote to a backticked literal for dispatch rather than converting to the new slash form -- still a decidable convention fix, just a different remediation."
       - category: "D_scope_violating"
-        procedure: "Ask whether the cross-reference should be deleted entirely (shipped skill referencing personal) or kept (personal skill comparing to project). The skill's structural intent determines the answer."
+        procedure: "[IMPROVE] Offer as a one-liner whether the cross-reference should be deleted (shipped skill referencing personal) or kept (personal skill comparing to project). Deleting may drop true comparison content; the skill's structural intent determines the answer."
       - category: "H_harness_transcript"
-        procedure: "Pick exclusion mechanism once: --ignore-dir flag in the project's wrapper, or document the recommended flags in the host project's CLAUDE.md. Apply to all matching files."
+        procedure: "[IMPROVE] Recommend the exclusion mechanism once as a one-liner: --ignore-dir flag in the project's wrapper, or document the recommended flags in the host project's CLAUDE.md. A batch config decision; apply to all matching files."
+      - category: "shadowing"
+        procedure: "[IMPROVE default] Surface an apparently-accidental shadow as a one-liner ('user skill X shadows project skill X -- intended?'). [SILENT] when confirmed an intentional personal override (an accepted structural pattern -- not surfaced)."
     special:
-      procedure: "Surface the finding to the user with: the scanner's report line, the categories you attempted to match, the reasons none fit. The user proposes a strategy. If the strategy generalizes (mutually exclusive with A-J, recognizable detection signal, default remediation applies broadly), propose adding it as a new category in references/finding-taxonomy.md."
+      procedure: "[SPECIAL] Surface the finding to the user with: the scanner's report line, the categories you attempted to match, the reasons none fit. The user proposes a strategy. If the strategy generalizes (mutually exclusive with A-J, recognizable detection signal, default remediation applies broadly), propose adding it as a new category in references/finding-taxonomy.md."
   enforcement:
     gate_kind: "merge-gate"
     gating_rule: "No ERRORs (broken hard dependencies) in any changelist submitted for merge. WARNINGs and INFOs are permissible and can be addressed in follow-up changes but should be minimized."
@@ -275,15 +288,15 @@ audit_skill:
     - id: "per_finding_user_round_trip"
       name: "Per-finding user round-trip"
       keywords: ["round-trip", "per-finding question", "conversation friction", "batching"]
-      why_it_seems_right: "Each DISCUSS finding has a genuine user decision; surely the agent should ask about each one individually so the user can give the right answer."
+      why_it_seems_right: "Each IMPROVE finding has a genuine user decision; surely the agent should ask about each one individually so the user can give the right answer."
       why_it_is_wrong: "Per-finding round-trips multiply conversation friction and slow remediation to a crawl. The user has to context-switch into each finding individually. Cost of being wrong is one revert; cost of friction is the user abandoning the audit."
-      alternative: "Batch every DISCUSS + SPECIAL finding into one foreground question round. Render as a numbered list with category, options, and a recommendation. The user answers in one pass."
+      alternative: "Batch every IMPROVE + SPECIAL finding into one foreground question round. Render as a numbered list with category, options, and a recommendation. The user answers in one pass."
     - id: "classify_then_self_remediate"
       name: "Classify and remediate in the same pass"
       keywords: ["self-remediation", "single-pass", "idempotency", "classify and fix"]
       why_it_seems_right: "Classifying a finding and applying its fix in the same step seems efficient -- one lane, fewer round trips."
-      why_it_is_wrong: "Mixing classification and remediation breaks idempotency. Classification (detection) and remediation are separate phases with an interactive Q&A gate between them; conflating them mutates files before the user has decided the DISCUSS/SPECIAL cases and prevents a clean re-run from reproducing the same findings."
-      alternative: "Run the CLASSIFY phase to completion (fan out one lane per file, no edits). Gather DISCUSS/SPECIAL decisions at the Q&A gate. Then run the REMEDIATE phase (fan out one lane per file). Re-run the scan to verify."
+      why_it_is_wrong: "Mixing classification and remediation breaks idempotency. Classification (detection) and remediation are separate phases with an interactive Q&A gate between them; conflating them mutates files before the user has decided the IMPROVE/SPECIAL cases and prevents a clean re-run from reproducing the same findings."
+      alternative: "Run the CLASSIFY phase to completion (fan out one lane per file, no edits). Gather IMPROVE/SPECIAL decisions at the Q&A gate. Then run the REMEDIATE phase (fan out one lane per file). Re-run the scan to verify."
 ```
 
 ## What this skill does
@@ -384,9 +397,9 @@ The flow is encoded in the `classify_and_dispatch` procedure of the audit-skill 
 
 1. Re-run the script with `--json` if you didn't already.
 2. For each finding, classify into one of the categories in the contract's `taxonomy:` block (A–J, plus K for special cases). Full detection signals and remediation details live in `references/finding-taxonomy.md`.
-3. Bucket findings into **AUTO** / **DISCUSS** / **SPECIAL** per the taxonomy.
-4. **CLASSIFY (fan-out)**: group findings by file. 1 file with findings → classify inline; 2+ → the Workflow tool with `workflow/classify.js`. One lane per file assigns category + bucket and computes AUTO before/after. No edits.
-5. **Q&A gate**: batch all DISCUSS + SPECIAL findings into one foreground round (AUTO needs no decision).
+3. Assign each finding a disposition -- **FIX** / **SERIOUS** / **IMPROVE** / **SILENT** (K -> **SPECIAL**) -- instance-level against the master razor; the taxonomy default is a starting point.
+4. **CLASSIFY (fan-out)**: group findings by file. 1 file with findings → classify inline; 2+ → the Workflow tool with `workflow/classify.js`. One lane per file assigns category + disposition and computes FIX before/after. No edits.
+5. **Q&A gate**: batch all IMPROVE + SPECIAL findings into one foreground round (FIX needs no decision; SERIOUS is surfaced summarized at the top; SILENT is omitted).
 6. **REMEDIATE (fan-out)**: 1 file with edits → apply inline; 2+ → the Workflow tool with `workflow/remediate.js`. One lane per file applies the decided edits. Then re-run the scan and iterate only on newly-surfaced findings.
 
 The taxonomy doc is the authoritative reference for the **finding detection signals** and the **foreground Q&A batching pattern**. The contract above declares the taxonomy structure; the reference doc supplies the operational templates.
@@ -398,16 +411,16 @@ Categorize-and-remediate runs in two phases split by an interactive Q&A gate, an
 ```
 scan (single script run) -> findings grouped by file
   -> CLASSIFY   (before-Q&A) : 1 file inline | 2+ files via workflow/classify.js   -> categorized findings
-  -> Q&A GATE   (main loop)  : batch DISCUSS/SPECIAL decisions (AUTO needs none)
+  -> Q&A GATE   (main loop)  : batch IMPROVE/SPECIAL decisions (FIX needs none; SERIOUS surfaced at top; SILENT omitted)
   -> REMEDIATE  (after-Q&A)  : 1 file inline | 2+ files via workflow/remediate.js  -> edits applied
   -> re-run scan to verify
 ```
 
-**Multi-file threshold (the overhead equalizer).** The Workflow tool has real per-run overhead. For a single file with findings that overhead is not worth it, so it is classified / remediated inline. At 2+ files the parallel fan-out pays for itself. Classification and remediation are **always separate passes** even in workflow mode — the interactive Q&A sits between them, and a background workflow cannot ask the user anything. AUTO findings need no decision, but they are applied in the REMEDIATE phase (with the decided DISCUSS edits), not during classification — this keeps the scan idempotent (`classify_then_self_remediate` anti-pattern).
+**Multi-file threshold (the overhead equalizer).** The Workflow tool has real per-run overhead. For a single file with findings that overhead is not worth it, so it is classified / remediated inline. At 2+ files the parallel fan-out pays for itself. Classification and remediation are **always separate passes** even in workflow mode — the interactive Q&A sits between them, and a background workflow cannot ask the user anything. FIX findings need no decision, but they are applied in the REMEDIATE phase (with the decided IMPROVE edits), not during classification — this keeps the scan idempotent (`classify_then_self_remediate` anti-pattern). SERIOUS and SILENT never enter the edit lists.
 
 **The two workflow scripts** (hand-authored, shipped as skill assets):
 
-- `workflow/classify.js` — before-Q&A. One lane per file-with-findings: read the file around each cited line → match each finding to an A–K category + bucket → compute AUTO before/after. Returns `{ perFile, totals }`. No edits.
+- `workflow/classify.js` — before-Q&A. One lane per file-with-findings: read the file around each cited line → match each finding to an A–K category + a FIX/SERIOUS/IMPROVE/SILENT disposition → compute FIX before/after. Returns `{ perFile, totals }`. No edits.
 - `workflow/remediate.js` — after-Q&A. One lane per file (disjoint files, no conflicts): apply the decided edits. Returns `{ perFile, summary }`.
 
 Both accept `args` as an object or JSON string. Pass absolute `refs` paths (they run from the session cwd, not the skill dir).

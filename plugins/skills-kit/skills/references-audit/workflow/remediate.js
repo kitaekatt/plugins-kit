@@ -1,10 +1,10 @@
 // references-audit — REMEDIATE workflow (after-Q&A phase).
 //
 // Fan-out remediation, one lane per file, applying the decided reference fixes
-// the main loop gathered during the Q&A gate (interactive) or the AUTO bucket
-// (no decision needed). Runs AFTER classification + the user decision step —
-// never folded into classification (detection and remediation stay separate so
-// re-running the scan reproduces the same findings).
+// the main loop gathered during the Q&A gate (interactive IMPROVE/SPECIAL) or the
+// FIX bucket (auto-applied, no decision needed). Runs AFTER classification + the
+// user decision step — never folded into classification (detection and
+// remediation stay separate so re-running the scan reproduces the same findings).
 //
 // One lane per FILE (not per finding) so two lanes never edit the same file
 // concurrently; within a lane, edits are applied in order. No worktree isolation:
@@ -18,11 +18,11 @@
 //   perFile: [ {
 //     file: string,
 //     edits: [ {
-//       category: string, bucket: "AUTO"|"DISCUSS"|"SPECIAL",
+//       category: string, bucket: "FIX"|"SERIOUS"|"IMPROVE"|"SILENT"|"SPECIAL",
 //       line: integer|null,
-//       before: string,                // exact current text (AUTO)
-//       after: string,                 // replacement text (AUTO)
-//       instruction: string,           // human-readable edit description (DISCUSS/SPECIAL)
+//       before: string,                // exact current text (before/after FIX)
+//       after: string,                 // replacement text (before/after FIX)
+//       instruction: string,           // human-readable edit description (instruction-type FIX / IMPROVE / SPECIAL)
 //       decision: "apply"|"skip"|string  // user/inferred decision; free-text = refined instruction
 //     } ]
 //   } ]
