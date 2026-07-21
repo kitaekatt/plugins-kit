@@ -105,3 +105,88 @@ class TestBootstrapManifestDeclaresJq:
         assert "jq" in names, (
             "statusline.sh uses jq; the dependency must stay declared in "
             "claude-ui-kit/bootstrap.json (X11), not satisfied transitively")
+
+
+@pytest.mark.skipif(not _HAS_TOOLS, reason="bash + jq required")
+class TestSegmentApi:
+    """Contributed cells from the segments dir (STATUSLINE_SEGMENTS_DIR
+    override): *.sh executed with stdin JSON under a hard timeout, *.txt
+    rendered while fresh. A broken segment loses only itself."""
+
+    _PAYLOAD = json.dumps({
+        "model": {"display_name": "TestModel", "id": "m-1"},
+        "cwd": "/tmp/myproj",
+    })
+
+    def _run_with_segments(self, tmp_path, segments_dir, extra_env=None):
+        env = {"STATUSLINE_SEGMENTS_DIR": str(segments_dir)}
+        if extra_env:
+            env.update(extra_env)
+        return run_statusline(self._PAYLOAD, tmp_path, extra_env=env)
+
+    def test_sh_segment_output_appended(self, tmp_path):
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        (segs / "50-hello.sh").write_text("#!/usr/bin/env bash\necho HELLO-CELL\n")
+        result = self._run_with_segments(tmp_path, segs)
+        assert result.returncode == 0
+        assert "HELLO-CELL" in result.stdout
+        assert "myproj" in result.stdout  # base bar intact
+
+    def test_sh_segment_receives_stdin_json(self, tmp_path):
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        (segs / "50-cwd.sh").write_text(
+            "#!/usr/bin/env bash\njq -r '.model.display_name' \n")
+        result = self._run_with_segments(tmp_path, segs)
+        assert result.stdout.count("TestModel") >= 2  # model cell + segment
+
+    def test_failing_segment_is_absent_bar_survives(self, tmp_path):
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        (segs / "50-bad.sh").write_text("#!/usr/bin/env bash\nexit 3\n")
+        result = self._run_with_segments(tmp_path, segs)
+        assert result.returncode == 0
+        assert "myproj" in result.stdout
+
+    def test_hanging_segment_times_out_bar_survives(self, tmp_path):
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        (segs / "50-hang.sh").write_text(
+            "#!/usr/bin/env bash\nsleep 30\necho NEVER\n")
+        result = self._run_with_segments(
+            tmp_path, segs, extra_env={"STATUSLINE_SEGMENT_TIMEOUT": "1"})
+        assert result.returncode == 0
+        assert "NEVER" not in result.stdout
+        assert "myproj" in result.stdout
+
+    def test_fresh_txt_segment_shown(self, tmp_path):
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        (segs / "10-note.txt").write_text("deploy at noon\nsecond line\n")
+        result = self._run_with_segments(tmp_path, segs)
+        assert "deploy at noon" in result.stdout
+        assert "second line" not in result.stdout
+
+    def test_stale_txt_segment_hidden(self, tmp_path):
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        f = segs / "10-note.txt"
+        f.write_text("old news\n")
+        old = 10_000
+        os.utime(f, (old, old))
+        result = self._run_with_segments(tmp_path, segs)
+        assert "old news" not in result.stdout
+
+    def test_lexical_order(self, tmp_path):
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        (segs / "20-b.sh").write_text("#!/usr/bin/env bash\necho BBB\n")
+        (segs / "10-a.sh").write_text("#!/usr/bin/env bash\necho AAA\n")
+        result = self._run_with_segments(tmp_path, segs)
+        assert result.stdout.index("AAA") < result.stdout.index("BBB")
+
+    def test_missing_segments_dir_is_noop(self, tmp_path):
+        result = self._run_with_segments(tmp_path, tmp_path / "absent")
+        assert result.returncode == 0
+        assert "myproj" in result.stdout

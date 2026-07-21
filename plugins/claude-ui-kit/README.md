@@ -62,6 +62,29 @@ The bootstrap install script:
 - **Surfaces a fix-all prompt** if a non-plugin statusLine is detected, so you can type `replace my status line` to switch.
 - **Stays quiet permanently** if the user customizes via `/statusline` (a marker file in the plugin data dir disables further automatic management).
 
+## Segment API (contributing a cell from another plugin)
+
+Other plugins add a cell to the bar WITHOUT touching `statusLine.command`:
+drop one entry into `segments/` (sibling of `scripts/` in this plugin's data
+dir, `~/.claude/plugins/data/<marketplace>/claude-ui-kit/segments/`). ui-kit
+owns composition -- the separator and ordering (lexical by filename; use
+`NN-` prefixes) -- contributors own content. Two entry kinds:
+
+- `*.txt` -- first line rendered while fresh (mtime within
+  `STATUSLINE_SEGMENT_TXT_TTL` seconds, default 300), capped at 60 chars.
+- `*.sh` -- executed with the statusline stdin JSON on stdin under a hard
+  per-segment timeout (`STATUSLINE_SEGMENT_TIMEOUT`, default 2s). Stdout is
+  appended verbatim: emit your own ANSI, one line, no leading separator.
+  Empty output, non-zero exit, or timeout renders as an absent cell -- a
+  broken segment can only lose itself, never blank the bar.
+
+Contract for `*.sh` entries: **pure cache reader**. Read pre-computed local
+state; never fetch, poll, or block on the network. Collect data in your own
+out-of-band process (a daemon, a hook, a cron) and write it somewhere cheap
+to read. Uninstalling a contributor should remove its segment file; a
+segment whose backing plugin is gone should exit 0 silently, which renders
+as no cell.
+
 ## /statusline skill
 
 Run `/statusline` in any session. The skill reads your active statusline script, summarizes what it displays, and asks if you want to change anything. It only acts on what you ask for — it won't pitch themes, gradients, or other concepts unless you bring them up.

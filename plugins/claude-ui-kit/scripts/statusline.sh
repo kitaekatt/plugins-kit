@@ -170,4 +170,49 @@ fi
 if [ -n "$SYSMSG" ]; then
     OUT="$OUT$SEP${GRAY}💬 $SYSMSG${RESET}"
 fi
+
+# ---- Segment API: contributed cells --------------------------------------
+# Other plugins add a cell by dropping ONE entry into the segments dir
+# (sibling of scripts/ in this plugin's data dir; override with
+# STATUSLINE_SEGMENTS_DIR). ui-kit owns COMPOSITION -- the separator and the
+# ordering (lexical by filename; use NN- prefixes) -- contributors own
+# CONTENT. Two entry kinds:
+#   *.txt  first line shown while fresh (mtime within
+#          STATUSLINE_SEGMENT_TXT_TTL seconds, default 300), capped 60 chars.
+#   *.sh   run with the statusline stdin JSON on stdin, under a HARD
+#          per-segment timeout (STATUSLINE_SEGMENT_TIMEOUT, default 2s);
+#          stdout appended verbatim (emit your own ANSI, single line, no
+#          leading separator). Empty output, non-zero exit, or timeout
+#          renders as an ABSENT cell -- a broken segment can lose only
+#          itself, never blank the bar.
+# Contract for *.sh entries: pure cache reader. Read pre-computed local
+# state; never fetch, poll, or block on the network -- collect data in your
+# own out-of-band process and write it somewhere cheap to read.
+SEGMENTS_DIR="${STATUSLINE_SEGMENTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/segments}"
+if [ -d "$SEGMENTS_DIR" ]; then
+    TXT_TTL="${STATUSLINE_SEGMENT_TXT_TTL:-300}"
+    SEG_TIMEOUT="${STATUSLINE_SEGMENT_TIMEOUT:-2}"
+    NOW=$(date +%s)
+    for seg in "$SEGMENTS_DIR"/*; do
+        [ -e "$seg" ] || continue
+        SEGOUT=""
+        case "$seg" in
+            *.txt)
+                MT=$(stat -c %Y "$seg" 2>/dev/null || stat -f %m "$seg" 2>/dev/null || echo 0)
+                if [ $((NOW - MT)) -le "$TXT_TTL" ]; then
+                    SEGOUT=$(awk 'NR==1 {print substr($0,1,60); exit}' "$seg" 2>/dev/null | tr -d '\r')
+                fi
+                ;;
+            *.sh)
+                if command -v timeout >/dev/null 2>&1; then
+                    SEGOUT=$(printf '%s' "$DATA" | timeout "$SEG_TIMEOUT" bash "$seg" 2>/dev/null || true)
+                else
+                    SEGOUT=$(printf '%s' "$DATA" | bash "$seg" 2>/dev/null || true)
+                fi
+                ;;
+        esac
+        [ -n "$SEGOUT" ] && OUT="$OUT$SEP$SEGOUT"
+    done
+fi
+
 printf '%s\n' "$OUT"
