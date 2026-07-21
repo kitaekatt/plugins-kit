@@ -240,6 +240,11 @@ def index_bootstrap_plugins(bootstrap: dict) -> dict:
     return out
 
 
+def is_truthy(value) -> bool:
+    """Normalize a mini-YAML boolean (the parser returns strings) to bool."""
+    return str(value).strip().lower() in ("true", "yes", "on", "1")
+
+
 def normalize_state(value: str) -> str:
     v = value.strip().lower()
     if v in ("on", "true", "enabled", "yes"):
@@ -298,7 +303,10 @@ def collect_plugins(installed: dict, marketplaces: dict, settings_enabled: dict,
                     bs_index: dict, overrides: dict, marketplace_states: dict,
                     defaults_mode: bool = False) -> list[dict]:
     """Yield one dict per installed plugin from a participating marketplace.
-    Filters out phantom installs (no longer present in the marketplace's marketplace.json)."""
+    Filters out phantom installs (no longer present in the marketplace's
+    marketplace.json) and hidden plugins (`hidden: true` in the plugin's own
+    .claude-plugin/poster.yaml -- the plugin author's opt-out for plugins that
+    are published but not meant for the poster, e.g. temporary remediations)."""
     out = []
     for key, entries in installed.get("plugins", {}).items():
         if "@" not in key:
@@ -319,6 +327,8 @@ def collect_plugins(installed: dict, marketplaces: dict, settings_enabled: dict,
                               marketplace_states, defaults_mode)
 
         poster_overrides = load_yaml(install_path / ".claude-plugin" / "poster.yaml")
+        if is_truthy(poster_overrides.get("hidden", "")):
+            continue  # plugin author opted out of the poster (e.g. temporary remediation plugins)
 
         out.append({
             "marketplace": marketplace,

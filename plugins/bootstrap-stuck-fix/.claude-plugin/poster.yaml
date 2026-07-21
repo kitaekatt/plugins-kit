@@ -1,0 +1,8 @@
+# Plugin display overrides for the plugin-ecosystem skill
+# (plugins-kit:awesome-kit /plugin-ecosystem).
+#
+# This plugin is a TEMPORARY remediation (see plugin.json description). It is
+# published so affected machines can install and run it, but it is not part of
+# the marketplace's user-facing offering -- keep it off the poster.
+
+hidden: true

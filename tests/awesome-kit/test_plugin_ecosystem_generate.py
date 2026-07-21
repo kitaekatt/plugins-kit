@@ -157,6 +157,30 @@ class TestCollectPluginsPhantomFiltering:
         assert out[0]["marketplace"] == "mkt"
         assert out[0]["version"] == "1.0.0"
 
+    def test_hidden_plugin_excluded(self, tmp_path):
+        """`hidden: true` in the plugin's own poster.yaml drops it from the
+        poster even though it is installed and listed in marketplace.json."""
+        shown = self._make_install(tmp_path, "shown")
+        hidden = self._make_install(tmp_path, "hidden")
+        (hidden / ".claude-plugin" / "poster.yaml").write_text(
+            "hidden: true\n", encoding="utf-8")
+        installed = {"plugins": {
+            "shown@mkt": [{"installPath": str(shown), "version": "1.0.0"}],
+            "hidden@mkt": [{"installPath": str(hidden), "version": "1.0.0"}],
+        }}
+        marketplaces = {"mkt": {"poster": {}, "plugin_names": {"shown", "hidden"}}}
+        out = generate.collect_plugins(installed, marketplaces, {}, {}, {}, {})
+        assert [p["name"] for p in out] == ["shown"]
+
+    def test_hidden_false_still_shown(self, tmp_path):
+        root = self._make_install(tmp_path, "p")
+        (root / ".claude-plugin" / "poster.yaml").write_text(
+            "hidden: false\n", encoding="utf-8")
+        installed = {"plugins": {"p@mkt": [{"installPath": str(root), "version": "0.1"}]}}
+        marketplaces = {"mkt": {"poster": {}, "plugin_names": {"p"}}}
+        out = generate.collect_plugins(installed, marketplaces, {}, {}, {}, {})
+        assert [p["name"] for p in out] == ["p"]
+
     def test_poster_yaml_overrides_card_copy(self, tmp_path):
         root = self._make_install(tmp_path, "p", description="from plugin.json")
         (root / ".claude-plugin" / "poster.yaml").write_text(

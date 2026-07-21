@@ -142,6 +142,8 @@ User config = poster author's knobs. Marketplace `poster.yaml` = marketplace mai
 # Lives at <plugin>/.claude-plugin/poster.yaml. All fields optional.
 description: "card-line override (falls back to plugin.json description)"
 razor: "side-panel razor override (falls back to plugin.json razor)"
+hidden: true   # omit the plugin from the poster entirely (published but not
+               # poster-worthy, e.g. a temporary remediation plugin)
 skills:
   <skill-name>: "side-panel description override (falls back to SKILL.md description)"
 ```
