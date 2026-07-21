@@ -42,7 +42,7 @@
     {
       "name": "p4-kit",
       "description": "Multi-agent code review of pending Perforce changelists via /p4-code-review (parallel Claude subagents). Shares chunking + CLAUDE.md primitives with git-kit via bootstrap_lib.code_review.",
-      "version": "0.16.1",
+      "version": "0.16.2",
       "author": {
         "name": "Christina"
       },
