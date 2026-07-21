@@ -644,8 +644,11 @@ def layered_report(family, scenes, members, source_docs=None):
     by_tpl: dict[tuple, list] = {}
     for sc in scenes:
         by_tpl.setdefault(sc["template"], []).append(sc)
+    # templates run simplest -> most elaborate: fewest layers first, so the
+    # section reads as a build-up (all-off, then one-layer washes, then the
+    # multi-layer stacks). Ties break on scene count, then name for determinism.
     for tpl, scs in sorted(by_tpl.items(),
-                           key=lambda kv: (-len(kv[1]), kv[0])):
+                           key=lambda kv: (len(kv[0]), -len(kv[1]), kv[0])):
         seq = " &rarr; ".join(html.escape(g) for g in tpl) or "(all off)"
         tname = scs[0].get("template_name")
         head = html.escape(tname) if tname else seq
