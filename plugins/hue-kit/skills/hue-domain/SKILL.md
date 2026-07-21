@@ -41,7 +41,12 @@ domain_skill:
       - Hue CLIP v2 bridge fundamentals (connect, entity model, xy colour)
     excludes:
       - activating / triggering / turning scenes or lights on at runtime (this
-        edits DEFINITIONS, it does not actuate)
+        edits DEFINITIONS, it does not actuate) -- but see hue-beyond-scenes for
+        the runtime FACTS (event stream, rate limits, group-command misses) a
+        caller needs even though this tool does not actuate
+      - implementing the Entertainment / DTLS streaming channel (documented in
+        hue-beyond-scenes as the only real-time path; not built here)
+      - sensors, rules, schedules, CLIP v1, cloud API, firmware / multi-bridge
       - non-Hue lighting ecosystems (LIFX, Nanoleaf, etc.)
       - whole-home administration beyond Hue scenes (network, other devices)
       - one specific home's inventory / credentials / named scenes
@@ -147,6 +152,24 @@ domain_skill:
           The layered scene model + the scene-layers.py solver/sync behind the
           CLI verbs -- the two config files, the report/export/validate/apply
           operations, the authoring workflow, and template-name maintenance.
+      - id: hue-beyond-scenes
+        path: references/hue-beyond-scenes.md
+        keywords: [event stream, eventstream, sse, server-sent events, keepalive,
+                   tcp keepalive, dead peer, silently deaf, scene activated,
+                   status static dynamic_palette, rate limit, 10 requests per
+                   second, throughput, entertainment, entertainment_configuration,
+                   dtls, udp 2100, real-time, sync, music sync, video sync,
+                   zigbee group miss, group command dropped, mesh congestion,
+                   rename light, metadata name, mirek to xy, kang approximation,
+                   colour conversion]
+        summary: >-
+          Bridge facts just OUTSIDE the scene-definition surface: the event
+          stream and its missing-keepalive trap (a dropped socket leaves a client
+          silently deaf), the ~10 req/s bridge-wide REST cap and why real-time
+          light driving needs the Entertainment DTLS channel instead, Zigbee
+          group commands silently missing a bulb, the light-rename endpoint, and
+          the mirek -> xy (Kang) conversion. Read when a task touches runtime
+          behaviour rather than scene authoring.
   capabilities:
     - id: start
       keywords: [default, bare invocation, no arguments, get started, set up,
