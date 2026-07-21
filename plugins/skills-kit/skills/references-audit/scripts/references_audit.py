@@ -23,8 +23,10 @@ vendored third-party docs that produce systematic false positives.
 finding carries file path, 1-indexed line number, ref name, severity, and a
 category hint, so downstream tooling can classify and apply mechanical fixes.
 
-Fenced code blocks (``` and ~~~) and YAML frontmatter are masked before
-scanning, so refs that appear inside them do not trigger findings.
+Fenced code blocks (``` and ~~~), inline code spans (single/double-backtick
+`...` runs), and YAML frontmatter are masked before scanning, so refs that
+appear inside them (e.g. a backticked `/route` endpoint or `$/unit` notation)
+do not trigger findings.
 
 A file can declare a per-file allowlist for legacy / historical references
 that intentionally do not resolve, via a comma-separated YAML frontmatter
@@ -92,7 +94,8 @@ class SourceFile:
 BUILTIN_COMMANDS = {
     "help", "clear", "tasks", "init", "login", "logout",
     "status", "memory", "compact", "cost", "doctor", "fast",
-    "review", "bug", "terminal-setup", "vim", "model",
+    "review", "code-review", "security-review", "bug",
+    "terminal-setup", "vim", "model",
     "add-dir", "mcp", "config", "permissions", "listen",
     "reload-plugins", "agents", "hooks", "output-style",
     "statusline", "resume", "release-notes",
@@ -173,10 +176,23 @@ def find_soft_refs(body: str) -> list[tuple[str, int]]:
     return out
 
 
+# Inline code span: a run of N backticks opens the span and the next run of
+# exactly N backticks closes it (single- and double-backtick spans are the
+# common cases). Content and delimiters are replaced with spaces of equal
+# length, so line/column offsets are preserved.
+_INLINE_CODE_RE = re.compile(r"(`+)(.+?)\1")
+
+
+def _mask_inline_code(line: str) -> str:
+    """Blank out inline code-span regions on a single line, preserving length
+    (no newlines are involved, so line numbers are unaffected)."""
+    return _INLINE_CODE_RE.sub(lambda m: " " * len(m.group(0)), line)
+
+
 def mask_non_scanned(text: str) -> str:
-    """Return text with frontmatter and fenced code-block regions replaced by
-    blank lines. Line count and offsets are preserved so soft/hard-ref matches
-    align with original file line numbers."""
+    """Return text with frontmatter, fenced code-block regions, and inline
+    code spans replaced by blanks. Line count and offsets are preserved so
+    soft/hard-ref matches align with original file line numbers."""
     lines = text.split("\n")
     out: list[str] = []
     in_frontmatter = lines and lines[0].strip() == "---"
@@ -194,7 +210,7 @@ def mask_non_scanned(text: str) -> str:
                 fence_marker = stripped[:3]
                 out.append("")
                 continue
-            out.append(line)
+            out.append(_mask_inline_code(line))
         else:
             out.append("")
             if stripped.startswith(fence_marker):

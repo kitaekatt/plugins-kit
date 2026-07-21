@@ -119,7 +119,7 @@ references-audit is a corpus-wide scanner with four rules. The taxonomy A-K abov
 
 - **Detection signal.** WARNING `/example:flag-name`; surrounding text is a shell or CLI invocation (binary name + flags). Common with MSBuild, `devenv`, `cl.exe`, the linker, and other Windows-native tools.
 - **Disposition.** FIX (a false positive; fencing loses nothing).
-- **Default remediation.** Wrap the whole command in a fenced code block (```` ``` ````). The scanner masks fenced regions, so refs inside them produce no findings.
+- **Default remediation.** Wrap the whole command in a fenced code block (```` ``` ````), or backtick a single slash-token inline (`` `/flag` ``). The scanner masks both fenced regions and inline code spans, so refs inside them produce no findings.
 - **Example.**
   ```
   - Run: devenv /debugexe "...exe" /minidump "...dmp"

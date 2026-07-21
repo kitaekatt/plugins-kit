@@ -156,6 +156,31 @@ class TestScannerBehaviors:
         assert "fenced-ghost" not in refs
         assert "real-ghost" in refs
 
+    def test_inline_code_spans_are_masked(self, tmp_path, capsys):
+        # Backticked `/route` endpoints and `$/unit` cost notation are inline
+        # code, not skill refs -- masking them keeps them out of findings,
+        # while a bare (unbackticked) ref on the same line still fires.
+        body = (
+            "# A\n"
+            "The `/route` endpoint and a `$/unit` price, but /real-ghost bare.\n"
+            "Double span: ``/double-ghost`` stays masked too.\n"
+        )
+        dirs = _build_tree(tmp_path, body)
+        rc, payload = _analyze(dirs, capsys)
+        refs = _refs(payload)
+        assert "route" not in refs
+        assert "unit" not in refs
+        assert "double-ghost" not in refs
+        assert "real-ghost" in refs
+
+    def test_builtin_code_review_not_reported(self, tmp_path, capsys):
+        # /code-review is a first-party Claude Code builtin (effort args,
+        # --fix/--comment flags) -- it must not surface as a broken ref.
+        dirs = _build_tree(tmp_path, "# A\nRun /code-review before submit.\n")
+        rc, payload = _analyze(dirs, capsys)
+        assert rc == 0
+        assert "code-review" not in _refs(payload)
+
     def test_example_prefix_never_reported(self, tmp_path, capsys):
         dirs = _build_tree(tmp_path, "# A\nSyntax: /example:anything and /proposed:later.\n")
         rc, payload = _analyze(dirs, capsys)

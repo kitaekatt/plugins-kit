@@ -316,6 +316,8 @@ Both resolve to the same SKILL.md and run the same `references_audit.py` script.
 
 When showing example skill-reference syntax in prose, use `/example:` or `/proposed:` prefixes (e.g. `/example:skill-name`, `/proposed:run-bot`). The scanner ignores any reference with one of these prefixes and never reports it as broken.
 
+The scanner also masks inline code spans (single/double-backtick `...` runs) as well as fenced blocks, so a backticked slash-token such as a `/route` endpoint or `$/unit` notation is treated as code, not a skill reference, and never fires.
+
 For **historical artifacts** (rollout summaries, design plans whose proposed names were later renamed or never built, postmortem docs that record past state), a per-file allowlist in YAML frontmatter declares which legacy names are expected to no longer resolve:
 
 ```yaml
