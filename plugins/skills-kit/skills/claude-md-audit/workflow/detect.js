@@ -14,13 +14,33 @@
 // separate phases). Returns structured per-file findings for the main loop to
 // render and dispatch.
 //
-// Invoked by the claude-md-audit SKILL.md only when auditing 2+ files (the
+// Invoked by the claude-md-audit SKILL.md when auditing 2+ files (the
 // multi-file threshold that equalizes the Workflow tool's per-run overhead).
-// Single-file audits run inline in the main loop.
+// Single-file audits normally run inline in the main loop -- EXCEPT in review
+// mode, where the threshold drops to 1 so every review-mode detect goes through
+// a lane. Review mode exists to gate a submit/publish, so it cannot inherit the
+// session model off the main loop; the lane is what pins model+effort and
+// enforces the schema. See args.review below.
 //
 // args = {
 //   files: [ { path: string, role: "root"|"ancestor"|"child"|"local",
 //              parentPath: string|null } ],
+//   review: boolean  (REVIEW MODE. When true, each finding is additionally
+//            marked `attributable` -- whether the change under review caused it
+//            -- via a targeted per-finding check against the pre-image. Lanes
+//            stay mode-agnostic otherwise: they do NOT filter and do NOT change
+//            the verdict. The caller filters on `attributable` and relabels the
+//            verdict DIFF-CLEAN. See files[i].preImagePath.)
+//   files[i].preImagePath: string|null  (review mode only. Absolute path to a
+//            materialized copy of the file as it was BEFORE the change under
+//            review. The CALLER materializes it -- `p4 print //path#have`, or
+//            `git show <base>:<path>` -- because this plugin is VCS-agnostic and
+//            must not learn Perforce or git. null means the file is an ADD with
+//            no pre-image, in which case every finding is attributable.)
+//   files[i].parentPreImagePath: string|null  (review mode, child role only.
+//            Pre-image of the parent CLAUDE.md, needed so cross-file duplication
+//            the change itself introduced in the PARENT is not misattributed to
+//            the untouched child. null -> judge B against the current parent.)
 //   files[i].dimension: "code-directory" | "classic"  (from discover.py; when
 //            "code-directory" the lane also loads refs.codeDirFilter and runs the
 //            CD-* insight-validation criteria. Absent/"classic" -> classic only.)
@@ -77,8 +97,9 @@ const FILE_FINDINGS_SCHEMA = {
           },
           bucket: { type: 'string', enum: ['FIX', 'SERIOUS', 'IMPROVE', 'SILENT', 'SPECIAL', 'NONE'], description: 'per-finding disposition assigned instance-level by the classifier (step 8)' },
           remediation: { type: 'string', description: 'concrete proposed remediation for FIX/SERIOUS/IMPROVE/SPECIAL; empty for SILENT/NONE' },
+          attributable: { type: 'boolean', description: 'review mode: did the change under review cause this finding? Judged against the pre-image (step 8.5). ALWAYS true outside review mode -- nothing is being diffed, so every finding counts.' },
         },
-        required: ['group', 'severity', 'criterion', 'message', 'line', 'taxonomy', 'bucket', 'remediation'],
+        required: ['group', 'severity', 'criterion', 'message', 'line', 'taxonomy', 'bucket', 'remediation', 'attributable'],
       },
     },
     verdict: { type: 'string', enum: ['COMPLIANT', 'NON-COMPLIANT'] },
@@ -97,11 +118,26 @@ if (!input || !Array.isArray(input.files) || input.files.length === 0) {
 }
 const refs = input.refs || {}
 const density = input.density === true
+const review = input.review === true
 
 function lanePrompt(f) {
   const densityClause = density
     ? `The OPT-IN density lens is requested. After the checks above, ALSO read the density criteria at ${refs.densityCriteria} and run the DD-1..DD-4 lens. Overriding rule: density != deletion — every finding must route the tokens somewhere (tighten in place / extract to a named reference / merge a duplicate); if you cannot name the destination, do not raise the finding. DD-1 density_in_place (over-worded but correctly-placed section -> taxonomy L_verbose_in_place, tighten IN PLACE, honor carve-outs for teaching examples / load-bearing nuance / labeled safety rails); DD-2 extract_to_reference (self-contained on-demand block taxing every reader -> taxonomy M_extract_to_reference, move to a reference + leave a one-line pointer; distinct from A wrong-scope and finer than C whole-file split); DD-3 intra_file_redundancy (same fact repeated within THIS file -> taxonomy N_intra_file_redundancy; NOT B, which is across the role chain); DD-4 value_earns_tokens (classic-file generalization of the CD-5 value filter -> taxonomy O_low_value_verbose; do NOT run on a code-directory file, where CD-5/J already owns value). Emit ALL density findings under group "Density", severity JUDGMENT, disposition IMPROVE — the density lens is the opt-in improvement lens (trims of true content passing the one-line test / structural moves), it NEVER produces FAIL and never changes the verdict. Each remediation names the destination (tighten | extract->ref | merge) and an approximate token-savings figure.`
     : `The density lens was not requested; do NOT load or apply the density criteria, and emit no Density-group findings.`
+
+  const reviewClause = !review
+    ? `Not review mode. Set \`attributable: true\` on EVERY finding -- nothing is being diffed, so every finding counts. Do not read any pre-image.`
+    : f.preImagePath
+      ? `REVIEW MODE. This audit gates a submit, so it must report only what the change under review actually caused. For EACH non-PASS finding you produced above, run a TARGETED check against the pre-image at ${f.preImagePath} (the file as it was BEFORE the change): does this same criterion fire at this same anchor in the pre-image?
+   - Fires in the pre-image too -> \`attributable: false\` (pre-existing; not this change's doing).
+   - Does not fire in the pre-image -> \`attributable: true\`.
+   Do NOT re-run the whole audit on the pre-image. Ask one narrow factual question per finding; that is cheaper and far more stable than differencing two full reports.
+   Match on (criterion, taxonomy, normalized anchor) -- NEVER on line number or message wording. Line numbers shift and phrasing varies; a finding that moved or got reworded is the SAME finding. When a pre-image finding plausibly corresponds to this one, be GENEROUS and call it non-attributable: a false "pre-existing" is a missed nag, a false "attributable" is an accusation the author cannot act on.
+   PASS / INFO / NONE findings are ALWAYS \`attributable: true\` -- they carry no remediation, so "did the change cause it" is not a meaningful question and a \`false\` there would silently delete the row from the report.
+   If the pre-image cannot be read (missing, empty, unreadable), do NOT guess: set \`attributable: true\` on every finding and add one JUDGMENT finding, group Hygiene, taxonomy "none", bucket "NONE", message "pre-image unreadable -- findings are unfiltered". Over-reporting is the safe direction; silently suppressing is not.
+   Attributable means CAUSED BY, not LOCATED IN. A finding anchored far from the edited lines is still attributable if the change created it -- e.g. the change adds a rule that now duplicates one 200 lines up, and the B finding anchors on the older copy. Judge causation, not proximity.
+   You still report EVERY finding with its real disposition. Do NOT drop, downgrade, or re-bucket anything based on attributability -- the caller filters. ${f.parentPreImagePath ? `For the CCP cross-file (B) check specifically, judge duplication against the PARENT PRE-IMAGE at ${f.parentPreImagePath}, not the current parent -- otherwise duplication this same change introduced in the parent gets misattributed to this untouched child.` : ''}`
+      : `REVIEW MODE, and this file has NO pre-image (it is an ADD introduced by the change under review). Every finding is therefore caused by this change: set \`attributable: true\` on ALL of them. Do not look for a pre-image.`
 
   const parentClause = f.role === 'child' && f.parentPath
     ? `This is a CHILD file. Also Read its parent CLAUDE.md at ${f.parentPath} so you can run the CCP cross-file duplication check (a rule restated from the parent is a FAIL, taxonomy B, disposition FIX under the loss-free-deletion guard + summarize-and-reference rule).`
@@ -158,6 +194,7 @@ Steps:
    Declined-opportunity ledger: if the target's frontmatter carries an \`md-audit-declined:\` list (suffixed taxonomy ids or short finding keys), do NOT re-raise an IMPROVE finding the user already declined for that file -- honor it exactly like references-audit honors \`references-audit-allow-stale\`. A new or materially different finding still fires.
    PASS / INFO / JUDGMENT findings that need no remediation get taxonomy "none" and bucket "NONE".
    For each FIX/SERIOUS/IMPROVE/SPECIAL finding write a concrete \`remediation\` (what edit you propose, with line refs); FIX writes the edit it will apply, SERIOUS writes the one-line summary for the top-of-report block, IMPROVE writes the single one-line pitch.
+8.5. ATTRIBUTABILITY. ${reviewClause}
 9. Verdict: NON-COMPLIANT if ANY finding has severity FAIL; otherwise COMPLIANT. INFO/JUDGMENT never gate. (A CodeDir CD-2 H/H2 FAIL gates exactly like a classic FAIL. Density findings are JUDGMENT only and never affect the verdict.) Disposition is orthogonal to the verdict -- a FIX still lands in the remediation CL, a SERIOUS still gates via its FAIL severity if it carries one.
 
 Idempotency matters: apply the fixed criteria and taxonomy deterministically. Do not invent findings; report only what the criteria actually surface. Return the structured object.`
@@ -176,7 +213,32 @@ const perFile = await parallel(input.files.map((f) => () =>
   }).then((r) => ({ ...r, path: f.path, role: f.role, dimension: f.dimension || 'classic' }))
 ))
 
-const results = perFile.filter(Boolean)
+const raw = perFile.filter(Boolean)
+
+// Review mode owns the filter and the relabel -- NOT the lanes. Lanes emit every
+// finding plus `attributable`; the reducer decides what survives and what the
+// verdict is called. Keeping this out of the lane is what lets one lane prompt
+// serve both modes.
+//
+// SERIOUS ALWAYS SURVIVES, attributable or not. A secret, or an invariant the
+// docs claim is protected but isn't, is not the author's doing and is still the
+// most important thing on the page. Filtering it because "the diff didn't cause
+// it" would turn review mode into a way to walk past exactly the findings that
+// most need a human.
+const isKept = (fnd) => !review || fnd.attributable !== false || fnd.bucket === 'SERIOUS'
+
+const results = raw.map((r) => {
+  if (!review) return r
+  const kept = r.findings.filter(isKept)
+  const suppressed = r.findings.length - kept.length
+  // The lane's verdict is computed over ALL findings, so it cannot stand once we
+  // filter. DIFF-CLEAN says "the change under review introduced no failure" --
+  // deliberately NOT the same claim as COMPLIANT, which would assert the whole
+  // file is clean. A DIFF-CLEAN file may still carry a surviving SERIOUS.
+  const attributableFail = kept.some((f) => f.severity === 'FAIL' && f.attributable !== false)
+  return { ...r, findings: kept, suppressed, verdict: attributableFail ? 'NON-COMPLIANT' : 'DIFF-CLEAN' }
+})
+
 const totals = results.reduce((acc, r) => {
   for (const fnd of r.findings) {
     if (fnd.bucket === 'FIX') acc.fix++
@@ -184,12 +246,20 @@ const totals = results.reduce((acc, r) => {
     else if (fnd.bucket === 'IMPROVE') acc.improve++
     else if (fnd.bucket === 'SILENT') acc.silent++
     else if (fnd.bucket === 'SPECIAL') acc.special++
-    if (fnd.severity === 'FAIL') acc.fail++
+    // Guard on attributability, not just severity. Non-attributable SERIOUS
+    // findings survive isKept by design, and a SERIOUS can carry FAIL.
+    // Counting those here would print "N attributable FAIL" next to a
+    // DIFF-CLEAN verdict that correctly ignored them.
+    if (fnd.severity === 'FAIL' && fnd.attributable !== false) acc.fail++
   }
+  acc.suppressed += r.suppressed || 0
   if (r.verdict === 'NON-COMPLIANT') acc.nonCompliant++
+  if (r.verdict === 'DIFF-CLEAN') acc.diffClean++
   return acc
-}, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0 })
+}, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0, diffClean: 0, suppressed: 0 })
 
-log(`Audited ${results.length}/${input.files.length} files — ${totals.nonCompliant} NON-COMPLIANT, ${totals.fail} FAIL findings; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (SILENT=${totals.silent} omitted)`)
+log(review
+  ? `Reviewed ${results.length}/${input.files.length} files — ${totals.diffClean} DIFF-CLEAN, ${totals.nonCompliant} NON-COMPLIANT, ${totals.fail} attributable FAIL; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (${totals.suppressed} pre-existing finding(s) suppressed as not caused by this change; SILENT=${totals.silent} omitted)`
+  : `Audited ${results.length}/${input.files.length} files — ${totals.nonCompliant} NON-COMPLIANT, ${totals.fail} FAIL findings; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (SILENT=${totals.silent} omitted)`)
 
-return { perFile: results, totals }
+return { perFile: results, totals, review }

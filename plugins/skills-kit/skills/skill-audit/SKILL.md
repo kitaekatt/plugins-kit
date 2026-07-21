@@ -202,22 +202,22 @@ audit_skill:
         - "workflow/detect.js and workflow/remediate.js are present (used for the 2+-file fan-out)."
       steps:
         - n: 1
-          action: "Resolve the audit target set from $ARGUMENTS. Empty -> cwd/SKILL.md if present, else stop. 'list' -> emit numbered list via discover.py and stop. Integers -> map to paths from last list output. Path -> use it directly. Strip any non-interactive token ('fast', '--fast', '--yes', '-y') first and set non_interactive accordingly (also set it if the user's prose expresses non-interactive intent, e.g. 'just apply everything, don't ask')."
+          action: "Resolve the audit target set from $ARGUMENTS. Empty -> cwd/SKILL.md if present, else stop. 'list' -> emit numbered list via discover.py and stop. Integers -> map to paths from last list output. Path -> use it directly. Strip any non-interactive token ('fast', '--fast', '--yes', '-y') first and set non_interactive accordingly (also set it if the user's prose expresses non-interactive intent, e.g. 'just apply everything, don't ask'). Strip the review token ('review', '--review') and set review=true (also set it if the user's prose expresses the intent, e.g. 'review my changes before I submit', 'audit the diff'); review is FALSE by default. Reject the combination review + non_interactive: 'propose instead of applying, but do not ask' resolves to doing nothing -- tell the user the two are mutually exclusive and stop."
           tool: "discover.py"
           input: "uv run python ${CLAUDE_PLUGIN_ROOT}/skills/skill-audit/scripts/discover.py [--json]"
           expected: "A resolved list of SKILL.md file paths + non_interactive flag."
           on_failure: "If no target resolves, surface cwd and stop. Do not improvise a target."
         - n: 2
-          action: "DETECT phase (before-Q&A). Choose execution mode by file count -- this threshold equalizes the Workflow tool's per-run overhead. ONE file: audit inline in the main loop (run the mechanical validator; apply the embedded skill-md cohesion recap; classify each finding into taxonomy + bucket). TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/skill-audit/workflow/detect.js and args = { files:[{path}], refs:{pluginRoot, venvPython} }. The workflow fans one lane out per file and returns { perFile, totals }. Detection only -- no file is edited in this phase. Cohesion recap (used by both the inline path and the detect.js lane): CCP = SKILL.md content belongs here only when it changes with the skill's contract (project-convention content -> co-located CLAUDE.md, taxonomy F); decision-provenance Dec-N / audit-finding logs are a CCP FAIL (taxonomy I, AUTO); CRP = SKILL.md is read together, references/ load on-demand for distinct sub-tasks, size is a signal not a verdict (taxonomy G/J); ADP = references/*.md are one hop deep and must not cite SKILL.md (back-reference FAIL, taxonomy H, AUTO); load-graph rows from the validator (orphaned reference, unlinked member dir, dangling index edge, two-hop-only reference) route to taxonomy L (DISCUSS), as does the judgment call that an index entry's keywords omit the terms a searcher would use."
+          action: "DETECT phase (before-Q&A). Choose execution mode by file count -- this threshold equalizes the Workflow tool's per-run overhead. REVIEW MODE OVERRIDE: when review is TRUE the threshold is 1, so ALWAYS use the Workflow path even for a single file. Review mode gates a submit/publish, so its verdict must not depend on whatever model the session happens to be running; only the lane pins model+effort and enforces the schema. Never run a review-mode detect inline. ONE file (non-review): audit inline in the main loop (run the mechanical validator; apply the embedded skill-md cohesion recap; classify each finding into taxonomy + bucket). TWO OR MORE files (or ANY count in review mode): call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/skill-audit/workflow/detect.js and args = { files:[{path,skillType,preImagePath}], review:<review bool>, refs:{pluginRoot, venvPython} }. The workflow fans one lane out per file and returns { perFile, totals, review }. In review mode YOU materialize each pre-image BEFORE calling the workflow (see the review-mode section) and pass its path; the workflow is VCS-agnostic and will not fetch anything itself. Detection only -- no file is edited in this phase. Cohesion recap (used by both the inline path and the detect.js lane): CCP = SKILL.md content belongs here only when it changes with the skill's contract (project-convention content -> co-located CLAUDE.md, taxonomy F); decision-provenance Dec-N / audit-finding logs are a CCP FAIL (taxonomy I, AUTO); CRP = SKILL.md is read together, references/ load on-demand for distinct sub-tasks, size is a signal not a verdict (taxonomy G/J); ADP = references/*.md are one hop deep and must not cite SKILL.md (back-reference FAIL, taxonomy H, AUTO); load-graph rows from the validator (orphaned reference, unlinked member dir, dangling index edge, two-hop-only reference) route to taxonomy L (DISCUSS), as does the judgment call that an index entry's keywords omit the terms a searcher would use."
           tool: "Workflow | inline"
           input: "detect.js args.refs: pluginRoot=${CLAUDE_PLUGIN_ROOT}; venvPython=<plugin venv python>. The validator is run as: (cd ${CLAUDE_PLUGIN_ROOT} && <venvPython> -m skills_kit_lib.audit <path> --json)."
           expected: "Structured per-file findings (group, severity, criterion, message, line, taxonomy, bucket, remediation) + per-file verdict."
           on_failure: "If the validator is unavailable, mark the Schema group JUDGMENT ('validator unavailable') and continue with cohesion judgment only -- never fail a file for that."
         - n: 3
-          action: "Render the per-file report (output_template), then the REPORT CONTRACT summary in three visible sections IN THIS ORDER, no hedging: (1) SERIOUS -- 'Found <N> serious issue(s) that require fixing' + a one-line summary each; never auto-fixed, never buried. (2) FIX -- the count auto-applied and landing in the reviewable remediation CL. (3) IMPROVE -- 'Audit found <N> improvement opportunit(ies). Do you want to discuss them?' + one one-line pitch each. SILENT findings do NOT appear. Omit a section whose count is zero."
+          action: "Render the per-file report (output_template), then the REPORT CONTRACT summary in three visible sections IN THIS ORDER, no hedging: (1) SERIOUS -- 'Found <N> serious issue(s) that require fixing' + a one-line summary each; never auto-fixed, never buried. (2) FIX -- normally the count auto-applied and landing in the reviewable remediation CL; in REVIEW MODE nothing is auto-applied, so render it as the count PROPOSED and awaiting the step-4 decision, never as applied. (3) IMPROVE -- 'Audit found <N> improvement opportunit(ies). Do you want to discuss them?' + one one-line pitch each. SILENT findings do NOT appear. Omit a section whose count is zero."
           expected: "Markdown report: per-file verdicts, then SERIOUS (summarized, top) / FIX (applied count) / IMPROVE (count + one-liners); SILENT omitted."
         - n: 4
-          action: "Q&A GATE. If non_interactive is FALSE (default): SERIOUS findings are surfaced summarized at the top, never auto-fixed; for each IMPROVE and SPECIAL finding the user opted to discuss, ask for a decision (apply as-proposed / skip / a refined instruction). Surface a tight grouped set; do not dump a giant list. For category C (wrong skill-type), this is where classify.py is run to confirm the suggestion before any type change. A declined IMPROVE is recorded in the SKILL.md's `md-audit-declined:` frontmatter so a re-audit does not re-pitch it. If non_interactive is TRUE: apply FIX findings, surface SERIOUS, and infer each IMPROVE/SPECIAL decision from the taxonomy's default_remediation plus the file content -- record each inferred decision in the final summary. FIX findings need no decision (they apply by definition); SILENT findings are never surfaced."
+          action: "Q&A GATE. If review is TRUE: NOTHING is auto-applied -- FIX is demoted from auto-apply to PROPOSED and goes to the user alongside IMPROVE/SPECIAL. Present proposals with AskUserQuestion offering accept-all / reject-all / custom instruction (use multiSelect when accept-some is the natural shape). Use judgement on grouping: batch fixes across files into ONE question when they are small and the files are related; split into several when the fixes are large or the files are unrelated. SERIOUS is surfaced at the top as always and still never auto-fixed. Review-mode declines write NOTHING to `md-audit-declined:` -- that ledger is IMPROVE-scoped and per-file-permanent, whereas a review decline usually means 'not in this change', and once the change lands the finding is in the next pre-image and stops being attributable anyway. Offer an explicit 'never flag this again for this file' only if the user asks for it, and only then write the ledger. If review is FALSE and non_interactive is FALSE (default): SERIOUS findings are surfaced summarized at the top, never auto-fixed; for each IMPROVE and SPECIAL finding the user opted to discuss, ask for a decision (apply as-proposed / skip / a refined instruction). Surface a tight grouped set; do not dump a giant list. For category C (wrong skill-type), this is where classify.py is run to confirm the suggestion before any type change. A declined IMPROVE is recorded in the SKILL.md's `md-audit-declined:` frontmatter so a re-audit does not re-pitch it. If non_interactive is TRUE: apply FIX findings, surface SERIOUS, and infer each IMPROVE/SPECIAL decision from the taxonomy's default_remediation plus the file content -- record each inferred decision in the final summary. FIX findings need no decision (they apply by definition); SILENT findings are never surfaced."
           expected: "SERIOUS summarized; a decision (explicit or inferred) attached to every IMPROVE/SPECIAL the user engaged; FIX applied."
         - n: 5
           action: "REMEDIATE phase (after-Q&A). Assemble per-file remediation lists from the decided findings (FIX=apply; IMPROVE/SPECIAL=per decision; SERIOUS never auto-applied; drop skips). Choose mode by how many FILES carry remediation work. ONE file: apply inline with Edit. TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/skill-audit/workflow/remediate.js and args = { perFile:[{path,remediations:[{criterion,taxonomy,bucket,line,instruction,decision}]}] }. One lane per file (disjoint skills never conflict; taxonomy H edits a references/*.md and taxonomy I moves Dec-N into the co-located CLAUDE.md, both under the same skill dir)."
@@ -256,7 +256,7 @@ audit_skill:
         ### SERIOUS -- Found <N> serious issue(s) that require fixing
         - <one-line summary per issue>   (never auto-fixed)
 
-        ### FIX -- <N> applied (in the reviewable remediation CL)
+        ### FIX -- <N> applied (in the reviewable remediation CL)   [review mode: "<N> proposed" -- nothing is applied]
         - <criterion>: <what was corrected>
 
         ### IMPROVE -- Audit found <N> improvement opportunit(ies). Do you want to discuss them?
@@ -379,6 +379,7 @@ Per-skill audit (the namesake procedure):
 - `<path>` -- audit a specific SKILL.md.
 - `<numbers>` -- audit files by index from the most recent `list` output (e.g. `3 7`).
 - `fast` / `--fast` / `--yes` / `-y` -- non-interactive: skip the Q&A round and infer every IMPROVE/SPECIAL decision; FIX applies by definition, SERIOUS is surfaced. Combine with any selector, e.g. `/md-audit skill 3 7 fast`. Prose intent ("audit these and just apply everything, don't ask me") sets the same flag.
+- `review` / `--review` -- review mode: audit a CHANGE rather than a file. Findings the change did not cause are suppressed, nothing is auto-applied (FIX is proposed, not applied), and the verdict is `DIFF-CLEAN` rather than `COMPLIANT`. For gating a submit / publish / handback. Combine with any selector, e.g. `/md-audit skill <path> --review`. Prose intent ("review my changes before I submit", "audit the diff") sets the same flag. Mutually exclusive with `fast` -- see Review mode. Off by default.
 
 Corpus-wide reports:
 
@@ -402,6 +403,7 @@ The per-skill audit runs in two phases split by an interactive Q&A gate, and use
 ```
 resolve (main loop)
   -> DETECT  (before-Q&A)  : 1 file inline | 2+ files via workflow/detect.js   -> structured findings
+                             (review mode: ALWAYS via workflow/detect.js, any file count)
   -> render report (main loop)
   -> Q&A GATE (main loop)  : interactive decisions | inferred when non-interactive
   -> REMEDIATE (after-Q&A) : 1 file inline | 2+ files via workflow/remediate.js -> edits applied
@@ -421,12 +423,42 @@ Both accept `args` as an object or JSON string. Pass absolute `refs` paths (they
 
 When the non-interactive flag is set (argument token or expressed intent), the Q&A gate does not prompt. Instead, infer each IMPROVE/SPECIAL decision from the taxonomy's `default_remediation` plus the file content, apply them, and **list every inferred decision in the final summary** so the user can see and reverse them. FIX findings apply regardless; SERIOUS findings are surfaced summarized at the top and never auto-applied; SILENT findings are never surfaced. FAIL findings are still gated by the verdict; non-interactive only changes how the *decisions* are obtained, not the audit contract.
 
+## Review mode
+
+Normal mode audits a FILE. Review mode audits a CHANGE: same criteria, same lanes, but findings the change did not cause are suppressed and nothing is auto-applied. It exists to gate a submit / publish / handback, where a report full of pre-existing findings would either bloat the change with unrelated remediations or train the author to skim past the gate.
+
+Three behavioral differences, and nothing else:
+
+1. **Attributability filter.** Each finding is marked `attributable` by the lane, then the caller drops the ones the change did not cause. **SERIOUS always survives regardless** -- a secret or a violated invariant is not the author's doing and is still the most important thing on the page.
+2. **Nothing is auto-applied.** FIX is demoted to a proposal at the Q&A gate. Mutually exclusive with `fast`, which would mean "propose instead of applying, but do not ask" -- i.e. nothing. Reject that combination rather than guessing.
+3. **Verdict is `DIFF-CLEAN`, not `COMPLIANT`.** A weaker and more honest claim: *this change introduced no failure*, not *this file is clean*. A DIFF-CLEAN file may still carry a surviving SERIOUS.
+
+Also: the multi-file threshold drops to 1 (always use the Workflow path), because a submit gate must not inherit whatever model the session happens to be running.
+
+**You materialize the pre-images; the workflow never does.** This plugin is VCS-agnostic and must stay that way -- do not teach `detect.js` about Perforce or git. Before calling the workflow, write each SKILL.md's pre-change content to a temp path and pass it as `preImagePath`:
+
+- Perforce: `p4 print -q -o <tmp> //depot/path/FILE#have`
+- git: `git show <base>:<path> > <tmp>`, base = `merge-base(HEAD, origin/main)`, with the diff spanning `base..worktree` so committed-but-unpushed work is INSIDE the change under review rather than part of its baseline.
+
+Infer which from the local repo. Two cases that are easy to get wrong:
+
+- **Adds have no pre-image.** Pass `preImagePath: null` and every finding is attributable, which is correct -- the whole file is new. `p4 diff` emits nothing for an add, so detect adds via `p4 opened` rather than concluding the diff is unavailable.
+- **Moves need the source.** `p4 print //new/path#have` fails for a `move/add`; resolve the pre-image through the move source.
+
+**If you cannot obtain a pre-image, do not silently fall back to a whole-file audit.** Say the pre-image was unavailable and label the output as unfiltered, so nobody mistakes a normal audit for a change-scoped gate.
+
+Two limits worth stating rather than hiding:
+
+- **Only the SKILL.md gets a pre-image.** A skill's members (`references/*.md`, scripts, tests) are read at their CURRENT state in both passes, so a change confined to a reference doc -- an ADP back-reference it introduces, a member it orphans -- fires identically against the pre-image SKILL.md and reads as pre-existing. Findings whose cause lives outside the SKILL.md can escape the filter.
+- **Attributability is judgment, not arithmetic.** It rests on re-detection, so a pre-existing finding the pre-image check happens to miss can resurface as attributable. Generous structural matching mitigates this; nothing eliminates it.
+
 ## Decision rules (per-skill audit verdict)
 
 - Any FAIL finding -> file is NON-COMPLIANT.
 - Only PASS, INFO, JUDGMENT findings -> file is COMPLIANT (with judgment-required calls noted).
 - INFO findings are advisory improvements, not compliance failures.
 - INFO findings do not escalate to FAIL on subsequent runs.
+- **Review mode:** any *attributable* FAIL -> NON-COMPLIANT; otherwise DIFF-CLEAN. Non-attributable FAILs do not gate -- they predate the change -- but a non-attributable SERIOUS is still reported above the verdict.
 
 ## Cross-references
 

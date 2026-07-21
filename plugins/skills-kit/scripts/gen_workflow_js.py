@@ -454,9 +454,64 @@ const totals = results.reduce((acc, r) => {
 }, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0 })
 """
 
+# Review-mode variant of the totals reducer, for the members that implement
+# `--review` (claude-md-audit, skill-audit). They cannot share
+# DETECT_TOTALS_CHUNK: review mode filters non-attributable findings out of the
+# per-file results and relabels the verdict DIFF-CLEAN before totalling, so the
+# reducer legitimately differs from the non-review members'. Splitting the
+# canonical chunk keeps the drift check meaningful -- these two must still match
+# each other verbatim -- rather than exempting them and losing the protection.
+# If project-doc-audit ever gains `--review`, move it onto this chunk too.
+DETECT_REVIEW_TOTALS_CHUNK = """\
+const raw = perFile.filter(Boolean)
+
+// Review mode owns the filter and the relabel -- NOT the lanes. Lanes emit every
+// finding plus `attributable`; the reducer decides what survives and what the
+// verdict is called. Keeping this out of the lane is what lets one lane prompt
+// serve both modes.
+//
+// SERIOUS ALWAYS SURVIVES, attributable or not. A secret, or an invariant the
+// docs claim is protected but isn't, is not the author's doing and is still the
+// most important thing on the page. Filtering it because "the diff didn't cause
+// it" would turn review mode into a way to walk past exactly the findings that
+// most need a human.
+const isKept = (fnd) => !review || fnd.attributable !== false || fnd.bucket === 'SERIOUS'
+
+const results = raw.map((r) => {
+  if (!review) return r
+  const kept = r.findings.filter(isKept)
+  const suppressed = r.findings.length - kept.length
+  // The lane's verdict is computed over ALL findings, so it cannot stand once we
+  // filter. DIFF-CLEAN says "the change under review introduced no failure" --
+  // deliberately NOT the same claim as COMPLIANT, which would assert the whole
+  // file is clean. A DIFF-CLEAN file may still carry a surviving SERIOUS.
+  const attributableFail = kept.some((f) => f.severity === 'FAIL' && f.attributable !== false)
+  return { ...r, findings: kept, suppressed, verdict: attributableFail ? 'NON-COMPLIANT' : 'DIFF-CLEAN' }
+})
+
+const totals = results.reduce((acc, r) => {
+  for (const fnd of r.findings) {
+    if (fnd.bucket === 'FIX') acc.fix++
+    else if (fnd.bucket === 'SERIOUS') acc.serious++
+    else if (fnd.bucket === 'IMPROVE') acc.improve++
+    else if (fnd.bucket === 'SILENT') acc.silent++
+    else if (fnd.bucket === 'SPECIAL') acc.special++
+    // Guard on attributability, not just severity. Non-attributable SERIOUS
+    // findings survive isKept by design, and a SERIOUS can carry FAIL.
+    // Counting those here would print "N attributable FAIL" next to a
+    // DIFF-CLEAN verdict that correctly ignored them.
+    if (fnd.severity === 'FAIL' && fnd.attributable !== false) acc.fail++
+  }
+  acc.suppressed += r.suppressed || 0
+  if (r.verdict === 'NON-COMPLIANT') acc.nonCompliant++
+  if (r.verdict === 'DIFF-CLEAN') acc.diffClean++
+  return acc
+}, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0, diffClean: 0, suppressed: 0 })
+"""
+
 SHARED_CHUNK_TARGETS = {
-    SKILLS / "claude-md-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_TOTALS_CHUNK],
-    SKILLS / "skill-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_TOTALS_CHUNK],
+    SKILLS / "claude-md-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    SKILLS / "skill-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
     SKILLS / "project-doc-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_TOTALS_CHUNK],
     SKILLS / "references-audit" / "workflow" / "classify.js": [ARGS_NORM_CHUNK],
 }

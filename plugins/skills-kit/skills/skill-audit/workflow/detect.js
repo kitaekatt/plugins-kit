@@ -18,12 +18,28 @@
 // criteria recap inline rather than loading cohesion-principles per lane (the
 // upstream framework is the derivation, not the operative rules).
 //
-// Invoked by the skill-audit SKILL.md only when auditing 2+ files (the multi-file
+// Invoked by the skill-audit SKILL.md when auditing 2+ files (the multi-file
 // threshold that equalizes the Workflow tool's per-run overhead). Single-file
-// audits run inline in the main loop.
+// audits normally run inline in the main loop -- EXCEPT in review mode, where the
+// threshold drops to 1 so every review-mode detect goes through a lane. Review
+// mode exists to gate a submit/publish, so it cannot inherit the session model off
+// the main loop; the lane is what pins model+effort and enforces the schema. See
+// args.review below.
 //
 // args = {
 //   files: [ { path: string, skillType?: string } ],
+//   review: boolean  (REVIEW MODE. When true, each finding is additionally
+//            marked `attributable` -- whether the change under review caused it
+//            -- via a targeted per-finding check against the pre-image. Lanes
+//            stay mode-agnostic otherwise: they do NOT filter and do NOT change
+//            the verdict. The caller filters on `attributable` and relabels the
+//            verdict DIFF-CLEAN. See files[i].preImagePath.)
+//   files[i].preImagePath: string|null  (review mode only. Absolute path to a
+//            materialized copy of the SKILL.md as it was BEFORE the change under
+//            review. The CALLER materializes it -- `p4 print //path#have`, or
+//            `git show <base>:<path>` -- because this plugin is VCS-agnostic and
+//            must not learn Perforce or git. null means the file is an ADD with
+//            no pre-image, in which case every finding is attributable.)
 //   refs:  { pluginRoot: <abs path to plugins/skills-kit (parent of skills_kit_lib)>,
 //            venvPython: <abs path to skills-kit venv python> }
 // }
@@ -63,8 +79,9 @@ const FILE_FINDINGS_SCHEMA = {
           },
           bucket: { type: 'string', enum: ['FIX', 'SERIOUS', 'IMPROVE', 'SILENT', 'SPECIAL', 'NONE'], description: 'per-finding disposition assigned instance-level by the classifier (step 6)' },
           remediation: { type: 'string', description: 'concrete proposed remediation for FIX/SERIOUS/IMPROVE/SPECIAL; empty for SILENT/NONE' },
+          attributable: { type: 'boolean', description: 'review mode: did the change under review cause this finding? Judged against the pre-image (step 6.5). ALWAYS true outside review mode -- nothing is being diffed, so every finding counts.' },
         },
-        required: ['group', 'severity', 'criterion', 'message', 'line', 'taxonomy', 'bucket', 'remediation'],
+        required: ['group', 'severity', 'criterion', 'message', 'line', 'taxonomy', 'bucket', 'remediation', 'attributable'],
       },
     },
     verdict: { type: 'string', enum: ['COMPLIANT', 'NON-COMPLIANT'] },
@@ -82,11 +99,26 @@ if (!input || !Array.isArray(input.files) || input.files.length === 0) {
   throw new Error('detect.js requires args.files = [{path}]')
 }
 const refs = input.refs || {}
+const review = input.review === true
 
 function lanePrompt(f) {
   const schemaClause = refs.pluginRoot && refs.venvPython
     ? `Run the mechanical validator via Bash (it is a package module, so cd into the plugin root first):\n    (cd "${refs.pluginRoot}" && "${refs.venvPython}" -m skills_kit_lib.audit "${f.path}" --json)\nMap its rows into Schema-group findings: a universal-rule or YAML-schema FAIL is a Schema FAIL. Specifically: missing/malformed required frontmatter -> taxonomy A (default FIX -- add the mechanical default; authorial fields route to IMPROVE); description length/directive-form/exclusion-clause FAIL -> taxonomy B (IMPROVE, authorial); a YAML contract FAIL (missing required key, wrong type, list below min_len, forbidden key) -> taxonomy E (default FIX for a missing-default field; authorial or forbidden-key -> IMPROVE); a mixed-type signal (>1 canonical root, or the mixed-type heuristic) -> taxonomy D (IMPROVE, unless the orientation-summary exception applies, then JUDGMENT); a load-graph row (orphaned references/ file, unlinked member directory, two-hop-only reference, dangling index entry) -> taxonomy L (IMPROVE default; a dangling index path with an identified correct target is a mechanical FIX; an accepted internal-helper orphan is SILENT), group ADP, keeping the validator's severity (FAIL gates; JUDGMENT does not). Assign the final disposition in step 6, not here. If the validator is unavailable, emit one Schema finding severity JUDGMENT ("validator unavailable") and continue — never fail a file for that.`
     : `Validator path was not provided; emit one Schema finding severity JUDGMENT ("validator unavailable") and continue with cohesion judgment only.`
+
+  const reviewClause = !review
+    ? `Not review mode. Set \`attributable: true\` on EVERY finding -- nothing is being diffed, so every finding counts. Do not read any pre-image.`
+    : f.preImagePath
+      ? `REVIEW MODE. This audit gates a submit, so it must report only what the change under review actually caused. For EACH non-PASS finding you produced above, run a TARGETED check against the pre-image at ${f.preImagePath} (the SKILL.md as it was BEFORE the change): does this same criterion fire at this same anchor in the pre-image?
+   - Fires in the pre-image too -> \`attributable: false\` (pre-existing; not this change's doing).
+   - Does not fire in the pre-image -> \`attributable: true\`.
+   Do NOT re-run the whole audit on the pre-image. Ask one narrow factual question per finding; that is cheaper and far more stable than differencing two full reports.
+   Match on (criterion, taxonomy, normalized anchor) -- NEVER on line number or message wording. Line numbers shift and phrasing varies; a finding that moved or got reworded is the SAME finding. When a pre-image finding plausibly corresponds to this one, be GENEROUS and call it non-attributable: a false "pre-existing" is a missed nag, a false "attributable" is an accusation the author cannot act on.
+   PASS / INFO / NONE findings are ALWAYS \`attributable: true\` -- they carry no remediation, so "did the change cause it" is not a meaningful question and a \`false\` there would silently delete the row from the report.
+   If the pre-image cannot be read (missing, empty, unreadable), do NOT guess: set \`attributable: true\` on every finding and add one JUDGMENT finding, taxonomy "none", bucket "NONE", message "pre-image unreadable -- findings are unfiltered". Over-reporting is the safe direction; silently suppressing is not.
+   Attributable means CAUSED BY, not LOCATED IN. A finding anchored far from the edited lines is still attributable if the change created it -- e.g. the change adds a section that pushes the body over the CRP threshold, and the G finding anchors on an older section. Judge causation, not proximity.
+   You still report EVERY finding with its real disposition. Do NOT drop, downgrade, or re-bucket anything based on attributability -- the caller filters.`
+      : `REVIEW MODE, and this file has NO pre-image (it is an ADD introduced by the change under review). Every finding is therefore caused by this change: set \`attributable: true\` on ALL of them. Do not look for a pre-image.`
 
   return `You are ONE lane of a SKILL.md audit. Audit exactly one file and return structured findings. This is DETECTION ONLY — do not modify any file.
 
@@ -126,6 +158,7 @@ Steps:
    Declined-opportunity ledger: if the SKILL.md frontmatter carries an \`md-audit-declined:\` list (suffixed taxonomy ids or short finding keys), do NOT re-raise an IMPROVE finding the user already declined for that file -- honor it exactly like references-audit honors \`references-audit-allow-stale\`. A new or materially different finding still fires.
    PASS / INFO / JUDGMENT findings that need no remediation get taxonomy "none" and bucket "NONE".
    For each FIX/SERIOUS/IMPROVE/SPECIAL finding write a concrete \`remediation\` (FIX = the edit it will apply; SERIOUS = the one-line top-of-report summary; IMPROVE = the single one-line pitch), with line refs.
+6.5. ATTRIBUTABILITY. ${reviewClause}
 7. Verdict: NON-COMPLIANT if ANY finding has severity FAIL; otherwise COMPLIANT. INFO/JUDGMENT never gate. Disposition is orthogonal to the verdict.
 
 Idempotency matters: apply the fixed criteria and taxonomy deterministically. Do not invent findings; report only what the criteria actually surface. Return the structured object.`
@@ -144,7 +177,32 @@ const perFile = await parallel(input.files.map((f) => () =>
   }).then((r) => ({ ...r, path: f.path }))
 ))
 
-const results = perFile.filter(Boolean)
+const raw = perFile.filter(Boolean)
+
+// Review mode owns the filter and the relabel -- NOT the lanes. Lanes emit every
+// finding plus `attributable`; the reducer decides what survives and what the
+// verdict is called. Keeping this out of the lane is what lets one lane prompt
+// serve both modes.
+//
+// SERIOUS ALWAYS SURVIVES, attributable or not. A secret, or an invariant the
+// docs claim is protected but isn't, is not the author's doing and is still the
+// most important thing on the page. Filtering it because "the diff didn't cause
+// it" would turn review mode into a way to walk past exactly the findings that
+// most need a human.
+const isKept = (fnd) => !review || fnd.attributable !== false || fnd.bucket === 'SERIOUS'
+
+const results = raw.map((r) => {
+  if (!review) return r
+  const kept = r.findings.filter(isKept)
+  const suppressed = r.findings.length - kept.length
+  // The lane's verdict is computed over ALL findings, so it cannot stand once we
+  // filter. DIFF-CLEAN says "the change under review introduced no failure" --
+  // deliberately NOT the same claim as COMPLIANT, which would assert the whole
+  // file is clean. A DIFF-CLEAN file may still carry a surviving SERIOUS.
+  const attributableFail = kept.some((f) => f.severity === 'FAIL' && f.attributable !== false)
+  return { ...r, findings: kept, suppressed, verdict: attributableFail ? 'NON-COMPLIANT' : 'DIFF-CLEAN' }
+})
+
 const totals = results.reduce((acc, r) => {
   for (const fnd of r.findings) {
     if (fnd.bucket === 'FIX') acc.fix++
@@ -152,12 +210,20 @@ const totals = results.reduce((acc, r) => {
     else if (fnd.bucket === 'IMPROVE') acc.improve++
     else if (fnd.bucket === 'SILENT') acc.silent++
     else if (fnd.bucket === 'SPECIAL') acc.special++
-    if (fnd.severity === 'FAIL') acc.fail++
+    // Guard on attributability, not just severity. Non-attributable SERIOUS
+    // findings survive isKept by design, and a SERIOUS can carry FAIL.
+    // Counting those here would print "N attributable FAIL" next to a
+    // DIFF-CLEAN verdict that correctly ignored them.
+    if (fnd.severity === 'FAIL' && fnd.attributable !== false) acc.fail++
   }
+  acc.suppressed += r.suppressed || 0
   if (r.verdict === 'NON-COMPLIANT') acc.nonCompliant++
+  if (r.verdict === 'DIFF-CLEAN') acc.diffClean++
   return acc
-}, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0 })
+}, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0, diffClean: 0, suppressed: 0 })
 
-log(`Audited ${results.length}/${input.files.length} SKILL.md files — ${totals.nonCompliant} NON-COMPLIANT, ${totals.fail} FAIL findings; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (SILENT=${totals.silent} omitted)`)
+log(review
+  ? `Reviewed ${results.length}/${input.files.length} SKILL.md files — ${totals.diffClean} DIFF-CLEAN, ${totals.nonCompliant} NON-COMPLIANT, ${totals.fail} attributable FAIL; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (${totals.suppressed} pre-existing finding(s) suppressed as not caused by this change; SILENT=${totals.silent} omitted)`
+  : `Audited ${results.length}/${input.files.length} SKILL.md files — ${totals.nonCompliant} NON-COMPLIANT, ${totals.fail} FAIL findings; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (SILENT=${totals.silent} omitted)`)
 
-return { perFile: results, totals }
+return { perFile: results, totals, review }

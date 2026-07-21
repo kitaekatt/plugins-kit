@@ -5,7 +5,7 @@ skill-type: domain-skill
 description: Use when auditing an md artifact -- CLAUDE.md, SKILL.md, project doc, or cross-references -- or via /md-audit. Do NOT use to author (use md-authoring).
 disable-model-invocation: false
 user-invocable: true
-argument-hint: "[skill <path> | claude-md <path> | project-doc <path> | references [--scope skills|references|md|all]]"
+argument-hint: "[skill <path> [--review] | claude-md <path> [--review] | project-doc <path> | references [--scope skills|references|md|all]]"
 ---
 
 # md-audit
@@ -18,7 +18,8 @@ This is a **broader union domain**, not a nest (see `skill-authoring:references/
 
 - **Bare** -- `/md-audit` greets with the menu below; pick an artifact.
 - **Argument-dispatched** -- `/md-audit skill <path>`, `/md-audit claude-md <path>`, `/md-audit project-doc <path>`, `/md-audit references [flags]` jump straight into that audit.
-- **Natural language** -- "audit this CLAUDE.md", "check my SKILL.md", "audit the docs in .claude/docs", "find broken skill references", "inventory the skills" -- routed by the artifact named.
+- **Review mode** -- append `--review` to a `skill` or `claude-md` dispatch to audit a CHANGE rather than a file: findings the change did not cause are suppressed, nothing is auto-applied, and the verdict is `DIFF-CLEAN`. For gating a submit / publish / handback. Owned by the member; the router only passes the token through. See that member's "Review mode" section. **Only `skill` and `claude-md` implement it** -- if `--review` arrives on a `project-doc` or `references` dispatch, say so and stop rather than passing it through. Those members would ignore the token silently and return a whole-file audit, which a caller gating a submit would read as a passed change-scoped gate: a fake gate is worse than no gate.
+- **Natural language** -- "audit this CLAUDE.md", "check my SKILL.md", "audit the docs in .claude/docs", "find broken skill references", "inventory the skills" -- routed by the artifact named. Change-scoped phrasing ("review my changes before I submit", "audit the diff") routes to the named artifact WITH `--review`.
 
 ### Bare-invocation greeting
 
@@ -41,8 +42,8 @@ Route by the artifact under audit, then load that member's SKILL.md and run its 
 
 | You want to audit… | Dispatch | Member (loaded by md-audit) | What it does |
 |---|---|---|---|
-| a **SKILL.md** (contract + cohesion) | `/md-audit skill <path>` | `skill-audit` | per-skill contract + CCP/CRP/ADP; fans multi-file runs via the Workflow tool; also `roster` / `hierarchy` corpus inventory |
-| a **CLAUDE.md** (multi-file capable) | `/md-audit claude-md <path>` | `claude-md-audit` | CCP/CRP/ADP + hygiene + optional `claude_md:` schema + opt-in `density` lens (verbosity / extract-to-reference); fans multi-file runs via the Workflow tool |
+| a **SKILL.md** (contract + cohesion) | `/md-audit skill <path> [--review]` | `skill-audit` | per-skill contract + CCP/CRP/ADP; fans multi-file runs via the Workflow tool; also `roster` / `hierarchy` corpus inventory; supports `--review` (change-scoped) |
+| a **CLAUDE.md** (multi-file capable) | `/md-audit claude-md <path> [--review]` | `claude-md-audit` | CCP/CRP/ADP + hygiene + optional `claude_md:` schema + opt-in `density` lens (verbosity / extract-to-reference); fans multi-file runs via the Workflow tool; supports `--review` (change-scoped) |
 | a **project document** (standalone reference doc outside skills + CLAUDE.md) | `/md-audit project-doc <path|dir>` | `project-doc-audit` | maturation (graduate / fold / absorb) + CRP single-reading-task + ADP discoverability (orphan) + CCP no-skill-duplication; fans multi-file runs via the Workflow tool |
 | **broken skill cross-references** | `/md-audit references [flags]` | `references-audit` | scans markdown for dangling skill refs and unresolved `skill:` hard deps; fans multi-file classify/remediate via the Workflow tool |
 
