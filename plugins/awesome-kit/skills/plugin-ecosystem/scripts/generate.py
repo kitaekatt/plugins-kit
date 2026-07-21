@@ -602,6 +602,27 @@ footer {
 }
 """
 
+# Appended after CSS in --public mode. The default poster is a fixed 16:9 frame
+# sized to the viewport, so overlong columns scroll INSIDE .col-body. A published
+# page is a document, not a poster: let it grow to its content and hand scrolling
+# back to the browser window.
+PUBLIC_CSS = r"""
+html, body { overflow: visible; }
+.poster {
+  width: auto;
+  height: auto;
+  min-height: 100vh;
+  aspect-ratio: auto;
+  max-width: 1200px;
+  max-height: none;
+}
+.col-body { overflow-y: visible; }
+footer {
+  position: static;
+  margin: 20px 0 12px;
+}
+"""
+
 JS = r"""
 const data = __DATA__;
 
@@ -617,7 +638,10 @@ function el(tag, attrs = {}, children = []) {
   return n;
 }
 
+// Returns null when the plugin carries no state -- --public strips state, since
+// "on/off/installed" describes the generating machine, not the marketplace.
 function badge(state) {
+  if (!state) return null;
   const label = { on: "On", "opt-in": "Opt-In", off: "Off", unmanaged: "Installed", required: "Required" }[state] || state;
   return el("span", { class: `badge ${state}`, text: label });
 }
@@ -748,7 +772,7 @@ HTML_TEMPLATE = """<!doctype html>
 
 def render_html(title: str, tagline: str, plugins: list[dict],
                 marketplace_order: list[str], marketplace_subtitles: dict,
-                marketplace_urls: dict) -> str:
+                marketplace_urls: dict, public: bool = False) -> str:
     data = {
         "plugins": plugins,
         "marketplace_order": marketplace_order,
@@ -756,6 +780,7 @@ def render_html(title: str, tagline: str, plugins: list[dict],
         "marketplace_urls": marketplace_urls,
     }
     js = JS.replace("__DATA__", json.dumps(data))
+    css = CSS + PUBLIC_CSS if public else CSS
     n = len(marketplace_order)
     if n <= 1:
         col_template = "minmax(0, 720px)"
@@ -766,7 +791,7 @@ def render_html(title: str, tagline: str, plugins: list[dict],
             .replace("__TITLE__", html.escape(title))
             .replace("__SUB__", html.escape(tagline))
             .replace("__COLS_STYLE__", cols_style)
-            .replace("__CSS__", CSS)
+            .replace("__CSS__", css)
             .replace("__JS__", js))
 
 
@@ -790,6 +815,12 @@ def main(argv: list[str]) -> int:
                     help="Source on/off state from project bootstrap.json declarations only, "
                          "ignoring the user's live settings.json enabledPlugins. Use to depict "
                          "'how this project ships' regardless of the operator's local toggles.")
+    ap.add_argument("--public", action="store_true",
+                    help="Render a published-page variant: omit the on/off/installed/required "
+                         "state badges entirely (they describe the generating machine, not the "
+                         "marketplace) and let the page flow to its content height instead of "
+                         "scrolling inside a fixed 16:9 poster frame. Use when the output is "
+                         "checked in or served to other people.")
     ap.add_argument("--marketplace", action="append", default=None,
                     help="Restrict the poster to the named marketplace. Repeatable, or pass a "
                          "comma-separated list. Unknown names are silently ignored. When exactly "
@@ -834,6 +865,12 @@ def main(argv: list[str]) -> int:
     plugins = collect_plugins(installed, marketplaces, settings_enabled, bs_index, overrides,
                               marketplace_states, defaults_mode=args.defaults)
 
+    if args.public:
+        # Drop state from the DATA, not just the rendering -- a checked-in page
+        # should not embed which plugins this machine happens to have enabled.
+        for p in plugins:
+            p.pop("state", None)
+
     # column order: declared in bootstrap.json first, then alphabetical
     declared = [m["name"] for m in bootstrap.get("marketplaces", []) or [] if m.get("name") in marketplaces]
     seen = set()
@@ -845,7 +882,8 @@ def main(argv: list[str]) -> int:
     subtitles = {m: meta["poster"].get("subtitle", "") for m, meta in marketplaces.items()}
     urls = {m: meta["poster"].get("url", "") for m, meta in marketplaces.items()}
 
-    out_html = render_html(title, tagline, plugins, order, subtitles, urls)
+    out_html = render_html(title, tagline, plugins, order, subtitles, urls,
+                           public=args.public)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(out_html, encoding="utf-8")
     print(f"Wrote {output} ({len(out_html):,} bytes, {len(plugins)} plugins, "

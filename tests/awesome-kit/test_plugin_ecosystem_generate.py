@@ -204,3 +204,38 @@ class TestMergeCacheFallback:
         self._home(tmp_path, monkeypatch)
         merged = generate.merge_cache_fallback({"plugins": {}})
         assert merged["plugins"] == {}
+
+
+class TestPublicMode:
+    """--public renders the checked-in/published variant: no machine-local state
+    badges, and the page flows instead of scrolling inside a fixed 16:9 frame."""
+
+    PLUGINS = [{
+        "marketplace": "mkt", "name": "pluga", "version": "1.0.0",
+        "description": "d", "razor": "", "skills": [],
+    }]
+
+    def _render(self, public, plugins=None):
+        return generate.render_html(
+            "T", "tag", plugins if plugins is not None else self.PLUGINS,
+            ["mkt"], {}, {}, public=public)
+
+    def test_public_css_appended_only_in_public_mode(self):
+        assert "min-height: 100vh" in self._render(True)
+        assert "min-height: 100vh" not in self._render(False)
+
+    def test_public_page_flows_instead_of_clipping(self):
+        html = self._render(True)
+        # The default poster sets html/body overflow:hidden and scrolls inside
+        # .col-body; the public override hands scrolling back to the window.
+        assert "html, body { overflow: visible; }" in html
+        assert ".col-body { overflow-y: visible; }" in html
+
+    def test_state_absent_from_embedded_data(self):
+        """State is stripped from the DATA, not merely hidden -- a published page
+        must not embed which plugins the generating machine had enabled."""
+        stateful = [dict(self.PLUGINS[0], state="on")]
+        assert '"state": "on"' in self._render(False, stateful)
+
+    def test_badge_helper_tolerates_missing_state(self):
+        assert "if (!state) return null;" in self._render(True)

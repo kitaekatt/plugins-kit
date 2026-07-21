@@ -222,6 +222,10 @@ def regenerate() -> bool:
     so dev-tree must point them at THIS working copy for the page to show what
     is about to be published. Restoring is a finally: leaving the tree flipped
     silently loads plugins from the working copy in the next session.
+
+    --public is mandatory here: the default poster badges each plugin on/off/
+    installed from THIS machine's enabledPlugins, which is meaningless-to-wrong
+    on a page checked in for other people to read.
     """
     run([sys.executable, str(REGEN_MARKETPLACE_PY)], "marketplace.json regen")
 
@@ -231,6 +235,7 @@ def regenerate() -> bool:
              "--marketplace", MARKETPLACE_NAME,
              "--title", PAGE_TITLE,
              "--output", str(INDEX_HTML),
+             "--public",
              "--no-open"], "index.html regen")
     finally:
         run([sys.executable, str(DEV_TREE_PY), "normal"], "dev-tree normal")
