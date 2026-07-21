@@ -31,7 +31,10 @@ home's natural structure.
 - `bin/hue-kit`, `bin/hue-kit.cmd` -- PATH shims (Claude Code adds `bin/` to PATH).
 - `examples/scene-groups.yaml`, `examples/scene-designs.yaml`, `examples/index.html`
   -- the author's home (42 lights, 12 scenes). **Example data**; a user
-  regenerates their own or overwrites via `hue-kit init`.
+  regenerates their own or overwrites via `hue-kit init`. The rendered report is
+  viewable live (GitHub Pages, served from `master`):
+  <https://kitaekatt.github.io/plugins-kit/plugins/hue-kit/examples/index.html>
+  -- refresh it by copying a current `hue-kit render` output over it.
 
 ## The CLI
 
