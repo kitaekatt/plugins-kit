@@ -78,14 +78,23 @@ technique_skill:
             Select one profile from `review_profiles` using its `selection.guidance` -- this is
             an inference call, not regex. Read each profile's guidance, weigh the actual contents
             of `bundle.changed_files`, and pick the most appropriate profile. Default to `code`
-            when uncertain. Then launch one subagent per (reviewer × chunk) pair in parallel via
+            when uncertain.
+            Dispatch rule (deterministic -- compute the number, do not eyeball it): let
+            lanes = R x K, where R = len(profile.reviewers) (2 for data_only, 3 for code)
+            and K = len(bundle.diff_chunks). If lanes <= 6, launch the reviewer subagents
+            DIRECTLY as parallel background Agent calls in a single message (the default
+            path, steps 6-7 as written below). If lanes > 6, hand the reviewer fan-out and
+            the validator wave to the Workflow tool instead of launching inline. Same
+            reviewers, same validators, same output either way -- only the dispatch
+            mechanism changes.
+            Then launch one subagent per (reviewer × chunk) pair in parallel via
             a single message with R × K Agent calls, where R = len(profile.reviewers) and
             K = len(bundle.diff_chunks). Each subagent gets the chunk's absolute diff path
-            (`<bundle.bundle_dir>/<diff_chunks[i].path>`), the depot paths of the files in that
-            chunk (`diff_chunks[i].files`), and -- for reviewer_a -- the CLAUDE.md mapping
-            restricted to those files. Reviewers not listed in the selected profile are NOT
-            launched. If bundle.diff_chunks is empty (CL has no diff content), skip step 6 and
-            jump to step 9 with zero issues.
+            (`<bundle.bundle_dir>/<diff_chunks[i].path>`), the depot paths of the files
+            in that chunk (`diff_chunks[i].files`), and -- for reviewer_a -- the CLAUDE.md
+            mapping restricted to those files. Reviewers not listed in the selected profile are
+            NOT launched. If bundle.diff_chunks is empty (CL has no diff content), skip
+            step 6 and jump to step 9 with zero issues.
           tool: Agent
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) subagent).
         - n: 7

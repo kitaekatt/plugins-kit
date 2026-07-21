@@ -161,6 +161,17 @@ except ImportError:
 repair_path()
 
 
+# This module is the PERFORCE VcsAdapter (bootstrap_lib.code_review.vcs_adapter)
+# by shape, not by inheritance: get_workspace_root -> workspace_root, CL-number
+# resolution -> resolve_target, extract_diff (over fetch_describe) -> fetch_diff,
+# _parse_p4_header -> parse_header, _p4_diff_to_sections -> diff_to_sections,
+# parse_file_actions + resolve_local_paths -> enumerate_changed_files,
+# find_unreconciled -> hygiene_unincluded, find_unresolved -> hygiene_unresolved.
+# p4 DOES implement the optional capability: auto_shelve_cl +
+# fetch_shelf_fingerprint -> snapshot_change, cleanup_auto_shelve -> cleanup. See
+# the protocol docstring for the full contract before changing any of these shapes.
+
+
 # Captures (depot, rev, filetype). The filetype (e.g. `text`, `binary`,
 # `binary+l`) drives the binary guard in extract_diff's hunk synthesis.
 _FILE_HEADER = re.compile(r"^==== (//[^#]+)#(\d+) \(([^)]*)\) ====\s*$")

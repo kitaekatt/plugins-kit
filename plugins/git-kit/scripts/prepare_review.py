@@ -109,6 +109,16 @@ except ImportError:
 repair_path()
 
 
+# This module is the GIT VcsAdapter (bootstrap_lib.code_review.vcs_adapter) by
+# shape, not by inheritance: get_repo_root -> workspace_root, detect_default_range
+# / parse_range_arg -> resolve_target, fetch_diff, _parse_git_header ->
+# parse_header, _git_diff_to_sections -> diff_to_sections, fetch_changed_files ->
+# enumerate_changed_files, find_untracked_or_unstaged -> hygiene_unincluded,
+# find_merge_conflicts -> hygiene_unresolved. Git implements neither optional
+# capability (snapshot_change/cleanup) -- its range is always diffable. See the
+# protocol docstring for the full contract before changing any of these shapes.
+
+
 # Mirror p4-kit's choice for the same reason -- Read tool refuses files
 # beyond some unpublished threshold (a 1.4 MB plain-text diff fails).
 # 1 MB leaves ~40% headroom and keeps chunk counts close to 1 for typical

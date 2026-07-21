@@ -32,7 +32,7 @@
     {
       "name": "bootstrap",
       "description": "Centralized bootstrap engine for Claude Code plugins",
-      "version": "0.53.0",
+      "version": "0.53.1",
       "author": {
         "name": "Christina"
       },
@@ -42,7 +42,7 @@
     {
       "name": "p4-kit",
       "description": "Multi-agent code review of pending Perforce changelists via /p4-code-review (parallel Claude subagents). Shares chunking + CLAUDE.md primitives with git-kit via bootstrap_lib.code_review.",
-      "version": "0.16.3",
+      "version": "0.17.0",
       "author": {
         "name": "Christina"
       },
@@ -55,7 +55,7 @@
     {
       "name": "git-kit",
       "description": "Git + GitHub multi-agent code review (/git-code-review) plus gh CLI bootstrap (auth + optional org membership). Shares chunking + CLAUDE.md primitives with p4-kit via bootstrap_lib.code_review.",
-      "version": "0.4.2",
+      "version": "0.5.0",
       "author": {
         "name": "Christina"
       },
