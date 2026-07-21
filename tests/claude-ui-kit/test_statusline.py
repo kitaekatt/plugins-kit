@@ -190,3 +190,27 @@ class TestSegmentApi:
         result = self._run_with_segments(tmp_path, tmp_path / "absent")
         assert result.returncode == 0
         assert "myproj" in result.stdout
+
+    def test_multiline_sh_segment_cannot_split_the_bar(self, tmp_path):
+        """ui-kit owns composition: a segment ignoring the single-line contract
+        degrades itself, it does not turn the status line into two lines."""
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        (segs / "50-chatty.sh").write_text(
+            "#!/usr/bin/env bash\necho FIRST-LINE\necho SECOND-LINE\n")
+        result = self._run_with_segments(tmp_path, segs)
+        assert result.returncode == 0
+        assert result.stdout.count("\n") == 1, "status line must stay one line"
+        assert "FIRST-LINE" in result.stdout
+        assert "SECOND-LINE" not in result.stdout
+
+    def test_overlong_sh_segment_is_capped(self, tmp_path):
+        """An unbounded segment must not blow out the bar."""
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        (segs / "50-long.sh").write_text(
+            "#!/usr/bin/env bash\nprintf 'X%.0s' $(seq 1 400)\necho\n")
+        result = self._run_with_segments(tmp_path, segs)
+        assert result.returncode == 0
+        assert "X" * 120 in result.stdout
+        assert "X" * 200 not in result.stdout

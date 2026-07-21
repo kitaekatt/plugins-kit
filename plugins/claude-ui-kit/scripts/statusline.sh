@@ -180,10 +180,14 @@ fi
 #   *.txt  first line shown while fresh (mtime within
 #          STATUSLINE_SEGMENT_TXT_TTL seconds, default 300), capped 60 chars.
 #   *.sh   run with the statusline stdin JSON on stdin, under a HARD
-#          per-segment timeout (STATUSLINE_SEGMENT_TIMEOUT, default 2s);
-#          stdout appended verbatim (emit your own ANSI, single line, no
-#          leading separator). Empty output, non-zero exit, or timeout
-#          renders as an ABSENT cell -- a broken segment can lose only
+#          per-segment timeout (STATUSLINE_SEGMENT_TIMEOUT, default 2s,
+#          via `timeout` or `gtimeout`). Emit your own ANSI; no leading
+#          separator. Output is normalized like *.txt -- first line only,
+#          capped 120 chars, CR stripped -- so a segment that ignores the
+#          single-line contract degrades itself rather than the bar, and a
+#          RESET is appended so unreset color cannot bleed onward. Empty
+#          output, non-zero exit, timeout, or NO timeout binary on PATH all
+#          render as an ABSENT cell -- a broken segment can lose only
 #          itself, never blank the bar.
 # Contract for *.sh entries: pure cache reader. Read pre-computed local
 # state; never fetch, poll, or block on the network -- collect data in your
@@ -204,14 +208,29 @@ if [ -d "$SEGMENTS_DIR" ]; then
                 fi
                 ;;
             *.sh)
+                # The timeout is the contract, not a nicety: without it one slow
+                # segment stalls every prompt render. macOS ships no `timeout`
+                # (coreutils installs it as `gtimeout`), so probing only for
+                # `timeout` and falling through to an unbounded run would quietly
+                # void the guarantee on exactly the platform that needs it. If
+                # neither exists, skip *.sh segments rather than risk the bar.
                 if command -v timeout >/dev/null 2>&1; then
                     SEGOUT=$(printf '%s' "$DATA" | timeout "$SEG_TIMEOUT" bash "$seg" 2>/dev/null || true)
+                elif command -v gtimeout >/dev/null 2>&1; then
+                    SEGOUT=$(printf '%s' "$DATA" | gtimeout "$SEG_TIMEOUT" bash "$seg" 2>/dev/null || true)
                 else
-                    SEGOUT=$(printf '%s' "$DATA" | bash "$seg" 2>/dev/null || true)
+                    SEGOUT=""
                 fi
                 ;;
         esac
-        [ -n "$SEGOUT" ] && OUT="$OUT$SEP$SEGOUT"
+        # Normalize contributed output the same way *.txt is: first line only,
+        # length-capped, CR stripped. ui-kit owns composition, so a segment that
+        # ignores the single-line contract degrades itself, never the bar.
+        # Trailing RESET so an unreset color cannot bleed into what follows.
+        if [ -n "$SEGOUT" ]; then
+            SEGOUT=$(printf '%s' "$SEGOUT" | awk 'NR==1 {print substr($0,1,120); exit}' | tr -d '\r')
+        fi
+        [ -n "$SEGOUT" ] && OUT="$OUT$SEP$SEGOUT${RESET}"
     done
 fi
 
