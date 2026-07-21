@@ -15,7 +15,7 @@ default_remediation: >-
 
 ## The disposition model (ratified four-disposition contract)
 
-Every finding gets a taxonomy category (A-K) AND one of four dispositions. This is the ratified four-disposition contract that replaced the earlier three-bucket dispatch model. The authoritative spec is skills-kit's ratified criteria; this doc applies it to references-audit findings.
+Every finding gets a taxonomy category (A-K) AND one of four dispositions. This is the ratified four-disposition contract that replaced the earlier three-bucket dispatch model. The authoritative spec is the four-disposition contract in `skills-kit:md-audit/references/audit-framework.md`; this doc applies it to references-audit findings.
 
 ```
 report -> classify each finding -> disposition -> dispatch
@@ -170,7 +170,7 @@ references-audit is a corpus-wide scanner with four rules. The taxonomy A-K abov
 
 ## Background-agent brief template
 
-When the FIX bucket is non-empty, launch a single background agent. The brief is fully self-contained -- the agent does not reclassify, it applies. Use this template:
+When the FIX bucket is non-empty, its edits are applied in the REMEDIATE phase, never during classification. For a single affected file the main agent applies them inline with Edit; for two or more files they are handed to `workflow/remediate.js` lanes (one per file). The per-finding brief below is fully self-contained -- the executor does not reclassify, it applies. Use this template to build each lane's payload:
 
 > **Task: apply references-audit FIX edits.**
 >
@@ -206,7 +206,7 @@ The main agent constructs the per-finding payload by:
 - Computing the **after-text** per the category's default remediation above.
 - Bundling all payloads into the single Agent call.
 
-This keeps inference (classification, remediation strategy) on the main agent and execution (apply edits) on the background agent. The background agent is cheap to parallelize against the foreground IMPROVE/SPECIAL conversation. SERIOUS findings are surfaced summarized at the top of the report and are NEVER handed to this agent.
+This keeps inference (classification, remediation strategy) on the main agent and execution (apply edits) in the REMEDIATE phase -- inline for a single file, one `workflow/remediate.js` lane per file for two or more. The remediate lanes are cheap to parallelize against the foreground IMPROVE/SPECIAL conversation. SERIOUS findings are surfaced summarized at the top of the report and are NEVER handed to a remediation lane.
 
 ---
 

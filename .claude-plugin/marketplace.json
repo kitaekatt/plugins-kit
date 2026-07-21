@@ -68,7 +68,7 @@
     {
       "name": "skills-kit",
       "description": "Authoring and auditing skills + CLAUDE.md files, organized as a verb x artifact matrix: md-authoring (/md-authoring) and md-audit (/md-audit) union domains over the md artifact, the cohesion-principles placement spine, and the canonical audit-framework (primitives, compositions, audit-kinds, viewer-kinds) that other plugins' audits and viewers ride on.",
-      "version": "0.28.1",
+      "version": "0.28.2",
       "author": {
         "name": "Christina"
       },

@@ -28,7 +28,7 @@ In framework terms, references-audit (reached via `/md-audit references`) is:
 - **Discovery:** walks the scan tree; activates plugin rules when it hits `.claude-plugin/plugin.json`, skill rules when it hits `SKILL.md`, directory rules otherwise. Rules stack rather than override.
 - **Scaffolding:** `scripts/references_audit.py` -- the one repeatable invocation that replaces what would otherwise be agent inference over every file.
 - **Rules per composition:** the bindings table in `audit-framework.yaml::audit_kinds.references_audit.rules_per_composition`. Canonical rule definitions (id, severity, summary, detail) live in this skill's own `criteria:` block below -- the framework registry only catalogs which rule ids bind to which compositions. Today's implemented set: `hard_dep_missing`, `soft_ref_missing`, `name_mismatch`, `shadowing`. Tracked in `audit-framework.yaml::future_rules`: `manifest_declarations_resolve`, `no_cross_scope_personal_refs`. (The formerly-parked `references_reachable_from_skill_md` shipped 2026-07-15 under `skill_md_audit` -- its subject is one skill composition, so it lives in the per-skill validator, not this corpus scanner.)
-- **Taxonomy + dispositions:** the A-K categories below classify findings; each finding gets one of the ratified four dispositions -- FIX (auto-applied) / SERIOUS (summarized at top) / IMPROVE (count + one-liners, opt-in) / SILENT (not surfaced); K -> SPECIAL. FIX runs on a background agent, IMPROVE/SPECIAL go through a foreground Q&A, SERIOUS is surfaced at the top, SILENT is omitted.
+- **Taxonomy + dispositions:** the A-K categories below classify findings; each finding gets one of the ratified four dispositions -- FIX (auto-applied) / SERIOUS (summarized at top) / IMPROVE (count + one-liners, opt-in) / SILENT (not surfaced); K -> SPECIAL. FIX applies in the REMEDIATE phase (inline Edit for a single affected file, `workflow/remediate.js` lanes for 2+), IMPROVE/SPECIAL go through a foreground Q&A, SERIOUS is surfaced at the top, SILENT is omitted.
 
 ```yaml
 audit_skill:
@@ -38,7 +38,7 @@ audit_skill:
     covers:
       - "scanning SKILL.md, reference docs (references/*.md, in-skill CLAUDE.md), and arbitrary markdown for broken `/example:skill-name` references and `skill: \"...\"` hard-dep invocations"
       - "classifying findings into categories A-K (renamed / retired / merged / scope-violating / false positives / illustrative / proposed / unclassified)"
-      - "assigning each finding a disposition -- FIX (mechanical fix via background agent), SERIOUS (surfaced summarized at the top, never auto-fixed), IMPROVE (opt-in one-liners via foreground Q&A), or SILENT (not surfaced); SPECIAL (K escape hatch for unanticipated cases)"
+      - "assigning each finding a disposition -- FIX (mechanical fix applied in the REMEDIATE phase -- inline Edit for a single file, workflow/remediate.js lanes for 2+), SERIOUS (surfaced summarized at the top, never auto-fixed), IMPROVE (opt-in one-liners via foreground Q&A), or SILENT (not surfaced); SPECIAL (K escape hatch for unanticipated cases)"
       - "re-running the audit after remediation to verify no new findings surfaced from the fixes"
     excludes:
       - "single-skill contract validation (use /md-audit skill)"
@@ -230,7 +230,7 @@ audit_skill:
         - "Detection and remediation are separate phases split by the Q&A gate. FIX findings need no decision, but they are still applied in the REMEDIATE phase (alongside the decided IMPROVE edits), not during classification -- this keeps the scan idempotent so a re-run reproduces the same findings. SERIOUS and SILENT never enter the edit lists."
   # Disposition mapping (four-disposition model): the auto / discuss / special
   # lanes are retained for schema stability across audit members. auto = FIX
-  # categories (auto-applied via the background agent). discuss = the categories
+  # categories (auto-applied in the REMEDIATE phase). discuss = the categories
   # whose disposition is IMPROVE (opt-in one-liner) or SERIOUS (surfaced at top,
   # never auto) -- disposition tagged per entry. special = K. The final
   # per-finding disposition is assigned instance-level by classify.js against the

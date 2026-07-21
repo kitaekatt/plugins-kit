@@ -100,9 +100,9 @@ audit_skill:
     - id: "hygiene_thresholds"
       name: "Hygiene -- size signal and broken outbound file links"
       keywords: ["hygiene", "size signal", "broken link", "file path", "line count"]
-      summary: "Body length is a CRP-evaluation signal (over ~500 lines / 3000 tokens prompts the unitary-reading-task check). Outbound file-path references must resolve. Broken SKILL-link / cross-reference integrity is delegated to /md-audit references, not re-checked here."
-      severity: "INFO"
-      detail: "Mechanical: line/token count (from discover.py) and file-path resolution. Cross-reference (skill-link) integrity is out of scope -- references-audit owns it."
+      summary: "Body length is a CRP-evaluation signal (over ~500 lines / 3000 tokens prompts the unitary-reading-task check). Outbound file-path references must resolve -- a broken file-path link is a FAIL (PD-H1) that gates compliance. Broken SKILL-link / cross-reference integrity is delegated to /md-audit references, not re-checked here."
+      severity: "FAIL"
+      detail: "Two mechanical checks (from discover.py). Size is an INFO-level signal (line/token count) -- never a verdict. Broken outbound file-path resolution is the FAIL half (PD-H1): a broken file-path reference gates compliance (matching the gating_rule enumeration below and references/audit-criteria.md PD-H1). Cross-reference (skill-link) integrity is out of scope -- references-audit owns it."
     - id: "mechanical_convention_hygiene"
       name: "Hygiene -- mechanical convention violations (FIX-eligible)"
       keywords: ["broken link identified target", "non-ascii", "foreign absolute path", "line drift", "stale anchor", "mechanical fix", "convention violation"]
