@@ -228,7 +228,7 @@ def is_skill_md(path: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def find_project_skill_roots(base_dir: Path) -> list[Path]:
+def find_project_skill_roots(base_dir: Path, expand: bool = True) -> list[Path]:
     """Resolve `--project-dir` to one or more `.claude/skills` directories.
 
     Projects commonly nest skill directories under sub-trees (for example
@@ -236,16 +236,23 @@ def find_project_skill_roots(base_dir: Path) -> list[Path]:
     root or at the top-level `.claude/skills`, walk the implied project root
     and return every `.claude/skills` directory found. Duplicates are
     deduplicated, results are returned in deterministic path order.
+
+    `expand=False` disables the implied-project-root walk and returns only
+    `base_dir` itself. Required for the USER skills dir: `~/.claude/skills`
+    has `$HOME` as its implied project root, so expanding it rglobs the whole
+    user profile and drags in every unrelated `.claude/skills` on the machine
+    (other checkouts, plugin caches, pytest tmpdirs). User skills are flat by
+    convention -- there is no nesting to discover. See find_user_skill_roots.
     """
     if not base_dir.exists():
         return []
-    if base_dir.name == "skills" and base_dir.parent.name == ".claude":
-        project_root = base_dir.parent.parent
-    else:
-        project_root = base_dir
+    is_claude_skills = base_dir.name == "skills" and base_dir.parent.name == ".claude"
     roots: set[Path] = set()
-    if base_dir.name == "skills" and base_dir.parent.name == ".claude":
+    if is_claude_skills:
         roots.add(base_dir.resolve())
+    if not expand:
+        return sorted(roots) if roots else [base_dir.resolve()]
+    project_root = base_dir.parent.parent if is_claude_skills else base_dir
     if project_root.exists():
         for skills_dir in project_root.rglob("skills"):
             if (
@@ -257,12 +264,26 @@ def find_project_skill_roots(base_dir: Path) -> list[Path]:
     return sorted(roots)
 
 
-def discover_skills(base_dir: Path, source: str) -> list[SkillInfo]:
+def find_user_skill_roots(base_dir: Path) -> list[Path]:
+    """Resolve `--user-dir` to its skill roots -- never expanded.
+
+    The user skills dir is a single flat root (`~/.claude/skills/<name>/`).
+    Expanding it would treat `$HOME` as a project root; see
+    find_project_skill_roots.
+    """
+    return find_project_skill_roots(base_dir, expand=False)
+
+
+def discover_skills(
+    base_dir: Path, source: str, expand: bool = True
+) -> list[SkillInfo]:
     """Find all SKILL.md files under every `.claude/skills` root reachable
-    from `base_dir`. Returns one SkillInfo per discovered SKILL.md."""
+    from `base_dir`. Returns one SkillInfo per discovered SKILL.md.
+
+    `expand=False` for the user dir (see find_project_skill_roots)."""
     skills = []
     seen: set[Path] = set()
-    for root in find_project_skill_roots(base_dir):
+    for root in find_project_skill_roots(base_dir, expand=expand):
         for skill_file in sorted(
             root.rglob("[Ss][Kk][Ii][Ll][Ll].[Mm][Dd]")
         ):
@@ -336,7 +357,7 @@ def collect_skill_dirs(
     if project_dir:
         project_roots.extend(find_project_skill_roots(project_dir))
     if user_dir:
-        project_roots.extend(find_project_skill_roots(user_dir))
+        project_roots.extend(find_user_skill_roots(user_dir))
     for root in project_roots:
         for sm in root.rglob("[Ss][Kk][Ii][Ll][Ll].[Mm][Dd]"):
             skill_dirs.add(sm.parent)
@@ -554,7 +575,7 @@ def analyze(
     if project_dir.exists():
         all_skills.extend(discover_skills(project_dir, "project"))
     if user_dir and user_dir.exists():
-        all_skills.extend(discover_skills(user_dir, "user"))
+        all_skills.extend(discover_skills(user_dir, "user", expand=False))
     all_skills.extend(plugin_skill_infos(plugin_entries))
 
     name_map = build_name_map(all_skills)
@@ -573,7 +594,7 @@ def analyze(
             for root in find_project_skill_roots(project_dir):
                 base_dirs.append((root, "project"))
         if user_dir and user_dir.exists():
-            for root in find_project_skill_roots(user_dir):
+            for root in find_user_skill_roots(user_dir):
                 base_dirs.append((root, "user"))
         for entry in plugin_entries:
             base_dirs.append(
@@ -652,7 +673,7 @@ def analyze(
     # Name/directory mismatch on the skill identities (project/user only;
     # plugin install paths are version-pinned cache dirs).
     project_roots = find_project_skill_roots(project_dir) if project_dir else []
-    user_roots = find_project_skill_roots(user_dir) if user_dir else []
+    user_roots = find_user_skill_roots(user_dir) if user_dir else []
     for s in all_skills:
         if s.source.startswith("plugin:"):
             continue

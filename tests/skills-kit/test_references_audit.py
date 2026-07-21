@@ -203,3 +203,59 @@ class TestSharedFrontmatterParser:
 
     def test_no_frontmatter_is_empty_dict(self):
         assert ra.parse_frontmatter("# no fm\n") == {}
+
+
+class TestUserDirRootExpansion:
+    """The user skills dir must never expand to its implied project root.
+
+    `~/.claude/skills` has `$HOME` as `parent.parent`, so the project-style
+    implied-root walk rglobs the entire user profile and adopts every
+    unrelated `.claude/skills` on the machine (other checkouts, plugin
+    caches, pytest tmpdirs) as "user" skills.
+    """
+
+    def _home_with_stray_sibling(self, tmp_path: Path) -> Path:
+        home = tmp_path / "home"
+        mine = home / ".claude" / "skills" / "mine"
+        mine.mkdir(parents=True)
+        (mine / "SKILL.md").write_text(
+            "---\nname: mine\ndescription: d\n---\n# Mine\n", encoding="utf-8"
+        )
+        # An unrelated project that merely happens to live under $HOME.
+        stray = home / "somewhere" / "other-proj" / ".claude" / "skills" / "stray"
+        stray.mkdir(parents=True)
+        (stray / "SKILL.md").write_text(
+            "---\nname: stray\ndescription: d\n---\n# Stray\n", encoding="utf-8"
+        )
+        return home
+
+    def test_user_roots_do_not_escape_into_home(self, tmp_path):
+        home = self._home_with_stray_sibling(tmp_path)
+        roots = ra.find_user_skill_roots(home / ".claude" / "skills")
+        assert roots == [(home / ".claude" / "skills").resolve()]
+
+    def test_user_skill_discovery_excludes_stray_trees(self, tmp_path):
+        home = self._home_with_stray_sibling(tmp_path)
+        names = {
+            s.name
+            for s in ra.discover_skills(
+                home / ".claude" / "skills", "user", expand=False
+            )
+        }
+        assert names == {"mine"}
+
+    def test_project_dir_still_expands_nested_roots(self, tmp_path):
+        """The expansion is load-bearing for projects -- do not regress it."""
+        proj = tmp_path / "proj"
+        top = proj / ".claude" / "skills" / "a"
+        top.mkdir(parents=True)
+        (top / "SKILL.md").write_text(
+            "---\nname: a\ndescription: d\n---\n# A\n", encoding="utf-8"
+        )
+        nested = proj / ".teamcity" / ".claude" / "skills" / "b"
+        nested.mkdir(parents=True)
+        (nested / "SKILL.md").write_text(
+            "---\nname: b\ndescription: d\n---\n# B\n", encoding="utf-8"
+        )
+        names = {s.name for s in ra.discover_skills(proj / ".claude" / "skills", "project")}
+        assert names == {"a", "b"}
