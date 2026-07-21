@@ -94,7 +94,7 @@
     {
       "name": "awesome-kit",
       "description": "Christina's cross-domain skills: the task system (file-backed task/issue tracking -- folders as source of truth, embedded task_list references, plan.md task_items blocks enumerating each task's open items, 15 verbs; evolved from the hand-off skill in 0.8.0, which it replaces), a shared communication framework (task + verbose-updates), /plugin-ecosystem (interactive 16:9 HTML poster of marketplaces and plugins), and /html-pdf (convert an HTML file to PDF via headless Chromium and open it). Depends on plugins-kit:skills-kit for the shared audit framework and the skills_kit_lib shared library (schema validation + document walking).",
-      "version": "0.12.0",
+      "version": "0.12.1",
       "author": {
         "name": "Christina"
       },

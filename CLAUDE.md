@@ -171,10 +171,13 @@ python plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py \
 uv run python scripts/dev-tree.py dev        # installPaths -> this working copy
 python plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py \
   --marketplace plugins-kit --title "plugins-kit marketplace" \
-  --output ./index.html --no-open
+  --marketplace-json plugins-kit=.claude-plugin/marketplace.json \
+  --output ./index.html --public --no-open
 uv run python scripts/dev-tree.py normal     # ALWAYS restore, even if the regen failed
 uv run python scripts/dev-tree.py status     # confirm: installPaths @ cache: <n>, not 0
 ```
+
+**Both flags are load-bearing — a regen without them produces a page that is worse than the published one.** `--public` drops the on/off/installed state badges, which describe the generating machine rather than the marketplace; omit it and a checked-in page carries this box's `"state": "on"/"unmanaged"` values (and loses the flow-to-content-height CSS). `--marketplace-json` overrides the listing that the phantom-install filter reads: the **cached** `marketplace.json` under `~/.claude/plugins/marketplaces/` lags the source by one publish, so a plugin added in the current release is absent from it and gets dropped from its own release's page. That filter exists to catch plugins *removed* upstream; it misfires on ones *added*. `publish.py` passes both.
 
 **Preview vs publish — same mechanism, different commit rule.** The dev-tree regen above is also how you *preview* the page against dev work (`claude-dev` / `pk-dev` do the same installPath rewrite for a whole session). The two uses differ only in whether the result may be committed: at **publish** time dev is the about-to-be master, so its page is the published page — commit it. **Outside** a publish, dev contains skills and versions that are not going out, so the page renders a marketplace that does not exist yet — look at it, then `git restore index.html`. The rule is not "never commit a dev-tree page"; it is "only commit one whose content is being published in the same commit."
 
