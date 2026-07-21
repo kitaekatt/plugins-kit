@@ -306,27 +306,7 @@ technique_skill:
       review time when at least one file in the range falls within the gate's scope.
       Reminders are not findings -- they don't go through reviewer or validator subagents.
       Detection is deterministic, performed by prepare_review.py (same parser as p4-code-review).
-    authoring_format: |
-      Add this block to any CLAUDE.md (root, subdirectory, or both):
-
-        **Submit gate:** <imperative -- what the author must do>.
-        Applies to:
-        - <path prefix or glob>
-        - <path prefix or glob>
-
-        <optional rationale paragraph, rendered verbatim with the gate>
-
-      Scope path semantics:
-        - No glob characters (`*`, `?`, `[`): prefix match. `Foo/Bar/` matches every file
-          under Foo/Bar/. `Foo/Bar` (no trailing slash) is equivalent and does NOT
-          accidentally match `Foo/BarBaz/`.
-        - Contains glob characters: fnmatch-style glob, anchored to the repo root.
-          `*` matches anything including `/`; `?` matches one character.
-        - Case-insensitive on Windows, case-sensitive elsewhere.
-
-      Multiple gates per CLAUDE.md allowed; blocks must be separated by a blank line.
-      Malformed blocks (missing `Applies to:`, empty scope list) are skipped with a
-      one-line stderr warning -- never silently dropped.
+    authoring_format: "See references/submit-gates.md for the CLAUDE.md-author-facing guide to writing submit-gate blocks (block format, scope path semantics, multi-gate rules)."
     rendering: |
       When bundle.submit_gates is non-empty, the rendered review prepends a
       `## Submit checklist` section ABOVE the per-file review body. Each gate renders as:
