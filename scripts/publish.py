@@ -226,6 +226,13 @@ def regenerate() -> bool:
     --public is mandatory here: the default poster badges each plugin on/off/
     installed from THIS machine's enabledPlugins, which is meaningless-to-wrong
     on a page checked in for other people to read.
+
+    --marketplace-json is mandatory for the same class of reason: generate.py
+    filters phantom installs against the CACHED marketplace.json, which lags the
+    source by one publish. A plugin introduced in this release is not in it yet,
+    so it would be dropped from its own release's page (how hue-kit 0.7.0 shipped
+    a page missing bootstrap-stuck-fix 0.1.0). Point it at the copy just
+    regenerated above.
     """
     run([sys.executable, str(REGEN_MARKETPLACE_PY)], "marketplace.json regen")
 
@@ -233,6 +240,7 @@ def regenerate() -> bool:
     try:
         run([sys.executable, str(GENERATE_PY),
              "--marketplace", MARKETPLACE_NAME,
+             "--marketplace-json", f"{MARKETPLACE_NAME}={MARKETPLACE_JSON}",
              "--title", PAGE_TITLE,
              "--output", str(INDEX_HTML),
              "--public",

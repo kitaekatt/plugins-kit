@@ -178,13 +178,21 @@ def collect_skills(plugin_root: Path, poster_overrides: dict) -> list[dict]:
     return skills
 
 
-def collect_marketplace_metadata() -> dict:
+def collect_marketplace_metadata(listing_overrides: dict | None = None) -> dict:
     """Return {marketplace_name: {poster, plugin_names}} for marketplaces that opted in.
 
     plugin_names is the set of plugin names currently listed in the marketplace's
     marketplace.json -- used to filter out phantom installs (plugins still cached
-    locally but already removed from the marketplace source)."""
+    locally but already removed from the marketplace source).
+
+    listing_overrides maps a marketplace name to a marketplace.json path to read
+    INSTEAD of the cached copy. The cached listing lags the source by one publish,
+    so a plugin added in the current release is absent from it and the phantom
+    filter drops it -- the filter is meant to catch REMOVALS and misfires on
+    ADDITIONS. Publishing passes the repo's freshly regenerated marketplace.json
+    here so a brand-new plugin appears on its own release's page."""
     root = home_claude() / "plugins" / "marketplaces"
+    overrides = listing_overrides or {}
     out = {}
     if not root.is_dir():
         return out
@@ -196,7 +204,8 @@ def collect_marketplace_metadata() -> dict:
         poster = child / ".claude-plugin" / "poster.yaml"
         if not poster.exists():
             continue
-        marketplace_json = load_json(child / ".claude-plugin" / "marketplace.json")
+        listing = overrides.get(child.name) or (child / ".claude-plugin" / "marketplace.json")
+        marketplace_json = load_json(Path(listing))
         plugin_names = {p.get("name") for p in marketplace_json.get("plugins", []) if p.get("name")}
         out[child.name] = {
             "poster": load_yaml(poster),
@@ -825,7 +834,21 @@ def main(argv: list[str]) -> int:
                     help="Restrict the poster to the named marketplace. Repeatable, or pass a "
                          "comma-separated list. Unknown names are silently ignored. When exactly "
                          "one marketplace remains, the column grid collapses to a single column.")
+    ap.add_argument("--marketplace-json", action="append", default=None,
+                    metavar="NAME=PATH",
+                    help="Read NAME's plugin listing from PATH instead of the cached "
+                         "marketplace.json. Repeatable. The cached copy lags the source by one "
+                         "publish, so a plugin added in the current release is filtered out as a "
+                         "phantom install; point this at the freshly regenerated marketplace.json "
+                         "to include it. Used by publish.py.")
     args = ap.parse_args(argv)
+
+    listing_overrides = {}
+    for raw in args.marketplace_json or []:
+        name, sep, path = raw.partition("=")
+        if not sep or not name.strip() or not path.strip():
+            sys.exit(f"--marketplace-json expects NAME=PATH, got: {raw}")
+        listing_overrides[name.strip()] = Path(path.strip()).expanduser()
 
     project_root = (args.project or Path.cwd()).resolve()
     output = args.output or (home_claude() / "plugin-ecosystem.html")
@@ -835,7 +858,7 @@ def main(argv: list[str]) -> int:
     tagline = user_config.get("tagline", "")
     overrides = user_config.get("states") or {}
 
-    marketplaces = collect_marketplace_metadata()
+    marketplaces = collect_marketplace_metadata(listing_overrides)
     if not marketplaces:
         sys.exit("No marketplaces have opted in (no .claude-plugin/poster.yaml files found "
                  "under ~/.claude/plugins/marketplaces/).")
