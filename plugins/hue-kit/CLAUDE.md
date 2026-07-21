@@ -26,7 +26,8 @@ home's natural structure.
   scene-layers.py (bridge I/O, colour math, the HTML renderer). Not run directly.
 - `scripts/hue_kit_cli.py` -- the `hue-kit` verb front-end (report / groups /
   export / render / validate / apply / init). Re-execs under the plugin venv via
-  `bootstrap_guard.py` (vendored, stdlib-only; canonical copy in git-kit).
+  `bootstrap_guard.py` (vendored, stdlib-only; canonical in bootstrap's
+  `bootstrap_lib/`).
 - `bin/hue-kit`, `bin/hue-kit.cmd` -- PATH shims (Claude Code adds `bin/` to PATH).
 - `examples/scene-groups.yaml`, `examples/scene-designs.yaml`, `examples/index.html`
   -- the author's home (42 lights, 12 scenes). **Example data**; a user
@@ -138,8 +139,11 @@ bar in Movie night"):
 - `scene-meta-groups.py` is loaded by PATH (via `importlib`), so its hyphenated
   filename is intentional -- do not rename it or scene-layers.py without updating
   the loader.
-- `bootstrap_guard.py` is a **vendored** byte-for-byte copy of git-kit's
-  canonical; a drift test in plugins-kit asserts copies match. If you change the
-  guard, change the canonical and re-vendor.
+- `bootstrap_guard.py` is a **vendored** byte-for-byte copy of the canonical at
+  `plugins/bootstrap/bootstrap_lib/bootstrap_guard.py`; a drift test in
+  plugins-kit asserts copies match. Every other copy -- git-kit's, p4-kit's,
+  this one -- is vendored, so editing one of THOSE is what breaks the test (it
+  is how p4-kit 0.16.1 drifted). If you change the guard, change the canonical
+  and re-vendor.
 - The example YAML/HTML are the author's home. Keep them buildable but treat them
   as a worked example, not this plugin's own config.
