@@ -60,6 +60,20 @@ rather than `uv run python`) is documented in the root CLAUDE.md insight
 `host_python_via_plugin_venv`. With the script-side re-exec in place, the
 SKILL.md guidance is a nicety, not a load-bearing requirement.
 
+**Test gotcha: this same re-exec silently short-circuits pytest.** Running
+`pytest tests/p4-kit` (or `tests/git-kit`) without `_BOOTSTRAP_GUARD_VENV_REEXEC=1`
+set stops at collection with exit 0 -- a false green. Importing
+`prepare_review.py` triggers `reexec_under_plugin_venv`, which on a machine
+with the plugin's venv provisioned calls `os.execv` and abandons the pytest
+process itself, not just the import. Setting the guard env var makes the
+re-exec a no-op (see `_REEXEC_GUARD_ENV` in `bootstrap_guard.py`), matching how
+the real script is invoked when the guard has already fired once. Canonical
+invocation:
+
+```bash
+_BOOTSTRAP_GUARD_VENV_REEXEC=1 uv run pytest tests/p4-kit -q
+```
+
 ## bootstrap_guard.py is vendored byte-for-byte
 
 `bootstrap_guard.py` is a stdlib-only guard that must run when `bootstrap_lib`

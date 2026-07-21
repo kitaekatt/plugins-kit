@@ -138,6 +138,8 @@ uv run python scripts/publish.py --check    # preflight only; no writes, no push
 
 **Definition.** "Publish" means **all** of: version bump + regenerated `marketplace.json`, regenerated `index.html` inside the release commit, `dev` pushed, and `master` fast-forwarded and pushed. A bump without a master merge is **not** a publish — users still see the old version. A `dev` push without a master merge is **not** a publish — `master` is the cache source. A master merge without a bump is **not** a publish — the cache key doesn't change, so consumers never refetch. `publish.py` refuses each of these rather than half-shipping.
 
+**A bare `git push` is not a publish.** The canonical publish is `uv run python scripts/publish.py` -- it regenerates derived artifacts (`index.html`) inside the release commit, pushes `dev`, fast-forwards `master`, and verifies `dev` == `master`. A bare push leaves `master` stale (it is the cache source consumers fetch), so consumers never see the release.
+
 `.claude-plugin/marketplace.json` is **derived data** — rebuilt from each plugin's `plugin.json`, filtered by `"published"` (missing = `true`; `false` = excluded). Never hand-edit its plugin entries; the pre-commit hook rejects drift.
 
 **What the script will NOT do:** decide what ships. When `origin/master..dev` holds commits touching a dev-only (`published: false`) plugin, it refuses and names them — branch from master and cherry-pick the publish-ready commits yourself.
