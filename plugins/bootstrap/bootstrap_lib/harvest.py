@@ -143,10 +143,21 @@ def _registry_installed_bootstrap(registry_path: str, marketplace: str) -> Tuple
     if isinstance(entry, dict):
         rec = entry
     elif isinstance(entry, list):
-        for e in entry:
-            if isinstance(e, dict) and e.get("installPath"):
-                rec = e
-                break
+        # Deliberate pick, never entries[0]: the registry can hold a stale
+        # duplicate record carrying projectPath ahead of the healthy one
+        # (claude-code#79892), and harvest's whole job is "run the newest
+        # engine on disk" -- so prefer records without projectPath, newest
+        # version first. Same policy as plugin_resolve.pick_registry_record,
+        # narrowed to records that actually carry an installPath.
+        candidates = [e for e in entry if isinstance(e, dict) and e.get("installPath")]
+        if candidates:
+            rec = max(
+                candidates,
+                key=lambda e: (
+                    0 if e.get("projectPath") else 1,
+                    _parse_semver(str(e.get("version", "") or "0")),
+                ),
+            )
     if not isinstance(rec, dict):
         return "", ""
     return rec.get("version", "") or "", rec.get("installPath", "") or ""

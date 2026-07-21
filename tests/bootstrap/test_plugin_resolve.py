@@ -324,3 +324,53 @@ class TestCacheFallbackDiscovery:
             {}, reg, str(root), fallback_enabled_refs={"pluga@mkt"}
         )
         assert [p.name for p in results] == ["pluga"]
+
+
+class TestPickRegistryRecord:
+    """Deliberate record pick (claude-code#79892): never entries[0]."""
+
+    def _pick(self, entry):
+        from bootstrap_lib.plugin_resolve import pick_registry_record
+        return pick_registry_record(entry)
+
+    def test_dict_passthrough(self):
+        rec = {"version": "1.0.0", "installPath": "/p"}
+        assert self._pick(rec) is rec
+
+    def test_prefers_record_without_projectpath(self):
+        stale = {"version": "0.45.0", "installPath": "/old", "projectPath": "D:/dev/x"}
+        healthy = {"version": "0.52.0", "installPath": "/new"}
+        assert self._pick([stale, healthy]) is healthy
+
+    def test_healthy_wins_even_when_older(self):
+        stale = {"version": "9.0.0", "projectPath": "/proj"}
+        healthy = {"version": "0.1.0"}
+        assert self._pick([stale, healthy]) is healthy
+
+    def test_newest_among_healthy(self):
+        a = {"version": "0.9.0"}
+        b = {"version": "0.10.0"}
+        assert self._pick([a, b]) is b
+
+    def test_junk_entries_ignored(self):
+        healthy = {"version": "1.0.0"}
+        assert self._pick(["junk", None, healthy]) is healthy
+
+    def test_empty_and_wrong_shapes_return_none(self):
+        assert self._pick([]) is None
+        assert self._pick(None) is None
+        assert self._pick("nope") is None
+
+    def test_resolve_plugin_skips_stale_duplicate(self, tmp_path):
+        registry = tmp_path / "installed_plugins.json"
+        registry.write_text(json.dumps({"plugins": {
+            "plugins-kit:demo": [
+                {"version": "0.45.0", "installPath": "/stale",
+                 "projectPath": "D:/dev/x"},
+                {"version": "0.52.0", "installPath": "/healthy"},
+            ],
+        }}))
+        info = resolve_plugin(str(registry), "plugins-kit:demo", str(tmp_path))
+        assert info is not None
+        assert info.version == "0.52.0"
+        assert info.install_path == os.path.normpath("/healthy")

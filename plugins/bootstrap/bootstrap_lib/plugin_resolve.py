@@ -61,7 +61,9 @@ def resolve_plugin(registry_path: str, plugin_ref: str, base_dir: str) -> Option
     if not entries or not isinstance(entries, list):
         return None
 
-    entry = entries[0]  # Use first entry
+    entry = pick_registry_record(entries)
+    if entry is None:
+        return None
     install_path = entry.get("installPath", "")
     version = entry.get("version", "0.0.0")
 
@@ -83,6 +85,36 @@ def _version_sort_key(version: str):
     keys) sort below any numeric version and tie-break lexically."""
     parts = re.findall(r"\d+", version)
     return (1 if parts else 0, tuple(int(p) for p in parts), version)
+
+
+def pick_registry_record(entry):
+    """The authoritative record for one installed_plugins.json ref.
+
+    The registry can hold DUPLICATE records under one ref: Claude Code's
+    trust/adoption flow writes a user-scope record that carries
+    ``projectPath``, and a later ``--scope user`` install APPENDS a
+    well-formed record instead of replacing it. A first-entry pick then
+    reads the stale record forever -- the machine-wedge failure mode
+    (2026-07-21 post-mortem; reported upstream as claude-code#79892).
+
+    Prefer records WITHOUT ``projectPath`` (the shape the updater actually
+    maintains), newest version among those. Accepts the registry's dict and
+    list shapes; returns None when nothing usable exists.
+    """
+    if isinstance(entry, dict):
+        return entry
+    if not isinstance(entry, list):
+        return None
+    records = [e for e in entry if isinstance(e, dict)]
+    if not records:
+        return None
+    return max(
+        records,
+        key=lambda e: (
+            0 if e.get("projectPath") else 1,
+            _version_sort_key(str(e.get("version", "") or "")),
+        ),
+    )
 
 
 def discover_cache_plugins(plugins_root: str, enabled_refs) -> dict:
@@ -205,7 +237,9 @@ def list_enabled_plugins(config: dict, registry_path: str, base_dir: str, enable
                 continue
 
         # Resolve install path
-        entry = entries[0]
+        entry = pick_registry_record(entries)
+        if entry is None:
+            continue
         install_path = entry.get("installPath", "")
         version = entry.get("version", "0.0.0")
         if install_path.startswith("./") or install_path.startswith("../"):

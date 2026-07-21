@@ -722,7 +722,7 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
     """
     from .fix_queue import (
         queue_from_failures, write_or_clear_queue, fix_queue_failure,
-        launch_fix_runner,
+        launch_fix_runner, has_actionable,
     )
     tasks = queue_from_failures(all_failures, current_os)
     try:
@@ -748,6 +748,16 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
         })
         return False
     if not path:
+        return False
+
+    if not has_actionable(tasks):
+        # Everything queued is opportunistic housekeeping (e.g. the dead-PATH
+        # prune): worth fixing, not worth an admin nag of its own. The queue
+        # and shim stay on disk, so the work rides along the next time a real
+        # deferral needs the runner (or the user runs the shim by hand) -- but
+        # nothing is surfaced: no aggregate, no fix-all launch, and the covered
+        # failures are dropped so they cannot surface as raw per-item nags.
+        all_failures[:] = [f for f in all_failures if not _opportunistic(f)]
         return False
 
     launch_detail = None
@@ -1180,11 +1190,9 @@ def _bootstrap_stale_advice(running_version, plugin_name, marketplace_name, regi
             installs = json.load(f).get("plugins", {}).get(cli_ref, [])
     except (OSError, ValueError):
         return None
-    registry_version = ""
-    if isinstance(installs, list) and installs and isinstance(installs[0], dict):
-        registry_version = installs[0].get("version", "")
-    elif isinstance(installs, dict):
-        registry_version = installs.get("version", "")
+    from .plugin_resolve import pick_registry_record
+    rec = pick_registry_record(installs)
+    registry_version = rec.get("version", "") if rec is not None else ""
     if not registry_version:
         return None
     from .marketplace_lifecycle import _version_greater
@@ -2181,11 +2189,19 @@ def _process_dead_path_entries(data_dir, prefix, ok_entries):
     queue.json first). This is the one queued operation that needs no privilege;
     it is queued for consent, not for elevation.
 
+    OPPORTUNISTIC: pruning is housekeeping, not a blocker, so the descriptor is
+    flagged `opportunistic` -- it rides the fix queue whenever something that
+    genuinely needs the runner is also queued, but a queue containing only this
+    task surfaces no nag at all (see _elevation_step). The finding still logs
+    every session and the queue/shim stay on disk for a user who wants to run
+    the prune by hand.
+
     Silent when clean (an ok entry), a persistent failure when not: the item
-    must survive a declined fix-all, so it re-offers next session instead of
-    being detected once and forgotten. The scan itself is cached on a PATH hash
-    -- see bootstrap_lib.path_prune for why caching the RESULT rather than
-    "already reported" is what makes that work.
+    must survive a declined fix-all, so it re-offers (when something actionable
+    is alongside it) next session instead of being detected once and forgotten.
+    The scan itself is cached on a PATH hash -- see bootstrap_lib.path_prune
+    for why caching the RESULT rather than "already reported" is what makes
+    that work.
 
     Returns a failure dict, or None when there is nothing to prune.
     """
@@ -2203,7 +2219,10 @@ def _process_dead_path_entries(data_dir, prefix, ok_entries):
 
     count = len(dead)
     noun = "entry" if count == 1 else "entries"
-    ok_entries.append(f"{prefix}User PATH: {count} dead {noun} (cached scan)")
+    ok_entries.append(
+        f"{prefix}User PATH: {count} dead {noun} (queued opportunistically; "
+        f"prunes when a real fix needs the runner)"
+    )
     return {
         "type": "path_prune",
         "name": "dead-path-entries",
@@ -2219,6 +2238,7 @@ def _process_dead_path_entries(data_dir, prefix, ok_entries):
             "entries": dead,
             "backup": os.path.join(os.path.dirname(stamp_path(data_dir)),
                                    "path_backup.txt"),
+            "opportunistic": True,
         },
         "agent_msg": (
             f"The Windows User PATH has {count} dead {noun} pointing at "
@@ -4309,6 +4329,10 @@ def _env_phase_env_checks(ctx):
                     # 3600s toolkit download from a default-timeout config fix.
                     # Declare it only when that inference is wrong.
                     **({"cost": cost} if cost else {}),
+                    # Author-declared piggyback-only housekeeping: the fix rides
+                    # the queue but never generates an admin nag on its own.
+                    **({"opportunistic": True}
+                       if entry.get("opportunistic") else {}),
                 },
                 agent_msg=(
                     f"The env check '{name}' is not configured and its fix "
@@ -4927,6 +4951,17 @@ _AUTO_FIXABLE_TYPES = frozenset({
     "path", "venv", "git_dep", "ini", "pypi",
     "json", "marketplace", "plugin", "sync_to_data",
 })
+
+
+def _opportunistic(failure):
+    """True when the failure's deferred task is piggyback-only housekeeping.
+
+    Such a failure is dropped outright when the whole queue is opportunistic
+    (see _elevation_step) -- surfacing it raw would recreate the exact nag the
+    flag exists to remove.
+    """
+    desc = failure.get("elevation")
+    return isinstance(desc, dict) and bool(desc.get("opportunistic"))
 
 
 def _spoken_for(failure):

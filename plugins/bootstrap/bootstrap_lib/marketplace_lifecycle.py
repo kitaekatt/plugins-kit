@@ -11,6 +11,8 @@ import subprocess
 import sys
 from typing import NamedTuple, Optional
 
+from .plugin_resolve import pick_registry_record
+
 
 class LifecycleResult(NamedTuple):
     passed: bool
@@ -600,8 +602,9 @@ def check_plugin_scope(plugin_ref: str, desired_scope: str) -> ScopeCheckResult:
         plugins = data.get("plugins", {})
         # Try both ref formats
         entries = plugins.get(cli_ref) or plugins.get(plugin_ref) or []
-        if entries:
-            installed_scope = entries[0].get("scope", "")
+        rec = pick_registry_record(entries)
+        if rec is not None:
+            installed_scope = rec.get("scope", "")
             if installed_scope == desired_scope:
                 return ScopeCheckResult(
                     matches=True, ref=plugin_ref,
@@ -682,6 +685,11 @@ def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> bool:
             return True  # not in registry, nothing to fix
         changed = False
         for entry in entries:
+            if not isinstance(entry, dict) or entry.get("projectPath"):
+                # Never scope-flip a record carrying projectPath: stamping
+                # scope onto it manufactures the user-scope+projectPath
+                # chimera that wedges updates (claude-code#79892).
+                continue
             if entry.get("scope") != desired_scope:
                 entry["scope"] = desired_scope
                 changed = True
@@ -732,8 +740,9 @@ def check_plugin_version(plugin_ref: str) -> VersionCheckResult:
         with open(ip_path, "r") as f:
             data = json.load(f)
         installs = data.get("plugins", {}).get(cli_ref, [])
-        if installs:
-            installed_version = installs[0].get("version", "")
+        rec = pick_registry_record(installs)
+        if rec is not None:
+            installed_version = rec.get("version", "")
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
 
@@ -823,8 +832,9 @@ def check_plugin_min_version(plugin_ref: str, min_version: str) -> VersionCheckR
         with open(ip_path, "r") as f:
             data = json.load(f)
         installs = data.get("plugins", {}).get(cli_ref) or data.get("plugins", {}).get(plugin_ref) or []
-        if installs:
-            installed_version = installs[0].get("version", "")
+        rec = pick_registry_record(installs)
+        if rec is not None:
+            installed_version = rec.get("version", "")
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
 

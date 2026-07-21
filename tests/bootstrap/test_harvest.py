@@ -521,3 +521,40 @@ class TestCacheFallbackInstalledBootstrap:
         reg = self._scaffold(tmp_path, ["0.46.0"])
         version, _ = read_installed_bootstrap(reg, "")
         assert version == "0.46.0"
+
+
+class TestReadInstalledBootstrapDuplicateRecords:
+    """The wedge scenario (claude-code#79892): a stale user-scope record
+    carrying projectPath sits AHEAD of the healthy record; first-entry picks
+    read the stale one forever."""
+
+    def test_prefers_record_without_projectpath(self, tmp_path):
+        reg = _registry(tmp_path, {
+            "bootstrap@plugins-kit": [
+                {"version": "0.45.0", "installPath": "/cache/bootstrap/0.45.0",
+                 "projectPath": "D:/dev/env-config", "scope": "user"},
+                {"version": "0.52.0", "installPath": "/cache/bootstrap/0.52.0",
+                 "scope": "user"},
+            ],
+        })
+        assert read_installed_bootstrap(reg, "plugins-kit") == (
+            "0.52.0", "/cache/bootstrap/0.52.0")
+
+    def test_healthy_record_wins_even_when_older(self, tmp_path):
+        reg = _registry(tmp_path, {
+            "bootstrap@plugins-kit": [
+                {"version": "0.60.0", "installPath": "/stale",
+                 "projectPath": "D:/dev/somewhere"},
+                {"version": "0.52.0", "installPath": "/healthy"},
+            ],
+        })
+        assert read_installed_bootstrap(reg, "plugins-kit") == ("0.52.0", "/healthy")
+
+    def test_newest_wins_among_healthy_records(self, tmp_path):
+        reg = _registry(tmp_path, {
+            "bootstrap@plugins-kit": [
+                {"version": "0.9.0", "installPath": "/a"},
+                {"version": "0.10.0", "installPath": "/b"},
+            ],
+        })
+        assert read_installed_bootstrap(reg, "plugins-kit") == ("0.10.0", "/b")

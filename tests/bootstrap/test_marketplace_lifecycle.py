@@ -1108,3 +1108,56 @@ class TestCheckMarketplaceCurrentNoUpstream:
         result = check_marketplace_current("test-mkt")
         assert result.passed is True
         assert "no upstream" in result.message
+
+
+class TestEnsureRegistryScopeProjectPathGuard:
+    """ensure_registry_scope must never scope-flip a record carrying
+    projectPath -- stamping scope onto it manufactures the chimera record
+    that wedges updates (claude-code#79892)."""
+
+    def _write_registry(self, tmp_path, monkeypatch, plugins_data):
+        ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        ip.parent.mkdir(parents=True, exist_ok=True)
+        ip.write_text(json.dumps({"version": 2, "plugins": plugins_data}))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        return ip
+
+    def test_projectpath_record_untouched_healthy_sibling_fixed(self, tmp_path, monkeypatch):
+        ip = self._write_registry(tmp_path, monkeypatch, {
+            "bootstrap@plugins-kit": [
+                {"scope": "project", "version": "0.45.0", "projectPath": "D:/dev/x"},
+                {"scope": "project", "version": "0.52.0"},
+            ]
+        })
+        assert ensure_registry_scope("plugins-kit:bootstrap", "user") is True
+        entries = json.loads(ip.read_text())["plugins"]["bootstrap@plugins-kit"]
+        assert entries[0]["scope"] == "project"  # projectPath record: untouched
+        assert entries[1]["scope"] == "user"     # healthy record: fixed
+
+    def test_only_projectpath_records_no_write(self, tmp_path, monkeypatch):
+        ip = self._write_registry(tmp_path, monkeypatch, {
+            "bootstrap@plugins-kit": [
+                {"scope": "project", "version": "0.45.0", "projectPath": "D:/dev/x"},
+            ]
+        })
+        before = ip.read_text()
+        assert ensure_registry_scope("plugins-kit:bootstrap", "user") is True
+        assert ip.read_text() == before
+
+
+class TestCheckPluginScopeDuplicateRecords:
+    def test_reads_scope_from_healthy_record(self, tmp_path, monkeypatch):
+        ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        ip.parent.mkdir(parents=True, exist_ok=True)
+        ip.write_text(json.dumps({"version": 2, "plugins": {
+            "bootstrap@plugins-kit": [
+                {"scope": "project", "version": "0.45.0", "projectPath": "D:/dev/x"},
+                {"scope": "user", "version": "0.52.0"},
+            ],
+        }}))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        result = check_plugin_scope("plugins-kit:bootstrap", "user")
+        assert result.matches is True
+        assert result.installed_scope == "user"
