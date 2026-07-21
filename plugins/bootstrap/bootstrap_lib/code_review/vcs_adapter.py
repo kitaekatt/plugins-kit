@@ -52,6 +52,20 @@ fingerprint, and deletes the shelf afterwards iff it still matches. Git needs
 no equivalent -- the range is always diffable from committed/indexed state -- so
 a git adapter legitimately omits both. They are OPTIONAL, not mandatory: a
 consumer must feature-detect (``hasattr`` / ``is not None``) before calling.
+
+Optional capability (BOTH implement -- subject-lens review contributor):
+
+    materialize_preimage       materialize_preimage           materialize_preimage
+                               (git show <base>:<path>)        (p4 print //depot#have)
+
+Pre-image materialization supports the claim mechanism: when the pipeline is
+asked to hold back a set of "claimed" files for a subject-lens reviewer
+(``pipeline.assemble_bundle(..., claim_globs=...)``), each front-half writes a
+snapshot of every claimed file AS IT WAS BEFORE the change into the bundle
+(``<bundle_dir>/pipeline.preimage_relpath(identifier)``) and records the path on
+the file dict as ``pre_image``. The subject-lens reviewer diffs the working-tree
+version against that pre-image to decide which findings the change introduced.
+An ADD has no pre-image, so ``materialize_preimage`` returns None for it.
 --------------------------------------------------------------------------------
 """
 
@@ -200,5 +214,27 @@ class VcsAdapter(Protocol):
         p4-kit only: reads the bundle's recorded fingerprint and, if the live
         shelf still matches exactly, deletes it; any mismatch is a safe no-op.
         Returns a process exit code. A git adapter does not implement this.
+        """
+        ...
+
+    # -- Optional capability: materialize a claimed file's pre-image. ----------
+    # BOTH adapters implement this (unlike snapshot_change/cleanup). It is only
+    # exercised when the caller passes claim globs; consumers feature-detect.
+
+    def materialize_preimage(
+        self, target: str, changed_file: dict, bundle_dir: Path
+    ) -> Optional[str]:
+        """OPTIONAL. Write the pre-change content of one claimed file to disk.
+
+        Returns the absolute path of the written pre-image, or None when the
+        file is an ADD (no prior content). ``changed_file`` is the front-half's
+        per-file dict (carrying ``identifier`` plus the kit's own keys -- git
+        ``path``/``status``, p4 ``depot``/``action``); ``target`` is the
+        resolved range/CL so the adapter can pick the correct base revision.
+
+        git: ``git show <range-base>:<path>`` (base derived from the range;
+        HEAD for working/staged/merge/rebase). p4: ``p4 print -q -o <dest>
+        //depot/path#have``. The destination is
+        ``bundle_dir / pipeline.preimage_relpath(changed_file["identifier"])``.
         """
         ...

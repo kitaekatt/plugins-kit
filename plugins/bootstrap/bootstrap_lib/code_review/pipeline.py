@@ -16,7 +16,10 @@ here. Chunking policy lives in chunking.py; CLAUDE.md collection and
 submit-gate parsing live in claude_mds.py -- this module composes them.
 """
 
+import fnmatch
+import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +34,54 @@ from bootstrap_lib.code_review.claude_mds import (
     collect_claude_mds,
     collect_submit_gates,
 )
+
+
+# ---------------------------------------------------------------------------
+# Claim matching (subject-lens review contributor support).
+# ---------------------------------------------------------------------------
+#
+# A "claimed" changed file is one a subject-lens reviewer (skills-kit md-audit)
+# owns: it is pulled OUT of the generic reviewer fan-out (its diff excluded from
+# the chunks, its record moved to `claimed_files`) but REMAINS in the CLAUDE.md
+# ruleset collection and submit-gate machinery. Matching is by claim glob, and
+# lives here (shared) so a kit front-half and the back-half agree on exactly
+# which files are claimed. Front-halves use it to decide which pre-images to
+# materialize; assemble_bundle uses it to do the exclusion + routing.
+
+
+def matches_claim(identifier: str, claim_globs: list[str]) -> bool:
+    """True if `identifier` matches any pattern in `claim_globs`.
+
+    `identifier` is the kit's chunk-map key (git repo-relative path, p4 depot
+    path). A `**/NAME` pattern matches NAME at ANY depth, including the root
+    (fnmatch's `*` alone would not match a bare-root `NAME` against `*/NAME`),
+    so it is special-cased to a basename compare. Any other pattern is an
+    ordinary fnmatch against the whole (posix-normalized) identifier.
+    """
+    if not claim_globs:
+        return False
+    norm = identifier.replace("\\", "/")
+    base = norm.rsplit("/", 1)[-1]
+    for g in claim_globs:
+        gnorm = g.replace("\\", "/")
+        if gnorm.startswith("**/") and fnmatch.fnmatch(base, gnorm[3:]):
+            return True
+        if fnmatch.fnmatch(norm, gnorm):
+            return True
+    return False
+
+
+def preimage_relpath(identifier: str) -> str:
+    """Deterministic bundle-relative path for a claimed file's pre-image.
+
+    Basenames collide across directories (`a/CLAUDE.md`, `b/CLAUDE.md`), so a
+    short content-independent hash of the full identifier disambiguates. The
+    kit front-half writes the materialized pre-image to
+    `<bundle_dir>/<preimage_relpath(identifier)>`.
+    """
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", identifier).strip("-")
+    digest = hashlib.sha1(identifier.encode("utf-8")).hexdigest()[:8]
+    return f"pre-images/{safe}-{digest}" if safe else f"pre-images/{digest}"
 
 
 def run_vcs(
@@ -101,6 +152,7 @@ def assemble_bundle(
     bundle_dir: Path,
     max_chunk_bytes: int,
     workspace_root: Optional[Path],
+    claim_globs: Optional[list[str]] = None,
 ) -> dict:
     """Chunk the diff to disk and build the VCS-neutral bundle core.
 
@@ -120,18 +172,40 @@ def assemble_bundle(
         max_chunk_bytes: per-chunk byte cap for the partitioner.
         workspace_root: stops the CLAUDE.md ancestor walk and anchors
                     submit-gate scope matching; None means filesystem root.
+        claim_globs: OPTIONAL claim patterns (e.g. ["**/CLAUDE.md",
+                    "**/SKILL.md"]). When non-empty, files whose identifier
+                    matches are EXCLUDED from the diff chunks and the
+                    `changed_files` list (a subject-lens reviewer owns them),
+                    and instead emitted under a new `claimed_files` key -- but
+                    they STILL contribute to `unique_claude_mds` and the
+                    submit-gate scan. When None/empty the returned dict is
+                    byte-identical to the pre-claim contract (no `claimed_files`
+                    key), so existing callers are unaffected.
 
     Returns the shared bundle fields:
         {"bundle_dir", "diff_chunks", "changed_files",
          "unique_claude_mds", "submit_gates"}
+    plus "claimed_files" when claim_globs is non-empty.
 
     Each changed_files entry is the input dict minus "identifier", plus
     "chunk_index" (int or None when absent from the diff) and
-    "claude_mds" (nearest-ancestor-first absolute paths).
+    "claude_mds" (nearest-ancestor-first absolute paths). Each claimed_files
+    entry is the input dict verbatim (identifier retained), carrying whatever
+    the front-half attached (local, status/action, pre_image).
     """
+    claim_globs = claim_globs or []
     bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    claimed_idents = {
+        f["identifier"] for f in files if matches_claim(f["identifier"], claim_globs)
+    }
+    # Claimed files' diff sections must not reach the generic reviewers, so
+    # drop them before chunking. Their records still flow through the CLAUDE.md
+    # / submit-gate walk below.
+    review_sections = [s for s in sections if s["identifier"] not in claimed_idents]
+
     chunks = partition_sections_into_chunks(
-        sections, max_chunk_bytes, preamble=preamble
+        review_sections, max_chunk_bytes, preamble=preamble
     )
     diff_chunks = write_chunks(chunks, bundle_dir)
 
@@ -142,35 +216,50 @@ def assemble_bundle(
             id_to_chunk[ident] = entry["index"]
 
     changed_files: list[dict] = []
+    claimed_files: list[dict] = []
     unique: list[str] = []
     seen: set[str] = set()
+    all_locals: list[str] = []
     for f in files:
         local = f.get("local")
         claude_mds: list[str] = []
         if local:
+            all_locals.append(local)
+            # Claimed files REMAIN in the ruleset collection: walk their
+            # ancestors too, so a claimed CLAUDE.md's scope still surfaces.
             claude_mds = collect_claude_mds(Path(local), workspace_root)
             for cm in claude_mds:
                 if cm not in seen:
                     unique.append(cm)
                     seen.add(cm)
+        if f["identifier"] in claimed_idents:
+            # Pass the entry through verbatim (identifier retained) so the
+            # skill can resolve pre_image / status back to the subject file.
+            # `claude_mds` is the nearest-ancestor-first CLAUDE.md chain and,
+            # for a CLAUDE.md subject, INCLUDES the subject itself as its first
+            # entry -- the skill drops the subject's own local to derive
+            # md-audit's ancestorClaudeMdPaths / parentPath.
+            entry = dict(f)
+            entry["claude_mds"] = claude_mds
+            claimed_files.append(entry)
+            continue
         out = {k: v for k, v in f.items() if k != "identifier"}
         out["chunk_index"] = id_to_chunk.get(f["identifier"])
         out["claude_mds"] = claude_mds
         changed_files.append(out)
 
-    submit_gates = collect_submit_gates(
-        unique,
-        [cf["local"] for cf in changed_files if cf.get("local")],
-        workspace_root,
-    )
+    submit_gates = collect_submit_gates(unique, all_locals, workspace_root)
 
-    return {
+    result = {
         "bundle_dir": str(bundle_dir),
         "diff_chunks": diff_chunks,
         "changed_files": changed_files,
         "unique_claude_mds": unique,
         "submit_gates": submit_gates,
     }
+    if claim_globs:
+        result["claimed_files"] = claimed_files
+    return result
 
 
 def emit_bundle(bundle: dict, bundle_dir: Path) -> int:

@@ -17,6 +17,8 @@ from unittest.mock import patch
 from bootstrap_lib.code_review.pipeline import (
     assemble_bundle,
     emit_bundle,
+    matches_claim,
+    preimage_relpath,
     run_vcs,
     split_sections,
 )
@@ -311,6 +313,145 @@ class TestAssembleBundle:
             workspace_root=None,
         )
         assert bundle_dir.is_dir()
+
+
+# ---------------------------------------------------------------------------
+# matches_claim / preimage_relpath
+# ---------------------------------------------------------------------------
+
+
+class TestMatchesClaim:
+    def test_empty_globs_never_match(self):
+        assert matches_claim("a/CLAUDE.md", []) is False
+
+    def test_recursive_glob_matches_any_depth(self):
+        g = ["**/CLAUDE.md"]
+        assert matches_claim("CLAUDE.md", g) is True            # root, no slash
+        assert matches_claim("a/CLAUDE.md", g) is True
+        assert matches_claim("a/b/c/CLAUDE.md", g) is True
+
+    def test_recursive_glob_matches_depot_paths(self):
+        assert matches_claim("//depot/proj/SKILL.md", ["**/SKILL.md"]) is True
+        assert matches_claim("//depot/proj/foo.cpp", ["**/SKILL.md"]) is False
+
+    def test_backslash_normalized(self):
+        assert matches_claim("a\\b\\CLAUDE.md", ["**/CLAUDE.md"]) is True
+
+    def test_non_recursive_glob_matches_whole_path(self):
+        assert matches_claim("src/x.py", ["src/*.py"]) is True
+        assert matches_claim("other/x.py", ["src/*.py"]) is False
+
+    def test_basename_that_is_not_the_target_does_not_match(self):
+        assert matches_claim("a/CLAUDE.md.bak", ["**/CLAUDE.md"]) is False
+
+
+class TestPreimageRelpath:
+    def test_under_pre_images_dir(self):
+        rel = preimage_relpath("a/b/CLAUDE.md")
+        assert rel.startswith("pre-images/")
+
+    def test_distinct_identifiers_get_distinct_paths(self):
+        # Same basename, different dirs -> must not collide.
+        assert preimage_relpath("a/CLAUDE.md") != preimage_relpath("b/CLAUDE.md")
+
+    def test_deterministic(self):
+        assert preimage_relpath("//depot/x/CLAUDE.md") == preimage_relpath("//depot/x/CLAUDE.md")
+
+
+# ---------------------------------------------------------------------------
+# assemble_bundle -- claim exclusion / claimed_files
+# ---------------------------------------------------------------------------
+
+
+class TestAssembleBundleClaims:
+    def test_no_claim_globs_is_byte_identical_contract(self, tmp_path):
+        """Default (no claim_globs) must not add a claimed_files key."""
+        core = assemble_bundle(
+            preamble="",
+            sections=_sections_for("a/CLAUDE.md", "src/b.py"),
+            files=[
+                {"identifier": "a/CLAUDE.md", "local": None},
+                {"identifier": "src/b.py", "local": None},
+            ],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+        )
+        assert "claimed_files" not in core
+        assert len(core["changed_files"]) == 2  # both files reviewed generically
+
+    def test_claimed_file_excluded_from_chunks_and_changed_files(self, tmp_path):
+        core = assemble_bundle(
+            preamble="",
+            sections=_sections_for("a/CLAUDE.md", "src/b.py"),
+            files=[
+                {"identifier": "a/CLAUDE.md", "local": None, "pre_image": None},
+                {"identifier": "src/b.py", "local": None},
+            ],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+            claim_globs=["**/CLAUDE.md"],
+        )
+        # changed_files has only the non-claimed file, identifier dropped.
+        assert len(core["changed_files"]) == 1
+        assert "identifier" not in core["changed_files"][0]
+        # claimed_files carries the claimed one, identifier retained.
+        assert len(core["claimed_files"]) == 1
+        assert core["claimed_files"][0]["identifier"] == "a/CLAUDE.md"
+        assert core["claimed_files"][0]["pre_image"] is None
+        # The claimed file's diff is NOT in any chunk.
+        all_text = "".join(
+            (tmp_path / "b" / c["path"]).read_text(encoding="utf-8")
+            for c in core["diff_chunks"]
+        )
+        assert "a/CLAUDE.md" not in all_text
+        assert "src/b.py" in all_text
+
+    def test_empty_claim_match_still_emits_empty_claimed_files(self, tmp_path):
+        core = assemble_bundle(
+            preamble="",
+            sections=_sections_for("src/b.py"),
+            files=[{"identifier": "src/b.py", "local": None}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024,
+            workspace_root=None,
+            claim_globs=["**/CLAUDE.md"],
+        )
+        assert core["claimed_files"] == []
+        assert len(core["changed_files"]) == 1
+
+    def test_claimed_file_remains_in_ruleset_and_submit_gates(self, tmp_path):
+        ws = tmp_path / "ws"
+        sub = ws / "src"
+        sub.mkdir(parents=True)
+        (ws / "CLAUDE.md").write_text(
+            "**Submit gate:** Rebuild.\nApplies to:\n- src/\n", encoding="utf-8"
+        )
+        claude = sub / "CLAUDE.md"
+        claude.write_text("child rules\n", encoding="utf-8")
+
+        core = assemble_bundle(
+            preamble="",
+            sections=_sections_for("src/CLAUDE.md"),
+            files=[{"identifier": "src/CLAUDE.md", "local": str(claude)}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024,
+            workspace_root=ws,
+            claim_globs=["**/CLAUDE.md"],
+        )
+        # Claimed, so not in changed_files...
+        assert core["changed_files"] == []
+        assert len(core["claimed_files"]) == 1
+        entry = core["claimed_files"][0]
+        # ...but its CLAUDE.md chain still populates unique_claude_mds (self + root).
+        assert any(c.endswith("CLAUDE.md") for c in core["unique_claude_mds"])
+        assert len(core["unique_claude_mds"]) >= 2
+        # claude_mds attached to the claimed entry, nearest-first, includes self.
+        assert os.path.normcase(entry["claude_mds"][0]) == os.path.normcase(str(claude))
+        # The submit gate (scope src/) still fires on the claimed file.
+        assert len(core["submit_gates"]) == 1
+        assert core["submit_gates"][0]["matched_files"] == [str(claude)]
 
 
 # ---------------------------------------------------------------------------
