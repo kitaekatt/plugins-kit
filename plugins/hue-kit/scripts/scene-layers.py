@@ -364,14 +364,30 @@ def relevant(scene, pool):
     return [g for g in pool if g <= L and any(c <= g for c in scene["cells"])]
 
 
-def min_family(pool, scenes, seed_upper=None):
-    """Smallest F subset-of pool expressing all scenes.  Complete + exact."""
+def pairwise_overlap(F):
+    """Sum of |a & b| over unordered pairs -- 0 iff F is pairwise disjoint."""
+    fam = list(F)
+    return sum(len(a & b) for i, a in enumerate(fam) for b in fam[i + 1:])
+
+
+def min_family(pool, scenes, seed_upper=None, tiebreak=True):
+    """Smallest F subset-of pool expressing all scenes.  Complete + exact.
+
+    Ties on |F| are broken by minimizing pairwise overlap: many minima exist
+    and near-disjoint families map onto physical rooms (nameable), whereas
+    arbitrary overlapping unions do not.  Cardinality stays the certified
+    primary objective; overlap only separates equal-size families.  Overlap
+    is monotone nondecreasing as groups are added, so a partial family's
+    overlap is an admissible bound for branch-and-bound.  tiebreak=False
+    skips the tie exploration (first minimum wins -- cheaper; use when only
+    the minimum SIZE matters, e.g. the interpretability probe)."""
     pool = set(pool)
     rel = {i: sorted(relevant(s, pool), key=lambda g: -len(g))
            for i, s in enumerate(scenes)}
 
     best = {"F": set(seed_upper) if seed_upper else None,
-            "size": len(seed_upper) if seed_upper else len(pool) + 1}
+            "size": len(seed_upper) if seed_upper else len(pool) + 1,
+            "ov": pairwise_overlap(seed_upper) if seed_upper else 0}
     visited = set()
 
     def conflict_lb(F, fscenes):
@@ -384,8 +400,14 @@ def min_family(pool, scenes, seed_upper=None):
                 chosen.append(k)
         return len(chosen)
 
-    def dfs(F):
-        if len(F) >= best["size"]:
+    def beaten(size, ov):
+        # can (size, ov) still beat the incumbent lexicographically?
+        if size != best["size"]:
+            return size > best["size"]
+        return (not tiebreak) or ov >= best["ov"]
+
+    def dfs(F, ov):
+        if beaten(len(F), ov):
             return
         key = frozenset(F)
         if key in visited:
@@ -393,16 +415,68 @@ def min_family(pool, scenes, seed_upper=None):
         visited.add(key)
         fscenes = [i for i, s in enumerate(scenes) if express(s, F) is None]
         if not fscenes:
-            best["F"], best["size"] = set(F), len(F)
+            best["F"], best["size"], best["ov"] = set(F), len(F), ov
             return
-        if len(F) + conflict_lb(F, fscenes) >= best["size"]:
+        if beaten(len(F) + conflict_lb(F, fscenes), ov):
             return
         i = min(fscenes, key=lambda i: sum(1 for g in rel[i] if g not in F))
         for g in rel[i]:
             if g not in F:
-                dfs(F | {g})
+                dfs(F | {g}, ov + sum(len(g & h) for h in F))
 
-    dfs(set())
+    dfs(set(), 0)
+    return best["F"]
+
+
+# Extra groups allowed beyond the certified minimum when the larger family is
+# better-structured (lower overlap).  One-line adjustable; keep it small.
+SLACK = 1
+
+
+def slack_family(pool, scenes, k_max, seed):
+    """Best family within a bounded size budget: minimize (pairwise overlap,
+    |F|) lexicographically over families of size <= k_max expressing every
+    scene.  seed (the certified minimum) is the incumbent, so the result only
+    differs from it when the budget buys strictly lower overlap.  Overlap is
+    split-neutral (partitioning a group into disjoint parts leaves the sum
+    unchanged) and strictly increased by overlapping additions, so extra
+    groups cannot game the objective; both components are monotone under
+    group addition, so the partial (overlap, size) is an admissible bound."""
+    pool = set(pool)
+    rel = {i: sorted(relevant(s, pool), key=lambda g: len(g))
+           for i, s in enumerate(scenes)}
+
+    best = {"F": set(seed), "ov": pairwise_overlap(seed), "size": len(seed)}
+    visited = set()
+
+    def conflict_lb(F, fscenes):
+        fixers = [frozenset(g for g in rel[i] if g not in F) for i in fscenes]
+        chosen = []
+        for k, fx in sorted(enumerate(fixers), key=lambda t: len(t[1])):
+            if all(fx.isdisjoint(fixers[j]) for j in chosen):
+                chosen.append(k)
+        return len(chosen)
+
+    def dfs(F, ov):
+        if ov > best["ov"] or (ov == best["ov"] and len(F) >= best["size"]):
+            return
+        key = frozenset(F)
+        if key in visited:
+            return
+        visited.add(key)
+        fscenes = [i for i, s in enumerate(scenes) if express(s, F) is None]
+        if not fscenes:
+            best["F"], best["ov"], best["size"] = set(F), ov, len(F)
+            return
+        need = len(F) + conflict_lb(F, fscenes)
+        if need > k_max or (ov == best["ov"] and need >= best["size"]):
+            return
+        i = min(fscenes, key=lambda i: sum(1 for g in rel[i] if g not in F))
+        for g in rel[i]:
+            if g not in F:
+                dfs(F | {g}, ov + sum(len(g & h) for h in F))
+
+    dfs(set(), 0)
     return best["F"]
 
 
@@ -437,14 +511,19 @@ def _cellrep(cell):
 
 
 def solve(scenes):
-    """Return (F, layers, upper, full_pool) with F a certified minimum family.
-    Depends only on the scene partitions -- the universe U and named zones are
-    the caller's concern (naming/reporting), never the solve itself."""
+    """Return (Fmin, Fsel, layers, upper, full_pool).  Fmin is a certified
+    minimum family (ties broken by pairwise overlap); Fsel is the family
+    SELECTED for use -- the lowest-overlap family within SLACK extra groups,
+    equal to Fmin unless the budget buys strictly lower overlap.  layers are
+    computed against Fsel.  Depends only on the scene partitions -- the
+    universe U and named zones are the caller's concern (naming/reporting),
+    never the solve itself."""
     upper = min_family(cell_union_pool(scenes), scenes)
     full_pool = unions_of(atoms_of(scenes))
-    F = min_family(full_pool, scenes, seed_upper=upper)
-    layers = {s["name"]: express(s, F, want_layers=True) for s in scenes}
-    return F, layers, upper, full_pool
+    Fmin = min_family(full_pool, scenes, seed_upper=upper)
+    Fsel = slack_family(full_pool, scenes, len(Fmin) + SLACK, seed=Fmin)
+    layers = {s["name"]: express(s, Fsel, want_layers=True) for s in scenes}
+    return Fmin, Fsel, layers, upper, full_pool
 
 
 # ========================================================================
@@ -466,9 +545,12 @@ def report(U, zones, scenes):
                    if len(s["cells"]) == 1 and s["cells"][0] == g]
             print(f"    |{len(g):2d}|  {name(g):32s} <- {who}")
 
-    F, layers, upper, full_pool = solve(scenes)
+    Fmin, F, layers, upper, full_pool = solve(scenes)
     print(f"\nupper-bound (union-of-cells) |F| = {len(upper)}")
-    print(f"\n*** MINIMUM GLOBAL META-GROUP FAMILY:  |F| = {len(F)} ***")
+    extra = "" if len(F) == len(Fmin) else \
+        f" (certified minimum {len(Fmin)}; +{len(F) - len(Fmin)} for a " \
+        "better-structured, lower-overlap family)"
+    print(f"\n*** GLOBAL META-GROUP FAMILY:  |F| = {len(F)}{extra} ***")
     for g in sorted(F, key=lambda g: -len(g)):
         print(f"    |{len(g):2d}|  {name(g)}")
 
@@ -492,23 +574,24 @@ def report(U, zones, scenes):
     print("INTERPRETABILITY  (restrict F to unions of whole named zones)")
     print("=" * 72)
     zpool = {g for g in full_pool if is_zone_union(g, zones)}
-    Fz = min_family(zpool, scenes)
-    print(f"  unconstrained optimum |F|         = {len(F)}")
-    print(f"  every optimum group is zone-union? {all(is_zone_union(g, zones) for g in F)}")
+    Fz = min_family(zpool, scenes, tiebreak=False)
+    print(f"  unconstrained optimum |F|         = {len(Fmin)}")
+    print(f"  every selected group is zone-union? {all(is_zone_union(g, zones) for g in F)}")
     if Fz is None:
         print("  min |F| restricted to zone-unions = INFEASIBLE "
               "(some scene needs a partial-zone group)")
     else:
         print(f"  min |F| restricted to zone-unions = {len(Fz)}")
-        print(f"  interpretability cost             = {len(Fz) - len(F)} group(s)")
+        print(f"  interpretability cost             = {len(Fz) - len(Fmin)} group(s)")
     return F, layers
 
 
 def json_result(U, zones, scenes):
     name = namer(U, zones)
-    F, layers, _upper, _pool = solve(scenes)
+    Fmin, F, layers, _upper, _pool = solve(scenes)
     return {
         "n_lights": len(U),
+        "k_min": len(Fmin),
         "family": [{"name": name(g), "lights": sorted(g), "size": len(g)}
                    for g in sorted(F, key=lambda g: -len(g))],
         "scenes": {
@@ -589,7 +672,7 @@ def export_designs(data):
     """Build the layered scene-designs.yaml text from live cells + the
     registry. VERIFIES the registry family expresses AND bakes every scene
     before emitting (fail loud) so the design file is always faithful.
-    Returns (yaml_text, n_groups, n_min)."""
+    Returns (yaml_text, n_groups, n_min, n_sel)."""
     zone_lightsets = data["light_groups"]
     fam = load_group_registry(zone_lightsets)
     name_of = {g: n for n, g in fam}
@@ -599,7 +682,7 @@ def export_designs(data):
     F = {g for _, g in fam}
 
     _U, _zones, scenes = build_model(data)
-    Fmin, _layers, _upper, _pool = solve(scenes)  # certified minimum (informational)
+    Fmin, Fsel, _layers, _upper, _pool = solve(scenes)  # informational sizes
 
     color_by_cell = {}
     for s in data["scenes"]:
@@ -647,29 +730,61 @@ def export_designs(data):
                 line = f"{line.ljust(58)}  # {hsl}"
             out.append(line)
         out.append("")
-    return "\n".join(out).rstrip() + "\n", len(fam), len(Fmin)
+    return "\n".join(out).rstrip() + "\n", len(fam), len(Fmin), len(Fsel)
+
+
+def _zone_token(zname):
+    """Zone name -> registry-name token: KITCHEN from 'Kitchen Lights'."""
+    t = zname.upper()
+    for suf in (" LIGHTS", " LIGHT"):
+        if t.endswith(suf):
+            t = t[: -len(suf)]
+    return re.sub(r"[^A-Z0-9]+", "_", t).strip("_")
+
+
+def propose_name(g, i, U, zones, taken):
+    """Suggest a registry name for group g: ALL for the whole home, the zone's
+    token when g is exactly one zone, a hyphenate for a union of <= 3 zones,
+    else a Gi placeholder.  Reporting-side only -- suggestions, never inputs
+    to the solve; degrades to Gi when zones are absent or uninformative."""
+    cand = f"G{i}"
+    if g == U:
+        cand = "ALL"
+    else:
+        zs = [z for z, zl in zones.items() if zl and zl <= g]
+        cov = frozenset().union(*(zones[z] for z in zs)) if zs else frozenset()
+        if cov == g and 1 <= len(zs) <= 3:
+            zs = sorted(zs, key=lambda z: (-len(zones[z]), z))
+            cand = "-".join(_zone_token(z) for z in zs) or cand
+    return cand if cand not in taken else f"G{i}"
 
 
 def export_groups(data):
-    """Generate a STARTER scene-groups.yaml from the solver's certified-minimum
-    family. Names are placeholders (G1..; the whole-home group is ALL) to be
-    renamed. Emits `zones:` when a group is a whole-zone union, else an explicit
-    `lights:` list. This is the bootstrap for a new bridge -- run it, rename the
-    groups, then `--export-designs`."""
+    """Generate a STARTER scene-groups.yaml from the solver's selected family
+    (certified minimum, or +SLACK when that buys a better-structured family).
+    Names are zone-derived suggestions where a group maps onto whole zones
+    (else G1.. placeholders; the whole-home group is ALL) -- RENAME freely.
+    Emits `zones:` when a group is a whole-zone union, else an explicit
+    `lights:` list. This is the bootstrap for a new bridge -- run it, rename
+    the groups, then `--export-designs`."""
     U, zones, scenes = build_model(data)
-    F, _layers, _upper, _pool = solve(scenes)
+    Fmin, F, _layers, _upper, _pool = solve(scenes)
     fam = sorted(F, key=lambda g: -len(g))
     out = [
         "# Layered scene-group registry -- GENERATED by `scene-layers.py",
-        "# --export-groups`. A CERTIFIED-MINIMUM meta-group family for the live",
-        "# scenes (no smaller family can express them). RENAME the placeholder",
-        "# groups (G1.. / ALL) to something meaningful, then run",
-        "# `--export-designs` to materialise scene-designs.yaml against them.",
+        "# --export-groups`. Certified minimum |F| = %d; this family has %d"
+        % (len(Fmin), len(F)),
+        "# group(s) (extra groups only when they buy a better-structured,",
+        "# lower-overlap family). RENAME the suggested/placeholder groups to",
+        "# something meaningful, then run `--export-designs` to materialise",
+        "# scene-designs.yaml against them.",
         "# (Optionally add a `templates:` block naming each layer-stack sequence.)",
         "groups:",
     ]
+    taken = set()
     for i, g in enumerate(fam, 1):
-        name = "ALL" if g == U else f"G{i}"
+        name = propose_name(g, i, U, zones, taken)
+        taken.add(name)
         zs = [z for z, zl in zones.items() if zl and zl <= g]
         cov = frozenset().union(*(zones[z] for z in zs)) if zs else frozenset()
         out.append(f"  - name: {name}")
@@ -1099,13 +1214,14 @@ def main() -> int:
         return 0
 
     if args.export_designs:
-        text, n_groups, n_min = export_designs(data)
+        text, n_groups, n_min, n_sel = export_designs(data)
         dest = Path(args.export_designs)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text)
-        note = "" if n_groups == n_min else \
-            f"  WARNING: registry has {n_groups} groups but the certified " \
-            f"minimum is {n_min} -- the family is not minimal"
+        note = "" if n_groups <= n_sel else \
+            f"  WARNING: registry has {n_groups} groups but the solver " \
+            f"selects {n_sel} (certified minimum {n_min}) -- the family " \
+            "is larger than it needs to be"
         print(f"wrote {dest}  ({len(data.get('scenes', []))} scenes, "
               f"{n_groups}-group vocabulary){note}")
         return 0

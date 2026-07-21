@@ -16,8 +16,12 @@ ultimately shows, because higher layers overpaint the excess. So
 `ALL(red) -> Kitchen(green)` bakes identically to `AllExceptKitchen(red) +
 Kitchen(green)` -- and every "everything-except-X" complement group disappears.
 Minimising the GLOBAL count of distinct groups (not per-scene) yields a small,
-reusable vocabulary. The solver returns a **certified minimum**: no smaller
-family of groups can express every scene.
+reusable vocabulary. The solver computes a **certified minimum** -- no smaller
+family of groups can express every scene -- and returns the lowest-overlap
+family within one group of that size: it deliberately prefers a family of up to
+one extra group when that family aligns better with the home's natural
+structure (near-disjoint, room-shaped groups). The report states both sizes
+when they differ.
 
 ## The two config files (source of truth)
 
@@ -53,7 +57,7 @@ Entry point -- `hue-kit start`:
 
 Solver (read-only) -- `hue-kit report`:
 
-- print the minimum group family + per-scene stacks + bake verification.
+- print the solved group family + per-scene stacks + bake verification.
 - `hue-kit render [PATH]` -- browsable HTML report (config + source embedded),
   via the shared `scene-meta-groups.py` renderer (guardrail: all HTML goes
   through `smg.layered_report()` -- never hand-roll one).
@@ -91,8 +95,8 @@ Sync (over the two files above):
 2. `hue-kit validate` -- see the pending diff vs the bridge.
 3. `hue-kit apply` (dry-run) to review, then `hue-kit apply --yes` to write.
 4. Re-run the solver (`hue-kit report`) after adding/restyling scenes to confirm
-   the group family is still a certified minimum; if the vocabulary changed,
-   edit `scene-groups.yaml` and re-run `hue-kit export`.
+   the group family still matches what the solver selects; if the vocabulary
+   changed, edit `scene-groups.yaml` and re-run `hue-kit export`.
 
 To re-capture the live bridge into the design (e.g. after ad-hoc scene edits):
 `hue-kit export` (verifies + overwrites the design file).

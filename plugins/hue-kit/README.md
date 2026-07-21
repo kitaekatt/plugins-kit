@@ -17,8 +17,10 @@ A scene = a default of **OFF** plus an ordered stack of layers; each layer paint
 one **meta-group** (a named set of lights) a single colour + brightness, and the
 **topmost** layer covering a light wins. A lower layer's group may be a superset
 that higher layers overpaint, so "everything-except-X" groups never need to
-exist. A solver finds the **smallest** group vocabulary that can express all your
-scenes (a certified minimum), and every scene becomes a short, readable stack.
+exist. A solver certifies the **smallest** group vocabulary that can express all
+your scenes, then emits the family that best matches your home's natural
+structure -- at most one group larger -- and every scene becomes a short,
+readable stack.
 
 See [`skills/hue-domain/references/scene-layers.md`](skills/hue-domain/references/scene-layers.md)
 for the full model + command reference, and

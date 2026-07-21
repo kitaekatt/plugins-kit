@@ -63,7 +63,7 @@ domain_skill:
         definition: >-
           A named light-subset in the registry (scene-groups.yaml), defined as a
           union of bridge zones (or explicit lights). The layered vocabulary is a
-          small set of these -- a certified minimum.
+          small set of these -- within one group of the certified minimum.
       - term: layer
         definition: >-
           One entry in a scene's stack = (meta-group, colour + brightness).
@@ -75,8 +75,10 @@ domain_skill:
           group may be a SUPERSET the higher layers overpaint.
       - term: certified minimum
         definition: >-
-          The solver's guarantee that no smaller family of meta-groups can
-          express every scene as a layer stack.
+          The solver's proven smallest family size that can express every scene
+          as a layer stack. Computed and reported as the baseline; the emitted
+          family may be one group larger when the larger family has lower
+          inter-group overlap (maps more cleanly onto real rooms).
       - term: xy-authoritative
         definition: >-
           A bulb's real colour is its CIE xy point in its gamut; the # hsl(...)
@@ -183,7 +185,7 @@ domain_skill:
       keywords: [read scenes, analyse, solve, minimal groups, meta-groups,
                  report, layer stacks, what scenes]
       description: >-
-        Read the live bridge, solve the smallest meta-group vocabulary, and print
+        Read the live bridge, solve a near-minimal meta-group vocabulary, and print
         each scene as a layer stack with bake verification. Read-only; start here.
       operation: hue-kit report
       tool: scripts/hue_kit_cli.py

@@ -13,8 +13,10 @@ fundamentals);
 A scene = a default of OFF plus an ordered stack of **layers**, each painting one
 **meta-group** (a named light-subset) a colour + brightness; the **topmost**
 layer covering a light wins. A lower layer's group may be a superset that higher
-layers overpaint, so complement groups vanish. A solver computes the **smallest**
-group vocabulary that expresses every scene (a certified minimum).
+layers overpaint, so complement groups vanish. A solver computes the certified
+minimum vocabulary size, then emits the lowest-overlap family within one group
+of it -- extra group only when it buys a family that maps more cleanly onto the
+home's natural structure.
 
 ## Layout
 
@@ -80,9 +82,11 @@ the loop after a shape change, so do not remove that coupling.
 ### Setting it up manually (what `start` automates)
 
 1. `hue-kit report` -- read-only; confirms the bridge is reachable and prints the
-   certified-minimum group family + each scene as a layer stack.
-2. `hue-kit groups` -- writes a starter `scene-groups.yaml` with placeholder
-   names (`G1..`, `ALL`). Leave them; rename only when the USER asks (optionally
+   solved group family (certified minimum, or one group more when that buys a
+   better-structured family) + each scene as a layer stack.
+2. `hue-kit groups` -- writes a starter `scene-groups.yaml` with suggested names
+   (zone-derived where a group maps onto whole zones, else `G1..`; the whole
+   home is `ALL`). Leave them; rename only when the USER asks (optionally
    adding a `templates:` block naming each stack sequence).
 3. `hue-kit export` -- materialises `scene-designs.yaml` from their live scene
    colours + the registry. Verifies the family expresses AND bakes every scene.
