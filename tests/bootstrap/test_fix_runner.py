@@ -139,8 +139,13 @@ class TestChildEnv:
         baked bash path fixed only what launches BASH, not what bash launches.
         """
         env = fr._child_env(os.path.join("C:", "git", "usr", "bin", "bash.exe"))
-        first = env["PATH"].split(os.pathsep)[0]
-        assert first == os.path.abspath(os.path.join("C:", "git", "usr", "bin"))
+        # Assert by prefix rather than split(os.pathsep)[0]: this path is
+        # deliberately Windows-shaped, and on POSIX os.pathsep is ":" -- the same
+        # character as the drive-letter colon -- so splitting severs "C:/git/..."
+        # into "C" and "/git/...". The production prepend is
+        # `bash_dir + os.pathsep + PATH`, which the prefix check reads directly.
+        expected = os.path.abspath(os.path.join("C:", "git", "usr", "bin"))
+        assert env["PATH"].startswith(expected + os.pathsep)
 
     def test_the_rest_of_the_environment_survives(self, monkeypatch):
         """The fix is a prepend, not a replacement: scoop shims, TEMP, the
@@ -157,8 +162,10 @@ class TestChildEnv:
             lambda argv, label, env=None: seen.update(env=env) or True)
         win_runner.run_command({"command": "x", "label": "x"})
         assert seen["env"] is win_runner.env
-        assert seen["env"]["PATH"].split(os.pathsep)[0] == \
-            os.path.dirname(os.path.abspath(win_runner.bash))
+        # Prefix, not split(os.pathsep)[0] -- win_runner.bash is "C:/git/bash.exe"
+        # and on POSIX os.pathsep is the same ":" as the drive-letter colon.
+        bash_dir = os.path.dirname(os.path.abspath(win_runner.bash))
+        assert seen["env"]["PATH"].startswith(bash_dir + os.pathsep)
 
     def test_home_is_the_msys_profile_on_windows(self, monkeypatch):
         """REGRESSION GUARD. `bash -c` is non-login, so an elevated fresh bash
