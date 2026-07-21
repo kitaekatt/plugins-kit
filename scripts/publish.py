@@ -107,6 +107,30 @@ def is_published(manifest: dict) -> bool:
     return manifest.get("published", True) is not False
 
 
+def is_poster_hidden(plugin: str) -> bool:
+    """True when a plugin opts out of the generated poster / index.html.
+
+    `hidden: true` in plugins/<name>/.claude-plugin/poster.yaml means published
+    (installable, listed in marketplace.json) but deliberately absent from the
+    user-facing page -- see the plugin-ecosystem generator, which owns the
+    feature. verify() must honour it or it reports a missing entry that the
+    generator was correct to omit.
+
+    Deliberately a substring check rather than a YAML parse: publish.py has no
+    YAML dependency, and this file's whole grammar is a handful of scalar keys.
+    """
+    poster = PLUGINS_DIR / plugin / ".claude-plugin" / "poster.yaml"
+    if not poster.is_file():
+        return False
+    for line in poster.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if stripped.replace(" ", "").lower() == "hidden:true":
+            return True
+    return False
+
+
 def version_at(ref: str, plugin: str) -> str | None:
     """A plugin's version at a git ref, or None if it doesn't exist there."""
     path = f"plugins/{plugin}/.claude-plugin/plugin.json"
@@ -314,7 +338,13 @@ def verify() -> list[str]:
             problems.append(
                 f"marketplace.json has {name}={listed.get(name)}, "
                 f"plugin.json has {version}")
-        if f'"name": "{name}", "version": "{version}"' not in index_text:
+        # A poster-hidden plugin is published but intentionally off the page;
+        # asserting its presence would fail every publish while it ships.
+        if is_poster_hidden(name):
+            if f'"name": "{name}"' in index_text:
+                problems.append(
+                    f"index.html shows {name}, which opts out via poster.yaml hidden: true")
+        elif f'"name": "{name}", "version": "{version}"' not in index_text:
             problems.append(f"index.html does not show {name} {version}")
 
     # The dev-tree restore is the failure that bites silently later: a flipped
