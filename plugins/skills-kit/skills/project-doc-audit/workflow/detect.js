@@ -8,7 +8,10 @@
 // four dispositions (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL) assigned
 // instance-level by the step-10 classifier. This audit is NO LONGER blanket
 // no-AUTO: the mechanical convention checks (N-R: broken-link-with-target,
-// non-ASCII, foreign-abs-path, line-drift, stale-anchor) plus I dedup are FIX.
+// non-ASCII, foreign-abs-path, line-drift, stale-anchor) are FIX. I dedup
+// (skill-duplicating doc -> pointer) is IMPROVE, not FIX: its loss-free
+// precondition (fold the doc's unique deltas into the skill BEFORE removal)
+// is a judgment no auto-apply pass can satisfy.
 // Report contract for the main loop: SERIOUS summarized at the top, FIX as an
 // applied count (lands in the remediation CL), IMPROVE as a count + one-line
 // pitches (opt-in), SILENT omitted, no hedging. Cache efficiency: each fan-out lane is an isolated context
@@ -57,7 +60,11 @@ const FILE_FINDINGS_SCHEMA = {
           criterion: { type: 'string', description: 'criterion id or short name, e.g. placement_maturation' },
           message: { type: 'string' },
           line: { type: ['integer', 'null'], description: 'line number in the file, or null' },
-          taxonomy: { type: 'string', description: 'taxonomy id A-K or N-R (mechanical FIX ids); "none" for PASS/INFO/JUDGMENT that need no remediation' },
+          taxonomy: {
+            type: 'string',
+            enum: ['A_misclassified_skill_ref', 'B_graduate_to_skill', 'C_fold_into_claude_md', 'D_move_into_existing_skill', 'E_crp_split', 'F_chained_reference', 'G_claude_md_back_reference', 'H_orphan', 'I_duplicates_skill', 'J_size_signal', 'K_unclassified', 'L_readme_stranded_fact', 'M_generated_missing_provenance', 'N_broken_link_identified_target', 'O_non_ascii_lookalike', 'P_foreign_absolute_path', 'Q_line_drift', 'R_stale_anchor', 'none'],
+            description: 'canonical suffixed taxonomy id (see the SKILL.md taxonomy table); "none" for PASS/INFO/JUDGMENT that need no remediation',
+          },
           bucket: { type: 'string', enum: ['FIX', 'SERIOUS', 'IMPROVE', 'SILENT', 'SPECIAL', 'NONE'], description: 'per-finding disposition assigned instance-level by the classifier (step 11)' },
           remediation: { type: 'string', description: 'concrete proposed remediation for AUTO/DISCUSS/SPECIAL; empty for NONE' },
         },
@@ -123,20 +130,20 @@ Steps:
 
    Master razor: FIX = anything decidable by VERIFIED FACTS plus DOCUMENTED PROJECT CONVENTIONS. Reserve IMPROVE for where no fact and no convention decides. The bar for FIX is: would a reasonable owner, seeing this diff in CL review, accept it without discussion? "Very likely improving" clears it.
 
-   FIX (auto-applied; lands in a reviewable CL): the mechanical convention checks N (broken link with identified target), O (non-ASCII), P (foreign abs path / backslash), Q (line drift), R (stale anchor re-pointable); plus I dedup (cross-file duplication -> collapse to summary + reference under the summarize-and-reference rule, a dozen tokens or less else reference-only). Deletion of FALSIFIED content is FIX. Loss-free-deletion guard ALWAYS before removing a duplicate/section: fold any local delta into the SSOT/pointer FIRST.
+   FIX (auto-applied; lands in a reviewable CL): the mechanical convention checks N (broken link with identified target), O (non-ASCII), P (foreign abs path / backslash), Q (line drift), R (stale anchor re-pointable). Deletion of FALSIFIED content is FIX. Loss-free-deletion guard ALWAYS before removing a duplicate/section: fold any local delta into the SSOT/pointer FIRST. (I_duplicates_skill is NOT FIX -- see IMPROVE.)
    SERIOUS (surface at the TOP, summarized, NEVER auto-fixed, never buried): a secret / security finding; a protective rail whose documented mechanism is fictional (the real finding is the unprotected invariant -- a stale anchor R guarding a rail with NO surviving mechanism is SERIOUS, not FIX); a doc problem that reveals a real-world problem.
-   IMPROVE (count + one-liners; opt-in): a structural move -- graduate to a skill (B), fold into a CLAUDE.md (C), move into an existing skill (D), a CRP split (E), flatten a chained reference (F), remove a back-reference (G), orphan-linking (H), README stranded-fact re-home (L), add a generation record (M); or a trim of TRUE content passing the one-line test.
+   IMPROVE (count + one-liners; opt-in): a structural move -- graduate to a skill (B), fold into a CLAUDE.md (C), move into an existing skill (D), a CRP split (E), flatten a chained reference (F), remove a back-reference (G), orphan-linking (H), collapse a skill-duplicating doc to a pointer (I) -- I carries a loss-free precondition (fold the doc's unique deltas into the skill BEFORE removal) that no auto-apply pass can satisfy, so it is opt-in, not FIX; README stranded-fact re-home (L), add a generation record (M); or a trim of TRUE content passing the one-line test.
    SILENT (do NOT surface; no hedging): a do-nothing conclusion (A misrouted-file routing note, "accept as-is -> PASS"); a validator detection artifact; an accepted structural pattern (an agent-definition file with zero inbound citations, a historical record, a companion-source PDF, an intentionally human-only orphan).
    SPECIAL = K only (escape hatch).
 
    Ambiguity rulings (apply when the disposition is unclear):
    1. Your own verified code-reading DISCHARGES any "confirm with author" hedge -- if the lane verified the actual behavior from code, the correction is FIX; do not leak it back into discussion.
    2. A generator-owned path absent from the checkout (e.g. Docs/ConfigFormat/*, anything that materializes on doc-gen like Generated/) is NOT a broken link. Adding the annotation "auto-generated (present after doc-gen)" is FIX (additive, loses nothing, prevents future false flags); repointing or deleting such a reference stays IMPROVE.
-   3. When a duplicate is both auto-dedupable and part of a larger opt-in relocation: FIX the dedup now (collapse to summary + reference); the relocation stays a separate IMPROVE. Dedup never waits on structure.
+   3. This audit's only cross-file dedup is I_duplicates_skill (a doc restating a skill's content). Its remediation carries a loss-free precondition -- fold the doc's unique deltas into the skill BEFORE collapsing the doc to a pointer -- which is a judgment no auto-apply pass can satisfy, so I stays IMPROVE (opt-in), never FIX. Do not re-classify it FIX on the general "dedup never waits on structure" reasoning; that razor applies only where dedup carries no such precondition.
    4. A CRP/size split is offerable (IMPROVE) only when you can NAME a concrete extraction candidate; a bare over-threshold nudge with no named candidate is SILENT (mirror of the one-line trim test).
    5. A validator detection artifact is SILENT only when placating the validator needs no real doc change. If the same edit is ALSO a genuine project-convention fix (e.g. backslash paths -> forward slashes), it is FIX.
 
-   Declined-opportunity ledger: if the doc's frontmatter carries an \`md-audit-declined:\` list (bare taxonomy ids or short finding keys), do NOT re-raise an IMPROVE finding the user already declined for that file -- honor it exactly like references-audit honors \`references-audit-allow-stale\`. A new or materially different finding still fires.
+   Declined-opportunity ledger: if the doc's frontmatter carries an \`md-audit-declined:\` list (suffixed taxonomy ids or short finding keys), do NOT re-raise an IMPROVE finding the user already declined for that file -- honor it exactly like references-audit honors \`references-audit-allow-stale\`. A new or materially different finding still fires.
    PASS / INFO / JUDGMENT findings that need no remediation get taxonomy "none" and bucket "NONE".
    For each FIX/SERIOUS/IMPROVE/SPECIAL finding write a concrete \`remediation\` (FIX = the edit it will apply; SERIOUS = the one-line top-of-report summary; IMPROVE = the single one-line pitch), with line refs.
 11. Verdict: NON-COMPLIANT if ANY finding has severity FAIL; otherwise COMPLIANT. INFO/JUDGMENT never gate (maturation, orphan, and split-candidacy are all JUDGMENT — a useful-where-it-sits doc is COMPLIANT). Disposition is orthogonal to the verdict.
