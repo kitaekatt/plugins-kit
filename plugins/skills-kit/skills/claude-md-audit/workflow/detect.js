@@ -41,6 +41,18 @@
 //            Pre-image of the parent CLAUDE.md, needed so cross-file duplication
 //            the change itself introduced in the PARENT is not misattributed to
 //            the untouched child. null -> judge B against the current parent.)
+//   files[i].ancestorClaudeMdPaths: string[]|undefined  (H-11 ancestor-convention
+//            check. The FULL ancestor CLAUDE.md chain above the subject on the
+//            directory path to the workspace root, nearest-ancestor first,
+//            EXCLUDING the subject itself. Deliberately INCLUDES the parent that
+//            parentPath names (the two overlap on the nearest ancestor -- they
+//            drive different criteria: parentPath -> B textual duplication,
+//            ancestorClaudeMdPaths -> H-11 declared-convention conformance -- so
+//            no dedup is needed). When present and non-empty the lane reads these
+//            files, extracts EXPLICITLY declared conventions, and checks the
+//            subject against them under criterion H-11 (group Hygiene, taxonomy
+//            R_ancestor_convention_violation). When absent/empty NO H-11 finding
+//            is emitted.)
 //   files[i].dimension: "code-directory" | "classic"  (from discover.py; when
 //            "code-directory" the lane also loads refs.codeDirFilter and runs the
 //            CD-* insight-validation criteria. Absent/"classic" -> classic only.)
@@ -92,7 +104,7 @@ const FILE_FINDINGS_SCHEMA = {
           line: { type: ['integer', 'null'], description: 'line number in the file, or null' },
           taxonomy: {
             type: 'string',
-            enum: ['A_wrong_role_content', 'B_ccp_cross_file_duplication', 'C_crp_split_candidate', 'D_adp_forward_dependency', 'E_schema_failure', 'F_hygiene_threshold', 'G_descendant_role_mismatch', 'H_stale_anchor', 'H2_inverted_absence', 'I_claim_drift', 'I2_line_drift', 'J_low_value_insight', 'K_unclassified', 'L_verbose_in_place', 'M_extract_to_reference', 'N_intra_file_redundancy', 'O_low_value_verbose', 'P_stale_factual_claim', 'Q_skill_content_duplication', 'none'],
+            enum: ['A_wrong_role_content', 'B_ccp_cross_file_duplication', 'C_crp_split_candidate', 'D_adp_forward_dependency', 'E_schema_failure', 'F_hygiene_threshold', 'G_descendant_role_mismatch', 'H_stale_anchor', 'H2_inverted_absence', 'I_claim_drift', 'I2_line_drift', 'J_low_value_insight', 'K_unclassified', 'L_verbose_in_place', 'M_extract_to_reference', 'N_intra_file_redundancy', 'O_low_value_verbose', 'P_stale_factual_claim', 'Q_skill_content_duplication', 'R_ancestor_convention_violation', 'none'],
             description: 'canonical suffixed taxonomy id (see the SKILL.md taxonomy table); "none" for PASS/INFO/JUDGMENT that need no remediation',
           },
           bucket: { type: 'string', enum: ['FIX', 'SERIOUS', 'IMPROVE', 'SILENT', 'SPECIAL', 'NONE'], description: 'per-finding disposition assigned instance-level by the classifier (step 8)' },
@@ -143,6 +155,13 @@ function lanePrompt(f) {
     ? `This is a CHILD file. Also Read its parent CLAUDE.md at ${f.parentPath} so you can run the CCP cross-file duplication check (a rule restated from the parent is a FAIL, taxonomy B, disposition FIX under the loss-free-deletion guard + summarize-and-reference rule).`
     : `No parent read is required for role=${f.role}.`
 
+  const ancestorPaths = Array.isArray(f.ancestorClaudeMdPaths) ? f.ancestorClaudeMdPaths : []
+  const ancestorConventionsClause = ancestorPaths.length > 0
+    ? `H-11 ANCESTOR-DECLARED CONVENTIONS. Read each ancestor CLAUDE.md, nearest-ancestor first: ${ancestorPaths.map((p) => `"${p}"`).join(', ')}. These load ambient in any session that touches the subject, so a convention they EXPLICITLY declare (ASCII-only mandates, "no absolute paths in shared files", stated formatting/structure rules) binds the subject file too. For each such convention, check whether the subject VIOLATES it.
+   Rule-extraction posture (mirror the code-review reviewer_a): flag a violation ONLY when you can quote the exact declared rule VERBATIM from an ancestor. No inferred conventions, no generic best-practice, no "spirit of" a rule, no convention you believe is standard but the ancestor did not write down. If you cannot quote the ancestor's rule text verbatim, do NOT raise the finding.
+   Emit each violation as group "Hygiene", taxonomy R_ancestor_convention_violation, severity FAIL, anchored on the SUBJECT line that violates the rule. The \`message\` MUST carry (a) the verbatim ancestor rule quote and (b) the source path of the ancestor CLAUDE.md that declared it. Disposition is assigned in step 8 like any other convention-violation fix -- normally FIX (a mechanical correction against a documented project convention), SERIOUS when the violation reveals a real-world problem the rule exists to prevent (e.g. a committed secret an ancestor forbids). Note: the nearest ancestor may be the same file as the parent read above; that is fine -- the B check reads it for duplication, this check reads it for declared conventions.`
+    : `No ancestor CLAUDE.md paths were supplied; do NOT run the H-11 ancestor-convention check and emit no R_ancestor_convention_violation findings.`
+
   const codeDirClause = f.dimension === 'code-directory'
     ? `This file is flagged \`code-directory\` (it is per-directory review notes for code/YAML/CSV). After the classic checks, ALSO read the insight-validation criteria at ${refs.codeDirFilter} and run the CD-* dimension on it. The order is fixed: (a) identify the file's shape(s) A/B/C/D; (b) for EVERY concrete anchor a claim makes, classify its modality FIRST (requires-present / requires-absent / external-unverifiable / template-or-env / vendored-don't-read / generated-or-unsynced / non-anchor) — only \`requires-present\` is eligible for FAIL, and \`requires-absent\` is scored INVERTED (presence of the asserted-absent thing is the FAIL); (c) apply CD-2 fidelity_anchor_resolves (FAIL=H stale-anchor / H2 inverted-absence), CD-3 line-drift (I2, silent if the author gave a recovery hint), CD-4 claim_holds (I; counted magnitudes never FAIL), CD-5 value filter honoring every carve-out (J), CD-6 silent_failure_preserved (INFO). Assign each a disposition in step 8, not here (H re-points to a found mechanism -> FIX, or SERIOUS when it guards an invariant with no surviving mechanism; H2 -> SERIOUS, the invariant is violated; I2 -> FIX; I claim-drift verified from the code reading -> FIX; J default/bare-inventory/restatement -> FIX, true content passing the one-line test -> IMPROVE, validator-artifact/historical-record -> SILENT). Resolve symbol anchors repo-wide and leading-slash paths against repo root. Emit these under group "CodeDir". Validate existing claims only — do NOT crawl the directory for new gotchas (non-idempotent). NEVER FAIL an external/template/vendored/generated/non-anchor anchor.`
     : `This file is flagged \`classic\` — run the classic CCP/CRP/ADP/Hygiene/Schema criteria only; do NOT load or apply the code-directory insight filter.`
@@ -161,6 +180,7 @@ Steps:
 1. Read the target file. Count its lines and estimate tokens (~chars/4).
 2. Read the audit criteria and role-to-criteria map at ${refs.criteria}. This file is self-contained: every testable rule is stated together with the CCP / CRP / ADP principle it derives from. Do NOT load any other framework document -- everything needed to classify is in this one file. (Principle recap so you can apply them without re-derivation: CCP = content that changes for the same reason belongs together; a rule duplicated across scopes is a FAIL. CRP = a fact lives in the smallest scope whose readers all need it. ADP = cross-file references must resolve and run downward in load order; a broken or stale reference is a FAIL.)
 3. ${parentClause}
+3.5. ${ancestorConventionsClause}
 4. Apply the criteria that the role-to-criteria map says apply to role=${f.role}. Produce findings tagged with group (CCP / CRP / ADP / Hygiene) and severity (PASS / FAIL / INFO / JUDGMENT). For role=local, only the D-group / local criteria apply (skip Hygiene and ADP per the map).
 5. ${schemaClause}
 6. ${codeDirClause}
@@ -190,7 +210,7 @@ Steps:
    4. A CRP/size split is offerable (IMPROVE) only when you can NAME a concrete extraction candidate; a bare over-threshold nudge with no named candidate is SILENT (mirror of the one-line trim test).
    5. A validator detection artifact is SILENT only when placating the validator needs no real doc change. If the same edit is ALSO a genuine project-convention fix (e.g. backslash paths -> forward slashes), it is FIX.
 
-   Classic-dimension findings use taxonomy A-G/P/Q/K; CodeDir-group findings use H_stale_anchor / H2_inverted_absence / I_claim_drift / I2_line_drift / J_low_value_insight (or K); Density-group findings use L_verbose_in_place / M_extract_to_reference / N_intra_file_redundancy / O_low_value_verbose.
+   Classic-dimension findings use taxonomy A-G/P/Q/K; the H-11 ancestor-convention finding (step 3.5) uses R_ancestor_convention_violation (group Hygiene); CodeDir-group findings use H_stale_anchor / H2_inverted_absence / I_claim_drift / I2_line_drift / J_low_value_insight (or K); Density-group findings use L_verbose_in_place / M_extract_to_reference / N_intra_file_redundancy / O_low_value_verbose.
    Declined-opportunity ledger: if the target's frontmatter carries an \`md-audit-declined:\` list (suffixed taxonomy ids or short finding keys), do NOT re-raise an IMPROVE finding the user already declined for that file -- honor it exactly like references-audit honors \`references-audit-allow-stale\`. A new or materially different finding still fires.
    PASS / INFO / JUDGMENT findings that need no remediation get taxonomy "none" and bucket "NONE".
    For each FIX/SERIOUS/IMPROVE/SPECIAL finding write a concrete \`remediation\` (what edit you propose, with line refs); FIX writes the edit it will apply, SERIOUS writes the one-line summary for the top-of-report block, IMPROVE writes the single one-line pitch.

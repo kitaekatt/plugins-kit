@@ -40,6 +40,15 @@
 //            `git show <base>:<path>` -- because this plugin is VCS-agnostic and
 //            must not learn Perforce or git. null means the file is an ADD with
 //            no pre-image, in which case every finding is attributable.)
+//   files[i].ancestorClaudeMdPaths: string[]|undefined  (H-11 ancestor-convention
+//            check. The FULL ancestor CLAUDE.md chain above the SKILL.md on the
+//            directory path to the workspace root, nearest-ancestor first,
+//            EXCLUDING the subject. Includes the skill's co-located CLAUDE.md when
+//            one exists. When present and non-empty the lane reads these files,
+//            extracts EXPLICITLY declared conventions, and checks the SKILL.md
+//            against them under criterion H-11 (group Hygiene, taxonomy
+//            M_ancestor_convention_violation). When absent/empty NO H-11 finding
+//            is emitted.)
 //   refs:  { pluginRoot: <abs path to plugins/skills-kit (parent of skills_kit_lib)>,
 //            venvPython: <abs path to skills-kit venv python> }
 // }
@@ -74,7 +83,7 @@ const FILE_FINDINGS_SCHEMA = {
           line: { type: ['integer', 'null'], description: 'line number in the file, or null' },
           taxonomy: {
             type: 'string',
-            enum: ['A_missing_required_frontmatter', 'B_description_quality', 'C_wrong_skill_type', 'D_mixed_type_signal', 'E_schema_validation_failure', 'F_ccp_misallocation', 'G_crp_violation', 'H_adp_back_reference', 'I_decision_provenance', 'J_hygiene_threshold', 'K_unclassified', 'L_load_graph_gap', 'none'],
+            enum: ['A_missing_required_frontmatter', 'B_description_quality', 'C_wrong_skill_type', 'D_mixed_type_signal', 'E_schema_validation_failure', 'F_ccp_misallocation', 'G_crp_violation', 'H_adp_back_reference', 'I_decision_provenance', 'J_hygiene_threshold', 'K_unclassified', 'L_load_graph_gap', 'M_ancestor_convention_violation', 'none'],
             description: 'canonical suffixed taxonomy id (see the SKILL.md taxonomy table); "none" for PASS/INFO/JUDGMENT that need no remediation',
           },
           bucket: { type: 'string', enum: ['FIX', 'SERIOUS', 'IMPROVE', 'SILENT', 'SPECIAL', 'NONE'], description: 'per-finding disposition assigned instance-level by the classifier (step 6)' },
@@ -120,6 +129,13 @@ function lanePrompt(f) {
    You still report EVERY finding with its real disposition. Do NOT drop, downgrade, or re-bucket anything based on attributability -- the caller filters.`
       : `REVIEW MODE, and this file has NO pre-image (it is an ADD introduced by the change under review). Every finding is therefore caused by this change: set \`attributable: true\` on ALL of them. Do not look for a pre-image.`
 
+  const ancestorPaths = Array.isArray(f.ancestorClaudeMdPaths) ? f.ancestorClaudeMdPaths : []
+  const ancestorConventionsClause = ancestorPaths.length > 0
+    ? `H-11 ANCESTOR-DECLARED CONVENTIONS. Read each ancestor CLAUDE.md, nearest-ancestor first: ${ancestorPaths.map((p) => `"${p}"`).join(', ')}. These load ambient in any session that touches this SKILL.md, so a convention they EXPLICITLY declare (ASCII-only mandates, "no absolute paths in shared files", stated formatting/structure rules) binds the SKILL.md too. For each such convention, check whether the SKILL.md VIOLATES it.
+   Rule-extraction posture (mirror the code-review reviewer_a): flag a violation ONLY when you can quote the exact declared rule VERBATIM from an ancestor. No inferred conventions, no generic best-practice, no "spirit of" a rule, no convention you believe is standard but the ancestor did not write down. If you cannot quote the ancestor's rule text verbatim, do NOT raise the finding.
+   Emit each violation as group "Hygiene", taxonomy M_ancestor_convention_violation, severity FAIL, anchored on the SUBJECT line that violates the rule. The \`message\` MUST carry (a) the verbatim ancestor rule quote and (b) the source path of the ancestor CLAUDE.md that declared it. Disposition is assigned in step 6 like any other convention-violation fix -- normally FIX (a mechanical correction against a documented project convention), SERIOUS when the violation reveals a real-world problem the rule exists to prevent (e.g. a committed secret an ancestor forbids).`
+    : `No ancestor CLAUDE.md paths were supplied; do NOT run the H-11 ancestor-convention check and emit no M_ancestor_convention_violation findings.`
+
   return `You are ONE lane of a SKILL.md audit. Audit exactly one file and return structured findings. This is DETECTION ONLY — do not modify any file.
 
 Target:    ${f.path}
@@ -134,9 +150,10 @@ Steps:
    - CRP (crp_placement): SKILL.md is read together; references/ are loaded on-demand for DISTINCT sub-tasks. Body length over ~500 lines / ~3000 tokens is a SIGNAL to evaluate a split, never a verdict by itself. Only when sections genuinely serve different reading tasks AND the body is over threshold is it taxonomy G (DISCUSS), group CRP, JUDGMENT. A stub whose reference is always co-loaded is a tool-call doubling, not a win — do not propose that split.
    - ADP (adp_back_reference): reference docs under this skill's references/ must be one hop deep from SKILL.md and must NOT cite SKILL.md sections (a back-reference is a cycle). Read each references/*.md (if any) and check for back-citations to this SKILL.md. A back-reference is a FAIL — taxonomy H (FIX -- mechanical rewrite), group ADP.
    - Load-graph routing (references_reachable_from_skill_md, judgment half): the validator already surfaces missing edges mechanically; the lane adds only the keyword-adequacy call — for content a reference doc owns (its headings, entity names, script names), do the SKILL.md index entry's keywords carry the exact terms a searcher would use? A clear routing gap is taxonomy L (IMPROVE), group ADP, severity JUDGMENT.
+3.5. ${ancestorConventionsClause}
 4. Hygiene: body over ~500 lines or ~3000 tokens -> one INFO finding, group Hygiene, taxonomy J — a CRP-evaluation prompt, never a FAIL on its own; disposition IMPROVE when a concrete extraction candidate can be named, else SILENT.
 5. Wrong-type signal (taxonomy C): only raise if the validator's type-specific rows or the body shape clearly contradict the declared skill-type. Emit as group Schema, severity JUDGMENT, disposition IMPROVE, and note that classify.py confirmation is deferred to the Q&A gate (the lane does NOT run classify.py).
-6. DISPOSITION CLASSIFIER. Assign EVERY non-PASS finding a taxonomy id (A-L) and one of four dispositions -- FIX / SERIOUS / IMPROVE / SILENT (K -> SPECIAL). The taxonomy default bucket is a starting point only; decide instance-level against these predicates.
+6. DISPOSITION CLASSIFIER. Assign EVERY non-PASS finding a taxonomy id (A-M; M_ancestor_convention_violation is the H-11 ancestor-convention finding from step 3.5, group Hygiene) and one of four dispositions -- FIX / SERIOUS / IMPROVE / SILENT (K -> SPECIAL). The taxonomy default bucket is a starting point only; decide instance-level against these predicates.
 
    Classifier prod (read this FIRST -- it overrides your default caution): You are biased toward conservatism; the user's time and attention are the scarce resources; source control and CL review are the safety net. If the edit very likely improves the doc, apply it.
 

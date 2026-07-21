@@ -299,6 +299,20 @@ Signs of `/init` output never edited: boilerplate headers ("This file provides g
 
 Severity: FAIL on visible auto-generation artifacts.
 
+### H-11. Obeys ancestor-declared conventions
+
+An audited file must not violate a convention that an **ancestor CLAUDE.md explicitly declares**. Ancestor CLAUDE.md files -- every CLAUDE.md above the subject on the directory path up to the workspace root -- load ambient in any session that touches the subject, so their stated conventions bind the subject exactly as they bind any file in their scope. Typical declared conventions: ASCII-only mandates ("never write non-ASCII characters into source files"), "no absolute paths in shared files", required formatting or structure rules the project's CLAUDE.md states.
+
+**Rule-extraction posture (mirrors the code-review reviewer_a):** a violation may be flagged ONLY when the exact declared rule can be **quoted verbatim** from an ancestor CLAUDE.md. No inferred conventions, no generic best-practice, no "the spirit of" a rule, no convention you believe is standard but the ancestor did not write down. If you cannot quote the ancestor's rule text verbatim, do not raise the finding.
+
+**Anchor + message:** the finding anchors on the SUBJECT file (the line that violates the rule), and its message carries (a) the **verbatim ancestor rule quote** and (b) the **source path** of the ancestor CLAUDE.md that declared it -- so the author can see both what was violated and where the rule lives.
+
+**Scope:** fires only when ancestor CLAUDE.md files are supplied to the audit (the `ancestorClaudeMdPaths` argument, nearest-ancestor first). A `root`-role file with no ancestors, or a run that supplies no ancestor paths, emits no H-11 findings.
+
+Taxonomy: `R_ancestor_convention_violation` (group Hygiene). Disposition is assigned instance-level by the classifier like any other convention-violation fix -- normally **FIX** (a mechanical correction against a documented project convention: replace a non-ASCII look-alike, relativize a hardcoded absolute path, apply the stated formatting rule), and **SERIOUS** when the violation reveals a real-world problem the ancestor's rule exists to prevent (e.g. a committed secret an ancestor forbids).
+
+Severity: FAIL on a verbatim-quotable ancestor-convention violation.
+
 ## Output format
 
 ### Per-file report
