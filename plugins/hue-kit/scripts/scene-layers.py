@@ -278,9 +278,17 @@ def express(scene, F, want_layers=False):
     cells, L = scene["cells"], scene["L"]
     if not cells:
         return [] if want_layers else True
+    # Deterministic candidate order: F is a set of frozensets of light-name
+    # strings, so its iteration order varies per process (hash randomisation)
+    # and the first valid itertools.product combination below would differ run
+    # to run -- churning the emitted YAML for an identical bake. Ascending size
+    # is also the better preference: a tightest-fitting group (ideally an exact
+    # fit, g == c) paints no lights outside its cell, so it induces no
+    # must-be-above constraints and the search succeeds sooner.
+    Fo = sorted(F, key=lambda g: (len(g), sorted(g)))
     cand = []
     for c in cells:
-        opts = [g for g in F if c <= g <= L]
+        opts = [g for g in Fo if c <= g <= L]
         if not opts:
             return None
         cand.append(opts)

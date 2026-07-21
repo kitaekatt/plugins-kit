@@ -100,6 +100,14 @@ domain_skill:
         Flag look changes. Redefining a scene is cheap and reversible; whether
         the new look is good is the user's call -- surface it, do not decide it.
       - >-
+        Always close the loop in the browser. ANY change to the working files --
+        a group rename, a colour or brightness edit, an export, an apply -- ends
+        with `hue-kit render` and opening the resulting index.html. The report IS
+        the user-facing view of this domain; a change they cannot see is a change
+        they cannot judge. Do not stop at "edited the YAML" or a terminal diff,
+        and do not ask whether to regenerate -- render and open, then describe
+        what changed.
+      - >-
         Bridge-agnostic only: never bake one home's IPs, keys, zone names, or
         scene set into this skill's docs. Connection details come from the user's
         environment (HUE_BRIDGE_IP / HUE_APP_KEY / HUE_KEY_FILE).
@@ -209,10 +217,15 @@ domain_skill:
       tool: scripts/hue_kit_cli.py
       reference_section: scene-layers.md (Sync)
     - id: render
-      keywords: [html, report page, browsable, self-contained, the draw, index.html]
+      keywords: [html, report page, browsable, self-contained, the draw,
+                 index.html, regenerate, refresh the report, show me the result]
       description: >-
         Render the self-contained HTML report (config + source embedded) -- the
-        shareable, buildable spec of the scenes.
+        shareable, buildable spec of the scenes. THE MANDATORY LAST STEP of every
+        change: run it after any group rename, colour/brightness edit, export, or
+        apply, then open the printed index.html path in the browser (`open` /
+        `xdg-open` / `start`) so the user sees the result. See the
+        close-the-loop guardrail in behavioral_guardrails.
       operation: hue-kit render [PATH]
       tool: scripts/hue_kit_cli.py
       reference_section: scene-layers.md (The tool -- solver)
@@ -334,9 +347,17 @@ asset_dependencies:
   `report` -> `groups` -> `export` -> `render` chain, and do not open with
   `report`, which prints solver internals at someone who asked to see a picture.
 - Changing a scene's colour/brightness ("make Reading warmer", "dim the bar in
-  Movie night") -- edit YAML -> `validate` -> `apply`.
+  Movie night") -- edit YAML -> `validate` -> `apply` -> `render` -> open.
+- Renaming meta-groups the user has supplied names for -- rewrite BOTH
+  scene-groups.yaml and every `group:` reference in scene-designs.yaml, then
+  `validate` (a pure rename must show 0 discrepancies) -> `render` -> open.
+  Nothing is written to the bridge; group names are a local vocabulary.
 - Seeing or regenerating the HTML report, or exporting the current bridge
   configuration to YAML.
+
+**Every one of those paths ends the same way: `hue-kit render`, then open the
+index.html.** The HTML is how the user actually sees their lights -- finishing
+in the terminal leaves the change invisible to them.
 
 Do NOT use to turn scenes/lights on or off at runtime (this edits definitions),
 for non-Hue ecosystems, or for whole-home administration beyond Hue scenes.
