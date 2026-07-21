@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """bootstrap_guard.py -- detect whether the bootstrap plugin has provisioned a
 plugin, and fail gracefully (with an actionable message) when it has not.
 

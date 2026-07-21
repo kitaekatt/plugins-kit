@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Gather review context for a Perforce changelist.
 
 Usage: prepare_review.py <CL>

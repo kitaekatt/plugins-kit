@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Remove legacy per-project p4-kit config files.
 
 Earlier p4-kit releases wrote `<project>/.local-data/p4-kit/config.yaml` (and
