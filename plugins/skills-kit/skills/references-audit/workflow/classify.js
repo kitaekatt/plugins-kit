@@ -98,21 +98,21 @@ Steps:
      - J_forward_looking (add the proposed: escape prefix) when the prose explicitly cues "planned"/"future".
      - B_retired ONLY in the purely-incidental sub-case: a broken clause whose removal loses nothing (falsified-content deletion under the loss-free guard).
    SERIOUS (surface at the TOP, summarized, NEVER auto-fixed, never buried):
-     - An ERROR hard_dep_missing (a Skill-tool \`skill: "..."\` invocation) to a skill that is GENUINELY GONE with no replacement and no mechanical escape -- a live runtime-crash path with NO surviving mechanism. The real finding is the unguarded invocation, not the doc drift.
+     - An ERROR hard-dep (a Skill-tool \`skill: "..."\` invocation) to a skill that is GENUINELY GONE with no replacement and no mechanical escape -- a live runtime-crash path with NO surviving mechanism. The real finding is the unguarded invocation, not the doc drift.
    IMPROVE (count + one-liners; opt-in) -- structural or judgment calls where no fact/convention decides the fix:
      - A_renamed with an UNKNOWN mapping (offer the best-guess new name as a one-liner).
      - B_retired non-incidental (which sub-case -- delete the section, demote to backtick, or add to the references-audit-allow-stale frontmatter -- protects surrounding true content; loss-free guard).
      - D_scope_violating (deleting a cross-scope reference may drop true comparison content).
      - H_harness_transcript (recommend the --ignore-dir wrapper flag ONCE for the whole batch -- a config decision that edits the invocation wrapper, not the scanned files).
      - I_illustrative / J_forward_looking when the cue is ambiguous (it could be a real, currently-broken instruction rather than an example/plan).
-     - name_mismatch when inbound references disagree on which name is canonical (renaming would break real refs).
+     - name-mismatch when inbound references disagree on which name is canonical (renaming would break real refs).
      - shadowing that looks ACCIDENTAL (one-line "user skill X shadows project skill X -- intended?").
    SILENT (do NOT surface; no hedging):
      - shadowing confirmed to be an intentional personal override (an accepted structural pattern).
      - a do-nothing conclusion, or a finding the scanner already silenced via a references-audit-allow-stale entry.
    SPECIAL = K_unclassified only (escape hatch).
 
-   Rule-level defaults (before taxonomy refines them): hard_dep_missing -> FIX when a mechanical re-point/prefix resolves it, else SERIOUS; soft_ref_missing -> FIX (decidable against the verified skill pool + escape conventions), refined per taxonomy; name_mismatch -> FIX (align frontmatter and directory, after verifying which side inbound refs use); shadowing -> IMPROVE (surface once, opt-in), SILENT when intentional.
+   Rule-level defaults (before taxonomy refines them): hard-dep -> FIX when a mechanical re-point/prefix resolves it, else SERIOUS; soft-ref -> FIX (decidable against the verified skill pool + escape conventions), refined per taxonomy; name-mismatch -> FIX (align frontmatter and directory, after verifying which side inbound refs use); shadowed -> IMPROVE (surface once, opt-in), SILENT when intentional.
 
    Ambiguity rulings: (1) Your own verified reading (the ref does/does not resolve against the pool; the surrounding prose is/ is not meta-descriptive) DISCHARGES any "confirm with author" hedge -- do not leak a decided FIX back into IMPROVE. (2) A validator/detection artifact that also happens to be a genuine convention fix (e.g. a real broken ref, not just a false positive) is FIX, not SILENT. (3) Dedup/mechanical fixes never wait on a larger structural relocation -- FIX the mechanical part now; the relocation stays a separate IMPROVE.
 4. For every FIX finding that is a before/after replacement, compute the EXACT before-text (the current line, verbatim) and the after-text (per the category's default remediation). For instruction-type FIX (fence a command, add an escape prefix, delete an incidental clause) leave before/after empty and put the recipe in \`rationale\`. For SERIOUS put the one-line top-of-report summary in \`rationale\`; for IMPROVE the one-line pitch; for SILENT why it is not surfaced. Leave before/after empty for SERIOUS/IMPROVE/SILENT/SPECIAL.
