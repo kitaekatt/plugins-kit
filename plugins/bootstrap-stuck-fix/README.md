@@ -1,6 +1,7 @@
 # bootstrap-stuck-fix
 
-**Temporary remediation plugin. Scheduled for withdrawal -- see "Withdrawal" below.**
+**Remediation plugin, kept published indefinitely as a safety net -- see
+"Distribution and withdrawal" below.**
 
 Repairs a malformed record in Claude Code's plugin registry
 (`~/.claude/plugins/installed_plugins.json`) that permanently and *silently*
@@ -102,8 +103,10 @@ python plugins/bootstrap-stuck-fix/scripts/repair_registry.py --dry-run
 ## Distribution and withdrawal
 
 Distributed by enabling it in a tracked project `settings.json`, so anyone who
-syncs that file and starts a session receives the fix. **Withdraw it after the
-known user population has run it** (target: ~1 month) by removing that
+syncs that file and starts a session receives the fix. **Kept published
+indefinitely as a safety net** (decision 2026-07-22): the repair is idempotent
+and silent on healthy machines, so leaving it in place costs nothing and
+covers stragglers that surface late. If it is ever withdrawn, remove that
 enablement.
 
 Two notes for whoever withdraws it:
