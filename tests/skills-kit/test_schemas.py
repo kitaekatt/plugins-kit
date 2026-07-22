@@ -30,7 +30,11 @@ from skills_kit_lib.schema_engine import validate
 # OR as a top-level portable facts: unit) and INTO an audit-time cross-source rule.
 import yaml
 
-from skills_kit_lib.audit import FAIL, check_facts_cross_rules
+from skills_kit_lib.audit import (
+    FAIL,
+    check_facts_cross_rules,
+    check_technique_caution_cross_rule,
+)
 
 
 def _has_fail_at(fails, path_substring: str) -> bool:
@@ -205,13 +209,48 @@ class TestTechniqueSkill:
         # trigger_model is metadata; user-only resolves to the one unified schema.
         assert schema["root"] == "technique_skill"
 
-    def test_missing_gotchas_fails(self, minimal_technique_skill, make_invalid):
+    def test_missing_gotchas_without_anti_patterns_fails_cross_rule(
+        self, minimal_technique_skill, make_invalid
+    ):
+        # Caution-surface OR-rule: per-technique gotchas moved OUT of the schema
+        # floor and INTO an audit-time cross-rule -- >=1 gotcha across techniques
+        # OR >=1 anti_patterns record. Neither present -> the cross-rule fails.
         bad = make_invalid(
             minimal_technique_skill,
             lambda d: d["technique_skill"]["techniques"][0].pop("gotchas"),
         )
         fails, _ = validate(bad, TECHNIQUE_SKILL_SCHEMA)
-        assert _has_fail_at(fails, "gotchas")
+        assert fails == [], f"gotchas is optional at the schema level: {fails}"
+        results = check_technique_caution_cross_rule(_ref_body(bad))
+        assert any("anti_pattern" in r.row for r in _fail_rows(results))
+
+    def test_anti_patterns_satisfy_caution_or_rule(
+        self, minimal_technique_skill, make_invalid
+    ):
+        # >=1 anti_patterns record with no gotchas anywhere satisfies the OR-rule.
+        anti_pattern = {
+            "id": "ap1",
+            "name": "Reach for shortcut S",
+            "keywords": ["shortcut s", "lookalike", "rationalization"],
+            "why_it_seems_right": "S looks faster because it skips step 2.",
+            "why_it_is_wrong": "Step 2 is what guarantees Z.",
+            "alternative": "Use technique T.",
+        }
+        ok = make_invalid(
+            minimal_technique_skill,
+            lambda d: (
+                d["technique_skill"]["techniques"][0].pop("gotchas"),
+                d["technique_skill"].update({"anti_patterns": [anti_pattern]}),
+            ),
+        )
+        fails, _ = validate(ok, TECHNIQUE_SKILL_SCHEMA)
+        assert fails == [], f"unexpected fails: {fails}"
+        results = check_technique_caution_cross_rule(_ref_body(ok))
+        assert results and not _fail_rows(results)
+
+    def test_gotchas_alone_satisfy_caution_or_rule(self, minimal_technique_skill):
+        results = check_technique_caution_cross_rule(_ref_body(minimal_technique_skill))
+        assert results and not _fail_rows(results)
 
     def test_forbidden_key_rules_fails(self, minimal_technique_skill, make_invalid):
         bad = make_invalid(

@@ -490,6 +490,38 @@ def check_facts_cross_rules(body_text: str, declared_type: str | None) -> list[C
     return results
 
 
+def check_technique_caution_cross_rule(body_text: str) -> list[CheckResult]:
+    """Enforce the technique-skill caution-surface OR-rule.
+
+    Per-technique gotchas are optional at the schema level; the document-level
+    floor is >=1 gotcha across techniques OR >=1 anti_patterns record. The two
+    are alternate containers for the same caution surface -- duplicating one
+    caution across both is an anti-pattern (the reader pays twice).
+    """
+    if not HAVE_YAML:
+        return []
+
+    units, _ = collect_yaml_units(body_text)
+    for unit_root, block_data in units:
+        if unit_root != "technique_skill":
+            continue
+        inner = block_data.get("technique_skill", {})
+        if not isinstance(inner, dict):
+            continue
+        techniques = inner.get("techniques", [])
+        has_gotcha = isinstance(techniques, list) and any(
+            isinstance(t, dict) and t.get("gotchas") for t in techniques)
+        anti_patterns = inner.get("anti_patterns")
+        has_anti = isinstance(anti_patterns, list) and len(anti_patterns) >= 1
+        ok = has_gotcha or has_anti
+        return [CheckResult(
+            "yaml: >=1 gotcha OR >=1 anti_pattern record (caution-surface OR-rule)",
+            PASS if ok else FAIL,
+            "" if ok else "no technique carries a gotchas list and no anti_patterns record exists",
+        )]
+    return []
+
+
 _PROJECT_MARKERS = (".git", ".hg", ".svn", ".p4config.txt")
 
 
@@ -933,6 +965,7 @@ def audit(skill_md_path: Path) -> dict[str, Any]:
 
     yaml_results.extend(check_portable_units(body.text))
     yaml_results.extend(check_facts_cross_rules(body.text, declared_type))
+    yaml_results.extend(check_technique_caution_cross_rule(body.text))
     yaml_results.extend(check_asset_dependencies_resolve(body.text, skill_dir))
 
     cross_block_drift = check_cross_block_drift(body.text)

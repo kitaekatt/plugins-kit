@@ -96,7 +96,10 @@ PATTERN_SKILL_SCHEMA = {
 # (min_len 1). output_template is an optional companion field carrying the
 # output-shape contract for the agent's reply -- not an alternative to
 # steps. Trigger model (auto vs user-only) is metadata; it does not change
-# what the body must contain.
+# what the body must contain. The caution surface is a document-level
+# OR-rule: >=1 gotcha across techniques OR >=1 anti_patterns record
+# (enforced by check_technique_caution_cross_rule in audit.py, following
+# the facts cross-source precedent).
 TECHNIQUE_SKILL_SCHEMA = {
     "root": "technique_skill",
     "owner_doc": "skills/skill-authoring/references/framework.md",
@@ -125,7 +128,11 @@ TECHNIQUE_SKILL_SCHEMA = {
                     "required": {"type": "bool", "required": True},
                     "description": {"type": "string", "required": True},
                 }}},
-                "gotchas": {"type": "list", "required": True, "min_len": 1},
+                "gotchas": {"type": "list", "required": False, "min_len": 1,
+                            "note": "caution-surface OR-rule: the document must carry >=1 gotcha "
+                                    "across techniques OR >=1 anti_patterns record (document-level "
+                                    "cross-rule in audit.py). State each caution once -- duplicating "
+                                    "it across both containers makes the reader pay twice."},
                 "validator": {"type": "dict", "required": False, "keys": {
                     "type": {"type": "string", "required": True},
                     "ref": {"type": "string", "required": False},

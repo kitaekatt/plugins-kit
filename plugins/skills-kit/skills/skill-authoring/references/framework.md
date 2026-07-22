@@ -55,6 +55,11 @@ framework:
           common-enough load-bearing extension was promoted to a first-class optional
           field on the two skill types whose surface (procedure or rule) frequently
           benefits from naming the lookalike-but-wrong moves an agent would reach for.
+          On technique_skill, anti_patterns also participates in the caution-surface
+          floor: ">=1 gotcha OR >=1 anti_pattern record" satisfies the known-gotchas
+          requirement, because the two are alternate containers for the same caution
+          surface. Duplicating one caution across both (or across steps[].detail and
+          either) is itself an anti-pattern -- the reader pays twice.
         keywords: [anti-pattern record, named anti-patterns, lookalike-but-wrong, structured assertion, technique-skill optional, discipline-skill optional]
 
   framework_goals:
@@ -418,8 +423,8 @@ Examples: `flatten-with-flags`, `test-invariants`, `reducing-complexity` (from t
 
 | Contract | Items |
 |---|---|
-| **Required blocks** | SKILL.md file with frontmatter and trigger; >=1 technique with ordered-step body (`steps:` list, min 1 step); >=1 gotcha. `output_template:` is an optional companion to `steps:` carrying the output-shape contract for the agent's reply -- not a substitute for steps. Even user-only slash-command skills reduce to a 1-step procedure ("invoke command; render output") and write that step explicitly. |
-| **Required patterns** | activation metadata, exclusion clause, technique, known gotchas |
+| **Required blocks** | SKILL.md file with frontmatter and trigger; >=1 technique with ordered-step body (`steps:` list, min 1 step); >=1 gotcha OR >=1 anti_pattern record. Gotchas and `anti_patterns:` records are alternate containers for the same caution surface; state each caution once -- duplicating it across both (or across `steps[].detail` and either) is an anti-pattern: the reader pays twice. `output_template:` is an optional companion to `steps:` carrying the output-shape contract for the agent's reply -- not a substitute for steps. Even user-only slash-command skills reduce to a 1-step procedure ("invoke command; render output") and write that step explicitly. |
+| **Required patterns** | activation metadata, exclusion clause, technique, known gotchas (satisfiable by gotchas OR anti_patterns records) |
 | **Conditionally required patterns** | explicit step-tracking -- IF the technique has more than 3 steps (criterion: count `step` blocks; satisfied by EITHER a paste-able `- [ ]` checklist OR an explicit step-tracker invocation like `TaskCreate` or a scratch file at the start of the procedure -- the goal is the discipline of explicit step-tracking, not the markdown syntax; when on the YAML contract, the `steps:` list IS the canonical step-tracking surface and a parallel markdown checklist is not required); utility bundle -- IF the procedure has deterministic steps that would otherwise be regenerated each call (criterion: any step where output depends only on input); self-correcting loop -- IF the procedure produces output that can be programmatically validated (criterion: a validator script or rubric exists); plan-validate-execute -- IF the procedure has batch operations or irreversible side effects (criterion: any step that modifies external state at scale or is hard to undo) |
 | **Prohibited patterns** | adversarial pressure testing |
 | **Audit** | Can the agent apply the method to a novel scenario? Try variation and missing-information tests. |
@@ -557,7 +562,7 @@ pattern_skill:
           after: First-class optional anti_patterns list with a fixed record shape on technique-skill and discipline-skill.
 ```
 
-Skill-type -- `technique_skill:` (one technique, ordered steps, required gotcha):
+Skill-type -- `technique_skill:` (one technique, ordered steps, required caution surface -- gotcha or anti_pattern record):
 
 ```yaml
 technique_skill:
