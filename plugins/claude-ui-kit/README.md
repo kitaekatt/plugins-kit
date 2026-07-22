@@ -2,6 +2,13 @@
 
 Opinionated defaults and customization skills for Claude Code's UI surfaces. Currently ships the **statusline** (the bar at the bottom of the prompt) with threshold-aware default colors and a `/statusline` skill for customizing it. Future home for other UI tweaks (notifications, output formatting, etc.) as the surface area grows.
 
+## Install
+
+```
+/plugin marketplace add kitaekatt/plugins-kit
+/plugin install claude-ui-kit
+```
+
 ## Status line
 
 When the plugin is installed (and no other `statusLine` is already configured), it writes a `statusLine` block into the project's `.claude/settings.local.json` (per-user, gitignored/p4ignored — safe in source-controlled projects) pointing at the bundled script. The default shows:

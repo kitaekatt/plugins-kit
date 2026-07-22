@@ -6,6 +6,17 @@ Repairs a malformed record in Claude Code's plugin registry
 (`~/.claude/plugins/installed_plugins.json`) that permanently and *silently*
 wedges a machine on an old bootstrap version.
 
+## Install
+
+```
+/plugin marketplace add kitaekatt/plugins-kit
+/plugin install bootstrap-stuck-fix
+```
+
+(The campaign normally distributes it via a tracked project `settings.json`
+-- see "Distribution and withdrawal" below -- but a manual install works for
+a single affected machine.)
+
 ## The defect
 
 An affected registry holds two records under `bootstrap@plugins-kit`:

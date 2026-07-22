@@ -29,7 +29,12 @@ for Hue CLIP v2 fundamentals.
 
 ## Install
 
-Enable the plugin from the `plugins-kit` marketplace. The `bootstrap` plugin
+```
+/plugin marketplace add kitaekatt/plugins-kit
+/plugin install hue-kit
+```
+
+The `bootstrap` plugin
 provisions a venv (requests, pyyaml, urllib3) from `pyproject.toml` on session
 start -- no manual `pip install`. Claude Code adds this plugin's `bin/` to PATH,
 so the `hue-kit` command works from any directory.
