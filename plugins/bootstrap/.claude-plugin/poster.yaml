@@ -1,3 +1,3 @@
 # Poster display overrides for the plugin-ecosystem skill.
 # All fields optional; falls back to plugin.json when absent.
-description: "Dependancy for all plugins in this marketplace. Provides a centralized bootstrap engine for Claude Code plugins."
+description: "Dependency for all plugins in this marketplace. Provides a centralized bootstrap engine for Claude Code plugins."

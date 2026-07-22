@@ -1,8 +1,42 @@
 # plugins-kit
 
+[![tests](https://github.com/kitaekatt/plugins-kit/actions/workflows/tests.yml/badge.svg)](https://github.com/kitaekatt/plugins-kit/actions/workflows/tests.yml)
+
 Individual plugins for [Claude Code](https://code.claude.com). **The deliverable is the
-plugin, not the marketplace** — `plugins-kit` is just the shared home (and dependency
-substrate) the plugins ride on.
+plugin, not the marketplace** — `plugins-kit` is the shared home and dependency substrate
+the plugins ride on.
+
+Browse the full catalog on the [marketplace landing page](https://kitaekatt.github.io/plugins-kit/).
+
+## Installing
+
+These plugins install through Claude Code's plugin marketplace mechanism. Add the
+marketplace, then install the plugins you want:
+
+```
+/plugin marketplace add kitaekatt/plugins-kit
+/plugin install bootstrap
+/plugin install p4-kit        # or unreal-kit, git-kit, skills-kit, ...
+```
+
+Most plugins depend on **bootstrap** and declare it as a dependency, so installing a
+plugin pulls bootstrap in automatically. To update later:
+
+```
+/plugin marketplace update
+/plugin update
+```
+
+## Your first session
+
+On the first session start after installing any plugin, the **bootstrap** plugin
+provisions its dependencies: it downloads `uv`, creates a per-plugin Python venv, and
+installs any system tools the plugin declares (such as `gh`). Prerequisite: `bash` on
+your PATH — on Windows, that means Git Bash.
+
+Healthy bootstrap is **silent** — no output at session start means every check passed.
+To verify a plugin was actually provisioned, read its log at
+`~/.claude/plugins/data/plugins-kit/<plugin>/bootstrap.log`.
 
 ## What I'm building
 
@@ -32,27 +66,9 @@ hooks. The headliners:
 | **openrouter-kit** | OpenRouter API key management + a shared model registry. |
 | **claude-ui-kit** | Status line with context-window and rate-limit threshold colors, plus `/statusline`. |
 | **cache-kit** | Cache-usage reporting — per-request and session-level cache hit analysis from transcripts. |
+| **hue-kit** | Philips Hue layered-scene framework — bridge sync, editable YAML scenes, meta-group solver, HTML report. |
+| **bootstrap-stuck-fix** | Temporary remediation shim — repairs a wedged bootstrap registry record that pins a machine on an old version. |
 | **prototypes** | Experimental skills awaiting graduation into their own plugins. |
-| **test-plugin** | Exercises the bootstrap system end to end. |
-
-## Installing
-
-These plugins install through Claude Code's plugin marketplace mechanism. Add the
-marketplace, then install the plugins you want:
-
-```
-/plugin marketplace add kitaekatt/plugins-kit
-/plugin install bootstrap
-/plugin install p4-kit        # or unreal-kit, git-kit, skills-kit, ...
-```
-
-Most plugins depend on **bootstrap** and declare it as a dependency, so installing a
-plugin pulls bootstrap in automatically. To update later:
-
-```
-/plugin marketplace update
-/plugin update
-```
 
 ## How it fits together
 
