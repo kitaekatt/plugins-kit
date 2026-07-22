@@ -107,31 +107,41 @@ CLAIM_PROBE = """\
             Claim probe -- decide the `--claim` flags BEFORE invoking prepare, and invoke prepare
             only ONCE. Check whether skills-kit's md-audit skill is available in this session (it
             appears in the available-skills list as `skills-kit:md-audit`). If it IS available, add
-            `--claim '**/CLAUDE.md' --claim '**/SKILL.md'` to the prepare invocation below so those
-            files are held back from the generic reviewers and returned under `bundle.claimed_files`
-            (each with a materialized `pre_image`) for the subject-lens md-audit pass in step 6. If it
-            is NOT available, invoke prepare with NO `--claim` flags -- degrade silently to today's
-            behavior (the md files get thin generic data_only coverage), noting the degradation in one
-            line. Do NOT run prepare twice."""
+            `--claim '**/*.md'` to the prepare invocation below so EVERY changed Markdown file (any
+            `.md` at any depth, root included -- CLAUDE.md, SKILL.md, and generic docs alike) is held
+            back from the generic reviewers and returned under `bundle.claimed_files` (each with a
+            materialized `pre_image`) for the subject-lens md-audit pass in step 6. The single
+            `**/*.md` glob supersedes the older two-glob form; `.md.html` (Markdeep) is NOT `.md`, so
+            it is deliberately left to the generic reviewers. If md-audit is NOT available, invoke
+            prepare with NO `--claim` flags -- degrade silently to today's behavior (the md files get
+            thin generic data_only coverage), noting the degradation in one line. Do NOT run prepare
+            twice."""
 
 # Inserted into step 6's action, right after the dispatch rule.
 MD_AUDIT_LAUNCH = """\
             Subject-lens md-audit pass -- run ONLY when `bundle.claimed_files` is non-empty; skip this
             entire paragraph otherwise. In the SAME message that launches the reviewer subagents (or the
             reviewer Workflow, per the dispatch rule above), ALSO invoke the Workflow tool with
-            skills-kit's headless detect.js for the claimed files: one Workflow call for the claimed
-            `**/CLAUDE.md` files (claude-md-audit's `workflow/detect.js`) and, only if any `**/SKILL.md`
-            files are claimed, a second Workflow call for those (skill-audit's `workflow/detect.js`) --
-            at most two Workflow calls. Pass `review: true` and, per claimed file, `preImagePath` = its
-            `pre_image` from the bundle (null for an add), with role / dimension / parentPath /
-            ancestorClaudeMdPaths resolved from each claimed file's `claude_mds` per
-            references/md-audit-review.md. Resolve the skills-kit plugin root and venvPython defensively
-            per that reference; if detect.js or the documented args contract is not found where expected
-            (version skew), FALL BACK cleanly: emit a one-line warning and re-run prepare_review.py
-            WITHOUT any `--claim` flags so the claimed files rejoin the generic review, then proceed with
-            the normal fan-out. This probe-and-fallback is the version-coupling safety valve. When it
-            runs, the md-audit Workflow executes in PARALLEL with the reviewer fan-out; keep its
-            `{perFile, totals, review}` for step 9's labeled section."""
+            skills-kit's headless detect.js for the claimed files, routed THREE ways by basename -- at
+            most THREE Workflow calls total: (a) every claimed file named `CLAUDE.md` -> claude-md-audit's
+            `workflow/detect.js`; (b) every claimed file named `SKILL.md` -> skill-audit's
+            `workflow/detect.js` (only if any); (c) every OTHER claimed `.md` file (generic docs) ->
+            project-doc-audit's `workflow/detect.js` (only if any). Pass `review: true` and, per claimed
+            file, `preImagePath` = its `pre_image` from the bundle (null for an add), with the per-member
+            `files[]` fields (CLAUDE.md: role / dimension / parentPath / ancestorClaudeMdPaths; SKILL.md:
+            ancestorClaudeMdPaths; project-doc: ancestorClaudeMdPaths) resolved from each claimed file's
+            `claude_mds` per references/md-audit-review.md. Resolve the skills-kit plugin root and
+            venvPython defensively per that reference. TWO-TIER version-skew fallback (the version-coupling
+            safety valve): (1) if the claude-md-audit or skill-audit detect.js entry point / args contract
+            is missing (a broad skills-kit skew), emit a one-line warning and re-run prepare_review.py
+            WITHOUT any `--claim` flags so ALL claimed files rejoin the generic review; (2) if ONLY the
+            project-doc-audit detect.js entry point is missing (an older skills-kit that predates
+            project-doc review), fall back for JUST the generic-md claims -- emit a one-line warning and
+            re-run prepare_review.py with only `--claim '**/CLAUDE.md' --claim '**/SKILL.md'` so CLAUDE.md
+            and SKILL.md keep specialist coverage while the other `.md` files rejoin the generic review.
+            Then proceed with the normal fan-out. When the pass runs, the md-audit Workflow(s) execute in
+            PARALLEL with the reviewer fan-out; keep each `{perFile, totals, review}` for step 9's labeled
+            section."""
 
 # Inserted into step 9's action, right after the unresolved-work section.
 MD_AUDIT_REPORT = """\
@@ -154,7 +164,8 @@ MD_AUDIT_REPORT = """\
 # Appended to both gotcha blocks (plain text -- no f-string braces).
 MD_AUDIT_GOTCHAS = """
         - md-audit findings are a SEPARATE, labeled section -- never interleave them with the code-review issue list. They come from skills-kit's detect.js (a subject-lens reviewer), not from the generic reviewer/validator subagents, so they are not filtered by the validators.
-        - The claim decision happens ONCE, at the step-2 probe, and controls whether prepare gets `--claim`. Do not run prepare a second time just to add claims -- the only re-run is the version-skew FALLBACK, which re-runs WITHOUT `--claim`.
+        - The claim decision happens ONCE, at the step-2 probe: md-audit available -> `--claim '**/*.md'` (one glob for CLAUDE.md, SKILL.md, and generic docs); md-audit absent -> no `--claim`. Do not run prepare a second time just to add claims -- the only re-runs are the two version-skew FALLBACKS (broad skew re-runs WITHOUT `--claim`; project-doc-only skew re-runs with only `--claim '**/CLAUDE.md' --claim '**/SKILL.md'`).
+        - Claimed `.md` files route THREE ways by basename in step 6: `CLAUDE.md` -> claude-md-audit, `SKILL.md` -> skill-audit, every other `.md` -> project-doc-audit. `.md.html` is NOT `.md` and is never claimed -- it stays with the generic reviewers.
         - When skills-kit md-audit is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-audit section -- the md files get today's thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
         - The Workflow tool is unavailable inside subagents. Launch the md-audit detect.js Workflow from the MAIN session (the same message that fans out the reviewers), never from within a reviewer subagent."""
 
@@ -537,7 +548,7 @@ GIT_STEP2 = """\
 __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff, partition it into chunked .diff fragments on disk, enumerate changed files via `git diff --name-status`, map ancestor CLAUDE.md files for each, detect untracked-or-unstaged files in the directories the diff touches, detect unresolved merge conflicts, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this range.
           tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
-          input: "<range or argument from step 1>  (append `--claim '**/CLAUDE.md' --claim '**/SKILL.md'` when md-audit is available, per the claim probe)"
+          input: "<range or argument from step 1>  (append `--claim '**/*.md'` when md-audit is available, per the claim probe)"
           expected: |
             JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
           on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
@@ -550,7 +561,7 @@ P4_STEP2 = """\
 __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
-          input: "<CL>  (append `--claim '**/CLAUDE.md' --claim '**/SKILL.md'` when md-audit is available, per the claim probe)"
+          input: "<CL>  (append `--claim '**/*.md'` when md-audit is available, per the claim probe)"
           expected: |
             JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
@@ -1049,18 +1060,19 @@ MD_AUDIT_REVIEW_TEMPLATE = """\
 # Subject-lens md-audit contributor
 
 When skills-kit's md-audit skill is available in the session, `@SKILL_NAME@` treats it
-as the SUBJECT-lens reviewer for the changed `**/CLAUDE.md` and `**/SKILL.md` files. Those
-files are CLAIMED out of the generic reviewer fan-out (prepare_review.py's `--claim` flag)
-and audited by skills-kit's headless `detect.js` Workflow instead; its findings render as a
-separate labeled section. When md-audit is ABSENT the mechanism degrades silently -- no
-`--claim`, no claimed files, the md files get the ordinary thin data_only coverage. This doc
-is the operational detail behind step 6 (launch) and step 9 (render); the SKILL body carries
-the decision flow.
+as the SUBJECT-lens reviewer for EVERY changed Markdown file -- `**/*.md`, which is CLAUDE.md,
+SKILL.md, and generic project docs alike (`.md.html` Markdeep files are NOT `.md` and stay with
+the generic reviewers). Those files are CLAIMED out of the generic reviewer fan-out
+(prepare_review.py's `--claim '**/*.md'` flag) and audited by skills-kit's headless `detect.js`
+Workflow instead; its findings render as a separate labeled section. When md-audit is ABSENT the
+mechanism degrades silently -- no `--claim`, no claimed files, the md files get the ordinary thin
+data_only coverage. This doc is the operational detail behind step 6 (launch) and step 9 (render);
+the SKILL body carries the decision flow.
 
 ## When it runs
 
 Only when `bundle.claimed_files` is non-empty (i.e. the step-2 probe found md-audit available
-AND at least one CLAUDE.md/SKILL.md changed). Otherwise skip everything here.
+AND at least one `.md` file changed). Otherwise skip everything here.
 
 ## Resolve the skills-kit plugin root and venvPython (defensively)
 
@@ -1072,21 +1084,30 @@ session) invokes it via the Workflow tool. Locate the INSTALLED skills-kit plugi
   semver dir present). `${CLAUDE_PLUGIN_ROOT}` of the CURRENT skill is NOT it -- that points at
   git-kit / p4-kit, not skills-kit.
 - detect.js entry points: `<root>/skills/claude-md-audit/workflow/detect.js` (for CLAUDE.md
-  subjects) and `<root>/skills/skill-audit/workflow/detect.js` (for SKILL.md subjects).
+  subjects), `<root>/skills/skill-audit/workflow/detect.js` (for SKILL.md subjects), and
+  `<root>/skills/project-doc-audit/workflow/detect.js` (for every OTHER `.md` subject).
 - venvPython: skills-kit's provisioned venv, which lives in the version-independent DATA dir --
   `~/.claude/plugins/data/plugins-kit/skills-kit/.venv/Scripts/python.exe` on Windows,
   `~/.claude/plugins/data/plugins-kit/skills-kit/.venv/bin/python` on macOS/Linux.
 
-**Version-coupling safety valve (the fallback).** If `<root>` cannot be located, either detect.js
-entry point is missing, or its documented args contract is not what this doc describes (a
-skills-kit major/contract skew), do NOT guess: emit a one-line warning and RE-RUN
-prepare_review.py WITHOUT any `--claim` flags. That returns the md files to `changed_files` so
-they get generic review, and the whole md-audit section is skipped for this run. This is the only
-sanctioned second prepare invocation.
+**Version-coupling safety valve (two-tier fallback).** Do NOT guess when an entry point is
+missing or a documented args contract is not what this doc describes:
 
-## The two Workflow calls
+- **Broad skew** -- `<root>` cannot be located, OR the claude-md-audit / skill-audit detect.js
+  entry point or args contract is missing: emit a one-line warning and RE-RUN prepare_review.py
+  WITHOUT any `--claim` flags. All claimed md files return to `changed_files` for generic review,
+  and the whole md-audit section is skipped for this run.
+- **project-doc-only skew** -- claude-md-audit and skill-audit are present but ONLY
+  `project-doc-audit/workflow/detect.js` is missing (an older skills-kit that predates
+  project-doc review): emit a one-line warning and RE-RUN prepare_review.py with only
+  `--claim '**/CLAUDE.md' --claim '**/SKILL.md'`. CLAUDE.md and SKILL.md keep their specialist
+  coverage; only the generic `.md` docs rejoin the generic review.
 
-At most two, in the SAME message that launches the reviewer fan-out (or the reviewer Workflow):
+These are the only sanctioned second prepare invocations.
+
+## The Workflow calls (three-way by basename)
+
+At most three, in the SAME message that launches the reviewer fan-out (or the reviewer Workflow):
 
 1. **claude-md-audit** -- one call for every claimed file whose basename is `CLAUDE.md`.
    `scriptPath = <root>/skills/claude-md-audit/workflow/detect.js`, `args` =
@@ -1094,6 +1115,9 @@ At most two, in the SAME message that launches the reviewer fan-out (or the revi
 2. **skill-audit** -- one call for every claimed file whose basename is `SKILL.md` (only if any).
    `scriptPath = <root>/skills/skill-audit/workflow/detect.js`, `args` =
    `{ files: [...], review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
+3. **project-doc-audit** -- one call for every OTHER claimed `.md` file (generic docs; only if any).
+   `scriptPath = <root>/skills/project-doc-audit/workflow/detect.js`, `args` =
+   `{ files: [...], review: true, refs: { criteria: <root>/skills/project-doc-audit/references/audit-criteria.md, pluginRoot: <root> } }`.
 
 `args` may be passed as an object or a JSON string; all `refs` paths must be ABSOLUTE (the
 Workflow runs from the session cwd, not the skill dir). `review: true` forces the model pin and
@@ -1134,6 +1158,13 @@ For a **SKILL.md** file (skill-audit `files[]`):
 - `ancestorClaudeMdPaths`, `preImagePath` as above. (No `role` / `dimension` / `parentPath` /
   `density` in the skill-audit contract.)
 
+For a **generic project doc** (any other claimed `.md`; project-doc-audit `files[]`):
+- `path` = `local`.
+- `ancestorClaudeMdPaths`, `preImagePath` as above. (No `role` / `dimension` / `parentPath` /
+  `kind` / `lines` / `inbound_citations` in the review-mode contract -- the discover.py signals
+  the own-skill path computes are OPTIONAL, and the lane degrades gracefully without them: it
+  counts the body itself and skips the orphan check, which needs the citer scan not run here.)
+
 ## Consuming the result
 
 Each Workflow returns `{ perFile, totals, review }`. `perFile[i]` carries `verdict`
@@ -1143,9 +1174,11 @@ in the SKILL's step-9 `## md-audit (subject-lens) findings` section -- separate 
 code-review issues, one decision pass over both. Accepted remediations are applied as normal edits
 after decisions. See the step-9 action for the ruleset self-reference notice.
 
-Scope: this integration is v1 and hardcoded to skills-kit's md-audit (claude-md-audit + skill-audit
-members). It targets skills-kit's 0.30.0 contract; the defensive probe above is what keeps a later
-skills-kit version skew from breaking the review.
+Scope: this integration is hardcoded to skills-kit's md-audit (claude-md-audit + skill-audit +
+project-doc-audit members). It targets skills-kit's 0.32.0 contract (the release that brought
+project-doc-audit to review parity); the two-tier defensive probe above is what keeps a later
+skills-kit version skew -- or an OLDER skills-kit that predates project-doc review -- from breaking
+the review.
 """
 
 MD_AUDIT_REVIEW_FRAGMENTS = {

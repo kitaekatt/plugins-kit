@@ -155,6 +155,14 @@ Every path-like reference in the doc (`see docs/X.md`, relative links) resolves 
 
 Broken `/skill-name` and `skill: "..."` references are NOT checked here -- `/md-audit references` owns skill-link integrity. This audit checks doc-to-doc one-hop discipline (PD-5) and file-path resolution (PD-H1) only. Do not duplicate the references-audit scan.
 
+### PD-11. Obeys ancestor-declared conventions
+
+A convention EXPLICITLY declared in an ancestor CLAUDE.md (ASCII-only mandates, "no absolute paths in shared files", stated formatting/structure rules) loads ambient in any session that touches this doc, so it binds the doc too. Flag a subject violation ONLY when the exact declared rule can be quoted VERBATIM from an ancestor (mirror the code-review reviewer_a rule-extraction posture -- no inferred conventions, no generic best-practice, no "spirit of" a rule). The finding (group Hygiene, taxonomy `S_ancestor_convention_violation`, severity FAIL) carries the verbatim ancestor rule quote + the source path of the ancestor that declared it. Disposition FIX for a mechanical correction; SERIOUS when the violation reveals a real-world problem the rule exists to prevent (e.g. a committed secret an ancestor forbids).
+
+**Scope:** fires only when ancestor CLAUDE.md files are supplied to the audit (the `ancestorClaudeMdPaths` argument, nearest-ancestor first). A doc with no ancestor CLAUDE.md, or a run that supplies no ancestor paths, emits no PD-11 findings.
+
+**Ancestor-declared exceptions suppress the built-in universal conventions.** The classifier also carries hardcoded universal-convention checks (a non-ASCII look-alike O or a hardcoded absolute path P is a convention-violation FIX unconditionally). Those are made **exception-aware** by the same ancestor CLAUDE.md declarations PD-11 reads: when an ancestor **explicitly declares a scoped exception** that covers the specific instance -- the right file scope AND the right content kind, e.g. *"ASCII only, except developer names in the contributors section may contain non-ASCII characters"* -- the built-in check does NOT emit the FIX; it demotes to PASS/INFO citing the verbatim exception quote + ancestor source path. The exception must be written down and actually cover the instance (same verbatim posture as PD-11; no inferred or stretched exceptions, and when in doubt the built-in check still fires). Precedence is deliberate: PD-11 and the built-in check read the *same* declared rule + exception, so they must yield one consistent outcome -- an exception that silences PD-11 silences the built-in FIX too, and vice versa. This is the contradiction the exception-awareness removes (PD-11 silent while the built-in check fires on the same instance). When no ancestor paths are supplied, or no exception is declared, the built-in checks behave exactly as before.
+
 ## Output format
 
 ### Per-file report
@@ -186,6 +194,6 @@ COMPLIANT | NON-COMPLIANT
 
 ### Decision rules
 
-- Any FAIL finding (PD-5 chain, PD-6 back-reference, PD-8 live duplication, PD-9 stranded agent facts in README, PD-10 unverifiable generation provenance, PD-H1 broken link) -> file is NON-COMPLIANT.
+- Any FAIL finding (PD-5 chain, PD-6 back-reference, PD-8 live duplication, PD-9 stranded agent facts in README, PD-10 unverifiable generation provenance, PD-H1 broken link, PD-11 ancestor-convention violation) -> file is NON-COMPLIANT.
 - Only PASS / INFO / JUDGMENT findings -> file is COMPLIANT.
 - JUDGMENT findings (PD-2 maturation, PD-3 split candidacy, PD-4 orphan) and INFO findings are advisory; they do not escalate to FAIL on subsequent runs even if unaddressed.

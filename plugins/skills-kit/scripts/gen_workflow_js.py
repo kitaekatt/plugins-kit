@@ -455,13 +455,14 @@ const totals = results.reduce((acc, r) => {
 """
 
 # Review-mode variant of the totals reducer, for the members that implement
-# `--review` (claude-md-audit, skill-audit). They cannot share
+# `--review` (claude-md-audit, skill-audit, project-doc-audit). They cannot share
 # DETECT_TOTALS_CHUNK: review mode filters non-attributable findings out of the
 # per-file results and relabels the verdict DIFF-CLEAN before totalling, so the
 # reducer legitimately differs from the non-review members'. Splitting the
-# canonical chunk keeps the drift check meaningful -- these two must still match
+# canonical chunk keeps the drift check meaningful -- these three must still match
 # each other verbatim -- rather than exempting them and losing the protection.
-# If project-doc-audit ever gains `--review`, move it onto this chunk too.
+# references-audit is the sole remaining non-review member (its classify.js
+# carries only ARGS_NORM_CHUNK; it has no detect totals reducer to pin).
 DETECT_REVIEW_TOTALS_CHUNK = """\
 const raw = perFile.filter(Boolean)
 
@@ -512,7 +513,7 @@ const totals = results.reduce((acc, r) => {
 SHARED_CHUNK_TARGETS = {
     SKILLS / "claude-md-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
     SKILLS / "skill-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
-    SKILLS / "project-doc-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_TOTALS_CHUNK],
+    SKILLS / "project-doc-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
     SKILLS / "references-audit" / "workflow" / "classify.js": [ARGS_NORM_CHUNK],
 }
 

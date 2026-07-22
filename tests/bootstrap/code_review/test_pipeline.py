@@ -345,6 +345,26 @@ class TestMatchesClaim:
     def test_basename_that_is_not_the_target_does_not_match(self):
         assert matches_claim("a/CLAUDE.md.bak", ["**/CLAUDE.md"]) is False
 
+    def test_star_dot_md_matches_every_markdown_at_any_depth(self):
+        # The single `**/*.md` glob the code-review skills now use supersedes the
+        # older two-glob (CLAUDE.md/SKILL.md) form: it claims CLAUDE.md, SKILL.md,
+        # and generic docs at any depth INCLUDING the repo root.
+        g = ["**/*.md"]
+        assert matches_claim("CLAUDE.md", g) is True             # root, no slash
+        assert matches_claim("SKILL.md", g) is True
+        assert matches_claim("README.md", g) is True             # root generic doc
+        assert matches_claim("a/CLAUDE.md", g) is True
+        assert matches_claim("a/b/SKILL.md", g) is True
+        assert matches_claim("docs/design/notes.md", g) is True  # generic project doc
+        assert matches_claim("//depot/proj/Foo.md", g) is True   # p4 depot path
+
+    def test_star_dot_md_excludes_md_html_and_non_markdown(self):
+        # Markdeep `.md.html` is NOT `.md` -- it must stay with the generic reviewers.
+        g = ["**/*.md"]
+        assert matches_claim("Docs/Server/ServerDesign.md.html", g) is False
+        assert matches_claim("a/foo.markdown", g) is False
+        assert matches_claim("a/foo.cpp", g) is False
+
 
 class TestPreimageRelpath:
     def test_under_pre_images_dir(self):

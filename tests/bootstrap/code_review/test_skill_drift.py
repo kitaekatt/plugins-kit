@@ -73,14 +73,19 @@ class TestMdAuditContributorPresent:
     def test_both_skills_carry_probe_and_fallback(self):
         for vcs in ("git", "p4"):
             body = gen.render_skill(vcs)
-            # step-2 claim probe
+            # step-2 claim probe: one `**/*.md` glob supersedes the two-glob form
             assert "Claim probe" in body
             assert "skills-kit:md-audit" in body
-            assert "--claim '**/CLAUDE.md' --claim '**/SKILL.md'" in body
-            # step-6 launch + version-skew fallback
+            assert "--claim '**/*.md'" in body
+            assert ".md.html" in body            # Markdeep is NOT claimed
+            # step-6 launch: three-way routing + two-tier version-skew fallback
             assert "Subject-lens md-audit pass" in body
-            assert "version-coupling safety valve" in body
+            assert "routed THREE ways by basename" in body
+            assert "project-doc-audit's" in body
+            assert "TWO-TIER version-skew fallback" in body
+            # broad skew re-runs without --claim; project-doc-only skew keeps the two globs
             assert "WITHOUT any `--claim` flags" in body
+            assert "--claim '**/CLAUDE.md' --claim '**/SKILL.md'" in body
 
     def test_both_skills_carry_labeled_section_and_notice(self):
         for vcs in ("git", "p4"):
@@ -96,8 +101,13 @@ class TestMdAuditContributorPresent:
             assert "# Subject-lens md-audit contributor" in ref
             assert "claude-md-audit/workflow/detect.js" in ref
             assert "skill-audit/workflow/detect.js" in ref
+            assert "project-doc-audit/workflow/detect.js" in ref  # third member (0.32.0)
             assert "venvPython" in ref
             assert "ancestorClaudeMdPaths" in ref
+            # three-way routing + two-tier fallback documented
+            assert "three-way by basename" in ref
+            assert "project-doc-only skew" in ref
+            assert "**/*.md" in ref
         # per-VCS pre-image origin seam
         assert "git show" in git_ref and "p4 print" not in git_ref
         assert "p4 print" in p4_ref and "git show" not in p4_ref

@@ -6,7 +6,7 @@ skill-type: audit-skill
 description: Use when md-audit dispatches a project-document audit against the cohesion framework. Do NOT use for SKILL.md, CLAUDE.md, or cross-references.
 disable-model-invocation: true
 user-invocable: false
-argument-hint: "[file/dir path, number(s) from list, or 'list'; add 'fast' for non-interactive]"
+argument-hint: "[file/dir path, number(s) from list, or 'list'; add 'fast' for non-interactive, '--review' to gate a change]"
 ---
 
 # Project Document Audit
@@ -109,6 +109,12 @@ audit_skill:
       summary: "Mechanical, fact-or-convention-decidable defects that a reasonable owner would accept in CL review without discussion: a broken outbound link with an identifiable target; a non-ASCII look-alike where ASCII-only is the convention; a hardcoded foreign/machine-specific absolute path (or backslash path); a drifted cited line number; a stale anchor re-pointable to a found mechanism. These are the project-doc audit's FIX-eligible checks -- additive to the historically placement-only taxonomy."
       severity: "INFO"
       detail: "Each maps to a FIX taxonomy id (N broken-link-with-target, O non-ASCII, P foreign-abs-path / backslash, Q line-drift, R stale-anchor). Decidable by verified facts + documented conventions; the disposition classifier assigns FIX (or SERIOUS for a stale anchor guarding a rail with no surviving mechanism). A generator-owned path absent from the checkout is NOT a broken link -- annotating it auto-generated is FIX, repoint/delete is IMPROVE."
+    - id: "ancestor_convention_conformance"
+      name: "Hygiene -- doc conforms to conventions an ancestor CLAUDE.md explicitly declares (PD-11)"
+      keywords: ["ancestor convention", "PD-11", "ascii-only", "no absolute paths", "declared convention", "verbatim rule", "exception aware"]
+      summary: "A convention EXPLICITLY declared in an ancestor CLAUDE.md (ASCII-only, no absolute paths in shared files, stated formatting rules) loads ambient in any session touching this doc, so it binds the doc too. A subject that violates a verbatim-quotable ancestor rule is a FAIL (PD-11). Fires only when ancestorClaudeMdPaths is supplied and non-empty; a doc with no ancestor CLAUDE.md emits nothing. EXCEPTION-AWARE: an ancestor's explicitly declared scoped exception that covers the exact instance suppresses both this finding and the built-in O/P convention FIX."
+      severity: "FAIL"
+      detail: "Judgment-assisted from the ancestor CLAUDE.md chain. Flag ONLY when the exact declared rule is quotable VERBATIM from an ancestor (no inferred / generic conventions); the message carries the verbatim quote + the ancestor source path. The same declared rule + exception governs BOTH this check and the built-in non-ASCII (O) / hardcoded-path (P) FIX so the two can never contradict. Taxonomy S_ancestor_convention_violation; disposition FIX (mechanical correction), SERIOUS when the violation reveals a real-world problem the rule exists to prevent."
   taxonomy:
     - id: "A_misclassified_skill_ref"
       name: "Selected target is actually a skill reference"
@@ -212,39 +218,45 @@ audit_skill:
       detection_signal: "A concrete anchor a claim makes (a symbol / heading / path the doc says should exist) is absent as cited but the current equivalent is findable. NOT a generator-owned absent path."
       default_remediation: "Re-point the anchor to the found current mechanism -- a correction against a verified fact. FIX. (When the anchor guards a protective rail with NO surviving mechanism, it is SERIOUS -- surface the unprotected invariant, do not auto-fix.)"
       bucket: "FIX"
+    - id: "S_ancestor_convention_violation"
+      name: "Doc violates a convention an ancestor CLAUDE.md explicitly declares (PD-11)"
+      keywords: ["ancestor convention", "PD-11", "ascii-only", "no absolute paths", "declared convention", "verbatim rule"]
+      detection_signal: "PD-11 hit: the doc violates a convention EXPLICITLY declared in an ancestor CLAUDE.md (loaded ambient), and the exact declared rule is quotable VERBATIM from that ancestor (no inferred / generic conventions). Fires only when ancestorClaudeMdPaths is supplied and non-empty; a doc with no ancestors emits nothing. Suppressed when an ancestor's explicitly declared scoped exception covers the exact instance."
+      default_remediation: "FIX for a mechanical correction against the documented convention (replace a non-ASCII look-alike, relativize a hardcoded absolute path, apply the stated formatting rule); the message carries the verbatim ancestor rule quote + the ancestor source path. SERIOUS when the violation reveals a real-world problem the rule exists to prevent (e.g. a committed secret an ancestor forbids) -- surfaced at the top, never auto-fixed."
+      bucket: "FIX"
     - id: "K_unclassified"
       name: "Unclassified / special case"
       keywords: ["unclassified", "special case", "escape hatch", "K bucket"]
-      detection_signal: "Finding does not match any A-J / L / M / N-R detection signal after a deliberate attempt."
+      detection_signal: "Finding does not match any A-J / L / M / N-S detection signal after a deliberate attempt."
       default_remediation: "Surface to the user with the audit row that fired, attempted matches, and reasons none fit. User proposes strategy."
       bucket: "SPECIAL"
   procedures:
     - id: "audit_project_doc"
       name: "Audit project documents and dispatch remediations"
       keywords: ["audit", "project doc", "single-file audit", "compliance verdict", "dispatch"]
-      goal: "For each target project document, run mechanical and judgment-based checks against the cohesion-principles project_reference_md role + maturation pipeline, classify findings into the taxonomy, assign each a disposition (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL) -- this audit is no longer blanket no-AUTO: the mechanical convention checks (N-R) are FIX -- and emit a per-file compliance verdict."
+      goal: "For each target project document, run mechanical and judgment-based checks against the cohesion-principles project_reference_md role + maturation pipeline, classify findings into the taxonomy, assign each a disposition (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL) -- this audit is no longer blanket no-AUTO: the mechanical convention checks (N-S) are FIX -- and emit a per-file compliance verdict."
       preconditions:
         - "discover.py is reachable (enumerates candidate project docs + the mechanical orphan/size signals)."
         - "references/audit-criteria.md is loadable (the self-contained criteria doc; the upstream cohesion-principles is its derivation and is NOT loaded by the audit path)."
         - "The user is in a project directory so discoverability / orphan signals are meaningful."
       steps:
         - n: 1
-          action: "Resolve the audit target set from $ARGUMENTS. Empty -> scan cwd and list. 'list' -> emit numbered list via discover.py and stop. A directory path -> scan it for project docs (discover.py --root). A file path -> audit it directly (discover.py --path). Integers -> map to paths from the last list. Strip any non-interactive token ('fast', '--fast', '--yes', '-y') first and set non_interactive accordingly (also set it if the user's prose expresses non-interactive intent). For each target capture (path, kind, role_hint, generated, generation_record, lines, approx_tokens, inbound_citations, cited_by) from discover.py --json. Drop targets whose kind is `skill_reference` or `other_claude_artifact` with an A_misclassified_skill_ref note (route them to the right auditor)."
+          action: "Resolve the audit target set from $ARGUMENTS. Empty -> scan cwd and list. 'list' -> emit numbered list via discover.py and stop. A directory path -> scan it for project docs (discover.py --root). A file path -> audit it directly (discover.py --path). Integers -> map to paths from the last list. Strip any non-interactive token ('fast', '--fast', '--yes', '-y') first and set non_interactive accordingly (also set it if the user's prose expresses non-interactive intent). Strip the review token ('review', '--review') and set review=true (also set it if the user's prose expresses the intent, e.g. 'review my changes before I submit', 'audit the diff'); review is FALSE by default. Reject the combination review + non_interactive: 'propose instead of applying, but do not ask' resolves to doing nothing -- tell the user the two are mutually exclusive and stop. For each target capture (path, kind, role_hint, generated, generation_record, lines, approx_tokens, inbound_citations, cited_by) from discover.py --json, plus ancestorClaudeMdPaths (for the PD-11 ancestor-convention check): the FULL ancestor CLAUDE.md chain above the doc, enumerated deterministically -- starting from the doc's PARENT directory, walk up one directory at a time until (and including) the workspace root (the cwd when there is no enclosing project, otherwise the nearest ancestor containing a `.git` entry), and for each directory Glob/stat `<dir>/CLAUDE.md`; collect every one that exists into a list ordered NEAREST-ANCESTOR FIRST, EXCLUDING the doc itself. Empty when no ancestor CLAUDE.md exists. Drop targets whose kind is `skill_reference` or `other_claude_artifact` with an A_misclassified_skill_ref note (route them to the right auditor)."
           tool: "discover.py"
           input: "uv run python ${CLAUDE_PLUGIN_ROOT}/skills/project-doc-audit/scripts/discover.py [--root DIR | --path FILE ...] --json"
           expected: "Resolved per-doc records (path, kind, lines, approx_tokens, inbound_citations, cited_by) + non_interactive flag."
           on_failure: "If no project docs resolve, surface the scan root and stop."
         - n: 2
-          action: "DETECT phase (before-Q&A). Choose execution mode by file count -- this threshold equalizes the Workflow tool's per-run overhead. Named-role dispatch first: a `generated` target gets ONLY the PD-10 provenance check (all authored-doc criteria skipped); a `role_hint: readme` target gets the PD-9 readme-role criteria (maturation/orphan skipped, identity-grain overlap tolerated). ONE file: audit inline in the main loop (Read the doc; Read references/audit-criteria.md -- the single self-contained criteria doc; apply the project_reference_md criteria; use the mechanical signals discover.py already computed -- orphan from inbound_citations, size from lines/approx_tokens, role_hint/generated for named-role dispatch; judge maturation / CRP / duplication; classify each finding into taxonomy + bucket). TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/project-doc-audit/workflow/detect.js and args = { files:[{path, kind, role_hint, generated, generation_record, lines, approx_tokens, inbound_citations, cited_by}], refs:{criteria, pluginRoot} }. The workflow fans one lane out per file and returns { perFile, totals }. Detection only -- no file is edited in this phase."
+          action: "DETECT phase (before-Q&A). Choose execution mode by file count -- this threshold equalizes the Workflow tool's per-run overhead. REVIEW MODE OVERRIDE: when review is TRUE the threshold is 1, so ALWAYS use the Workflow path even for a single file. Review mode gates a submit/publish, so its verdict must not depend on whatever model the session happens to be running; only the lane pins model+effort and enforces the schema. Never run a review-mode detect inline. Named-role dispatch first: a `generated` target gets ONLY the PD-10 provenance check (all authored-doc criteria skipped); a `role_hint: readme` target gets the PD-9 readme-role criteria (maturation/orphan skipped, identity-grain overlap tolerated). ONE file (non-review): audit inline in the main loop (Read the doc; Read references/audit-criteria.md -- the single self-contained criteria doc; apply the project_reference_md criteria; use the mechanical signals discover.py already computed -- orphan from inbound_citations, size from lines/approx_tokens, role_hint/generated for named-role dispatch; if ancestorClaudeMdPaths is non-empty run the PD-11 ancestor-convention check inline exactly as the lane does -- read each ancestor CLAUDE.md, flag a subject violation ONLY when the declared rule can be quoted VERBATIM from the ancestor (no inferred/generic conventions), emit it as group Hygiene, taxonomy S_ancestor_convention_violation, FAIL, with the verbatim quote + ancestor source path in the message; exception awareness (applies to PD-11 AND to the built-in non-ASCII O / hardcoded-absolute-path P convention FIX in the classifier): when an ancestor EXPLICITLY declares a scoped exception that covers the specific instance -- right file scope AND right content kind, e.g. 'ASCII only, except developer names in the contributors section may contain non-ASCII characters' -- do NOT flag that instance under either check; demote it to PASS/INFO and cite the verbatim exception quote + ancestor source path in the message. The one declared rule + exception governs both checks so they never contradict (PD-11 silent while the built-in convention FIX still fires is exactly the bug this removes); no inferred or stretched exceptions, and when in doubt the check STILL fires; judge maturation / CRP / duplication; classify each finding into taxonomy + bucket). TWO OR MORE files (or ANY count in review mode): call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/project-doc-audit/workflow/detect.js and args = { files:[{path, kind, role_hint, generated, generation_record, lines, approx_tokens, inbound_citations, cited_by, ancestorClaudeMdPaths, preImagePath}], review:<review bool>, refs:{criteria, pluginRoot} }. The workflow fans one lane out per file and returns { perFile, totals, review }. In review mode YOU materialize each pre-image BEFORE calling the workflow (see the review-mode section) and pass its path; the workflow is VCS-agnostic and will not fetch anything itself. Detection only -- no file is edited in this phase."
           tool: "Workflow | inline"
           input: "detect.js args.refs: criteria=${CLAUDE_PLUGIN_ROOT}/skills/project-doc-audit/references/audit-criteria.md; pluginRoot=${CLAUDE_PLUGIN_ROOT}. (cohesion-principles is intentionally NOT passed -- lanes load only the self-contained criteria doc for cache efficiency.)"
           expected: "Structured per-file findings (group, severity, criterion, message, line, taxonomy, bucket, remediation) + per-file verdict."
-          on_failure: "If the Workflow tool is not available in this environment (subagent contexts do not expose it), fall back to the ONE-file inline detect procedure run sequentially per file -- detection and remediation stay separate passes. If a maturation/duplication judgment cannot be made cheaply (e.g. the candidate skill is ambiguous), mark it JUDGMENT/DISCUSS rather than FAIL."
+          on_failure: "If the Workflow tool is not available in this environment (subagent contexts do not expose it), fall back to the ONE-file inline detect procedure run sequentially per file -- detection and remediation stay separate passes. EXCEPT in review mode, where this fallback does not apply: inline detection inherits the session model and forfeits the pin the gate depends on, so either stop and tell the user review mode needs a main-session run, or run inline and label the result advisory-and-unpinned rather than a passed gate. If a maturation/duplication judgment cannot be made cheaply (e.g. the candidate skill is ambiguous), mark it JUDGMENT/DISCUSS rather than FAIL."
         - n: 3
-          action: "Render the per-file report (output_template), then the REPORT CONTRACT summary in three visible sections IN THIS ORDER, no hedging: (1) SERIOUS -- 'Found <N> serious issue(s) that require fixing' + a one-line summary each; never auto-fixed. (2) FIX -- the count auto-applied and landing in the reviewable remediation CL (the mechanical N-R convention fixes). (3) IMPROVE -- 'Audit found <N> improvement opportunit(ies). Do you want to discuss them?' + one one-line pitch each. SILENT findings do NOT appear. Omit a section whose count is zero."
+          action: "Render the per-file report (output_template), then the REPORT CONTRACT summary in three visible sections IN THIS ORDER, no hedging: (1) SERIOUS -- 'Found <N> serious issue(s) that require fixing' + a one-line summary each; never auto-fixed. (2) FIX -- normally the count auto-applied and landing in the reviewable remediation CL (the mechanical N-S convention fixes); in REVIEW MODE nothing is auto-applied, so render it as the count PROPOSED and awaiting the step-4 decision, never as applied. (3) IMPROVE -- 'Audit found <N> improvement opportunit(ies). Do you want to discuss them?' + one one-line pitch each. SILENT findings do NOT appear. Omit a section whose count is zero."
           expected: "Markdown report: per-file verdicts, then SERIOUS (summarized, top) / FIX (applied count) / IMPROVE (count + one-liners); SILENT omitted."
         - n: 4
-          action: "Q&A GATE. If non_interactive is FALSE (default): SERIOUS findings are surfaced summarized at the top, never auto-fixed; for each IMPROVE and SPECIAL finding the user opted to discuss, ask for a decision (apply as-proposed / skip / a refined instruction). Surface a tight grouped set; do not dump a giant list. A declined IMPROVE is recorded in the doc's `md-audit-declined:` frontmatter so a re-audit does not re-pitch it. If non_interactive is TRUE: apply FIX findings, surface SERIOUS, and infer each IMPROVE/SPECIAL decision from the taxonomy's default_remediation plus the doc content -- record each inferred decision in the final summary. FIX findings need no decision; SILENT findings are never surfaced."
+          action: "Q&A GATE. If review is TRUE: NOTHING is auto-applied -- FIX is demoted from auto-apply to PROPOSED and goes to the user alongside IMPROVE/SPECIAL. Present proposals with AskUserQuestion offering accept-all / reject-all / custom instruction (use multiSelect when accept-some is the natural shape). Batch small related fixes into ONE question; split large or unrelated ones. SERIOUS is surfaced at the top as always and still never auto-fixed. Review-mode declines write NOTHING to `md-audit-declined:` -- that ledger is IMPROVE-scoped and per-file-permanent, whereas a review decline usually means 'not in this change', and once the change lands the finding is in the next pre-image and stops being attributable anyway. Offer an explicit 'never flag this again for this file' only if the user asks for it, and only then write the ledger. If review is FALSE and non_interactive is FALSE (default): SERIOUS findings are surfaced summarized at the top, never auto-fixed; for each IMPROVE and SPECIAL finding the user opted to discuss, ask for a decision (apply as-proposed / skip / a refined instruction). Surface a tight grouped set; do not dump a giant list. A declined IMPROVE is recorded in the doc's `md-audit-declined:` frontmatter so a re-audit does not re-pitch it. If non_interactive is TRUE: apply FIX findings, surface SERIOUS, and infer each IMPROVE/SPECIAL decision from the taxonomy's default_remediation plus the doc content -- record each inferred decision in the final summary. FIX findings need no decision; SILENT findings are never surfaced."
           expected: "SERIOUS summarized; a decision (explicit or inferred) attached to every IMPROVE/SPECIAL the user engaged; FIX applied."
         - n: 5
           action: "REMEDIATE phase (after-Q&A). Assemble per-file remediation lists from the decided findings (FIX=apply; IMPROVE/SPECIAL=per decision; SERIOUS never auto-applied; drop skips). ONE file: apply inline with Edit. TWO OR MORE files: call the Workflow tool with scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/project-doc-audit/workflow/remediate.js and args = { perFile:[{path, remediations:[{criterion, taxonomy, bucket, line, instruction, decision}]}] }. One lane per file (disjoint files never conflict). NOTE: graduation (B), fold-into-CLAUDE.md (C), and move-into-skill (D) remediations are multi-file structural moves -- the lane applies the move it is instructed to make; new-skill authoring beyond a simple move should be handed to /md-authoring skill rather than performed blind."
@@ -283,7 +295,7 @@ audit_skill:
         ### SERIOUS -- Found <N> serious issue(s) that require fixing
         - <one-line summary per issue>   (never auto-fixed)
 
-        ### FIX -- <N> applied (in the reviewable remediation CL)
+        ### FIX -- <N> applied (in the reviewable remediation CL)   [review mode: "<N> proposed" -- nothing is applied]
         - <criterion>: <what was corrected>
 
         ### IMPROVE -- Audit found <N> improvement opportunit(ies). Do you want to discuss them?
@@ -311,7 +323,7 @@ audit_skill:
   # Disposition mapping (four-disposition model): structural lanes retained for
   # schema stability across audit members. auto = FIX categories (auto-applied;
   # land in the reviewable CL) -- this audit is NO LONGER blanket no-AUTO: the
-  # mechanical convention checks N-R are FIX. I dedup is IMPROVE, not FIX: its
+  # mechanical convention checks N-S are FIX. I dedup is IMPROVE, not FIX: its
   # loss-free precondition (fold the doc's unique deltas into the skill BEFORE
   # removal) is a judgment no auto-apply pass can satisfy. discuss = SERIOUS
   # (never auto) + IMPROVE (opt-in) + SILENT-default (A routing) categories,
@@ -334,6 +346,9 @@ audit_skill:
       - category: "R_stale_anchor"
         procedure: "[FIX default] Re-point the stale anchor to the found current mechanism (a verified fact). SERIOUS instead when the anchor guards a protective rail with NO surviving mechanism -- surface the unprotected invariant, do not auto-fix."
         agent_template: "Background agent receives the stale anchor + found target (or no-surviving-mechanism proof); re-points, or escalates a rail to the SERIOUS surface."
+      - category: "S_ancestor_convention_violation"
+        procedure: "[FIX default] Apply the mechanical correction that satisfies the verbatim-quoted ancestor convention (replace the non-ASCII look-alike, relativize the absolute path, apply the stated formatting rule). SERIOUS instead when the violation reveals a real-world problem the rule exists to prevent (e.g. a committed secret) -- surface at the top, never auto-fix. Suppressed entirely when an ancestor's declared scoped exception covers the instance."
+        agent_template: "Background agent receives the subject line + the verbatim ancestor rule quote + the ancestor source path; applies the convention-satisfying edit, or escalates a real-world-problem violation to the SERIOUS surface."
     discuss:
       - category: "A_misclassified_skill_ref"
         procedure: "[SILENT] Note the file is a skill reference and is audited via /md-audit skill (its owning SKILL.md). Skip it here; no edit. A routing conclusion, not surfaced as a finding against the doc (mention only in the operational skipped-files line)."
@@ -359,7 +374,7 @@ audit_skill:
       procedure: "Surface the finding with the audit row that fired, attempted categories, and reasons none fit. User proposes strategy. Generalizable strategies become new taxonomy categories in references/audit-criteria.md."
   enforcement:
     gate_kind: "audit-finding"
-    gating_rule: "FAIL findings (CRP chained reference, ADP back-reference into CLAUDE.md, CCP live duplication of skill content, README stranded agent facts (PD-9), unverifiable generation provenance (PD-10), broken file-path links (PD-H1)) gate compliance. JUDGMENT findings (maturation, orphan, CRP split candidacy) surface for review without gating; INFO findings are advisory only."
+    gating_rule: "FAIL findings (CRP chained reference, ADP back-reference into CLAUDE.md, CCP live duplication of skill content, README stranded agent facts (PD-9), unverifiable generation provenance (PD-10), broken file-path links (PD-H1), ancestor-declared convention violation (PD-11, when ancestorClaudeMdPaths is supplied)) gate compliance. JUDGMENT findings (maturation, orphan, CRP split candidacy) surface for review without gating; INFO findings are advisory only."
     appeal_process: "JUDGMENT findings are resolved by user confirmation (PASS once the user accepts the exception explicitly -- e.g. an intentionally human-only orphan). FAIL findings have no bypass; remediation is available within the taxonomy."
   gotchas:
     - "The subject is a corpus of project documents, but the audit procedure visits one file at a time. discover.py is the corpus enumerator + mechanical-signal source."
@@ -377,6 +392,7 @@ audit_skill:
 - `<file>` -- audit a specific project doc.
 - `<numbers>` -- audit docs by index from the most recent `list` output (e.g. `3 7 9`).
 - `fast` / `--fast` / `--yes` / `-y` -- non-interactive: skip the Q&A round and infer every IMPROVE/SPECIAL decision; FIX applies by definition, SERIOUS is surfaced. Combine with any selector. Prose intent ("audit these and just apply everything, don't ask") sets the same flag.
+- `review` / `--review` -- review mode: audit a CHANGE rather than a file. Findings the change did not cause are suppressed, nothing is auto-applied (FIX is proposed, not applied), and the verdict is `DIFF-CLEAN` rather than `COMPLIANT`. For gating a submit / publish / handback. Combine with any selector, e.g. `/md-audit project-doc Docs/Foo.md --review`. Prose intent ("review my changes before I submit", "audit the diff") sets the same flag. Mutually exclusive with `fast` -- see Review mode. Off by default.
 
 Typical workflow: `/md-audit project-doc .claude/docs` to audit a whole doc home, or `/md-audit project-doc list` then `/md-audit project-doc 3 7` for specific files.
 
@@ -387,13 +403,14 @@ This skill runs in two phases split by an interactive Q&A gate, and uses the Wor
 ```
 resolve (main loop, via discover.py)
   -> DETECT  (before-Q&A)  : 1 file inline | 2+ files via workflow/detect.js   -> structured findings
+                             (review mode: ALWAYS via workflow/detect.js, any file count)
   -> render report (main loop)
   -> Q&A GATE (main loop)  : interactive decisions | inferred when non-interactive
   -> REMEDIATE (after-Q&A) : 1 file inline | 2+ files via workflow/remediate.js -> edits applied
   -> final summary + "re-run to verify"
 ```
 
-**Multi-file threshold (the overhead equalizer).** The Workflow tool has real per-run overhead. For a single file that overhead is not worth it, so a 1-file audit runs inline in the main loop. At 2+ files the parallel fan-out pays for itself, so detection (and, separately, remediation) go through the workflow scripts. **Fallback when the Workflow tool is not exposed** (subagent environments do not have it): run the 1-file inline procedure sequentially per file -- detection for all files first, then remediation, keeping the two as separate passes with the Q&A gate between them. Detection and remediation are **always separate passes** even in workflow mode -- the interactive Q&A sits between them, and a background workflow cannot ask the user anything.
+**Multi-file threshold (the overhead equalizer).** The Workflow tool has real per-run overhead. For a single file that overhead is not worth it, so a 1-file audit runs inline in the main loop. At 2+ files the parallel fan-out pays for itself, so detection (and, separately, remediation) go through the workflow scripts. **Fallback when the Workflow tool is not exposed** (subagent environments do not have it): run the 1-file inline procedure sequentially per file -- detection for all files first, then remediation, keeping the two as separate passes with the Q&A gate between them. **This fallback does NOT apply in review mode.** Inline detection inherits the session's model, which is exactly the property review mode's threshold-1 override exists to eliminate -- a gate whose strictness depends on which model the caller happened to be running is not a gate. If review mode is requested where the Workflow tool is unavailable, either stop and tell the user review mode needs a main-session run, or run inline and label the result explicitly as advisory-and-unpinned, never as a passed gate. Detection and remediation are **always separate passes** even in workflow mode -- the interactive Q&A sits between them, and a background workflow cannot ask the user anything.
 
 **The two workflow scripts** (the detect script is hand-authored; the remediate script is generated from `scripts/gen_workflow_js.py` and drift-checked):
 
@@ -406,11 +423,37 @@ Both accept `args` as an object or JSON string. Pass absolute `refs` paths (they
 
 When the non-interactive flag is set (argument token or expressed intent), the Q&A gate does not prompt. Instead, infer each IMPROVE/SPECIAL decision from the taxonomy's `default_remediation` plus the doc content, apply them, and **list every inferred decision in the final summary** so the user can see and reverse them. FIX findings apply regardless; SERIOUS findings are surfaced summarized at the top and never auto-applied; SILENT findings are never surfaced. FAIL findings are still gated by the verdict; non-interactive only changes how the *decisions* are obtained. Interactive mode is the default.
 
+## Review mode
+
+Normal mode audits a FILE. Review mode audits a CHANGE: same criteria, same lanes, but findings the change did not cause are suppressed and nothing is auto-applied. It exists to gate a submit / publish / handback, where a report full of pre-existing findings would either bloat the change with unrelated remediations or train the author to skim past the gate.
+
+Three behavioral differences, and nothing else:
+
+1. **Attributability filter.** Each finding is marked `attributable` by the lane, then the caller drops the ones the change did not cause. **SERIOUS always survives regardless** -- a secret or a violated invariant is not the author's doing and is still the most important thing on the page.
+2. **Nothing is auto-applied.** FIX is demoted to a proposal at the Q&A gate. Mutually exclusive with `fast`, which would mean "propose instead of applying, but do not ask" -- i.e. nothing. Reject that combination rather than guessing.
+3. **Verdict is `DIFF-CLEAN`, not `COMPLIANT`.** A weaker and more honest claim: *this change introduced no failure*, not *this file is clean*. A DIFF-CLEAN doc may still carry a surviving SERIOUS.
+
+Also: the multi-file threshold drops to 1 (always use the Workflow path), because a submit gate must not inherit whatever model the session happens to be running.
+
+**You materialize the pre-images; the workflow never does.** This plugin is VCS-agnostic and must stay that way -- do not teach `detect.js` about Perforce or git. Before calling the workflow, write each doc's pre-change content to a temp path and pass it as `preImagePath`:
+
+- Perforce: `p4 print -q -o <tmp> //depot/path/DOC#have`
+- git: `git show <base>:<path> > <tmp>`, base = `merge-base(HEAD, origin/main)`, with the diff spanning `base..worktree` so committed-but-unpushed work is INSIDE the change under review rather than part of its baseline.
+
+Infer which from the local repo. **Adds have no pre-image** -- pass `preImagePath: null` and every finding is attributable, which is correct (the whole doc is new). `p4 diff` emits nothing for an add, so detect adds via `p4 opened` rather than concluding the diff is unavailable; `p4 print //new/path#have` fails for a `move/add`, so resolve the pre-image through the move source.
+
+Review mode also uses the PD-11 ancestor-convention input: pass `ancestorClaudeMdPaths` (the nearest-ancestor-first CLAUDE.md chain above the doc) so a change that violates an ancestor-declared convention is caught. When the code-review subject-lens caller drives this (git-kit / p4-kit), it derives that chain from the claimed file's `claude_mds`.
+
+**If you cannot obtain a pre-image, do not silently fall back to a whole-file audit.** Say the pre-image was unavailable and label the output as unfiltered, so nobody mistakes a normal audit for a change-scoped gate.
+
+Attributability is judgment, not arithmetic -- it rests on re-detection, so a pre-existing finding the pre-image check happens to miss can resurface as attributable. Generous structural matching mitigates this; nothing eliminates it.
+
 ## Decision rules
 
 - Any FAIL finding -> file is NON-COMPLIANT.
 - Only PASS / INFO / JUDGMENT findings -> file is COMPLIANT.
 - INFO and JUDGMENT findings are advisory; they do not escalate to FAIL on subsequent runs even if unaddressed.
+- **Review mode:** any *attributable* FAIL -> NON-COMPLIANT; otherwise DIFF-CLEAN. Non-attributable FAILs do not gate -- they predate the change -- but a non-attributable SERIOUS is still reported above the verdict.
 
 ## Cross-references
 
