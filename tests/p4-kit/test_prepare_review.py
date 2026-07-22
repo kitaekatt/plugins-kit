@@ -2186,3 +2186,147 @@ class TestBuildBundleClaims:
 
         assert "claimed_files" not in bundle
         assert len(bundle["changed_files"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Submitted-CL guard: --claim requires a pending CL (#have would be POST-change)
+# ---------------------------------------------------------------------------
+
+
+class TestSubmittedClaimGuard:
+    def _submitted_describe(self):
+        # NO *pending* marker -> a submitted CL.
+        return (
+            "Change 555 by user@client on 2026/01/01 12:00:00\n"
+            "\n"
+            "\tEdit rules\n"
+            "\n"
+            "Affected files ...\n"
+            "... //depot/src/CLAUDE.md#4 edit\n"
+            "\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/src/CLAUDE.md#4 (text) ====\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+
+    def _fake(self, ws, claude):
+        where_out = (
+            "... depotFile //depot/src/CLAUDE.md\n"
+            f"... path {claude}\n"
+        )
+        info_out = f"... clientRoot {ws}\n"
+
+        def fake_run_p4(args):
+            if args[:2] == ["describe", "-du"]:
+                return (0, self._submitted_describe(), "")
+            if args[:2] == ["-ztag", "where"]:
+                return (0, where_out, "")
+            if args[:2] == ["-ztag", "info"]:
+                return (0, info_out, "")
+            if args[:3] == ["-ztag", "reconcile", "-n"]:
+                return (1, "", "no file(s) to reconcile.\n")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            return (1, "", "")
+
+        return fake_run_p4
+
+    def test_submitted_cl_with_claim_raises(self, tmp_path):
+        ws = tmp_path / "ws"
+        src = ws / "src"
+        src.mkdir(parents=True)
+        claude = src / "CLAUDE.md"
+        claude.write_text("new\n", encoding="utf-8")
+        with patch.object(pr, "run_p4", side_effect=self._fake(ws, claude)):
+            with pytest.raises(ValueError, match="submitted"):
+                pr.build_bundle(
+                    "555", tmp_path / "bundle", claim_globs=["**/CLAUDE.md"]
+                )
+
+    def test_submitted_cl_without_claim_ok(self, tmp_path):
+        # Without --claim, a submitted CL is still reviewable (informational).
+        ws = tmp_path / "ws"
+        src = ws / "src"
+        src.mkdir(parents=True)
+        claude = src / "CLAUDE.md"
+        claude.write_text("new\n", encoding="utf-8")
+        with patch.object(pr, "run_p4", side_effect=self._fake(ws, claude)):
+            bundle = pr.build_bundle("555", tmp_path / "bundle")
+        assert bundle["cl"] == "555"
+        assert "claimed_files" not in bundle
+
+
+# ---------------------------------------------------------------------------
+# Ledger wiring in the bundle
+# ---------------------------------------------------------------------------
+
+
+class TestBundleLedgerWiring:
+    def _fake(self, ws, foo):
+        describe = (
+            "Change 999 by user@client on 2026/01/01 12:00:00 *pending*\n"
+            "\n\tEdit foo\n\n"
+            "Affected files ...\n"
+            "... //depot/src/foo.cpp#1 edit\n"
+            "\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/src/foo.cpp#1 (text) ====\n"
+            "@@ -1 +1 @@\n-int x = 0;\n+int x = 1;\n"
+        )
+        where_out = (
+            "... depotFile //depot/src/foo.cpp\n"
+            f"... path {foo}\n"
+        )
+        info_out = f"... clientRoot {ws}\n"
+
+        def fake_run_p4(args):
+            if args[:2] == ["describe", "-du"]:
+                return (0, describe, "")
+            if args[:2] == ["-ztag", "where"]:
+                return (0, where_out, "")
+            if args[:2] == ["-ztag", "info"]:
+                return (0, info_out, "")
+            if args[:3] == ["-ztag", "reconcile", "-n"]:
+                return (1, "", "no file(s) to reconcile.\n")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            return (1, "", "")
+
+        return fake_run_p4
+
+    def test_bundle_carries_ledger_fields(self, tmp_path):
+        ws = tmp_path / "ws"
+        src = ws / "src"
+        src.mkdir(parents=True)
+        foo = src / "foo.cpp"
+        foo.write_text("int x = 1;\n", encoding="utf-8")
+        led = tmp_path / "ledger.json"
+        with patch.object(pr, "run_p4", side_effect=self._fake(ws, foo)):
+            bundle = pr.build_bundle("999", tmp_path / "bundle", ledger_path=led)
+        assert bundle["change_id"] == "999"
+        assert isinstance(bundle["ledger_baseline"], str) and bundle["ledger_baseline"]
+        assert bundle["ledger_hits"] == []
+
+    def test_recorded_finding_flows_back_as_hit(self, tmp_path):
+        ws = tmp_path / "ws"
+        src = ws / "src"
+        src.mkdir(parents=True)
+        foo = src / "foo.cpp"
+        foo.write_text("int x = 1;\n", encoding="utf-8")
+        led = tmp_path / "ledger.json"
+        with patch.object(pr, "run_p4", side_effect=self._fake(ws, foo)):
+            first = pr.build_bundle("999", tmp_path / "b1", ledger_path=led)
+        # Record a declined finding at the baseline the first run computed.
+        pr.ledger.record_declined(
+            led, first["change_id"], first["ledger_baseline"],
+            [{"kind": "code_review", "file": "src/foo.cpp", "reason": "bug",
+              "description": "off by one in loop"}],
+        )
+        with patch.object(pr, "run_p4", side_effect=self._fake(ws, foo)):
+            second = pr.build_bundle("999", tmp_path / "b2", ledger_path=led)
+        assert len(second["ledger_hits"]) == 1
+        assert second["ledger_hits"][0]["label"] == "off by one in loop"

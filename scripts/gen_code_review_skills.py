@@ -48,6 +48,8 @@ GIT_SUBMIT_GATES = REPO_ROOT / "plugins/git-kit/skills/git-code-review/reference
 P4_SUBMIT_GATES = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/submit-gates.md"
 GIT_MD_AUDIT_REVIEW = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/md-audit-review.md"
 P4_MD_AUDIT_REVIEW = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/md-audit-review.md"
+GIT_DECLINED_LEDGER = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/declined-ledger.md"
+P4_DECLINED_LEDGER = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/declined-ledger.md"
 
 # Non-ASCII glyphs the rendered files use, escaped so THIS source stays ASCII
 # (matching gen_workflow_js.py's EM convention).
@@ -158,6 +160,67 @@ MD_AUDIT_GOTCHAS = """
 
 
 # ===========================================================================
+# DECLINED-FINDINGS LEDGER (deliverable of this phase, shared by BOTH skills).
+# ---------------------------------------------------------------------------
+# Reviews re-run against the same change re-surface findings the author already
+# declined -- both generic code-review issues and md-audit subject-lens findings.
+# The HOST kits own change identity, so prepare_review.py emits `ledger_hits`
+# (previously-declined findings still valid at the current baseline); step 9
+# renders matching findings COLLAPSED and does not re-ask them, and a post-
+# decision step records newly-declined findings via `--ledger-record`. Shared
+# implementation lives in bootstrap_lib.code_review.ledger. A SERIOUS md-audit
+# finding is NEVER collapsed (mirrors skills-kit's reducer rule). All regions
+# below are SHARED verbatim by both VCS skills; the key/baseline detail lives in
+# the generated references/declined-ledger.md so the step prose stays legible.
+# ===========================================================================
+
+# Inserted into step 9's action, right after the md-audit report region.
+LEDGER_STEP9 = """\
+            - Declined-findings ledger: `bundle.ledger_hits` lists findings the author previously
+              DECLINED for this same @RANGE_OR_CL@ whose baseline is still valid. Before the decision
+              pass, compute each current code-review issue's and md-audit finding's ledger key
+              (code-review: file + reason + normalized-description anchor; md-audit: file + criterion +
+              taxonomy + normalized-message anchor -- never line numbers or exact wording; see
+              references/declined-ledger.md) and, when it matches a `bundle.ledger_hits` entry, render it
+              COLLAPSED under a one-line `previously declined (N): <labels>` note in its own section
+              (code-review issues under the issue list; md-audit findings under the md-audit section)
+              and do NOT re-ask it in the decision pass. EXCEPTION: a SERIOUS-severity md-audit finding
+              is NEVER collapsed -- it always renders and is always decided, even against a ledger hit.
+              The ledger is advisory memory, not a gate."""
+
+# A dedicated post-decision step (shared body; per-VCS step number, launch
+# prefix, and change-noun). For git it is step 10 (git has no other step 10);
+# for p4 it is step 11 (after the auto-shelf cleanup step 10).
+LEDGER_RECORD_STEP = """\
+        - n: @LEDGER_RECORD_N@
+          action: |
+            Record declined findings so the next review of this same @RANGE_OR_CL@ does not
+            re-litigate them. After the decision pass, collect every finding the author DECLINED --
+            both code-review issues they rejected and md-audit remediations they chose NOT to apply.
+            Skip this step entirely when nothing was declined. Otherwise write a JSON file to
+            `<bundle.bundle_dir>/declined.json`:
+              {"change_id": "<bundle.change_id>", "baseline": "<bundle.ledger_baseline>",
+               "declined": [
+                 {"kind": "code_review", "file": "<path>", "reason": "bug"|"claude_md",
+                  "description": "<the issue description>"},
+                 {"kind": "md_audit", "file": "<path>", "criterion": "<criterion/group>",
+                  "taxonomy": "<taxonomy>", "message": "<finding message>", "severity": "<severity>"}
+               ]}
+            Then run prepare_review.py --ledger-record on that file. The ledger keys each entry by a
+            normalized anchor (never line numbers or exact wording) and NEVER records a SERIOUS
+            md-audit finding (those always re-surface). Do NOT hand-edit the ledger JSON -- always go
+            through --ledger-record so keying stays deterministic.
+          tool: @PREPARE_TOOL@
+          input: "--ledger-record <bundle.bundle_dir>/declined.json"
+"""
+
+# Appended to both gotcha blocks (after the md-audit gotchas). Plain text.
+LEDGER_GOTCHAS = """
+        - The declined-findings ledger is advisory memory, not a gate. A collapsed finding is one the author already declined for THIS change at THIS baseline; when the baseline moves (@BASELINE_DESC@) the entry goes stale and the finding re-surfaces on its own. Never let a ledger hit suppress a SERIOUS md-audit finding.
+        - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed."""
+
+
+# ===========================================================================
 # The canonical SKILL.md template. Shared prose is inline (one copy); tokens
 # (@NAME@ ...) carry the genuinely per-VCS regions, filled from FRAGMENTS.
 # ===========================================================================
@@ -246,8 +309,9 @@ technique_skill:
               section (confirmed and unconfirmed gates both rendered).
 @STEP9_TAIL@
 @MD_AUDIT_REPORT@
+@LEDGER_STEP9@
             Group the review body by file.
-@STEP10@      checklist:
+@STEP10@@LEDGER_RECORD_STEP@      checklist:
 @CHECKLIST@
       gotchas:
 @GOTCHAS@
@@ -475,7 +539,7 @@ __CLAIM_PROBE__
           tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/CLAUDE.md' --claim '**/SKILL.md'` when md-audit is available, per the claim probe)"
           expected: |
-            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
+            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
           on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
     "__CLAIM_PROBE__", CLAIM_PROBE
 )
@@ -488,7 +552,7 @@ __CLAIM_PROBE__
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<CL>  (append `--claim '**/CLAUDE.md' --claim '**/SKILL.md'` when md-audit is available, per the claim probe)"
           expected: |
-            JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
+            JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
             Surface the stderr message to the user and stop. No retry.
             Launch note: ALWAYS invoke with an explicit `python3` interpreter (as shown in `tool:`), never as a bare path. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any python3 launcher is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
@@ -570,7 +634,9 @@ GIT_CHECKLIST = f"""\
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
         - md-audit subject-lens pass launched for bundle.claimed_files when skills-kit md-audit is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-audit is absent
-        - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merge conflicts section prepended when bundle.merge_conflicts is non-empty; separate `## md-audit (subject-lens) findings` section when the md-audit pass ran)"""
+        - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-audit findings never collapsed
+        - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merge conflicts section prepended when bundle.merge_conflicts is non-empty; separate `## md-audit (subject-lens) findings` section when the md-audit pass ran)
+        - Newly declined findings recorded to the ledger via `prepare_review.py --ledger-record` (skipped when nothing was declined)"""
 
 P4_CHECKLIST = f"""\
         - CL number resolved
@@ -583,8 +649,10 @@ P4_CHECKLIST = f"""\
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
         - md-audit subject-lens pass launched for bundle.claimed_files when skills-kit md-audit is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-audit is absent
+        - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-audit findings never collapsed
         - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merges section prepended when bundle.unresolved is non-empty; separate `## md-audit (subject-lens) findings` section when the md-audit pass ran)
-        - Auto-shelf cleanup invoked when bundle.auto_shelved is true (`prepare_review.py --cleanup <bundle_dir>`)"""
+        - Auto-shelf cleanup invoked when bundle.auto_shelved is true (`prepare_review.py --cleanup <bundle_dir>`)
+        - Newly declined findings recorded to the ledger via `prepare_review.py --ledger-record` (skipped when nothing was declined)"""
 
 GIT_GOTCHAS = f"""\
         - Always quote the exact CLAUDE.md rule text when flagging a claude_md issue. If you cannot quote it verbatim, do not flag it.
@@ -600,7 +668,7 @@ GIT_GOTCHAS = f"""\
         - Unconfirmed submit gates are NOT errors. Render them with {CRS} so they're visible, but do not block the review or refuse to render the rest.
         - Merge conflicts are NOT findings -- they do NOT go through reviewer subagents. They are detected deterministically by prepare_review.py (`git ls-files -u`). The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the merge-conflicts section is a separate informational warning to the user.
         - Auto-detect is convenient, not authoritative. Always restate the chosen range in the step-1 narration line; a user reviewing the wrong branch will catch it there before subagents spawn.
-        - Detached HEAD with no main/master fallback is a real failure mode; surface the error and ask for an explicit range. Do not guess at a "probably right" base.""" + MD_AUDIT_GOTCHAS
+        - Detached HEAD with no main/master fallback is a real failure mode; surface the error and ask for an explicit range. Do not guess at a "probably right" base.""" + MD_AUDIT_GOTCHAS + LEDGER_GOTCHAS
 
 P4_GOTCHAS = f"""\
         - Always quote the exact CLAUDE.md rule text when flagging a claude_md issue. If you cannot quote it verbatim, do not flag it.
@@ -615,7 +683,8 @@ P4_GOTCHAS = f"""\
         - The submit-gates AskUserQuestion fires once, regardless of gate count. multiSelect bundles all gates into one prompt. Re-prompting per gate is rude and adds no value -- the author's response is final either way.
         - Unconfirmed submit gates are NOT errors. Render them with {CRS} so they're visible, but do not block the review or refuse to render the rest.
         - Unresolved merges are NOT findings -- they do NOT go through reviewer or validator subagents. They are detected deterministically by prepare_review.py (`p4 resolve -n -c <CL>`) and rendered verbatim in a separate output section. The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the unresolved section is a separate informational warning to the user.
-        - Auto-shelf cleanup (step 10) must run whenever `bundle.auto_shelved` is true, no matter what happened in steps 3-9. The cleanup script is deterministic and safe (it only deletes the shelf when the live fingerprint exactly matches what we recorded), so there is no scenario where skipping it is the right call. Skipping leaves an orphan shelf the author didn't ask for.""" + MD_AUDIT_GOTCHAS
+        - Auto-shelf cleanup (step 10) must run whenever `bundle.auto_shelved` is true, no matter what happened in steps 3-9. The cleanup script is deterministic and safe (it only deletes the shelf when the live fingerprint exactly matches what we recorded), so there is no scenario where skipping it is the right call. Skipping leaves an orphan shelf the author didn't ask for.
+        - --claim requires a PENDING CL. On a submitted CL, `#have` pre-images are POST-change once the workspace synced past the CL, so prepare_review exits with an error when --claim is passed on a submitted CL; re-run without --claim for a plain informational review.""" + MD_AUDIT_GOTCHAS + LEDGER_GOTCHAS
 
 GIT_NARRATION_TEMPLATES = f"""\
       - when: "Before step 2"
@@ -828,6 +897,9 @@ FRAGMENTS = {
         "ISSUE_PATH": "<repo-relative or absolute path>",
         "SG_DESC": GIT_SG_DESC,
         "OUTPUT_FORMAT": GIT_OUTPUT_FORMAT,
+        "PREPARE_TOOL": "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "LEDGER_RECORD_N": "10",
+        "BASELINE_DESC": "the range base SHA advances -- origin/main moves, or HEAD changes for a working-tree review",
     },
     "p4": {
         "NAME": "p4-code-review",
@@ -857,6 +929,9 @@ FRAGMENTS = {
         "ISSUE_PATH": "<depot or local path>",
         "SG_DESC": P4_SG_DESC,
         "OUTPUT_FORMAT": P4_OUTPUT_FORMAT,
+        "PREPARE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "LEDGER_RECORD_N": "11",
+        "BASELINE_DESC": "the CL is reshelved, its content edited, or its revisions move",
     },
 }
 
@@ -866,6 +941,8 @@ _SHARED = {
     "DISPATCH": DISPATCH,
     "MD_AUDIT_LAUNCH": MD_AUDIT_LAUNCH,
     "MD_AUDIT_REPORT": MD_AUDIT_REPORT,
+    "LEDGER_STEP9": LEDGER_STEP9,
+    "LEDGER_RECORD_STEP": LEDGER_RECORD_STEP,
     "X": X,
     "CHK": CHK,
     "CRS": CRS,
@@ -874,12 +951,16 @@ _SHARED = {
 _SKILL_TOKEN_ORDER = [
     "DISPATCH",  # multi-line, contains no other @tokens@; substitute first
     "MD_AUDIT_LAUNCH", "MD_AUDIT_REPORT",  # shared, no nested @tokens@
+    # Ledger regions: shared bodies that DO carry nested per-VCS @tokens@
+    # (@RANGE_OR_CL@, @PREPARE_TOOL@, @LEDGER_RECORD_N@, @BASELINE_DESC@) --
+    # substitute the region first, then those tokens resolve below.
+    "LEDGER_STEP9", "LEDGER_RECORD_STEP",
     "NAME", "DESC", "TITLE", "INTRO", "IDENTITY",
     "SCOPE_COVERS_HEAD", "SCOPE_EXCLUDES", "KEYWORDS", "GOAL", "PRECONDITIONS",
     "STEP1", "STEP2", "STEP3", "STEP5_PHRASE", "STEP9_TAIL", "STEP10",
     "CHECKLIST", "GOTCHAS", "NARRATION_TEMPLATES", "NARRATION_VARIABLES",
     "DIFF_OR_CL", "RANGE_OR_CL", "FILEPATHS", "CHANGE_DESC", "ISSUE_PATH",
-    "SG_DESC", "OUTPUT_FORMAT",
+    "SG_DESC", "OUTPUT_FORMAT", "PREPARE_TOOL", "LEDGER_RECORD_N", "BASELINE_DESC",
     # glyph tokens last -- they appear inside already-substituted blocks too,
     # but those blocks embed the literal glyph (via f-strings), so the only
     # remaining @X@/@CHK@/@CRS@ markers are in the template body.
@@ -1029,7 +1110,10 @@ Derive, per claimed file:
 
 - `ancestorClaudeMdPaths` = `claude_mds` with the subject's OWN `local` removed (drop the
   self-entry a CLAUDE.md subject carries; a SKILL.md subject has nothing to drop). Nearest-ancestor
-  first, excluding the subject -- exactly md-audit's H-11 / M ancestor-convention input.
+  first, excluding the subject -- exactly md-audit's H-11 / M ancestor-convention input. Compare paths
+  case-INSENSITIVELY on Windows when removing the self-entry: the emitted `local` and the `claude_mds`
+  chain are already normalized to agree byte-for-byte, but a case-insensitive compare is the
+  belt-and-braces guard against any residual drive-letter casing skew.
 - `preImagePath` = the entry's `pre_image` (pass `null` through unchanged -- an add is fully
   attributable).
 
@@ -1083,6 +1167,113 @@ def render_md_audit_review(vcs: str) -> str:
     return out
 
 
+# ===========================================================================
+# declined-ledger.md -- one parameterized source rendering both references.
+# The key/baseline/collapse/record detail behind the step-9 collapse region and
+# the post-decision record step, kept out of the drift-tested SKILL body.
+# ===========================================================================
+DECLINED_LEDGER_TEMPLATE = """\
+# Declined-findings ledger
+
+Reviews re-run against the same change re-surface findings the author already
+declined -- both generic code-review issues and md-audit subject-lens findings.
+`@SKILL_NAME@` keeps a small ledger so a re-run renders those previously-declined
+findings COLLAPSED instead of re-litigating them. The ledger is advisory memory,
+NOT a gate: it never changes a verdict, only whether a finding is re-asked.
+
+Shared implementation: `bootstrap_lib.code_review.ledger` (consumed by both
+git-code-review and p4-code-review via prepare_review.py, like the rest of the
+pipeline). This doc is the operational detail behind step 9's collapse region
+and the post-decision `--ledger-record` step.
+
+## Change identity + baseline
+
+- `change_id` (`bundle.change_id`) = @CHANGE_ID_LEDGER@. It is the outer ledger
+  key -- entries are bucketed per change.
+- `baseline` (`bundle.ledger_baseline`) = @BASELINE_LEDGER@. Every recorded entry
+  stores the baseline it was declined at; on a later run prepare_review recomputes
+  the current baseline and emits only entries whose baseline STILL MATCHES as
+  `bundle.ledger_hits`. When the baseline moves the entry is stale and the finding
+  re-surfaces (it is re-asked, and `record_declined` prunes it).
+
+## The key (aligned with skills-kit attribution)
+
+A finding is keyed by criterion/reason + taxonomy + a NORMALIZED anchor -- never
+line numbers, never exact wording (both churn on trivial edits):
+
+- code-review issue: `file` + `reason` (`bug`|`claude_md`) + normalized-`description` anchor.
+- md-audit finding: `file` + `criterion` + `taxonomy` + normalized-`message` anchor.
+
+The normalized anchor is the lowercased first 8 alphanumeric tokens of the
+message/description. File paths are lowercased + posix-slashed for matching.
+
+**Limits (know them).** The anchor is a lossy fingerprint. Two distinct findings
+that share file + criterion/reason and open with the same 8 tokens collapse to one
+key (false merge); a finding reworded in its FIRST 8 tokens gets a new key and
+re-surfaces (false miss). Both degrade only to "asked once more" / "not re-asked
+once" -- never to a wrong verdict -- which is why the ledger is advisory.
+
+## Collapse (step 9)
+
+For each current issue / md-audit finding, compute its key and check
+`bundle.ledger_hits`. On a match, render it COLLAPSED under a one-line
+`previously declined (N): <labels>` note in its own section and do not re-ask it
+in the decision pass. EXCEPTION: a **SERIOUS** md-audit finding is NEVER collapsed
+-- it always renders and is always decided. (SERIOUS findings are never written to
+the ledger in the first place, so a hit can never exist for one; the collapse rule
+is belt-and-braces.)
+
+## Record (post-decision step)
+
+After the decision pass, collect the findings the author DECLINED (code-review
+issues rejected + md-audit remediations not applied), write them to
+`<bundle.bundle_dir>/declined.json`, and run:
+
+    @PREPARE_TOOL@ --ledger-record <bundle.bundle_dir>/declined.json
+
+The payload is `{change_id, baseline, declined:[{kind, file, ...}, ...]}` using
+`bundle.change_id` and `bundle.ledger_baseline`. `--ledger-record` computes keys
+deterministically, drops SERIOUS md-audit findings, prunes stale entries for the
+change, and dedups by key. NEVER hand-edit the ledger JSON -- always go through
+`--ledger-record`.
+
+## Storage
+
+A single JSON file in the plugin's version-independent data dir, a sibling of the
+per-change bundle dirs: `@LEDGER_STORE@`. Never written into the user's repo
+working tree. Shape:
+
+    {"version": 1, "changes": {"<change_id>": {"entries": [<entry>, ...]}}}
+"""
+
+DECLINED_LEDGER_FRAGMENTS = {
+    "git": {
+        "SKILL_NAME": "git-code-review",
+        "CHANGE_ID_LEDGER": "the diff range spec (e.g. `origin/main..HEAD`)",
+        "BASELINE_LEDGER": "the range base SHA (`git rev-parse <base>`)",
+        "PREPARE_TOOL": "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "LEDGER_STORE": "~/.claude/plugins/data/plugins-kit/git-kit/reviews/ledger.json",
+    },
+    "p4": {
+        "SKILL_NAME": "p4-code-review",
+        "CHANGE_ID_LEDGER": "the CL number",
+        "BASELINE_LEDGER": (
+            "a hash over the CL's shelf fingerprint (content) plus its per-file "
+            "(rev, action) map (identity)"
+        ),
+        "PREPARE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "LEDGER_STORE": "~/.claude/plugins/data/plugins-kit/p4-kit/reviews/ledger.json",
+    },
+}
+
+
+def render_declined_ledger(vcs: str) -> str:
+    out = DECLINED_LEDGER_TEMPLATE
+    for token, value in DECLINED_LEDGER_FRAGMENTS[vcs].items():
+        out = out.replace(f"@{token}@", value)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Targets + write/check driver.
 # ---------------------------------------------------------------------------
@@ -1096,6 +1287,8 @@ def targets() -> dict[Path, str]:
         P4_SUBMIT_GATES: render_submit_gates("p4"),
         GIT_MD_AUDIT_REVIEW: render_md_audit_review("git"),
         P4_MD_AUDIT_REVIEW: render_md_audit_review("p4"),
+        GIT_DECLINED_LEDGER: render_declined_ledger("git"),
+        P4_DECLINED_LEDGER: render_declined_ledger("p4"),
     }
 
 

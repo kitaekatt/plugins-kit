@@ -108,6 +108,60 @@ class TestMdAuditContributorPresent:
         assert "md-audit-review.md" in target_names
 
 
+class TestDeclinedLedgerPresent:
+    """The declined-findings ledger collapse + record steps must reach BOTH skills."""
+
+    def test_both_skills_carry_collapse_and_record(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            # step-9 collapse region
+            assert "Declined-findings ledger" in body
+            assert "bundle.ledger_hits" in body
+            assert "previously declined (N):" in body
+            assert "SERIOUS-severity md-audit finding" in body
+            assert "NEVER collapsed" in body
+            # post-decision record step
+            assert "--ledger-record" in body
+            assert "bundle.change_id" in body
+            assert "bundle.ledger_baseline" in body
+            # bundle field wiring
+            assert "ledger_baseline" in body
+            assert "ledger_hits" in body
+
+    def test_record_step_uses_correct_launch_prefix(self):
+        # p4 must launch via python3; git via the bare plugin-root path.
+        p4 = gen.render_skill("p4")
+        git = gen.render_skill("git")
+        assert "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" in p4
+        assert "tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" in git
+
+    def test_both_ledger_references_render(self):
+        git_ref = gen.render_declined_ledger("git")
+        p4_ref = gen.render_declined_ledger("p4")
+        for ref in (git_ref, p4_ref):
+            assert "# Declined-findings ledger" in ref
+            assert "bootstrap_lib.code_review.ledger" in ref
+            assert "normalized anchor" in ref
+            assert "SERIOUS" in ref
+            assert "Limits" in ref
+        # per-VCS baseline seam
+        assert "range base SHA" in git_ref and "shelf fingerprint" not in git_ref
+        assert "shelf fingerprint" in p4_ref and "range base SHA" not in p4_ref
+
+    def test_ledger_reference_targets_exist(self):
+        target_names = {p.name for p in gen.targets()}
+        assert "declined-ledger.md" in target_names
+
+
+class TestMdAuditCaseInsensitiveGuard:
+    """Deliverable 2 (b): the md-audit reference tells consumers to compare case-insensitively."""
+
+    def test_both_references_mention_case_insensitive_compare(self):
+        for vcs in ("git", "p4"):
+            ref = gen.render_md_audit_review(vcs)
+            assert "case-INSENSITIVELY on Windows" in ref
+
+
 class TestVcsSeamsRendered:
     """The per-VCS seams the substitution table exists for must actually land."""
 
@@ -116,11 +170,16 @@ class TestVcsSeamsRendered:
         assert "# Git Code Review" in body
         assert "auto-detect" in body           # range auto-detection wording
         assert "Branch: <branch>" in body      # git-only output header
-        assert "- n: 10" not in body           # git has no shelf-cleanup step
+        assert "auto-created shelf" not in body  # git has no shelf-cleanup step
+        # git's ledger-record step is step 10 (no shelf-cleanup step precedes it).
+        assert "- n: 10" in body               # ledger-record step
+        assert "- n: 11" not in body           # ...and nothing beyond it
 
     def test_p4_seam(self):
         body = gen.render_skill("p4")
         assert "# P4 Code Review" in body
         assert "- n: 10" in body               # p4-only auto-shelf cleanup step
+        assert "- n: 11" in body               # p4 ledger-record step (after cleanup)
+        assert "auto-created shelf" in body     # p4-only cleanup step content
         assert "python3` interpreter" in body  # p4-only launch gotcha
         assert "Branch: <branch>" not in body  # no git output header

@@ -62,7 +62,10 @@ Derive, per claimed file:
 
 - `ancestorClaudeMdPaths` = `claude_mds` with the subject's OWN `local` removed (drop the
   self-entry a CLAUDE.md subject carries; a SKILL.md subject has nothing to drop). Nearest-ancestor
-  first, excluding the subject -- exactly md-audit's H-11 / M ancestor-convention input.
+  first, excluding the subject -- exactly md-audit's H-11 / M ancestor-convention input. Compare paths
+  case-INSENSITIVELY on Windows when removing the self-entry: the emitted `local` and the `claude_mds`
+  chain are already normalized to agree byte-for-byte, but a case-insensitive compare is the
+  belt-and-braces guard against any residual drive-letter casing skew.
 - `preImagePath` = the entry's `pre_image` (pass `null` through unchanged -- an add is fully
   attributable).
 

@@ -54,7 +54,7 @@ technique_skill:
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<CL>  (append `--claim '**/CLAUDE.md' --claim '**/SKILL.md'` when md-audit is available, per the claim probe)"
           expected: |
-            JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
+            JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
             Surface the stderr message to the user and stop. No retry.
             Launch note: ALWAYS invoke with an explicit `python3` interpreter (as shown in `tool:`), never as a bare path. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any python3 launcher is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.
@@ -155,6 +155,17 @@ technique_skill:
               other changed files' paths -- print a one-line notice: "ruleset changed -- findings for
               <files> were judged against the working-tree version; consider a re-run." Keep it to one
               line; it is advisory, not a blocker.
+            - Declined-findings ledger: `bundle.ledger_hits` lists findings the author previously
+              DECLINED for this same CL whose baseline is still valid. Before the decision
+              pass, compute each current code-review issue's and md-audit finding's ledger key
+              (code-review: file + reason + normalized-description anchor; md-audit: file + criterion +
+              taxonomy + normalized-message anchor -- never line numbers or exact wording; see
+              references/declined-ledger.md) and, when it matches a `bundle.ledger_hits` entry, render it
+              COLLAPSED under a one-line `previously declined (N): <labels>` note in its own section
+              (code-review issues under the issue list; md-audit findings under the md-audit section)
+              and do NOT re-ask it in the decision pass. EXCEPTION: a SERIOUS-severity md-audit finding
+              is NEVER collapsed -- it always renders and is always decided, even against a ledger hit.
+              The ledger is advisory memory, not a gate.
             Group the review body by file.
         - n: 10
           action: |
@@ -174,6 +185,26 @@ technique_skill:
             not create the shelf and must not touch it).
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "--cleanup <bundle.bundle_dir>"
+        - n: 11
+          action: |
+            Record declined findings so the next review of this same CL does not
+            re-litigate them. After the decision pass, collect every finding the author DECLINED --
+            both code-review issues they rejected and md-audit remediations they chose NOT to apply.
+            Skip this step entirely when nothing was declined. Otherwise write a JSON file to
+            `<bundle.bundle_dir>/declined.json`:
+              {"change_id": "<bundle.change_id>", "baseline": "<bundle.ledger_baseline>",
+               "declined": [
+                 {"kind": "code_review", "file": "<path>", "reason": "bug"|"claude_md",
+                  "description": "<the issue description>"},
+                 {"kind": "md_audit", "file": "<path>", "criterion": "<criterion/group>",
+                  "taxonomy": "<taxonomy>", "message": "<finding message>", "severity": "<severity>"}
+               ]}
+            Then run prepare_review.py --ledger-record on that file. The ledger keys each entry by a
+            normalized anchor (never line numbers or exact wording) and NEVER records a SERIOUS
+            md-audit finding (those always re-surface). Do NOT hand-edit the ledger JSON -- always go
+            through --ledger-record so keying stays deterministic.
+          tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          input: "--ledger-record <bundle.bundle_dir>/declined.json"
       checklist:
         - CL number resolved
         - Context bundled via prepare_review.py
@@ -185,8 +216,10 @@ technique_skill:
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
         - md-audit subject-lens pass launched for bundle.claimed_files when skills-kit md-audit is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-audit is absent
+        - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-audit findings never collapsed
         - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merges section prepended when bundle.unresolved is non-empty; separate `## md-audit (subject-lens) findings` section when the md-audit pass ran)
         - Auto-shelf cleanup invoked when bundle.auto_shelved is true (`prepare_review.py --cleanup <bundle_dir>`)
+        - Newly declined findings recorded to the ledger via `prepare_review.py --ledger-record` (skipped when nothing was declined)
       gotchas:
         - Always quote the exact CLAUDE.md rule text when flagging a claude_md issue. If you cannot quote it verbatim, do not flag it.
         - Sequential reviewer or validator calls waste time. Reviewers run in one message with one concurrent Agent call per (reviewer × chunk) pair (R reviewers × K chunks). For a small CL (K=1) that's still 2 calls for data_only / 3 for code; for a large CL (K=N) it scales to R × N. Validators run in one message with N concurrent Agent calls.
@@ -201,10 +234,13 @@ technique_skill:
         - Unconfirmed submit gates are NOT errors. Render them with ✗ so they're visible, but do not block the review or refuse to render the rest.
         - Unresolved merges are NOT findings -- they do NOT go through reviewer or validator subagents. They are detected deterministically by prepare_review.py (`p4 resolve -n -c <CL>`) and rendered verbatim in a separate output section. The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the unresolved section is a separate informational warning to the user.
         - Auto-shelf cleanup (step 10) must run whenever `bundle.auto_shelved` is true, no matter what happened in steps 3-9. The cleanup script is deterministic and safe (it only deletes the shelf when the live fingerprint exactly matches what we recorded), so there is no scenario where skipping it is the right call. Skipping leaves an orphan shelf the author didn't ask for.
+        - --claim requires a PENDING CL. On a submitted CL, `#have` pre-images are POST-change once the workspace synced past the CL, so prepare_review exits with an error when --claim is passed on a submitted CL; re-run without --claim for a plain informational review.
         - md-audit findings are a SEPARATE, labeled section -- never interleave them with the code-review issue list. They come from skills-kit's detect.js (a subject-lens reviewer), not from the generic reviewer/validator subagents, so they are not filtered by the validators.
         - The claim decision happens ONCE, at the step-2 probe, and controls whether prepare gets `--claim`. Do not run prepare a second time just to add claims -- the only re-run is the version-skew FALLBACK, which re-runs WITHOUT `--claim`.
         - When skills-kit md-audit is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-audit section -- the md files get today's thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
         - The Workflow tool is unavailable inside subagents. Launch the md-audit detect.js Workflow from the MAIN session (the same message that fans out the reviewers), never from within a reviewer subagent.
+        - The declined-findings ledger is advisory memory, not a gate. A collapsed finding is one the author already declined for THIS change at THIS baseline; when the baseline moves (the CL is reshelved, its content edited, or its revisions move) the entry goes stale and the finding re-surfaces on its own. Never let a ledger hit suppress a SERIOUS md-audit finding.
+        - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed.
   narration:
     note: Reviews involve long silent stretches (batched file reads, parallel subagents that take 30s+). Post one short status line per step using these templates verbatim, filling in the bracketed counts. Do not paraphrase, omit, or add extras.
     templates:

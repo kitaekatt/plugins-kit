@@ -96,7 +96,14 @@ Output schema:
          "line_no": <int>}
       ],
       "auto_shelved": <bool>,
-      "shelf_fingerprint": {"<depot path>": "<md5 digest>", ...}
+      "shelf_fingerprint": {"<depot path>": "<md5 digest>", ...},
+      "change_id": "<CL>",                       # ledger key: the change identity
+      "ledger_baseline": "<token>",              # invalidates stale ledger entries
+      "ledger_hits": [                           # findings previously declined for this CL, still valid
+        {"key": "<hash>", "kind": "md_audit"|"code_review", "file": "<path>",
+         "verdict": "declined", "baseline": "<token>", "timestamp": <float>,
+         "label": "<short human label>", "severity": "<md_audit only>"}
+      ]
     }
 
 `auto_shelved` is true when this run executed `p4 shelve -c <CL>` to make the
@@ -119,6 +126,15 @@ Modes:
   `auto_shelved` is true and the live shelf fingerprint still matches, run
   `p4 shelve -d -c <CL>`. Any mismatch (file added/removed/changed, shelf gone)
   is a silent no-op -- the user's work is never overwritten.
+- `prepare_review.py --ledger-record <declined.json>` -- record findings the
+  author declined into the ledger so they render collapsed (not re-litigated)
+  on the next review of the same CL. Payload: {change_id, baseline, declined:[...]}.
+  See bootstrap_lib.code_review.ledger.
+
+`--claim` requires a PENDING CL: pre-images come from the workspace `#have`
+revision, which is POST-change for a submitted CL once the workspace has synced
+past it, so `--claim` on a submitted CL exits with an error (re-run without
+`--claim` for a plain informational review).
 
 Stderr-only diagnostics. Non-zero exit on hard failure.
 """
@@ -164,6 +180,7 @@ try:
         run_vcs,
         split_sections,
     )
+    from bootstrap_lib.code_review import ledger  # noqa: E402
 except ImportError:
     # Belt-and-suspenders: _ensure_bootstrap_lib_importable() should already
     # have exited if bootstrap_lib is missing, but guard the import directly
@@ -219,6 +236,11 @@ DEFAULT_BUNDLE_ROOT = (
     Path.home() / ".claude" / "plugins" / "data"
     / "plugins-kit" / "p4-kit" / "reviews"
 )
+
+# Declined-findings ledger: a single JSON file in the plugin's version-independent
+# data dir, a sibling of the per-CL bundle dirs. Keyed per change-id (CL). See
+# bootstrap_lib.code_review.ledger.
+LEDGER_PATH = DEFAULT_BUNDLE_ROOT / "ledger.json"
 
 
 def run_p4(args: list[str]) -> tuple[int, str, str]:
@@ -929,7 +951,10 @@ def materialize_preimage(depot: str, action: str, bundle_dir: Path) -> Optional[
 
 
 def build_bundle(
-    cl: str, bundle_dir: Path, claim_globs: Optional[list[str]] = None
+    cl: str,
+    bundle_dir: Path,
+    claim_globs: Optional[list[str]] = None,
+    ledger_path: Optional[Path] = None,
 ) -> dict:
     """Gather CL context, partition diff into chunks on disk, return the index bundle.
 
@@ -964,6 +989,18 @@ def build_bundle(
             auto_shelve_cl(cl)
             describe, is_shelved = fetch_describe(cl)
             auto_shelved = True
+
+    # Claim pre-images are materialized from the workspace's #have revision,
+    # which for a SUBMITTED CL is POST-change once the workspace has synced past
+    # it -- so attribution silently inverts. The skill's scope already excludes
+    # submitted CLs; guard the --claim path explicitly with an actionable error.
+    # Without --claim, submitted CLs remain reviewable as plain informational
+    # reviews (behavior untouched).
+    if claim_globs and not _is_pending(describe):
+        raise ValueError(
+            f"CL {cl} is submitted; claim pre-images require a pending CL -- "
+            f"re-run without --claim for a plain informational review"
+        )
 
     # Fingerprint AFTER our last shelf-affecting operation so --cleanup compares
     # against the exact shelf state we leave behind.
@@ -1010,6 +1047,17 @@ def build_bundle(
     unreconciled = find_unreconciled(minimal_dirs)
     unresolved = find_unresolved(cl)
 
+    # Declined-findings ledger. The baseline folds the CL's shelf fingerprint
+    # (content) and per-file (rev, action) map (identity) into one token: when
+    # the author reshelves / edits / the CL's revisions move, the baseline
+    # changes and previously-declined findings re-surface. `shelf_now` reuses
+    # the just-captured fingerprint when we auto-shelved; otherwise it is a
+    # cheap `fstat -Ol` (no content download), tolerant of an absent shelf.
+    shelf_now = shelf_fingerprint if auto_shelved else fetch_shelf_fingerprint(cl)
+    ledger_baseline = ledger.baseline_token({"actions": actions, "shelf": shelf_now})
+    change_id = cl
+    ledger_hits = ledger.ledger_hits(ledger_path or LEDGER_PATH, change_id, ledger_baseline)
+
     bundle: dict = {
         "cl": cl,
         "description": description,
@@ -1022,6 +1070,9 @@ def build_bundle(
         "submit_gates": core["submit_gates"],
         "auto_shelved": auto_shelved,
         "shelf_fingerprint": shelf_fingerprint,
+        "change_id": change_id,
+        "ledger_baseline": ledger_baseline,
+        "ledger_hits": ledger_hits,
     }
     if claim_globs:
         bundle["claimed_files"] = core.get("claimed_files", [])
@@ -1110,7 +1161,8 @@ def _parse_args(args: list[str]) -> tuple[list[str], list[str]]:
 def _usage() -> int:
     print(
         "Usage: prepare_review.py <CL> [--claim <glob> ...]\n"
-        "       prepare_review.py --cleanup <bundle_dir>",
+        "       prepare_review.py --cleanup <bundle_dir>\n"
+        "       prepare_review.py --ledger-record <declined.json>",
         file=sys.stderr,
     )
     return 2
@@ -1119,6 +1171,14 @@ def _usage() -> int:
 def main(argv: list[str]) -> int:
     if len(argv) == 3 and argv[1] == "--cleanup":
         return cleanup_auto_shelve(Path(argv[2]))
+    if len(argv) == 3 and argv[1] == "--ledger-record":
+        try:
+            n = ledger.record_from_file(LEDGER_PATH, Path(argv[2]))
+        except (OSError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        print(f"prepare_review: recorded {n} declined finding(s) into the ledger.", file=sys.stderr)
+        return 0
     try:
         positionals, claim_globs = _parse_args(argv[1:])
     except ValueError as e:

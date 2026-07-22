@@ -774,6 +774,30 @@ class TestBuildBundle:
         assert bundle["merge_conflicts"] == []
         assert bundle["submit_gates"] == []
 
+    def test_ledger_fields_and_hit_roundtrip(self, git_repo, tmp_path):
+        (git_repo.path / "src").mkdir()
+        (git_repo.path / "src" / "foo.py").write_text("x = 0\n", encoding="utf-8")
+        git_repo.git("add", ".")
+        git_repo.git("commit", "-qm", "base")
+        git_repo.git("checkout", "-qb", "feature")
+        git_repo.commit_file("src/foo.py", "x = 1\n", "change foo")
+
+        led = tmp_path / "ledger.json"
+        first = pr.build_bundle("main..HEAD", tmp_path / "b1", ledger_path=led)
+        # change_id is the range; baseline is the range base SHA; no hits yet.
+        assert first["change_id"] == "main..HEAD"
+        assert first["ledger_baseline"] and len(first["ledger_baseline"]) >= 7
+        assert first["ledger_hits"] == []
+
+        pr.ledger.record_declined(
+            led, first["change_id"], first["ledger_baseline"],
+            [{"kind": "code_review", "file": "src/foo.py", "reason": "bug",
+              "description": "constant assignment never used"}],
+        )
+        second = pr.build_bundle("main..HEAD", tmp_path / "b2", ledger_path=led)
+        assert len(second["ledger_hits"]) == 1
+        assert second["ledger_hits"][0]["label"] == "constant assignment never used"
+
     def test_auto_reason_carried_into_bundle(self, git_repo, tmp_path):
         git_repo.commit_file("a.txt", "base\n", "base")
         git_repo.git("update-ref", "refs/remotes/origin/main", "HEAD")

@@ -76,8 +76,20 @@ Output schema:
          "matched_files": ["<local path>", ...],
          "rationale": "<optional prose, may be empty>",
          "line_no": <int>}
+      ],
+      "change_id": "<range spec>",               # ledger key: the change identity
+      "ledger_baseline": "<range base SHA>",      # invalidates stale ledger entries
+      "ledger_hits": [                            # findings previously declined for this range, still valid
+        {"key": "<hash>", "kind": "md_audit"|"code_review", "file": "<path>",
+         "verdict": "declined", "baseline": "<sha>", "timestamp": <float>,
+         "label": "<short human label>", "severity": "<md_audit only>"}
       ]
     }
+
+Also supports `prepare_review.py --ledger-record <declined.json>` -- record
+findings the author declined into the ledger so they render collapsed (not
+re-litigated) on the next review of the same range. Payload:
+{change_id, baseline, declined:[...]}. See bootstrap_lib.code_review.ledger.
 
 Stderr-only diagnostics. Non-zero exit on hard failure.
 """
@@ -112,6 +124,7 @@ try:
         run_vcs,
         split_sections,
     )
+    from bootstrap_lib.code_review import ledger  # noqa: E402
 except ImportError:
     # bootstrap_lib is absent -> the bootstrap plugin never provisioned this
     # plugin's venv. Convert the raw ModuleNotFoundError traceback into an
@@ -147,6 +160,11 @@ DEFAULT_BUNDLE_ROOT = (
     Path.home() / ".claude" / "plugins" / "data"
     / "plugins-kit" / "git-kit" / "reviews"
 )
+
+# Declined-findings ledger: a single JSON file in the plugin's version-independent
+# data dir, a sibling of the per-range bundle dirs. Keyed per change-id (range).
+# See bootstrap_lib.code_review.ledger.
+LEDGER_PATH = DEFAULT_BUNDLE_ROOT / "ledger.json"
 
 # git diff section header prefix: `diff --git a/<path> b/<path>`.
 # Paths may contain spaces (emitted unquoted) or non-ASCII characters
@@ -643,11 +661,28 @@ def materialize_preimage(range_spec: str, path: str, bundle_dir: Path) -> Option
     return str(dest)
 
 
+def _range_base_sha(range_spec: str) -> Optional[str]:
+    """Resolve the range base to a concrete SHA (the ledger baseline).
+
+    The base ref (`_range_base`) is a ref like `origin/main` for a normal range
+    and an already-resolved merge-base SHA for a symmetric range; either way
+    `git rev-parse` yields the concrete SHA. When the base advances (origin/main
+    moves, HEAD changes for working-tree mode), the SHA changes -- so a stored
+    ledger entry keyed to the old base goes stale and the finding re-surfaces.
+    """
+    base = _range_base(range_spec)
+    if base is None:
+        return None
+    rc, out, _ = run_git(["rev-parse", base])
+    return out.strip() if rc == 0 and out.strip() else None
+
+
 def build_bundle(
     range_spec: str,
     bundle_dir: Path,
     auto_reason: Optional[str] = None,
     claim_globs: Optional[list[str]] = None,
+    ledger_path: Optional[Path] = None,
 ) -> dict:
     """Gather context for `range_spec`, write chunks to disk, return the index bundle.
 
@@ -708,6 +743,13 @@ def build_bundle(
     untracked_or_unstaged = find_untracked_or_unstaged(repo_root, touched_dirs)
     merge_conflicts = find_merge_conflicts(repo_root)
 
+    # Declined-findings ledger. The baseline is the range base SHA; when it moves
+    # (origin/main advances, HEAD changes for working-tree mode) previously-
+    # declined findings re-surface. Falls back to head_sha when no base resolves.
+    ledger_baseline = _range_base_sha(range_spec) or head_sha or ""
+    change_id = range_spec
+    ledger_hits = ledger.ledger_hits(ledger_path or LEDGER_PATH, change_id, ledger_baseline)
+
     bundle: dict = {
         "vcs": "git",
         "range": range_spec,
@@ -721,6 +763,9 @@ def build_bundle(
         "untracked_or_unstaged": untracked_or_unstaged,
         "merge_conflicts": merge_conflicts,
         "submit_gates": core["submit_gates"],
+        "change_id": change_id,
+        "ledger_baseline": ledger_baseline,
+        "ledger_hits": ledger_hits,
     }
     if auto_reason:
         bundle["auto_detected_reason"] = auto_reason
@@ -756,6 +801,15 @@ def _parse_args(args: list[str]) -> tuple[list[str], list[str]]:
 
 
 def main(argv: list[str]) -> int:
+    if len(argv) == 3 and argv[1] == "--ledger-record":
+        try:
+            n = ledger.record_from_file(LEDGER_PATH, Path(argv[2]))
+        except (OSError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        print(f"prepare_review: recorded {n} declined finding(s) into the ledger.", file=sys.stderr)
+        return 0
+
     try:
         positionals, claim_globs = _parse_args(argv[1:])
     except ValueError as e:

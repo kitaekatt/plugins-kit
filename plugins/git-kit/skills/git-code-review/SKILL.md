@@ -65,7 +65,7 @@ technique_skill:
           tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/CLAUDE.md' --claim '**/SKILL.md'` when md-audit is available, per the claim probe)"
           expected: |
-            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
+            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
           on_failure: Surface the stderr message to the user and stop. No retry.
         - n: 3
           action: |
@@ -165,7 +165,38 @@ technique_skill:
               other changed files' paths -- print a one-line notice: "ruleset changed -- findings for
               <files> were judged against the working-tree version; consider a re-run." Keep it to one
               line; it is advisory, not a blocker.
+            - Declined-findings ledger: `bundle.ledger_hits` lists findings the author previously
+              DECLINED for this same range whose baseline is still valid. Before the decision
+              pass, compute each current code-review issue's and md-audit finding's ledger key
+              (code-review: file + reason + normalized-description anchor; md-audit: file + criterion +
+              taxonomy + normalized-message anchor -- never line numbers or exact wording; see
+              references/declined-ledger.md) and, when it matches a `bundle.ledger_hits` entry, render it
+              COLLAPSED under a one-line `previously declined (N): <labels>` note in its own section
+              (code-review issues under the issue list; md-audit findings under the md-audit section)
+              and do NOT re-ask it in the decision pass. EXCEPTION: a SERIOUS-severity md-audit finding
+              is NEVER collapsed -- it always renders and is always decided, even against a ledger hit.
+              The ledger is advisory memory, not a gate.
             Group the review body by file.
+        - n: 10
+          action: |
+            Record declined findings so the next review of this same range does not
+            re-litigate them. After the decision pass, collect every finding the author DECLINED --
+            both code-review issues they rejected and md-audit remediations they chose NOT to apply.
+            Skip this step entirely when nothing was declined. Otherwise write a JSON file to
+            `<bundle.bundle_dir>/declined.json`:
+              {"change_id": "<bundle.change_id>", "baseline": "<bundle.ledger_baseline>",
+               "declined": [
+                 {"kind": "code_review", "file": "<path>", "reason": "bug"|"claude_md",
+                  "description": "<the issue description>"},
+                 {"kind": "md_audit", "file": "<path>", "criterion": "<criterion/group>",
+                  "taxonomy": "<taxonomy>", "message": "<finding message>", "severity": "<severity>"}
+               ]}
+            Then run prepare_review.py --ledger-record on that file. The ledger keys each entry by a
+            normalized anchor (never line numbers or exact wording) and NEVER records a SERIOUS
+            md-audit finding (those always re-surface). Do NOT hand-edit the ledger JSON -- always go
+            through --ledger-record so keying stays deterministic.
+          tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          input: "--ledger-record <bundle.bundle_dir>/declined.json"
       checklist:
         - Diff range resolved (auto-detected from workspace state OR explicit user arg) and surfaced in the step-1 narration line
         - Context bundled via prepare_review.py
@@ -177,7 +208,9 @@ technique_skill:
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
         - md-audit subject-lens pass launched for bundle.claimed_files when skills-kit md-audit is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-audit is absent
+        - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-audit findings never collapsed
         - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merge conflicts section prepended when bundle.merge_conflicts is non-empty; separate `## md-audit (subject-lens) findings` section when the md-audit pass ran)
+        - Newly declined findings recorded to the ledger via `prepare_review.py --ledger-record` (skipped when nothing was declined)
       gotchas:
         - Always quote the exact CLAUDE.md rule text when flagging a claude_md issue. If you cannot quote it verbatim, do not flag it.
         - Sequential reviewer or validator calls waste time. Reviewers run in one message with one concurrent Agent call per (reviewer × chunk) pair (R reviewers × K chunks). For a small diff (K=1) that's still 2 calls for data_only / 3 for code; for a large diff (K=N) it scales to R × N. Validators run in one message with N concurrent Agent calls.
@@ -197,6 +230,8 @@ technique_skill:
         - The claim decision happens ONCE, at the step-2 probe, and controls whether prepare gets `--claim`. Do not run prepare a second time just to add claims -- the only re-run is the version-skew FALLBACK, which re-runs WITHOUT `--claim`.
         - When skills-kit md-audit is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-audit section -- the md files get today's thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
         - The Workflow tool is unavailable inside subagents. Launch the md-audit detect.js Workflow from the MAIN session (the same message that fans out the reviewers), never from within a reviewer subagent.
+        - The declined-findings ledger is advisory memory, not a gate. A collapsed finding is one the author already declined for THIS change at THIS baseline; when the baseline moves (the range base SHA advances -- origin/main moves, or HEAD changes for a working-tree review) the entry goes stale and the finding re-surfaces on its own. Never let a ledger hit suppress a SERIOUS md-audit finding.
+        - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed.
   narration:
     note: Reviews involve long silent stretches (batched file reads, parallel subagents that take 30s+). Post one short status line per step using these templates verbatim, filling in the bracketed counts. Do not paraphrase, omit, or add extras.
     templates:
