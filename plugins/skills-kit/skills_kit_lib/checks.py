@@ -73,7 +73,7 @@ def check_schema_owner_docs_validate(root: Path | None = None) -> list[OwnerDocR
             ))
             continue
 
-        units, _ = collect_yaml_units(text)
+        units, _, _ = collect_yaml_units(text)
         instances = [data for (r, data) in units if r == unit_root]
         if not instances:
             results.append(OwnerDocResult(

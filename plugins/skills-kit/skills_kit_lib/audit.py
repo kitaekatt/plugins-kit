@@ -414,7 +414,7 @@ def check_portable_units(body_text: str) -> list[CheckResult]:
     results: list[CheckResult] = []
     if not HAVE_YAML:
         return results
-    units, _ = collect_yaml_units(body_text)
+    units, _, _ = collect_yaml_units(body_text)
     for unit_root, block_data in units:
         if unit_root not in PORTABLE_UNIT_ROOTS:
             continue
@@ -448,7 +448,7 @@ def check_facts_cross_rules(body_text: str, declared_type: str | None) -> list[C
         return []
 
     all_facts: list[dict] = []
-    units, _ = collect_yaml_units(body_text)
+    units, _, _ = collect_yaml_units(body_text)
     for unit_root, block_data in units:
         if unit_root == "reference_skill":
             inner = block_data.get("reference_skill", {})
@@ -501,7 +501,7 @@ def check_technique_caution_cross_rule(body_text: str) -> list[CheckResult]:
     if not HAVE_YAML:
         return []
 
-    units, _ = collect_yaml_units(body_text)
+    units, _, _ = collect_yaml_units(body_text)
     for unit_root, block_data in units:
         if unit_root != "technique_skill":
             continue
@@ -541,7 +541,7 @@ def _declared_asset_paths(body_text: str) -> list[tuple[str, str]]:
     (top-level portable unit OR nested inside a skill-type unit) and from
     domain_skill tools[].tests entries."""
     out: list[tuple[str, str]] = []
-    units, _ = collect_yaml_units(body_text)
+    units, _, _ = collect_yaml_units(body_text)
     seen_ids = set()
 
     def _add_deps(deps, origin: str):
@@ -663,7 +663,7 @@ def _structured_index_paths(body_text: str) -> list[tuple[str, str, bool]]:
     out: list[tuple[str, str, bool]] = []
     if not HAVE_YAML:
         return out
-    units, _ = collect_yaml_units(body_text)
+    units, _, _ = collect_yaml_units(body_text)
     for unit_root, block_data in units:
         if unit_root not in SKILL_TYPE_ROOTS:
             continue
@@ -863,7 +863,7 @@ def check_cross_block_drift(body_text: str) -> CheckResult | None:
     """Cross-block mixed-type drift detection."""
     if not HAVE_YAML:
         return None
-    units, _ = collect_yaml_units(body_text)
+    units, _, _ = collect_yaml_units(body_text)
     skill_type_roots = sorted({root for (root, _) in units if root in SKILL_TYPE_ROOTS})
     if len(skill_type_roots) > 1:
         return CheckResult(
@@ -899,6 +899,13 @@ def audit_claude_md(claude_md_path: Path, content: str) -> dict[str, Any]:
             f"yaml: contract block detected (root='{detected_root}')",
             JUDGMENT,
             "pyyaml not installed; YAML contract validation unavailable.",
+        ))
+    elif yaml_err.startswith("yaml-parse-error"):
+        yaml_results.append(CheckResult(
+            f"yaml: claude_md contract block (root='{detected_root}')",
+            FAIL,
+            "fenced yaml block found but failed to parse -- "
+            + yaml_err.split(": ", 1)[1],
         ))
     else:
         yaml_results.append(CheckResult(
@@ -955,6 +962,14 @@ def audit(skill_md_path: Path) -> dict[str, Any]:
             "yaml: parser available + contract block",
             JUDGMENT,
             "pyyaml not installed AND no yaml contract block found; falling back to legacy markdown heuristics",
+        ))
+    elif yaml_err.startswith("yaml-parse-error"):
+        yaml_root = detected_root
+        yaml_results.append(CheckResult(
+            f"yaml: contract block (root='{detected_root}')",
+            FAIL,
+            "fenced yaml block found but failed to parse -- "
+            + yaml_err.split(": ", 1)[1],
         ))
     else:
         yaml_results.append(CheckResult(

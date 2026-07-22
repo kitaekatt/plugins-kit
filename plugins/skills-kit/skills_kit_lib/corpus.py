@@ -98,7 +98,7 @@ def parse_skill_md(path: Path) -> SkillRecord | None:
 
     body_contract: dict | None = None
     if HAVE_YAML:
-        units, _ = collect_yaml_units(body_text)
+        units, _, _ = collect_yaml_units(body_text)
         for root, data in units:
             if root in CONTRACT_ROOTS:
                 body_contract = data

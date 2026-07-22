@@ -55,32 +55,50 @@ def safe_load_block(block_text: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def collect_yaml_units(body_text: str) -> tuple[list[tuple[str, dict]], str | None]:
+def collect_yaml_units(
+    body_text: str,
+) -> tuple[list[tuple[str, dict]], str | None, tuple[str, str] | None]:
     """Walk all fenced yaml blocks; collect (unit_root, block_data) for every
     recognized root key across all blocks.
 
     Returns:
-        (units, detected_root_no_parser) where:
+        (units, detected_root_no_parser, parse_error) where:
         - units is a list of (unit_root, block_data) tuples. Empty if no blocks
           parsed or no recognized units found.
         - detected_root_no_parser is set only when pyyaml is missing AND a
           contract root key was detected by regex; the audit knows a contract
           is staged but cannot validate.
+        - parse_error is (root_key, message) when a fenced yaml block textually
+          contains a recognized contract root key but pyyaml raised while
+          parsing it (a real YAML syntax error in the block, e.g. an unquoted
+          special character inside a flow sequence). Distinguishes "a block is
+          present but broken" from "no block at all" -- previously a parse
+          exception was swallowed silently (`except Exception: continue`) and
+          surfaced as the misleading "no fenced yaml block found", which was
+          once mistaken for a CRLF/line-ending intolerance in the fence regex.
+          The fence regex and pyyaml both already tolerate CRLF fine; a swallowed
+          parse error was the actual mechanism.
     """
     units: list[tuple[str, dict]] = []
     detected_root_no_parser: str | None = None
+    parse_error: tuple[str, str] | None = None
 
     if HAVE_YAML:
         for text in iter_yaml_blocks(body_text):
             try:
                 data = _pyyaml.safe_load(text)
-            except Exception:
+            except Exception as exc:
+                if parse_error is None:
+                    for key in CONTRACT_ROOT_KEYS:
+                        if re.search(rf"^{key}\s*:", text, re.MULTILINE):
+                            parse_error = (key, str(exc))
+                            break
                 continue
             if isinstance(data, dict):
                 for key in data.keys():
                     if key in SCHEMAS_BY_ROOT:
                         units.append((key, data))
-        return units, None
+        return units, None, parse_error
 
     # pyyaml missing -- detect a contract root key by regex inside any yaml fence
     for text in iter_yaml_blocks(body_text):
@@ -90,7 +108,7 @@ def collect_yaml_units(body_text: str) -> tuple[list[tuple[str, dict]], str | No
                 break
         if detected_root_no_parser:
             break
-    return [], detected_root_no_parser
+    return [], detected_root_no_parser, None
 
 
 def extract_skill_type_unit(body_text: str) -> tuple[dict | None, str, str | None]:
@@ -100,12 +118,15 @@ def extract_skill_type_unit(body_text: str) -> tuple[dict | None, str, str | Non
     from portable units. Returns the first matching skill-type (or claude_md)
     unit's full block_data.
     """
-    units, detected_root_no_parser = collect_yaml_units(body_text)
+    units, detected_root_no_parser, parse_error = collect_yaml_units(body_text)
     if units:
         for root, data in units:
             if root in CONTRACT_ROOT_KEYS:
                 return data, "", root
         return None, "no-contract-yaml-block", None
+    if parse_error is not None:
+        root, message = parse_error
+        return None, f"yaml-parse-error: {message}", root
     if detected_root_no_parser:
         return None, "no-yaml-parser", detected_root_no_parser
     if HAVE_YAML:
