@@ -172,6 +172,58 @@ class TestMdAuditCaseInsensitiveGuard:
             assert "case-INSENSITIVELY on Windows" in ref
 
 
+class TestLaunchNarrationPresent:
+    """Deliverable 1: the file-type-driven launch message table reaches BOTH skills."""
+
+    def test_both_skills_carry_the_launch_table(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            name = "git-code-review" if vcs == "git" else "p4-code-review"
+            assert "launch_message:" in body
+            # canonical style line, VCS-named
+            assert f"Running {name}: this audits .md file changes against project standards" in body
+            # all four base rows + the trivial/skip row
+            assert "all_md:" in body and "all_data:" in body
+            assert "mixed:" in body and "all_code:" in body
+            assert "md_trivial:" in body
+            assert "mechanical (typo-sized)" in body
+            # emitted at launch, from step 2
+            assert "emit the launch rationale line ONCE" in body
+
+    def test_launch_message_documents_banned_anti_patterns(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            assert "Negative direction" in body          # anti-pattern (a)
+            assert "Asserting it is not a mistake" in body  # anti-pattern (b)
+            assert "let the reader draw the" in body
+
+
+class TestTrivialityGatePresent:
+    """Deliverable 2: the pure-mechanical triviality skip rule reaches BOTH skills."""
+
+    def test_both_skills_carry_the_gate_and_honest_labeling(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            assert "Triviality gate" in body
+            assert "trivial_reasons" in body
+            # only non-trivial files are audited
+            assert "NON-TRIVIAL claimed file" in body
+            # honest skip section, never DIFF-CLEAN / never an audit
+            assert "## Mechanical checks (audit skipped)" in body
+            assert "never label a skipped file DIFF-CLEAN" in body
+            # nothing to the ledger for skipped files
+            assert "NEVER written to the ledger" in body or "write NOTHING to the ledger" in body
+            # override on explicit request
+            assert "asks for the full review" in body
+
+    def test_reference_documents_the_gate(self):
+        for vcs in ("git", "p4"):
+            ref = gen.render_md_audit_review(vcs)
+            assert "Triviality gate" in ref
+            assert "trivial_checks" in ref
+            assert "fails CLOSED" in ref
+
+
 class TestVcsSeamsRendered:
     """The per-VCS seams the substitution table exists for must actually land."""
 

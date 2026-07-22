@@ -119,10 +119,22 @@ CLAIM_PROBE = """\
 
 # Inserted into step 6's action, right after the dispatch rule.
 MD_AUDIT_LAUNCH = """\
-            Subject-lens md-audit pass -- run ONLY when `bundle.claimed_files` is non-empty; skip this
-            entire paragraph otherwise. In the SAME message that launches the reviewer subagents (or the
-            reviewer Workflow, per the dispatch rule above), ALSO invoke the Workflow tool with
-            skills-kit's headless detect.js for the claimed files, routed THREE ways by basename -- at
+            Triviality gate (pure-mechanical, decided by prepare_review -- do NOT re-judge it):
+            each `bundle.claimed_files` entry carries `trivial` (bool) and `trivial_reasons` (the
+            disqualifier codes when false). Partition the claimed files into TRIVIAL (`trivial == true`)
+            and NON-TRIVIAL. Only the NON-TRIVIAL claimed files are audited below; a TRIVIAL file is
+            NEVER sent to detect.js and NEVER written to the ledger -- it gets the mechanical-checks line
+            in step 9 instead. If EVERY claimed file is trivial AND `bundle.diff_chunks` is empty (no
+            generic reviewer chunks either), skip the reviewer fan-out AND this md-audit pass ENTIRELY --
+            launch nothing -- and jump to step 9 to render the mechanical-checks / audit-skipped section.
+            The gate is mechanical memory, not a verdict: never label a skipped file DIFF-CLEAN and never
+            present the skip as an audit. If the author or user explicitly asks for the full review,
+            ignore the gate and audit every claimed file.
+            Subject-lens md-audit pass -- run ONLY when at least one NON-TRIVIAL claimed file exists (per
+            the triviality gate above); skip this entire paragraph otherwise. In the SAME message that
+            launches the reviewer subagents (or the reviewer Workflow, per the dispatch rule above), ALSO
+            invoke the Workflow tool with skills-kit's headless detect.js for the NON-TRIVIAL claimed
+            files, routed THREE ways by basename -- at
             most THREE Workflow calls total: (a) every claimed file named `CLAUDE.md` -> claude-md-audit's
             `workflow/detect.js`; (b) every claimed file named `SKILL.md` -> skill-audit's
             `workflow/detect.js` (only if any); (c) every OTHER claimed `.md` file (generic docs) ->
@@ -154,6 +166,17 @@ MD_AUDIT_REPORT = """\
               this section and the code-review issues; accepted md-audit remediations are applied as
               normal edits AFTER decisions. If the md-audit pass fell back to the generic review, do NOT
               render this section (the md files were reviewed as ordinary subjects).
+            - Mechanical checks (audit-skipped) section: for every claimed file with `trivial == true`,
+              render a distinct `## Mechanical checks (audit skipped)` section -- kept SEPARATE from both
+              the code-review issues and the md-audit findings. For each such file, state in one line what
+              was verified mechanically (the change is typo-sized -- <= 5 changed lines; Markdown structure
+              unchanged; no link/path/anchor reference changed; no meaning-bearing keyword touched; no
+              YAML/front-matter touched) plus its `trivial_checks` results (`ascii_clean`, `no_abs_paths`),
+              then state plainly that the full audit was SKIPPED because the change is mechanical. NEVER
+              call this DIFF-CLEAN and NEVER present it as an audit result; write NOTHING to the ledger for
+              a skipped file. If the author or user asks for the full review, run the md-audit pass on these
+              files instead of this section. Render this section whenever any claimed file is trivial --
+              including the all-trivial fast path where the rest of the review was skipped.
             - Ruleset self-reference notice: if any claimed CLAUDE.md with a pending or accepted md-audit
               change lies on the ancestor chain of OTHER changed files in this review -- a cheap
               path-prefix check of that CLAUDE.md's directory against bundle.unique_claude_mds and the
@@ -167,6 +190,7 @@ MD_AUDIT_GOTCHAS = """
         - The claim decision happens ONCE, at the step-2 probe: md-audit available -> `--claim '**/*.md'` (one glob for CLAUDE.md, SKILL.md, and generic docs); md-audit absent -> no `--claim`. Do not run prepare a second time just to add claims -- the only re-runs are the two version-skew FALLBACKS (broad skew re-runs WITHOUT `--claim`; project-doc-only skew re-runs with only `--claim '**/CLAUDE.md' --claim '**/SKILL.md'`).
         - Claimed `.md` files route THREE ways by basename in step 6: `CLAUDE.md` -> claude-md-audit, `SKILL.md` -> skill-audit, every other `.md` -> project-doc-audit. `.md.html` is NOT `.md` and is never claimed -- it stays with the generic reviewers.
         - When skills-kit md-audit is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-audit section -- the md files get today's thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
+        - The triviality gate is pure-mechanical and decided by prepare_review (per-claimed-file `trivial` / `trivial_reasons`); the skill never re-judges it. A TRIVIAL claimed file is reported via the mechanical-checks line and is NEVER sent to detect.js or written to the ledger. When EVERY claimed file is trivial and there are no generic diff chunks, the whole audit is skipped -- render the `## Mechanical checks (audit skipped)` section, never a DIFF-CLEAN verdict, and never present the skip as an audit. A user or author asking for the full review overrides the gate.
         - The Workflow tool is unavailable inside subagents. Launch the md-audit detect.js Workflow from the MAIN session (the same message that fans out the reviewers), never from within a reviewer subagent."""
 
 
@@ -229,6 +253,57 @@ LEDGER_RECORD_STEP = """\
 LEDGER_GOTCHAS = """
         - The declined-findings ledger is advisory memory, not a gate. A collapsed finding is one the author already declined for THIS change at THIS baseline; when the baseline moves (@BASELINE_DESC@) the entry goes stale and the finding re-surfaces on its own. Never let a ledger hit suppress a SERIOUS md-audit finding.
         - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed."""
+
+
+# ===========================================================================
+# LAUNCH NARRATION (deliverable 1 -- shared by BOTH skills).
+# ---------------------------------------------------------------------------
+# A short, file-type-driven rationale line emitted ONCE at launch, so a user
+# editing docs does not see "code review" spin up and cancel it as a mistake.
+# The line is selected purely by the extension MIX of the changed + claimed
+# files (content is not read at launch), from a small deterministic table. The
+# md_trivial row is emitted instead when the step-6 triviality gate fires.
+# ===========================================================================
+LAUNCH_NARRATION = """\
+    launch_message:
+      note: |
+        Emit ONE short rationale line at launch -- with, or just before, the step-2 prepare
+        narration and BEFORE any reviewer subagent or md-audit Workflow spins up -- so the user
+        sees WHY a review is running on THIS change. It exists because a user editing documentation
+        can see "code review" launch and cancel it, thinking it a mistake. The table rows below are
+        the exact lines to emit -- copy the selected one verbatim.
+      selection: |
+        Selection is by FILE TYPE, never by content (nothing is read yet). After prepare returns,
+        compute the extension set over EVERY changed AND claimed file, then pick the FIRST matching row:
+          - every file ends in .md                                   -> all_md
+          - every file is config/data (.yaml/.yml/.csv/.json/.tsv)   -> all_data
+          - at least one .md AND at least one code file              -> mixed
+          - otherwise                                                 -> all_code (default)
+        Override: when the step-6 triviality gate fires (every claimed file `trivial` AND no generic
+        diff chunks -- an all-mechanical change), emit the `md_trivial` row INSTEAD of the row above.
+        Emit exactly one line; do not repeat it later in the run.
+      table:
+        all_md: "Running @NAME@: this audits .md file changes against project standards and verifies references."
+        all_data: "Running @NAME@: this checks the changed config files for schema, reference, and consistency problems."
+        mixed: "Running @NAME@: this reviews the code changes and audits the .md changes against project standards."
+        all_code: "Running @NAME@: this reviews the changes for bugs and project-standard compliance."
+        md_trivial: "Running @NAME@: the .md changes are mechanical (typo-sized); running quick standards checks only."
+      style: |
+        State what is running and what it does, in plain short sentences, and let the reader draw the
+        conclusion. Two anti-patterns are BANNED (they read as defensive and invite the doubt they try
+        to pre-empt):
+          - Negative direction -- "don't stop this", "do not skip", "this will only take a second".
+            Never tell the reader what NOT to do.
+          - Asserting it is not a mistake -- "this is not an error", "don't worry, this is intentional".
+            Informing plainly already makes that self-evident; asserting it invites doubt.
+"""
+
+# Appended into both step-2 actions (shared) so the launch line is emitted right
+# after prepare returns, before the step-6 fan-out. Plain text, no @tokens@.
+LAUNCH_EMIT = """\
+            After prepare returns, emit the launch rationale line ONCE (see narration.launch_message):
+            select the row from the file-type mix of the changed + claimed files, or the md_trivial row
+            when the step-6 triviality gate will fire. This is the single launch message -- do not repeat it."""
 
 
 # ===========================================================================
@@ -332,6 +407,7 @@ technique_skill:
 @NARRATION_TEMPLATES@
     variables:
 @NARRATION_VARIABLES@
+@LAUNCH_NARRATION@
   review_profiles:
     description: |
       Routing table for selecting reviewers and models based on @DIFF_OR_CL@ content. Exactly one
@@ -547,12 +623,15 @@ GIT_STEP2 = """\
           action: |
 __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff, partition it into chunked .diff fragments on disk, enumerate changed files via `git diff --name-status`, map ancestor CLAUDE.md files for each, detect untracked-or-unstaged files in the directories the diff touches, detect unresolved merge conflicts, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this range.
+__LAUNCH_EMIT__
           tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/*.md'` when md-audit is available, per the claim probe)"
           expected: |
             JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
           on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
     "__CLAIM_PROBE__", CLAIM_PROBE
+).replace(
+    "__LAUNCH_EMIT__", LAUNCH_EMIT
 )
 
 P4_STEP2 = """\
@@ -560,6 +639,7 @@ P4_STEP2 = """\
           action: |
 __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
+__LAUNCH_EMIT__
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<CL>  (append `--claim '**/*.md'` when md-audit is available, per the claim probe)"
           expected: |
@@ -568,6 +648,8 @@ __CLAIM_PROBE__
             Surface the stderr message to the user and stop. No retry.
             Launch note: ALWAYS invoke with an explicit `python3` interpreter (as shown in `tool:`), never as a bare path. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any python3 launcher is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
     "__CLAIM_PROBE__", CLAIM_PROBE
+).replace(
+    "__LAUNCH_EMIT__", LAUNCH_EMIT
 )
 
 GIT_STEP3 = """\
@@ -644,7 +726,9 @@ GIT_CHECKLIST = f"""\
         - Reviewers launched in parallel (single message, R {X} K Agent calls -- one per (reviewer {X} chunk) pair, where K = len(bundle.diff_chunks))
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
-        - md-audit subject-lens pass launched for bundle.claimed_files when skills-kit md-audit is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-audit is absent
+        - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
+        - md-audit subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-audit is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-audit is absent
+        - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
         - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-audit findings never collapsed
         - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merge conflicts section prepended when bundle.merge_conflicts is non-empty; separate `## md-audit (subject-lens) findings` section when the md-audit pass ran)
         - Newly declined findings recorded to the ledger via `prepare_review.py --ledger-record` (skipped when nothing was declined)"""
@@ -659,7 +743,9 @@ P4_CHECKLIST = f"""\
         - Reviewers launched in parallel (single message, R {X} K Agent calls -- one per (reviewer {X} chunk) pair, where K = len(bundle.diff_chunks))
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
-        - md-audit subject-lens pass launched for bundle.claimed_files when skills-kit md-audit is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-audit is absent
+        - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
+        - md-audit subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-audit is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-audit is absent
+        - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
         - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-audit findings never collapsed
         - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merges section prepended when bundle.unresolved is non-empty; separate `## md-audit (subject-lens) findings` section when the md-audit pass ran)
         - Auto-shelf cleanup invoked when bundle.auto_shelved is true (`prepare_review.py --cleanup <bundle_dir>`)
@@ -954,6 +1040,7 @@ _SHARED = {
     "MD_AUDIT_REPORT": MD_AUDIT_REPORT,
     "LEDGER_STEP9": LEDGER_STEP9,
     "LEDGER_RECORD_STEP": LEDGER_RECORD_STEP,
+    "LAUNCH_NARRATION": LAUNCH_NARRATION,
     "X": X,
     "CHK": CHK,
     "CRS": CRS,
@@ -966,6 +1053,9 @@ _SKILL_TOKEN_ORDER = [
     # (@RANGE_OR_CL@, @PREPARE_TOOL@, @LEDGER_RECORD_N@, @BASELINE_DESC@) --
     # substitute the region first, then those tokens resolve below.
     "LEDGER_STEP9", "LEDGER_RECORD_STEP",
+    # Launch-narration block: shared body carrying a nested @NAME@ -- substitute
+    # the block first, then NAME resolves below.
+    "LAUNCH_NARRATION",
     "NAME", "DESC", "TITLE", "INTRO", "IDENTITY",
     "SCOPE_COVERS_HEAD", "SCOPE_EXCLUDES", "KEYWORDS", "GOAL", "PRECONDITIONS",
     "STEP1", "STEP2", "STEP3", "STEP5_PHRASE", "STEP9_TAIL", "STEP10",
@@ -1074,6 +1164,25 @@ the SKILL body carries the decision flow.
 Only when `bundle.claimed_files` is non-empty (i.e. the step-2 probe found md-audit available
 AND at least one `.md` file changed). Otherwise skip everything here.
 
+## Triviality gate (skip typo-sized changes)
+
+prepare_review.py attaches a pure-mechanical triviality profile to EACH claimed file:
+`trivial` (bool), `trivial_reasons` (disqualifier codes when false -- `too_large`,
+`structure_changed`, `reference_changed`, `keyword_changed`, `yaml_touched`, `unparseable`), and,
+for a trivial file, `trivial_checks` (`{ascii_clean, no_abs_paths}` over the changed lines). A file
+is `trivial` ONLY when it is typo-sized (<= 5 changed lines), its Markdown skeleton is unchanged,
+no link/path/anchor reference changed, no negation/modal/quantifier keyword was touched, and no
+YAML front-matter or config fence was touched -- computed in `bootstrap_lib.code_review.triviality`
+with zero inference. The profile fails CLOSED: an unreadable pre-image or unparseable diff yields
+`trivial=false`, so the fallback is always the full audit.
+
+The skill uses this to AVOID auditing mechanical changes: only NON-TRIVIAL claimed files are sent to
+detect.js below; a trivial file is reported via the SKILL's `## Mechanical checks (audit skipped)`
+section and is NEVER audited or written to the ledger. When every claimed file is trivial AND there
+are no generic diff chunks, the whole review is skipped. A trivial file is never DIFF-CLEAN and never
+an audit result -- it is an honest "checked mechanically, audit skipped" line. An author/user request
+for the full review overrides the gate.
+
 ## Resolve the skills-kit plugin root and venvPython (defensively)
 
 md-audit's `detect.js` is a native Workflow script; the code-review skill (running in the main
@@ -1125,7 +1234,8 @@ per-file diff attribution; keep it true.
 
 ## Building `files[]` from `bundle.claimed_files`
 
-Each claimed-file entry carries `local` (absolute path), `pre_image` (absolute path to the
+Build `files[]` from the NON-TRIVIAL claimed files only (per the triviality gate above); trivial
+files never reach detect.js. Each claimed-file entry carries `local` (absolute path), `pre_image` (absolute path to the
 materialized before-image via @PREIMAGE_ORIGIN@, or `null` for an add), and `claude_mds` (the
 nearest-ancestor-first CLAUDE.md chain, which for a CLAUDE.md subject INCLUDES the subject itself
 as its first element).

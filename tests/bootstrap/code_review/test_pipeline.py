@@ -542,6 +542,72 @@ class TestCanonicalLocal:
 
 
 # ---------------------------------------------------------------------------
+# assemble_bundle -- triviality profile on claimed files
+# ---------------------------------------------------------------------------
+
+
+def _md_section(ident: str, header: str, *lines: str) -> dict:
+    """A claimed-file diff section with a real unified-diff hunk."""
+    body = "\n".join(lines)
+    return {"identifier": ident, "text": f"diff --git a/{ident} b/{ident}\n{header}\n{body}\n"}
+
+
+class TestAssembleBundleTriviality:
+    def test_trivial_claimed_file_gets_profile_and_checks(self, tmp_path):
+        pre = tmp_path / "pre.md"
+        pre.write_text("# Notes\n\nsome text with teh typo\n", encoding="utf-8")
+        core = assemble_bundle(
+            preamble="",
+            sections=[_md_section(
+                "docs/notes.md", "@@ -3,1 +3,1 @@",
+                "-some text with teh typo", "+some text with the typo",
+            )],
+            files=[{"identifier": "docs/notes.md", "local": None, "pre_image": str(pre)}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+            claim_globs=["**/*.md"],
+        )
+        entry = core["claimed_files"][0]
+        assert entry["trivial"] is True
+        assert entry["trivial_reasons"] == []
+        assert entry["trivial_checks"] == {"ascii_clean": True, "no_abs_paths": True}
+
+    def test_non_trivial_claimed_file_reports_reasons_no_checks(self, tmp_path):
+        pre = tmp_path / "pre.md"
+        pre.write_text("## Foo\n", encoding="utf-8")
+        core = assemble_bundle(
+            preamble="",
+            sections=[_md_section("a/CLAUDE.md", "@@ -1,1 +1,1 @@", "-## Foo", "+## Bar")],
+            files=[{"identifier": "a/CLAUDE.md", "local": None, "pre_image": str(pre)}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+            claim_globs=["**/*.md"],
+        )
+        entry = core["claimed_files"][0]
+        assert entry["trivial"] is False
+        assert "structure_changed" in entry["trivial_reasons"]
+        assert "trivial_checks" not in entry  # only emitted for trivial files
+
+    def test_missing_pre_image_fails_closed_when_diff_needs_it(self, tmp_path):
+        # pre_image points nowhere: an edit hunk cannot reconstruct -> not trivial.
+        core = assemble_bundle(
+            preamble="",
+            sections=[_md_section("d/x.md", "@@ -1,1 +1,1 @@", "-old line", "+new line")],
+            files=[{
+                "identifier": "d/x.md", "local": None,
+                "pre_image": str(tmp_path / "nonexistent.md"),
+            }],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+            claim_globs=["**/*.md"],
+        )
+        assert core["claimed_files"][0]["trivial"] is False
+
+
+# ---------------------------------------------------------------------------
 # emit_bundle
 # ---------------------------------------------------------------------------
 

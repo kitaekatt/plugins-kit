@@ -15,6 +15,25 @@ the SKILL body carries the decision flow.
 Only when `bundle.claimed_files` is non-empty (i.e. the step-2 probe found md-audit available
 AND at least one `.md` file changed). Otherwise skip everything here.
 
+## Triviality gate (skip typo-sized changes)
+
+prepare_review.py attaches a pure-mechanical triviality profile to EACH claimed file:
+`trivial` (bool), `trivial_reasons` (disqualifier codes when false -- `too_large`,
+`structure_changed`, `reference_changed`, `keyword_changed`, `yaml_touched`, `unparseable`), and,
+for a trivial file, `trivial_checks` (`{ascii_clean, no_abs_paths}` over the changed lines). A file
+is `trivial` ONLY when it is typo-sized (<= 5 changed lines), its Markdown skeleton is unchanged,
+no link/path/anchor reference changed, no negation/modal/quantifier keyword was touched, and no
+YAML front-matter or config fence was touched -- computed in `bootstrap_lib.code_review.triviality`
+with zero inference. The profile fails CLOSED: an unreadable pre-image or unparseable diff yields
+`trivial=false`, so the fallback is always the full audit.
+
+The skill uses this to AVOID auditing mechanical changes: only NON-TRIVIAL claimed files are sent to
+detect.js below; a trivial file is reported via the SKILL's `## Mechanical checks (audit skipped)`
+section and is NEVER audited or written to the ledger. When every claimed file is trivial AND there
+are no generic diff chunks, the whole review is skipped. A trivial file is never DIFF-CLEAN and never
+an audit result -- it is an honest "checked mechanically, audit skipped" line. An author/user request
+for the full review overrides the gate.
+
 ## Resolve the skills-kit plugin root and venvPython (defensively)
 
 md-audit's `detect.js` is a native Workflow script; the code-review skill (running in the main
@@ -66,7 +85,8 @@ per-file diff attribution; keep it true.
 
 ## Building `files[]` from `bundle.claimed_files`
 
-Each claimed-file entry carries `local` (absolute path), `pre_image` (absolute path to the
+Build `files[]` from the NON-TRIVIAL claimed files only (per the triviality gate above); trivial
+files never reach detect.js. Each claimed-file entry carries `local` (absolute path), `pre_image` (absolute path to the
 materialized before-image via `p4 print -q -o <dest> //depot/path#have`, or `null` for an add), and `claude_mds` (the
 nearest-ancestor-first CLAUDE.md chain, which for a CLAUDE.md subject INCLUDES the subject itself
 as its first element).

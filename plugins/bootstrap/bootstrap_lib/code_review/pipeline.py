@@ -34,6 +34,10 @@ from bootstrap_lib.code_review.claude_mds import (
     collect_claude_mds,
     collect_submit_gates,
 )
+from bootstrap_lib.code_review.triviality import (
+    mechanical_checks,
+    triviality_profile,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +111,31 @@ def preimage_relpath(identifier: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", identifier).strip("-")
     digest = hashlib.sha1(identifier.encode("utf-8")).hexdigest()[:8]
     return f"pre-images/{safe}-{digest}" if safe else f"pre-images/{digest}"
+
+
+def annotate_triviality(entry: dict, section_text: str) -> None:
+    """Attach the pure-mechanical triviality profile to a claimed-file entry.
+
+    Reads the entry's materialized `pre_image` (None for an add) and computes
+    `trivial` + `trivial_reasons` from the file's diff hunks; for a trivial file
+    it ALSO computes `trivial_checks` (an ASCII scan and an absolute-path scan
+    over the changed lines) the skip section reports honestly. Mutates `entry`
+    in place. Fails closed -- an unreadable pre-image or unparseable diff yields
+    `trivial=False`, so the full review is always the fallback. VCS-neutral; see
+    bootstrap_lib.code_review.triviality.
+    """
+    pre_path = entry.get("pre_image")
+    pre_text: Optional[str] = None
+    if pre_path:
+        try:
+            pre_text = Path(pre_path).read_text(encoding="utf-8")
+        except OSError:
+            pre_text = None
+    profile = triviality_profile(section_text, pre_text)
+    entry["trivial"] = profile["trivial"]
+    entry["trivial_reasons"] = profile["reasons"]
+    if profile["trivial"]:
+        entry["trivial_checks"] = mechanical_checks(section_text)
 
 
 def run_vcs(
@@ -216,7 +245,11 @@ def assemble_bundle(
     "chunk_index" (int or None when absent from the diff) and
     "claude_mds" (nearest-ancestor-first absolute paths). Each claimed_files
     entry is the input dict verbatim (identifier retained), carrying whatever
-    the front-half attached (local, status/action, pre_image).
+    the front-half attached (local, status/action, pre_image), PLUS the
+    pure-mechanical triviality profile: "trivial" (bool), "trivial_reasons"
+    (machine-readable disqualifier codes, [] when trivial) and -- only when
+    trivial -- "trivial_checks" ({"ascii_clean", "no_abs_paths"} over the
+    changed lines). See bootstrap_lib.code_review.triviality.
     """
     claim_globs = claim_globs or []
     bundle_dir.mkdir(parents=True, exist_ok=True)
@@ -224,6 +257,10 @@ def assemble_bundle(
     claimed_idents = {
         f["identifier"] for f in files if matches_claim(f["identifier"], claim_globs)
     }
+    # Per-identifier diff section text, used to compute each claimed file's
+    # triviality profile (the section is excluded from the reviewer chunks, but
+    # its hunks are still what the pure-mechanical guard inspects).
+    id_to_text = {s["identifier"]: s["text"] for s in sections}
     # Claimed files' diff sections must not reach the generic reviewers, so
     # drop them before chunking. Their records still flow through the CLAUDE.md
     # / submit-gate walk below.
@@ -270,6 +307,10 @@ def assemble_bundle(
             if local:
                 entry["local"] = canonical_local(local)
             entry["claude_mds"] = claude_mds
+            # Pure-mechanical triviality profile (+ mechanical checks when
+            # trivial), so the skill can skip the audit lane for a typo-sized
+            # change and report an honest what-was-checked line instead.
+            annotate_triviality(entry, id_to_text.get(f["identifier"], ""))
             claimed_files.append(entry)
             continue
         out = {k: v for k, v in f.items() if k != "identifier"}

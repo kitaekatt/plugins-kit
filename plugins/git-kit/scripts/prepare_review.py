@@ -67,6 +67,9 @@ Output schema:
         {"identifier": "<repo-relative path>", "path": "<repo-relative path>",
          "local": "<absolute path>", "status": "A"|"M"|"D"|...,
          "pre_image": "<absolute path to materialized pre-image, or null for an add>",
+         "trivial": <bool>,                    # pure-mechanical: typo-sized + no meaning-bearing change
+         "trivial_reasons": ["<code>", ...],   # disqualifiers when trivial=false (e.g. too_large, structure_changed)
+         "trivial_checks": {"ascii_clean": <bool>, "no_abs_paths": <bool>},  # only when trivial=true
          "claude_mds": ["<absolute path>", ...]}   # nearest-ancestor-first; includes self for a CLAUDE.md subject
       ],
       "submit_gates": [
