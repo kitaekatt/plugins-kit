@@ -356,15 +356,70 @@ if [ -z "$PYTHON" ]; then
     ARCHIVE="cpython-${PY_VERSION}+${RELEASE_TAG}-${TRIPLE}-install_only_stripped.tar.gz"
     URL="https://github.com/indygreg/python-build-standalone/releases/download/${RELEASE_TAG}/${ARCHIVE}"
 
+    # Pinned sha256 per platform triple for cpython-${PY_VERSION}+${RELEASE_TAG}
+    # (indygreg python-build-standalone install_only_stripped tarballs). Because
+    # PY_VERSION and RELEASE_TAG are pinned above, the correct hash is known
+    # ahead of time -- strong verification (detects tampering, not just
+    # truncation). When bumping PY_VERSION/RELEASE_TAG, refresh every hash from
+    # the release's <archive>.sha256 sidecar or SHA256SUMS file, else the
+    # matching triple aborts with a checksum mismatch.
+    case "$TRIPLE" in
+        x86_64-pc-windows-msvc)    EXPECTED_SHA256="ee338839315bdd8af5fc935f9595eca20ebebdd250726c5816b2d0cf94d1e661" ;;
+        x86_64-unknown-linux-gnu)  EXPECTED_SHA256="a36bc60c38fe146e908e2e71fc21266c8558b24a9407226b1d887212839437ef" ;;
+        aarch64-unknown-linux-gnu) EXPECTED_SHA256="0354f70e7d3e2d0c36308edc1815c563d9bae1a3221830f7e222f6bb0a7e1a3a" ;;
+        x86_64-apple-darwin)       EXPECTED_SHA256="1a414bf392a7afe08c742502a82edd41893a1144ccbceb184dc5ee6ee9c069c0" ;;
+        aarch64-apple-darwin)      EXPECTED_SHA256="0a4647b7df3c8eca11071d6cea68a14a4b102bd6fc6afae314e9852510654b7d" ;;
+        *)                         EXPECTED_SHA256="" ;;
+    esac
+
     log_entry "python3: downloading $ARCHIVE"
     mkdir -p "$STANDALONE_DIR"
     _dl_tmp="$STANDALONE_DIR/$ARCHIVE"
-    if ! curl -LsSf "${CURL_FLAGS[@]}" "$URL" -o "$_dl_tmp" 2>/dev/null || ! tar xzf "$_dl_tmp" -C "$STANDALONE_DIR" 2>/dev/null; then
+    if ! curl -LsSf "${CURL_FLAGS[@]}" "$URL" -o "$_dl_tmp" 2>/dev/null; then
         rm -f "$_dl_tmp" 2>/dev/null
         log_entry "python3: FAILED - download error"
         flush_log
         mkdir -p "$PLUGIN_DATA"
         printf '{"continue": true, "suppressOutput": false, "systemMessage": "%s -> Automatic Python 3 install failed (download error). Claude will ask if you want help installing it.", "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "%s -> ASK THE USER: bootstrap tried to auto-install Python 3 but the download failed, so bootstrap cannot run until Python 3.x is on PATH. Installing Python needs the user, so use the AskUserQuestion tool (do not merely mention it). Ask whether to install Python 3 now, with exactly two options in order: Do nothing (the default -- bootstrap retries next session), and Install Python (help them install Python 3.x for their OS -- retry the download or use the OS package manager -- and get it on PATH). Act only if they pick Install Python."}}\n' "${BOOTSTRAP_LABEL}" "${BOOTSTRAP_LABEL}" > "$PLUGIN_DATA/bootstrap_display.pending"
+        exit 0
+    fi
+
+    # Verify sha256 BEFORE extracting so a corrupted or tampered tarball never
+    # reaches the filesystem. Portable digest: coreutils sha256sum (Linux, Git
+    # Bash), shasum -a 256 (macOS), certutil (Windows fallback).
+    _sha256_of() {
+        if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$1" 2>/dev/null | awk '{print tolower($1)}'
+        elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$1" 2>/dev/null | awk '{print tolower($1)}'
+        elif command -v certutil >/dev/null 2>&1; then
+            certutil -hashfile "$1" SHA256 2>/dev/null | sed -n '2p' | tr -d '[:space:]' | tr 'A-Z' 'a-z'
+        else
+            echo ""
+        fi
+    }
+    _actual_sha256="$(_sha256_of "$_dl_tmp")"
+    if [ -z "$EXPECTED_SHA256" ]; then
+        log_entry "python3: WARNING - no pinned sha256 for $TRIPLE, skipping checksum verification"
+    elif [ -z "$_actual_sha256" ]; then
+        log_entry "python3: WARNING - no sha256 tool available (sha256sum/shasum/certutil), skipping checksum verification"
+    elif [ "$_actual_sha256" != "$EXPECTED_SHA256" ]; then
+        rm -f "$_dl_tmp" 2>/dev/null
+        log_entry "python3: FAILED - checksum mismatch (expected $EXPECTED_SHA256, got $_actual_sha256)"
+        flush_log
+        mkdir -p "$PLUGIN_DATA"
+        printf '{"continue": true, "suppressOutput": false, "systemMessage": "%s -> Automatic Python 3 install aborted: the downloaded Python tarball failed sha256 verification. Claude will ask if you want help installing it.", "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "%s -> ASK THE USER: bootstrap downloaded the standalone Python tarball but its sha256 did not match the pinned value, so the file was DISCARDED and not extracted (possible corruption, truncation, or tampering). Bootstrap cannot run until Python 3.x is on PATH. Installing Python needs the user, so use the AskUserQuestion tool (do not merely mention it). Ask whether to install Python 3 now, with exactly two options in order: Do nothing (the default -- bootstrap retries next session), and Install Python (help them install Python 3.x for their OS -- retry the download or use the OS package manager -- and get it on PATH). Act only if they pick Install Python."}}\n' "${BOOTSTRAP_LABEL}" "${BOOTSTRAP_LABEL}" > "$PLUGIN_DATA/bootstrap_display.pending"
+        exit 0
+    else
+        log_entry "python3: sha256 verified ($TRIPLE)"
+    fi
+
+    if ! tar xzf "$_dl_tmp" -C "$STANDALONE_DIR" 2>/dev/null; then
+        rm -f "$_dl_tmp" 2>/dev/null
+        log_entry "python3: FAILED - archive extraction error"
+        flush_log
+        mkdir -p "$PLUGIN_DATA"
+        printf '{"continue": true, "suppressOutput": false, "systemMessage": "%s -> Automatic Python 3 install failed (archive extraction error). Claude will ask if you want help installing it.", "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "%s -> ASK THE USER: bootstrap downloaded Python 3 but could not extract the archive, so bootstrap cannot run until Python 3.x is on PATH. Installing Python needs the user, so use the AskUserQuestion tool (do not merely mention it). Ask whether to install Python 3 now, with exactly two options in order: Do nothing (the default -- bootstrap retries next session), and Install Python (help them install Python 3.x for their OS -- retry the download or use the OS package manager -- and get it on PATH). Act only if they pick Install Python."}}\n' "${BOOTSTRAP_LABEL}" "${BOOTSTRAP_LABEL}" > "$PLUGIN_DATA/bootstrap_display.pending"
         exit 0
     fi
     rm -f "$_dl_tmp"
