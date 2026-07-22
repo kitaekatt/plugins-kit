@@ -1,0 +1,3 @@
+{
+  "$comment": "Minimal manifest: this plugin provisions no dependencies. It exists so bootstrap's self-registration (engine.py Step 4b2 / bootstrap_lib/self_register.py) picks the plugin up for in-session auto-update -- that pass only considers installed plugins that ship a bootstrap.json. Without this file the plugin falls back to Claude Code's own autoUpdate, which lags a publish. Declare real dependencies here if this plugin ever gains any."
+}

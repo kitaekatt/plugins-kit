@@ -22,7 +22,7 @@
     {
       "name": "cache-kit",
       "description": "Cache usage reporting - per-request and session-level cache hit analysis from Claude Code transcripts",
-      "version": "0.5.4",
+      "version": "0.5.5",
       "author": {
         "name": "Christina"
       },
@@ -148,7 +148,7 @@
     {
       "name": "bootstrap-stuck-fix",
       "description": "TEMPORARY remediation: repairs the malformed duplicate registry record that permanently wedges a machine on an old bootstrap version. Withdraw once the known user population has run it.",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "author": {
         "name": "Christina"
       },
