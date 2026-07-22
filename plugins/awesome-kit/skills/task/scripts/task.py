@@ -66,13 +66,15 @@ State-op conventions (Step 4):
 
 Location-op conventions (Step 5):
 - ``archive <ref>`` prints ``archived: <id>`` plus the closure-policy
-  disposition (tmp folder kept vs folder deleted). Non-zero with the refusal
-  reason on stderr when the task is not active (closed -> reopen first), the
-  folder is missing, or a non-tmp folder is uncommitted / not in a git repo
-  (commit first; git is the record -- no auto-commit).
-- ``delete <ref>`` prints ``deleted: <id>``; same preconditions and
-  uncommitted guard as archive (the documented Step 5 reading), then the
-  folder is removed even when tmp.
+  disposition (tmp -> folder moved to tmp/archived-tasks/<stub>; non-tmp ->
+  final state committed, folder deleted + removal committed). Non-zero with
+  the refusal reason on stderr when the task is not active (closed -> reopen
+  first), the folder is missing, the tmp parking spot is occupied, a non-tmp
+  folder is not in any git repo, or a git command fails (the folder is never
+  removed before its final state is committed).
+- ``delete <ref>`` prints ``deleted: <id>``; archive's status-active
+  precondition plus the commit-first guard (delete never auto-commits), then
+  the folder is removed even when tmp.
 - ``move <ref> <dest>`` (dest: ``tmp`` or ``dev/tasks``; the stub is
   preserved) prints ``moved: <old> -> <new>`` and the rewritten-document
   count. Non-zero when the source folder is absent or the destination
@@ -479,9 +481,9 @@ def _cmd_archive(args: argparse.Namespace) -> int:
         _print_state_op_error(exc)
         return 1
     disposition = (
-        "folder deleted; git is the record"
+        "final state committed; folder deleted; git is the record"
         if result.folder_removed
-        else "tmp folder kept, status: archived"
+        else f"moved to {result.archived_to}, status: archived"
     )
     print(f"archived: {result.canonical} ({disposition})")
     return 0
@@ -815,13 +817,15 @@ def main(argv: list[str] | None = None) -> int:
     add_state_op_parser(
         "archive",
         "Archive an active task per the closure policy: tmp -> status "
-        "archived, folder kept; non-tmp -> folder deleted (git is the "
-        "record; refuses when uncommitted).",
+        "archived, folder moved to tmp/archived-tasks/<stub>; non-tmp -> "
+        "final state committed, then folder deleted and the removal "
+        "committed (git is the record).",
     )
     add_state_op_parser(
         "delete",
-        "Archive semantics, then remove the folder even when tmp "
-        "(unconditional removal).",
+        "Archive's active precondition plus the commit-first guard, then "
+        "remove the folder even when tmp (unconditional removal; never "
+        "auto-commits).",
     )
     p_move = add_state_op_parser(
         "move",

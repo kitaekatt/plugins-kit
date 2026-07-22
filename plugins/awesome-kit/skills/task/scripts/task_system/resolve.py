@@ -30,6 +30,17 @@ LOCATION_TMP = "tmp"
 LOCATION_DEV_TASKS = "dev/tasks"
 KNOWN_ROOTS = (LOCATION_TMP, LOCATION_DEV_TASKS)
 
+# Where a tmp task's folder is parked by ``archive`` (spec 2.5): the folder
+# moves out of the live root so tmp/ stays a working set, and the user can
+# purge tmp/archived-tasks/ wholesale. The name is reserved -- it can never
+# itself be a task stub under tmp/.
+ARCHIVED_TMP_DIRNAME = "archived-tasks"
+
+
+def archived_tmp_folder(project_root: Path, stub: str) -> Path:
+    """The parking spot for an archived tmp task's folder."""
+    return project_root / LOCATION_TMP / ARCHIVED_TMP_DIRNAME / stub
+
 
 class RefResolutionError(ValueError):
     """A <ref> could not be resolved to a canonical task path."""
@@ -79,6 +90,11 @@ def _normalize_parts(path_str: str, project_root: Path) -> tuple[str, ...]:
 def _classify_parts(parts: tuple[str, ...], original: str) -> ResolvedRef:
     """Classify normalized parts as a tmp or dev/tasks task path."""
     if len(parts) == 2 and parts[0] == "tmp":
+        if parts[1] == ARCHIVED_TMP_DIRNAME:
+            raise RefResolutionError(
+                f"tmp/{ARCHIVED_TMP_DIRNAME} is the reserved parking "
+                f"directory for archived tmp tasks, not a task: {original!r}"
+            )
         return ResolvedRef("/".join(parts), LOCATION_TMP, parts[1])
     if len(parts) == 3 and parts[0] == "dev" and parts[1] == "tasks":
         return ResolvedRef("/".join(parts), LOCATION_DEV_TASKS, parts[2])

@@ -13,17 +13,28 @@ Readings chosen in Step 5 (flagged in the implementation report):
 - **archive precondition is the STORED status** (``status: active`` in
   task.yaml), matching close's reading. A ``closed`` task errors with a
   "reopen first" hint (spec 7.1); any other non-active status also errors.
-- **Uncommitted-archive guard** (spec 7.4): a non-tmp folder that
-  ``validate.is_uncommitted`` reads as uncommitted -- which includes "not in
-  a git repo at all" (no git record exists) -- REFUSES with a "commit first;
-  git is the record" error. No auto-commit (the user owns the commit). The
-  guard shares validate's exact predicate, so the validate warning and the
-  archive refusal can never diverge.
-- **delete inherits BOTH archive's status-active precondition and the
-  uncommitted guard** (spec 7.1: delete is "``archive`` semantics, then
-  ensure the folder is removed even when tmp"). So a closed task must be
-  reopened before delete, and an uncommitted dev/tasks folder refuses delete
-  exactly as it refuses archive.
+- **Non-tmp archive COMMITS, then removes** (spec 7.4, revised 2026-07-22):
+  the durable record must be in git history before the folder can go. archive
+  writes the final state (``status: archived`` + a dated log.md entry),
+  commits it, removes the folder, and commits the removal -- two commits, both
+  pathspec-limited to the task folder (``git commit -- <folder>``) so
+  pre-staged unrelated index content never rides along. A dev/tasks folder
+  NOT inside any git repo still refuses: no record is possible. Any git
+  failure aborts BEFORE the folder is removed -- the folder is never deleted
+  without its final state safely in history.
+- **delete keeps the commit-first guard** (``validate.is_uncommitted``,
+  shared predicate): delete is the no-ceremony removal verb -- it refuses an
+  uncommitted dev/tasks folder rather than auto-committing, exactly as
+  archive used to. It also inherits archive's status-active precondition
+  (spec 7.1: delete is "``archive`` semantics, then ensure the folder is
+  removed even when tmp"). Want the final state recorded? That is archive.
+- **tmp archive PARKS the folder** (spec 2.5, revised 2026-07-22): sets
+  ``status: archived`` and moves the folder to
+  ``tmp/archived-tasks/<stub>`` (resolve.archived_tmp_folder) so tmp/ stays
+  a working set; the user purges the parking directory at will. An occupied
+  parking spot (a previously-archived same-stub task) refuses -- remove the
+  old copy first. validate reads a parked folder as ``archived`` (not
+  orphaned) and reopen restores it to ``tmp/<stub>``.
 - **delete skips the intermediate tmp status write.** For a tmp folder,
   archive-then-remove would write ``status: archived`` into a folder removed
   moments later -- an unobservable intermediate state. delete goes straight
@@ -62,7 +73,9 @@ Readings chosen in Step 5 (flagged in the implementation report):
 
 from __future__ import annotations
 
+import datetime
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,6 +99,7 @@ from .validate import is_uncommitted
 class ArchiveResult:
     canonical: str
     folder_removed: bool  # non-tmp: True (git is the record); tmp: False
+    archived_to: str | None = None  # tmp: parking path (project-relative)
 
 
 @dataclass(frozen=True)
@@ -100,11 +114,12 @@ class MoveResult:
 
 
 def _archive_preflight(
-    ref: str, project_root: Path, verb: str
+    ref: str, project_root: Path, verb: str, *, require_committed: bool
 ) -> tuple[resolve.ResolvedRef, Path, dict]:
-    """The shared archive/delete preconditions + guard (module docstring):
-    folder exists, stored status active (closed -> reopen-first hint),
-    non-tmp uncommitted -> refuse."""
+    """The shared archive/delete preconditions (module docstring): folder
+    exists, stored status active (closed -> reopen-first hint). With
+    ``require_committed`` (delete), a non-tmp uncommitted folder refuses --
+    archive instead commits the final state itself."""
     resolved = _resolve(ref, project_root)
     folder = resolved.folder(project_root)
     if not folder.is_dir():
@@ -122,41 +137,152 @@ def _archive_preflight(
             f"{verb} acts on an active task; {resolved.canonical} has "
             f"status {stored_status!r}{hint}"
         )
-    if resolved.location == resolve.LOCATION_DEV_TASKS and is_uncommitted(folder):
+    if (
+        require_committed
+        and resolved.location == resolve.LOCATION_DEV_TASKS
+        and is_uncommitted(folder)
+    ):
         raise StateOpError(
             f"{resolved.canonical} has uncommitted changes (or no git repo "
             f"holds it) -- commit first; git is the record ({verb} refuses, "
-            "spec 7.4; no auto-commit)"
+            "spec 7.4; use archive to record the final state)"
         )
     return resolved, folder, data
+
+
+def _git_toplevel(folder: Path) -> Path | None:
+    """The git working-tree root holding ``folder``, or None when it is not
+    inside a repo (or git is unavailable/fails)."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(folder), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    top = proc.stdout.strip()
+    return Path(top) if top else None
+
+
+def _git_commit_folder(repo_root: Path, folder: Path, message: str) -> None:
+    """Stage and commit exactly the task folder's changes (adds, edits, AND
+    deletions). Pathspec-limited commit: pre-staged unrelated index content
+    is never swept in. Raises StateOpError on any git failure."""
+    for cmd in (
+        ["git", "-C", str(repo_root), "add", "-A", "--", str(folder)],
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "commit",
+            "-q",
+            "-m",
+            message,
+            "--",
+            str(folder),
+        ],
+    ):
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=60
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise StateOpError(f"git failed during archive: {exc}") from exc
+        if proc.returncode != 0:
+            detail = (proc.stderr.strip() or proc.stdout.strip() or
+                      f"exit {proc.returncode}")
+            raise StateOpError(
+                f"git failed during archive ({' '.join(cmd[3:5])}): {detail}"
+            )
+
+
+def _append_archive_log_entry(folder: Path) -> None:
+    """The dated log.md line recording the archival (mirrors state_ops'
+    update log discipline)."""
+    stamp = datetime.date.today().isoformat()
+    with (folder / "log.md").open("a", encoding="utf-8") as fh:
+        fh.write(
+            f"- {stamp}: archive: final state committed; folder removed "
+            "(git is the record)\n"
+        )
 
 
 def archive_task(
     ref: str, project_root: Path, pointer_path: Path
 ) -> ArchiveResult:
     """``archive <ref>`` (spec 7.1): pre folder exists + stored status
-    active; non-tmp uncommitted refuses. Then per closure policy (spec 2.5):
-    tmp -> ``status: archived``, keep folder; non-tmp -> delete the folder
-    (git is the record). Clear the pointer iff it names this task."""
-    resolved, folder, data = _archive_preflight(ref, project_root, "archive")
+    active. Then per closure policy (spec 2.5, revised): tmp ->
+    ``status: archived`` and park the folder at ``tmp/archived-tasks/<stub>``;
+    non-tmp -> record the final state (status + log entry), commit it, remove
+    the folder, commit the removal (git is the record; two pathspec-limited
+    commits). Clear the pointer iff it names this task."""
+    resolved, folder, data = _archive_preflight(
+        ref, project_root, "archive", require_committed=False
+    )
     folder_resolved = folder.resolve()
+    archived_to: str | None = None
     if resolved.location == resolve.LOCATION_TMP:
+        parking = resolve.archived_tmp_folder(project_root, resolved.stub)
+        if parking.exists():
+            raise StateOpError(
+                f"archive parking spot already occupied: "
+                f"{resolve.LOCATION_TMP}/{resolve.ARCHIVED_TMP_DIRNAME}/"
+                f"{resolved.stub} exists -- remove (purge) the old archived "
+                "copy first"
+            )
         data["task"]["status"] = "archived"
         _write_task_yaml(folder, data)
+        parking.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(folder), str(parking))
         removed = False
+        archived_to = (
+            f"{resolve.LOCATION_TMP}/{resolve.ARCHIVED_TMP_DIRNAME}/"
+            f"{resolved.stub}"
+        )
     else:
+        repo_root = _git_toplevel(folder)
+        if repo_root is None:
+            raise StateOpError(
+                f"{resolved.canonical} is not inside a git repo -- git is "
+                "the record; archive cannot record durable history without "
+                "one"
+            )
+        data["task"]["status"] = "archived"
+        _write_task_yaml(folder, data)
+        _append_archive_log_entry(folder)
+        _git_commit_folder(
+            repo_root,
+            folder_resolved,
+            f"task archive: {resolved.canonical} (final state)",
+        )
         shutil.rmtree(folder)
+        _git_commit_folder(
+            repo_root,
+            folder_resolved,
+            f"task archive: {resolved.canonical} (remove folder; git is "
+            "the record)",
+        )
         removed = True
     _clear_pointer_if_names(pointer_path, folder_resolved)
-    return ArchiveResult(canonical=resolved.canonical, folder_removed=removed)
+    return ArchiveResult(
+        canonical=resolved.canonical,
+        folder_removed=removed,
+        archived_to=archived_to,
+    )
 
 
 def delete_task(ref: str, project_root: Path, pointer_path: Path) -> str:
-    """``delete <ref>`` (spec 7.1): archive semantics -- same precondition
-    and uncommitted guard (module docstring) -- then remove the folder even
-    when tmp (unconditional). Clear the pointer iff it names this task.
-    Returns the canonical id."""
-    resolved, folder, _ = _archive_preflight(ref, project_root, "delete")
+    """``delete <ref>`` (spec 7.1): archive's status-active precondition
+    plus the commit-first guard (module docstring -- delete never
+    auto-commits), then remove the folder even when tmp (unconditional).
+    Clear the pointer iff it names this task. Returns the canonical id."""
+    resolved, folder, _ = _archive_preflight(
+        ref, project_root, "delete", require_committed=True
+    )
     folder_resolved = folder.resolve()
     shutil.rmtree(folder)
     _clear_pointer_if_names(pointer_path, folder_resolved)

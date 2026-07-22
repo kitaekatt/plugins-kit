@@ -178,6 +178,9 @@ def _crawl_folders(
         if not base.is_dir():
             continue
         for task_yaml in sorted(base.rglob("task.yaml")):
+            rel_parts = task_yaml.parent.relative_to(effective_root).parts
+            if rel_parts[:2] == ("tmp", resolve.ARCHIVED_TMP_DIRNAME):
+                continue  # parked archived tmp tasks: deliberate, not listed
             rel = task_yaml.parent.relative_to(effective_root).as_posix()
             try:
                 resolved = resolve.resolve_path(rel, effective_root)

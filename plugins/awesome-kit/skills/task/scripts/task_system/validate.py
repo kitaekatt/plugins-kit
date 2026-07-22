@@ -13,7 +13,9 @@ Classification outcomes:
 - ``invalid``  -- any error.
 - ``archived`` / ``orphaned`` -- the absent-folder tri-state (spec section 4):
   non-tmp path + no folder reads as ``archived`` (expected end state, git is
-  the record, no findings); tmp path (local host or no host) + no folder is
+  the record, no findings); a tmp path whose folder is parked at
+  ``tmp/archived-tasks/<stub>`` (archive's tmp closure policy) also reads as
+  ``archived``; tmp path (local host or no host) + no folder otherwise is
   ``orphaned`` with the "orphaned tmp reference" warning.
 - otherwise the stored status from task.yaml (``active`` / ``blocked`` /
   ``closed`` / ``archived``), except a non-empty ``blocked_by`` reads as
@@ -241,6 +243,8 @@ def _dangling_reason(entry: object, project_root: Path) -> str | None:
     if resolved.folder(project_root).is_dir():
         return None
     if resolved.location == resolve.LOCATION_TMP:
+        if resolve.archived_tmp_folder(project_root, resolved.stub).is_dir():
+            return None  # parked archive: reads as archived, not dangling
         return "orphaned tmp reference (no folder on this host)"
     return None  # non-tmp absent reads as archived per the tri-state
 
@@ -280,9 +284,12 @@ def validate_ref(
         result.classification = "remote"
         return result
 
-    # Absent-folder tri-state (spec section 4).
+    # Absent-folder tri-state (spec section 4). A tmp folder parked at
+    # tmp/archived-tasks/<stub> is a PROPER archive, not an orphan.
     if not folder.is_dir():
         if resolved.location == resolve.LOCATION_DEV_TASKS:
+            result.classification = "archived"
+        elif resolve.archived_tmp_folder(project_root, resolved.stub).is_dir():
             result.classification = "archived"
         else:
             result.classification = "orphaned"
@@ -380,7 +387,8 @@ def validate_ref(
         if is_uncommitted(folder):
             warnings.append(
                 f"uncommitted dev/tasks folder: {resolved.canonical} has unsaved "
-                "durable work; archive refuses until committed"
+                "durable work -- commit it (git is the record; archive commits "
+                "the final state itself, delete refuses until committed)"
             )
 
     size_warnings, size_notes = _doc_size_findings(folder, resolved.canonical)

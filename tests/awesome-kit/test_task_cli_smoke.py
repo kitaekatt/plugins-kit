@@ -7,7 +7,7 @@ SKILL.md documents it (subprocess invocations of scripts/task.py):
     Skill lines emitted) -> list / show / current / status substrate ->
     close -> reopen -> move to dev/tasks inside a git repo fixture
     (task_list reference rewrite across a doc) -> commit -> archive
-    (folder deleted; git is the record)
+    (final state committed; folder deleted; git is the record)
 
 plus a delete path for a second tmp task. Everything runs under pytest
 tmp_path with an injected pointer (--pointer) -- the real repo's tmp/,
@@ -82,6 +82,10 @@ def git_root(tmp_path) -> Path:
     )
     subprocess.run(
         ["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "commit.gpgsign", "false"],
+        check=True,
     )
     return tmp_path
 
@@ -221,7 +225,8 @@ class TestCliLifecycle:
         assert res.returncode == 0, res.stderr
         assert (
             res.stdout.strip()
-            == f"archived: dev/tasks/{STUB} (folder deleted; git is the record)"
+            == f"archived: dev/tasks/{STUB} (final state committed; folder "
+            "deleted; git is the record)"
         )
         assert not new_folder.exists()
 

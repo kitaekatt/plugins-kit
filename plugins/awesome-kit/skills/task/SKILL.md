@@ -31,7 +31,9 @@ global `current` pointer** (a file at
 `~/.claude/plugins/data/plugins-kit/awesome-kit/current`)
 naming the single task being worked. **Durability is location**: `tmp/<stub>`
 is ephemeral and machine-local; `dev/tasks/<stub>` is git-tracked -- archiving
-a dev/tasks folder deletes it because git is the record.
+a dev/tasks folder commits its final state, then deletes it and commits the
+removal, because git is the record. Archiving a tmp folder parks it at
+`tmp/archived-tasks/<stub>` (purge that directory whenever you like).
 
 ## Invoking the CLI
 
@@ -159,7 +161,7 @@ capability_skill:
         "${CLAUDE_PLUGIN_ROOT}/skills/task/scripts/task.py"
         reopen <ref> [--root PATH] [--pointer PATH]
       gotchas:
-        - "Contract: allowed only while the folder still exists (including a tmp archived folder). A task with no folder is gone -- it cannot be reopened. Sets status: active and re-validates (prints classification; exit reflects findings)."
+        - "Contract: allowed only while the folder still exists -- including a tmp archived folder parked at tmp/archived-tasks/<stub>, which reopen RESTORES to tmp/<stub> first. A task with no folder (and nothing parked) is gone -- it cannot be reopened. Sets status: active and re-validates (prints classification; exit reflects findings)."
     - id: archive
       keywords: [archive task, finish for good, git is the record, closure policy]
       user_objective: "Retire an active task per its closure policy."
@@ -168,7 +170,7 @@ capability_skill:
         "${CLAUDE_PLUGIN_ROOT}/skills/task/scripts/task.py"
         archive <ref> [--root PATH] [--pointer PATH]
       gotchas:
-        - "Contract: acts on an ACTIVE task (a closed task errors with a reopen-first hint). tmp -> status: archived, folder kept. dev/tasks -> folder DELETED; git is the record -- and archive REFUSES an uncommitted (or not-in-git) dev/tasks folder: commit first, no auto-commit. Clears the pointer if current."
+        - "Contract: acts on an ACTIVE task (a closed task errors with a reopen-first hint). tmp -> status: archived, folder MOVED to tmp/archived-tasks/<stub> (the user-purgeable parking directory; an occupied spot refuses -- remove the old copy first). dev/tasks -> final state (status + dated log entry) COMMITTED, folder deleted, removal committed -- two commits scoped to the task folder, so unrelated staged work never rides along; a folder in no git repo refuses (no record possible). The folder is never removed before its final state is committed. Clears the pointer if current."
     - id: delete
       keywords: [delete task, remove folder, unconditional removal, discard]
       user_objective: "Archive semantics plus unconditional folder removal (even tmp)."
@@ -177,7 +179,7 @@ capability_skill:
         "${CLAUDE_PLUGIN_ROOT}/skills/task/scripts/task.py"
         delete <ref> [--root PATH] [--pointer PATH]
       gotchas:
-        - "Contract: same preconditions and uncommitted guard as archive, then the folder is removed even when tmp. Prints deleted: <id>; clears the pointer if current."
+        - "Contract: archive's status-active precondition plus the commit-first guard (an uncommitted dev/tasks folder REFUSES -- delete never auto-commits; use archive to record the final state), then the folder is removed even when tmp. Prints deleted: <id>; clears the pointer if current."
     - id: move
       keywords: [move task, promote, demote, relocate folder, rewrite references]
       user_objective: "Relocate a task between tmp and dev/tasks, keeping every reference valid."

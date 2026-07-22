@@ -44,7 +44,9 @@ Readings chosen in Step 4 (flagged in the implementation report):
 - **close checks the STORED status** (``status: active`` in task.yaml), not
   the computed classification.
 - **reopen sets ``status: active`` unconditionally** (its precondition is
-  only that the folder exists); it re-validates and reports findings.
+  only that the folder exists -- a tmp folder parked at
+  ``tmp/archived-tasks/<stub>`` counts and is restored to ``tmp/<stub>``
+  first); it re-validates and reports findings.
 - **task.yaml read-modify-write** uses yaml.safe_load + safe_dump
   (sort_keys=False): unknown extra fields and the mapping's insertion order
   round-trip; YAML comments do not survive an edit (content, not bytes, is
@@ -60,6 +62,7 @@ Readings chosen in Step 4 (flagged in the implementation report):
 from __future__ import annotations
 
 import datetime
+import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -422,16 +425,27 @@ def reopen(
     *,
     local_host: str | None = None,
 ) -> UpdateResult:
-    """``reopen <ref>`` (spec 7.1): pre folder exists (incl. a tmp archived
-    folder; a missing folder cannot be reopened -- it is gone). Set
-    ``status: active``; re-validate; the result carries the findings."""
+    """``reopen <ref>`` (spec 7.1): pre folder exists -- including a tmp
+    archived folder parked at ``tmp/archived-tasks/<stub>``, which is first
+    RESTORED to ``tmp/<stub>``; a missing folder cannot be reopened -- it is
+    gone. Set ``status: active``; re-validate; the result carries the
+    findings."""
     resolved = _resolve(ref, project_root)
     folder = resolved.folder(project_root)
     if not folder.is_dir():
-        raise StateOpError(
-            f"{resolved.canonical}: no task folder -- a missing folder "
-            "cannot be reopened (the task is gone)"
+        parked = (
+            resolve.archived_tmp_folder(project_root, resolved.stub)
+            if resolved.location == resolve.LOCATION_TMP
+            else None
         )
+        if parked is not None and parked.is_dir():
+            folder.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(parked), str(folder))
+        else:
+            raise StateOpError(
+                f"{resolved.canonical}: no task folder -- a missing folder "
+                "cannot be reopened (the task is gone)"
+            )
     data = _read_task_yaml(folder, resolved.canonical)
     data["task"]["status"] = "active"
     _write_task_yaml(folder, data)

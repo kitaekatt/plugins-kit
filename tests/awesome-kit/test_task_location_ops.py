@@ -1,11 +1,12 @@
 """End-to-end tests for the task-system location ops (Step 5).
 
 Covers the spec section 7.1/7.2/7.4 verbs ``archive`` / ``delete`` /
-``move``: archive's closure policy (tmp -> status archived + folder kept;
-non-tmp -> folder deleted, git is the record), the uncommitted-archive guard
-(refuse, no auto-commit; not-in-a-git-repo counts as uncommitted), the
-status-active precondition (closed -> reopen-first error), delete's
-inheritance of both archive readings plus unconditional folder removal,
+``move``: archive's closure policy (tmp -> status archived + folder parked
+at tmp/archived-tasks/<stub>; non-tmp -> final state committed, folder
+deleted, removal committed -- git is the record; not-in-a-git-repo refuses),
+the status-active precondition (closed -> reopen-first error), delete's
+commit-first guard (delete never auto-commits) plus unconditional folder
+removal, reopen's restore of a parked tmp folder,
 move's relocation + span-precise reference rewrite across the project
 document set (byte-level preservation outside the rewritten path values,
 prose mentions and other-task refs untouched), and the pointer
@@ -125,7 +126,31 @@ def git_root(tmp_path) -> Path:
     subprocess.run(
         ["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True
     )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "commit.gpgsign", "false"],
+        check=True,
+    )
     return tmp_path
+
+
+def _log_subjects(root: Path) -> list[str]:
+    proc = subprocess.run(
+        ["git", "-C", str(root), "log", "--format=%s"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.splitlines()
+
+
+def _show_file(root: Path, rev: str, rel: str) -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(root), "show", f"{rev}:{rel}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout
 
 
 def _commit_all(root: Path) -> None:
@@ -147,48 +172,119 @@ def _commit_all(root: Path) -> None:
 
 
 class TestArchiveLib:
-    def test_tmp_active_marks_archived_keeps_folder(self, tmp_path, ptr):
+    def test_tmp_active_marks_archived_parks_folder(self, tmp_path, ptr):
         folder = make_task(tmp_path, "tmp/a")
         result = location_ops.archive_task("tmp/a", tmp_path, ptr)
         assert result.canonical == "tmp/a"
         assert result.folder_removed is False
-        assert read_block(folder)["status"] == "archived"
+        assert result.archived_to == "tmp/archived-tasks/a"
+        assert not folder.exists()
+        parked = tmp_path / "tmp" / "archived-tasks" / "a"
+        assert read_block(parked)["status"] == "archived"
         for fname in SCAFFOLD_FILES:
-            assert (folder / fname).is_file(), fname
+            assert (parked / fname).is_file(), fname
 
     def test_tmp_archived_result_validates_clean(self, tmp_path, ptr):
-        # Spec section 9 interplay: the non-tmp-archived warning is for
-        # NON-tmp folders only -- a tmp archived folder (archive's own
-        # output) is legitimate and validates clean.
+        # Spec section 9 interplay: a tmp task parked at
+        # tmp/archived-tasks/<stub> (archive's own output) is a PROPER
+        # archive -- the ref reads as archived, not orphaned, no findings.
         make_task(tmp_path, "tmp/a")
         location_ops.archive_task("tmp/a", tmp_path, ptr)
         result = validate_ref("tmp/a", tmp_path)
         assert result.classification == "archived"
         assert result.clean
 
-    def test_nontmp_committed_deletes_folder(self, git_root, ptr):
+    def test_tmp_occupied_parking_spot_refuses_untouched(self, tmp_path, ptr):
+        folder = make_task(tmp_path, "tmp/a")
+        parked = tmp_path / "tmp" / "archived-tasks" / "a"
+        parked.mkdir(parents=True)
+        before = snapshot(folder)
+        with pytest.raises(StateOpError, match="parking spot"):
+            location_ops.archive_task("tmp/a", tmp_path, ptr)
+        assert snapshot(folder) == before
+        assert read_block(folder)["status"] == "active"
+
+    def test_nontmp_committed_commits_final_state_and_removal(
+        self, git_root, ptr
+    ):
         folder = make_task(git_root, "dev/tasks/durable")
         _commit_all(git_root)
         result = location_ops.archive_task("dev/tasks/durable", git_root, ptr)
         assert result.canonical == "dev/tasks/durable"
         assert result.folder_removed is True
+        assert result.archived_to is None
         assert not folder.exists()
+        subjects = _log_subjects(git_root)
+        assert subjects[0] == (
+            "task archive: dev/tasks/durable (remove folder; git is the "
+            "record)"
+        )
+        assert subjects[1] == "task archive: dev/tasks/durable (final state)"
+        # The final-state commit holds the archived record + the log entry.
+        final_yaml = _show_file(
+            git_root, "HEAD~1", "dev/tasks/durable/task.yaml"
+        )
+        assert "archived" in final_yaml
+        final_log = _show_file(git_root, "HEAD~1", "dev/tasks/durable/log.md")
+        assert "archive: final state committed" in final_log
+        # Nothing uncommitted left behind for the task folder.
+        status = subprocess.run(
+            ["git", "-C", str(git_root), "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert "durable" not in status
 
-    def test_nontmp_uncommitted_refuses_untouched(self, git_root, ptr):
+    def test_nontmp_uncommitted_is_committed_then_removed(self, git_root, ptr):
+        # The 2026-07-22 revision: archive no longer refuses uncommitted
+        # durable work -- it records + submits the final state itself, then
+        # removes the folder.
         folder = make_task(git_root, "dev/tasks/durable")  # never committed
-        before = snapshot(folder)
-        with pytest.raises(StateOpError, match="commit first"):
-            location_ops.archive_task("dev/tasks/durable", git_root, ptr)
-        assert folder.is_dir()
-        assert snapshot(folder) == before
+        result = location_ops.archive_task("dev/tasks/durable", git_root, ptr)
+        assert result.folder_removed is True
+        assert not folder.exists()
+        final_yaml = _show_file(
+            git_root, "HEAD~1", "dev/tasks/durable/task.yaml"
+        )
+        assert "archived" in final_yaml
+
+    def test_nontmp_commit_scoped_to_folder_only(self, git_root, ptr):
+        # Pathspec-limited commits: pre-staged UNRELATED index content must
+        # not be swept into the archive commits.
+        make_task(git_root, "dev/tasks/durable")
+        _commit_all(git_root)
+        unrelated = git_root / "unrelated.txt"
+        unrelated.write_text("wip\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(git_root), "add", str(unrelated)], check=True
+        )
+        location_ops.archive_task("dev/tasks/durable", git_root, ptr)
+        status = subprocess.run(
+            ["git", "-C", str(git_root), "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert "unrelated.txt" in status  # still pending, not committed
+        for rev in ("HEAD", "HEAD~1"):
+            files = subprocess.run(
+                ["git", "-C", str(git_root), "show", "--name-only",
+                 "--format=", rev],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            assert "unrelated.txt" not in files
 
     def test_nontmp_not_in_git_repo_refuses(self, tmp_path, ptr):
-        # No git repo at all: there is no git record, which the documented
-        # reading (matching validate.is_uncommitted) treats as uncommitted.
+        # No git repo at all: no durable record is possible -- archive still
+        # refuses rather than deleting unrecorded work.
         folder = make_task(tmp_path, "dev/tasks/durable")
-        with pytest.raises(StateOpError, match="commit first"):
+        with pytest.raises(StateOpError, match="not inside a git repo"):
             location_ops.archive_task("dev/tasks/durable", tmp_path, ptr)
         assert folder.is_dir()
+        assert read_block(folder)["status"] == "active"
 
     def test_closed_task_errors_reopen_first(self, tmp_path, ptr):
         folder = make_task(tmp_path, "tmp/a", status="closed")
@@ -267,6 +363,63 @@ class TestDeleteLib:
         write_current(ptr, folder)
         location_ops.delete_task("tmp/a", tmp_path, ptr)
         assert read_current(ptr) is None
+
+
+class TestParkedTmpArchive:
+    """The tmp/archived-tasks parking lifecycle around archive (2026-07-22)."""
+
+    def test_reopen_restores_parked_folder(self, tmp_path, ptr):
+        from task_system import state_ops
+
+        make_task(tmp_path, "tmp/a")
+        location_ops.archive_task("tmp/a", tmp_path, ptr)
+        result = state_ops.reopen("tmp/a", tmp_path, ptr)
+        folder = tmp_path / "tmp" / "a"
+        assert folder.is_dir()
+        assert not (tmp_path / "tmp" / "archived-tasks" / "a").exists()
+        assert read_block(folder)["status"] == "active"
+        assert result.validation.classification == "active"
+
+    def test_reopen_still_errors_when_nothing_parked(self, tmp_path, ptr):
+        from task_system import state_ops
+
+        with pytest.raises(StateOpError, match="cannot be reopened"):
+            state_ops.reopen("tmp/ghost", tmp_path, ptr)
+
+    def test_discovery_skips_parked_folders(self, tmp_path, ptr):
+        from task_system.discovery import discover
+
+        make_task(tmp_path, "tmp/live")
+        make_task(tmp_path, "tmp/done")
+        location_ops.archive_task("tmp/done", tmp_path, ptr)
+        notes: list[str] = []
+        records = discover("project", tmp_path, notes=notes)
+        assert {r.id for r in records} == {"tmp/live"}
+        assert notes == []  # the parked folder is skipped silently
+
+    def test_referenced_parked_task_lists_as_archived(self, tmp_path, ptr):
+        # A surviving task_list ref to the archived task resolves through
+        # the parking directory: archived, not orphaned.
+        from task_system.discovery import discover
+
+        make_task(tmp_path, "tmp/done")
+        write_doc(
+            tmp_path / "notes.md", fenced_task_list([{"path": "tmp/done"}])
+        )
+        location_ops.archive_task("tmp/done", tmp_path, ptr)
+        records = discover("project", tmp_path)
+        by_id = {r.id: r for r in records}
+        assert by_id["tmp/done"].classification == "archived"
+
+    def test_reserved_ref_errors(self, tmp_path, ptr):
+        with pytest.raises(StateOpError, match="reserved"):
+            location_ops.archive_task("tmp/archived-tasks", tmp_path, ptr)
+
+    def test_init_reserved_stub_errors(self, tmp_path):
+        from task_system.init import InitError, init_task
+
+        with pytest.raises(InitError, match="reserved"):
+            init_task("archived-tasks", tmp_path, dest="tmp")
 
 
 def fenced_task_list(refs: list[dict]) -> str:
@@ -447,9 +600,12 @@ class TestArchiveCLI:
         )
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.strip() == (
-            "archived: tmp/a (tmp folder kept, status: archived)"
+            "archived: tmp/a (moved to tmp/archived-tasks/a, "
+            "status: archived)"
         )
-        assert read_block(folder)["status"] == "archived"
+        assert not folder.exists()
+        parked = tmp_path / "tmp" / "archived-tasks" / "a"
+        assert read_block(parked)["status"] == "archived"
 
     def test_nontmp_committed_prints_deleted_disposition(self, git_root, ptr):
         folder = make_task(git_root, "dev/tasks/durable")
@@ -467,26 +623,27 @@ class TestArchiveCLI:
         )
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.strip() == (
-            "archived: dev/tasks/durable (folder deleted; git is the record)"
+            "archived: dev/tasks/durable (final state committed; folder "
+            "deleted; git is the record)"
         )
         assert not folder.exists()
 
-    def test_uncommitted_refusal_exits_nonzero(self, git_root, ptr):
-        folder = make_task(git_root, "dev/tasks/durable")
+    def test_not_in_git_repo_refusal_exits_nonzero(self, tmp_path, ptr):
+        folder = make_task(tmp_path, "dev/tasks/durable")
         proc = run_cli(
             [
                 "archive",
                 "dev/tasks/durable",
                 "--root",
-                str(git_root),
+                str(tmp_path),
                 "--pointer",
                 str(ptr),
             ],
-            git_root,
+            tmp_path,
         )
         assert proc.returncode != 0
         assert proc.stdout == ""
-        assert "commit first" in proc.stderr
+        assert "not inside a git repo" in proc.stderr
         assert folder.is_dir()
 
     def test_closed_task_exits_nonzero_with_reopen_hint(self, tmp_path, ptr):
