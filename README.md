@@ -2,11 +2,49 @@
 
 [![tests](https://github.com/kitaekatt/plugins-kit/actions/workflows/tests.yml/badge.svg)](https://github.com/kitaekatt/plugins-kit/actions/workflows/tests.yml)
 
-Individual plugins for [Claude Code](https://code.claude.com). **The deliverable is the
-plugin, not the marketplace** — `plugins-kit` is the shared home and dependency substrate
-the plugins ride on.
+A marketplace of plugins for [Claude Code](https://code.claude.com), built on a
+shared dependency-provisioning engine. Each plugin extends Claude Code with
+skills, slash commands, and hooks; a foundation plugin, **bootstrap**, provisions
+the Python environments, system tools, and configuration every other plugin
+needs, silently, at session start.
 
-Browse the full catalog on the [marketplace landing page](https://kitaekatt.github.io/plugins-kit/).
+The plugins are the deliverable; the marketplace is the shared home and
+dependency substrate they ride on. Browse the full catalog on the
+[marketplace landing page](https://kitaekatt.github.io/plugins-kit/).
+
+## Architecture
+
+The marketplace follows a foundation-and-extension model. One plugin,
+**bootstrap**, is the dependency-and-provisioning engine; every plugin that
+ships Python or external tools declares what it needs and rides on it. This is
+what lets these plugins ship real scripts, not just prompts: you cannot assume
+anything about a user's machine, so without a provisioning layer a plugin with
+Python tooling breaks on the first machine that lacks it.
+
+At session start a `SessionStart` hook runs fast skip-gate checks, then
+dispatches the engine to a background subshell so the session is never blocked;
+results are reported on the next prompt via a `UserPromptSubmit` hook. The
+engine deep-merges every enabled plugin's `bootstrap.json` manifest into one
+provisioning pass and brings three categories into the declared state:
+
+- **Tools** -- system binaries (`uv`, `git`, `gh`, `jq`), installed to
+  `~/.local/bin` with no admin rights and only User-scope PATH changes.
+- **Venvs** -- a per-plugin Python virtualenv under
+  `~/.claude/plugins/data/<marketplace>/<plugin>/.venv/`, so plugins never share
+  or pollute a global interpreter.
+- **Shared libs** -- Python modules exported to peer plugins via `.pth` files,
+  so common code (for example the multi-agent code-review library both p4-kit
+  and git-kit build on) lives once and is imported, not duplicated.
+
+Checks that fail and can be fixed automatically are; those needing your
+authorization are queued and surfaced as a single "fix-all" prompt. Plugin
+locations resolve from `installed_plugins.json`, with a cache-scan fallback for
+newer Claude Code registries that leave that file empty. Platform differences
+(Windows vs. Unix) are handled centrally.
+
+Healthy bootstrap is silent: no output at session start means every check
+passed. To confirm a plugin was provisioned, read its log at
+`~/.claude/plugins/data/plugins-kit/<plugin>/bootstrap.log`.
 
 ## Installing
 
@@ -27,56 +65,44 @@ plugin pulls bootstrap in automatically. To update later:
 /plugin update
 ```
 
-## Your first session
+> Prerequisite: `bash` on your PATH. On Windows that means Git Bash.
 
-On the first session start after installing any plugin, the **bootstrap** plugin
-provisions its dependencies: it downloads `uv`, creates a per-plugin Python venv, and
-installs any system tools the plugin declares (such as `gh`). Prerequisite: `bash` on
-your PATH — on Windows, that means Git Bash.
+## Plugins
 
-Healthy bootstrap is **silent** — no output at session start means every check passed.
-To verify a plugin was actually provisioned, read its log at
-`~/.claude/plugins/data/plugins-kit/<plugin>/bootstrap.log`.
+The marketplace ships the following plugins. bootstrap is the foundation; the
+rest declare it as a dependency, so installing any of them pulls it in.
 
-## What I'm building
+| Plugin | Category | What it does |
+|--------|----------|--------------|
+| **bootstrap** | Foundation | Dependency/provisioning engine -- tools, venvs, git deps, marketplaces, and config from a `bootstrap.json`. |
+| **p4-kit** | Code review | Multi-agent review of pending Perforce changelists (`/p4-code-review`). |
+| **git-kit** | Code review | Git + GitHub multi-agent code review (`/git-code-review`) plus `gh` bootstrap. |
+| **skills-kit** | Authoring | Authoring/auditing skills and `CLAUDE.md` -- verb x artifact matrix (`/md-authoring`, `/md-audit`). |
+| **unreal-kit** | Automation | Unreal Engine automation -- Python asset API, MCP editor control, redirector cleanup. |
+| **hue-kit** | Automation | Philips Hue layered-scene framework -- bridge sync, YAML scenes, meta-group solver. |
+| **awesome-kit** | Utility | Cross-domain skills -- communication framework, `/plugin-ecosystem`, `/html-pdf`, task tracking. |
+| **openrouter-kit** | Utility | OpenRouter API-key management + shared model registry. |
+| **claude-ui-kit** | Utility | Status line with context-window and rate-limit threshold colors, plus `/statusline`. |
+| **cache-kit** | Utility | Cache-usage reporting from transcripts -- per-request and session-level hit analysis. |
+| **bootstrap-stuck-fix** | Maintenance | Temporary shim repairing a wedged bootstrap registry record. |
+| **prototypes** | Incubation | Experimental skills awaiting graduation into their own plugins. |
 
-A handful of focused plugins that extend Claude Code with skills, slash commands, and
-hooks. The headliners:
+## Testing and CI
 
-- **bootstrap** — a dependency / provisioning engine every plugin rides on. Declare your
-  tools, venvs, git dependencies, marketplaces, and per-user config in a `bootstrap.json`,
-  and bootstrap brings the environment into that state automatically at session start. No
-  manual `pip` / `venv` / clone steps — healthy bootstrap is silent.
-- **p4-kit** — a Perforce-based code reviewer: multi-agent review of pending changelists
-  (`/p4-code-review`), with parallel Claude reviewers plus per-issue validators.
-- **unreal-kit** — skills and tools that let Claude function as an Unreal developer: a
-  Python API for asset inspection and data extraction, an MCP server for driving the
-  editor, and redirector cleanup.
+Each plugin has a matching test directory under `tests/` (mirroring the plugin
+layout), alongside repo-script tests that guard the publish and manifest
+tooling. The suite runs in GitHub Actions on every push (the badge above). Run a
+targeted subset with:
 
-## All plugins
+    uv run --extra dev pytest tests/bootstrap/ -v
 
-| Plugin | What it does |
-|--------|--------------|
-| **bootstrap** | Dependency/provisioning engine — tools, venvs, git deps, marketplaces, and config from a `bootstrap.json`. Foundation for everything else. |
-| **p4-kit** | Multi-agent code review of pending Perforce changelists (`/p4-code-review`). |
-| **unreal-kit** | Unreal Engine automation — Python asset API, MCP editor control, redirector cleanup. |
-| **git-kit** | Git + GitHub multi-agent code review (`/git-code-review`) plus `gh` CLI bootstrap. |
-| **skills-kit** | Authoring and auditing skills + `CLAUDE.md` files — a verb × artifact matrix (`/md-authoring`, `/md-audit`, cohesion principles). |
-| **awesome-kit** | Cross-domain skills: a shared communication framework, `/plugin-ecosystem`, `/html-pdf`. |
-| **openrouter-kit** | OpenRouter API key management + a shared model registry. |
-| **claude-ui-kit** | Status line with context-window and rate-limit threshold colors, plus `/statusline`. |
-| **cache-kit** | Cache-usage reporting — per-request and session-level cache hit analysis from transcripts. |
-| **hue-kit** | Philips Hue layered-scene framework — bridge sync, editable YAML scenes, meta-group solver, HTML report. |
-| **bootstrap-stuck-fix** | Temporary remediation shim — repairs a wedged bootstrap registry record that pins a machine on an old version. |
-| **prototypes** | Experimental skills awaiting graduation into their own plugins. |
+## Security
 
-## How it fits together
-
-Every plugin that ships Python or external tools rides on **bootstrap**. At session start
-bootstrap reads each enabled plugin's `bootstrap.json` and ensures the system tools,
-per-plugin venvs, git dependencies, and per-user config are in the state that plugin
-needs. That's why the rest of the plugins can stay focused on their domain instead of
-re-solving environment setup: declare what you need, and the environment is there.
+These plugins run trusted code on your machine with your user privileges.
+[`SECURITY.md`](SECURITY.md) inventories exactly what each plugin -- bootstrap
+especially -- reads, writes, downloads, and executes, including the User-scope
+(never system/admin) PATH changes bootstrap makes, so you can decide whether to
+trust them before installing.
 
 ## Repository
 

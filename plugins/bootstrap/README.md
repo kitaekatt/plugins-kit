@@ -3,6 +3,22 @@
 Installs each plugin's tools, Python venvs, and config automatically -- your
 plugins just work.
 
+## Why this exists
+
+Most Claude Code plugins ship prompts and skills, which run anywhere. Almost
+none ship *scripts*, because a script has to run on a machine you have never
+seen -- unknown OS, unknown tools on PATH, no Python venv, no guarantee `uv`
+or `gh` exists. Even the narrow problem of creating a Python venv for a
+plugin automatically has no standard solution in the ecosystem today (the
+going practice is a one-off `npm install` in a SessionStart hook).
+
+Bootstrap is that missing layer. A plugin declares what it needs -- tools,
+a venv from its `pyproject.toml`, git dependencies, config -- in a
+`bootstrap.json`, and bootstrap brings each user's machine into that state
+at session start. Every non-trivial plugin in this marketplace (p4-kit,
+git-kit, unreal-kit, skills-kit) ships working Python to strangers'
+machines on top of it, which is the existence proof that it works.
+
 ## What it does
 
 Bootstrap is the dependency-management layer for the plugins-kit marketplace.
@@ -77,6 +93,8 @@ bootstrap in automatically. Manual install, if you want it explicitly:
 
 Bootstrap is the substrate for this marketplace's plugins. There is no reason
 to install it standalone -- on its own it provisions nothing you would use
-directly. Adapting it as the dependency layer for a different marketplace is
-not currently supported without forking; its self-setup and discovery are
-wired to plugins-kit.
+directly. Pointing bootstrap at a *different* marketplace is not supported
+yet -- its self-setup and discovery are currently wired to plugins-kit. That
+decoupling is a deliberate future step, not a limitation of the approach; the
+problem it solves (above) is the same for any marketplace that wants to ship
+real tools.

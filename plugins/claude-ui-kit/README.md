@@ -1,6 +1,11 @@
 # claude-ui-kit
 
-Opinionated defaults and customization skills for Claude Code's UI surfaces. Currently ships the **statusline** (the bar at the bottom of the prompt) with threshold-aware default colors and a `/statusline` skill for customizing it. Future home for other UI tweaks (notifications, output formatting, etc.) as the surface area grows.
+Your status line shows how much context and rate-limit headroom you have
+left, in color, before you hit a wall -- plus a skill to customize it.
+Currently ships the **statusline** (the bar at the bottom of the prompt) with
+threshold-aware default colors and a `/statusline` skill for customizing it.
+Future home for other UI tweaks (notifications, output formatting, etc.) as
+the surface area grows.
 
 ## Install
 

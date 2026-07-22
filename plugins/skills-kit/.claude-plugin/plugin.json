@@ -1,7 +1,7 @@
 {
   "name": "skills-kit",
-  "version": "0.33.1",
-  "description": "Author and audit the CLAUDE.md and SKILL.md files Claude loads -- placement, cohesion, drift.",
+  "version": "0.33.2",
+  "description": "Author and audit every md file a project loads or ships -- CLAUDE.md, SKILL.md, project docs, and their cross-references -- for placement, cohesion, and drift.",
   "author": {
     "name": "Christina"
   },

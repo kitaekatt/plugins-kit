@@ -4,8 +4,11 @@ Your CLAUDE.md is a codebase. Audit it like one.
 
 ## What it does
 
-skills-kit is authoring and auditing tooling for the markdown artifacts
-Claude Code actually loads: SKILL.md files and CLAUDE.md files.
+skills-kit is authoring and auditing tooling for the markdown a project
+accumulates -- the SKILL.md and CLAUDE.md files Claude Code loads, and the
+project docs and READMEs it does not. It treats every md file in a repo as
+one owned surface with a place each fact belongs, rather than a pile of
+files that drift apart independently.
 
 - `/md-authoring` guides writing them. It routes to a per-artifact member
   (skill-authoring for SKILL.md, claude-md-authoring for CLAUDE.md), each
@@ -23,6 +26,16 @@ you should need all of it), ADP (no dependency cycles). Together they form
 a placement algorithm for the question "which file should this fact live
 in" -- root CLAUDE.md vs subsystem CLAUDE.md vs a skill reference vs a
 project doc.
+
+**Why run it across a repo, not one file.** Docs rot by diverging: the root
+CLAUDE.md says one thing, a subsystem CLAUDE.md contradicts it, a fact that
+belongs in a skill reference is stranded in a README, and a renamed skill
+leaves dangling cross-references. Auditing the whole md surface at once is
+what surfaces those -- a single-file check cannot see a fact in the wrong
+file or a broken edge between two files. It also matters because the code
+reviewers you already run (including Claude Code's own /code-review) read
+CLAUDE.md to decide what "correct" means; an unaudited CLAUDE.md silently
+sets a wrong standard for every review.
 
 ## How it relates to neighboring tools
 

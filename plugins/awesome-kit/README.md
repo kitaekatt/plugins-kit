@@ -1,7 +1,7 @@
 # awesome-kit
 
-One command renders your installed marketplaces and plugins as a
-clickable poster.
+See every marketplace, plugin, and skill you have installed at a glance --
+one command renders them as a single self-contained HTML poster.
 
 ## What it does
 
