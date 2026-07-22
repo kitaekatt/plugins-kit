@@ -71,6 +71,31 @@ def matches_claim(identifier: str, claim_globs: list[str]) -> bool:
     return False
 
 
+def canonical_local(local: Optional[str]) -> Optional[str]:
+    """Canonicalize an emitted local path so it agrees with the CLAUDE.md chain.
+
+    The CLAUDE.md ancestor walk (`collect_claude_mds`) resolve()s every path, so
+    on a case-insensitive filesystem (Windows) its entries carry the canonical
+    drive/component casing. A front-half's raw `local` may NOT: p4's
+    `p4 where` emits a lowercase drive letter (`d:/dev/...`) while the resolved
+    chain carries `D:/dev/...`, so a consumer comparing a claimed file's `local`
+    against its own `claude_mds` self-entry (md-audit's
+    "ancestorClaudeMdPaths = claude_mds minus the subject's own local") fails to
+    remove the subject and treats every CLAUDE.md as its own parent.
+
+    Routing the emitted `local` through the SAME resolve() the chain uses makes
+    the two agree byte-for-byte. Idempotent for an already-resolved path (git
+    resolves its locals at enumeration, so this is a no-op there). Falsy input
+    (a file with no workspace mapping) passes through unchanged.
+    """
+    if not local:
+        return local
+    try:
+        return str(Path(local).resolve())
+    except OSError:
+        return local
+
+
 def preimage_relpath(identifier: str) -> str:
     """Deterministic bundle-relative path for a claimed file's pre-image.
 
@@ -238,12 +263,18 @@ def assemble_bundle(
             # `claude_mds` is the nearest-ancestor-first CLAUDE.md chain and,
             # for a CLAUDE.md subject, INCLUDES the subject itself as its first
             # entry -- the skill drops the subject's own local to derive
-            # md-audit's ancestorClaudeMdPaths / parentPath.
+            # md-audit's ancestorClaudeMdPaths / parentPath. Canonicalize the
+            # emitted local so that self-removal compares equal (see
+            # canonical_local) regardless of the front-half's path casing.
             entry = dict(f)
+            if local:
+                entry["local"] = canonical_local(local)
             entry["claude_mds"] = claude_mds
             claimed_files.append(entry)
             continue
         out = {k: v for k, v in f.items() if k != "identifier"}
+        if local:
+            out["local"] = canonical_local(local)
         out["chunk_index"] = id_to_chunk.get(f["identifier"])
         out["claude_mds"] = claude_mds
         changed_files.append(out)

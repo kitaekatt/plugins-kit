@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from bootstrap_lib.code_review.pipeline import (
     assemble_bundle,
+    canonical_local,
     emit_bundle,
     matches_claim,
     preimage_relpath,
@@ -452,6 +453,72 @@ class TestAssembleBundleClaims:
         # The submit gate (scope src/) still fires on the claimed file.
         assert len(core["submit_gates"]) == 1
         assert core["submit_gates"][0]["matched_files"] == [str(claude)]
+
+
+# ---------------------------------------------------------------------------
+# canonical_local -- emitted local agrees with the CLAUDE.md chain (case fix)
+# ---------------------------------------------------------------------------
+
+
+def _mixed_case_spelling(path_str: str) -> str:
+    """Mimic p4 `where`: lowercase drive letter + forward slashes on Windows."""
+    if os.name == "nt" and len(path_str) > 1 and path_str[1] == ":":
+        return path_str[0].lower() + path_str[1:].replace("\\", "/")
+    return path_str
+
+
+class TestCanonicalLocal:
+    def test_idempotent_on_resolved_path(self, tmp_path):
+        f = tmp_path / "a.py"
+        f.write_text("x\n", encoding="utf-8")
+        resolved = str(f.resolve())
+        assert canonical_local(resolved) == resolved
+
+    def test_falsy_passthrough(self):
+        assert canonical_local(None) is None
+        assert canonical_local("") == ""
+
+    def test_claimed_local_matches_claude_mds_self_entry(self, tmp_path):
+        """The reported bug: a claimed CLAUDE.md's `local` differed in case from
+        its own `claude_mds` self-entry, so a consumer removing the self-entry by
+        string compare failed. The emitted local must now agree byte-for-byte."""
+        ws = tmp_path / "ws"
+        sub = ws / "sub"
+        sub.mkdir(parents=True)
+        claude = sub / "CLAUDE.md"
+        claude.write_text("child rules\n", encoding="utf-8")
+
+        core = assemble_bundle(
+            preamble="",
+            sections=_sections_for("sub/CLAUDE.md"),
+            files=[{
+                "identifier": "sub/CLAUDE.md",
+                "local": _mixed_case_spelling(str(claude)),
+                "pre_image": None,
+            }],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024,
+            workspace_root=ws,
+            claim_globs=["**/CLAUDE.md"],
+        )
+        entry = core["claimed_files"][0]
+        # claude_mds[0] is the subject's own resolved CLAUDE.md; local must equal it.
+        assert entry["local"] == entry["claude_mds"][0]
+
+    def test_changed_file_local_is_canonicalized(self, tmp_path):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        f = ws / "a.py"
+        f.write_text("x\n", encoding="utf-8")
+        core = assemble_bundle(
+            preamble="",
+            sections=_sections_for("a.py"),
+            files=[{"identifier": "a.py", "local": _mixed_case_spelling(str(f))}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024,
+            workspace_root=ws,
+        )
+        assert core["changed_files"][0]["local"] == str(f.resolve())
 
 
 # ---------------------------------------------------------------------------
