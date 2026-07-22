@@ -1,8 +1,0 @@
-task:
-  _schema_version: '1'
-  type: hand-off
-  title: Bootstrap absorb repo sync
-  status: active
-  priority: P2
-  description: Absorb repo-sync into bootstrap as a tested declarative engine feature;
-    gated on user sign-off that nag tuning is sufficient

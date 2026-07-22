@@ -16,3 +16,4 @@ CLAUDE.local.md
 .claude/workflows/
 .workflow-kit/
 .DS_Store
+dev/
