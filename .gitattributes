@@ -1,0 +1,8 @@
+# Workflow tool scripts must be LF-only. The Claude Code Workflow tool's
+# permission layer rejects launching a scriptPath whose content contains
+# control characters ("script contains control characters that would be hidden
+# in the approval dialog") -- a CR (\r) counts. With core.autocrlf=true a
+# Windows checkout would otherwise rewrite these LF blobs to CRLF in the working
+# tree (and in the marketplace-synced plugin cache), tripping that rejection.
+# eol=lf pins the working-tree bytes to LF regardless of the user's autocrlf.
+plugins/skills-kit/skills/*/workflow/*.js eol=lf
