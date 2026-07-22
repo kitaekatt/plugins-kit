@@ -22,11 +22,13 @@ Classification outcomes:
   ``blocked`` regardless of the stored status.
 
 Minimal readings chosen in Step 1 (flagged in the implementation report):
-- Uncommitted dev/tasks detection runs ``git status --porcelain`` scoped to
-  the folder. A dev/tasks folder NOT inside any git repo (or where git itself
-  fails / is unavailable) also counts as uncommitted -- there is no git record
-  of it, which is exactly the unsaved-durable-work condition the warning
-  exists for.
+- Version-control detection is git-scoped but VCS-neutral in posture
+  (``git_vcs_state``): ``git status --porcelain`` scoped to the folder
+  yields clean / dirty / no-repo. Dirty is the unsaved-durable-work WARNING
+  (gates work). No-repo -- not inside any git repo, or git itself fails / is
+  unavailable -- is an advisory NOTE only: the task system has no dependency
+  on git, and the workspace may be under Perforce or another VCS this script
+  cannot check; the agent owns version control there.
 - Dangling ``depends_on`` / ``blocked_by``: an entry is dangling when it is
   not a path string, is malformed / outside the known roots, or resolves to
   ``orphaned`` (tmp path, local, no folder). A non-tmp absent path reads as
@@ -126,14 +128,19 @@ def _git_status_porcelain(folder: Path) -> str | None:
     return proc.stdout
 
 
-def is_uncommitted(folder: Path) -> bool:
-    """True when the folder has uncommitted git changes OR is not inside a
-    git repo (no git record of it -- the unsaved-durable-work condition; see
-    the module docstring). Public: location_ops.archive/delete reuse this
-    exact reading for the spec 7.4 uncommitted-archive guard, so the warning
-    and the refusal can never diverge."""
+def git_vcs_state(folder: Path) -> str:
+    """The folder's git state: ``"clean"`` / ``"dirty"`` / ``"no-repo"``.
+
+    The task system has NO dependency on git -- version control is the
+    record, and git is merely the VCS this script can detect and automate.
+    ``"no-repo"`` therefore means "cannot verify here", NOT "unrecorded":
+    the workspace may use Perforce or another VCS the agent understands.
+    Public: location_ops.archive/delete share this exact predicate, so the
+    validate finding and the verbs' behavior can never diverge."""
     out = _git_status_porcelain(folder)
-    return out is None or out.strip() != ""
+    if out is None:
+        return "no-repo"
+    return "dirty" if out.strip() != "" else "clean"
 
 
 def _doc_sections(lines: list[str]) -> list[tuple[str, int]]:
@@ -382,13 +389,24 @@ def validate_ref(
         if status == "archived":
             warnings.append(
                 f"non-tmp folder with status: archived: {resolved.canonical} "
-                "should have been deleted (git is the record) -- run archive/delete"
+                "should have been deleted (version control is the record) -- "
+                "submit any pending state to version control, then run delete "
+                "(archive/delete automate this in a git workspace)"
             )
-        if is_uncommitted(folder):
+        vcs = git_vcs_state(folder)
+        if vcs == "dirty":
             warnings.append(
                 f"uncommitted dev/tasks folder: {resolved.canonical} has unsaved "
-                "durable work -- commit it (git is the record; archive commits "
-                "the final state itself, delete refuses until committed)"
+                "durable work -- commit it (version control is the record; "
+                "archive commits the final state itself, delete refuses until "
+                "committed)"
+            )
+        elif vcs == "no-repo":
+            result.notes.append(
+                f"version-control state unverified: {resolved.canonical} is "
+                "not in a git repo (the only VCS this script checks); if this "
+                "workspace uses another VCS (e.g. Perforce), ensure the "
+                "folder is submitted -- version control is the record"
             )
 
     size_warnings, size_notes = _doc_size_findings(folder, resolved.canonical)

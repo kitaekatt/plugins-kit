@@ -288,12 +288,18 @@ class TestWarnings:
         result = v("dev/tasks/done", git_root)
         assert any("uncommitted dev/tasks folder" in w for w in result.warnings)
 
-    def test_dev_tasks_outside_any_git_repo_counts_as_uncommitted(self, tmp_path):
-        # Documented minimal reading: no enclosing repo means no git record,
-        # which is the unsaved-durable-work condition the warning exists for.
+    def test_dev_tasks_outside_any_git_repo_notes_not_warns(self, tmp_path):
+        # The task system has no dependency on git: outside a git repo the
+        # script cannot verify VCS state (the workspace may use Perforce or
+        # another VCS), so this is an advisory NOTE in neutral language --
+        # never a blocking warning.
         make_task(tmp_path, "dev/tasks/norepo")
         result = v("dev/tasks/norepo", tmp_path)
-        assert any("uncommitted dev/tasks folder" in w for w in result.warnings)
+        assert result.classification == "active"
+        assert result.warnings == []
+        assert any(
+            "version-control state unverified" in n for n in result.notes
+        )
 
     def test_tmp_task_never_gets_git_warnings(self, tmp_path):
         make_task(tmp_path, "tmp/foo")

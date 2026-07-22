@@ -13,21 +13,30 @@ Readings chosen in Step 5 (flagged in the implementation report):
 - **archive precondition is the STORED status** (``status: active`` in
   task.yaml), matching close's reading. A ``closed`` task errors with a
   "reopen first" hint (spec 7.1); any other non-active status also errors.
-- **Non-tmp archive COMMITS, then removes** (spec 7.4, revised 2026-07-22):
-  the durable record must be in git history before the folder can go. archive
-  writes the final state (``status: archived`` + a dated log.md entry),
-  commits it, removes the folder, and commits the removal -- two commits, both
-  pathspec-limited to the task folder (``git commit -- <folder>``) so
-  pre-staged unrelated index content never rides along. A dev/tasks folder
-  NOT inside any git repo still refuses: no record is possible. Any git
-  failure aborts BEFORE the folder is removed -- the folder is never deleted
-  without its final state safely in history.
-- **delete keeps the commit-first guard** (``validate.is_uncommitted``,
-  shared predicate): delete is the no-ceremony removal verb -- it refuses an
-  uncommitted dev/tasks folder rather than auto-committing, exactly as
-  archive used to. It also inherits archive's status-active precondition
-  (spec 7.1: delete is "``archive`` semantics, then ensure the folder is
-  removed even when tmp"). Want the final state recorded? That is archive.
+- **Non-tmp archive SUBMITS to version control, then removes** (spec 7.4,
+  revised 2026-07-22): the durable record must be in version-control history
+  before the folder can go. The task system has NO dependency on git --
+  version control is the record; git is merely the VCS this script can
+  detect and automate. In a git repo, archive writes the final state
+  (``status: archived`` + a dated log.md entry), commits it, removes the
+  folder, and commits the removal -- two commits, both pathspec-limited to
+  the task folder (``git commit -- <folder>``) so pre-staged unrelated index
+  content never rides along; any git failure aborts BEFORE the folder is
+  removed. OUTSIDE a git repo, no git command runs: archive records the
+  final state and KEEPS the folder (``vcs_pending``), leaving submission to
+  the agent/user who knows the workspace's VCS (e.g. ``p4 submit``) --
+  finish with ``delete`` once submitted.
+- **delete keeps the commit-first guard where git can verify it**
+  (``validate.git_vcs_state``, shared predicate): delete is the no-ceremony
+  removal verb -- in a git repo it refuses a dirty dev/tasks folder rather
+  than auto-committing. Outside a git repo the script cannot verify any VCS
+  state, so delete proceeds -- the agent owns version control there (this is
+  the second half of the non-git archive flow). Preconditions: delete
+  accepts stored status ``active`` OR ``archived`` -- ``archived`` because a
+  still-present archived folder (a ``vcs_pending`` archive output, or the
+  validate warning's "should have been deleted" case) is exactly what
+  delete finishes off; a ``closed`` task still errors with the
+  reopen-first hint.
 - **tmp archive PARKS the folder** (spec 2.5, revised 2026-07-22): sets
   ``status: archived`` and moves the folder to
   ``tmp/archived-tasks/<stub>`` (resolve.archived_tmp_folder) so tmp/ stays
@@ -92,14 +101,18 @@ from .state_ops import (
     _resolve,
     _write_task_yaml,
 )
-from .validate import is_uncommitted
+from .validate import git_vcs_state
 
 
 @dataclass(frozen=True)
 class ArchiveResult:
     canonical: str
-    folder_removed: bool  # non-tmp: True (git is the record); tmp: False
+    folder_removed: bool  # non-tmp in git: True (VC is the record); else False
     archived_to: str | None = None  # tmp: parking path (project-relative)
+    # Non-tmp, outside any git repo: final state recorded, folder KEPT --
+    # submission to the workspace's VCS (and the finishing delete) is the
+    # agent/user's to do.
+    vcs_pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -114,12 +127,19 @@ class MoveResult:
 
 
 def _archive_preflight(
-    ref: str, project_root: Path, verb: str, *, require_committed: bool
+    ref: str,
+    project_root: Path,
+    verb: str,
+    *,
+    allowed_statuses: tuple[str, ...],
+    require_committed: bool,
 ) -> tuple[resolve.ResolvedRef, Path, dict]:
     """The shared archive/delete preconditions (module docstring): folder
-    exists, stored status active (closed -> reopen-first hint). With
-    ``require_committed`` (delete), a non-tmp uncommitted folder refuses --
-    archive instead commits the final state itself."""
+    exists, stored status in ``allowed_statuses`` (closed -> reopen-first
+    hint). With ``require_committed`` (delete), a non-tmp folder that git
+    can see is dirty refuses -- archive instead commits the final state
+    itself, and outside a git repo the script cannot verify VCS state, so
+    no guard applies (the agent owns version control there)."""
     resolved = _resolve(ref, project_root)
     folder = resolved.folder(project_root)
     if not folder.is_dir():
@@ -129,23 +149,24 @@ def _archive_preflight(
         )
     data = _read_task_yaml(folder, resolved.canonical)
     stored_status = data["task"].get("status")
-    if stored_status != "active":
+    if stored_status not in allowed_statuses:
         hint = (
             " -- reopen it first" if stored_status == "closed" else ""
         )
+        wanted = " or ".join(allowed_statuses)
         raise StateOpError(
-            f"{verb} acts on an active task; {resolved.canonical} has "
+            f"{verb} acts on an {wanted} task; {resolved.canonical} has "
             f"status {stored_status!r}{hint}"
         )
     if (
         require_committed
         and resolved.location == resolve.LOCATION_DEV_TASKS
-        and is_uncommitted(folder)
+        and git_vcs_state(folder) == "dirty"
     ):
         raise StateOpError(
-            f"{resolved.canonical} has uncommitted changes (or no git repo "
-            f"holds it) -- commit first; git is the record ({verb} refuses, "
-            "spec 7.4; use archive to record the final state)"
+            f"{resolved.canonical} has uncommitted git changes -- commit "
+            f"first; version control is the record ({verb} refuses, spec "
+            "7.4; use archive to record the final state)"
         )
     return resolved, folder, data
 
@@ -200,15 +221,12 @@ def _git_commit_folder(repo_root: Path, folder: Path, message: str) -> None:
             )
 
 
-def _append_archive_log_entry(folder: Path) -> None:
+def _append_archive_log_entry(folder: Path, detail: str) -> None:
     """The dated log.md line recording the archival (mirrors state_ops'
     update log discipline)."""
     stamp = datetime.date.today().isoformat()
     with (folder / "log.md").open("a", encoding="utf-8") as fh:
-        fh.write(
-            f"- {stamp}: archive: final state committed; folder removed "
-            "(git is the record)\n"
-        )
+        fh.write(f"- {stamp}: archive: {detail}\n")
 
 
 def archive_task(
@@ -217,14 +235,22 @@ def archive_task(
     """``archive <ref>`` (spec 7.1): pre folder exists + stored status
     active. Then per closure policy (spec 2.5, revised): tmp ->
     ``status: archived`` and park the folder at ``tmp/archived-tasks/<stub>``;
-    non-tmp -> record the final state (status + log entry), commit it, remove
-    the folder, commit the removal (git is the record; two pathspec-limited
-    commits). Clear the pointer iff it names this task."""
+    non-tmp in a git repo -> record the final state (status + log entry),
+    commit it, remove the folder, commit the removal (version control is the
+    record; two pathspec-limited commits); non-tmp outside any git repo ->
+    record the final state and KEEP the folder (``vcs_pending``: the agent
+    submits it with the workspace's VCS, then runs delete). Clear the
+    pointer iff it names this task."""
     resolved, folder, data = _archive_preflight(
-        ref, project_root, "archive", require_committed=False
+        ref,
+        project_root,
+        "archive",
+        allowed_statuses=("active",),
+        require_committed=False,
     )
     folder_resolved = folder.resolve()
     archived_to: str | None = None
+    vcs_pending = False
     if resolved.location == resolve.LOCATION_TMP:
         parking = resolve.archived_tmp_folder(project_root, resolved.stub)
         if parking.exists():
@@ -245,43 +271,61 @@ def archive_task(
         )
     else:
         repo_root = _git_toplevel(folder)
-        if repo_root is None:
-            raise StateOpError(
-                f"{resolved.canonical} is not inside a git repo -- git is "
-                "the record; archive cannot record durable history without "
-                "one"
-            )
         data["task"]["status"] = "archived"
         _write_task_yaml(folder, data)
-        _append_archive_log_entry(folder)
-        _git_commit_folder(
-            repo_root,
-            folder_resolved,
-            f"task archive: {resolved.canonical} (final state)",
-        )
-        shutil.rmtree(folder)
-        _git_commit_folder(
-            repo_root,
-            folder_resolved,
-            f"task archive: {resolved.canonical} (remove folder; git is "
-            "the record)",
-        )
-        removed = True
+        if repo_root is None:
+            # Not a git workspace: no git command runs. The final state is
+            # recorded on disk; submitting it with the workspace's VCS (e.g.
+            # p4 submit) and then removing the folder (delete) is the
+            # agent/user's to do -- version control is the record.
+            _append_archive_log_entry(
+                folder,
+                "final state recorded; submit to version control, then "
+                "delete the folder (version control is the record)",
+            )
+            removed = False
+            vcs_pending = True
+        else:
+            _append_archive_log_entry(
+                folder,
+                "final state committed; folder removed (version control "
+                "is the record)",
+            )
+            _git_commit_folder(
+                repo_root,
+                folder_resolved,
+                f"task archive: {resolved.canonical} (final state)",
+            )
+            shutil.rmtree(folder)
+            _git_commit_folder(
+                repo_root,
+                folder_resolved,
+                f"task archive: {resolved.canonical} (remove folder; "
+                "version control is the record)",
+            )
+            removed = True
     _clear_pointer_if_names(pointer_path, folder_resolved)
     return ArchiveResult(
         canonical=resolved.canonical,
         folder_removed=removed,
         archived_to=archived_to,
+        vcs_pending=vcs_pending,
     )
 
 
 def delete_task(ref: str, project_root: Path, pointer_path: Path) -> str:
-    """``delete <ref>`` (spec 7.1): archive's status-active precondition
-    plus the commit-first guard (module docstring -- delete never
-    auto-commits), then remove the folder even when tmp (unconditional).
-    Clear the pointer iff it names this task. Returns the canonical id."""
+    """``delete <ref>`` (spec 7.1): accepts stored status active OR archived
+    (a still-present archived folder is what delete finishes off), plus the
+    commit-first guard where git can verify it (module docstring -- delete
+    never auto-commits; outside a git repo the agent owns VCS state), then
+    remove the folder even when tmp (unconditional). Clear the pointer iff
+    it names this task. Returns the canonical id."""
     resolved, folder, _ = _archive_preflight(
-        ref, project_root, "delete", require_committed=True
+        ref,
+        project_root,
+        "delete",
+        allowed_statuses=("active", "archived"),
+        require_committed=True,
     )
     folder_resolved = folder.resolve()
     shutil.rmtree(folder)

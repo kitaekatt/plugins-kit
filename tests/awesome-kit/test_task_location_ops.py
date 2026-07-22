@@ -2,10 +2,12 @@
 
 Covers the spec section 7.1/7.2/7.4 verbs ``archive`` / ``delete`` /
 ``move``: archive's closure policy (tmp -> status archived + folder parked
-at tmp/archived-tasks/<stub>; non-tmp -> final state committed, folder
-deleted, removal committed -- git is the record; not-in-a-git-repo refuses),
-the status-active precondition (closed -> reopen-first error), delete's
-commit-first guard (delete never auto-commits) plus unconditional folder
+at tmp/archived-tasks/<stub>; non-tmp in git -> final state committed,
+folder deleted, removal committed; non-tmp outside git -> final state
+recorded, folder kept, VCS submission left to the agent -- version control
+is the record, git is just the automated case), the status preconditions
+(closed -> reopen-first error), delete's git-dirty guard (delete never
+auto-commits; accepts active or archived) plus unconditional folder
 removal, reopen's restore of a parked tmp folder,
 move's relocation + span-precise reference rewrite across the project
 document set (byte-level preservation outside the rewritten path values,
@@ -216,8 +218,8 @@ class TestArchiveLib:
         assert not folder.exists()
         subjects = _log_subjects(git_root)
         assert subjects[0] == (
-            "task archive: dev/tasks/durable (remove folder; git is the "
-            "record)"
+            "task archive: dev/tasks/durable (remove folder; version "
+            "control is the record)"
         )
         assert subjects[1] == "task archive: dev/tasks/durable (final state)"
         # The final-state commit holds the archived record + the log entry.
@@ -277,14 +279,34 @@ class TestArchiveLib:
             ).stdout
             assert "unrelated.txt" not in files
 
-    def test_nontmp_not_in_git_repo_refuses(self, tmp_path, ptr):
-        # No git repo at all: no durable record is possible -- archive still
-        # refuses rather than deleting unrecorded work.
+    def test_nontmp_not_in_git_repo_records_and_keeps_folder(
+        self, tmp_path, ptr
+    ):
+        # No git repo: the task system has no dependency on git -- the
+        # workspace may use another VCS (e.g. Perforce). No git command
+        # runs; the final state is recorded and the folder KEPT for the
+        # agent to submit with the workspace's VCS, then delete.
         folder = make_task(tmp_path, "dev/tasks/durable")
-        with pytest.raises(StateOpError, match="not inside a git repo"):
-            location_ops.archive_task("dev/tasks/durable", tmp_path, ptr)
+        result = location_ops.archive_task("dev/tasks/durable", tmp_path, ptr)
+        assert result.folder_removed is False
+        assert result.vcs_pending is True
         assert folder.is_dir()
-        assert read_block(folder)["status"] == "active"
+        assert read_block(folder)["status"] == "archived"
+        log = (folder / "log.md").read_text(encoding="utf-8")
+        assert "submit to version control" in log
+
+    def test_nontmp_vcs_pending_then_delete_finishes(self, tmp_path, ptr):
+        # The second half of the non-git flow: after the agent submits with
+        # the workspace's VCS, delete removes the archived folder (delete
+        # accepts stored status archived, and outside a git repo no git
+        # guard applies).
+        folder = make_task(tmp_path, "dev/tasks/durable")
+        location_ops.archive_task("dev/tasks/durable", tmp_path, ptr)
+        canonical = location_ops.delete_task(
+            "dev/tasks/durable", tmp_path, ptr
+        )
+        assert canonical == "dev/tasks/durable"
+        assert not folder.exists()
 
     def test_closed_task_errors_reopen_first(self, tmp_path, ptr):
         folder = make_task(tmp_path, "tmp/a", status="closed")
@@ -624,11 +646,13 @@ class TestArchiveCLI:
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.strip() == (
             "archived: dev/tasks/durable (final state committed; folder "
-            "deleted; git is the record)"
+            "deleted; version control is the record)"
         )
         assert not folder.exists()
 
-    def test_not_in_git_repo_refusal_exits_nonzero(self, tmp_path, ptr):
+    def test_not_in_git_repo_prints_vcs_pending_disposition(
+        self, tmp_path, ptr
+    ):
         folder = make_task(tmp_path, "dev/tasks/durable")
         proc = run_cli(
             [
@@ -641,9 +665,11 @@ class TestArchiveCLI:
             ],
             tmp_path,
         )
-        assert proc.returncode != 0
-        assert proc.stdout == ""
-        assert "not inside a git repo" in proc.stderr
+        assert proc.returncode == 0, proc.stderr
+        out = proc.stdout.strip()
+        assert out.startswith("archived: dev/tasks/durable (")
+        assert "final state recorded; folder kept" in out
+        assert "then run delete" in out
         assert folder.is_dir()
 
     def test_closed_task_exits_nonzero_with_reopen_hint(self, tmp_path, ptr):

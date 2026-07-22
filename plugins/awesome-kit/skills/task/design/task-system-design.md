@@ -168,8 +168,8 @@ state_vocabulary: [active, blocked, closed, archived]
 priority_pattern: "^P[1-3]$" # P1 highest
 closure_policy:
   close:    "status = closed; keep folder"
-  archive:  "tmp: status = archived, move folder to tmp/archived-tasks/<stub> | non-tmp: commit final state, delete folder, commit removal (git is the record)"
-  delete:   "archive's active precondition + commit-first guard (no auto-commit), AND delete the folder even when tmp (unconditional removal)"
+  archive:  "tmp: status = archived, move folder to tmp/archived-tasks/<stub> | non-tmp: version control is the record -- git repo: commit final state, delete folder, commit removal; no git repo: record final state, keep folder (agent submits via the workspace's VCS, then delete)"
+  delete:   "active or archived precondition + git-dirty guard (no auto-commit; no git check outside a git repo), AND delete the folder even when tmp (unconditional removal)"
 ```
 
 **Type registration.** A type is identified by the `type:` field in `task.yaml`. v1 ships exactly one
@@ -257,7 +257,7 @@ decides whether a task is `active`, `invalid`, or `remote`. The lifecycle diagra
 | `invalid` | computed (validate) | Fails validation. Must be **fixed forward** — no back-compat, no recovery — then re-validated. |
 | `blocked` | stored | A valid task with unmet `depends_on` / `blocked_by`. Clears back to `active`. *(In the spec; omitted from the lifecycle diagram for clarity.)* |
 | `closed` | stored | Work done; folder retained (not yet archived). |
-| `archived` | stored / computed | Terminal. tmp: folder marked + **parked** at `tmp/archived-tasks/<stub>` (user-purgeable; a parked folder also reads as `archived` via the tri-state below). non-tmp: final state committed, folder **deleted**, removal committed (git is the record) — which also reads as `archived` via the tri-state below. |
+| `archived` | stored / computed | Terminal. tmp: folder marked + **parked** at `tmp/archived-tasks/<stub>` (user-purgeable; a parked folder also reads as `archived` via the tri-state below). non-tmp: final state submitted to version control, folder **deleted** (version control is the record; git is automated, other VCS agent-driven) — which also reads as `archived` via the tri-state below. |
 | `current` | pointer | The one task the global `current` pointer names (§2.6). An overlay on an `active` task. |
 | `orphaned` | computed | A **tmp** reference (local host) whose folder is absent — cleaned up without a proper archive. A defect. *(In the spec; omitted from the lifecycle diagram.)* |
 | `remote` | computed (validate) | A **tmp** reference tagged with a non-matching `host`. Assumed to exist there; not locally resolvable. |
@@ -270,7 +270,7 @@ decides whether a task is `active`, `invalid`, or `remote`. The lifecycle diagra
 
 | Reference | Local folder present? | Resolves to |
 |---|---|---|
-| non-tmp path | absent | `archived` (expected end state; git holds the record) |
+| non-tmp path | absent | `archived` (expected end state; version control holds the record) |
 | tmp path, host = me / unset | absent, parked copy at `tmp/archived-tasks/<stub>` | `archived` (proper archive) |
 | tmp path, host = me / unset | absent | `orphaned` (defect) |
 | tmp path, host = other | n/a | `remote` (assumed valid on `host`) |
@@ -319,8 +319,8 @@ inference exception.
 | `update [<ref>]` | script | Upsert: `init` if absent, otherwise refresh the folder's state (and rotate `plan.md`/`log.md` per the hand-off discipline). Writes `task.yaml` field edits (`status`, `priority`, `description`, `depends_on`, `blocked_by`, …). **Re-runs `validate`, classifying the task `active` / `invalid` / `remote`** (§9). |
 | `close <ref>` | script | Mark `status: closed`; **keeps** the folder (reopen-able). Acts on an `active` task. |
 | `reopen <ref>` | script | Reverse a terminal state back to `active`. **Allowed only if the folder still exists** — incl. a tmp `archived` folder parked at `tmp/archived-tasks/<stub>`, which is **restored** to `tmp/<stub>` first. A task with no folder (and nothing parked) cannot be reopened — it is gone. |
-| `archive <ref>` | script | **Operates on an `active` task** (`active → archived`); to archive a `closed` task, `reopen` it first. Per closure policy: **non-tmp** → commit the final state (status + log entry), delete the folder, commit the removal (git is the record; two folder-scoped commits); **tmp** → set `status: archived`, move the folder to `tmp/archived-tasks/<stub>`. |
-| `delete <ref>` | script | `archive`'s active precondition **plus the commit-first guard** (an uncommitted `dev/tasks` folder refuses; delete never auto-commits), **and delete the folder even when it is tmp**. Removes the working folder unconditionally. |
+| `archive <ref>` | script | **Operates on an `active` task** (`active → archived`); to archive a `closed` task, `reopen` it first. Per closure policy — **version control is the record** (git is the automated case; no dependency on git): **non-tmp in a git repo** → commit the final state (status + log entry), delete the folder, commit the removal (two folder-scoped commits); **non-tmp outside git** → no git command runs; record the final state, keep the folder (`vcs_pending`), agent submits with the workspace's VCS (e.g. `p4 submit`) then runs `delete`; **tmp** → set `status: archived`, move the folder to `tmp/archived-tasks/<stub>`. |
+| `delete <ref>` | script | Operates on an `active` **or `archived`** task (a still-present archived folder — the `vcs_pending` output — is what delete finishes off). **Git-dirty guard** where git can verify (a dirty `dev/tasks` folder refuses; delete never auto-commits; outside a git repo the agent owns VCS state), **and delete the folder even when it is tmp**. Removes the working folder unconditionally. |
 | `move <ref> <dest>` | script | Relocate the folder (commonly `tmp/<stub>` → `dev/tasks/<stub>`) **and rewrite every reference** to the new path (§7.2). |
 | `current` | script | Report the single global `current` task (read the `current` pointer). |
 | `status <ref>` | **inference** | Summarize a task — works on **any** task. Resolves the task's classification via `validate`, then **summarizes** in a **background agent** to preserve context. |
@@ -363,13 +363,17 @@ file (§2.6).
   nothing parked cannot be reopened** — error). Set `status: active`; re-validate.
 - **`archive <ref>`** — Pre: folder exists, `status: active` (to archive a `closed` task, `reopen` first
   — else error). Then: tmp → `status: archived`, **move** the folder to `tmp/archived-tasks/<stub>`
-  (occupied parking spot → refuse); non-tmp → write the final state (`status: archived` + dated log
-  entry), **commit** it, **delete** the folder, **commit** the removal — two commits pathspec-limited to
-  the task folder; a folder in **no git repo** refuses (no record possible), and the folder is never
-  removed before its final state is committed. Clear pointer if current.
-- **`delete <ref>`** — `archive`'s active precondition **plus the commit-first guard** (non-tmp
-  **uncommitted** → refuse — delete never auto-commits; use `archive` to record the final state), then
-  ensure the folder is removed **even when tmp** (unconditional). Clear pointer if current.
+  (occupied parking spot → refuse); non-tmp → **version control is the record**: in a **git repo**,
+  write the final state (`status: archived` + dated log entry), **commit** it, **delete** the folder,
+  **commit** the removal — two commits pathspec-limited to the task folder, never removing the folder
+  before its final state is committed; **outside a git repo**, run **no git command** — write the final
+  state, **keep** the folder (`vcs_pending`), and leave submission to the agent/user who knows the
+  workspace's VCS (e.g. `p4 submit`), finished by `delete`. Clear pointer if current.
+- **`delete <ref>`** — Pre: folder exists, `status: active` **or `archived`** (a still-present archived
+  folder is what delete finishes off; `closed` → reopen-first hint). **Git-dirty guard** where git can
+  verify (non-tmp folder git sees as **dirty** → refuse — delete never auto-commits; use `archive`);
+  outside a git repo no git check applies. Then ensure the folder is removed **even when tmp**
+  (unconditional). Clear pointer if current.
 - **`move <ref> <dest>`** — Pre: folder exists **locally** (not remote). Steps: relocate folder
   `old → <dest>/<stub>`; scan project-scope documents for the old path; **rewrite every reference** to
   the new path (project-relative when `dest` is `dev/tasks`); update `current` if it named the old path.
@@ -414,22 +418,30 @@ Durability is a **per-task location choice**, not a system-wide mode:
 | Location | Tracking | Use |
 |---|---|---|
 | `tmp/<stub>` | none (ephemeral) | default; session-local work |
-| `dev/tasks/<stub>` | git-tracked | durable, auditable work |
+| `dev/tasks/<stub>` | version-controlled (git automated; other VCS agent-driven) | durable, auditable work |
 
 `move` promotes/demotes between them and rewrites references. Git-tracked documents may reference tmp
 tasks via the optional `host` parameter (§7.3).
 
 **Uncommitted-archive guard (revised 2026-07-22).** `archive` deletes a non-tmp folder on the
-assumption git history is the record. An **uncommitted** `dev/tasks/<stub>` deleted without a commit
-would be lost with no record. Original resolution: `validate` warns and `archive` refuses until the
-user commits. Revision: `archive` now **records the final state itself** — it writes
-`status: archived` + a dated log entry, commits, deletes the folder, and commits the removal (both
-commits pathspec-limited to the task folder, so unrelated staged work never rides along); it refuses
-only when the folder is in **no git repo** (no record possible), and never removes the folder before
-the final-state commit succeeds. `delete` keeps the original refuse-until-committed guard (it never
-auto-commits — it is the no-ceremony removal verb). The **`validate` warning** for an uncommitted
-`dev/tasks` folder remains: warnings gate `work` (§9), so unsaved durable work still surfaces at the
-next `work`/`validate`.
+assumption version-control history is the record. A `dev/tasks/<stub>` deleted without a submitted
+record would be lost. Original resolution: `validate` warns and `archive` refuses until the user
+commits. Revision — with the principle that **the task system has no dependency on git** (version
+control is the record; git is merely the VCS the scripts can detect and automate):
+
+- **In a git repo**, `archive` **records the final state itself** — it writes `status: archived` + a
+  dated log entry, commits, deletes the folder, and commits the removal (both commits pathspec-limited
+  to the task folder, so unrelated staged work never rides along), never removing the folder before
+  the final-state commit succeeds.
+- **Outside a git repo**, the scripts run **no git command** and pass no judgment — the workspace may
+  use Perforce or another VCS the agent understands. `archive` records the final state and **keeps**
+  the folder (`vcs_pending`); the agent submits it with the workspace's VCS, then `delete` (which
+  accepts `status: archived` and applies no git check outside a repo) removes it.
+- `delete` keeps the refuse-when-dirty guard **where git can verify it** (it never auto-commits — it
+  is the no-ceremony removal verb).
+- The **`validate` warning** for a git-dirty `dev/tasks` folder remains (warnings gate `work`, §9);
+  outside a git repo it is an advisory **note** ("version-control state unverified"), never a blocking
+  warning — a Perforce-backed workspace must not be permanently gated by a git check.
 
 ---
 
@@ -505,8 +517,8 @@ block, state outside the item vocabulary, priority outside the type pattern, non
 
 | Condition | Detail |
 |---|---|
-| non-tmp `status: archived` folder | git is the record — the folder should be deleted (`archive`/`delete`) |
-| uncommitted `dev/tasks` folder | unsaved durable work; commit it — `archive` commits the final state itself, `delete` refuses until committed (§7.4) |
+| non-tmp `status: archived` folder | version control is the record — submit any pending state, then `delete` the folder (a `vcs_pending` archive awaiting its finishing `delete` sits in exactly this state) |
+| uncommitted `dev/tasks` folder | git sees unsaved durable work; commit it — `archive` commits the final state itself, `delete` refuses until committed. Outside a git repo this is an advisory *note* ("version-control state unverified"), not a warning (§7.4) |
 | dangling `depends_on`/`blocked_by` | references a path with no resolvable task |
 | orphaned tmp reference | a tmp ref (local host) whose folder is absent (§4) |
 | no `task_items` block in plan.md | pre-contract folder; prompts the one-time forward conversion (§2.7) |
@@ -533,9 +545,11 @@ by awesome-kit.* The **rules above are the contract** regardless of how validati
 - **Packaging / where this is built** → the task system **evolves the `hand-off` skill in awesome-kit**
   (the task folder *is* the generalized hand-off folder). Design lives in
   `plugins/awesome-kit/skills/task/design/`; approved diagrams in `design/diagrams/`.
-- **Uncommitted non-tmp archive** (§7.4, revised 2026-07-22) → `validate` **warns**; `archive`
-  **commits the final state + removal itself** (refusing only outside any git repo); `delete` keeps the
-  refuse-until-committed guard (no auto-commit).
+- **Uncommitted non-tmp archive** (§7.4, revised 2026-07-22) → version control is the record; **no
+  dependency on git**. In a git repo `validate` **warns** and `archive` **commits the final state +
+  removal itself**; outside a git repo the scripts run no git command — `archive` records the final
+  state and keeps the folder (`vcs_pending`) for the agent to submit via the workspace's VCS, and
+  `validate` emits an advisory note. `delete` keeps the refuse-when-git-dirty guard (no auto-commit).
 - **Type registration** (§2.5) → v1 ships exactly one type (`hand-off`); the `type` field reserves the
   extension seam, but the registry-extension mechanism is **out of scope for v1**.
 

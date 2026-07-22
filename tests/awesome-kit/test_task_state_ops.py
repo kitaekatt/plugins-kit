@@ -186,10 +186,15 @@ class TestWorkLib:
     def test_dev_tasks_promotion_inits_then_blocks_on_warning(
         self, tmp_path, ptr
     ):
-        # tmp_path is not a git repo, so the freshly-initialized dev/tasks
-        # folder carries the uncommitted warning -- work blocks, but the
-        # promotion ran a real init and the folder is KEPT (the documented
-        # Step 4 reading).
+        # Inside a git repo, the freshly-initialized dev/tasks folder is
+        # dirty, so it carries the uncommitted warning -- work blocks, but
+        # the promotion ran a real init and the folder is KEPT (the
+        # documented Step 4 reading).
+        subprocess.run(
+            ["git", "init", "-q", str(tmp_path)],
+            check=True,
+            capture_output=True,
+        )
         with pytest.raises(StateOpError) as exc_info:
             state_ops.work("dev/tasks/durable", tmp_path, ptr)
         assert any("uncommitted" in w for w in exc_info.value.warnings)
@@ -197,6 +202,15 @@ class TestWorkLib:
         for fname in SCAFFOLD_FILES:
             assert (folder / fname).is_file(), fname
         assert read_current(ptr) is None
+
+    def test_dev_tasks_promotion_outside_git_succeeds(self, tmp_path, ptr):
+        # Outside any git repo the script cannot verify VCS state (no git
+        # dependency): validate emits only an advisory note, so promotion
+        # completes and the pointer is written.
+        result = state_ops.work("dev/tasks/durable", tmp_path, ptr)
+        assert result.initialized is True
+        folder = tmp_path / "dev" / "tasks" / "durable"
+        assert read_current(ptr) == str(folder.resolve())
 
     def test_unsafe_stub_cannot_auto_init(self, tmp_path, ptr):
         # init would rewrite "UPPER" to "upper" -- promotion refuses rather

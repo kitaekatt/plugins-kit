@@ -66,15 +66,19 @@ State-op conventions (Step 4):
 
 Location-op conventions (Step 5):
 - ``archive <ref>`` prints ``archived: <id>`` plus the closure-policy
-  disposition (tmp -> folder moved to tmp/archived-tasks/<stub>; non-tmp ->
-  final state committed, folder deleted + removal committed). Non-zero with
-  the refusal reason on stderr when the task is not active (closed -> reopen
-  first), the folder is missing, the tmp parking spot is occupied, a non-tmp
-  folder is not in any git repo, or a git command fails (the folder is never
-  removed before its final state is committed).
-- ``delete <ref>`` prints ``deleted: <id>``; archive's status-active
-  precondition plus the commit-first guard (delete never auto-commits), then
-  the folder is removed even when tmp.
+  disposition. tmp -> folder moved to tmp/archived-tasks/<stub>. Non-tmp:
+  version control is the record; in a git repo the final state is committed,
+  the folder deleted, and the removal committed (never removing the folder
+  before its final state is committed); outside a git repo NO git command
+  runs -- the final state is recorded, the folder kept, and submission via
+  the workspace's VCS (e.g. p4) plus the finishing delete are left to the
+  agent/user. Non-zero with the refusal reason on stderr when the task is
+  not active (closed -> reopen first), the folder is missing, the tmp
+  parking spot is occupied, or a git command fails.
+- ``delete <ref>`` prints ``deleted: <id>``; accepts an active OR archived
+  task, refuses a dev/tasks folder git can see is dirty (delete never
+  auto-commits; outside a git repo the agent owns VCS state), then the
+  folder is removed even when tmp.
 - ``move <ref> <dest>`` (dest: ``tmp`` or ``dev/tasks``; the stub is
   preserved) prints ``moved: <old> -> <new>`` and the rewritten-document
   count. Non-zero when the source folder is absent or the destination
@@ -480,11 +484,19 @@ def _cmd_archive(args: argparse.Namespace) -> int:
     except StateOpError as exc:
         _print_state_op_error(exc)
         return 1
-    disposition = (
-        "final state committed; folder deleted; git is the record"
-        if result.folder_removed
-        else f"moved to {result.archived_to}, status: archived"
-    )
+    if result.folder_removed:
+        disposition = (
+            "final state committed; folder deleted; version control is the "
+            "record"
+        )
+    elif result.vcs_pending:
+        disposition = (
+            "final state recorded; folder kept -- not a git workspace, so "
+            "submit it with your version control (e.g. p4 submit), then run "
+            "delete"
+        )
+    else:
+        disposition = f"moved to {result.archived_to}, status: archived"
     print(f"archived: {result.canonical} ({disposition})")
     return 0
 
@@ -818,14 +830,15 @@ def main(argv: list[str] | None = None) -> int:
         "archive",
         "Archive an active task per the closure policy: tmp -> status "
         "archived, folder moved to tmp/archived-tasks/<stub>; non-tmp -> "
-        "final state committed, then folder deleted and the removal "
-        "committed (git is the record).",
+        "version control is the record (git repo: commit final state, "
+        "delete folder, commit removal; other/no VCS: record final state, "
+        "keep folder for the agent to submit + delete).",
     )
     add_state_op_parser(
         "delete",
-        "Archive's active precondition plus the commit-first guard, then "
-        "remove the folder even when tmp (unconditional removal; never "
-        "auto-commits).",
+        "Remove the folder even when tmp (unconditional removal). Accepts "
+        "an active or archived task; refuses a dev/tasks folder git can "
+        "see is dirty (never auto-commits).",
     )
     p_move = add_state_op_parser(
         "move",
