@@ -156,11 +156,15 @@ def preflight() -> list[str]:
             f"not on {DEV_BRANCH} (publish releases {DEV_BRANCH} -> "
             f"{MASTER_BRANCH}); checkout {DEV_BRANCH} first")
 
-    if git("status", "--porcelain"):
+    dirty = git("status", "--porcelain")
+    if dirty:
         raise PublishError(
-            "working tree is dirty. Commit your code and version bump first -- "
-            "this script owns the derived artifacts and the git flow, not your "
-            "changes.")
+            "working tree is dirty -- commit your work before publishing "
+            "(the dev tree is shared by multiple agents/sessions, so uncommitted "
+            "changes may be another session's in-flight work; commit them in "
+            "scoped commits rather than stashing or discarding). This script "
+            "owns the derived artifacts and the git flow, not your changes.\n"
+            "Dirty files:\n" + dirty)
 
     git("fetch", REMOTE, "--quiet")
 
