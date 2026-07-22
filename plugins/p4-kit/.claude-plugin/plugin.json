@@ -1,10 +1,10 @@
 {
   "name": "p4-kit",
-  "version": "0.20.0",
+  "version": "0.20.1",
   "dependencies": [
     "bootstrap"
   ],
-  "description": "Multi-agent code review of pending Perforce changelists via /p4-code-review (parallel Claude subagents). Shares chunking + CLAUDE.md primitives with git-kit via bootstrap_lib.code_review.",
+  "description": "Multi-agent code review for pending Perforce changelists (/p4-code-review) -- auto-shelves, reviews, cleans up.",
   "author": {
     "name": "Christina"
   },

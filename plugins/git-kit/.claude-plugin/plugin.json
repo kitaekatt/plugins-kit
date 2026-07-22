@@ -1,10 +1,10 @@
 {
   "name": "git-kit",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "dependencies": [
     "bootstrap"
   ],
-  "description": "Git + GitHub multi-agent code review (/git-code-review) plus gh CLI bootstrap (auth + optional org membership). Shares chunking + CLAUDE.md primitives with p4-kit via bootstrap_lib.code_review.",
+  "description": "Multi-agent pre-push code review for git (/git-code-review) with per-finding validation and declined-findings memory.",
   "author": {
     "name": "Christina"
   },

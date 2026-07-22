@@ -1,7 +1,7 @@
 {
   "name": "openrouter-kit",
-  "version": "0.2.3",
-  "description": "OpenRouter API key management and account validation: shared library, CLI, and bootstrap-time credential check that other plugins/projects depend on for OpenRouter access",
+  "version": "0.2.4",
+  "description": "Manage and validate OpenRouter API keys via a shared library, CLI, and session-start check.",
   "author": {
     "name": "Christina"
   },

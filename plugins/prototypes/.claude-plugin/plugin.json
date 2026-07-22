@@ -1,7 +1,7 @@
 {
   "name": "prototypes",
-  "version": "0.2.0",
-  "description": "Experimental skills that may graduate into their own plugins. Currently hosts /claude-explorer (Omarchy-style HTML browser of ~/.claude/ + the current project, Python crawl + local HTTP serve + embedded SPA). Depends on plugins-kit:skills-kit for the shared audit framework.",
+  "version": "0.2.1",
+  "description": "Experimental skills awaiting graduation; currently /claude-explorer, an HTML browser of your Claude configuration.",
   "author": {
     "name": "Christina"
   },

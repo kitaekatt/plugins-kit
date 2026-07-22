@@ -31,8 +31,8 @@
     },
     {
       "name": "bootstrap",
-      "description": "Centralized bootstrap engine for Claude Code plugins",
-      "version": "0.56.0",
+      "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
+      "version": "0.56.1",
       "author": {
         "name": "Christina"
       },
@@ -41,8 +41,8 @@
     },
     {
       "name": "p4-kit",
-      "description": "Multi-agent code review of pending Perforce changelists via /p4-code-review (parallel Claude subagents). Shares chunking + CLAUDE.md primitives with git-kit via bootstrap_lib.code_review.",
-      "version": "0.20.0",
+      "description": "Multi-agent code review for pending Perforce changelists (/p4-code-review) -- auto-shelves, reviews, cleans up.",
+      "version": "0.20.1",
       "author": {
         "name": "Christina"
       },
@@ -54,8 +54,8 @@
     },
     {
       "name": "git-kit",
-      "description": "Git + GitHub multi-agent code review (/git-code-review) plus gh CLI bootstrap (auth + optional org membership). Shares chunking + CLAUDE.md primitives with p4-kit via bootstrap_lib.code_review.",
-      "version": "0.8.0",
+      "description": "Multi-agent pre-push code review for git (/git-code-review) with per-finding validation and declined-findings memory.",
+      "version": "0.8.1",
       "author": {
         "name": "Christina"
       },
@@ -67,8 +67,8 @@
     },
     {
       "name": "skills-kit",
-      "description": "Authoring and auditing skills + CLAUDE.md files, organized as a verb x artifact matrix: md-authoring (/md-authoring) and md-audit (/md-audit) union domains over the md artifact, the cohesion-principles placement spine, and the canonical audit-framework (primitives, compositions, audit-kinds, viewer-kinds) that other plugins' audits and viewers ride on.",
-      "version": "0.33.0",
+      "description": "Author and audit the CLAUDE.md and SKILL.md files Claude loads -- placement, cohesion, drift.",
+      "version": "0.33.1",
       "author": {
         "name": "Christina"
       },
@@ -93,8 +93,8 @@
     },
     {
       "name": "awesome-kit",
-      "description": "Christina's cross-domain skills: orchestrate (delegate significant multi-part work to background agents to preserve main-agent context), the task system (file-backed task/issue tracking -- folders as source of truth, embedded task_list references, plan.md task_items blocks enumerating each task's open items, 15 verbs; evolved from the hand-off skill in 0.8.0, which it replaces), a shared communication framework (task + verbose-updates), /plugin-ecosystem (interactive 16:9 HTML poster of marketplaces and plugins), and /html-pdf (convert an HTML file to PDF via headless Chromium and open it). Depends on plugins-kit:skills-kit for the shared audit framework and the skills_kit_lib shared library (schema validation + document walking).",
-      "version": "0.16.0",
+      "description": "Render your installed marketplaces, plugins, and skills as a clickable HTML poster; plus file-backed task tracking.",
+      "version": "0.16.1",
       "author": {
         "name": "Christina"
       },
@@ -107,8 +107,8 @@
     },
     {
       "name": "prototypes",
-      "description": "Experimental skills that may graduate into their own plugins. Currently hosts /claude-explorer (Omarchy-style HTML browser of ~/.claude/ + the current project, Python crawl + local HTTP serve + embedded SPA). Depends on plugins-kit:skills-kit for the shared audit framework.",
-      "version": "0.2.0",
+      "description": "Experimental skills awaiting graduation; currently /claude-explorer, an HTML browser of your Claude configuration.",
+      "version": "0.2.1",
       "author": {
         "name": "Christina"
       },
@@ -121,8 +121,8 @@
     },
     {
       "name": "openrouter-kit",
-      "description": "OpenRouter API key management and account validation: shared library, CLI, and bootstrap-time credential check that other plugins/projects depend on for OpenRouter access",
-      "version": "0.2.3",
+      "description": "Manage and validate OpenRouter API keys via a shared library, CLI, and session-start check.",
+      "version": "0.2.4",
       "author": {
         "name": "Christina"
       },
@@ -134,8 +134,8 @@
     },
     {
       "name": "hue-kit",
-      "description": "Philips Hue layered scene framework: read scenes from the bridge, solve a compact meta-group vocabulary biased toward natural room-shaped groupings, sync scene definitions bi-directionally with editable YAML, and render a self-contained HTML report. Ships a hue-kit CLI plus example data to overwrite with your own.",
-      "version": "0.9.0",
+      "description": "Manage Philips Hue scenes as editable YAML -- bridge sync, dry-run apply, HTML report.",
+      "version": "0.9.1",
       "author": {
         "name": "Christina"
       },
