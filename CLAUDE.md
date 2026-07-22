@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Currently ships (published): **awesome-kit** (cross-domain skills: shared comms framework, /plugin-ecosystem, /html-pdf), **bootstrap** (dependency management), **bootstrap-stuck-fix** (temporary remediation shim for a wedged bootstrap registry record), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **hue-kit** (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), **openrouter-kit** (OpenRouter key management + shared model registry), **p4-kit** (Perforce multi-agent code review), **prototypes** (experimental skills awaiting graduation), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md: /md-authoring, /md-audit, cohesion-principles, knowledge-encoding, update-documentation), and **unreal-kit** (Unreal Engine Python API automation). Dev-only (not published, `published: false`): **agent-glue**, **workflow-kit**.
+**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Currently ships (published): **awesome-kit** (plugin-ecosystem poster, /html-pdf, task tracking), **bootstrap** (dependency management), **bootstrap-stuck-fix** (temporary remediation shim for a wedged bootstrap registry record), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **hue-kit** (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), **openrouter-kit** (OpenRouter key management + shared model registry), **p4-kit** (Perforce multi-agent code review), **prototypes** (experimental skills awaiting graduation), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md: /md-authoring, /md-audit, cohesion-principles, knowledge-encoding, update-documentation), and **unreal-kit** (Unreal Engine Python API automation). Dev-only (not published, `published: false`): **agent-glue**, **workflow-kit**.
 
 This repo is a **Claude Code plugin marketplace** — it extends Claude Code with skills, commands, and hooks via the `.claude-plugin/marketplace.json` manifest. Plugins are loaded either via `--plugin-dir` (local development) or `enabledPlugins` in settings (production installs from the remote repo).
 
@@ -72,9 +72,7 @@ The **bootstrap** plugin is the dependency-management layer every other plugin i
 
 **Healthy bootstrap is silent.** No SessionStart output does NOT mean bootstrap is broken; it means every check passed (or hit a cache). To verify a plugin's bootstrap actually ran, read its log at `~/.claude/plugins/data/<marketplace>/<plugin>/bootstrap.log`. If the log doesn't exist, bootstrap never reached that plugin -- most often because the per-project cooldown short-circuited the run (see below).
 
-**Per-project cooldown.** After bootstrap finishes for a project, it writes a per-project timestamp at `~/.claude/plugins/data/plugins-kit/bootstrap/cooldowns/last_run_epoch.<sha1-of-cwd>`. Subsequent SessionStart hooks within the cooldown window are skipped entirely -- bootstrap does NOT re-check anything, no logs are written, no remediation runs. After a `bootstrap.json` change, after publishing a plugin update you want pulled in immediately, or any time bootstrap appears to be ignoring you, clear the cooldown:
-
-> **Auto-bypass on plugin/marketplace change.** The cooldown is automatically bypassed when `installed_plugins.json` or `known_marketplaces.json` is newer than the cooldown stamp, so a published plugin update re-arms a real bootstrap pass on the next session without a manual reset. You still need a manual reset (below) only when nothing in the plugin registry changed -- e.g. you edited a *layered* `bootstrap.json` (`~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`), which touches neither registry file. Full mechanism (mtime gate, why a cooldown skip never refreshes the stamp, the `_shared_libs`-stale failure it fixes): the `cooldown_registry_invalidation` insight below.
+**Per-project cooldown.** After a pass, bootstrap writes a per-project timestamp (`~/.claude/plugins/data/plugins-kit/bootstrap/cooldowns/last_run_epoch.<sha1-of-cwd>`); SessionStart hooks inside the window are skipped entirely -- no checks, no logs, no remediation. It is the only run throttle, and the answer ~99% of the time when bootstrap appears to be ignoring you. Reset it with:
 
 ```bash
 bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh             # current project (CWD)
@@ -83,15 +81,14 @@ bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh --status    # list co
 bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh --clear-alerts  # also nuke pending alert/display files
 ```
 
-The reset script's `--help` is the canonical doc; the usage block lives inline at `plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh:2-18`.
+The reset script's `--help` is the canonical doc.
 
-**The cooldown is the only run throttle.** (A per-check `bootstrap_cache.sha256` content-hash cache used to exist alongside it; that module was dead code and was deleted in bootstrap 0.17.0 -- if you see it referenced, the doc is stale.) The two narrow caches that DO still exist are unrelated to run throttling: the plugin-discovery `bootstrap_cache` list in bootstrap's config.json, and the shared-lib sync hash. When bootstrap appears to be ignoring you, the cooldown is the answer ~99% of the time.
+**Update-lifecycle guardrails** (the bootstrap skill is the SSOT -- invoke `/bootstrap`, facts `message_outcomes` + `update_lifecycle`, and `plugin-reload-lifecycle.md` for full mechanics):
 
-**Two skip gates, both bypass on a registry change.** `session-bootstrap.sh` has a second gate *above* the cooldown: a **session-id guard** that skips a repeat of the *same* `session_id` (anti-double-fire). It bites because **`claude --resume` re-presents the original session's id** — so after an update a resumed session would skip the whole pass, except the guard (like the cooldown) now **bypasses when `installed_plugins.json`/`known_marketplaces.json` is newer than its stamp** (added in bootstrap 0.24.0 after a live `--resume` test stalled). Net: a published update is picked up on the next session whether fresh or `--resume`, no manual reset. `bootstrap-reset-cooldown` clears **both** gates (`--status` reports both). The remaining manual-reset case is a *layered* `bootstrap.json` edit (touches no registry file).
-
-**Single-session updates (the harvest).** A bootstrap version bump used to need *two* restarts (the SessionStart pass runs the OLD engine; the fetch lands after; the NEW engine only runs next session). Bootstrap now **harvests** the already-fetched new engine on the next `UserPromptSubmit` and runs it in-session, converging an update in one session. **Advising the user:** provisioning is done once `engine_ran_version` (a stamp in the bootstrap data dir) equals the installed version — via the harvest *or* a restart; a restart is needed *only* to load new plugin **code** (hooks/skills), not for provisioning, so the SessionStart "restart to load it" nag is **moot** once `engine_ran_version` has caught up — say so rather than parroting it. If `engine_ran_version` stays *behind* `installed` after a restart + a prompt or two, that's an **anomaly** to surface (a silent harvest no-op is how a real bug presents), not success. Full operational guide — state files, healthy flow, anomaly checklist — is in `plugin-reload-lifecycle.md` (the `single_session_update_protocol` insight below points to it).
-
-**Mid-session installs also converge without a restart** (bootstrap 0.51.0): a plugin installed/uninstalled/updated mid-session (`/plugin` + `/reload-plugins`) is detected on the next `UserPromptSubmit` via a content hash of the registry `plugins` map + settings.json `enabledPlugins` (`plugins_state_hash`, absorbed by the engine at pass completion) and a full provisioning pass is relaunched once per change — so a freshly installed plugin's venv exists a prompt or two later. Mechanism: the "Mid-session install relaunch" section of `plugin-reload-lifecycle.md`.
+- A published update converges in ONE session without a manual reset -- both skip gates (session-id guard, cooldown) auto-bypass on a registry change, `claude --resume` included, and the harvest runs the new engine in-session. Do not prescribe extra restarts or resets on a normal publish.
+- A manual `bootstrap-reset-cooldown` is needed only after editing a *layered* `bootstrap.json` (`~/.claude/` or `<project>/.claude/`), which touches no registry file.
+- Provisioning is done once `engine_ran_version` == installed version; a restart is then needed only to load new plugin CODE. `engine_ran_version` staying behind after a restart + a prompt is an **anomaly to surface**, not success.
+- Mid-session installs (`/plugin` + `/reload-plugins`) also converge without a restart -- a fresh plugin's venv exists a prompt or two later.
 
 For deeper material -- manifest schema, condition categories, fix-all flow, engine internals -- invoke `/bootstrap`.
 
@@ -136,9 +133,7 @@ uv run python scripts/publish.py --check    # preflight only; no writes, no push
 
 **`scripts/publish.py` is the source of truth for the flow** — steps, guards, and post-verification live in code so this file cannot drift from what actually runs. Read its module docstring for the mechanics. Do not hand-run the steps; the script exists because three of them are easy to get wrong in ways that fail silently (a half-restored dev-tree that makes your next session load plugins from the working copy; a merge that publishes a dev-only plugin; an `index.html` that lands outside the release commit).
 
-**Definition.** "Publish" means **all** of: version bump + regenerated `marketplace.json`, regenerated `index.html` inside the release commit, `dev` pushed, and `master` fast-forwarded and pushed. A bump without a master merge is **not** a publish — users still see the old version. A `dev` push without a master merge is **not** a publish — `master` is the cache source. A master merge without a bump is **not** a publish — the cache key doesn't change, so consumers never refetch. `publish.py` refuses each of these rather than half-shipping.
-
-**A bare `git push` is not a publish.** The canonical publish is `uv run python scripts/publish.py` -- it regenerates derived artifacts (`index.html`) inside the release commit, pushes `dev`, fast-forwards `master`, and verifies `dev` == `master`. A bare push leaves `master` stale (it is the cache source consumers fetch), so consumers never see the release.
+**Definition.** "Publish" means **all** of: version bump + regenerated `marketplace.json`, regenerated `index.html` inside the release commit, `dev` pushed, and `master` fast-forwarded and pushed. Anything less is not a publish -- a bump without the master merge, a bare `git push`, or a master merge without a bump each leaves consumers on the old release (`master` is the cache source, and the cache keys on version). `publish.py` refuses each of these rather than half-shipping.
 
 `.claude-plugin/marketplace.json` is **derived data** — rebuilt from each plugin's `plugin.json`, filtered by `"published"` (missing = `true`; `false` = excluded). Never hand-edit its plugin entries; the pre-commit hook rejects drift.
 
@@ -165,23 +160,7 @@ python plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py \
 
 **At publish time this is `publish.py`'s job — don't hand-run it.** The script repoints installPaths at the working copy via `dev-tree.py` (which, since the 0.47.0 release, also **synthesizes** entries for repo plugins the registry doesn't record — the registry-v2 case), regenerates, restores in a `finally`, and post-verifies the restore landed. It also lands `index.html` *inside* the release commit, so master is never in a state where its page disagrees with its own `marketplace.json`. The manual sequence below is for **previewing** only.
 
-**This is equivalent to the old post-merge regen, not an approximation** — verified 2026-07-15 on the bootstrap 0.40.0 release by generating both ways and diffing: byte-identical. The dev tree and the freshly-published cache are the same content; only the path differs.
-
-**Always restore dev-tree mode.** Leaving it on silently repoints every plugin at the working copy for all later sessions — a footgun far worse than a stale page. If you run `dev` by hand, run `normal` in the same breath, and confirm with `status`:
-
-```bash
-uv run python scripts/dev-tree.py dev        # installPaths -> this working copy
-python plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py \
-  --marketplace plugins-kit --title "plugins-kit marketplace" \
-  --marketplace-json plugins-kit=.claude-plugin/marketplace.json \
-  --output ./index.html --public --no-open
-uv run python scripts/dev-tree.py normal     # ALWAYS restore, even if the regen failed
-uv run python scripts/dev-tree.py status     # confirm: installPaths @ cache: <n>, not 0
-```
-
-**Both flags are load-bearing — a regen without them produces a page that is worse than the published one.** `--public` drops the on/off/installed state badges, which describe the generating machine rather than the marketplace; omit it and a checked-in page carries this box's `"state": "on"/"unmanaged"` values (and loses the flow-to-content-height CSS). `--marketplace-json` overrides the listing that the phantom-install filter reads: the **cached** `marketplace.json` under `~/.claude/plugins/marketplaces/` lags the source by one publish, so a plugin added in the current release is absent from it and gets dropped from its own release's page. That filter exists to catch plugins *removed* upstream; it misfires on ones *added*. `publish.py` passes both.
-
-**Preview vs publish — same mechanism, different commit rule.** The dev-tree regen above is also how you *preview* the page against dev work (`claude-dev` / `pk-dev` do the same installPath rewrite for a whole session). The two uses differ only in whether the result may be committed: at **publish** time dev is the about-to-be master, so its page is the published page — commit it. **Outside** a publish, dev contains skills and versions that are not going out, so the page renders a marketplace that does not exist yet — look at it, then `git restore index.html`. The rule is not "never commit a dev-tree page"; it is "only commit one whose content is being published in the same commit."
+**Previewing the page by hand** (dev-tree regen, the load-bearing `--public`/`--marketplace-json` flags, always-restore discipline, preview-vs-publish commit rule): see [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md). The one rule that must stay front-of-mind: if you ever run `dev-tree.py dev` by hand, run `normal` in the same breath -- leaving dev-tree mode on silently repoints every plugin at the working copy for all later sessions.
 
 ### Dev-only plugins — do not publish to master
 
@@ -198,13 +177,7 @@ When you see commits for a dev-only plugin in `git log origin/master..origin/dev
 
 ### dev -> master reconcile: conflict-resolution policy
 
-A full `dev`/`master` reconcile (the "publish: reconcile master with dev" release) conflicts because both branches independently edit the same files (marketplace.json, plugin.json versions, CLAUDE.md, .gitignore, skills). `dev` is the source of truth for a reconcile — master's divergent commits are prior publish/reconcile artifacts that `dev` supersedes. Resolve **toward dev**, with one guard that prevents silently dropping a master-only fix:
-
-- **Generated / JSON files** (`marketplace.json`, every `plugin.json`, `index.html`): clobber with dev unconditionally. `plugin.json` versions are dev >= master by construction; `marketplace.json` is regenerated from them anyway (`scripts/regen_marketplace.py` after the merge); `index.html` is a post-publish regen.
-- **Non-generated text** (`.gitignore`, `CLAUDE.md`, `*.md`, `*.py`, etc.): first run `git diff dev origin/master -- <file>` and inspect the `+` lines (content master has that dev LACKS). If any are important, **back-port them to dev first** (commit on dev), then clobber with dev. If there are no master-only lines, dev is a superset — clobber with dev directly, no loss. (In practice these conflicts are usually textual-only: dev already contains master's content via a different commit, so the `+` set is empty and the clobber is safe.)
-- **`published: false` plugins** (agent-glue, workflow-kit): dev-only by design and filtered out of `marketplace.json` by the regenerator, so their divergence never reaches consumers — take dev and move on; don't agonize over their conflicts.
-
-Mechanics: `git checkout master && git merge --no-commit --no-ff dev`, resolve each conflict per the rules above (`git checkout --theirs <file>` takes dev while on master; `git rm` honors a dev-side delete), then `python scripts/regen_marketplace.py`, run `pytest tests/bootstrap` + `regen_marketplace.py --check`, commit the merge, and push master. The back-port-then-clobber rule is what makes the wholesale "dev wins" resolution safe rather than blind.
+For a full `dev`/`master` reconcile, resolve **toward dev** (master's divergent commits are prior publish artifacts dev supersedes) -- with one guard: back-port any master-only `+` lines in non-generated text to dev FIRST, then clobber. Full policy and mechanics: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
 
 ### Pre-publish validation (default)
 
@@ -254,27 +227,13 @@ Read every line. If anything is unrelated to the feature, `git restore --staged 
 
 **Gotcha 3: a botched publish burns the version number.** Cache entries on consumer machines key off `(plugin, version)`. If a bad version is pushed to master, retracting it doesn't evict caches that already pulled it — same version = same code, forever, from the cache's view. The fix is a patch-bump *past* the burned number (e.g. 0.11.0 broken → don't ship 0.11.1, jump to 0.12.0) so every consumer's cache invalidates cleanly. The 0.11.1 / `patch-bump 4 plugins to force-refresh post-retraction caches` commits on master are an example of this recovery pattern.
 
-**Gotcha 4: unauthorized publish.** A publish go-signal authorizes the full three-step flow (version bumps, push to dev, merge to master). It does **not** authorize sweeping in adjacent unrelated work just because it happens to be staged or sitting on `dev`. If your feature commit is clean but `dev` has other commits, that's gotcha 1 territory — branch from master. The publish authorization is scoped to the work the user actually approved.
+**Gotcha 4: unauthorized publish.** The go-signal rule above scopes authorization to the work the user actually approved -- it does **not** authorize sweeping in adjacent unrelated work that happens to be staged or sitting on `dev`. A clean feature commit next to unrelated dev commits is gotcha 1 territory: branch from master.
 
 **Recovery: how to retract.** A bad publish on master is fixed forward, never with `push --force` to master. Push a follow-up commit that either (a) reverts the bad commit and patch-bumps the affected plugins past the burned version, or (b) re-implements correctly under a new version. Consumers with `autoUpdate: true` then refresh on their next session start. Never rewrite master history — other machines have already fetched it.
 
-**Master drifts behind dev on non-plugin infra — reconcile periodically.** The publish flow cherry-picks *feature* commits (plugin code + version bumps) to master; it never carries the not-tied-to-a-feature changes — a CLAUDE.md gotcha you added while thinking about process, a new test file, a `.gitignore` tweak, dev tooling. So master silently falls behind dev on repo **infrastructure** — including, ironically, the safe-publish gotchas themselves and test coverage for *published* plugins. This is expected (the per-publish scoping in gotcha 4 is what causes it), not a bug — but reconcile it from time to time. Do it in the **master tree**, against `origin/dev`'s committed state (never the live dev working tree), keeping dev-only plugins back:
+**Master drifts behind dev on non-plugin infra — reconcile periodically.** The publish flow carries feature commits only, so master silently falls behind dev on repo infrastructure (gotchas, tests, tooling). Expected, not a bug; sync it from time to time with the infra-drift procedure in [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md) (no version bumps, consumers unaffected).
 
-```bash
-git diff --name-only origin/master origin/dev \
-  | grep -vE '^(plugins|tests)/(agent-glue|workflow-kit)/' \
-  | xargs git checkout origin/dev --
-```
-
-Then confirm no dev-only plugin content leaked (`git diff --cached --name-only`), run the brought tests, commit, push master. No version bumps, no `marketplace.json` change — pure infra sync, so consumers are unaffected. Skip the master→dev merge-back when the dev tree is being actively edited: the content already matches on both branches, so the history merge can wait for a calm moment.
-
-**Why both files**: Claude Code uses the `marketplace.json` version to decide whether to fetch a new cache entry. If you only bump `plugin.json` but not `marketplace.json`, consumers won't see the update. The regenerator + a pre-commit hook (`scripts/pre-commit-version-check.sh`) keep them in sync automatically.
-
-**The cache keys on version** — same version = same code. The cache will NOT refresh without a version bump, even if you push new commits. Fresh installs between releases copy HEAD code under the old version string, creating **silent divergence** — two users on the "same version" with different code. The dev-branch strategy above prevents this. Never copy files directly into the plugin cache — always use this publish flow.
-
-**Manifest edits count as code edits.** Adding a tool to `bootstrap.json`, changing a `download:` recipe, bumping a `venv.check_imports` list — all need a version bump too. The engine reads each plugin's `bootstrap.json` from its cached `installPath`, so a manifest edit without a version bump is structurally invisible to consumers (see the `manifest_changes_need_version_bump` insight below).
-
-**Don't omit the version field** hoping for rolling updates. Claude Code substitutes a truncated git SHA, which becomes a static cache key at install time — identical behavior to a version string, with worse readability.
+**The cache keys on version** — same version = same code; the cache never refreshes without a bump, and fresh installs between releases copy HEAD code under the old version string (**silent divergence**). Consequences: `plugin.json` and `marketplace.json` versions must move together (the regenerator + `scripts/pre-commit-version-check.sh` enforce this); **manifest edits count as code edits** (a `bootstrap.json` change without a bump is structurally invisible to consumers -- see the `manifest_changes_need_version_bump` insight below); never copy files directly into the plugin cache; and don't omit the version field hoping for rolling updates (Claude Code substitutes a git SHA that becomes a static cache key anyway).
 
 **Keep architecture docs current** — when modifying bootstrap behavior, update the bootstrap skill references (`plugins/bootstrap/skills/bootstrap/references/`) to reflect the changes. These are the source of truth for how the system works.
 
@@ -284,22 +243,11 @@ Then confirm no dev-only plugin content leaked (`git diff --cached --name-only`)
 
 **Plan non-trivial tasks**: Plan when both (a) the task is non-trivial, and (b) the implementation could go several reasonable directions. Share the plan, get a thumbs-up, then implement. Skip planning when the path is obvious or the user has already framed the approach — in those cases extra ceremony reads as procedural friction, not rigor. When you do plan, use plan mode (`EnterPlanMode`) as the sanctioned space to think and propose; don't ritualize the steps. The goal is alignment on intent, not a checklist.
 
-**Skill-based document placement** (package cohesion): When creating a document, ask "what skill does this belong to?" — the same way you'd ask "what package does this class belong in?" Apply these cohesion principles:
-
-- **CRP (Common Reuse Principle)** — If you use one document in a skill, you should plausibly use them all. Don't force a skill to load content the consumer doesn't need.
-- **CCP (Common Closure Principle)** — Documents that change for the same reason belong in the same skill. A schema change should affect one skill, not scatter across several.
-- **ADP (Acyclic Dependencies Principle)** — Skills don't circularly depend on each other. The dependency graph is a DAG.
-
-If no existing skill fits, create a stub skill with a description that explains why it exists. The document lives as a reference within the skill and is progressively disclosed (loaded only when the skill is invoked, not upfront).
+**Skill-based document placement** (package cohesion): when creating a document, ask "what skill does this belong to?" and place it by the CCP/CRP/ADP framework -- the `skills-kit:cohesion-principles` skill is the SSOT for those principles and the placement algorithm. If no existing skill fits, create a stub skill and let the document live as a progressively-disclosed reference inside it.
 
 **Plugin boundaries are hard boundaries for cohesion work.** Never move content between plugins — or into a new plugin — to achieve skill cohesion. Plugins are independently versioned, installed, and bootstrapped units; relocating a skill/reference across a plugin boundary to satisfy CCP/CRP/ADP breaks that independence (cross-plugin caches, dependency edges, version coupling) and is never worth the cohesion gain. Cohesion refactors operate *within* a plugin only. When you spot a genuine cohesion opportunity that spans plugins — two doer-skills in different plugins sharing a subject (e.g. git-kit `git-code-review` + p4-kit `p4-code-review`), a reference duplicated across plugins, a shared substrate two plugins both consume — **surface it as an insight** (a `claude_md:` insight or a note in the relevant skill), do **not** act on it by relocation or by spawning a unifying plugin. Sharing across plugins is done through a library both depend on (e.g. `bootstrap_lib.code_review`), not by merging the skills.
 
-**Reference file design** (within a skill): Apply the same cohesion principles to reference files. Each reference should serve a single audience and change for a single reason. Validate with:
-
-- **CRP test**: "If I load this reference, do I plausibly need all of it?" If a reference mixes engine internals with manifest schema, split it.
-- **CCP test**: "When X changes, how many references need updating?" If more than one, the boundary is wrong.
-
-See `plugins/bootstrap/skills/bootstrap/` for the gold standard — 4 references split by audience (engine developers, manifest authors, debuggers, plugin authors) with clean change boundaries.
+**Reference file design** (within a skill): each reference serves a single audience and changes for a single reason (same cohesion framework). See `plugins/bootstrap/skills/bootstrap/` for the gold standard -- references split by audience with clean change boundaries.
 
 ## Plugin System
 
@@ -391,139 +339,61 @@ claude_md:
       keywords: [cooldown, bootstrap not running, force bootstrap, plugin update not applying, last_run_epoch, bootstrap-reset-cooldown, silent skip, no bootstrap log]
       summary: Bootstrap throttles itself per-project via a cooldown file; clear it with bootstrap-reset-cooldown.sh when bootstrap appears to be ignoring you.
       detail: |
-        After bootstrap runs for a project it writes ~/.claude/plugins/data/plugins-kit/bootstrap/cooldowns/last_run_epoch.<sha1-of-cwd>.
-        Subsequent SessionStart hooks within the cooldown window skip bootstrap entirely -- no
-        log entry, no checks, no remediation. Symptoms: a published plugin update doesn't take
-        effect, a bootstrap.json change isn't applied, or a plugin's bootstrap.log is stale.
-        Reset with `bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh` (current
-        project), `--all` (every project), or `--status` (list cooldowns + ages, no writes).
-        The cooldown is the only run throttle (the old per-check bootstrap_cache.sha256
-        cache was deleted in 0.17.0) and the right tool 99% of the time. See the
-        "Bootstrap" section above for full context.
+        Symptoms: a published update doesn't take effect, a bootstrap.json change isn't applied,
+        or a plugin's bootstrap.log is stale. Reset with
+        `bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh` (`--all`, `--status`).
+        The cooldown is the only run throttle and the right tool 99% of the time. Commands and
+        guardrails: the "Bootstrap" section above; mechanics: the /bootstrap skill.
       origin: User directive 2026-05-05 -- documentation gap surfaced when a unreal-kit publish appeared not to apply.
       added: "2026-05-05"
     - id: cooldown_registry_invalidation
       keywords: [cooldown bypass, installed_plugins.json, known_marketplaces.json, stale shared_libs, version bump not applied, mtime, -nt, registry change, single-pass convergence, fewer reloads, reload-plugins vs restart, when to reload, when to restart, hooks need restart myth, SessionStart re-fire, script content live, registration reload, session-id guard, last_session_id, claude --resume, resume skips bootstrap, two skip gates, Layer 1, Layer 2]
       summary: BOTH session-bootstrap.sh skip gates -- the Layer-1 session-id guard AND the Layer-2 per-project cooldown -- auto-bypass when installed_plugins.json/known_marketplaces.json is newer than their stamp, so a plugin update re-arms a real pass on the next session (fresh OR `claude --resume`, which reuses the session_id) without a manual reset. Layered-bootstrap.json edits still need a manual reset.
       detail: |
-        Gotcha this fixes: Claude Code's plugin-update path bumps installed_plugins.json to the
-        new version, but the per-project cooldown (last_run_epoch.<sha1-cwd>) independently
-        throttled the SessionStart bootstrap pass that resyncs ~/.claude/plugins/data/plugins-kit/_shared_libs/.
-        Result: version looked current while the shared lib stayed stale, and multiple restarts
-        didn't fix it (every restart landed inside the cooldown window). Fix (session-bootstrap.sh
-        cooldown gate): honor the cooldown only when NEITHER installed_plugins.json NOR
-        known_marketplaces.json is newer (mtime, `-nt`) than the cooldown stamp. Claude Code
-        rewrites those on any plugin install/update/rescope or marketplace add/refresh, so a
-        version bump re-arms a real pass on the next session. A cooldown SKIP never refreshes the
-        stamp, so the bypass stays armed across every restart until a pass actually re-provisions.
-        Paired engine change: _shared_lib_convergence_sweep (Step 4c) re-links all shared_lib_imports
-        consumers after every owner has published, so a consumer processed before its owner converges
-        in the SAME pass instead of deferring to next session. Net effect: after a publish you
-        generally need ONE reload, not several. Still need a manual bootstrap-reset-cooldown when
-        nothing in the plugin registry changed -- e.g. editing a LAYERED bootstrap.json
-        (~/.claude/bootstrap.json or <project>/.claude/bootstrap.json), which touches neither
-        registry file. Companion to bootstrap_cooldown_reset.
-
-        UPDATE (bootstrap 0.24.0): the SAME registry-newer bypass was added to the Layer-1
-        SESSION-ID GUARD (session-bootstrap.sh stamps last_session_id and skips a repeat of the
-        same session_id as an anti-double-fire dedup). `claude --resume` re-presents the ORIGINAL
-        session_id, so without that bypass a resumed session skipped the whole pass even right
-        after an update landed (a live test caught this). Now it bypasses when a registry file is
-        newer than the guard stamp and runs. bootstrap-reset-cooldown clears BOTH gates.
-
-        The one restart bootstrap genuinely can't eliminate is Claude Code re-firing a SessionStart
-        hook (it only runs on a fresh session) -- EXCEPT for bootstrap's OWN version updates, which
-        the harvest (see single_session_update_protocol) now converges in-session on the next
-        UserPromptSubmit, so a bootstrap version bump needs one session, not two restarts. For the provable case -- a plugin that ENTERED the
-        registry during the pass (layered `plugins:` install, per-plugin, or script install; detected
-        by a registry before/after diff, NOT Step 4b's new_plugins, which misses layered installs --
-        the cache-kit end-to-end test caught that), not yet loaded -- the engine emits a reload/restart
-        nag (_reload_advice, Step 4d): restart Claude / the IDE if the new plugin registers a SessionStart
-        hook (only a fresh session re-fires it), else /reload-plugins. A plugin merely UPDATED at
-        session start is NOT nagged, so this stays quiet on normal publishes. MEASURED reload/restart
-        rule (don't trust "hooks always need a restart" -- it's wrong): a hook/engine/skill's SCRIPT
-        CONTENT is read fresh from disk each run (live, no reload); REGISTRATION (hooks.json command
-        map, skills/commands) is reloaded in-session by /reload-plugins, including a changed hook
-        command; only SessionStart re-firing needs a new session. For a real version update (cache
-        version dir moves), restart Claude/IDE to re-resolve install paths reliably. Full mechanics +
-        the probe method: plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md.
-        Toggle the nag with config notify_reload_needed (default true).
+        Both gates bypass when installed_plugins.json/known_marketplaces.json is newer (mtime)
+        than their stamp; a skip never refreshes the stamp, so the bypass stays armed until a
+        pass actually re-provisions. Manual bootstrap-reset-cooldown (clears BOTH gates) is
+        needed only for a LAYERED bootstrap.json edit, which touches no registry file.
+        MEASURED reload/restart rule (don't trust "hooks always need a restart" -- wrong):
+        script CONTENT is read fresh from disk each run; REGISTRATION reloads in-session via
+        /reload-plugins; only SessionStart re-firing needs a new session. Full mechanics, the
+        convergence sweep, the reload-nag (_reload_advice), and the probe method:
+        plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md and the
+        /bootstrap skill's update_lifecycle fact. Companion to bootstrap_cooldown_reset.
       origin: "Feedback report 2026-05-31 -- openrouter-kit 0.1.5 -> 0.2.0 publish left a consumer's _shared_libs stale because the cooldown blocked the resync across restarts. Implemented Part 1 (registry-change bypass) + Part 2 (convergence sweep)."
       added: "2026-05-31"
     - id: single_session_update_protocol
       keywords: [harvest, single-session update, engine_ran_version, harvest_launched_version, two restarts, bootstrap-display.sh, UserPromptSubmit, installPath, claude --resume, advise restart, provisioning done, update converged, anomaly, harvest no-op, script invocation, stamps.py]
       summary: Bootstrap converges its OWN version updates in ONE session via the "harvest" -- the UserPromptSubmit hook launches the already-fetched new engine in-session instead of waiting for a second restart. Provisioning is done when the engine_ran_version stamp == the installed version; a restart is then needed only to load new plugin CODE, not for provisioning.
       detail: |
-        Problem: a SessionStart hook re-fires only on a fresh session, so a published bootstrap bump
-        ran the OLD engine at session start, the fetch landed after, and the NEW engine only ran on a
-        SECOND restart. The harvest (bootstrap_lib/harvest.py, driven by
-        hooks/userpromptsubmit/bootstrap-display.sh) closes this: UserPromptSubmit DOES re-fire
-        in-session, so on each prompt it compares the installed bootstrap version (installed_plugins.json)
-        against the engine_ran_version stamp and, when installed > ran, launches the new engine by its
-        real installPath (NOT ${CLAUDE_PLUGIN_ROOT}, which is bound to the old dir), detached, in the
-        background/pending-file mode. The new engine stamps engine_ran_version = its own version on
-        completion (loop guard); harvest_launched_version caps relaunches at one per installed version.
-
-        ADVISING THE USER ON AN UPDATE: provisioning (tools/venv/shared-libs/config) is complete the
-        moment engine_ran_version == the installed version -- via the harvest OR a restart. The
-        SessionStart "restart to load it" nag is emitted by the OLD engine BEFORE the harvest runs;
-        once engine_ran_version catches up it is MOOT -- a restart then only reloads plugin CODE (new
-        hook/skill bytes Claude Code binds at session load). So for an engine-only / provisioning bump,
-        no restart is needed; only new plugin code needs one. `claude --resume` works (the guard bypass
-        -- see cooldown_registry_invalidation -- lets the resumed pass run and the harvest converge), so
-        no manual cooldown clear in the normal case.
-
-        ANOMALY (surface it, do not claim success): engine_ran_version staying BEHIND installed after a
-        restart + a prompt or two means the new engine isn't running -- check bootstrap.log for a
-        bootstrap@<new> run header and a "bootstrap harvest" audit line, and harvest_launched_version.
-        installed itself never advancing means the FETCH didn't happen (autoUpdate off / clone stale /
-        offline). This is exactly how the bugs below presented.
-
-        HISTORY / caveats: the harvest first shipped in 0.22.0 but SILENTLY NO-OP'd in production -- its
-        in-function imports were relative (from .stamps import ...) and the hook runs harvest.py as a
-        SCRIPT (no package context), so run_harvest threw and main() swallowed it; the module-level unit
-        tests hid it. Fixed in 0.25.0 (absolute imports + a subprocess test). The Layer-1 guard bypass it
-        relies on shipped in 0.24.0. The stamp files (engine_ran_version, last_version, cooldown) are
-        consolidated in bootstrap_lib/stamps.py (one atomic-write + one safe-read convention). INHERENT
-        caveat: a bootstrap-mechanism fix can't use that same mechanism to adopt itself -- the version
-        that first ships the (working) harvest can't harvest itself, and the guard-bypass version can't
-        bypass for its own adoption; that one transition needs a manual bootstrap-reset-cooldown + an
-        extra restart. Full operational guide (state files, healthy flow, anomaly checklist):
-        plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md.
+        Advising the user: provisioning is complete the moment engine_ran_version == installed
+        (harvest OR restart); the SessionStart "restart to load it" nag is moot once caught up --
+        a restart then only reloads plugin CODE. Anomaly (surface, don't claim success):
+        engine_ran_version staying BEHIND installed after a restart + a prompt means the new
+        engine isn't running (check bootstrap.log + harvest_launched_version); installed never
+        advancing means the fetch didn't happen. INHERENT caveat: a bootstrap-mechanism fix
+        can't use that mechanism to adopt itself -- that one transition needs a manual
+        bootstrap-reset-cooldown + an extra restart. Full operational guide (mechanism, state
+        files, healthy flow, anomaly checklist):
+        plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md and the
+        /bootstrap skill's update_lifecycle fact.
       origin: "Built + hardened this session (2026-06-27): single-session protocol added (0.22.0), then live testing on this machine exposed two real bugs only live/script testing could catch -- the --resume session-guard skip (fixed 0.24.0) and the harvest's script-path import failure that meant it had NEVER fired in production (fixed 0.25.0). Verified end-to-end converging 0.26.0 hands-off."
       added: "2026-06-27"
     - id: registry_v2_empty
       keywords: [installed_plugins.json, empty registry, registry v2, plugins {}, fresh machine, deleted plugins dir, provisions nothing, rescue, sessionstart missed, sessionstart-rescue, cache fallback, discover_cache_plugins, enabledPlugins, index.html empty, dev-tree synthesize, harvest blind, new machine test]
       summary: Newer Claude Code keeps installed_plugins.json PERMANENTLY EMPTY ({"version":2,"plugins":{}}) for marketplace installs -- enablement lives in settings enabledPlugins, code in the cache layout. Everything that read the registry needed a cache-scan fallback (bootstrap 0.47.0) and a SessionStart that races the fresh-machine plugin sync is caught by the UserPromptSubmit rescue (0.46.0).
       detail: |
-        Observed live 2026-07-16 while testing "bootstrap on a new machine" (delete ~/.claude/plugins,
-        restart): Claude Code re-seeds the marketplace from settings extraKnownMarketplaces, refills the
-        cache, and loads/enables everything from enabledPlugins -- but installed_plugins.json stays
-        {"version": 2, "plugins": {}} forever. Two independent failures followed:
-
-        1. SessionStart raced the plugin sync (hook not yet registered when SessionStart fired), so NO
-           provisioning pass ran that session. Fix (bootstrap 0.46.0): the SessionStart-missed RESCUE in
-           bootstrap-display.sh -- session-bootstrap.sh touches sessions/<session_id> at entry; a prompt
-           whose session_id has no marker means no pass ran, and the UserPromptSubmit hook launches
-           session-bootstrap.sh itself (detached, locked one-launch-per-session, hook JSON piped in,
-           normal gates intact). Note the rescue itself needs the UPS hook registered -- if even the
-           FIRST PROMPT races the sync, the rescue simply fires on the next prompt.
-        2. The engine's per-plugin loop iterated the (empty) registry and provisioned nothing but
-           bootstrap itself; the harvest was equally blind. Fix (bootstrap 0.47.0): cache-scan fallback
-           (plugin_resolve.discover_cache_plugins + harvest._cache_installed_bootstrap) -- synthesize
-           (name, version, installPath) from ~/.claude/plugins/cache/<mkt>/<plugin>/<version>/ for
-           ENABLED refs the registry doesn't record; highest version dir wins; registry entries keep
-           precedence; no enablement source -> no fallback.
-
-        Downstream consumers of the registry hit the same wall: dev-tree.py rewrote 0 entries (fixed --
-        it now synthesizes entries for repo plugins, which is how publish.py's index.html regen works on
-        v2 machines; the 0.47.0 release briefly shipped an empty index.html because of this), and
-        awesome-kit's generate.py rendered an empty poster (fixed in awesome-kit 0.10.0:
-        merge_cache_fallback scans the cache for refs the registry omits, registry precedence intact).
-        Also note Claude Code still WRITES enabledPlugins entries to the
-        live ~/.claude/settings.json on `claude plugin install` -- uncommitted entries appear there at
-        runtime; check `git diff` before assuming settings.json's committed state matches the live file.
-        Full mechanics: bootstrap skill references (engine-internals.md, plugin-reload-lifecycle.md).
+        Engine-side fixes (rescue 0.46.0, cache-scan fallback 0.47.0) are owned by the bootstrap
+        skill references (engine-internals.md, plugin-reload-lifecycle.md) -- consult those for
+        mechanics. The REPO-specific residue to remember here:
+        - dev-tree.py must SYNTHESIZE entries for repo plugins the registry doesn't record;
+          that synthesis is how publish.py's index.html regen works on v2 machines (the 0.47.0
+          release briefly shipped an empty index.html before it existed).
+        - awesome-kit's generate.py needed the same cache fallback (awesome-kit 0.10.0,
+          merge_cache_fallback) or the poster renders empty.
+        - Claude Code still WRITES enabledPlugins to the live ~/.claude/settings.json on
+          `claude plugin install` -- check `git diff` before assuming settings.json's committed
+          state matches the live file.
       origin: "Live fresh-machine testing 2026-07-16 (this machine, wiped ~/.claude/plugins repeatedly); fixed in bootstrap 0.46.0 (rescue) + 0.47.0 (cache fallback) + dev-tree.py synthesis."
       added: "2026-07-16"
     - id: host_python_via_plugin_venv
@@ -570,7 +440,7 @@ claude_md:
         Loading a plugin via `--plugin-dir <dev tree>` only overrides Claude Code's loading of
         THAT plugin's hooks/skills. The bootstrap engine's per-plugin loop iterates
         `installed_plugins.json` and reads each plugin's bootstrap.json from its cached
-        installPath. So when claudx loads all 12 dev plugins via --plugin-dir, the engine
+        installPath. So when claudx loads every dev plugin via --plugin-dir, the engine
         still sees each plugin's CACHED bootstrap.json -- not the dev-tree version.
         Implication: --plugin-dir smoke tests can exercise the new engine code paths (the
         engine binary is loaded from dev), but they cannot exercise new bootstrap.json content
