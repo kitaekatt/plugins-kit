@@ -30,10 +30,13 @@ reading the folder. The task **id is its path** (`tmp/<stub>` or
 global `current` pointer** (a file at
 `~/.claude/plugins/data/plugins-kit/awesome-kit/current`)
 naming the single task being worked. **Durability is location**: `tmp/<stub>`
-is ephemeral and machine-local; `dev/tasks/<stub>` is git-tracked -- archiving
-a dev/tasks folder commits its final state, then deletes it and commits the
-removal, because git is the record. Archiving a tmp folder parks it at
-`tmp/archived-tasks/<stub>` (purge that directory whenever you like).
+is ephemeral and machine-local; `dev/tasks/<stub>` is version-controlled --
+archiving a dev/tasks folder records its final state in version control, then
+deletes it, because version control is the record. Git is the VCS the scripts
+detect and automate; in a workspace under another VCS (e.g. Perforce) the
+scripts run no git commands and leave submission to you/the agent. Archiving
+a tmp folder parks it at `tmp/archived-tasks/<stub>` (purge that directory
+whenever you like).
 
 ## Invoking the CLI
 
@@ -79,7 +82,6 @@ capability_skill:
       - "The 15-verb capability surface with per-verb contracts"
       - "The agent-side behaviors the scripts leave open (work dispatch, status background summary, update rotation, and the required end-of-turn hand-off baton the update/hand-off packaging must emit)"
     references:
-      - "orchestration.md -- the delegation rule (delegate by context footprint: reads-a-lot / emits-a-lot work -> background agent, small self-contained ops -> inline) and the model-routing table for background-agent dispatch"
       - "handoff-template.md -- how to fill in and rotate a scaffolded folder's CLAUDE.md / plan.md / log.md"
       - "example-claude-md.md -- worked example of a fully-populated task-folder CLAUDE.md"
       - "communication-framework.md -- shared vocabulary (work-unit, auto-loaded vs on-demand, hand-off baton)"
@@ -106,7 +108,7 @@ capability_skill:
       gotchas:
         - "Contract: prints the classification (active/blocked/closed/archived/invalid/remote) to stdout, errors AND warnings to stderr; exit 0 iff zero findings. All warnings originate here (non-tmp archived folder, uncommitted dev/tasks folder, dangling depends_on/blocked_by, orphaned tmp ref, no task_items block, stale item reference, oversized document -- a doc over its line ceiling: CLAUDE.md/plan.md 400, other docs 800, log.md exempt)."
         - "Findings gate work -- errors AND warnings both block. Fix forward (no recovery path), then re-validate."
-        - "Advisory note: lines (NOT findings; exit code unaffected) also print to stderr: approaching-budget (doc past its healthy target -- CLAUDE.md 250, plan.md 300), dominant-section (one ## section over half of CLAUDE.md/plan.md), session-diary (dated narrative accreting in CLAUDE.md). Act on them at the next rotation; thresholds and remedies in references/handoff-template.md 'Document size budgets'."
+        - "Advisory note: lines (NOT findings; exit code unaffected) also print to stderr: approaching-budget (doc past its healthy target -- CLAUDE.md 250, plan.md 300), dominant-section (one ## section over half of CLAUDE.md/plan.md), session-diary (dated narrative accreting in CLAUDE.md), version-control-unverified (a dev/tasks folder outside any git repo -- the scripts cannot check other VCS; ensure it is submitted, e.g. via p4). Act on the size notes at the next rotation; thresholds and remedies in references/handoff-template.md 'Document size budgets'."
     - id: work
       keywords: [work on task, set current, activate task, start task, dispatch]
       user_objective: "Make a task the single global current task and load its working context."
@@ -118,7 +120,7 @@ capability_skill:
         - n: 1
           action: "Run the work verb. It validates first: ANY error OR warning blocks (exit non-zero, findings on stderr, pointer unwritten). A remote ref (tmp + other host) cannot be worked locally. If no folder exists at the ref, work auto-inits it (promotion)."
         - n: 2
-          action: "On success the script writes the current pointer and prints one Skill(skill: \"<name>\") line per skills_to_invoke entry plus an agent_hint: <type> line when set. AGENT BEHAVIOR: actually invoke each emitted skill via the Skill tool now, then dispatch the work to a background agent per references/orchestration.md (delegation rule + model routing), honoring the agent_hint type when set. The script only emits these lines; acting on them is your job."
+          action: "On success the script writes the current pointer and prints one Skill(skill: \"<name>\") line per skills_to_invoke entry plus an agent_hint: <type> line when set. AGENT BEHAVIOR: actually invoke each emitted skill via the Skill tool now; then, for a non-trivial task, invoke the orchestrate skill (Skill: awesome-kit:orchestrate) and dispatch the work to background agents per it, honoring the agent_hint type when set. The script only emits these lines; acting on them is your job."
       gotchas:
         - "Do not skip the emitted Skill(...) invocations -- they are the task's self-documented working context (the self-documenting-task pattern), not decoration."
     - id: switch
@@ -170,7 +172,7 @@ capability_skill:
         "${CLAUDE_PLUGIN_ROOT}/skills/task/scripts/task.py"
         archive <ref> [--root PATH] [--pointer PATH]
       gotchas:
-        - "Contract: acts on an ACTIVE task (a closed task errors with a reopen-first hint). tmp -> status: archived, folder MOVED to tmp/archived-tasks/<stub> (the user-purgeable parking directory; an occupied spot refuses -- remove the old copy first). dev/tasks -> final state (status + dated log entry) COMMITTED, folder deleted, removal committed -- two commits scoped to the task folder, so unrelated staged work never rides along; a folder in no git repo refuses (no record possible). The folder is never removed before its final state is committed. Clears the pointer if current."
+        - "Contract: acts on an ACTIVE task (a closed task errors with a reopen-first hint). tmp -> status: archived, folder MOVED to tmp/archived-tasks/<stub> (the user-purgeable parking directory; an occupied spot refuses -- remove the old copy first). dev/tasks -> version control is the record: in a GIT repo the final state (status + dated log entry) is COMMITTED, the folder deleted, and the removal committed -- two commits scoped to the task folder, never removing the folder before its final state is committed; OUTSIDE a git repo no git command runs -- the final state is recorded and the folder KEPT ('vcs_pending'), and the AGENT submits it with the workspace's VCS (e.g. p4 submit), then runs delete. Clears the pointer if current."
     - id: delete
       keywords: [delete task, remove folder, unconditional removal, discard]
       user_objective: "Archive semantics plus unconditional folder removal (even tmp)."
@@ -179,7 +181,7 @@ capability_skill:
         "${CLAUDE_PLUGIN_ROOT}/skills/task/scripts/task.py"
         delete <ref> [--root PATH] [--pointer PATH]
       gotchas:
-        - "Contract: archive's status-active precondition plus the commit-first guard (an uncommitted dev/tasks folder REFUSES -- delete never auto-commits; use archive to record the final state), then the folder is removed even when tmp. Prints deleted: <id>; clears the pointer if current."
+        - "Contract: acts on an ACTIVE or ARCHIVED task (a still-present archived folder -- e.g. archive's vcs_pending output after you submitted it -- is exactly what delete finishes off; closed errors with a reopen-first hint). Refuses a dev/tasks folder git can see is DIRTY (delete never auto-commits; use archive); outside a git repo no git check applies -- the agent owns VCS state. Then the folder is removed even when tmp. Prints deleted: <id>; clears the pointer if current."
     - id: move
       keywords: [move task, promote, demote, relocate folder, rewrite references]
       user_objective: "Relocate a task between tmp and dev/tasks, keeping every reference valid."
@@ -240,16 +242,16 @@ capability_skill:
         - n: 1
           action: "Run the status verb. The script prints the SUBSTRATE only: classification, findings, the task.yaml fields, the document paths (CLAUDE.md / plan.md / log.md), and the parsed task_items menu."
         - n: 2
-          action: "AGENT BEHAVIOR: status is the system's ONE inference verb. Dispatch a BACKGROUND sub-agent (Task tool) to read the substrate's documents and produce the summary -- do NOT read plan.md/log.md and summarize inline in the main context. The point is main-context preservation; the sub-agent returns the short summary, you relay it. Summarization is information gathering: route it to sonnet per references/orchestration.md."
+          action: "AGENT BEHAVIOR: status is the system's ONE inference verb. Dispatch a BACKGROUND sub-agent (Task tool) to read the substrate's documents and produce the summary -- do NOT read plan.md/log.md and summarize inline in the main context. The point is main-context preservation; the sub-agent returns the short summary, you relay it. Summarization is workhorse-tier work per the orchestrate skill's model_selection (currently sonnet)."
       gotchas:
         - "Summarizing inline defeats the verb's reason for existing (context preservation). The script even prints a reminder note to this effect."
   gotchas:
     - "hand-off is the task TYPE name (task.yaml type: field, --type flag), not the skill name -- the skill was renamed hand-off -> task; the v1 type keeps the old name. Do not 'fix' type: hand-off to type: task."
     - "Use the explicit plugin-venv python shown above. The CLI self-repairs (it re-execs under the provisioned venv via its vendored bootstrap_guard), but the venv path is the canonical, cwd-independent invocation."
     - "The current pointer is USER-GLOBAL (one across all projects), matching 'one active task globally'. Tests and sandboxes must inject --pointer; never point real work at a scratch pointer or vice versa."
-    - "validate gates work with BOTH errors and warnings -- an uncommitted dev/tasks folder (a warning) blocks work until committed. This is deliberate: durable work that exists only in the working tree is one rm away from gone. Same posture for the doc size budgets: a CLAUDE.md or plan.md over its 400-line ceiling blocks work until rotated (decompose per handoff-template.md -- history to log.md, detail to referenced docs -- do not just trim)."
+    - "validate gates work with BOTH errors and warnings -- a dev/tasks folder git can see is uncommitted (a warning) blocks work until committed. This is deliberate: durable work that exists only in the working tree is one rm away from gone. The check is git-scoped but the posture is VCS-neutral: outside a git repo it is an advisory note, not a warning (the workspace may use Perforce or another VCS the scripts cannot check -- keeping the folder submitted is then the agent's job). Same posture for the doc size budgets: a CLAUDE.md or plan.md over its 400-line ceiling blocks work until rotated (decompose per handoff-template.md -- history to log.md, detail to referenced docs -- do not just trim)."
     - "References never carry status. To answer 'is X done?' resolve the folder (show/validate/list) -- do not infer from the presence or wording of a task_list entry."
-    - "Every agent dispatch names `model` explicitly, routed per references/orchestration.md (fable = deep analysis/complex coding, sonnet = information gathering/simple analysis, haiku = trivial operations, opus = everything else). Omitting model silently inherits the session model and skips the routing -- a model-less dispatch is a red flag, not a neutral default."
+    - "REQUIRED: when working on a non-trivial task, invoke the orchestrate skill (Skill: awesome-kit:orchestrate). It owns the delegation economics (what goes to a background agent vs inline) and the model-tier selection for every agent dispatch; this skill does not restate them. Name `model` explicitly per its tiers -- a model-less dispatch skips the routing."
     - "Vocabulary: the unit below the task is an ITEM (long form 'task item'; accepted synonym 'work item') -- route all of 'work items', 'open items', 'goals', 'sub-tasks', 'what's available on this task' to the items verb. Never introduce a sub-task entity: an item has no folder, no lifecycle verbs, no outside references; an item that outgrows the block is promoted to a real task (init + a task_list ref)."
   anti_patterns:
     - id: inline_status_summary
@@ -270,20 +272,10 @@ capability_skill:
       why_it_seems_right: "The pointer is set and the command exited 0 -- the verb succeeded, time to start coding."
       why_it_is_wrong: "The Skill(...) and agent_hint: lines ARE the task's working context -- skills the task declared it needs and the sub-agent type suited to it. Ignoring them starts the work without the vocabulary the task recorded for itself."
       alternative: "Invoke each emitted skill via the Skill tool, then weigh dispatching to the agent_hint sub-agent type before proceeding (the work capability's step 2)."
-    - id: inline_footprint_work
-      name: Doing reads-a-lot / emits-a-lot work inline in the orchestrating context
-      keywords: [inline work, context footprint, delegate, background agent, quick edit]
-      why_it_seems_right: "It's quick, I'm already here, and dispatching an agent costs a prompt and a relay."
-      why_it_is_wrong: "Sessions run hundreds of messages; every file read and diff emitted inline stays in the orchestrating context for all of them. Difficulty and duration are the wrong axis -- persistent context footprint is."
-      alternative: "Classify by shape in one glance (references/orchestration.md, the delegation rule): reads-a-lot or emits-a-lot -> background agent; small, self-contained, and the result feeds the next orchestration decision -> inline (an agent round-trip there costs as much context as the work). Never run a heavy 'how expensive will this be' estimate -- that meta-analysis is itself the cost."
 ```
 
 ```yaml
 references:
-  - id: orchestration
-    path: references/orchestration.md
-    keywords: [orchestration, delegate, background agent, model routing, fable, sonnet, haiku, opus, dispatch, context footprint, inline vs delegate]
-    summary: "The delegation rule (delegate by persistent context footprint: reads-a-lot or emits-a-lot work goes to a background agent; small self-contained ops whose result feeds the next orchestration decision stay inline; classify by shape in one glance, never by heavy estimate) and the model-routing table (fable = deep analysis/complex coding, sonnet = information gathering/simple analysis, haiku = trivial operations, opus = everything else). Load whenever dispatching work to agents."
   - id: handoff_template
     path: references/handoff-template.md
     keywords: [hand-off template, eight sections, CLAUDE.md template, plan rotation, log filter, fill in scaffold, task_items block, item states, promotion rule, priorities reference items, pre-contract conversion, convert old folder, no task_items block, document size budgets, line budget, oversized document, approaching budget, dominant section, session diary, 400 lines, log.md exempt]

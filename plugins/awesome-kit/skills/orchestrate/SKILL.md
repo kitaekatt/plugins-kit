@@ -45,9 +45,13 @@ technique_skill:
         - n: 1
           action: Confirm the task warrants orchestration.
           detail: |
-            Significant = multiple independent work units, or units whose execution burns far more
-            context/tool calls than their conclusions are worth. One focused unit finishable inline
-            in a few calls stays inline -- delegation overhead loses.
+            Delegate by persistent context footprint, not difficulty or duration. Significant =
+            multiple independent work units, or units that read a lot / emit a lot (bulk reads,
+            diffs, logs, drafts) relative to their conclusions. One small self-contained unit whose
+            result feeds the very next decision stays inline -- an agent round-trip there costs as
+            much context as the work. Classify by shape in one glance; if classifying takes more
+            thought than that, treat it as delegate-shaped. A per-unit "how expensive will this be"
+            estimate is itself the context spend this rule avoids.
         - n: 2
           action: Decompose into self-contained units and classify each.
           detail: |
@@ -108,6 +112,12 @@ technique_skill:
       why_it_seems_right: Reading all the raw output yourself feels more thorough than trusting summaries.
       why_it_is_wrong: It defeats the entire point -- the main context fills with generation-cost material whose value was already captured in the agents' conclusions.
       alternative: Ask agents for structured conclusions; pull raw detail only for the specific items you must verify or that agents disagreed on.
+    - id: inline_footprint_work
+      name: Doing reads-a-lot / emits-a-lot work inline in the orchestrating context
+      keywords: [inline work, context footprint, quick edit, difficulty axis]
+      why_it_seems_right: "It's quick, I'm already here, and dispatching an agent costs a prompt and a relay."
+      why_it_is_wrong: Sessions run hundreds of messages; every file read and diff emitted inline stays in the orchestrating context for all of them. Difficulty and duration are the wrong axis -- persistent context footprint is.
+      alternative: Classify by shape in one glance (step 1); reads-a-lot or emits-a-lot goes to a background agent even when it is easy.
     - id: vague_dispatch
       name: Under-specified agent prompts
       keywords: [vague prompt, missing context, wrong question]
