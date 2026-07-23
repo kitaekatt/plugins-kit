@@ -1,7 +1,7 @@
 [project]
-name = "openrouter-kit"
-version = "0.2.3"
-description = "OpenRouter API key resolution and account validation for Claude Code plugins"
+name = "llm-scripting-kit"
+version = "0.3.0"
+description = "LLM key resolution, model registry, and named OpenAI-compatible endpoints for Claude Code plugins (importable package: openrouter_kit)"
 requires-python = ">=3.10"
 
 dependencies = ["pyyaml"]

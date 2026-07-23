@@ -97,7 +97,7 @@ The script is stdlib-only; the shims call the standalone Python that bootstrap i
 
 **Key loaded from the wrong place** -- run `which` to see which file Wins the precedence resolution (env var > project `.env` > user `.env`). If the user wants the user-scoped file to win but a project file is shadowing it, delete `<project>/.local-data/openrouter-kit/.env`.
 
-**Bootstrap plugin not installed** -- openrouter-kit declares a dependency on `plugins-kit:bootstrap`. If bootstrap isn't installed/enabled, the session-start credential check and fix-all flow won't fire, so a missing or rejected key won't surface automatically. The CLI still works (it self-heals to system Python), so just run `openrouter-kit status` and, if needed, `openrouter-kit set-key` manually. No hard stop -- this is advisory; installing/enabling bootstrap restores the automatic check on the next session.
+**Bootstrap plugin not installed** -- llm-scripting-kit declares a dependency on `plugins-kit:bootstrap`. If bootstrap isn't installed/enabled, the session-start credential check and fix-all flow won't fire, so a missing or rejected key won't surface automatically. The CLI still works (it self-heals to system Python), so just run `openrouter-kit status` and, if needed, `openrouter-kit set-key` manually. No hard stop -- this is advisory; installing/enabling bootstrap restores the automatic check on the next session.
 
 ## What lives where
 

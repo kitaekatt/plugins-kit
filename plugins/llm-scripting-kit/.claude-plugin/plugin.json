@@ -1,0 +1,20 @@
+{
+  "name": "llm-scripting-kit",
+  "version": "0.3.0",
+  "description": "LLM access for scripts and pipelines: key resolution, model registry, and named OpenAI-compatible endpoints (OpenRouter is the default endpoint). CLI + shared library + session-start check.",
+  "author": {
+    "name": "Christina"
+  },
+  "dependencies": [
+    "bootstrap"
+  ],
+  "keywords": [
+    "openrouter",
+    "openai",
+    "llm",
+    "api-key",
+    "endpoints",
+    "credentials",
+    "bootstrap"
+  ]
+}

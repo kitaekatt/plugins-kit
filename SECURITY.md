@@ -46,10 +46,11 @@ All downloads are over HTTPS from official upstream release pages:
 
 ## Network use by other plugins
 
-- **openrouter-kit** -- only when you configure an OpenRouter API key: it
-  validates the key against `GET /auth/key` at `openrouter.ai` and caches a
-  hash of the validation result locally. No key configured means no network
-  call.
+- **llm-scripting-kit** -- only when you configure an API key: for an
+  OpenRouter endpoint it validates the key against `GET /auth/key` at
+  `openrouter.ai` (other endpoints use a `GET /models` probe, or skip when
+  `account_check: none`) and caches a hash of the validation result locally. No
+  key configured means no network call.
 
 Other plugins (git-kit, p4-kit, etc.) invoke tools you already use (`git`,
 `gh`, `p4`) against endpoints you have configured; they add no telemetry of

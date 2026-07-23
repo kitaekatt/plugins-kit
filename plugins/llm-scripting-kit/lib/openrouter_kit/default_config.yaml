@@ -1,0 +1,54 @@
+# Model registry, selection defaults, and named endpoints (shipped baseline).
+#
+# This is the lowest-precedence layer. Bootstrap seeds an editable copy at
+#   ~/.claude/plugins/data/plugins-kit/openrouter-kit/config.yaml
+# and a project may override at
+#   <project_root>/.local-data/plugins-kit/openrouter-kit/config.yaml
+# Higher layers are deep-merged over this one (project wins); new model or
+# endpoint entries union in, so an override file only states what it changes.
+#
+# The data/config namespace stays `openrouter-kit` (matching the importable
+# `openrouter_kit` package) even though the plugin ships as `llm-scripting-kit`.
+#
+# Consumed by any plugin that makes LLM calls via openrouter_kit.resolve_model()
+# / make_openai_client() (e.g. workflow-kit, content-pipeline-kit).
+#
+# Keep in sync with DEFAULT_MODEL_CONFIG in models.py (a test enforces this).
+
+# Which endpoint is used when a caller passes endpoint=None.
+default_endpoint: openrouter
+
+# Named OpenAI-compatible endpoints. Each may carry base_url, key_env, an
+# account_check mode ("openrouter" | "none" | "models-probe"), and its own
+# models / default / defaultCheap. An endpoint that omits those inherits the
+# top-level registry below -- which is why the built-in `openrouter` endpoint
+# lists none: it uses the top-level models/default/defaultCheap.
+#
+# To add another endpoint, drop it here in a user or project override, e.g.:
+#   endpoints:
+#     my-vllm:
+#       base_url: http://localhost:8000/v1
+#       key_env: MY_VLLM_API_KEY
+#       account_check: none          # or models-probe to GET /models
+#       default: llama
+#       models:
+#         llama: {slug: meta-llama/Llama-3.1-8B-Instruct}
+endpoints:
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    key_env: OPENROUTER_API_KEY
+    account_check: openrouter
+
+# Top-level model registry (the openrouter endpoint's registry). Named
+# selection: `default` for general use, `defaultCheap` for cheap/smoke work.
+# Each references a key under `models` (or may be a raw slug).
+models:
+  qwen:
+    slug: qwen/qwen3-32b
+  gpt-mini:
+    slug: openai/gpt-4o-mini
+  gemini-lite:
+    slug: google/gemini-2.5-flash-lite
+
+default: gpt-mini
+defaultCheap: qwen

@@ -1,4 +1,4 @@
-"""Fixtures for openrouter-kit tests."""
+"""Fixtures for llm-scripting-kit tests (importable package: openrouter_kit)."""
 
 import os
 import sys
@@ -6,7 +6,7 @@ import sys
 import pytest
 
 PLUGIN_ROOT = os.path.normpath(
-    os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "plugins", "openrouter-kit")
+    os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "plugins", "llm-scripting-kit")
 )
 
 # Make `lib/` importable as `openrouter_kit.*` and the plugin root importable
@@ -22,5 +22,5 @@ for p in (lib_path, PLUGIN_ROOT):
 
 @pytest.fixture
 def plugin_root():
-    """Path to the openrouter-kit plugin."""
+    """Path to the llm-scripting-kit plugin."""
     return PLUGIN_ROOT

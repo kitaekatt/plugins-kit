@@ -120,13 +120,13 @@
       ]
     },
     {
-      "name": "openrouter-kit",
-      "description": "Manage and validate OpenRouter API keys via a shared library, CLI, and session-start check.",
-      "version": "0.2.4",
+      "name": "llm-scripting-kit",
+      "description": "LLM access for scripts and pipelines: key resolution, model registry, and named OpenAI-compatible endpoints (OpenRouter is the default endpoint). CLI + shared library + session-start check.",
+      "version": "0.3.0",
       "author": {
         "name": "Christina"
       },
-      "source": "./plugins/openrouter-kit",
+      "source": "./plugins/llm-scripting-kit",
       "category": "development",
       "dependencies": [
         "bootstrap"
