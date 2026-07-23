@@ -53,7 +53,10 @@
 //            venvPython: <abs path to skills-kit venv python> }
 // }
 // The mechanical validator is invoked as a module:
-//   (cd <pluginRoot> && <venvPython> -m skills_kit_lib.audit <file> --json)
+//   (cd <pluginRoot> && <venvPython> -m skills_kit_lib.audit <file> --json --config)
+//   --config makes audit.py honor the resolved standards config (drop disabled
+//   mechanical rows, overlay thresholds); disabled ids also arrive as
+//   args.disabledCriteria and standards files per-file as files[i].standardsPaths.
 
 export const meta = {
   name: 'skill-audit-detect',
@@ -83,7 +86,7 @@ const FILE_FINDINGS_SCHEMA = {
           line: { type: ['integer', 'null'], description: 'line number in the file, or null' },
           taxonomy: {
             type: 'string',
-            enum: ['A_missing_required_frontmatter', 'B_description_quality', 'C_wrong_skill_type', 'D_mixed_type_signal', 'E_schema_validation_failure', 'F_ccp_misallocation', 'G_crp_violation', 'H_adp_back_reference', 'I_decision_provenance', 'J_hygiene_threshold', 'K_unclassified', 'L_load_graph_gap', 'M_ancestor_convention_violation', 'none'],
+            enum: ['A_missing_required_frontmatter', 'B_description_quality', 'C_wrong_skill_type', 'D_mixed_type_signal', 'E_schema_validation_failure', 'F_ccp_misallocation', 'G_crp_violation', 'H_adp_back_reference', 'I_decision_provenance', 'J_hygiene_threshold', 'K_unclassified', 'L_load_graph_gap', 'M_ancestor_convention_violation', 'N_user_standard_violation', 'none'],
             description: 'canonical suffixed taxonomy id (see the SKILL.md taxonomy table); "none" for PASS/INFO/JUDGMENT that need no remediation',
           },
           bucket: { type: 'string', enum: ['FIX', 'SERIOUS', 'IMPROVE', 'SILENT', 'SPECIAL', 'NONE'], description: 'per-finding disposition assigned instance-level by the classifier (step 6)' },
@@ -112,7 +115,7 @@ const review = input.review === true
 
 function lanePrompt(f) {
   const schemaClause = refs.pluginRoot && refs.venvPython
-    ? `Run the mechanical validator via Bash (it is a package module, so cd into the plugin root first):\n    (cd "${refs.pluginRoot}" && "${refs.venvPython}" -m skills_kit_lib.audit "${f.path}" --json)\nMap its rows into Schema-group findings: a universal-rule or YAML-schema FAIL is a Schema FAIL. Specifically: missing/malformed required frontmatter -> taxonomy A (default FIX -- add the mechanical default; authorial fields route to IMPROVE); description length/directive-form/exclusion-clause FAIL -> taxonomy B (IMPROVE, authorial); a YAML contract FAIL (missing required key, wrong type, list below min_len, forbidden key) -> taxonomy E (default FIX for a missing-default field; authorial or forbidden-key -> IMPROVE); a mixed-type signal (>1 canonical root, or the mixed-type heuristic) -> taxonomy D (IMPROVE, unless the orientation-summary exception applies, then JUDGMENT); a load-graph row (orphaned references/ file, unlinked member directory, two-hop-only reference, dangling index entry) -> taxonomy L (IMPROVE default; a dangling index path with an identified correct target is a mechanical FIX; an accepted internal-helper orphan is SILENT), group ADP, keeping the validator's severity (FAIL gates; JUDGMENT does not). Assign the final disposition in step 6, not here. If the validator is unavailable, emit one Schema finding severity JUDGMENT ("validator unavailable") and continue — never fail a file for that.`
+    ? `Run the mechanical validator via Bash (it is a package module, so cd into the plugin root first):\n    (cd "${refs.pluginRoot}" && "${refs.venvPython}" -m skills_kit_lib.audit "${f.path}" --json --config)\n(--config makes audit.py drop disabled mechanical rows and overlay the resolved thresholds; the disabled ids also arrive as args.disabledCriteria, so honor both.) Map its rows into Schema-group findings: a universal-rule or YAML-schema FAIL is a Schema FAIL. Specifically: missing/malformed required frontmatter -> taxonomy A (default FIX -- add the mechanical default; authorial fields route to IMPROVE); description length/directive-form/exclusion-clause FAIL -> taxonomy B (IMPROVE, authorial); a YAML contract FAIL (missing required key, wrong type, list below min_len, forbidden key) -> taxonomy E (default FIX for a missing-default field; authorial or forbidden-key -> IMPROVE); a mixed-type signal (>1 canonical root, or the mixed-type heuristic) -> taxonomy D (IMPROVE, unless the orientation-summary exception applies, then JUDGMENT); a load-graph row (orphaned references/ file, unlinked member directory, two-hop-only reference, dangling index entry) -> taxonomy L (IMPROVE default; a dangling index path with an identified correct target is a mechanical FIX; an accepted internal-helper orphan is SILENT), group ADP, keeping the validator's severity (FAIL gates; JUDGMENT does not). Assign the final disposition in step 6, not here. If the validator is unavailable, emit one Schema finding severity JUDGMENT ("validator unavailable") and continue — never fail a file for that.`
     : `Validator path was not provided; emit one Schema finding severity JUDGMENT ("validator unavailable") and continue with cohesion judgment only.`
 
   const reviewClause = !review
@@ -141,6 +144,16 @@ function lanePrompt(f) {
     ? ` ANCESTOR-DECLARED EXCEPTION CARVE-OUT: the ancestor CLAUDE.md files supplied for step 3.5 may EXPLICITLY declare a SCOPED EXCEPTION to one of these universal conventions -- e.g. "ASCII only, EXCEPT developer names in the contributors section may contain non-ASCII characters". Before emitting a convention-violation FIX for a non-ASCII look-alike or a hardcoded absolute / foreign-machine path, check those ancestors for an explicit exception that COVERS this exact instance -- the right file scope AND the right content kind. If one does, do NOT emit the FIX: demote the finding to PASS (taxonomy "none", bucket "NONE") -- or INFO if it is worth noting -- and put the verbatim quoted exception rule plus the ancestor source path in its \`message\`. Same verbatim-quote posture as H-11: the exception must be written down and actually cover this instance; no inferred, generic, or stretched exceptions, and when in doubt the built-in check STILL fires. PRECEDENCE: this carve-out and H-11 (step 3.5) read the SAME ancestor declarations, so a declared rule + its exception must yield ONE consistent outcome for a given instance -- an exception that silences the H-11 M_ancestor_convention_violation finding silences this built-in convention FIX too, and vice versa; they must never contradict (H-11 silent while the built-in FIX still fires is exactly the bug this carve-out removes).`
     : ``
 
+  const standardsPaths = Array.isArray(f.standardsPaths) ? f.standardsPaths : []
+  const standardsClause = standardsPaths.length > 0
+    ? `USER-AUTHORED STANDARDS. Read each standards file, nearest-layer first: ${standardsPaths.map((p) => `"${p}"`).join(', ')}. Each is a *-standards.md carrying a fenced \`standards_set:\` block whose \`criteria[]\` are the project's or user's own opinions for this artifact type. Apply ONLY criteria whose \`statement\` you can quote VERBATIM from the standards file -- same rule-extraction posture as the ancestor-convention check: no inferred rules, no generic best-practice, no "spirit of" a criterion; if you cannot quote the statement verbatim, do NOT raise the finding. SKIP any criterion whose \`enforcement\` is \`mechanical\` -- those are the audit.py validator's job (it runs them under --config), not yours; you evaluate only judgment criteria (enforcement \`judgment\` or absent). For each violated criterion emit group "Hygiene", taxonomy N_user_standard_violation, severity taken from the criterion's declared \`severity\` (fail -> FAIL, info -> INFO, judgment -> JUDGMENT), anchored on the SKILL.md line that violates it. The \`message\` MUST carry (a) the verbatim criterion statement, (b) the criterion \`id\`, and (c) the source standards-file path. Disposition is assigned in step 6 from the severity: a fail-severity violation is SERIOUS (a hard user-declared rule the auditor cannot mechanically satisfy -- surface at the top, never auto-fix), an info-severity note is IMPROVE (one-line pitch), a judgment-severity call is JUDGMENT (surfaced for review).`
+    : `No user-authored standards files were supplied; do NOT apply any user standards and emit no N_user_standard_violation findings.`
+
+  const disabledCriteria = Array.isArray(input.disabledCriteria) ? input.disabledCriteria : []
+  const disabledClause = disabledCriteria.length > 0
+    ? `DISABLED CRITERIA. The run configuration switched these optional criterion/rule ids OFF: ${disabledCriteria.map((d) => `"${d}"`).join(', ')}. SUPPRESS any finding whose criterion id or rule id matches one in that list -- do not emit it and do not count it toward the verdict. That list only ever names OPTIONAL ids; architectural (schema/contract) and integrity (frontmatter, reachability, convention) checks are NEVER in it, so never suppress one of those on account of this list.`
+    : `No criteria were disabled for this run; apply every criterion normally.`
+
   return `You are ONE lane of a SKILL.md audit. Audit exactly one file and return structured findings. This is DETECTION ONLY — do not modify any file.
 
 Target:    ${f.path}
@@ -156,9 +169,11 @@ Steps:
    - ADP (adp_back_reference): reference docs under this skill's references/ must be one hop deep from SKILL.md and must NOT cite SKILL.md sections (a back-reference is a cycle). Read each references/*.md (if any) and check for back-citations to this SKILL.md. A back-reference is a FAIL — taxonomy H (FIX -- mechanical rewrite), group ADP.
    - Load-graph routing (references_reachable_from_skill_md, judgment half): the validator already surfaces missing edges mechanically; the lane adds only the keyword-adequacy call — for content a reference doc owns (its headings, entity names, script names), do the SKILL.md index entry's keywords carry the exact terms a searcher would use? A clear routing gap is taxonomy L (IMPROVE), group ADP, severity JUDGMENT.
 3.5. ${ancestorConventionsClause}
+3.6. ${standardsClause}
+3.7. ${disabledClause}
 4. Hygiene: body over ~500 lines or ~3000 tokens -> one INFO finding, group Hygiene, taxonomy J — a CRP-evaluation prompt, never a FAIL on its own; disposition IMPROVE when a concrete extraction candidate can be named, else SILENT.
 5. Wrong-type signal (taxonomy C): only raise if the validator's type-specific rows or the body shape clearly contradict the declared skill-type. Emit as group Schema, severity JUDGMENT, disposition IMPROVE, and note that classify.py confirmation is deferred to the Q&A gate (the lane does NOT run classify.py).
-6. DISPOSITION CLASSIFIER. Assign EVERY non-PASS finding a taxonomy id (A-M; M_ancestor_convention_violation is the H-11 ancestor-convention finding from step 3.5, group Hygiene) and one of four dispositions -- FIX / SERIOUS / IMPROVE / SILENT (K -> SPECIAL). The taxonomy default bucket is a starting point only; decide instance-level against these predicates.
+6. DISPOSITION CLASSIFIER. Assign EVERY non-PASS finding a taxonomy id (A-N; M_ancestor_convention_violation is the H-11 ancestor-convention finding from step 3.5, group Hygiene; N_user_standard_violation is the user-authored-standards finding from step 3.6, group Hygiene, disposition driven by the criterion's declared severity -- fail -> SERIOUS, info -> IMPROVE, judgment -> JUDGMENT) and one of four dispositions -- FIX / SERIOUS / IMPROVE / SILENT (K -> SPECIAL). The taxonomy default bucket is a starting point only; decide instance-level against these predicates.
 
    Classifier prod (read this FIRST -- it overrides your default caution): You are biased toward conservatism; the user's time and attention are the scarce resources; source control and CL review are the safety net. If the edit very likely improves the doc, apply it.
 

@@ -244,6 +244,25 @@ def minimal_claude_md():
 
 
 @pytest.fixture
+def minimal_standards_set():
+    """Minimal valid standards_set: 1 criterion with all required fields."""
+    return {
+        "standards_set": {
+            "identity": "Optional description-hygiene standards for SKILL.md files.",
+            "applies_to": "skill_md",
+            "criteria": [
+                {
+                    "id": "desc-160-char",
+                    "statement": "The description frontmatter field is at most 160 characters.",
+                    "severity": "fail",
+                    "keywords": _kw("description length", "160 char", "hygiene"),
+                },
+            ],
+        }
+    }
+
+
+@pytest.fixture
 def make_invalid():
     """Helper: deep-copy a fixture and apply a mutation, return the mutated copy.
 

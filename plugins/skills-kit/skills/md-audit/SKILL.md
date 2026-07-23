@@ -96,6 +96,14 @@ domain_skill:
         path: references/audit-framework.yaml
         keywords: [audit framework data, primitives, compositions, audit-kind registry, rules per composition, machine-readable]
         summary: The machine-readable data side of the framework -- primitives, compositions, and the audit-kind registry (which rule ids bind to which compositions per audit-kind). Authoritative on divergence with the markdown tables.
+      - id: configuring_standards
+        path: references/configuring-standards.md
+        keywords: [configure standards, disable rule, tune threshold, rules off, config.yaml, config.local.yaml, layer model, rule-id catalog, architectural optional inoffensive, threshold defaults, disabledCriteria, user standard violation]
+        summary: User-and-Claude-facing configuration reference -- the layer model and precedence, config.yaml format (disable an optional rule, tune a threshold), the full rule-id catalog by bucket, the five thresholds, additive standards files, how disables surface in reports, and loud config-error troubleshooting. Load when a user wants to configure which opinions skills-kit enforces.
+      - id: authoring_standards
+        path: references/authoring-standards.md
+        keywords: [author standards file, standards_set block, applies_to, criteria, severity, enforcement, verbatim quote, SKILL-standards.md, CLAUDE-md-standards.md, standards schema]
+        summary: Authoring spec for an additive standards file -- the standards_set block schema, filename-to-primitive convention, severity (fail/info/judgment) and enforcement (mechanical/judgment) semantics, verbatim-quote posture, and a complete valid example. Load when writing a project's or user's own standards to add on top of skills-kit's shipped opinions.
     members:
       - name: skill-audit
         type: audit-skill

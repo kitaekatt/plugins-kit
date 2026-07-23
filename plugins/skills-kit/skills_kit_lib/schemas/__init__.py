@@ -9,3 +9,4 @@ caller does `from skills_kit_lib import schemas`.
 from . import portable  # noqa: F401
 from . import skill_types  # noqa: F401
 from . import claude_md  # noqa: F401
+from . import standards  # noqa: F401

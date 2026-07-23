@@ -63,12 +63,24 @@ FAIL = "fail"
 JUDGMENT = "judgment-required"
 NA = "n/a"
 
+# Centralized threshold literals. Each is referenced by lookup below (and, from
+# M2 on, overlaid by resolved standards config) rather than being hard-coded at
+# the check site.
+THRESHOLDS = {
+    "name_max_chars": 64,
+    "desc_max_chars": 160,
+    "body_max_lines": 500,
+    "body_max_tokens": 3000,
+    "mixed_min_score": 2,
+}
+
 
 @dataclass
 class CheckResult:
     row: str
     verdict: str
     note: str = ""
+    rule: str = ""
 
 
 def has_identity_sentence(body_text: str) -> bool:
@@ -80,35 +92,48 @@ def has_identity_sentence(body_text: str) -> bool:
     return bool(first_para) and "." in first_para and len(first_para) < 600
 
 
-def check_universal(fm: Frontmatter | None, body: Body, skill_dir: Path) -> list[CheckResult]:
+def check_universal(
+    fm: Frontmatter | None,
+    body: Body,
+    skill_dir: Path,
+    thresholds: dict[str, int] | None = None,
+) -> list[CheckResult]:
+    th = thresholds if thresholds is not None else THRESHOLDS
     out: list[CheckResult] = []
     if fm is None:
-        out.append(CheckResult("frontmatter present", FAIL, "no leading --- block"))
+        out.append(CheckResult("frontmatter present", FAIL, "no leading --- block", rule="frontmatter-present"))
         return out
-    out.append(CheckResult("frontmatter present", PASS))
+    out.append(CheckResult("frontmatter present", PASS, rule="frontmatter-present"))
 
     if "name" not in fm.fields:
-        out.append(CheckResult("frontmatter.name present", FAIL))
+        out.append(CheckResult("frontmatter.name present", FAIL, rule="name-present"))
     else:
         name = fm.fields["name"]
-        out.append(CheckResult("frontmatter.name present", PASS))
-        out.append(CheckResult("name <= 64 chars", PASS if len(name) <= 64 else FAIL, f"len={len(name)}"))
+        out.append(CheckResult("frontmatter.name present", PASS, rule="name-present"))
+        out.append(CheckResult(
+            "name <= 64 chars",
+            PASS if len(name) <= th["name_max_chars"] else FAIL,
+            f"len={len(name)}",
+            rule="name-length",
+        ))
         out.append(CheckResult(
             "name charset (lowercase/digits/hyphens)",
             PASS if re.fullmatch(r"[a-z0-9-]+", name) else FAIL,
             name,
+            rule="name-charset",
         ))
-        out.append(CheckResult("name not reserved", PASS if name not in RESERVED_NAMES else FAIL, name))
+        out.append(CheckResult("name not reserved", PASS if name not in RESERVED_NAMES else FAIL, name, rule="name-reserved"))
 
     if "description" not in fm.fields:
-        out.append(CheckResult("frontmatter.description present", FAIL))
+        out.append(CheckResult("frontmatter.description present", FAIL, rule="desc-present"))
     else:
         desc = fm.fields["description"]
-        out.append(CheckResult("frontmatter.description present", PASS))
+        out.append(CheckResult("frontmatter.description present", PASS, rule="desc-present"))
         out.append(CheckResult(
             "description <= 160 chars",
-            PASS if len(desc) <= 160 else FAIL,
+            PASS if len(desc) <= th["desc_max_chars"] else FAIL,
             f"len={len(desc)}",
+            rule="desc-160-char",
         ))
         desc_lc = desc.lower().lstrip()
         directive = desc_lc.startswith("use when") or desc_lc.startswith("invoke when")
@@ -116,12 +141,14 @@ def check_universal(fm: Frontmatter | None, body: Body, skill_dir: Path) -> list
             "directive form ('Use when...' / 'Invoke when...')",
             PASS if directive else FAIL,
             "description should open with 'Use when...' or 'Invoke when...'" if not directive else "",
+            rule="desc-directive-form",
         ))
         excl = bool(re.search(r"\bdo not use\b|\bdon'?t use\b", desc, re.IGNORECASE))
         out.append(CheckResult(
             "exclusion clause (Do NOT use for...)",
             PASS if excl else FAIL,
             "no 'do not use' phrase in description" if not excl else "",
+            rule="desc-exclusion-clause",
         ))
 
     if "skill-type" not in fm.fields:
@@ -129,34 +156,41 @@ def check_universal(fm: Frontmatter | None, body: Body, skill_dir: Path) -> list
             "skill-type advisory tag",
             JUDGMENT,
             "no skill-type frontmatter; agent infers type from content",
+            rule="skill-type-tag",
         ))
     else:
         val = fm.fields["skill-type"]
         if val in CANONICAL_TYPES:
-            out.append(CheckResult("skill-type value valid", PASS, val))
+            out.append(CheckResult("skill-type value valid", PASS, val, rule="skill-type-valid"))
         else:
             out.append(CheckResult(
                 "skill-type value valid",
                 FAIL,
                 f"got '{val}', expected one of {sorted(CANONICAL_TYPES)}",
+                rule="skill-type-valid",
             ))
 
-    out.append(CheckResult("SKILL.md line count", PASS, str(body.lines)))
-    out.append(CheckResult("SKILL.md token count (approx)", PASS, str(body.tokens_approx)))
+    out.append(CheckResult("SKILL.md line count", PASS, str(body.lines), rule="body-line-count"))
+    out.append(CheckResult("SKILL.md token count (approx)", PASS, str(body.tokens_approx), rule="body-token-count"))
 
     has_references = (skill_dir / "references").exists()
-    body_too_big = body.lines > 500 or body.tokens_approx > 3000
+    body_too_big = (
+        body.lines > th["body_max_lines"]
+        or body.tokens_approx > th["body_max_tokens"]
+    )
     if not body_too_big:
         out.append(CheckResult(
             "progressive disclosure (conditional)",
             NA,
             f"lines={body.lines}, tokens~{body.tokens_approx}",
+            rule="body-size-signal",
         ))
     elif has_references:
         out.append(CheckResult(
             "progressive disclosure (conditional)",
             PASS,
             f"body large (lines={body.lines}, tokens~{body.tokens_approx}); references/ exists",
+            rule="body-size-signal",
         ))
     else:
         # Size is a SIGNAL, not a verdict (framework Dec-11): a split is REQUIRED
@@ -171,29 +205,30 @@ def check_universal(fm: Frontmatter | None, body: Body, skill_dir: Path) -> list
             f"body large (lines={body.lines}, tokens~{body.tokens_approx}) and no references/; "
             "run the CRP test (do sections serve different reading tasks?) before splitting -- "
             "size is a signal, not a verdict (Dec-11)",
+            rule="body-size-signal",
         ))
 
     refs_dir = skill_dir / "references"
     if not refs_dir.exists():
-        out.append(CheckResult("references one-hop-deep (ADP)", NA, "no references/ directory"))
+        out.append(CheckResult("references one-hop-deep (ADP)", NA, "no references/ directory", rule="refs-one-hop-deep"))
     else:
         nested = list(refs_dir.glob("*/*.md"))
         if nested:
             rel = [str(p.relative_to(skill_dir)) for p in nested]
-            out.append(CheckResult("references one-hop-deep (ADP)", FAIL, f"nested: {rel}"))
+            out.append(CheckResult("references one-hop-deep (ADP)", FAIL, f"nested: {rel}", rule="refs-one-hop-deep"))
         else:
-            out.append(CheckResult("references one-hop-deep (ADP)", PASS))
+            out.append(CheckResult("references one-hop-deep (ADP)", PASS, rule="refs-one-hop-deep"))
 
     # Match local references/X.md citations only; exclude cross-plugin refs.
     cited = set(re.findall(r"(?<![/:])references/([a-zA-Z0-9_\-]+\.md)", body.text))
     if not cited:
-        out.append(CheckResult("references cited in body all exist", NA, "no references cited in body"))
+        out.append(CheckResult("references cited in body all exist", NA, "no references cited in body", rule="refs-cited-exist"))
     else:
         missing = [name for name in cited if not (skill_dir / "references" / name).exists()]
         if missing:
-            out.append(CheckResult("references cited in body all exist", FAIL, f"missing: {missing}"))
+            out.append(CheckResult("references cited in body all exist", FAIL, f"missing: {missing}", rule="refs-cited-exist"))
         else:
-            out.append(CheckResult("references cited in body all exist", PASS, f"checked {len(cited)} references"))
+            out.append(CheckResult("references cited in body all exist", PASS, f"checked {len(cited)} references", rule="refs-cited-exist"))
 
     return out
 
@@ -204,22 +239,26 @@ def check_reference_skill(body: Body, skill_dir: Path) -> list[CheckResult]:
         ">=1 example block",
         PASS if has_heading(body.text, "Example", "Examples") else JUDGMENT,
         "no 'Example' heading detected" if not has_heading(body.text, "Example", "Examples") else "",
+        rule="ref-example-block",
     ))
     out.append(CheckResult(
         ">=1 gotcha block",
         PASS if has_heading(body.text, "Gotcha", "Gotchas", "Known gotchas") else JUDGMENT,
         "no 'Gotcha' heading detected" if not has_heading(body.text, "Gotcha", "Gotchas", "Known gotchas") else "",
+        rule="ref-gotcha-block",
     ))
     discipline_hit = has_red_green_refactor(body.text) or has_excuse_reality_table(body.text)
     out.append(CheckResult(
         "prohibited: discipline content (rule+counter, RED/GREEN/REFACTOR)",
         FAIL if discipline_hit else PASS,
         "discipline markers detected" if discipline_hit else "",
+        rule="ref-prohibited-discipline",
     ))
     out.append(CheckResult(
         "prohibited: workflow checklist",
         FAIL if has_tickbox_list(body.text) else PASS,
         "tickbox list present" if has_tickbox_list(body.text) else "",
+        rule="ref-prohibited-checklist",
     ))
     return out
 
@@ -230,26 +269,31 @@ def check_pattern_skill(body: Body, skill_dir: Path) -> list[CheckResult]:
         "recognition criteria block",
         PASS if has_recognition_marker(body.text) else JUDGMENT,
         "no 'recognize/recognition/applies when' marker" if not has_recognition_marker(body.text) else "",
+        rule="pattern-recognition-block",
     ))
     out.append(CheckResult(
         "counter-example(s) block",
         PASS if has_counter_example(body.text) else JUDGMENT,
         "no 'counter-example' or 'do NOT apply' marker" if not has_counter_example(body.text) else "",
+        rule="pattern-counter-example",
     ))
     bundle_present = (skill_dir / "scripts").exists() or (skill_dir / "bin").exists()
     out.append(CheckResult(
         "prohibited: utility bundle",
         FAIL if bundle_present else PASS,
         "scripts/ or bin/ present" if bundle_present else "",
+        rule="pattern-prohibited-bundle",
     ))
     out.append(CheckResult(
         "prohibited: workflow checklist",
         FAIL if has_tickbox_list(body.text) else PASS,
+        rule="pattern-prohibited-checklist",
     ))
     out.append(CheckResult(
         "prohibited: rule + counter pairs",
         FAIL if has_excuse_reality_table(body.text) else PASS,
         "rationalization/excuse->reality detected" if has_excuse_reality_table(body.text) else "",
+        rule="pattern-prohibited-rule-counter",
     ))
     return out
 
@@ -261,6 +305,7 @@ def check_technique_skill(body: Body, skill_dir: Path, fm: Frontmatter | None) -
         "ordered-step body",
         PASS if step_count >= 1 else FAIL,
         f"{step_count} ordered-step entries detected",
+        rule="technique-ordered-steps",
     ))
     if step_count > 3:
         has_checklist = has_tickbox_list(body.text)
@@ -276,17 +321,20 @@ def check_technique_skill(body: Body, skill_dir: Path, fm: Frontmatter | None) -
             "explicit step-tracking (conditional, IF >3 steps): checklist OR tracker invocation",
             PASS if signal_present else FAIL,
             note,
+            rule="step-tracking",
         ))
     else:
         out.append(CheckResult(
             "explicit step-tracking (conditional, IF >3 steps): checklist OR tracker invocation",
             NA,
             f"only {step_count} steps",
+            rule="step-tracking",
         ))
     out.append(CheckResult(
         "prohibited: adversarial pressure testing",
         FAIL if has_red_green_refactor(body.text) else PASS,
         "RED/GREEN/REFACTOR markers present" if has_red_green_refactor(body.text) else "",
+        rule="technique-prohibited-pressure-test",
     ))
     return out
 
@@ -297,23 +345,27 @@ def check_discipline_skill(body: Body, skill_dir: Path) -> list[CheckResult]:
         ">=1 rule + counter pair",
         PASS if has_excuse_reality_table(body.text) else FAIL,
         "no rule+counter / rationalization markers" if not has_excuse_reality_table(body.text) else "",
+        rule="discipline-rule-counter",
     ))
     out.append(CheckResult(
         "red flags list",
         PASS if has_red_flags_list(body.text) else FAIL,
         "no 'Red flags' heading" if not has_red_flags_list(body.text) else "",
+        rule="discipline-red-flags",
     ))
     if has_red_green_refactor(body.text):
         out.append(CheckResult(
             "adversarial pressure testing applied",
             JUDGMENT,
             "RED/GREEN/REFACTOR markers present; agent must verify pressure testing was applied to this skill's own rules",
+            rule="discipline-pressure-test",
         ))
     else:
         out.append(CheckResult(
             "adversarial pressure testing applied",
             FAIL,
             "no RED/GREEN/REFACTOR markers",
+            rule="discipline-pressure-test",
         ))
     return out
 
@@ -324,32 +376,38 @@ def check_domain_skill(body: Body, skill_dir: Path) -> list[CheckResult]:
         "identity sentence",
         PASS if has_identity_sentence(body.text) else JUDGMENT,
         "no clear single-sentence identity after H1" if not has_identity_sentence(body.text) else "",
+        rule="domain-identity-sentence",
     ))
     out.append(CheckResult(
         "companion declaration",
         PASS if has_companion_declaration(body.text) else FAIL,
         "no 'Companion declaration' heading or 'no sibling' / 'companion domains' phrase" if not has_companion_declaration(body.text) else "",
+        rule="domain-companion-declaration",
     ))
     h2_count = len(re.findall(r"^##\s+\S", body.text, re.MULTILINE))
     out.append(CheckResult(
         "orientation content (>=1 H2 beyond index)",
         PASS if h2_count >= 2 else FAIL,
         f"{h2_count} H2 sections",
+        rule="domain-orientation",
     ))
     out.append(CheckResult(
         "reference index (Conditional Loading)",
         PASS if has_conditional_loading(body.text) else FAIL,
+        rule="domain-reference-index",
     ))
     if h2_count == 1 and has_conditional_loading(body.text):
         out.append(CheckResult(
             "prohibited: index without orientation",
             FAIL,
             "only Conditional Loading H2; no orientation content",
+            rule="domain-prohibited-index-only",
         ))
     else:
         out.append(CheckResult(
             "prohibited: index without orientation",
             PASS,
+            rule="domain-prohibited-index-only",
         ))
     return out
 
@@ -390,21 +448,22 @@ def check_yaml_contract(yaml_data: dict) -> tuple[list[CheckResult], str | None]
             "yaml: single root key",
             FAIL,
             f"multiple type roots present (mixed-type drift): {roots_present}",
+            rule="mixed-type",
         ))
 
     root_key, schema = resolve_schema(yaml_data)
     if schema is None:
-        results.append(CheckResult("yaml: recognized root key", FAIL, "no canonical-type root key found"))
+        results.append(CheckResult("yaml: recognized root key", FAIL, "no canonical-type root key found", rule="yaml-contract"))
         return results, None
 
-    results.append(CheckResult(f"yaml: root key '{root_key}'", PASS))
+    results.append(CheckResult(f"yaml: root key '{root_key}'", PASS, rule="yaml-contract"))
 
     fails, _checked = validate(yaml_data, schema)
     if not fails:
-        results.append(CheckResult("yaml: schema validation", PASS, "all required keys present, all rules satisfied"))
+        results.append(CheckResult("yaml: schema validation", PASS, "all required keys present, all rules satisfied", rule="yaml-contract"))
     else:
         for path, msg in fails:
-            results.append(CheckResult(f"yaml: {path}", FAIL, msg))
+            results.append(CheckResult(f"yaml: {path}", FAIL, msg, rule="yaml-contract"))
 
     return results, root_key
 
@@ -427,10 +486,11 @@ def check_portable_units(body_text: str) -> list[CheckResult]:
                 f"yaml: portable unit '{unit_root}'",
                 PASS,
                 "all required keys present, all rules satisfied",
+                rule="yaml-contract",
             ))
         else:
             for path, msg in fails:
-                results.append(CheckResult(f"yaml: {path}", FAIL, msg))
+                results.append(CheckResult(f"yaml: {path}", FAIL, msg, rule="yaml-contract"))
     return results
 
 
@@ -467,6 +527,7 @@ def check_facts_cross_rules(body_text: str, declared_type: str | None) -> list[C
             "yaml: facts present (cross-source)",
             FAIL,
             "reference-skill requires at least one fact (nested in reference_skill: or as a top-level facts: unit, or both)",
+            rule="facts-floor",
         ))
         return results
 
@@ -474,18 +535,21 @@ def check_facts_cross_rules(body_text: str, declared_type: str | None) -> list[C
         "yaml: facts present (cross-source)",
         PASS,
         f"{len(all_facts)} facts across all sources",
+        rule="facts-floor",
     ))
     has_gotcha = any(f.get("gotchas") for f in all_facts)
     results.append(CheckResult(
         "yaml: >=1 fact carries gotchas (cross-source)",
         PASS if has_gotcha else FAIL,
         "" if has_gotcha else "no fact carries a gotchas list across any source",
+        rule="facts-gotcha",
     ))
     has_example = any(f.get("example") for f in all_facts)
     results.append(CheckResult(
         "yaml: >=1 fact carries example (cross-source)",
         PASS if has_example else FAIL,
         "" if has_example else "no fact carries an example block across any source",
+        rule="facts-example",
     ))
     return results
 
@@ -518,6 +582,7 @@ def check_technique_caution_cross_rule(body_text: str) -> list[CheckResult]:
             "yaml: >=1 gotcha OR >=1 anti_pattern record (caution-surface OR-rule)",
             PASS if ok else FAIL,
             "" if ok else "no technique carries a gotchas list and no anti_patterns record exists",
+            rule="caution-floor",
         )]
     return []
 
@@ -595,12 +660,14 @@ def check_asset_dependencies_resolve(body_text: str, skill_dir: Path) -> list[Ch
             f"yaml: {row_label}",
             FAIL,
             f"declared asset does not resolve against skill dir or project root: {raw}",
+            rule="asset-paths-resolve",
         ))
     if not missing:
         results.append(CheckResult(
             "yaml: asset dependencies resolve",
             PASS,
             f"{len(declared)} declared path(s) resolve",
+            rule="asset-paths-resolve",
         ))
     return results
 
@@ -740,6 +807,7 @@ def check_references_reachable_from_skill_md(body_text: str, skill_dir: Path) ->
                 f"load-graph: {row_label}",
                 FAIL,
                 f"index entry points at a path that does not exist: {raw}",
+                rule="refs-reachable",
             ))
 
     # -- reachability of references/ files ----------------------------------
@@ -790,6 +858,7 @@ def check_references_reachable_from_skill_md(body_text: str, skill_dir: Path) ->
                     f"not cited or indexed from SKILL.md; reachable only via {via} "
                     "(two hops -- the index cannot route to it). Add a direct edge "
                     "or confirm the routing is intentional.",
+                    rule="refs-reachable",
                 ))
             continue
         results.append(CheckResult(
@@ -797,6 +866,7 @@ def check_references_reachable_from_skill_md(body_text: str, skill_dir: Path) ->
             FAIL if p.suffix == ".md" else JUDGMENT,
             "orphaned reference: no edge from SKILL.md or any reachable reference "
             "points at this file. Add an index entry / citation, or delete it.",
+            rule="refs-reachable",
         ))
 
     # -- member directories with no SKILL.md edge ---------------------------
@@ -822,6 +892,7 @@ def check_references_reachable_from_skill_md(body_text: str, skill_dir: Path) ->
             f"skill member directory has no edge from SKILL.md{note_suffix}. "
             "An agent cannot discover it; index it (index.members / tools[].tests "
             "/ a citation) or confirm it is an internal helper.",
+            rule="refs-reachable",
         ))
 
     if (ref_files or member_dirs) and not results:
@@ -830,6 +901,7 @@ def check_references_reachable_from_skill_md(body_text: str, skill_dir: Path) ->
             PASS,
             f"{len(ref_files)} reference file(s) reachable "
             f"({len(direct)} direct), {len(member_dirs)} member dir(s) linked",
+            rule="refs-reachable",
         ))
     return results
 
@@ -851,11 +923,13 @@ def check_claude_md_record_floor(yaml_data: dict) -> CheckResult | None:
             "yaml: >=1 record across insights/conventions (union floor)",
             PASS,
             f"{n_insights} insight(s), {n_conventions} convention(s)",
+            rule="claude-md-record-floor",
         )
     return CheckResult(
         "yaml: >=1 record across insights/conventions (union floor)",
         FAIL,
         "claude_md block carries neither insights nor conventions; the block must be non-empty",
+        rule="claude-md-record-floor",
     )
 
 
@@ -870,11 +944,16 @@ def check_cross_block_drift(body_text: str) -> CheckResult | None:
             "yaml: single skill-type root (cross-block)",
             FAIL,
             f"multiple skill-type roots across blocks (mixed-type drift): {skill_type_roots}",
+            rule="cross-block-drift",
         )
     return None
 
 
-def audit_claude_md(claude_md_path: Path, content: str) -> dict[str, Any]:
+def audit_claude_md(
+    claude_md_path: Path,
+    content: str,
+    resolved: "ResolvedStandards | None" = None,
+) -> dict[str, Any]:
     """Audit a CLAUDE.md insight file."""
     body = parse_body(content)
     yaml_data, yaml_err, detected_root = extract_skill_type_unit(body.text)
@@ -888,6 +967,7 @@ def audit_claude_md(claude_md_path: Path, content: str) -> dict[str, Any]:
                 "yaml: claude_md root key",
                 FAIL,
                 f"CLAUDE.md must carry a claude_md: YAML block; found roots {roots}",
+                rule="yaml-contract",
             ))
         else:
             yaml_results, yaml_root = check_yaml_contract(yaml_data)
@@ -899,6 +979,7 @@ def audit_claude_md(claude_md_path: Path, content: str) -> dict[str, Any]:
             f"yaml: contract block detected (root='{detected_root}')",
             JUDGMENT,
             "pyyaml not installed; YAML contract validation unavailable.",
+            rule="yaml-contract",
         ))
     elif yaml_err.startswith("yaml-parse-error"):
         yaml_results.append(CheckResult(
@@ -906,13 +987,20 @@ def audit_claude_md(claude_md_path: Path, content: str) -> dict[str, Any]:
             FAIL,
             "fenced yaml block found but failed to parse -- "
             + yaml_err.split(": ", 1)[1],
+            rule="yaml-contract",
         ))
     else:
         yaml_results.append(CheckResult(
             "yaml: claude_md contract block",
             FAIL,
             "no fenced yaml block with a claude_md root key found",
+            rule="yaml-contract",
         ))
+
+    disabled = resolved.disabled_rules if resolved else set()
+    yaml_rows = [asdict(r) for r in yaml_results]
+    if disabled:
+        yaml_rows = [r for r in yaml_rows if r["rule"] not in disabled]
 
     return {
         "path": str(claude_md_path),
@@ -920,26 +1008,30 @@ def audit_claude_md(claude_md_path: Path, content: str) -> dict[str, Any]:
         "declared_type": None,
         "yaml_root": yaml_root,
         "universal": [],
-        "yaml_contract": [asdict(r) for r in yaml_results],
+        "yaml_contract": yaml_rows,
         "type_specific": [],
-        "mixed_type": asdict(CheckResult("mixed-type signal (n/a for CLAUDE.md)", NA)),
+        "mixed_type": asdict(CheckResult("mixed-type signal (n/a for CLAUDE.md)", NA, rule="mixed-type")),
     }
 
 
-def audit(skill_md_path: Path) -> dict[str, Any]:
+def audit(skill_md_path: Path, resolved: "ResolvedStandards | None" = None) -> dict[str, Any]:
     if not skill_md_path.exists():
         return {"error": f"file not found: {skill_md_path}"}
     content = skill_md_path.read_text(encoding="utf-8")
 
     if skill_md_path.name.lower() == "claude.md":
-        return audit_claude_md(skill_md_path, content)
+        return audit_claude_md(skill_md_path, content, resolved)
 
     skill_dir = skill_md_path.parent
+
+    # Effective thresholds: audit defaults overlaid by any resolved overrides.
+    # The module-level THRESHOLDS dict is never mutated (this run only).
+    th = {**THRESHOLDS, **(resolved.thresholds if resolved else {})}
 
     fm = parse_frontmatter(content)
     body = parse_body(content)
 
-    universal = check_universal(fm, body, skill_dir)
+    universal = check_universal(fm, body, skill_dir, th)
     universal.extend(check_references_reachable_from_skill_md(body.text, skill_dir))
     declared_type = fm.fields.get("skill-type") if fm else None
 
@@ -956,12 +1048,14 @@ def audit(skill_md_path: Path) -> dict[str, Any]:
             f"yaml: contract block detected (root='{detected_root}')",
             JUDGMENT,
             "pyyaml not installed; YAML contract validation unavailable. Skill is staged for YAML validation; install pyyaml to validate.",
+            rule="yaml-contract",
         ))
     elif yaml_err == "no-yaml-parser-no-block":
         yaml_results.append(CheckResult(
             "yaml: parser available + contract block",
             JUDGMENT,
             "pyyaml not installed AND no yaml contract block found; falling back to legacy markdown heuristics",
+            rule="yaml-contract",
         ))
     elif yaml_err.startswith("yaml-parse-error"):
         yaml_root = detected_root
@@ -970,12 +1064,14 @@ def audit(skill_md_path: Path) -> dict[str, Any]:
             FAIL,
             "fenced yaml block found but failed to parse -- "
             + yaml_err.split(": ", 1)[1],
+            rule="yaml-contract",
         ))
     else:
         yaml_results.append(CheckResult(
             "yaml: contract block",
             JUDGMENT,
             "no fenced yaml contract block with a recognized root key; falling back to legacy markdown heuristics",
+            rule="yaml-contract",
         ))
 
     yaml_results.extend(check_portable_units(body.text))
@@ -1004,14 +1100,15 @@ def audit(skill_md_path: Path) -> dict[str, Any]:
 
     if not contract_staged:
         score, signals = mixed_type_signal(body.text)
-        if score >= 2:
+        if score >= th["mixed_min_score"]:
             mixed = CheckResult(
                 "mixed-type signal (legacy heuristic)",
                 JUDGMENT,
                 f"score={score}: {signals}",
+                rule="mixed-type",
             )
         else:
-            mixed = CheckResult("mixed-type signal (legacy heuristic)", PASS, f"score={score}")
+            mixed = CheckResult("mixed-type signal (legacy heuristic)", PASS, f"score={score}", rule="mixed-type")
     elif yaml_data is not None:
         roots_present = detect_mixed_type_yaml(yaml_data)
         if len(roots_present) > 1:
@@ -1019,23 +1116,34 @@ def audit(skill_md_path: Path) -> dict[str, Any]:
                 "mixed-type signal (deterministic)",
                 FAIL,
                 f"multiple root keys present: {roots_present}",
+                rule="mixed-type",
             )
         else:
-            mixed = CheckResult("mixed-type signal (deterministic)", PASS, f"single root: {roots_present[0] if roots_present else 'none'}")
+            mixed = CheckResult("mixed-type signal (deterministic)", PASS, f"single root: {roots_present[0] if roots_present else 'none'}", rule="mixed-type")
     else:
         mixed = CheckResult(
             "mixed-type signal (deferred)",
             JUDGMENT,
             f"contract block detected (root='{detected_root}') but pyyaml unavailable; cannot determine deterministically",
+            rule="mixed-type",
         )
+
+    disabled = resolved.disabled_rules if resolved else set()
+    universal_rows = [asdict(r) for r in universal]
+    yaml_rows = [asdict(r) for r in yaml_results]
+    type_rows = [asdict(r) for r in type_specific]
+    if disabled:
+        universal_rows = [r for r in universal_rows if r["rule"] not in disabled]
+        yaml_rows = [r for r in yaml_rows if r["rule"] not in disabled]
+        type_rows = [r for r in type_rows if r["rule"] not in disabled]
 
     return {
         "path": str(skill_md_path),
         "declared_type": declared_type,
         "yaml_root": yaml_root,
-        "universal": [asdict(r) for r in universal],
-        "yaml_contract": [asdict(r) for r in yaml_results],
-        "type_specific": [asdict(r) for r in type_specific],
+        "universal": universal_rows,
+        "yaml_contract": yaml_rows,
+        "type_specific": type_rows,
         "mixed_type": asdict(mixed),
     }
 
@@ -1076,9 +1184,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("path", help="Path to SKILL.md")
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of formatted text")
+    parser.add_argument(
+        "--config",
+        action="store_true",
+        help="Resolve and apply the layered skills-kit standards config "
+             "(disabled rules + threshold overrides). Off by default so existing "
+             "invocations stay deterministic.",
+    )
     args = parser.parse_args(argv)
 
-    report = audit(Path(args.path))
+    resolved = None
+    if args.config:
+        from . import standards_resolve
+        project_root = _find_project_root(Path(args.path).resolve())
+        resolved = standards_resolve.resolve(project_root)
+
+    report = audit(Path(args.path), resolved)
     if "error" in report:
         print(report["error"], file=sys.stderr)
         return 1

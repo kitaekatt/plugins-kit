@@ -36,6 +36,10 @@ claude_md:
         - classify script
         - tag script
         - schema validator
+        - configure standards
+        - rule catalog
+        - standards resolver
+        - disable optional rule
       origin: Phase 4.6 P5 plugin-level orientation surface (2026-04-30).
       added: "2026-04-30"
       summary: skills-kit ships the verb x artifact matrix -- md-authoring + md-audit union domains over the md artifact (skill / claude-md specializations) -- plus standalones (cohesion-principles, knowledge-encoding, materialized-output, update-documentation) and the skill-authoring tooling (audit / classify / tag / schema_registry). skill-authoring is the skill-authoring sub-domain, kept whole.
@@ -63,6 +67,24 @@ claude_md:
         - skills_kit_lib/tag.py -- idempotent skill-type: frontmatter
           writer; refuses to overwrite existing differing values without --force;
           refuses missing-frontmatter cases (never invents).
+
+        Standards-configuration surface (configurable optional rules + layered
+        user/project standards):
+        - skills_kit_lib/rule_catalog.py -- SSOT mapping every audit rule id to
+          one bucket (architectural / optional / inoffensive); consumed by the
+          resolver's reject-un-tunable-rule check and by the M4 config docs.
+        - skills_kit_lib/standards_resolve.py -- self-contained (stdlib+pyyaml,
+          no bootstrap_lib) resolver of the layered config: shipped -> user_dir
+          skills-kit/ -> its config.local.yaml -> project .claude/skills-kit/ ->
+          its config.local.yaml; config.yaml carries rules:{<id>: off} +
+          thresholds:; *-standards.md files union across layers. Loud errors
+          (StandardsConfigError) on an un-tunable id, unknown threshold, or
+          malformed config; degrades to defaults + note without pyyaml.
+        - skills/md-audit/references/configuring-standards.md -- user-and-Claude
+          configuration reference (layer model, config.yaml format, the full
+          rule-id catalog, thresholds, troubleshooting).
+        - skills/md-audit/references/authoring-standards.md -- authoring spec for
+          an additive standards_set file.
     - id: which_surface_for_which_task
       keywords:
         - reading order

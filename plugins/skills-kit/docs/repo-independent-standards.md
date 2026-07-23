@@ -1,8 +1,17 @@
 # Repo-Independent Standards: separating the toolkit from the standards
 
-Status: concept capture, 2026-07-22. Not scheduled. This documents a direction
+Status: concept capture, 2026-07-22. This documents a direction
 the author has been considering for a while; it exists so the idea has a home
 and a shape before any implementation decision.
+
+Implementation status (2026-07-23): the first increment is implemented --
+configurable optional rules (disable/tune via `config.yaml`), the layered
+user/project standards resolution, and additive per-file-type standards files
+(`*-standards.md` carrying a `standards_set:` block). Architectural opinions
+stay hard-coded; inoffensive integrity checks stay knob-less. For the
+configuration surface (layer model, `config.yaml` format, the rule-id catalog,
+thresholds), see
+[../skills/md-audit/references/configuring-standards.md](../skills/md-audit/references/configuring-standards.md).
 
 ## The observation
 

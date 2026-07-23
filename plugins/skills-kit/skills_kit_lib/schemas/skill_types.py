@@ -49,7 +49,8 @@ REFERENCE_SKILL_SCHEMA = {
         }}},
     },
     "forbidden_keys": ["procedures", "steps", "rules", "counters", "patterns",
-                       "apply_when", "do_not_apply_when", "members", "index"],
+                       "apply_when", "do_not_apply_when", "members", "index",
+                       "standards_set"],
 }
 
 
@@ -88,7 +89,7 @@ PATTERN_SKILL_SCHEMA = {
         },
     },
     "forbidden_keys": ["procedures", "steps", "rules", "counters", "facts",
-                       "tools", "scripts", "members", "index"],
+                       "tools", "scripts", "members", "index", "standards_set"],
 }
 
 
@@ -144,7 +145,8 @@ TECHNIQUE_SKILL_SCHEMA = {
         "anti_patterns": ANTI_PATTERNS_RULE,
     },
     "forbidden_keys": ["rules", "counters", "facts", "patterns",
-                       "apply_when", "do_not_apply_when", "members", "index"],
+                       "apply_when", "do_not_apply_when", "members", "index",
+                       "standards_set"],
 }
 
 DISCIPLINE_SKILL_SCHEMA = {
@@ -195,7 +197,7 @@ DISCIPLINE_SKILL_SCHEMA = {
         "anti_patterns": ANTI_PATTERNS_RULE,
     },
     "forbidden_keys": ["facts", "patterns", "apply_when", "do_not_apply_when",
-                       "members", "index", "tools", "scripts"],
+                       "members", "index", "tools", "scripts", "standards_set"],
 }
 
 
@@ -258,7 +260,8 @@ DOMAIN_SKILL_SCHEMA = {
         }},
     },
     "forbidden_keys": ["rules", "counters", "facts", "patterns",
-                       "apply_when", "do_not_apply_when", "steps_at_root"],
+                       "apply_when", "do_not_apply_when", "steps_at_root",
+                       "standards_set"],
     "max_orientation_summary_words": 300,
 }
 
@@ -328,7 +331,7 @@ CAPABILITY_SKILL_SCHEMA = {
     },
     "forbidden_keys": ["rules", "counters", "facts", "patterns",
                        "apply_when", "do_not_apply_when", "techniques",
-                       "index"],
+                       "index", "standards_set"],
 }
 
 
@@ -434,7 +437,8 @@ AUDIT_SKILL_SCHEMA = {
         "anti_patterns": ANTI_PATTERNS_RULE,
     },
     "forbidden_keys": ["techniques", "rules", "patterns", "apply_when",
-                       "do_not_apply_when", "facts", "index", "members"],
+                       "do_not_apply_when", "facts", "index", "members",
+                       "standards_set"],
 }
 
 

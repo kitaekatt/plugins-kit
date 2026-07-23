@@ -18,7 +18,10 @@ from skills_kit_lib.schemas.skill_types import (
     DOMAIN_SKILL_SCHEMA,
 )
 from skills_kit_lib.schemas.claude_md import CLAUDE_MD_SCHEMA
+from skills_kit_lib.schemas.standards import STANDARDS_SET_SCHEMA
 from skills_kit_lib.schema_registry import (
+    OWNER_DOCS,
+    PORTABLE_UNIT_ROOTS,
     SCHEMAS_BY_ROOT,
     detect_mixed_type_yaml,
     resolve_schema,
@@ -399,6 +402,144 @@ class TestClaudeMd:
         )
         fails, _ = validate(bad, CLAUDE_MD_SCHEMA)
         assert _has_fail_at(fails, "added")
+
+
+# ---------------------------------------------------------------------------
+# standards_set (portable configurable-standards unit)
+# ---------------------------------------------------------------------------
+
+
+class TestStandardsSet:
+    def test_minimal_floor_validates(self, minimal_standards_set):
+        fails, _ = validate(minimal_standards_set, STANDARDS_SET_SCHEMA)
+        assert fails == [], f"unexpected fails: {fails}"
+
+    def test_missing_identity_fails(self, minimal_standards_set, make_invalid):
+        bad = make_invalid(
+            minimal_standards_set,
+            lambda d: d["standards_set"].pop("identity"),
+        )
+        fails, _ = validate(bad, STANDARDS_SET_SCHEMA)
+        assert _has_fail_at(fails, "identity")
+
+    def test_missing_applies_to_fails(self, minimal_standards_set, make_invalid):
+        bad = make_invalid(
+            minimal_standards_set,
+            lambda d: d["standards_set"].pop("applies_to"),
+        )
+        fails, _ = validate(bad, STANDARDS_SET_SCHEMA)
+        assert _has_fail_at(fails, "applies_to")
+
+    def test_missing_criteria_fails(self, minimal_standards_set, make_invalid):
+        bad = make_invalid(
+            minimal_standards_set,
+            lambda d: d["standards_set"].pop("criteria"),
+        )
+        fails, _ = validate(bad, STANDARDS_SET_SCHEMA)
+        assert _has_fail_at(fails, "criteria")
+
+    def test_empty_criteria_fails_min_len(self, minimal_standards_set, make_invalid):
+        bad = make_invalid(
+            minimal_standards_set,
+            lambda d: d["standards_set"].update({"criteria": []}),
+        )
+        fails, _ = validate(bad, STANDARDS_SET_SCHEMA)
+        assert _has_fail_with_msg(fails, "list length 0")
+
+    def test_criterion_missing_id_fails(self, minimal_standards_set, make_invalid):
+        bad = make_invalid(
+            minimal_standards_set,
+            lambda d: d["standards_set"]["criteria"][0].pop("id"),
+        )
+        fails, _ = validate(bad, STANDARDS_SET_SCHEMA)
+        assert _has_fail_at(fails, "id")
+
+    def test_criterion_missing_statement_fails(self, minimal_standards_set, make_invalid):
+        bad = make_invalid(
+            minimal_standards_set,
+            lambda d: d["standards_set"]["criteria"][0].pop("statement"),
+        )
+        fails, _ = validate(bad, STANDARDS_SET_SCHEMA)
+        assert _has_fail_at(fails, "statement")
+
+    def test_criterion_missing_severity_fails(self, minimal_standards_set, make_invalid):
+        bad = make_invalid(
+            minimal_standards_set,
+            lambda d: d["standards_set"]["criteria"][0].pop("severity"),
+        )
+        fails, _ = validate(bad, STANDARDS_SET_SCHEMA)
+        assert _has_fail_at(fails, "severity")
+
+    def test_invalid_severity_value_fails(self, minimal_standards_set, make_invalid):
+        bad = make_invalid(
+            minimal_standards_set,
+            lambda d: d["standards_set"]["criteria"][0].update({"severity": "critical"}),
+        )
+        fails, _ = validate(bad, STANDARDS_SET_SCHEMA)
+        assert _has_fail_with_msg(fails, "severity must be one of")
+
+    def test_valid_severity_values_pass(self, minimal_standards_set, make_invalid):
+        for value in ("fail", "info", "judgment"):
+            ok = make_invalid(
+                minimal_standards_set,
+                lambda d, v=value: d["standards_set"]["criteria"][0].update({"severity": v}),
+            )
+            fails, _ = validate(ok, STANDARDS_SET_SCHEMA)
+            assert fails == [], f"severity {value!r} should validate; got: {fails}"
+
+    def test_invalid_enforcement_value_fails(self, minimal_standards_set, make_invalid):
+        bad = make_invalid(
+            minimal_standards_set,
+            lambda d: d["standards_set"]["criteria"][0].update({"enforcement": "automatic"}),
+        )
+        fails, _ = validate(bad, STANDARDS_SET_SCHEMA)
+        assert _has_fail_with_msg(fails, "enforcement must be one of")
+
+    def test_criterion_keywords_below_three_fails(self, minimal_standards_set, make_invalid):
+        bad = make_invalid(
+            minimal_standards_set,
+            lambda d: d["standards_set"]["criteria"][0].update({"keywords": ["only", "two"]}),
+        )
+        fails, _ = validate(bad, STANDARDS_SET_SCHEMA)
+        assert _has_fail_at(fails, "keywords")
+
+    def test_extras_allowed(self, minimal_standards_set, make_invalid):
+        """Schemas-as-floors: unknown non-forbidden keys must NOT fail."""
+        bad = make_invalid(
+            minimal_standards_set,
+            lambda d: d["standards_set"].update({"my_extra": "anything"}),
+        )
+        fails, _ = validate(bad, STANDARDS_SET_SCHEMA)
+        assert fails == [], f"extras should be allowed; got fails: {fails}"
+
+    def test_skill_type_schema_rejects_embedded_standards_set(
+        self, minimal_technique_skill, make_invalid
+    ):
+        # forbidden_keys the other direction: a skill-type unit must not embed a
+        # standards_set block.
+        bad = make_invalid(
+            minimal_technique_skill,
+            lambda d: d["technique_skill"].update({"standards_set": {}}),
+        )
+        fails, _ = validate(bad, TECHNIQUE_SKILL_SCHEMA)
+        assert _has_fail_with_msg(fails, "forbidden key")
+
+    def test_registered_as_portable(self):
+        assert "standards_set" in SCHEMAS_BY_ROOT
+        assert SCHEMAS_BY_ROOT["standards_set"]["root"] == "standards_set"
+        assert "standards_set" in PORTABLE_UNIT_ROOTS
+
+    def test_owner_doc_recorded(self):
+        assert OWNER_DOCS.get("standards_set") == (
+            "skills/md-audit/references/authoring-standards.md"
+        )
+
+    def test_declares_forbidden_skill_type_roots(self):
+        forbidden = SCHEMAS_BY_ROOT["standards_set"]["forbidden_keys"]
+        for root in ("reference_skill", "pattern_skill", "technique_skill",
+                     "discipline_skill", "domain_skill", "capability_skill",
+                     "audit_skill"):
+            assert root in forbidden
 
 
 # ---------------------------------------------------------------------------

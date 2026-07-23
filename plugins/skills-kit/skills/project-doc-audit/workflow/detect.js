@@ -91,7 +91,7 @@ const FILE_FINDINGS_SCHEMA = {
           line: { type: ['integer', 'null'], description: 'line number in the file, or null' },
           taxonomy: {
             type: 'string',
-            enum: ['A_misclassified_skill_ref', 'B_graduate_to_skill', 'C_fold_into_claude_md', 'D_move_into_existing_skill', 'E_crp_split', 'F_chained_reference', 'G_claude_md_back_reference', 'H_orphan', 'I_duplicates_skill', 'J_size_signal', 'K_unclassified', 'L_readme_stranded_fact', 'M_generated_missing_provenance', 'N_broken_link_identified_target', 'O_non_ascii_lookalike', 'P_foreign_absolute_path', 'Q_line_drift', 'R_stale_anchor', 'S_ancestor_convention_violation', 'none'],
+            enum: ['A_misclassified_skill_ref', 'B_graduate_to_skill', 'C_fold_into_claude_md', 'D_move_into_existing_skill', 'E_crp_split', 'F_chained_reference', 'G_claude_md_back_reference', 'H_orphan', 'I_duplicates_skill', 'J_size_signal', 'K_unclassified', 'L_readme_stranded_fact', 'M_generated_missing_provenance', 'N_broken_link_identified_target', 'O_non_ascii_lookalike', 'P_foreign_absolute_path', 'Q_line_drift', 'R_stale_anchor', 'S_ancestor_convention_violation', 'N_user_standard_violation', 'none'],
             description: 'canonical suffixed taxonomy id (see the SKILL.md taxonomy table); "none" for PASS/INFO/JUDGMENT that need no remediation',
           },
           bucket: { type: 'string', enum: ['FIX', 'SERIOUS', 'IMPROVE', 'SILENT', 'SPECIAL', 'NONE'], description: 'per-finding disposition assigned instance-level by the classifier (step 11)' },
@@ -162,6 +162,16 @@ function lanePrompt(f) {
     ? ` ANCESTOR-DECLARED EXCEPTION CARVE-OUT: the ancestor CLAUDE.md files supplied for step 9c may EXPLICITLY declare a SCOPED EXCEPTION to one of these universal conventions -- e.g. "ASCII only, EXCEPT developer names in the contributors section may contain non-ASCII characters". Before emitting a convention-violation FIX for a non-ASCII look-alike (O) or a hardcoded absolute / foreign-machine path (P), check those ancestors for an explicit exception that COVERS this exact instance -- the right file scope AND the right content kind. If one does, do NOT emit the FIX: demote the finding to PASS (taxonomy "none", bucket "NONE") -- or INFO if it is worth noting -- and put the verbatim quoted exception rule plus the ancestor source path in its \`message\`. Same verbatim-quote posture as PD-11: the exception must be written down and actually cover this instance; no inferred, generic, or stretched exceptions, and when in doubt the built-in check STILL fires. PRECEDENCE: this carve-out and PD-11 (step 9c) read the SAME ancestor declarations, so a declared rule + its exception must yield ONE consistent outcome for a given instance -- an exception that silences the PD-11 S_ancestor_convention_violation finding silences this built-in convention FIX too, and vice versa; they must never contradict (PD-11 silent while the built-in FIX still fires is exactly the bug this carve-out removes).`
     : ``
 
+  const standardsPaths = Array.isArray(f.standardsPaths) ? f.standardsPaths : []
+  const standardsClause = standardsPaths.length > 0
+    ? `USER-AUTHORED STANDARDS. Read each standards file, nearest-layer first: ${standardsPaths.map((p) => `"${p}"`).join(', ')}. Each is a *-standards.md carrying a fenced \`standards_set:\` block whose \`criteria[]\` are the project's or user's own opinions for this artifact type. Apply ONLY criteria whose \`statement\` you can quote VERBATIM from the standards file -- same rule-extraction posture as the ancestor-convention check: no inferred rules, no generic best-practice, no "spirit of" a criterion; if you cannot quote the statement verbatim, do NOT raise the finding. SKIP any criterion whose \`enforcement\` is \`mechanical\` -- those are the audit.py validator's job (it runs them under --config), not yours; you evaluate only judgment criteria (enforcement \`judgment\` or absent). For each violated criterion emit group "Hygiene", taxonomy N_user_standard_violation, severity taken from the criterion's declared \`severity\` (fail -> FAIL, info -> INFO, judgment -> JUDGMENT), anchored on the doc line that violates it. The \`message\` MUST carry (a) the verbatim criterion statement, (b) the criterion \`id\`, and (c) the source standards-file path. Disposition is assigned in step 10 from the severity: a fail-severity violation is SERIOUS (a hard user-declared rule the auditor cannot mechanically satisfy -- surface at the top, never auto-fix), an info-severity note is IMPROVE (one-line pitch), a judgment-severity call is JUDGMENT (surfaced for review).`
+    : `No user-authored standards files were supplied; do NOT apply any user standards and emit no N_user_standard_violation findings.`
+
+  const disabledCriteria = Array.isArray(input.disabledCriteria) ? input.disabledCriteria : []
+  const disabledClause = disabledCriteria.length > 0
+    ? `DISABLED CRITERIA. The run configuration switched these optional criterion/rule ids OFF: ${disabledCriteria.map((d) => `"${d}"`).join(', ')}. SUPPRESS any finding whose criterion id or rule id matches one in that list -- do not emit it and do not count it toward the verdict. That list only ever names OPTIONAL ids; architectural (schema/contract) and integrity (frontmatter, reachability, convention) checks are NEVER in it, so never suppress one of those on account of this list.`
+    : `No criteria were disabled for this run; apply every criterion normally.`
+
   return `You are ONE lane of a project-document audit. Audit exactly one file and return structured findings. This is DETECTION ONLY — do not modify any file.
 
 Target: ${f.path}
@@ -187,7 +197,9 @@ Steps:
      - Q_line_drift: a cited line number whose named enclosing symbol/section resolves but is far from the cited number, with no author recovery hint.
      - R_stale_anchor: a concrete anchor (symbol / heading / path the doc says exists) absent as cited but whose current equivalent is findable.
 9c. ${ancestorConventionsClause}
-10. DISPOSITION CLASSIFIER. Assign EVERY non-PASS finding a taxonomy id (A-S; S_ancestor_convention_violation is the PD-11 ancestor-convention finding from step 9c, group Hygiene) and one of four dispositions -- FIX / SERIOUS / IMPROVE / SILENT (K -> SPECIAL). The taxonomy default bucket is a starting point only; decide instance-level against these predicates.
+9d. ${standardsClause}
+9e. ${disabledClause}
+10. DISPOSITION CLASSIFIER. Assign EVERY non-PASS finding a taxonomy id (A-S plus N_user_standard_violation; S_ancestor_convention_violation is the PD-11 ancestor-convention finding from step 9c, group Hygiene; N_user_standard_violation is the user-authored-standards finding from step 9d, group Hygiene, disposition driven by the criterion's declared severity -- fail -> SERIOUS, info -> IMPROVE, judgment -> JUDGMENT) and one of four dispositions -- FIX / SERIOUS / IMPROVE / SILENT (K -> SPECIAL). The taxonomy default bucket is a starting point only; decide instance-level against these predicates.
 
    Classifier prod (read this FIRST -- it overrides your default caution): You are biased toward conservatism; the user's time and attention are the scarce resources; source control and CL review are the safety net. If the edit very likely improves the doc, apply it.
 
