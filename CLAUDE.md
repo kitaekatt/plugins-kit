@@ -294,6 +294,10 @@ python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootst
 
 ## Preferences
 
+- **No temporal deixis in documentation.** Never "recent(ly)", "new", "just
+  shipped", or similar now-relative phrasing in docs, READMEs, or outward
+  content -- state what a thing IS, cite a source, and use absolute dates
+  when a date matters. Now-relative claims rot silently and are unverifiable.
 - **Never use the memory system** (`~/.claude/projects/*/memory/`). Always update `CLAUDE.md` instead — it is machine-independent and checked into the repo, so all machines and sessions share the same context.
 
 ## Insights
