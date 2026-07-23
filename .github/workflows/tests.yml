@@ -24,3 +24,21 @@ jobs:
 
       - name: Run bootstrap test suite
         run: uv run --extra dev pytest tests/bootstrap -q
+
+  content-pipeline-tests:
+    name: content-pipeline + llm-scripting (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run content-pipeline-kit and llm-scripting-kit suites
+        run: uv run --extra dev pytest tests/content-pipeline-kit tests/llm-scripting-kit -q
