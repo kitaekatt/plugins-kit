@@ -18,10 +18,40 @@ import bootstrap_lib.engine as engine
 
 class TestAskReason:
     def test_plain_types_are_auto(self):
-        for t in ("venv", "git_dep", "json", "pypi", "marketplace",
-                  "plugin", "sync_to_data", "ini", "path"):
+        for t in ("venv", "json", "pypi", "sync_to_data", "ini", "path"):
             assert engine._ask_reason({"type": t}) is None
             assert engine._needs_user({"type": t}) is False
+
+    def test_credential_network_types_ask(self):
+        # marketplace/plugin/git_dep only surface after a failed in-line network
+        # op; a doomed AUTO retry helps nobody and the fix often needs a
+        # credential. They ASK, even carrying a remediation_cmd.
+        for t in ("marketplace", "plugin", "git_dep"):
+            assert engine._ask_reason({"type": t}) == "info"
+            assert engine._ask_reason(
+                {"type": t, "remediation_cmd": "git clone x"}) == "info"
+            assert engine._needs_user({"type": t}) is True
+        # And they are no longer advertised as fix-all-eligible.
+        assert engine._is_auto_fixable({"type": "git_dep",
+                                        "remediation_cmd": "git clone x"}) is False
+
+    def test_json_ini_in_user_scope_are_auto(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        claude = tmp_path / ".claude"
+        assert engine._ask_reason(
+            {"type": "json", "target": str(claude / "settings.json")}) is None
+        assert engine._ask_reason(
+            {"type": "ini", "file": str(claude / "plugins/data/x/foo.ini")}) is None
+        # No target named at all: nothing to guard -> stays AUTO.
+        assert engine._ask_reason({"type": "json"}) is None
+
+    def test_json_ini_outside_user_scope_ask(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        # A manifest pointing json/ini at a shared/VCS-tracked project file.
+        assert engine._ask_reason(
+            {"type": "json", "target": str(tmp_path / "proj/.p4config")}) == "info"
+        assert engine._ask_reason(
+            {"type": "ini", "file": "/etc/someapp.ini"}) == "info"
 
     def test_tool_install_is_auto(self):
         # Installing non-elevated software is AUTO on a fleet.
@@ -78,7 +108,7 @@ class TestTwoOutcomeEmission:
     def test_all_auto_fixes_now_never_asks(self, tmp_path):
         failures = [
             {"type": "venv", "remediation_cmd": "python -m venv .venv"},
-            {"type": "git_dep", "name": "dep", "remediation_cmd": "git clone x"},
+            {"type": "pypi", "package": "requests", "message": "missing"},
         ]
         sysmsg, ac = _emit(failures, tmp_path)
         assert "FIX NOW" in ac

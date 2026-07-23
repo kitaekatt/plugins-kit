@@ -4947,9 +4947,19 @@ def emit_success_response(log_content, label="bootstrap", output_file=None):
 # Anything else (config items asking for API keys, python_stub admin
 # elevation, parse errors in user-edited files, generic custom failures)
 # is manual-only — Claude can guide but can't run a one-shot command.
+#
+# marketplace/plugin/git_dep are deliberately ABSENT: they cross the network
+# and only surface as failures after a failed in-line attempt, so they route to
+# ASK (see _CREDENTIAL_NETWORK_TYPES / _ask_reason). json/ini stay here because
+# their in-user-scope case is genuinely auto-fixable.
+#
+# Routing authority is _ask_reason, NOT this set: an out-of-scope json/ini
+# failure is still a member here (so _is_auto_fixable reports True) yet _ask_reason
+# returns "info" and the ASK partition wins -- the item is surfaced, never
+# auto-run. This set governs fix-all *eligibility* for the AUTO path only; it is
+# never consulted to override an ASK verdict.
 _AUTO_FIXABLE_TYPES = frozenset({
-    "path", "venv", "git_dep", "ini", "pypi",
-    "json", "marketplace", "plugin", "sync_to_data",
+    "path", "venv", "ini", "pypi", "json", "sync_to_data",
 })
 
 
@@ -5043,6 +5053,40 @@ def _is_auto_fixable(failure):
 _ASK_REASONS = ("elevation", "action", "info")
 
 
+# Types whose fix crosses the network and can fail on authentication. Each of
+# these only becomes a *failure* AFTER the engine already attempted the
+# operation in-line (add_marketplace / install_plugin / clone_git_dep) and it
+# failed -- so the item reaching remediation is a failed network/auth op, not a
+# fresh one. Handing Claude an AUTO "fix now, run the command" for it is doomed
+# twice over: retrying what the engine just failed accomplishes nothing, and the
+# common failure cause is a credential (SSH key, token) a background hook cannot
+# supply. Route to the user instead. (This never touches the happy path -- a
+# marketplace/plugin/git op that succeeds in-line produces no failure.)
+_CREDENTIAL_NETWORK_TYPES = frozenset({"marketplace", "plugin", "git_dep"})
+
+
+def _user_scope_root():
+    """The one tree bootstrap may write to unattended: ~/.claude."""
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    return os.path.normpath(os.path.join(home, ".claude"))
+
+
+def _path_in_user_scope(p):
+    """True when p resolves inside ~/.claude. Empty/None -> True (nothing to
+    guard: the failure names no write target)."""
+    if not p:
+        return True
+    root = _user_scope_root()
+    ap = os.path.normpath(os.path.expanduser(str(p)))
+    return ap == root or ap.startswith(root + os.sep)
+
+
+def _write_target(failure):
+    """The filesystem path an AUTO fix for this failure would write, if it names
+    one. json carries `target`, ini carries `file`, sync carries `dst`."""
+    return failure.get("target") or failure.get("file") or failure.get("dst")
+
+
 def _ask_reason(failure):
     """Why this failure must ASK the user first: 'elevation' | 'action' | 'info',
     or None when it is AUTO-fixable (the fleet default).
@@ -5065,6 +5109,16 @@ def _ask_reason(failure):
         return "action"
     # Info: a value only the user can supply, or a diagnostic only they can run.
     if state == "installed_but_path_stale" or t in ("config", "project_config"):
+        return "info"
+    # Network + credential classes: a failed marketplace/plugin/git op needs the
+    # user, not a doomed AUTO retry (see _CREDENTIAL_NETWORK_TYPES).
+    if t in _CREDENTIAL_NETWORK_TYPES:
+        return "info"
+    # Scope guard: an AUTO fix may only write inside ~/.claude. A json/ini
+    # remediation the manifest points at a shared or VCS-tracked file must ask
+    # first -- editing a shared file unattended is the failure we will not
+    # repeat. In-user-scope targets stay AUTO.
+    if t in ("json", "ini") and not _path_in_user_scope(_write_target(failure)):
         return "info"
     # Safety net: AUTO means "fix it now" and hands Claude a run-this directive,
     # so an item bootstrap CANNOT actually auto-fix (no runnable command/edit and

@@ -2,11 +2,21 @@
 
 Detailed check methods and remediation actions for all condition categories the bootstrap engine can handle. For a summary table, see the SKILL.md "Remediable Condition Categories" section.
 
+## The UX ladder: how every bootstrap surfacing is judged
+
+Every message, prompt, or line bootstrap puts in front of a user is ranked on one ladder, worst to best:
+
+1. **Worst -- an `AskUserQuestion` the user must respond to.** A forced interruption with a decision attached. Reserve for the cases where the user genuinely must decide (the ASK outcomes below); never manufacture one for something that needs no decision.
+2. **Better -- a line the user may or may not read.** A one-line report carried back in Claude's reply. Costs attention only if they choose to spend it.
+3. **Best -- no line at all.** Silence. The healthy steady state.
+
+This is the primary lens for any bootstrap UX decision: prefer the lowest rung that still discharges bootstrap's duty to be honest and secure. Push work *down* the ladder wherever it can go without hiding something the user must be told (out-of-scope writes, credentials, authorization-set growth, failures, suspected injection stay surfaced -- but at the cheapest honest rung, a line rather than a prompt). Never push work *up* the ladder for emphasis. A design that adds a prompt where a line would do, or a line where silence would do, is worse by this measure regardless of any other merit.
+
 ## Two outcomes: auto-fix or ask
 
 Every issue bootstrap surfaces resolves to **exactly one of two outcomes** — there is no third "guide the user through it / work through it with Claude" path.
 
-- **AUTO — fix it now, no prompt.** This is the **default**, because bootstrap manages a fleet. Claude fixes it immediately: runs the install/clone/merge command, edits the manifest, whatever the remediation is. **Installing software is AUTO** — bootstrap will install non-elevated packages unattended without asking. Do not wait for the user to say "fix-all".
+- **AUTO — fix it now, no prompt.** This is the **default**, because bootstrap manages a fleet. Claude fixes it immediately: runs the install/merge command, sets up a venv, edits an in-user-scope manifest, whatever the remediation is. **Installing software is AUTO** — bootstrap will install non-elevated packages unattended without asking. Do not wait for the user to say "fix-all". (Note the two structural exceptions below: network/credential ops and out-of-user-scope file edits are NOT auto — they ASK.)
 
 - **ASK — get the user's go-ahead via the `AskUserQuestion` tool first.** Only when the fix needs one of exactly three things the user alone can provide:
   - **`elevation`** — admin / root / UAC / `sudo` that a background hook cannot obtain.
@@ -16,6 +26,13 @@ Every issue bootstrap surfaces resolves to **exactly one of two outcomes** — t
   The `AskUserQuestion` prompt is always a single question with exactly two options, "Do nothing" leading (an absent-minded Enter changes nothing; bootstrap re-checks next session) and "Fix" second. Claude acts only on "Fix", and never re-prompts.
 
 **How the outcome is decided:** `engine._ask_reason(failure)` returns `elevation` / `action` / `info` (→ ASK) or `None` (→ AUTO). An explicit `ask_reason` on the failure wins — that is how a check or a plugin `custom_bootstrap` (via `ctx.add_failure(..., ask_reason="action")`) declares it needs the user. Otherwise the reason is derived from signals the engine already records (`install_state == "needs_elevation"`, `type in {python_stub, elevation_script}`, `manual_install`, `bootstrap_outdated`, `config`, ...). **Anything not marked is AUTO.**
+
+**Two derived ASK cases enforce the "no doomed AUTO, no unattended shared-file edit" rules — they are structural, not per-item annotations:**
+
+- **Network + credential classes (`marketplace`, `plugin`, `git_dep`) always ASK.** These types only ever surface as a *failure* after the engine already attempted the operation in-line (`add_marketplace` / `install_plugin` / `clone_git_dep`) and it failed. Handing Claude an AUTO "run the command" for one is doomed twice: retrying what just failed changes nothing, and the usual cause is a credential (SSH key, token) a background hook cannot supply. Routing them to ASK is why Leon's SSH-auth marketplace failure must never again arrive as a fix-now directive. The happy path is untouched — a network op that succeeds in-line produces no failure. Set: `engine._CREDENTIAL_NETWORK_TYPES`.
+- **Scope guard: a `json`/`ini` fix whose target is outside `~/.claude` ASKs.** These types' write target comes from the manifest and can point anywhere, including a shared or VCS-tracked project file. `engine._path_in_user_scope(_write_target(failure))` gates them: in-user-scope targets stay AUTO, out-of-scope targets ASK. This is the guard against the incident's actual harm — an unattended edit to a Perforce-controlled shared file.
+
+  The line the guard enforces is **shared vs. personal**, not literally *inside `~/.claude`*. `path` (shell-rc / PATH) edits write to `~/.bashrc` / `~/.zshrc` — outside `~/.claude`, yet still AUTO — because a personal dotfile is single-user, and bootstrap's PATH edit is idempotent (it checks for the entry first) and reversible (remove the line). Personal-scope, converging, credential-free clears the bar; only *shared / VCS-tracked / system* state must ASK. `pypi` and `sync_to_data` write to the plugin data dir under `~/.claude` by construction, so they never trip the guard. The `json`/`ini` gate exists precisely because those two are the AUTO types whose target the manifest can aim at an arbitrary — possibly shared — path.
 
 **Authoring a `custom_bootstrap` failure:** if the fix is runnable without the user, give it a remediation and leave it AUTO. If it needs the user, set `ask_reason` to the matching category and a friendly `user_msg` (the plain-language line the user sees, e.g. "hue-kit wants to pair with your Hue bridge") plus an `agent_msg` describing the post-consent steps.
 
