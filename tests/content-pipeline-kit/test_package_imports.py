@@ -25,6 +25,8 @@ _SUBPACKAGES = [
     "content_pipeline.freshness",
     "content_pipeline.freshness.hashing",
     "content_pipeline.freshness.classify",
+    "content_pipeline.freshness.tier",
+    "content_pipeline.freshness.ensure",
     "content_pipeline.freshness.seed",
     "content_pipeline.validate",
     "content_pipeline.validate.contract",
