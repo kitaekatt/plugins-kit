@@ -26,9 +26,9 @@ Deviations from the two source systems' semantics
 --------------------------------------------------
 
 The generic design preserves every *behavioral* case the two source suites
-pin, but three details differ deliberately. Each is recorded here so the
-later Spirit Crossing port knows where equivalence is behavioral rather than
-byte-for-byte.
+pin, but three details differ deliberately. Each is recorded here so a
+port of an originating system knows where equivalence is behavioral rather
+than byte-for-byte.
 
 1. **Uniform string canonicalization (no legacy raw-UTF-8 path).** The
    first-pass system hashes a legacy bare-string field as raw UTF-8 bytes

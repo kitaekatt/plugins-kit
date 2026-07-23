@@ -16,7 +16,7 @@ Deviations from the two source systems' semantics
 
 The generic design preserves every behavioral case the two source suites
 pin, but several details are deliberate semantic unions. Each is recorded
-here so the later Spirit Crossing port knows where equivalence is behavioral
+here so a port of an originating system knows where equivalence is behavioral
 rather than byte-for-byte.
 
 1. **Presence precedence unifies the scalar-wins and block-wins shapes.**

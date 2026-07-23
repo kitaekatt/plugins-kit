@@ -16,7 +16,7 @@ architecture, and routes to the library (`content_pipeline`, this plugin's
 shared lib) that implements it. Neutral illustrations only in this skill and
 its references -- e.g. a product-copy generator that mutates authored rows
 in place, or a support-macro translator that emits standalone artifacts.
-Never Spirit Crossing or SpryFox specifics.
+Never specifics of any particular consuming project.
 
 ```yaml
 domain_skill:
