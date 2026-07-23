@@ -78,14 +78,14 @@ domain_skill:
     references:
       - id: building_a_pipeline
         path: references/building-a-pipeline.md
-        keywords: [new pipeline, pipeline shape, work-unit strategy, provider registration, delivery mode, VCS backend, CLI facade, mock LLM seam, standing up a pipeline]
-        summary: Stepped procedure for building a new pipeline from the abstractions -- pick the shape, choose a work-unit strategy, register providers, select delivery + VCS, stand up the CLI facade, wire the mock LLM seam for tests.
+        keywords: [new pipeline, pipeline shape, single_pass, convergence_loop, work-unit strategy, FlatChunkStrategy, GraphWalkStrategy, attributed store schema, MergePolicy, two-tier freshness, classify, ensure, provider registration, run_tier, assembly, validators, Severity, floor guard, delivery mode, inplace Marker, projection, VcsBackend, git null, roundtrip, CLI scaffold budget bulk unsupported, AuditSpec Recorder, MockBackend, submit_validated, standing up a pipeline]
+        summary: Eleven-step how-to for building a new pipeline on content_pipeline -- pick shape (single_pass/convergence_loop) and work-unit strategy, define the attributed store + MergePolicy, wire two-tier freshness, register providers + assembly, write Severity-tiered validators + optional floor guards, pick delivery mode (inplace Marker / projection) and a VcsBackend, add roundtrip, stand up the CLI, wire the audit spec + Recorder, and test with MockBackend. Real API snippets.
       - id: porting_a_pipeline
         path: references/porting-a-pipeline.md
-        keywords: [port, migration, existing tool, monolithic facade, equivalence baseline, freshness first, collapse module, subsystem by subsystem]
-        summary: Mapping an existing monolithic LLM-batch tool onto the abstractions subsystem by subsystem -- freshness first, pinning an equivalence baseline before collapsing a module, honestly annotating what is retired.
+        keywords: [port, migration, existing tool, monolithic facade, inventory subpackages, equivalence baseline, freshness first, pin existing tests, dependency order, collapse module, retired surfaces, delete not stub, documented deviation, shared_libs, sys.path shim, fail-soft, _shared_libs path, project-venv consumption]
+        summary: Subsystem-first porting method -- inventory the monolith against the 13 subpackages, port freshness first, pin the existing test suite as an equivalence baseline before collapsing each module, work outward in dependency order (store, validate, llm, providers, deliver/vcs, cli last), re-run the tool's own suite as the final oracle, record retired surfaces honestly (delete-not-stub), and the fail-soft sys.path shim for project-venv consumption.
       - id: design_discipline
         path: references/design-discipline.md
-        keywords: [design philosophy, floor-first, do-no-harm, write-only-on-diff, human-always-wins, exact-file-set-never-sweep, deterministic seeding, guardrails opt-in]
-        summary: The design philosophy behind the library -- floor-first, better-informing-not-forcing, the known-good <10% floor-rule gate, do-no-harm boundary, write-only-on-diff, human-always-wins, exact-file-set-never-sweep, deterministic seeding. Guidance, never library-enforced.
+        keywords: [design philosophy, opt-in guardrails, human-always-wins, do-no-harm markers, first-class revert, write-only-on-diff, one-predicate freshness, one-rule-set-many-sites, advisory floor guards, known-good <10% gate, deterministic seeding, exact-path never-wildcard VCS, truthful audit stamping, altitude discipline, entity-level vs item-level, minimal pipeline needs none]
+        summary: The opt-in design philosophy behind the library and the component that embodies each principle -- human-always-wins attribution, do-no-harm markers + first-class revert, write-only-on-diff, one-predicate freshness, one-rule-set-many-sites validation, advisory floor guards on a known-good <10% gate, deterministic seeding, exact-path-never-wildcard VCS, truthful audit stamping, altitude discipline. Every one opt-in; a minimal pipeline needs none.
 ```
