@@ -26,8 +26,12 @@ The mechanisms that make it more than "ask a model about a diff":
   become a pre-submit confirmation checklist when the CL touches their
   scope. Advisory, not enforcement.
 - **Cost routing.** A `data_only` profile reviews docs/config-only CLs with
-  fewer, cheaper reviewers; the full `code` profile uses Opus-grade
-  reviewers where deep reasoning pays off.
+  two Sonnet reviewers (CLAUDE.md compliance, surface-level bugs) and Sonnet
+  validators. The full `code` profile runs Sonnet for CLAUDE.md compliance
+  and Opus for the two deep-reasoning roles (diff-only bugs,
+  introduced-code review), with Opus validating bug findings and Sonnet
+  validating compliance findings. These assignments are the defaults; ask
+  Claude to use a different model to override them.
 - **Fingerprint-checked cleanup.** When the review auto-created the shelf, it
   deletes it afterward -- but only if the live shelf still exactly matches
   the recorded fingerprint. If you reshelved or edited in the meantime, the

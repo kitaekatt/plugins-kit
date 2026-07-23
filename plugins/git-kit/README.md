@@ -25,8 +25,12 @@ diff":
   files become a confirmation checklist when the range touches their scope.
   Advisory, not enforcement.
 - **Cost routing.** A `data_only` profile handles docs/config-only diffs with
-  fewer, cheaper reviewers; the full `code` profile runs Opus-grade reviewers
-  where semantic reasoning pays off.
+  two Sonnet reviewers (CLAUDE.md compliance, surface-level bugs) and Sonnet
+  validators. The full `code` profile runs Sonnet for CLAUDE.md compliance
+  and Opus for the two deep-reasoning roles (diff-only bugs, introduced-code
+  review), with Opus validating bug findings and Sonnet validating
+  compliance findings. These assignments are the defaults; ask Claude to use
+  a different model to override them.
 
 Output is rendered markdown in chat. Nothing is written to disk, no PR
 comment is posted.
