@@ -8,9 +8,31 @@ stage implementations and what lets a stage be tested in isolation against a
 mock store.
 """
 
-from typing import Protocol
+from __future__ import annotations
+
+from typing import Any, Protocol, Sequence
 
 
 class Stage(Protocol):
-    def __call__(self, store, context) -> object:
+    def __call__(self, store: Any, context: Any) -> Any:
         ...
+
+
+def compose(store: Any, stages: Sequence[Stage], context: Any = None) -> Any:
+    """Fold ``stages`` over ``store``, threading each stage's result forward.
+
+    Each stage receives the store returned by the previous stage and the same
+    ``context``. A stage that mutates the store in place may return ``None``;
+    in that case the (mutated) store is carried forward unchanged, so both the
+    functional (return-a-new-store) and imperative (mutate-and-return-None)
+    stage styles compose under one helper.
+    """
+    current = store
+    for stage in stages:
+        result = stage(current, context)
+        if result is not None:
+            current = result
+    return current
+
+
+__all__ = ["Stage", "compose"]
