@@ -39,6 +39,7 @@ _SUBPACKAGES = [
     "content_pipeline.llm.platform",
     "content_pipeline.llm.backends",
     "content_pipeline.llm.convergence",
+    "content_pipeline.llm.yaml_extract",
     "content_pipeline.pipeline",
     "content_pipeline.pipeline.stage",
     "content_pipeline.pipeline.single_pass",
