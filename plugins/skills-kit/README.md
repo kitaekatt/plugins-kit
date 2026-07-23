@@ -37,6 +37,12 @@ reviewers you already run (including Claude Code's own /code-review) read
 CLAUDE.md to decide what "correct" means; an unaudited CLAUDE.md silently
 sets a wrong standard for every review.
 
+This is skills-kit's place in an authoring -> auditing -> review path: it
+authors and audits the standards, and the `git-kit` and `p4-kit` reviewers
+(in this same marketplace) enforce those same CLAUDE.md standards on every
+change. Authoring and auditing set the standard; review keeps each change
+compliant with it.
+
 ## How it relates to neighboring tools
 
 - Anthropic's skill-creator generates new skills from a description.

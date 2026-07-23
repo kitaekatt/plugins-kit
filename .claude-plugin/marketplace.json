@@ -9,7 +9,7 @@
     {
       "name": "unreal-kit",
       "description": "Unreal Engine automation: Python API for asset inspection and data extraction; MCP server for live Editor authoring (actors, Blueprints, materials, PIE)",
-      "version": "0.11.2",
+      "version": "0.11.3",
       "author": {
         "name": "Christina"
       },
@@ -42,7 +42,7 @@
     {
       "name": "p4-kit",
       "description": "Multi-agent code review for pending Perforce changelists (/p4-code-review) -- auto-shelves, reviews, cleans up.",
-      "version": "0.20.1",
+      "version": "0.20.2",
       "author": {
         "name": "Christina"
       },
@@ -55,7 +55,7 @@
     {
       "name": "git-kit",
       "description": "Multi-agent pre-push code review for git (/git-code-review) with per-finding validation and declined-findings memory.",
-      "version": "0.8.1",
+      "version": "0.8.2",
       "author": {
         "name": "Christina"
       },
@@ -68,7 +68,7 @@
     {
       "name": "skills-kit",
       "description": "Author and audit every md file a project loads or ships -- CLAUDE.md, SKILL.md, project docs, and their cross-references -- for placement, cohesion, and drift.",
-      "version": "0.33.2",
+      "version": "0.33.3",
       "author": {
         "name": "Christina"
       },

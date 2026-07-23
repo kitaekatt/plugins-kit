@@ -1,0 +1,9 @@
+{
+  "repo_notes": [
+    "bootstrap exists so plugins can ship working scripts, not just prompts, to machines nobody has seen: a script has to run on an unknown OS with unknown tools on PATH and no guaranteed Python venv. A plugin declares what it needs in bootstrap.json and bootstrap brings each user's machine into that state at session start. Weight plugins/bootstrap/README.md ('Why this exists') for this framing, not just the mechanics.",
+    "skills-kit, git-kit, and p4-kit form one authoring -> auditing -> review path over the same standards, not three unrelated plugins: skills-kit authors and audits the CLAUDE.md and SKILL.md files that encode a project's conventions, and git-kit (git) and p4-kit (Perforce) review each change against those same CLAUDE.md files. See the root README note under the Plugins table and the cross-references in each of the three plugin READMEs.",
+    "p4-kit reviews PENDING Perforce changelists before you submit -- a local pre-submit gate. It is not a post-hoc or PR review; the native /code-review is post-hoc, PR-oriented, and git-only and does not support this workflow. See plugins/p4-kit/README.md.",
+    "unreal-kit is the effective-use layer over Epic's own PythonScriptPlugin and the third-party upyrc library, not the Python-in-Unreal bridge itself. It ships the settings bootstrap writes to enable the API, the ue_runner orchestration (auto-detecting a running Editor for the fast UDP path vs a headless commandlet when the Editor is closed, venv re-exec, YAML output), and an encoded gotcha corpus. It works with the editor open or closed. See plugins/unreal-kit/README.md.",
+    "Philips Hue functionality belongs to hue-kit (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), not to unreal-kit. unreal-kit is Unreal Engine automation only. See plugins/hue-kit/README.md and plugins/unreal-kit/README.md."
+  ]
+}

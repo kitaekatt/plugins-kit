@@ -1,6 +1,6 @@
 {
   "name": "unreal-kit",
-  "version": "0.11.2",
+  "version": "0.11.3",
   "description": "Unreal Engine automation: Python API for asset inspection and data extraction; MCP server for live Editor authoring (actors, Blueprints, materials, PIE)",
   "author": {
     "name": "Christina"

@@ -40,6 +40,13 @@ independent validator pass, and remembers your prior decisions across
 re-reviews of the same change. Use native review for someone else's merged
 or in-flight PR; use this before your own work leaves the machine.
 
+Claude Code's native /code-review reads ancestor CLAUDE.md files too, so the
+standards `skills-kit` authors and audits improve any reviewer that reads
+them, this one and the native one alike. That is git-kit's place in an
+authoring -> auditing -> review path: `skills-kit` (in this marketplace)
+authors and audits the CLAUDE.md standards, git-kit reviews git changes
+against them per-change, and `p4-kit` does the same for Perforce.
+
 ## Install
 
 ```

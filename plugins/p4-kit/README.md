@@ -42,6 +42,13 @@ pre-submit gate for Perforce -- a workflow the built-in review does not
 support at all -- with independent validation of every finding and memory of
 what you already declined.
 
+The native /code-review reads ancestor CLAUDE.md files too, so the standards
+`skills-kit` authors and audits improve any reviewer that reads them, this
+one and the native one alike. That is p4-kit's place in an authoring ->
+auditing -> review path: `skills-kit` (in this marketplace) authors and
+audits the CLAUDE.md standards, p4-kit reviews pending Perforce changelists
+against them per-change, and `git-kit` does the same for git.
+
 ## Install
 
 ```

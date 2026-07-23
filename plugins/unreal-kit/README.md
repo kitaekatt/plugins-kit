@@ -16,6 +16,17 @@ That covers asset inspection, batch property edits, reference-graph walks,
 DataTable and animation queries, and data extraction -- all scriptable and
 CI-able, no human in the Editor required.
 
+Running Python inside Unreal is not this plugin's invention: the in-editor
+interpreter is Epic's own PythonScriptPlugin, and the UDP remote-execution
+path is the third-party `upyrc` library. What unreal-kit ships is the
+effective-use layer on top of them -- the settings bootstrap writes to turn
+the API on (`bRemoteExecution`, Developer Mode), the `ue_runner`
+orchestration (auto-detecting a running Editor for the ~2s UDP path vs a
+headless commandlet when it is closed, re-execing under the plugin venv, and
+returning results as YAML), and the encoded expertise (bundled API stubs and
+the gotcha corpus below). It claims exactly that, not the Python bridge
+itself.
+
 ## Secondary capabilities
 
 - **ue-mcp-server** -- live Editor authoring via MCP: spawning actors,

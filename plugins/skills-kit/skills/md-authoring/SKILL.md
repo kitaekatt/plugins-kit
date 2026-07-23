@@ -2,7 +2,7 @@
 name: md-authoring
 author: christina
 skill-type: domain-skill
-description: Use when authoring or refining an md artifact -- a SKILL.md or a CLAUDE.md -- or via /md-authoring. Do NOT use for auditing (use md-audit).
+description: Use when authoring or refining project markdown -- a SKILL.md or a CLAUDE.md -- or via /md-authoring. Do NOT use for auditing (use md-audit).
 disable-model-invocation: false
 user-invocable: true
 argument-hint: "[skill | claude-md]"

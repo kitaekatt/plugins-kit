@@ -1,6 +1,7 @@
 # plugins-kit
 
 [![tests](https://github.com/kitaekatt/plugins-kit/actions/workflows/tests.yml/badge.svg)](https://github.com/kitaekatt/plugins-kit/actions/workflows/tests.yml)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kitaekatt/plugins-kit)
 
 A marketplace of plugins for [Claude Code](https://code.claude.com), built on a
 shared dependency-provisioning engine. Each plugin extends Claude Code with
@@ -86,6 +87,14 @@ rest declare it as a dependency, so installing any of them pulls it in.
 | **cache-kit** | Utility | Cache-usage reporting from transcripts -- per-request and session-level hit analysis. |
 | **bootstrap-stuck-fix** | Maintenance | Temporary shim repairing a wedged bootstrap registry record. |
 | **prototypes** | Incubation | Experimental skills awaiting graduation into their own plugins. |
+
+Three of these form one authoring -> auditing -> review path over the same
+standards: **skills-kit** authors and audits the `CLAUDE.md` and `SKILL.md`
+files that encode a project's conventions, and **git-kit** and **p4-kit**
+review each change against those same `CLAUDE.md` files (quoting the rule
+verbatim before flagging a violation). Authoring establishes the standard,
+auditing brings a whole file into compliance, and review keeps every change
+compliant.
 
 ## Testing and CI
 
