@@ -1,9 +1,16 @@
 [project]
 name = "p4-kit"
-version = "0.20.3"
-description = "Host-side dependencies for p4-kit plugin"
+version = "0.21.0"
+description = "Host-side dependencies for p4-kit plugin (importable package: p4kit_vcs)"
 requires-python = ">=3.12,!=3.14.*"
 
 # bootstrap_lib is provided via the bootstrap shared-libs .pth (this plugin declares
 # "shared_lib_imports": ["bootstrap_lib"] in bootstrap.json), not as a pip dependency.
 dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["lib"]

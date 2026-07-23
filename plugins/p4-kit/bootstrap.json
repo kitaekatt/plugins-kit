@@ -20,8 +20,11 @@
       }
     }
   ],
+  "shared_libs": [
+    { "name": "p4kit_vcs", "src": "lib" }
+  ],
   "venv": {
-    "check_imports": []
+    "check_imports": ["p4kit_vcs"]
   },
   "shared_lib_imports": ["bootstrap_lib"],
   "script": {
