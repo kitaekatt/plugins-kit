@@ -1,0 +1,24 @@
+[project]
+name = "content-pipeline-kit"
+version = "0.1.0"
+description = "Library for LLM-in-the-loop batch content pipelines: attributed store, two-tier freshness, one-validator-many-sites, provider tiers, convergence gate, delivery modes, VCS seam, round-trip, audit."
+requires-python = ">=3.10"
+
+dependencies = [
+    "pyyaml>=6.0",
+    "ruamel.yaml>=0.18",
+    "openai>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["lib"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,32 @@
+{
+  "shared_libs": [
+    { "name": "content_pipeline", "src": "lib" }
+  ],
+  "shared_lib_imports": ["openrouter_kit"],
+  "venv": {
+    "check_imports": ["yaml", "content_pipeline"]
+  },
+  "config": {
+    "file": "config.yaml",
+    "defaults_source": "lib/content_pipeline/default_config.yaml"
+  },
+  "project_config": {
+    "file": ".local-data/content-pipeline-kit/config.yaml",
+    "required_fields": {
+      "CONTENT_ROOT": {
+        "user_msg": "Root of the authored content this pipeline reads",
+        "agent_msg": "Ask for CONTENT_ROOT and write it to {config_path}"
+      },
+      "VCS_BACKEND": {
+        "user_msg": "VCS backend (git | p4 | null)",
+        "agent_msg": "Ask for VCS_BACKEND",
+        "default": "git"
+      },
+      "LLM_BACKEND": {
+        "user_msg": "LLM backend (openrouter | claude-cli)",
+        "agent_msg": "Ask for LLM_BACKEND",
+        "default": "openrouter"
+      }
+    }
+  }
+}
