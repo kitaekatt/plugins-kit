@@ -2,7 +2,7 @@
 name = "prototypes"
 # Kept equal to .claude-plugin/plugin.json (the authoritative version);
 # tests/repo-scripts/test_pyproject_version_sync.py enforces the match.
-version = "0.2.0"
+version = "0.2.1"
 description = "Experimental skills awaiting graduation. claude-explorer degrades gracefully without PyYAML (regex frontmatter fallback); the venv just makes the full parse the default."
 requires-python = ">=3.10"
 

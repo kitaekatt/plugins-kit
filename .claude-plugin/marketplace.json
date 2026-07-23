@@ -22,12 +22,15 @@
     {
       "name": "cache-kit",
       "description": "Cache usage reporting - per-request and session-level cache hit analysis from Claude Code transcripts",
-      "version": "0.5.5",
+      "version": "0.5.6",
       "author": {
         "name": "Christina"
       },
       "source": "./plugins/cache-kit",
-      "category": "development"
+      "category": "development",
+      "dependencies": [
+        "bootstrap"
+      ]
     },
     {
       "name": "bootstrap",
