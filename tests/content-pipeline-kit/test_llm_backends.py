@@ -1,21 +1,19 @@
 """Behavioral tests for content_pipeline.llm.backends.
 
-Covers the mock seam, the ClaudeCliBackend (subprocess boundary faked via the
-``runner`` seam -- no real spawn), the OpenRouterBackend (message shape via an
-injected fake client -- no openrouter_kit / openai needed), and process-level
-routing. Translates loc's routing cases and firstpass's agent_io retry /
-hard-stop cases.
+Covers the hermetic surface: the MockBackend seam and process-level routing.
+The two live transports (OpenRouterBackend, ClaudeCliBackend) are thin adapters
+that delegate to ``openrouter_kit.completion`` -- the ported transport itself is
+covered in tests/llm-scripting-kit (fake-runner subprocess seam, envelope parse,
+retry, hard-stop, timeout, halt classification, OpenRouter fake client). Here we
+only verify the adapters construct without the shared lib and raise a clear
+ImportError when actually driven without it.
 """
-
-import json
 
 import pytest
 
 from content_pipeline.llm import backends
 from content_pipeline.llm.backends import (
     ClaudeCliBackend,
-    ClaudeCliError,
-    ClaudeCliTimeout,
     MockBackend,
     OpenRouterBackend,
     active_backend_name,
@@ -23,7 +21,7 @@ from content_pipeline.llm.backends import (
     routed_model,
     set_active_backend,
 )
-from content_pipeline.llm.platform import BackendOptions, HALT_RATE_LIMIT
+from content_pipeline.llm.platform import BackendOptions
 
 
 # --- MockBackend -------------------------------------------------------------
@@ -79,170 +77,37 @@ def test_mock_default_model_when_blank():
     assert backend.complete("s", "u", model="").model == "mm"
 
 
-# --- ClaudeCliBackend (runner seam) ------------------------------------------
+# --- live-backend delegation (adapter boundary) ------------------------------
 
 
-def _envelope(result="ok", *, is_error=False, status=None, usage=None):
-    data = {"type": "result", "is_error": is_error, "result": result}
-    if status is not None:
-        data["api_error_status"] = status
-    if usage is not None:
-        data["usage"] = usage
-    return json.dumps(data)
+def _has_openrouter_kit() -> bool:
+    try:
+        import openrouter_kit  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
-def _runner_returning(*sequence):
-    """Build a runner that yields (stdout, stderr, rc) tuples in sequence."""
-    state = {"i": 0, "calls": []}
-
-    def runner(cmd, request, cwd, *, timeout_s):
-        state["calls"].append((cmd, request, timeout_s))
-        idx = state["i"]
-        state["i"] += 1
-        return sequence[idx]
-
-    runner.state = state  # type: ignore[attr-defined]
-    return runner
+def test_openrouter_backend_constructs_without_lib():
+    """Constructing the adapter never needs the shared lib -- only driving it."""
+    OpenRouterBackend()
+    ClaudeCliBackend()
 
 
-def test_claude_cli_happy_path():
-    runner = _runner_returning((_envelope("hello", usage={"input_tokens": 5, "output_tokens": 2}), "", 0))
-    backend = ClaudeCliBackend(runner=runner)
-    resp = backend.complete("sys", "usr", model="claude-x")
-    assert resp.text == "hello"
-    assert resp.model == "claude-x"
-    assert resp.input_tokens == 5
-    assert resp.attempts == 1
+def test_openrouter_backend_requires_lib_when_driven():
+    backend = OpenRouterBackend()
+    if _has_openrouter_kit():  # pragma: no cover - env-dependent
+        pytest.skip("openrouter_kit importable; delegation path exercised in llm-scripting-kit")
+    with pytest.raises(ImportError, match="openrouter_kit"):
+        backend.complete("s", "u", model="x")
 
 
-def test_claude_cli_retries_transient_500_then_succeeds(monkeypatch):
-    monkeypatch.setattr(backends.time, "sleep", lambda *_: None)
-    runner = _runner_returning(
-        (_envelope("err", is_error=True, status=500), "s", 1),
-        (_envelope("recovered"), "", 0),
-    )
-    backend = ClaudeCliBackend(runner=runner, retry_max_attempts=3)
-    resp = backend.complete("s", "u", model="claude-x")
-    assert resp.text == "recovered"
-    assert resp.attempts == 2
-
-
-def test_claude_cli_hard_stop_429_does_not_retry(monkeypatch):
-    monkeypatch.setattr(backends.time, "sleep", lambda *_: None)
-    runner = _runner_returning((_envelope("You've hit your limit.", is_error=True, status=429), "", 0))
-    backend = ClaudeCliBackend(runner=runner, retry_max_attempts=3)
-    with pytest.raises(ClaudeCliError, match="hard-stop"):
-        backend.complete("s", "u", model="claude-x")
-    assert runner.state["i"] == 1  # only one attempt
-
-
-def test_claude_cli_nonzero_exit_raises():
-    runner = _runner_returning(("", "boom", 1))
-    with pytest.raises(ClaudeCliError, match="exit 1"):
-        ClaudeCliBackend(runner=runner).complete("s", "u", model="claude-x")
-
-
-def test_claude_cli_is_error_envelope_raises():
-    runner = _runner_returning((_envelope("validator rejected", is_error=True), "", 0))
-    with pytest.raises(ClaudeCliError, match="returned error"):
-        ClaudeCliBackend(runner=runner).complete("s", "u", model="claude-x")
-
-
-def test_claude_cli_timeout_classifies_as_rate_limit():
-    def runner(cmd, request, cwd, *, timeout_s):
-        raise ClaudeCliTimeout("claude -p exceeded 1s timeout")
-
-    backend = ClaudeCliBackend(runner=runner)
-    with pytest.raises(ClaudeCliTimeout):
-        backend.complete("s", "u", model="claude-x")
-    assert backend.classify_halt(ClaudeCliTimeout("x")) == HALT_RATE_LIMIT
-
-
-def test_claude_cli_passes_options_into_cmd():
-    runner = _runner_returning((_envelope("ok"), "", 0))
-    backend = ClaudeCliBackend(runner=runner)
-    backend.complete("s", "u", model="claude-x", options=BackendOptions(effort="high", timeout_s=5))
-    cmd, _request, timeout_s = runner.state["calls"][0]
-    assert "--effort" in cmd and "high" in cmd
-    assert timeout_s == 5
-
-
-# --- OpenRouterBackend (injected fake client) --------------------------------
-
-
-class _FakeUsage:
-    def __init__(self):
-        self.prompt_tokens = 100
-        self.completion_tokens = 20
-        self.prompt_tokens_details = {"cached_tokens": 40}
-
-
-class _FakeMessage:
-    content = "router-response"
-
-
-class _FakeChoice:
-    message = _FakeMessage()
-
-
-class _FakeResponse:
-    choices = [_FakeChoice()]
-    usage = _FakeUsage()
-
-
-class _FakeCompletions:
-    def __init__(self, sink):
-        self._sink = sink
-
-    def create(self, **kwargs):
-        self._sink.append(kwargs)
-        return _FakeResponse()
-
-
-class _FakeChat:
-    def __init__(self, sink):
-        self.completions = _FakeCompletions(sink)
-
-
-class _FakeClient:
-    def __init__(self):
-        self.sink = []
-        self.chat = _FakeChat(self.sink)
-
-
-def test_openrouter_backend_parses_response_and_cache_hit_tokens():
-    client = _FakeClient()
-    backend = OpenRouterBackend(client=client)
-    resp = backend.complete("sys", "usr", model="test/slug")
-    assert resp.text == "router-response"
-    assert resp.input_tokens == 100
-    assert resp.output_tokens == 20
-    assert resp.cache_hit_tokens == 40
-    assert resp.model == "test/slug"  # concrete slug used verbatim
-
-
-def test_openrouter_backend_marks_system_cache_control():
-    client = _FakeClient()
-    OpenRouterBackend(client=client).complete("SYSTEM", "USER", model="test/slug")
-    messages = client.sink[0]["messages"]
-    system_msg = messages[0]
-    assert system_msg["role"] == "system"
-    assert isinstance(system_msg["content"], list)
-    assert system_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
-    # Plain user message when no prefix.
-    assert messages[1]["content"] == "USER"
-
-
-def test_openrouter_backend_user_prefix_two_part_content():
-    client = _FakeClient()
-    OpenRouterBackend(client=client).complete(
-        "s", "u", model="test/slug", options=BackendOptions(user_cache_prefix="PREAMBLE")
-    )
-    user_msg = client.sink[0]["messages"][1]
-    assert isinstance(user_msg["content"], list)
-    assert user_msg["content"][0]["text"] == "PREAMBLE"
-    assert user_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
-    assert user_msg["content"][1]["text"] == "u"
+def test_claude_cli_backend_requires_lib_when_driven():
+    backend = ClaudeCliBackend()
+    if _has_openrouter_kit():  # pragma: no cover - env-dependent
+        pytest.skip("openrouter_kit importable; delegation path exercised in llm-scripting-kit")
+    with pytest.raises(ImportError, match="openrouter_kit"):
+        backend.complete("s", "u", model="x")
 
 
 # --- routing -----------------------------------------------------------------
@@ -291,19 +156,3 @@ def test_routed_model_substitutes_for_claude(monkeypatch):
 
 def test_routed_model_no_substitution_for_openrouter():
     assert routed_model("deepseek/deepseek-v4") == "deepseek/deepseek-v4"
-
-
-def test_openrouter_backend_requires_lib_or_client():
-    # No client, no openrouter_kit installed in the test env: complete must
-    # raise a clear ImportError rather than a cryptic failure.
-    backend = OpenRouterBackend()
-    try:
-        import openrouter_kit  # noqa: F401
-        has_lib = True
-    except ImportError:
-        has_lib = False
-    if not has_lib:
-        with pytest.raises(ImportError, match="openrouter_kit"):
-            backend.complete("s", "u", model="x")
-    else:  # pragma: no cover - depends on env
-        pytest.skip("openrouter_kit importable; injection path not exercised here")

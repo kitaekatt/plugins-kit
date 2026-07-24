@@ -19,7 +19,14 @@ Submodules:
   entry point), and ``submit_validated`` (the validate-until-valid loop over
   ``validate.contract`` validators).
 - ``backends`` -- the three transports (``OpenRouterBackend``,
-  ``ClaudeCliBackend``, ``MockBackend``) and process-level ``route``.
+  ``ClaudeCliBackend``, ``MockBackend``) and process-level ``route``. The two
+  live transports are THIN ADAPTERS over ``openrouter_kit.completion`` (from
+  llm-scripting-kit), which owns the actual completion transport -- the
+  ``claude -p`` subprocess runner, retry, timeout, hard-stop detection, and the
+  OpenAI-compatible client + prompt-cache message shaping. This layer keeps only
+  the pipeline glue and adapts the seam types across the boundary; the shared
+  lib is a lazy / optional import, so the ``MockBackend`` path and the import
+  graph stay hermetic without it.
 - ``convergence`` -- the ``CONVERGED`` / ``STALLED`` / ``CONTINUE`` gate.
 - ``yaml_extract`` -- fenced-block-tolerant YAML extraction from LLM output.
 
@@ -60,11 +67,14 @@ but several details differ deliberately.
    exactly.
 
 4. **``max_tokens`` / ``temperature`` on ``BackendOptions``, not
-   ``complete()`` parameters.** gen-ops carries these as ``complete()`` keyword
-   args and the transport-specific knobs on ``BackendOptions``. This library
-   folds all per-call knobs onto ``BackendOptions`` so the ``LLMBackend``
-   protocol signature is uniform; the behavioral effect (temperature /
-   max-tokens flow to the provider and into the cache key) is unchanged.
+   ``complete()`` parameters.** The original gen-ops source carried these as
+   ``complete()`` keyword args and only the transport-specific knobs on
+   ``BackendOptions``. This library folds all per-call knobs onto
+   ``BackendOptions`` so the ``LLMBackend`` protocol signature is uniform; the
+   behavioral effect (temperature / max-tokens flow to the provider and into the
+   cache key) is unchanged. The ``openrouter_kit.completion`` seam this layer now
+   delegates its transport to shares this folded shape, so the adapter passes
+   options across the boundary field-for-field.
 
 5. **Convergence over an explicit ``Round`` history, not substrate/log
    scans.** loc's ``trial_status`` derives its verdict by inspecting the

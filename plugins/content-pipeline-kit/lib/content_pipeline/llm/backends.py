@@ -2,106 +2,125 @@
 
 Three transports implement :class:`~content_pipeline.llm.platform.LLMBackend`:
 
-- :class:`OpenRouterBackend` -- an OpenAI-compatible HTTP completion. Consumes
-  ``openrouter_kit`` for the ready-made client and model resolution (lazy /
-  optional import: the mock path works without it, and a caller may inject a
-  ``client`` directly). ``endpoint=`` is passed through to
-  ``make_openai_client`` / ``resolve_model``.
-- :class:`ClaudeCliBackend` -- a THIN adapter over the local ``claude -p``
-  CLI: spawn with UTF-8 pipes, a per-call timeout, transient-5xx retry, and
-  hard-stop mapping. Deliberately minimal -- the proposal has this migrating
-  down into ``openrouter_kit`` later (a "use Claude locally instead of an
-  endpoint" backend) without this module's call-site interface changing. The
-  subprocess is injected as a ``runner`` seam so tests never spawn.
+- :class:`OpenRouterBackend` -- an OpenAI-compatible HTTP completion.
+- :class:`ClaudeCliBackend` -- the local ``claude -p`` CLI (subscription-billed,
+  no per-call metering).
 - :class:`MockBackend` -- deterministic, scriptable responses. The always-wins
-  test seam: no network, no subprocess. Scriptable with a FIFO queue, a
-  content-addressed map, or an exception to raise (for retry / halt tests).
+  test seam: no network, no subprocess, no shared lib.
+
+The two live transports are THIN ADAPTERS over ``openrouter_kit.completion``
+(from llm-scripting-kit): that shared lib owns the actual completion
+transport -- the ``claude -p`` subprocess runner, retry, timeout, hard-stop
+detection, and the OpenAI-compatible client + prompt-cache message shaping.
+This module keeps only the content-pipeline-specific glue; it does NOT
+reimplement the transport. ``openrouter_kit`` is a LAZY / optional import: it is
+reached for only when a live backend's ``complete`` / ``classify_halt`` actually
+runs, so this module (and the MockBackend path, and process import graph
+guards) load with no shared lib and no ``openai`` SDK installed. The per-call
+options and the normalized response are adapted across the seam so this module's
+:class:`~content_pipeline.llm.platform.BackendOptions` /
+:class:`~content_pipeline.llm.platform.LLMResponse` stay the pipeline-facing
+types regardless of provider.
 
 :func:`route` reads a process-level env var (``CONTENT_PIPELINE_LLM_BACKEND``)
-and returns the active backend, mirroring loc's ``routing.py`` -- backend
-selection is one process-wide switch rather than a parameter threaded through
-every call site. The returned response's ``model`` reflects the model that
-ACTUALLY ran (routing substitutes when the requested id means nothing to the
-active transport), so audit stamping stays truthful.
+and returns the active backend -- backend selection is one process-wide switch
+rather than a parameter threaded through every call site. The returned
+response's ``model`` reflects the model that ACTUALLY ran, so audit stamping
+stays truthful.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional
 
 from content_pipeline.llm import platform
 from content_pipeline.llm.platform import BackendOptions, LLMResponse
 
+# The message a live backend raises when the shared lib is missing. The
+# claude-cli / openrouter transports genuinely require openrouter_kit; only the
+# MockBackend path is hermetic.
+_MISSING_LIB_MSG = (
+    "needs the 'openrouter_kit' shared lib (from llm-scripting-kit). Declare it "
+    "via the plugin's shared_lib_imports, or use MockBackend for tests."
+)
+
+
+def _to_completion_options(opts: BackendOptions) -> Any:
+    """Build an ``openrouter_kit.completion.BackendOptions`` from ours.
+
+    Field-for-field: the two option bundles are intentionally identical, but the
+    conversion is explicit so a future field drift surfaces here rather than
+    silently mis-binding across the seam. Lazy import -- only reached once a live
+    backend is actually driven.
+    """
+    from openrouter_kit.completion import BackendOptions as _CompletionOptions
+
+    return _CompletionOptions(
+        max_tokens=opts.max_tokens,
+        temperature=opts.temperature,
+        timeout_s=opts.timeout_s,
+        cache_salt=opts.cache_salt,
+        user_cache_prefix=opts.user_cache_prefix,
+        effort=opts.effort,
+        allowed_tools=opts.allowed_tools,
+        cwd=opts.cwd,
+        log_prefix=opts.log_prefix,
+        extras=opts.extras,
+    )
+
+
+def _from_completion_response(resp: Any) -> LLMResponse:
+    """Adapt an ``openrouter_kit.completion.LLMResponse`` into ours."""
+    return LLMResponse(
+        text=resp.text,
+        model=resp.model,
+        input_tokens=resp.input_tokens,
+        output_tokens=resp.output_tokens,
+        cache_hit_tokens=resp.cache_hit_tokens,
+        wall_ms=resp.wall_ms,
+        attempts=resp.attempts,
+        from_cache=resp.from_cache,
+    )
+
+
 # ---------------------------------------------------------------------------
-# OpenRouter (OpenAI-compatible HTTP) backend
+# OpenRouter (OpenAI-compatible HTTP) backend -- delegates to openrouter_kit
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class OpenRouterBackend:
-    """OpenAI-compatible HTTP completion via an ``openrouter_kit`` client.
+    """OpenAI-compatible HTTP completion, delegated to ``openrouter_kit``.
 
-    The client and model resolution are consumed from ``openrouter_kit`` --
-    imported lazily so the mock path (and this whole module) loads without the
-    shared lib or the ``openai`` SDK installed. A caller may inject a
-    pre-built ``client`` (the test seam / a custom HTTP client); when absent,
-    ``make_openai_client(endpoint=...)`` builds one on first use.
-
-    ``endpoint`` is passed through to both ``make_openai_client`` and
-    ``resolve_model`` so a named OpenAI-compatible endpoint (see
-    llm-scripting-kit's endpoints model) is honored end to end. A request
-    ``model`` that is already a concrete slug is used as-is; ``resolve_model``
-    is consulted only when the shared lib is available and the id is an alias.
+    ``endpoint`` / ``project_root`` / ``client`` are forwarded to
+    ``openrouter_kit.completion.OpenRouterBackend`` (a caller may inject a
+    pre-built ``client`` as the test seam). The delegate is built lazily on
+    first use, so constructing this adapter never requires the shared lib.
     """
 
     endpoint: Optional[str] = None
     project_root: Optional[Path] = None
     client: Any = None
     name: str = field(default="openrouter", init=False)
+    _delegate: Any = field(default=None, init=False, repr=False, compare=False)
 
-    def _ensure_client(self) -> Any:
-        if self.client is not None:
-            return self.client
-        try:
-            from openrouter_kit import make_openai_client  # noqa: PLC0415
-        except ImportError as exc:  # pragma: no cover - env-dependent
-            raise ImportError(
-                "OpenRouterBackend needs the 'openrouter_kit' shared lib (from "
-                "llm-scripting-kit) unless a client is injected. Declare it via "
-                "shared_lib_imports, or pass client= for tests."
-            ) from exc
-        self.client = make_openai_client(
-            project_root=self.project_root, endpoint=self.endpoint
-        )
-        return self.client
-
-    def _resolve_model(self, model: str) -> str:
-        """Resolve a model alias to a concrete slug when the shared lib is present.
-
-        A raw slug (already concrete, e.g. contains ``/``) or an unavailable
-        shared lib means the id is used verbatim -- the backend never fails
-        just because ``openrouter_kit`` is absent when the caller passed a
-        concrete slug.
-        """
-        try:
-            from openrouter_kit import resolve_model  # noqa: PLC0415
-        except ImportError:
-            return model
-        try:
-            return resolve_model(
-                model,
+    def _backend(self) -> Any:
+        if self._delegate is None:
+            try:
+                from openrouter_kit.completion import (  # noqa: PLC0415
+                    OpenRouterBackend as _CompletionOpenRouter,
+                )
+            except ImportError as exc:  # pragma: no cover - env-dependent
+                raise ImportError(f"OpenRouterBackend {_MISSING_LIB_MSG}") from exc
+            self._delegate = _CompletionOpenRouter(
                 endpoint=self.endpoint,
-                project_root=str(self.project_root)
-                if self.project_root is not None
-                else None,
+                project_root=self.project_root,
+                client=self.client,
             )
-        except Exception:  # noqa: BLE001 - a concrete slug resolves to itself
-            return model
+        return self._delegate
 
     def complete(
         self,
@@ -111,158 +130,65 @@ class OpenRouterBackend:
         model: str,
         options: Optional[BackendOptions] = None,
     ) -> LLMResponse:
-        """Run one Chat-Completions call and normalize the result.
-
-        Marks the (non-empty) system prompt with a ``cache_control: ephemeral``
-        breakpoint so a provider that supports prompt caching serves the stable
-        prefix from cache. When ``options.user_cache_prefix`` is set, the user
-        message is emitted as a two-part content list with a second breakpoint
-        on the static prefix; otherwise it is a plain string (byte-identical to
-        the single-block shape).
-        """
         opts = options or BackendOptions()
-        client = self.client if self.client is not None else self._ensure_client()
-        resolved_model = self._resolve_model(model)
-
-        if system:
-            system_content: Any = [
-                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
-            ]
-        else:
-            system_content = system
-
-        if opts.user_cache_prefix:
-            user_content: Any = [
-                {
-                    "type": "text",
-                    "text": opts.user_cache_prefix,
-                    "cache_control": {"type": "ephemeral"},
-                },
-                {"type": "text", "text": user},
-            ]
-        else:
-            user_content = user
-
-        create_kwargs: Dict[str, Any] = {
-            "model": resolved_model,
-            "messages": [
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": user_content},
-            ],
-            "temperature": opts.temperature,
-            "max_tokens": opts.max_tokens,
-        }
-        if opts.timeout_s is not None:
-            create_kwargs["timeout"] = opts.timeout_s
-
-        start = time.monotonic()
-        response = client.chat.completions.create(**create_kwargs)
-        wall_ms = int((time.monotonic() - start) * 1000)
-
-        text = response.choices[0].message.content or ""
-        usage = getattr(response, "usage", None)
-        input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-        output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-        cache_hit_tokens = 0
-        ptd = getattr(usage, "prompt_tokens_details", None)
-        if isinstance(ptd, dict):
-            cache_hit_tokens = int(ptd.get("cached_tokens", 0) or 0)
-        elif ptd is not None:
-            cache_hit_tokens = int(getattr(ptd, "cached_tokens", 0) or 0)
-        if not cache_hit_tokens:
-            cache_hit_tokens = int(getattr(usage, "prompt_cache_hit_tokens", 0) or 0)
-
-        return LLMResponse(
-            text=text,
-            model=resolved_model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cache_hit_tokens=cache_hit_tokens,
-            wall_ms=wall_ms,
-            attempts=1,
-            from_cache=False,
+        resp = self._backend().complete(
+            system, user, model=model, options=_to_completion_options(opts)
         )
+        return _from_completion_response(resp)
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
-        return platform.classify_openai_exception(exc)
+        return self._backend().classify_halt(exc)
 
 
 # ---------------------------------------------------------------------------
-# Claude CLI backend (thin adapter)
+# Claude CLI backend -- delegates to openrouter_kit
 # ---------------------------------------------------------------------------
-
-
-class ClaudeCliError(RuntimeError):
-    """Raised when the ``claude -p`` subprocess fails non-transiently."""
-
-
-class ClaudeCliTimeout(ClaudeCliError):
-    """Raised when the ``claude -p`` subprocess exceeds its per-call timeout."""
-
-
-# Transient envelope statuses worth one more attempt. 429 / 401 are excluded
-# -- they persist across calls and are the caller's hard-stop path.
-_RETRYABLE_STATUSES = frozenset([500, 502, 503, 504])
-
-
-def _default_runner(
-    cmd: List[str],
-    request: str,
-    cwd: Path,
-    *,
-    timeout_s: float,
-) -> "tuple[str, str, int]":
-    """Spawn ``claude -p`` with UTF-8 pipes and a bounded wait.
-
-    The minimal generic core of gen-ops' ``claude_runner`` -- enough to run a
-    completion and enforce a timeout. Returns ``(stdout, stderr, returncode)``.
-    Raises :class:`ClaudeCliTimeout` on timeout. Injected as the ``runner``
-    seam so tests never actually spawn.
-    """
-    import subprocess  # noqa: PLC0415
-
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        cwd=str(cwd),
-    )
-    try:
-        stdout, stderr = proc.communicate(input=request, timeout=timeout_s)
-    except subprocess.TimeoutExpired as exc:
-        proc.kill()
-        stdout, stderr = proc.communicate()
-        raise ClaudeCliTimeout(
-            f"claude -p exceeded {timeout_s}s timeout"
-        ) from exc
-    return stdout, stderr, proc.returncode
 
 
 @dataclass
 class ClaudeCliBackend:
-    """Thin ``claude -p`` completion adapter.
+    """Local ``claude -p`` completion, delegated to ``openrouter_kit``.
 
     Spawns the CLI in pure-completion mode (JSON output, no tools by default),
     enforces a per-call timeout, retries transient 5xx envelopes, and maps
-    rate-limit / auth markers to a hard stop. Cost is flat zero (the CLI bills
-    at its own subscription, not per call), so ``LLMResponse`` carries the
-    usage the envelope reports but the platform prices it against no table.
+    rate-limit / auth markers to a hard stop -- all inside
+    ``openrouter_kit.completion.ClaudeCliBackend``. Cost is flat zero (the CLI
+    bills at its own subscription, not per call).
 
-    ``runner`` is the subprocess seam: ``(cmd, request, cwd, *, timeout_s) ->
-    (stdout, stderr, returncode)``. Production is :func:`_default_runner`;
-    tests inject a scripted stub.
+    Config fields forward to the delegate; ``runner`` is the subprocess seam
+    (``None`` uses the shared lib's battle-tested ``run_claude_streaming``). The
+    delegate is built lazily so constructing this adapter never requires the
+    shared lib.
     """
 
     default_timeout_s: float = 900.0
     retry_max_attempts: int = 3
     retry_cooldown_s: float = 60.0
-    executable: str = "claude"
-    runner: Callable[..., "tuple[str, str, int]"] = _default_runner
+    diagnostics_dir: Optional[Path] = None
+    executable: Optional[str] = None
+    runner: Optional[Callable[..., "tuple[str, str, int]"]] = None
     name: str = field(default="claude-cli", init=False)
+    _delegate: Any = field(default=None, init=False, repr=False, compare=False)
+
+    def _backend(self) -> Any:
+        if self._delegate is None:
+            try:
+                from openrouter_kit.completion import (  # noqa: PLC0415
+                    ClaudeCliBackend as _CompletionClaudeCli,
+                )
+            except ImportError as exc:  # pragma: no cover - env-dependent
+                raise ImportError(f"ClaudeCliBackend {_MISSING_LIB_MSG}") from exc
+            kwargs: Dict[str, Any] = {
+                "default_timeout_s": self.default_timeout_s,
+                "retry_max_attempts": self.retry_max_attempts,
+                "retry_cooldown_s": self.retry_cooldown_s,
+                "diagnostics_dir": self.diagnostics_dir,
+                "executable": self.executable,
+            }
+            if self.runner is not None:
+                kwargs["runner"] = self.runner
+            self._delegate = _CompletionClaudeCli(**kwargs)
+        return self._delegate
 
     def complete(
         self,
@@ -273,92 +199,13 @@ class ClaudeCliBackend:
         options: Optional[BackendOptions] = None,
     ) -> LLMResponse:
         opts = options or BackendOptions()
-        timeout_s = opts.timeout_s if opts.timeout_s is not None else self.default_timeout_s
-        cwd = opts.cwd if opts.cwd is not None else Path.cwd()
-
-        cmd = [
-            self.executable,
-            "-p",
-            "--model",
-            model,
-            "--system-prompt",
-            system,
-            "--output-format",
-            "json",
-            "--no-session-persistence",
-            "--permission-mode",
-            "bypassPermissions",
-            "--allowedTools",
-            opts.allowed_tools if opts.allowed_tools is not None else "",
-        ]
-        if opts.effort is not None:
-            cmd.extend(["--effort", opts.effort])
-
-        start = time.monotonic()
-        stdout = stderr = ""
-        returncode = 0
-        attempts_made = 0
-        for attempt in range(self.retry_max_attempts):
-            attempts_made = attempt + 1
-            stdout, stderr, returncode = self.runner(
-                cmd, user, cwd, timeout_s=timeout_s
-            )
-            transient = self._transient_status(stdout)
-            if transient is None or attempt == self.retry_max_attempts - 1:
-                break
-            time.sleep(self.retry_cooldown_s)
-
-        if returncode != 0:
-            raise ClaudeCliError(
-                f"claude -p failed (exit {returncode}): {stderr or stdout}"
-            )
-
-        data = json.loads(stdout)
-        status = data.get("api_error_status")
-        result_body = data.get("result", "") if isinstance(data.get("result"), str) else ""
-        if status in (429, 401) or platform.classify_halt_text(result_body):
-            raise ClaudeCliError(
-                f'claude -p hard-stop (api_error_status={status}): '
-                f'{result_body or "unknown"}'
-            )
-        if data.get("is_error"):
-            raise ClaudeCliError(
-                f"claude -p returned error: {data.get('result', 'unknown')}"
-            )
-
-        usage = data.get("usage") or {}
-        wall_ms = int((time.monotonic() - start) * 1000)
-        return LLMResponse(
-            text=data["result"],
-            model=model,
-            input_tokens=int(usage.get("input_tokens", 0) or 0),
-            output_tokens=int(usage.get("output_tokens", 0) or 0),
-            cache_hit_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
-            wall_ms=wall_ms,
-            attempts=attempts_made,
-            from_cache=False,
+        resp = self._backend().complete(
+            system, user, model=model, options=_to_completion_options(opts)
         )
-
-    @staticmethod
-    def _transient_status(stdout: str) -> Optional[int]:
-        """Return the envelope ``api_error_status`` if it is a retryable 5xx.
-
-        A 500 has been observed with both exit 0 and exit 1, so the envelope is
-        inspected regardless of returncode.
-        """
-        try:
-            data = json.loads(stdout)
-        except (json.JSONDecodeError, ValueError):
-            return None
-        if not isinstance(data, dict):
-            return None
-        status = data.get("api_error_status")
-        return status if status in _RETRYABLE_STATUSES else None
+        return _from_completion_response(resp)
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
-        if isinstance(exc, ClaudeCliTimeout):
-            return platform.HALT_RATE_LIMIT  # CLI-layer backoff manifests as a timeout
-        return platform.classify_halt_text(str(exc))
+        return self._backend().classify_halt(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -381,8 +228,8 @@ class MockBackend:
     - both empty -- every call raises ``RuntimeError("MockBackend exhausted")``.
 
     ``classify_halt`` maps a raised entry to a halt kind when its message
-    carries a marker, so a scripted ``HaltError``-shaped exception halts.
-    Every call's kwargs are recorded on ``self.calls``.
+    carries a marker, so a scripted ``HaltError``-shaped exception halts. Every
+    call's kwargs are recorded on ``self.calls``.
     """
 
     responses: Optional[List[Any]] = None
@@ -466,8 +313,8 @@ def active_backend_name() -> str:
 def set_active_backend(name: Optional[str]) -> None:
     """Set (or clear, with ``None`` / ``"openrouter"``) the active backend.
 
-    Writes the env var rather than module state so worker subprocesses
-    inherit the selection.
+    Writes the env var rather than module state so worker subprocesses inherit
+    the selection.
     """
     if name and name != "openrouter":
         os.environ[BACKEND_ENV] = name
@@ -485,8 +332,7 @@ def route(
 
     Reads :data:`BACKEND_ENV`. A caller-supplied instance for the active name
     wins (the mock seam always wins so tests never route to a live transport);
-    otherwise a default instance is constructed. Mirrors loc's ``routing.py``:
-    backend selection is a process-wide switch, not a per-call parameter.
+    otherwise a default instance is constructed.
     """
     name = active_backend_name()
     if name == "mock":
@@ -513,8 +359,6 @@ def routed_model(requested_model: str, *, backend_name: Optional[str] = None) ->
 __all__ = [
     "OpenRouterBackend",
     "ClaudeCliBackend",
-    "ClaudeCliError",
-    "ClaudeCliTimeout",
     "MockBackend",
     "BACKEND_ENV",
     "MODEL_ENV",
