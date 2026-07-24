@@ -9,6 +9,18 @@ changeset choreography (a placeholder changeset up front, per-item inline
 moves, a description rebuilt from the successfully-moved subset, delete-if-
 empty).
 
+Per-item isolation is collect-and-continue by default (matching the proven
+consumer's apply/revert semantics): a single item that fails to apply OR fails
+to move into the changeset is recorded and skipped, never aborting the rest of
+the batch. Apply failures land on :attr:`ChangesetResult.failed`; VCS failures
+(``open_for_edit`` / ``move_into`` raising -- e.g. p4-kit's ``move_into``
+raising when a ``p4 reopen`` was a silent no-op or landed the file in the wrong
+CL) land on :attr:`ChangesetResult.failed_moves`. Only successfully-moved items
+enter :attr:`ChangesetResult.moved`, so the finalize step still rebuilds the
+description from the successfully-moved subset alone (the description never
+claims an item that did not land in the changeset) and delete-if-empty still
+fires when nothing moved.
+
 Three generalizations, each domain-free:
 
 - **Ownership marker schema** (:class:`Marker`, :func:`classify_ownership`) --
@@ -264,7 +276,12 @@ class ChangesetResult:
     - ``changeset`` -- the backend's changeset handle (``None`` for a no-op
       backend).
     - ``moved`` -- ``(item_id, path)`` for items whose write + move succeeded.
-    - ``failed`` -- ``(item_id, reason)`` for items whose write raised.
+    - ``failed`` -- ``(item_id, reason)`` for items whose write (``apply_item``)
+      raised.
+    - ``failed_moves`` -- ``(item_id, path, reason)`` for items whose VCS step
+      (``open_for_edit`` / ``move_into``) raised. Collect-and-continue: a
+      per-item VCS failure is recorded here and the batch proceeds, so one bad
+      move never aborts the rest.
     - ``description`` -- the final description finalized onto the changeset
       (rebuilt from the moved subset), or ``""`` when nothing moved.
     """
@@ -272,6 +289,7 @@ class ChangesetResult:
     changeset: Any = None
     moved: List[Tuple[str, str]] = field(default_factory=list)
     failed: List[Tuple[str, str]] = field(default_factory=list)
+    failed_moves: List[Tuple[str, str, str]] = field(default_factory=list)
     description: str = ""
 
 
@@ -294,10 +312,13 @@ def deliver_changeset(
     1. **Placeholder changeset up front** -- ``vcs.make_changeset(placeholder)``
        before any item is touched.
     2. **Per-item inline moves** -- for each item: ``open_for_edit(path)``,
-       ``apply_item(item)`` (the caller's write; an exception records the item
-       on ``failed`` and moves on -- one bad item never aborts the batch),
-       then ``move_into(changeset, [path])``. Successfully-moved items are
-       collected.
+       ``apply_item(item)`` (the caller's write), then
+       ``move_into(changeset, [path])``. Collect-and-continue isolates every
+       item: an ``apply_item`` exception records the item on ``failed``; an
+       ``open_for_edit`` / ``move_into`` exception records ``(id, path,
+       reason)`` on ``failed_moves`` -- in either case the batch proceeds, so
+       one bad item never aborts the rest. Only items that both applied and
+       moved are collected on ``moved``.
     3. **Description rebuilt from the moved subset** -- ``describe`` is called
        with ONLY the successfully-moved ``(id, path)`` pairs, and its result is
        finalized via ``finalize_description`` -- so the description never claims
@@ -312,13 +333,21 @@ def deliver_changeset(
     for item in items:
         iid = item_id(item)
         path = path_of(item)
-        vcs.open_for_edit(path)
+        try:
+            vcs.open_for_edit(path)
+        except Exception as exc:  # noqa: BLE001 -- isolate one item's VCS step
+            result.failed_moves.append((iid, path, str(exc)))
+            continue
         try:
             apply_item(item)
         except Exception as exc:  # noqa: BLE001 -- isolate one item's write
             result.failed.append((iid, str(exc)))
             continue
-        vcs.move_into(changeset, [path])
+        try:
+            vcs.move_into(changeset, [path])
+        except Exception as exc:  # noqa: BLE001 -- isolate one item's VCS step
+            result.failed_moves.append((iid, path, str(exc)))
+            continue
         result.moved.append((iid, path))
 
     result.description = describe(result.moved) if result.moved else ""

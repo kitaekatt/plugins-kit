@@ -254,6 +254,120 @@ def test_changeset_empty_batch_finalizes_empty_and_delete_if_empty():
     assert ("delete_if_empty", 0) in vcs.calls
 
 
+def test_changeset_collects_move_failure_and_continues():
+    # A vcs.move_into failure on one item is recorded on failed_moves and the
+    # batch continues; the description is rebuilt from the moved subset only.
+    class FlakyMoveVcs(MockVcs):
+        def move_into(self, changeset, paths):
+            if "b.txt" in paths:
+                raise RuntimeError("reopen no-op: not open for edit")
+            super().move_into(changeset, paths)
+
+    vcs = FlakyMoveVcs()
+    written = []
+    items = [
+        {"id": "a", "path": "a.txt"},
+        {"id": "b", "path": "b.txt"},  # move fails
+        {"id": "c", "path": "c.txt"},
+    ]
+    result = deliver_changeset(
+        items,
+        vcs=vcs,
+        item_id=lambda it: it["id"],
+        path_of=lambda it: it["path"],
+        apply_item=lambda it: written.append(it["path"]),
+        describe=lambda moved: ",".join(i for i, _p in moved),
+    )
+
+    # All three applied (writes happened) but only a + c moved.
+    assert written == ["a.txt", "b.txt", "c.txt"]
+    assert [i for i, _p in result.moved] == ["a", "c"]
+    assert result.failed_moves == [("b", "b.txt", "reopen no-op: not open for edit")]
+    # Description rebuilt from the moved subset only -- "b" never claimed.
+    assert result.description == "a,c"
+    # Batch was NOT aborted: finalize + delete_if_empty still ran.
+    kinds = [c[0] for c in vcs.calls]
+    assert kinds[-2:] == ["finalize", "delete_if_empty"]
+
+
+def test_changeset_collects_open_for_edit_failure():
+    # An open_for_edit failure is also a per-item vcs failure: recorded, skipped,
+    # and apply_item is NOT called for that item.
+    class FlakyOpenVcs(MockVcs):
+        def open_for_edit(self, path):
+            if path == "b.txt":
+                raise RuntimeError("cannot open for edit")
+            super().open_for_edit(path)
+
+    vcs = FlakyOpenVcs()
+    written = []
+    items = [{"id": "a", "path": "a.txt"}, {"id": "b", "path": "b.txt"}]
+    result = deliver_changeset(
+        items,
+        vcs=vcs,
+        item_id=lambda it: it["id"],
+        path_of=lambda it: it["path"],
+        apply_item=lambda it: written.append(it["path"]),
+        describe=lambda moved: ",".join(i for i, _p in moved),
+    )
+    assert written == ["a.txt"]  # b's apply skipped (open failed first)
+    assert [i for i, _p in result.moved] == ["a"]
+    assert result.failed_moves == [("b", "b.txt", "cannot open for edit")]
+
+
+def test_changeset_all_moves_fail_deletes_empty_cl():
+    # Every move fails -> nothing moved -> empty description -> delete_if_empty.
+    class AllFailVcs(MockVcs):
+        def move_into(self, changeset, paths):
+            raise RuntimeError("move failed")
+
+    vcs = AllFailVcs()
+    result = deliver_changeset(
+        [{"id": "a", "path": "a.txt"}],
+        vcs=vcs,
+        item_id=lambda it: it["id"],
+        path_of=lambda it: it["path"],
+        apply_item=lambda it: None,
+        describe=lambda moved: "unused",
+    )
+    assert result.moved == []
+    assert result.failed_moves == [("a", "a.txt", "move failed")]
+    assert result.description == ""
+    assert ("delete_if_empty", 0) in vcs.calls
+
+
+def test_changeset_apply_and_move_failures_are_separate_buckets():
+    # apply failures -> failed; vcs failures -> failed_moves; the two do not mix.
+    class FlakyMoveVcs(MockVcs):
+        def move_into(self, changeset, paths):
+            if "m.txt" in paths:
+                raise RuntimeError("move boom")
+            super().move_into(changeset, paths)
+
+    def apply_item(it):
+        if it["id"] == "apply_bad":
+            raise RuntimeError("write boom")
+
+    vcs = FlakyMoveVcs()
+    items = [
+        {"id": "ok", "path": "ok.txt"},
+        {"id": "apply_bad", "path": "a.txt"},
+        {"id": "move_bad", "path": "m.txt"},
+    ]
+    result = deliver_changeset(
+        items,
+        vcs=vcs,
+        item_id=lambda it: it["id"],
+        path_of=lambda it: it["path"],
+        apply_item=apply_item,
+        describe=lambda moved: ",".join(i for i, _p in moved),
+    )
+    assert [i for i, _p in result.moved] == ["ok"]
+    assert result.failed == [("apply_bad", "write boom")]
+    assert result.failed_moves == [("move_bad", "m.txt", "move boom")]
+    assert result.description == "ok"
+
+
 def test_changeset_works_with_null_backend():
     # NullVcs makes deliver exercisable end-to-end without a real repo.
     written = []

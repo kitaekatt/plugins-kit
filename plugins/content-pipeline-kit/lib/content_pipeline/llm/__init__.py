@@ -85,4 +85,75 @@ but several details differ deliberately.
    with the disk I/O left to the caller. loc's shell-driven FAILED verdict is
    out of scope (it classifies non-zero stage exits from a log, not a generic
    convergence signal).
+
+Convenience re-exports
+----------------------
+
+Unlike the root package (which re-exports nothing, keeping the cross-subpackage
+import graph a strict DAG), this package re-exports its own advertised public
+surface so a consumer writes ``from content_pipeline.llm import call_llm``
+rather than reaching into ``.platform`` / ``.backends``. Only names that do NOT
+collide with a submodule name (``platform``, ``backends``, ``convergence``,
+``yaml_extract``) are re-exported -- the repo's name-shadowing discipline -- so
+``content_pipeline.llm.platform`` always resolves to the submodule, never a
+re-exported symbol. The re-exports are import-safe: ``platform`` and
+``backends`` load with no ``openai`` / ``openrouter_kit`` present (both are lazy
+imports reached only when a live backend actually runs), so importing this
+package never drags in an optional transport dependency.
+
+The surface (both live under ``platform`` unless noted):
+
+- ``call_llm`` / ``submit_validated`` -- the entry point and the
+  validate-until-valid loop.
+- ``LLMResponse`` / ``BackendOptions`` / ``LLMBackend`` -- the seam types.
+- ``HaltError`` + ``HALT_AUTH`` / ``HALT_RATE_LIMIT`` /
+  ``HALT_INSUFFICIENT_CREDIT`` -- the halt taxonomy.
+- ``ResponseCache`` / ``CostBudget`` -- the cache and budget guard.
+- ``OpenRouterBackend`` / ``ClaudeCliBackend`` / ``MockBackend`` / ``route`` /
+  ``routed_model`` -- the transports and process-level routing (from
+  ``backends``).
+
+The ``convergence`` and ``yaml_extract`` submodules are imported directly (their
+top-level names would be less discoverable flattened here, and ``convergence``
+is a CRP opt-in a single-pass consumer never reaches).
 """
+
+from content_pipeline.llm.backends import (
+    ClaudeCliBackend,
+    MockBackend,
+    OpenRouterBackend,
+    route,
+    routed_model,
+)
+from content_pipeline.llm.platform import (
+    HALT_AUTH,
+    HALT_INSUFFICIENT_CREDIT,
+    HALT_RATE_LIMIT,
+    BackendOptions,
+    CostBudget,
+    HaltError,
+    LLMBackend,
+    LLMResponse,
+    ResponseCache,
+    call_llm,
+    submit_validated,
+)
+
+__all__ = [
+    "call_llm",
+    "submit_validated",
+    "LLMResponse",
+    "BackendOptions",
+    "LLMBackend",
+    "HaltError",
+    "HALT_AUTH",
+    "HALT_RATE_LIMIT",
+    "HALT_INSUFFICIENT_CREDIT",
+    "ResponseCache",
+    "CostBudget",
+    "OpenRouterBackend",
+    "ClaudeCliBackend",
+    "MockBackend",
+    "route",
+    "routed_model",
+]

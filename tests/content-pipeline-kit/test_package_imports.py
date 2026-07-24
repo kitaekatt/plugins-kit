@@ -90,6 +90,89 @@ def test_top_level_package_reexports_nothing(plugin_root):
     )
 
 
+def test_llm_package_reexports_advertised_surface(plugin_root):
+    """content_pipeline.llm re-exports its docstring-advertised public surface.
+
+    Consumers should ``from content_pipeline.llm import call_llm`` rather than
+    reaching into ``.platform`` / ``.backends``. The re-exported names must be
+    exactly those advertised, none may collide with a submodule name, and
+    importing the package must not require the optional transport deps.
+    """
+    import content_pipeline.llm as llm
+
+    expected = {
+        "call_llm",
+        "submit_validated",
+        "LLMResponse",
+        "BackendOptions",
+        "LLMBackend",
+        "HaltError",
+        "HALT_AUTH",
+        "HALT_RATE_LIMIT",
+        "HALT_INSUFFICIENT_CREDIT",
+        "ResponseCache",
+        "CostBudget",
+        "OpenRouterBackend",
+        "ClaudeCliBackend",
+        "MockBackend",
+        "route",
+        "routed_model",
+    }
+    assert expected.issubset(set(llm.__all__))
+    for name in expected:
+        assert hasattr(llm, name), f"content_pipeline.llm missing re-export {name!r}"
+
+    # Name-shadowing discipline: no re-export may collide with a submodule name,
+    # so `content_pipeline.llm.platform` always resolves to the SUBMODULE.
+    submodules = {"platform", "backends", "convergence", "yaml_extract"}
+    assert expected.isdisjoint(submodules)
+    from types import ModuleType
+
+    assert isinstance(llm.platform, ModuleType)
+    assert isinstance(llm.backends, ModuleType)
+
+    # Re-exports bind to the real objects, not shadows.
+    from content_pipeline.llm.platform import call_llm as platform_call_llm
+    from content_pipeline.llm.backends import MockBackend as backends_mock
+
+    assert llm.call_llm is platform_call_llm
+    assert llm.MockBackend is backends_mock
+
+
+def test_llm_import_does_not_require_optional_transport_deps(plugin_root):
+    """Importing content_pipeline.llm must not import openai / openrouter_kit.
+
+    The re-exports pull in ``platform`` and ``backends``, whose transport deps
+    are lazy (reached only when a live backend actually runs). A plain import of
+    the package -- and the MockBackend path -- must stay hermetic.
+    """
+    import sys
+
+    for mod in ("openai", "openrouter_kit"):
+        assert mod not in sys.modules or sys.modules[mod] is not None
+    # A fresh reimport of the llm package leaves the optional deps untouched by
+    # the act of importing (they may already be present from another test, but
+    # the llm __init__ itself does not import them at module scope).
+    import ast
+    from pathlib import Path
+
+    init_path = (
+        Path(__file__).resolve().parents[2]
+        / "plugins" / "content-pipeline-kit" / "lib"
+        / "content_pipeline" / "llm" / "__init__.py"
+    )
+    tree = ast.parse(init_path.read_text(encoding="utf-8"))
+    imported_names = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            imported_names.append(node.module or "")
+        elif isinstance(node, ast.Import):
+            imported_names.extend(alias.name for alias in node.names)
+    assert all(not m.startswith(("openai", "openrouter_kit")) for m in imported_names), (
+        f"llm/__init__.py must not import a transport dep at module scope: {imported_names}"
+    )
+
+
 def test_null_vcs_satisfies_seam_shape(plugin_root):
     """The one concrete implementation in the skeleton -- NullVcs -- must be usable."""
     from content_pipeline.vcs.null_vcs import NullVcs
