@@ -62,6 +62,37 @@ endpoints:
       llama: {slug: meta-llama/Llama-3.1-8B-Instruct}
 ```
 
+## Completion seam
+
+`openrouter_kit.completion` puts two transports behind one `complete()` so a
+pipeline can switch between a paid HTTP endpoint and the local `claude -p` CLI
+(subscription-billed, no per-call metering) purely by configuration:
+
+```python
+from openrouter_kit.completion import (
+    OpenRouterBackend, ClaudeCliBackend, BackendOptions,
+)
+
+backend = ClaudeCliBackend()                       # or OpenRouterBackend(endpoint="local")
+resp = backend.complete("system prompt", "user prompt", model="claude-opus-4-8")
+print(resp.text, resp.input_tokens, resp.output_tokens)
+```
+
+`BackendOptions` carries per-call knobs (`max_tokens`, `temperature`,
+`timeout_s`, `effort`, `allowed_tools`, `user_cache_prefix`, ...); transports
+ignore the ones they do not understand. `ClaudeCliBackend` spawns via a shared,
+battle-tested runner (UTF-8 pipes, daemon stdout/stderr drains, a bounded
+per-call timeout raising `AgentTimeoutError`, and a live hard-stop kill on
+rate-limit / auth markers). Persistent failures on either transport classify
+into one halt taxonomy (`classify_halt_text`, `HaltError`, `HALT_*`) so an
+orchestrator can halt-and-resume identically regardless of provider. The seam
+types and the runner are stdlib-only; only `OpenRouterBackend` reaches for the
+`openai` SDK, and only lazily.
+
+The `claude-cli` backend needs the `claude` executable on PATH; it is already
+provisioned via the `bootstrap` dependency (which declares `claude` as a tool),
+so no extra install step is required.
+
 ## Key handling
 
 Interactive `set-key` uses a hidden prompt (`getpass`), the `.env` file is
