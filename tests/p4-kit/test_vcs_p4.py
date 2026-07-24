@@ -37,7 +37,12 @@ _CP_LIB = os.path.normpath(
 if _CP_LIB not in sys.path:
     sys.path.insert(0, _CP_LIB)
 
-from p4kit_vcs.p4_vcs import P4Changeset, P4Vcs, P4VcsError  # noqa: E402
+from p4kit_vcs.p4_vcs import (  # noqa: E402
+    P4Changeset,
+    P4ChangesetContents,
+    P4Vcs,
+    P4VcsError,
+)
 
 
 class FakeP4:
@@ -48,10 +53,13 @@ class FakeP4:
     the CL number ``p4 change -i`` (create form) reports.
     """
 
-    def __init__(self, created_cl="4242", change_o_spec=""):
+    def __init__(self, created_cl="4242", change_o_spec="",
+                 opened_ztag="", opened_c_ztag=""):
         self.calls = []  # list of (args, input, cwd)
         self.created_cl = created_cl
         self.change_o_spec = change_o_spec
+        self.opened_ztag = opened_ztag  # `p4 -ztag opened <path>` output
+        self.opened_c_ztag = opened_c_ztag  # `p4 -ztag opened -c <cl>` output
 
     def __call__(self, args, input=None, cwd=None):
         self.calls.append((list(args), input, cwd))
@@ -59,6 +67,14 @@ class FakeP4:
             return 0, f"Change {self.created_cl} created.\n", ""
         if args[:2] == ["change", "-o"]:
             return 0, self.change_o_spec, ""
+        if args[:1] == ["reopen"]:
+            # ["reopen", "-c", <cl>, <path>] -- a real move reports "reopened".
+            cl, path = args[2], args[3]
+            return 0, f"{path}#1 - reopened; change {cl}\n", ""
+        if args[:3] == ["-ztag", "opened", "-c"]:
+            return 0, self.opened_c_ztag, ""
+        if args[:2] == ["-ztag", "opened"]:
+            return 0, self.opened_ztag, ""
         return 0, "", ""
 
     def inputs_for(self, prefix):
@@ -187,6 +203,80 @@ def test_wildcards_are_rejected_everywhere(bad):
         vcs.move_into(P4Changeset(cl="1"), [bad])
 
 
+# -- move_into: reopen output verification (no-op / wrong-CL detection) -------
+
+def test_move_into_accepts_reopened_output_shape():
+    # The default FakeP4 emits "<path>#1 - reopened; change <cl>" -- a real move.
+    fake = FakeP4()
+    vcs = P4Vcs(runner=fake)
+    cs = P4Changeset(cl="99")
+    vcs.move_into(cs, ["a.txt"])
+    assert cs.paths == ["a.txt"]
+    assert ["reopen", "-c", "99", "a.txt"] in fake.arg_vectors
+
+
+def test_move_into_accepts_already_in_target_cl_noop():
+    # Idempotent re-move: file already in the TARGET CL. p4 reports "currently
+    # opened for edit; change <this-cl>" -- accepted, path recorded.
+    def already_here(args, input=None, cwd=None):
+        if args[:1] == ["reopen"]:
+            path = args[3]
+            return 0, f"{path}#1 - currently opened for edit; change 99\n", ""
+        return 0, "", ""
+
+    vcs = P4Vcs(runner=already_here)
+    cs = P4Changeset(cl="99")
+    vcs.move_into(cs, ["a.txt"])
+    assert cs.paths == ["a.txt"]
+
+
+def test_move_into_raises_on_silent_noop():
+    # p4 reopen exits 0 but did nothing: the file was never open for edit.
+    def noop(args, input=None, cwd=None):
+        if args[:1] == ["reopen"]:
+            path = args[3]
+            return 0, f"{path} - file(s) not opened on this client.\n", ""
+        return 0, "", ""
+
+    vcs = P4Vcs(runner=noop)
+    cs = P4Changeset(cl="99")
+    with pytest.raises(P4VcsError) as exc:
+        vcs.move_into(cs, ["a.txt"])
+    assert "not opened on this client" in str(exc.value)
+    assert cs.paths == []  # nothing recorded -- the move did not happen
+
+
+def test_move_into_raises_on_wrong_cl():
+    # p4 reopen exits 0 but the file is opened in a DIFFERENT CL, not the target
+    # (its "currently opened for edit; change <n>" names another CL).
+    def wrong_cl(args, input=None, cwd=None):
+        if args[:1] == ["reopen"]:
+            path = args[3]
+            return 0, f"{path}#1 - currently opened for edit; change 12345\n", ""
+        return 0, "", ""
+
+    vcs = P4Vcs(runner=wrong_cl)
+    cs = P4Changeset(cl="99")  # target is 99, file landed in 12345
+    with pytest.raises(P4VcsError) as exc:
+        vcs.move_into(cs, ["a.txt"])
+    assert "into CL 99" in str(exc.value)
+    assert cs.paths == []
+
+
+def test_move_into_raises_on_nonzero_exit():
+    def failing(args, input=None, cwd=None):
+        if args[:1] == ["reopen"]:
+            return 1, "", "some transport error"
+        return 0, "", ""
+
+    vcs = P4Vcs(runner=failing)
+    cs = P4Changeset(cl="99")
+    with pytest.raises(P4VcsError) as exc:
+        vcs.move_into(cs, ["a.txt"])
+    assert "some transport error" in str(exc.value)
+    assert cs.paths == []
+
+
 # -- finalize_description: dump-edit-restore, preserve Files: ----------------
 
 _CHANGE_O = (
@@ -273,6 +363,106 @@ def test_nonzero_exit_raises_p4vcserror():
     with pytest.raises(P4VcsError) as exc:
         vcs.open_for_edit("a.txt")
     assert "some p4 error" in str(exc.value)
+
+
+# -- P4-specific extensions: owning_changeset / describe_changeset -----------
+
+def test_owning_changeset_returns_numbered_cl():
+    ztag = (
+        "... depotFile //depot/a.txt\n"
+        "... clientFile /ws/a.txt\n"
+        "... rev 3\n"
+        "... action edit\n"
+        "... change 12345\n"
+        "... type text\n"
+    )
+    fake = FakeP4(opened_ztag=ztag)
+    assert P4Vcs(runner=fake).owning_changeset("a.txt") == "12345"
+    assert ["-ztag", "opened", "a.txt"] in fake.arg_vectors
+
+
+def test_owning_changeset_returns_default():
+    ztag = (
+        "... depotFile //depot/a.txt\n"
+        "... clientFile /ws/a.txt\n"
+        "... change default\n"
+    )
+    fake = FakeP4(opened_ztag=ztag)
+    assert P4Vcs(runner=fake).owning_changeset("a.txt") == "default"
+
+
+def test_owning_changeset_none_when_not_open():
+    # p4 opened exits non-zero when the file is not open at all.
+    def not_open(args, input=None, cwd=None):
+        if args[:2] == ["-ztag", "opened"]:
+            return 1, "", "a.txt - file(s) not opened on this client.\n"
+        return 0, "", ""
+
+    assert P4Vcs(runner=not_open).owning_changeset("a.txt") is None
+
+
+def test_owning_changeset_none_when_no_row():
+    fake = FakeP4(opened_ztag="")  # zero exit but no change field
+    assert P4Vcs(runner=fake).owning_changeset("a.txt") is None
+
+
+def test_owning_changeset_rejects_wildcard():
+    with pytest.raises(P4VcsError):
+        P4Vcs(runner=FakeP4()).owning_changeset("foo/...")
+
+
+def test_describe_changeset_returns_description_and_paths():
+    change_o = (
+        "Change: 4242\n"
+        "\n"
+        "Client: c\n"
+        "\n"
+        "User: u\n"
+        "\n"
+        "Status: pending\n"
+        "\n"
+        "Description:\n"
+        "\tFinal title\n"
+        "\t\n"
+        "\tA body paragraph.\n"
+        "\n"
+        "Files:\n"
+        "\t//depot/one.txt\t# edit\n"
+    )
+    opened_c = (
+        "... depotFile //depot/one.txt\n"
+        "... clientFile /ws/one.txt\n"
+        "... change 4242\n"
+        "\n"
+        "... depotFile //depot/two.txt\n"
+        "... clientFile /ws/two.txt\n"
+        "... change 4242\n"
+    )
+    fake = FakeP4(change_o_spec=change_o, opened_c_ztag=opened_c)
+    contents = P4Vcs(runner=fake).describe_changeset("4242")
+
+    assert isinstance(contents, P4ChangesetContents)
+    assert contents.cl == "4242"
+    assert contents.description == "Final title\n\nA body paragraph."
+    assert contents.paths == ["/ws/one.txt", "/ws/two.txt"]
+    assert ["change", "-o", "4242"] in fake.arg_vectors
+    assert ["-ztag", "opened", "-c", "4242"] in fake.arg_vectors
+
+
+def test_describe_changeset_supports_contents_assertion():
+    # The whole point: compare what the CL claims (description) against what it
+    # actually contains (paths) -- the description-vs-contents drift check.
+    change_o = (
+        "Change: 7\n\nStatus: pending\n\nDescription:\n"
+        "\tdeliver: one, two\n\nFiles:\n\t//depot/one.txt\t# edit\n"
+    )
+    opened_c = (
+        "... clientFile /ws/one.txt\n... change 7\n"
+    )  # only ONE file actually open, though the description names two
+    fake = FakeP4(change_o_spec=change_o, opened_c_ztag=opened_c)
+    contents = P4Vcs(runner=fake).describe_changeset("7")
+    assert contents.description == "deliver: one, two"
+    assert contents.paths == ["/ws/one.txt"]  # drift is visible to the caller
 
 
 # -- end-to-end choreography via content_pipeline.deliver_changeset ----------
