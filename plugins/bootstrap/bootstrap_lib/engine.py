@@ -27,7 +27,8 @@ from .atomic_write import write_atomic as _write_atomic
 
 
 def main():
-    """Entry point: run the engine pass with crash containment.
+    """Entry point: acquire the single-instance lock, then run the engine
+    pass with crash containment.
 
     The shell hook stamps the per-project cooldown BEFORE launching the
     engine and (in background mode) only surfaces what the engine writes to
@@ -38,7 +39,88 @@ def main():
     the next prompt surfaces the failure, clear the cooldown so the next
     SessionStart retries, then re-raise behavior via exit code 1 with the
     traceback on stderr (still captured by engine_output.log).
+
+    Locking (proc_lock.engine_lock) wraps the whole pass: rapid session
+    start/exit/restart can fire several independent launchers (session-
+    bootstrap.sh, the harvest, the SessionStart-missed rescue) within the
+    same few seconds, each of which stands down a RE-launch of itself but not
+    a genuinely concurrent OTHER process. When the lock can't be acquired,
+    another engine instance is already running a pass (for this project or a
+    different one -- the lock is engine-wide, not per-project, because a
+    concurrent pass from ANY project races the same shared-lib sync this bug
+    was filed against) -- stand down without running _main(), but roll back
+    this launch's already-consumed per-project cooldown stamp (see
+    _stand_down_lock_contended) so the project that lost the race gets a
+    genuine retry instead of silently waiting out the cooldown window. The
+    elevation flow's own child-engine relaunch (_spawn_recheck_pass)
+    sidesteps this entirely by releasing the lock early via
+    proc_lock.release_lock() before spawning its child.
     """
+    data_dir, project_dir = _peek_lock_args()
+    if not data_dir:
+        # --data-dir is a required arg; _main()'s own parser will reject a
+        # genuinely missing one with the standard argparse error.
+        _run_with_containment()
+        return
+
+    from .proc_lock import engine_lock
+    with engine_lock(data_dir) as acquired:
+        if not acquired:
+            _stand_down_lock_contended(data_dir, project_dir)
+            return
+        _run_with_containment()
+
+
+def _peek_lock_args() -> tuple:
+    """Lenient pre-parse of --data-dir/--project-dir only, so the lock can be
+    acquired (and, on stand-down, this launch's guards rolled back) before
+    the full argparse (which requires --plugin-root too) runs."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--data-dir", default=None)
+    parser.add_argument("--project-dir", default=None)
+    args, _ = parser.parse_known_args()
+    return args.data_dir or "", args.project_dir or ""
+
+
+def _stand_down_lock_contended(data_dir, project_dir):
+    """Another engine instance already holds the lock -- this pass never ran.
+    Roll back the ONE guard that is unambiguously OURS: the per-project
+    cooldown stamp session-bootstrap.sh writes BEFORE launching the engine.
+    Left alone, the project this launch was for would get no bootstrap pass
+    until that cooldown naturally expires.
+
+    Deliberately does NOT touch the global harvest/import-retry/registry-
+    relaunch marker stamps: those belong to whichever launch trigger fired --
+    which may not be THIS launch (a plain SessionStart losing the race can
+    stand down at the same moment a genuinely in-flight harvest pass, spawned
+    moments earlier, is still running and holds the lock). Clearing a marker
+    this stand-down doesn't own would falsely tell that OTHER, still-running
+    launcher's caller "not yet launched", inviting a duplicate spawn. Those
+    markers are safe to leave alone: ANY completed pass (this project's next
+    one included) stamps engine_ran_version, which is the first thing
+    should_harvest checks -- the marker only matters while that's still
+    behind, and self-clears the moment some pass finishes. Logged so a stand-
+    down is visible in bootstrap.log rather than silently invisible (the
+    "every remediation-like action logs its outcome" rule this repo's
+    CLAUDE.md holds tooling to). Best-effort; never raises -- a failure here
+    just costs one retry cycle, never a crash.
+    """
+    try:
+        _clear_project_cooldown(data_dir, project_dir)
+    except Exception:
+        pass
+    try:
+        from .log import write_log_block
+        write_log_block(data_dir, "bootstrap lock", [
+            "stand-down: another engine instance already holds the "
+            "single-instance lock; this project's cooldown was cleared "
+            "for a retry on the next opportunity",
+        ])
+    except Exception:
+        pass
+
+
+def _run_with_containment():
     try:
         _main()
     except (SystemExit, KeyboardInterrupt):
@@ -804,7 +886,18 @@ def _spawn_recheck_pass(args, plugin_root):
     re-check results); background mode writes a fresh
     bootstrap_display.pending. The child also owns the end-of-pass
     bookkeeping (cooldown clear/restamp, engine_ran_version stamp).
+
+    Releases proc_lock's single-instance lock BEFORE spawning: the child is a
+    full second bootstrap_engine.py process with the SAME --data-dir, and
+    this (parent) process is still inside its own engine_lock() while it
+    waits on subprocess.run -- without releasing first, the child would see
+    our still-alive PID as the lock holder and stand down without doing its
+    re-check. Safe because this pass has no more work after the child exits
+    (the caller returns immediately).
     """
+    from .proc_lock import release_lock
+    release_lock(args.data_dir)
+
     import subprocess
     cmd = [
         sys.executable,
