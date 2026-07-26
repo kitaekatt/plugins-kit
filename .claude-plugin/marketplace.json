@@ -151,12 +151,28 @@
     {
       "name": "bootstrap-stuck-fix",
       "description": "TEMPORARY remediation: repairs the malformed duplicate registry record that permanently wedges a machine on an old bootstrap version. Withdraw once the known user population has run it.",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "author": {
         "name": "Christina"
       },
       "source": "./plugins/bootstrap-stuck-fix",
-      "category": "development"
+      "category": "development",
+      "dependencies": [
+        "bootstrap"
+      ]
+    },
+    {
+      "name": "content-pipeline-kit",
+      "description": "Library + skills for LLM-in-the-loop batch content pipelines.",
+      "version": "0.3.0",
+      "author": {
+        "name": "Christina"
+      },
+      "source": "./plugins/content-pipeline-kit",
+      "category": "development",
+      "dependencies": [
+        "bootstrap"
+      ]
     }
   ]
 }

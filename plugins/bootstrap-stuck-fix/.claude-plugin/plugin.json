@@ -1,10 +1,13 @@
 {
   "name": "bootstrap-stuck-fix",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "TEMPORARY remediation: repairs the malformed duplicate registry record that permanently wedges a machine on an old bootstrap version. Withdraw once the known user population has run it.",
   "author": {
     "name": "Christina"
   },
+  "dependencies": [
+    "bootstrap"
+  ],
   "keywords": [
     "remediation",
     "temporary",
