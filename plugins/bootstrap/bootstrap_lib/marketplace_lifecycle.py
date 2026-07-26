@@ -647,7 +647,7 @@ def _run_claude_scoped(args, scope: str, project_dir: Optional[str]):
     )
 
     settings_path = settings_path_for_scope(scope, project_dir)
-    prep = ensure_writable(settings_path)
+    prep = ensure_writable(settings_path, project_dir)
     with preserve_line_endings(settings_path):
         # Run IN project_dir so the CLI writes the same settings file we just
         # made writable -- see _run_claude on why cwd is load-bearing here.
@@ -981,7 +981,7 @@ def enable_plugin_at_scope(
             message=f"cannot resolve settings file for scope '{scope}'",
         )
 
-    prep = ensure_writable(settings_path)
+    prep = ensure_writable(settings_path, project_dir)
     if not prep.ok:
         return LifecycleResult(
             passed=False, ref=plugin_ref,

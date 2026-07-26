@@ -88,7 +88,7 @@ class TestEnablePluginAtScope:
         _settings(tmp_path, {"enabledPlugins": {}})
         monkeypatch.setattr(
             settings_writable, "ensure_writable",
-            lambda path: settings_writable.WritableResult(False, "failed", "read-only"),
+            lambda path, project_dir=None: settings_writable.WritableResult(False, "failed", "read-only"),
         )
 
         result = enable_plugin_at_scope("mkt:b", "project", str(tmp_path))
