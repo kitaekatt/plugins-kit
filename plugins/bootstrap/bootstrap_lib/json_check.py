@@ -135,12 +135,31 @@ def merge_json_entries(
             if field not in target_entry and field in ref_entry:
                 target_entry[field] = ref_entry[field]
 
-    # Write target
+    # Write target. A Perforce-controlled target is read-only on disk unless it
+    # is open for edit, which makes this open() raise PermissionError -- clear
+    # that first (preferring `p4 edit`, so the change stays tracked).
+    from .settings_writable import ensure_writable, preserve_line_endings
+
     target = Path(target_path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    with open(target, "w") as f:
-        json.dump(target_data, f, indent=2)
-        f.write("\n")
+    prep = ensure_writable(str(target))
+    if not prep.ok:
+        return JsonCheckResult(
+            passed=False, target=target_path,
+            message=f"target not writable: {prep.detail}",
+        )
+    try:
+        with preserve_line_endings(str(target)):
+            with open(target, "w", encoding="utf-8") as f:
+                # ensure_ascii=False (with an explicit utf-8 encoding): the
+                # default rewrites pre-existing non-ASCII characters as \uXXXX
+                # escapes, churning parts of the file we never touched.
+                json.dump(target_data, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+    except OSError as exc:
+        return JsonCheckResult(
+            passed=False, target=target_path, message=f"write failed: {exc}",
+        )
 
     return JsonCheckResult(
         passed=True, target=target_path,
@@ -149,10 +168,15 @@ def merge_json_entries(
 
 
 def _load_json(path: str) -> Optional[Dict[str, Any]]:
-    """Load a JSON file. Returns None if not found or invalid."""
+    """Load a JSON file. Returns None if not found or invalid.
+
+    Reads as utf-8 explicitly: JSON is utf-8 by definition, but Python would
+    otherwise use the platform default (cp1252 on Windows), which fails to
+    decode any non-ASCII character the file already contains.
+    """
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else None
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeDecodeError):
         return None

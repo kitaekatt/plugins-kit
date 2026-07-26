@@ -123,8 +123,15 @@ def _find_claude_cli() -> Optional[str]:
     return None
 
 
-def _run_claude(args: list, timeout: int = 120) -> tuple:
-    """Run a claude CLI command. Returns (success, stdout, stderr)."""
+def _run_claude(args: list, timeout: int = 120, cwd: Optional[str] = None) -> tuple:
+    """Run a claude CLI command. Returns (success, stdout, stderr).
+
+    `cwd` matters for any `--scope project|local` command: the CLI resolves
+    which project's settings file to write from its working directory, not
+    from anything on the command line. Left unset it would inherit the engine
+    process's directory, which is not necessarily the project being
+    bootstrapped -- writing the entry into the wrong project's settings.json.
+    """
     claude = _find_claude_cli()
     if not claude:
         return False, "", "claude CLI not found"
@@ -135,6 +142,7 @@ def _run_claude(args: list, timeout: int = 120) -> tuple:
         result = subprocess.run(
             [claude] + args,
             capture_output=True, text=True, timeout=timeout, env=env,
+            cwd=cwd or None,
         )
         return result.returncode == 0, result.stdout, result.stderr
     except (subprocess.SubprocessError, OSError) as e:
@@ -625,34 +633,72 @@ def check_plugin_scope(plugin_ref: str, desired_scope: str) -> ScopeCheckResult:
     )
 
 
-def install_plugin(plugin_ref: str, scope: str = "user") -> LifecycleResult:
+def _run_claude_scoped(args, scope: str, project_dir: Optional[str]):
+    """Run a scope-targeted `claude plugin ...` command, guarding its settings write.
+
+    The CLI rewrites the scope's settings.json via tmp+rename. That fails with
+    EPERM when the target is read-only -- the normal on-disk state of a
+    Perforce-controlled file -- so make it writable first, and put back the
+    original line endings the CLI's reserialisation would otherwise churn.
+    See settings_writable for why `p4 edit` is preferred over a bare chmod.
+    """
+    from .settings_writable import (
+        ensure_writable, preserve_line_endings, settings_path_for_scope,
+    )
+
+    settings_path = settings_path_for_scope(scope, project_dir)
+    prep = ensure_writable(settings_path)
+    with preserve_line_endings(settings_path):
+        # Run IN project_dir so the CLI writes the same settings file we just
+        # made writable -- see _run_claude on why cwd is load-bearing here.
+        ok, stdout, stderr = _run_claude(args, cwd=project_dir)
+    if not ok and not prep.ok:
+        stderr = f"{stderr.strip()} (settings file not writable: {prep.detail})"
+    return ok, stdout, stderr
+
+
+def install_plugin(
+    plugin_ref: str, scope: str = "user", project_dir: Optional[str] = None
+) -> LifecycleResult:
     """Install a plugin via `claude plugin install`.
 
     Args:
         plugin_ref: Plugin reference in marketplace:plugin format
         scope: Installation scope (user, project, local)
+        project_dir: Project root, needed to locate the settings file a
+            project/local-scope install writes
     """
     # Claude CLI uses plugin@marketplace format
     cli_ref = _to_cli_ref(plugin_ref)
-    ok, stdout, stderr = _run_claude(["plugin", "install", cli_ref, "--scope", scope])
+    ok, stdout, stderr = _run_claude_scoped(
+        ["plugin", "install", cli_ref, "--scope", scope], scope, project_dir
+    )
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="installed")
     return LifecycleResult(passed=False, ref=plugin_ref, message=f"install failed: {stderr.strip()}")
 
 
-def uninstall_plugin(plugin_ref: str, scope: str = "user") -> LifecycleResult:
+def uninstall_plugin(
+    plugin_ref: str, scope: str = "user", project_dir: Optional[str] = None
+) -> LifecycleResult:
     """Uninstall a plugin via `claude plugin uninstall`."""
     cli_ref = _to_cli_ref(plugin_ref)
-    ok, stdout, stderr = _run_claude(["plugin", "uninstall", cli_ref, "--scope", scope])
+    ok, stdout, stderr = _run_claude_scoped(
+        ["plugin", "uninstall", cli_ref, "--scope", scope], scope, project_dir
+    )
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="uninstalled")
     return LifecycleResult(passed=False, ref=plugin_ref, message=f"uninstall failed: {stderr.strip()}")
 
 
-def update_plugin(plugin_ref: str, scope: str = "user") -> LifecycleResult:
+def update_plugin(
+    plugin_ref: str, scope: str = "user", project_dir: Optional[str] = None
+) -> LifecycleResult:
     """Update a plugin via `claude plugin update`."""
     cli_ref = _to_cli_ref(plugin_ref)
-    ok, stdout, stderr = _run_claude(["plugin", "update", cli_ref, "--scope", scope])
+    ok, stdout, stderr = _run_claude_scoped(
+        ["plugin", "update", cli_ref, "--scope", scope], scope, project_dir
+    )
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="updated")
     return LifecycleResult(passed=False, ref=plugin_ref, message=f"update failed: {stderr.strip()}")
@@ -903,6 +949,70 @@ def check_plugin_enabled_at_scope(plugin_ref: str, scope: str, project_dir: str 
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
     return LifecycleResult(passed=False, ref=plugin_ref, message=f"not enabled at {scope} scope")
+
+
+def enable_plugin_at_scope(
+    plugin_ref: str, scope: str, project_dir: Optional[str] = None
+) -> LifecycleResult:
+    """Write the `enabledPlugins` entry a scope-targeted install should have written.
+
+    `claude plugin install --scope X` short-circuits with "already installed"
+    whenever the registry records scope X -- WITHOUT writing the settings
+    entry that actually enables the plugin. If the registry and the settings
+    file ever disagree (a half-applied install; an earlier failed write), the
+    CLI can no longer repair it: bootstrap re-installs every session, the CLI
+    no-ops, the check fails again, forever, and nothing is ever reported
+    because the install "succeeded". This closes that loop by writing the
+    entry directly -- the same end state the CLI produces.
+
+    Edits surgically (the file's other keys, ordering, indentation and line
+    endings are left alone) because the target is frequently a shared,
+    source-controlled settings.json.
+    """
+    from .settings_writable import (
+        ensure_writable, preserve_line_endings, settings_path_for_scope,
+    )
+
+    cli_ref = _to_cli_ref(plugin_ref)
+    settings_path = settings_path_for_scope(scope, project_dir)
+    if not settings_path:
+        return LifecycleResult(
+            passed=False, ref=plugin_ref,
+            message=f"cannot resolve settings file for scope '{scope}'",
+        )
+
+    prep = ensure_writable(settings_path)
+    if not prep.ok:
+        return LifecycleResult(
+            passed=False, ref=plugin_ref,
+            message=f"settings file not writable: {prep.detail}",
+        )
+
+    try:
+        if os.path.isfile(settings_path):
+            with open(settings_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = {}
+        if not isinstance(data, dict):
+            raise ValueError("settings root is not an object")
+        data.setdefault("enabledPlugins", {})[cli_ref] = True
+        os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+        with preserve_line_endings(settings_path):
+            with open(settings_path, "w", encoding="utf-8") as f:
+                # ensure_ascii=False: the default would rewrite every non-ASCII
+                # character already in the file as a \uXXXX escape, turning a
+                # two-line change into a diff across unrelated settings.
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return LifecycleResult(
+            passed=False, ref=plugin_ref, message=f"could not enable at {scope} scope: {exc}",
+        )
+
+    return LifecycleResult(
+        passed=True, ref=plugin_ref, message=f"enabled at {scope} scope",
+    )
 
 
 def enable_plugin_in_claude(plugin_ref: str) -> LifecycleResult:

@@ -3406,6 +3406,7 @@ def _phase_plugins(ctx):
         check_plugin_installed, install_plugin,
         enable_plugin_in_claude, disable_plugin_in_claude,
         check_plugin_enabled, check_plugin_enabled_at_scope,
+        enable_plugin_at_scope,
         check_plugin_version, check_plugin_min_version,
         update_plugin, ensure_registry_scope,
         pinned_marketplace_sha,
@@ -3445,7 +3446,7 @@ def _phase_plugins(ctx):
                 ctx.ok(f"plugin {plugin_ref}: not installed (install: manual; run `claude plugin install {cli_ref}` to enable)")
                 continue
             # Auto-install via CLI
-            inst = install_plugin(plugin_ref, scope=desired_scope)
+            inst = install_plugin(plugin_ref, scope=desired_scope, project_dir=ctx.project_dir)
             if inst.passed:
                 _bucket(plugins_installed, plugin_ref, f"at {desired_scope} scope")
             else:
@@ -3463,16 +3464,24 @@ def _phase_plugins(ctx):
             scope_check = check_plugin_enabled_at_scope(plugin_ref, desired_scope, ctx.project_dir)
             if not scope_check.passed:
                 # Keep the scope-mismatch note as its own line so the user sees
-                # *why* the re-install happened; consolidate the action.
+                # *why* the enable happened; consolidate the action.
                 ctx.action(f"plugin {plugin_ref}: {scope_check.message}")
-                reinst = install_plugin(plugin_ref, scope=desired_scope)
-                if reinst.passed:
-                    _bucket(plugins_re_installed, plugin_ref, f"at {desired_scope} scope")
+                # The plugin IS installed -- only this scope's enabledPlugins
+                # entry is missing -- so write that entry directly instead of
+                # re-running `claude plugin install --scope`. The CLI is the
+                # wrong tool twice over here: it short-circuits with "already
+                # installed" (writing nothing, so the check fails again next
+                # session, forever, while reporting success), and when it does
+                # write it reserialises the whole settings file, reordering
+                # keys in what is frequently a shared, source-controlled file.
+                enabled = enable_plugin_at_scope(plugin_ref, desired_scope, ctx.project_dir)
+                if enabled.passed:
+                    _bucket(plugins_enabled, plugin_ref, f"at {desired_scope} scope")
                 else:
                     ctx.fail(
-                        f"plugin {plugin_ref}: scope install failed - {reinst.message}",
+                        f"plugin {plugin_ref}: could not enable at {desired_scope} scope - {enabled.message}",
                         type="plugin", ref=plugin_ref,
-                        message=f"scope install failed: {reinst.message}",
+                        message=f"enable at {desired_scope} scope failed: {enabled.message}",
                     )
                     continue
 
@@ -3487,7 +3496,7 @@ def _phase_plugins(ctx):
             if install_result.passed:
                 ver_result = check_plugin_version(plugin_ref)
                 if not ver_result.up_to_date:
-                    upd_result = update_plugin(plugin_ref, scope=desired_scope)
+                    upd_result = update_plugin(plugin_ref, scope=desired_scope, project_dir=ctx.project_dir)
                     if upd_result.passed:
                         _bucket(plugins_updated, plugin_ref, f"{ver_result.installed_version} -> {ver_result.latest_version}, manual")
                     else:
@@ -3501,7 +3510,7 @@ def _phase_plugins(ctx):
             if install_result.passed:
                 ver_result = check_plugin_version(plugin_ref)
                 if not ver_result.up_to_date:
-                    upd_result = update_plugin(plugin_ref, scope=desired_scope)
+                    upd_result = update_plugin(plugin_ref, scope=desired_scope, project_dir=ctx.project_dir)
                     if upd_result.passed:
                         _bucket(plugins_updated, plugin_ref, f"{ver_result.installed_version} -> {ver_result.latest_version}")
                     else:
@@ -3534,7 +3543,7 @@ def _phase_plugins(ctx):
                         f"; marketplace {mkt_for_ref} is pinned at {pin_sha}, so the constraint "
                         "cannot be satisfied while pinned - drop the pin to update"
                     ) if pin_sha else ""
-                    upd_result = update_plugin(plugin_ref, scope=desired_scope)
+                    upd_result = update_plugin(plugin_ref, scope=desired_scope, project_dir=ctx.project_dir)
                     if upd_result.passed:
                         recheck = check_plugin_min_version(plugin_ref, min_version)
                         if recheck.up_to_date:

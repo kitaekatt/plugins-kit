@@ -556,8 +556,14 @@ class TestScopeRemediation:
 
         assert not any("installing at" in e for e in action_entries)
 
-    def test_not_enabled_at_desired_scope_triggers_install(self, tmp_path, monkeypatch):
-        """Plugin not enabled at desired scope → install at that scope (no uninstall)."""
+    def test_not_enabled_at_desired_scope_writes_entry_directly(self, tmp_path, monkeypatch):
+        """Plugin installed but not enabled at the desired scope -> write the
+        enabledPlugins entry directly, WITHOUT re-running `claude plugin install`.
+
+        The CLI short-circuits an install it considers already done, writing
+        nothing -- so routing this through it left the check failing every
+        session forever while reporting success.
+        """
         self._setup_engine_path()
 
         # Plugin is in the registry (installed) but NOT in user settings
@@ -594,12 +600,16 @@ class TestScopeRemediation:
                 manifest, "windows", str(tmp_path / "data"), str(tmp_path / "root"),
                 action_entries, ok_entries, plugin_name="test",
             )
-            # Install at desired scope, no uninstall
-            mock_inst.assert_called_once_with("plugins-kit:bootstrap", scope="user")
+            # The CLI is not involved -- the plugin is already installed.
+            mock_inst.assert_not_called()
 
-        # Scope-mismatch note kept as its own line; re-install action consolidated.
+        # The declared state actually landed in the settings file.
+        assert json.loads(settings.read_text())["enabledPlugins"] == {
+            "bootstrap@plugins-kit": True
+        }
+        # Scope-mismatch note kept as its own line; enable action consolidated.
         assert any("not enabled at user scope" in e for e in action_entries)
-        assert any("re-installed bootstrap [at user scope]" in e for e in action_entries)
+        assert any("enabled bootstrap [at user scope]" in e for e in action_entries)
 
     def test_stale_registry_scope_no_uninstall(self, tmp_path, monkeypatch):
         """Registry says 'project' but plugin is enabled at user scope → no action.
