@@ -88,7 +88,6 @@ def merge_json_entries(
     target_path: str,
     merge_fields: List[str],
     preserve_fields: Optional[List[str]] = None,
-    project_dir: Optional[str] = None,
 ) -> JsonCheckResult:
     """Merge entries from reference into target JSON.
 
@@ -100,8 +99,6 @@ def merge_json_entries(
         target_path: Path to target JSON file
         merge_fields: Fields to copy from reference
         preserve_fields: Fields to keep from existing target
-        project_dir: Project root, used to decide whether a read-only target
-            should be opened via p4 (see settings_writable)
 
     Returns:
         JsonCheckResult with pass/fail
@@ -145,7 +142,7 @@ def merge_json_entries(
 
     target = Path(target_path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    prep = ensure_writable(str(target), project_dir)
+    prep = ensure_writable(str(target))
     if not prep.ok:
         return JsonCheckResult(
             passed=False, target=target_path,

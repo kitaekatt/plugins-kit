@@ -16,15 +16,13 @@ writable BEFORE the CLI runs.
 
 Two behaviours worth knowing about:
 
-* ``p4 edit`` is preferred over a bare ``chmod`` -- but ONLY where the p4-kit
-  plugin is enabled, read from local settings before any p4 process is spawned.
-  Having the p4 binary is not consent to use it; p4-kit being enabled is what
-  says Perforce is part of how this project is worked. Where it does apply,
-  clearing the read-only bit alone leaves the file writable-but-not-opened, and
-  the next ``p4 sync`` then refuses to clobber it -- the workspace silently
-  stops receiving teammates' settings updates. ``p4 edit`` makes it writable
-  AND puts it in a pending changelist the user can see and submit. Everywhere
-  else, chmod is the whole answer.
+* ``p4 edit`` is preferred over a bare ``chmod`` -- but ONLY inside a Perforce
+  workspace, detected from a local marker file before any p4 process is
+  spawned. Where Perforce does apply, clearing the read-only bit alone leaves
+  the file writable-but-not-opened, and the next ``p4 sync`` then refuses to
+  clobber it -- the workspace silently stops receiving teammates' settings
+  updates. ``p4 edit`` makes it writable AND puts it in a pending changelist
+  the user can see and submit. Everywhere else, chmod is the whole answer.
 * ``preserve_line_endings`` exists because the CLI reserialises the whole file
   (LF endings, keys reordered). On a CRLF working copy that turns a two-line
   semantic change into a whole-file diff -- unmergeable for teammates who have
@@ -35,7 +33,6 @@ Nothing here raises: a failure to make the file writable degrades to the
 pre-existing behaviour (the CLI fails and bootstrap reports it).
 """
 
-import json
 import os
 import re
 import shutil
@@ -46,9 +43,10 @@ from typing import NamedTuple, Optional
 
 _P4_TIMEOUT = 10
 
-# The plugin that owns Perforce in this ecosystem. Its being enabled is what
-# authorises bootstrap to run p4 -- see _p4_kit_enabled.
-_P4_KIT_REF = "p4-kit@plugins-kit"
+# Files that mark a Perforce workspace. P4CONFIG/P4IGNORE name them, and both
+# sit at the workspace root, so finding one at or above a path means the tree
+# is Perforce-managed -- checked before any p4 process is spawned.
+_P4_MARKERS = (".p4config.txt", ".p4config", ".p4ignore.txt", ".p4ignore")
 
 # Marker used to find (and reuse) the pending changelist bootstrap parks its
 # settings edits in, so repeated passes don't accumulate one CL each.
@@ -87,49 +85,34 @@ def _is_read_only(path: str) -> bool:
         return False
 
 
-def _p4_kit_enabled(project_dir: Optional[str]) -> bool:
-    """True if the p4-kit plugin is enabled here.
+def _in_p4_workspace(path: str) -> bool:
+    """True if a Perforce workspace marker sits at or above `path`.
 
-    Gate for touching p4 AT ALL. Merely having p4 installed does not mean this
-    workflow wants bootstrap opening changelists -- plenty of machines have the
-    binary for unrelated reasons. p4-kit is the plugin that owns Perforce in
-    this ecosystem, so its being enabled is the signal that Perforce is part of
-    how this project is worked, and it is a local settings read rather than a
-    subprocess.
-
-    Reads the same enabledPlugins cascade Claude Code applies, later files
-    overriding earlier, so a plugin disabled at project scope stops counting
-    even while enabled at user scope.
+    Gate for touching p4 AT ALL. Without it, every read-only file on every
+    machine would spawn `p4 fstat` -- pointless in a git checkout, slow where
+    p4 is installed but unconfigured, and actively misleading where an ambient
+    P4CLIENT points somewhere unrelated to this file. A marker file is a local,
+    zero-cost answer to "is this tree even Perforce?".
     """
-    home = os.environ.get("HOME") or os.path.expanduser("~")
-    paths = [
-        os.path.join(home, ".claude", "settings.json"),
-        os.path.join(home, ".claude", "settings.local.json"),
-    ]
-    if project_dir:
-        paths.append(os.path.join(project_dir, ".claude", "settings.json"))
-        paths.append(os.path.join(project_dir, ".claude", "settings.local.json"))
-
-    enabled = False
-    for path in paths:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                entries = json.load(f).get("enabledPlugins", {})
-        except (OSError, ValueError, UnicodeDecodeError):
-            continue
-        if isinstance(entries, dict) and _P4_KIT_REF in entries:
-            enabled = entries[_P4_KIT_REF] is True
-    return enabled
+    directory = os.path.dirname(os.path.abspath(path))
+    while True:
+        for marker in _P4_MARKERS:
+            if os.path.exists(os.path.join(directory, marker)):
+                return True
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            return False
+        directory = parent
 
 
-def _p4_tracked(path: str, project_dir: Optional[str] = None) -> bool:
+def _p4_tracked(path: str) -> bool:
     """True if `p4 fstat` recognises this path as a depot file in the client view.
 
-    p4-kit being enabled says Perforce is in play for this project; this says
-    the FILE is actually under depot control (a p4ignored or not-yet-added file
-    is not, and wants a plain chmod instead).
+    The workspace marker says the TREE is Perforce; this says the FILE is
+    actually under depot control (a p4ignored or newly added file is not, and
+    wants a plain chmod instead).
     """
-    if not _p4_kit_enabled(project_dir) or shutil.which("p4") is None:
+    if not _in_p4_workspace(path) or shutil.which("p4") is None:
         return False
     proc = _p4(["fstat", path], os.path.dirname(path))
     return proc is not None and proc.returncode == 0 and "depotFile" in (proc.stdout or "")
@@ -227,12 +210,8 @@ def _p4_edit(path: str) -> bool:
     return proc.returncode == 0 and not _is_read_only(path)
 
 
-def ensure_writable(path: Optional[str], project_dir: Optional[str] = None) -> WritableResult:
-    """Best-effort: leave `path` writable so a foreign writer can replace it.
-
-    `project_dir` scopes the p4-kit check; without it only user-scope settings
-    are consulted, which is correct for a user-level target.
-    """
+def ensure_writable(path: Optional[str]) -> WritableResult:
+    """Best-effort: leave `path` writable so a foreign writer can replace it."""
     if not path:
         return WritableResult(True, "absent", "")
     if not os.path.isfile(path):
@@ -241,7 +220,7 @@ def ensure_writable(path: Optional[str], project_dir: Optional[str] = None) -> W
     if not _is_read_only(path):
         return WritableResult(True, "already-writable", "")
 
-    if _p4_tracked(path, project_dir) and _p4_edit(path):
+    if _p4_tracked(path) and _p4_edit(path):
         return WritableResult(True, "p4-edit", "opened for edit in Perforce")
 
     try:

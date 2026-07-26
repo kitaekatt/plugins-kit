@@ -6,7 +6,6 @@ settings.json, and the line-ending preservation that keeps the CLI's
 whole-file reserialisation from churning a shared source-controlled file.
 """
 
-import json
 import os
 import stat
 
@@ -52,58 +51,39 @@ class TestSettingsPathForScope:
         assert settings_path_for_scope("bogus", str(tmp_path)) is None
 
 
-def _write_settings(directory, enabled):
-    claude = directory / ".claude"
-    claude.mkdir(parents=True, exist_ok=True)
-    (claude / "settings.json").write_text(
-        json.dumps({"enabledPlugins": enabled}), encoding="utf-8"
+class TestP4WorkspaceDetection:
+    """p4 must not be touched at all outside a Perforce workspace."""
+
+    def test_no_marker_is_not_a_workspace(self, tmp_path):
+        target = tmp_path / "settings.json"
+        target.write_text("{}")
+        assert not settings_writable._in_p4_workspace(str(target))
+
+    @pytest.mark.parametrize(
+        "marker", [".p4config.txt", ".p4config", ".p4ignore.txt", ".p4ignore"]
     )
+    def test_marker_beside_file_is_a_workspace(self, tmp_path, marker):
+        (tmp_path / marker).write_text("")
+        target = tmp_path / "settings.json"
+        target.write_text("{}")
+        assert settings_writable._in_p4_workspace(str(target))
 
+    def test_marker_at_workspace_root_is_found_from_below(self, tmp_path):
+        (tmp_path / ".p4config.txt").write_text("")
+        nested = tmp_path / ".claude" / "deeper"
+        nested.mkdir(parents=True)
+        target = nested / "settings.json"
+        target.write_text("{}")
+        assert settings_writable._in_p4_workspace(str(target))
 
-class TestP4KitGate:
-    """p4 is touched only where p4-kit is enabled -- owning the p4 binary is
-    not consent to have bootstrap open changelists."""
-
-    def test_no_settings_anywhere_is_not_enabled(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path / "home"))
-        assert not settings_writable._p4_kit_enabled(str(tmp_path / "proj"))
-
-    def test_p4_installed_but_p4_kit_absent_is_not_enabled(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path / "home"))
-        project = tmp_path / "proj"
-        _write_settings(project, {"git-kit@plugins-kit": True})
-        assert not settings_writable._p4_kit_enabled(str(project))
-
-    def test_enabled_at_project_scope(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path / "home"))
-        project = tmp_path / "proj"
-        _write_settings(project, {"p4-kit@plugins-kit": True})
-        assert settings_writable._p4_kit_enabled(str(project))
-
-    def test_enabled_at_user_scope(self, tmp_path, monkeypatch):
-        home = tmp_path / "home"
-        monkeypatch.setenv("HOME", str(home))
-        _write_settings(home, {"p4-kit@plugins-kit": True})
-        assert settings_writable._p4_kit_enabled(None)
-
-    def test_project_scope_false_overrides_user_scope_true(self, tmp_path, monkeypatch):
-        """Later files win, so a project opt-out really opts out."""
-        home = tmp_path / "home"
-        monkeypatch.setenv("HOME", str(home))
-        _write_settings(home, {"p4-kit@plugins-kit": True})
-        project = tmp_path / "proj"
-        _write_settings(project, {"p4-kit@plugins-kit": False})
-        assert not settings_writable._p4_kit_enabled(str(project))
-
-    def test_p4_is_never_invoked_when_p4_kit_is_disabled(self, tmp_path, monkeypatch):
-        """The whole point of the gate: no p4 subprocess for non-p4-kit users."""
-        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    def test_p4_is_never_invoked_outside_a_workspace(self, tmp_path, monkeypatch):
+        """The whole point of the gate: no p4 subprocess in a git checkout."""
         target = tmp_path / "settings.json"
         target.write_text("{}")
         _make_read_only(str(target))
 
         def explode(*args, **kwargs):
-            raise AssertionError("p4 must not be invoked when p4-kit is disabled")
+            raise AssertionError("p4 must not be invoked outside a p4 workspace")
 
         monkeypatch.setattr(settings_writable, "_p4", explode)
 
@@ -112,9 +92,7 @@ class TestP4KitGate:
         assert result.ok and result.method == "chmod"
 
     def test_missing_p4_binary_falls_back_to_chmod(self, tmp_path, monkeypatch):
-        home = tmp_path / "home"
-        monkeypatch.setenv("HOME", str(home))
-        _write_settings(home, {"p4-kit@plugins-kit": True})
+        (tmp_path / ".p4config.txt").write_text("")
         target = tmp_path / "settings.json"
         target.write_text("{}")
         _make_read_only(str(target))
@@ -141,7 +119,7 @@ class TestEnsureWritable:
         assert result.ok and result.method == "already-writable"
 
     def test_read_only_untracked_file_falls_back_to_chmod(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(settings_writable, "_p4_tracked", lambda path, project_dir=None: False)
+        monkeypatch.setattr(settings_writable, "_p4_tracked", lambda path: False)
         target = tmp_path / "settings.json"
         target.write_text("{}")
         _make_read_only(str(target))
@@ -167,7 +145,7 @@ class TestEnsureWritable:
             os.chmod(path, stat.S_IWRITE)
             return True
 
-        monkeypatch.setattr(settings_writable, "_p4_tracked", lambda path, project_dir=None: True)
+        monkeypatch.setattr(settings_writable, "_p4_tracked", lambda path: True)
         monkeypatch.setattr(settings_writable, "_p4_edit", fake_edit)
 
         result = ensure_writable(str(target))
@@ -179,7 +157,7 @@ class TestEnsureWritable:
         target = tmp_path / "settings.json"
         target.write_text("{}")
         _make_read_only(str(target))
-        monkeypatch.setattr(settings_writable, "_p4_tracked", lambda path, project_dir=None: True)
+        monkeypatch.setattr(settings_writable, "_p4_tracked", lambda path: True)
         monkeypatch.setattr(settings_writable, "_p4_edit", lambda path: False)
 
         result = ensure_writable(str(target))
@@ -191,7 +169,7 @@ class TestEnsureWritable:
         target = tmp_path / "settings.json"
         target.write_text("{}")
         _make_read_only(str(target))
-        monkeypatch.setattr(settings_writable, "_p4_tracked", lambda path, project_dir=None: False)
+        monkeypatch.setattr(settings_writable, "_p4_tracked", lambda path: False)
 
         def boom(path, mode):
             raise OSError("denied")

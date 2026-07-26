@@ -3667,9 +3667,7 @@ def _phase_json_entries(ctx):
         if result.passed:
             ctx.ok(f"json {os.path.basename(target_path)}: ok")
         else:
-            result = merge_json_entries(
-                ref_path, target_path, merge_fields, preserve_fields, ctx.project_dir
-            )
+            result = merge_json_entries(ref_path, target_path, merge_fields, preserve_fields)
             if result.passed:
                 ctx.action(f"json {os.path.basename(target_path)}: merged")
             else:
