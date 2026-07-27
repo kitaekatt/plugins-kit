@@ -90,6 +90,10 @@ The reset script's `--help` is the canonical doc.
 - Provisioning is done once `engine_ran_version` == installed version; a restart is then needed only to load new plugin CODE. `engine_ran_version` staying behind after a restart + a prompt is an **anomaly to surface**, not success.
 - Mid-session installs (`/plugin` + `/reload-plugins`) also converge without a restart -- a fresh plugin's venv exists a prompt or two later.
 
+**Bootstrap cannot patch itself -- ship the escape hatch in `bootstrap-stuck-fix`.** When a bug is in the *delivery path* (update, harvest, registry record selection, install scope), fixing it in bootstrap is a no-op for everyone it affects: the fix reaches a machine only by the mechanism that is broken there. Publishing it looks like progress, converges nobody, and strands every LATER bootstrap fix behind the same wedge. Such bugs are also self-masking -- the machine reports one stable error forever, so it reads as a known annoyance rather than a stuck update.
+
+Test before writing the fix: *would this change have to be installed by the thing it repairs?* If yes, the repair belongs in `plugins/bootstrap-stuck-fix/` -- a separate, dependency-free plugin with no prior version to be wedged on, so it runs current code on its first session. Fix the root cause in bootstrap too, for machines that are not yet stuck; just do not mistake that for remediation of the ones that are. See that plugin's README for the two defects covered and the narrowness discipline every remediation there follows (act on one exact shape, never force a version, never break a session).
+
 For deeper material -- manifest schema, condition categories, fix-all flow, engine internals -- invoke `/bootstrap`.
 
 ## Development Workflow

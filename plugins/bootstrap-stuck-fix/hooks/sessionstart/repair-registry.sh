@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # SessionStart hook for bootstrap-stuck-fix.
 #
-# Repairs the malformed duplicate registry record that permanently wedges an
-# affected machine on an old bootstrap version (see scripts/repair_registry.py
-# for the full defect writeup).
+# Repairs the two independent defects that permanently wedge an affected machine
+# on an old bootstrap version (full writeups in each script):
+#
+#   repair_registry.py     - malformed duplicate registry record
+#   repair_update_scope.py - update requested at the manifest's scope rather
+#                            than the scope the plugin is installed at
+#
+# Both run: they are separate defects and a machine can have either or both.
+# Registry repair goes first -- it can leave a single well-formed record behind,
+# which is exactly the shape the scope repair then acts on.
 #
 # DEPENDENCY-FREE BY CONSTRUCTION. This plugin exists precisely because the
 # bootstrap engine cannot fix this on an affected machine -- so it must not
@@ -16,8 +23,8 @@
 
 set -u
 
-SCRIPT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/scripts/repair_registry.py"
-[[ -f "$SCRIPT" ]] || exit 0
+SCRIPTS="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}/scripts"
+[[ -d "$SCRIPTS" ]] || exit 0
 
 # Find a usable Python. The Microsoft Store stub on Windows is on PATH as
 # `python`/`python3` but is not a real interpreter -- it prints a "not found"
@@ -38,5 +45,8 @@ do
 done
 [[ -n "$PY" ]] || exit 0
 
-"$PY" "$SCRIPT" 2>/dev/null || true
+for script in repair_registry.py repair_update_scope.py; do
+    [[ -f "$SCRIPTS/$script" ]] || continue
+    "$PY" "$SCRIPTS/$script" 2>/dev/null || true
+done
 exit 0

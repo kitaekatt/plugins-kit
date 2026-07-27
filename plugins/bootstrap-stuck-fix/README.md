@@ -3,9 +3,14 @@
 **Remediation plugin, kept published indefinitely as a safety net -- see
 "Distribution and withdrawal" below.**
 
-Repairs a malformed record in Claude Code's plugin registry
-(`~/.claude/plugins/installed_plugins.json`) that permanently and *silently*
-wedges a machine on an old bootstrap version.
+Repairs the defects that permanently wedge a machine on an old bootstrap
+version. Two are covered, independent of each other -- a machine can have
+either or both:
+
+| Defect | Script | Shape |
+|---|---|---|
+| Malformed duplicate registry record | `repair_registry.py` | two records under one ref, one a `user`-scope/`projectPath` chimera |
+| Update requested at the wrong scope | `repair_update_scope.py` | one well-formed record, but bootstrap asks the CLI for the *manifest's* scope |
 
 ## Install
 
@@ -18,7 +23,7 @@ wedges a machine on an old bootstrap version.
 -- see "Distribution and withdrawal" below -- but a manual install works for
 a single affected machine.)
 
-## The defect
+## Defect 1 -- malformed duplicate registry record
 
 An affected registry holds two records under `bootstrap@plugins-kit`:
 
@@ -62,7 +67,7 @@ cat ~/.claude/plugins/data/plugins-kit/bootstrap/engine_ran_version   # stuck
 tail ~/.claude/plugins/data/plugins-kit/bootstrap/bootstrap.log       # "updated X -> Y" every session
 ```
 
-## What it does
+### What it does
 
 One narrow rule, bootstrap only:
 
@@ -87,6 +92,62 @@ start and must never break one.
 **It takes effect on the NEXT session.** Claude Code reads the registry and
 loads plugins at startup, before SessionStart hooks fire. So affected users need
 two sessions to converge.
+
+## Defect 2 -- update requested at the wrong scope
+
+bootstrap takes the scope it wants from the project manifest
+(`{"ref": "plugins-kit:bootstrap", "scope": "user"}`) and runs
+`claude plugin update <ref> --scope user`. But the plugin is installed at
+whatever the registry records -- commonly a genuine project-scope install:
+
+```
+{"scope": "project", "projectPath": "C:\\dev\\<project>", "version": "0.57.0"}
+```
+
+The CLI resolves by scope, does not find it at `user`, and refuses:
+
+```
+Failed to update plugin "bootstrap@plugins-kit":
+Plugin "bootstrap" is not installed at scope user
+```
+
+Updating is orthogonal to scope: the plugin needs updating where it *lives*,
+not where the manifest wishes it lived.
+
+**Why the machine cannot recover on its own.** The failure blocks delivery of
+its own fix. A corrected bootstrap can be published, but installing it is the
+exact operation that fails -- so every *later* bootstrap fix is stranded behind
+this one too. The machine reports the same error every session, forever.
+
+`ensure_registry_scope` cannot help: it deliberately refuses to touch any record
+carrying `projectPath`, because stamping a scope onto one manufactures the
+defect-1 chimera. That refusal is correct -- this registry record is
+well-formed, and nothing in the registry needs repairing. The wedge is purely
+in which scope the request is made at.
+
+### What it does
+
+> exactly one bootstrap record, installed version < marketplace version
+> -> `claude plugin update bootstrap@plugins-kit --scope <recorded scope>`
+
+It deliberately does **not**:
+
+- edit the registry -- the record is well-formed; this reads it, never writes it
+- force or choose a version; the CLI picks, exactly as on a healthy machine
+- act when >1 record exists (that is defect 1, and acting on an ambiguous
+  registry could deregister bootstrap)
+- act when already current, so the common path is two local file reads and
+  spawns no subprocess
+
+On success it writes `~/.claude/bootstrap-stuck-fix-update.json`. A *failed*
+update prints one line rather than staying silent -- a silent persistent failure
+is precisely how this wedge went unnoticed. Exits 0 either way.
+
+Dry run:
+
+```bash
+python plugins/bootstrap-stuck-fix/scripts/repair_update_scope.py --dry-run
+```
 
 ## Verifying reach
 

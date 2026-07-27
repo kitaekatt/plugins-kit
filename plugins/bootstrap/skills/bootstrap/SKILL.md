@@ -74,6 +74,13 @@ reference_skill:
           run header and a "harvest" line). Do NOT report success; a silent harvest no-op is how a real bug presented.
         - A bootstrap-mechanism fix cannot adopt itself via that mechanism (the first working-harvest version
           can't harvest itself); that one transition needs bootstrap-reset-cooldown + an extra restart.
+        - Where the broken mechanism is DELIVERY itself (update, harvest, registry record selection, install
+          scope), no bootstrap release can reach an affected machine -- the fix arrives only via the path that
+          is broken there, so publishing it converges nobody and strands every later bootstrap fix behind the
+          same wedge. Ask "would this fix have to be installed by the thing it repairs?"; if yes it belongs in
+          the separate dependency-free bootstrap-stuck-fix plugin (no prior version to be wedged on, runs
+          current code on its first session). Still fix the root cause in bootstrap for machines not yet stuck
+          -- just do not mistake that for remediating the ones that are.
     - id: remediation_phases
       summary: The engine remediates silently first; only escalates to fix-all when user action is required.
       keywords: [auto-remediation, fix-all, two-phase, silent install, remediation flow, autodetect, default values]
