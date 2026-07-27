@@ -90,6 +90,38 @@ The reset script's `--help` is the canonical doc.
 - Provisioning is done once `engine_ran_version` == installed version; a restart is then needed only to load new plugin CODE. `engine_ran_version` staying behind after a restart + a prompt is an **anomaly to surface**, not success.
 - Mid-session installs (`/plugin` + `/reload-plugins`) also converge without a restart -- a fresh plugin's venv exists a prompt or two later.
 
+### Anti-pattern: repairing a wedged machine by hand
+
+**Our job is not to fix bootstrap issues. It is to make bootstrap fix them.** A machine that is wedged is a *specification* for a repair that ships; it is not a chore to clear. Whenever you find yourself typing the command that unwedges the machine in front of you, you are writing the wrong artifact.
+
+A hand-repair fails twice over:
+
+1. **It converges nobody.** The machine in front of you is one of N. Every other user with the same wedge is still stuck, and nothing you did will reach them. Only a published change to `bootstrap` (or `bootstrap-stuck-fix`, per the escape-hatch test below) reaches anyone.
+2. **It destroys the evidence.** A wedge is usually only observable while it is happening. Repairing it overwrites the registry, the cache tree, and the marketplace clone -- the exact state needed to diagnose it. A hand-repair therefore converts a diagnosable defect into a permanently unexplained one, guaranteeing the recurrence it appeared to resolve.
+
+The second cost is the one that gets underestimated, because the machine looks *better* afterwards. It isn't. A healthy machine with an unknown root cause is strictly worse than a wedged machine you can still read.
+
+**Worked example (2026-07-27).** Nine plugins reported `Plugin "<name>" not cached at <path>` in the Claude Code plugin list; a restart did not clear it. The on-disk state was inspected and found coherent -- every `installPath` in `installed_plugins.json` existed, cached `plugin.json` versions matched the registry, and the registry matched the marketplace clone -- so the cause was in Claude Code's cache resolution and was not reproducible from disk. At that point the correct move was to snapshot the state and ship a repair. Instead the engine was invoked by hand:
+
+```bash
+# ANTI-PATTERN -- do not do this to a wedged machine before capturing its state
+python .../bootstrap/0.63.0/engine/bootstrap_engine.py \
+  --plugin-root .../bootstrap/0.63.0 --data-dir .../data/plugins-kit/bootstrap \
+  --project-dir <project> --console
+```
+
+The pass fetched the marketplace, installed 0.64.1 into the cache, and rewrote the registry. The machine came back healthy and the root cause became permanently unrecoverable. No code shipped, so every other machine that hits the same wedge is still wedged, and the next occurrence here will be equally undiagnosable. The wedge was a specification; it was spent as a chore.
+
+**The discipline.** When a machine is wedged:
+
+1. **Snapshot first, always.** Capture `installed_plugins.json` verbatim, the `~/.claude/plugins/cache/` tree listing, each marketplace clone's HEAD sha and `git status`, `enabledPlugins` from user and project settings, and the Claude Code version. This costs seconds and is the only artifact that survives the repair.
+2. **Then write the repair into the plugin**, choosing `bootstrap` vs `bootstrap-stuck-fix` by the escape-hatch test below.
+3. **Let the mechanism heal the machine.** The wedged machine is the integration test for the repair. Unwedging it by hand forfeits that test.
+
+A hand-run engine invocation is a diagnostic of last resort, valid only *after* step 1 -- and even then, prefer a read-only probe over a full pass.
+
+**`--console` is not read-only.** It suppresses log-file writes and JSON output; it does **not** suppress provisioning. A `--console` pass still fetches marketplaces, installs plugin versions into the cache, and rewrites `installed_plugins.json`. Do not reach for it as a safe way to look at a wedged machine -- it is a live pass with quieter output. (This misreading is what turned the 2026-07-27 investigation above into a repair.)
+
 **Bootstrap cannot patch itself -- ship the escape hatch in `bootstrap-stuck-fix`.** When a bug is in the *delivery path* (update, harvest, registry record selection, install scope), fixing it in bootstrap is a no-op for everyone it affects: the fix reaches a machine only by the mechanism that is broken there. Publishing it looks like progress, converges nobody, and strands every LATER bootstrap fix behind the same wedge. Such bugs are also self-masking -- the machine reports one stable error forever, so it reads as a known annoyance rather than a stuck update.
 
 Test before writing the fix: *would this change have to be installed by the thing it repairs?* If yes, the repair belongs in `plugins/bootstrap-stuck-fix/` -- a separate, dependency-free plugin with no prior version to be wedged on, so it runs current code on its first session. Fix the root cause in bootstrap too, for machines that are not yet stuck; just do not mistake that for remediation of the ones that are. See that plugin's README for the two defects covered and the narrowness discipline every remediation there follows (act on one exact shape, never force a version, never break a session).
@@ -290,6 +322,10 @@ The one plugins-kit-specific wrinkle to keep in mind: bootstrap runs in a **back
 bash scripts/plugin-versions.sh
 
 # Run bootstrap engine in console mode (plain text, no JSON, no log writes)
+# WARNING: --console is NOT read-only. It still fetches marketplaces, installs
+# versions into the cache, and rewrites installed_plugins.json. Never point it at
+# a wedged machine before snapshotting its state -- see the hand-repair
+# anti-pattern in the Bootstrap section above.
 python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/bootstrap --console
 
 # Verbose mode (show ok/cached entries too)
@@ -480,7 +516,32 @@ claude_md:
         re-investigate a code-review domain; the answer is "surface, don't merge."
       origin: Surfaced 2026-05-31 during the cohesion refactor -- after W2-proper, an Explore feasibility sweep found the shared lib already exists; user ruled cross-plugin relocation/new-plugin out of bounds for cohesion work.
       added: "2026-05-31"
+    - id: never_hand_repair_a_wedge
+      keywords: [hand repair, manual fix, wedged machine, not cached, snapshot first, evidence destroyed, converges nobody, console not read-only, anti-pattern, ship the repair, diagnostic of last resort]
+      summary: Never unwedge a machine by hand. A wedge is a specification for a repair that ships -- hand-fixing it converges nobody and destroys the only evidence of the defect. Snapshot the state first, then write the repair into bootstrap or bootstrap-stuck-fix.
+      detail: |
+        A hand-repair fails twice: it reaches only the machine in front of you, and it
+        overwrites the registry/cache/marketplace state that is the sole record of the
+        defect -- turning a diagnosable bug into a permanently unexplained one. The second
+        cost is systematically underestimated because the machine looks healthier afterwards.
+        Procedure when a machine is wedged: (1) snapshot installed_plugins.json verbatim, the
+        cache tree listing, each marketplace clone's HEAD sha + git status, enabledPlugins
+        from user and project settings, and the Claude Code version; (2) write the repair
+        into the plugin, choosing bootstrap vs bootstrap-stuck-fix by the escape-hatch test;
+        (3) let the mechanism heal the machine -- the wedged machine is the integration test
+        for the repair, and unwedging it by hand forfeits that test.
+        Load-bearing correction: `--console` is NOT read-only. It suppresses log writes and
+        JSON output only; the pass still fetches marketplaces, installs versions into the
+        cache, and rewrites installed_plugins.json. Misreading it as a safe probe is exactly
+        what converted the 2026-07-27 investigation into a repair.
+        Full narrative and the worked example: "Anti-pattern: repairing a wedged machine by
+        hand" in the Bootstrap section above.
+      origin: "User directive 2026-07-27 after nine plugins reported 'not cached' and the engine was run by hand to clear it -- the machine recovered, the root cause became unrecoverable, and no fix shipped to any other machine."
+      added: "2026-07-27"
   conventions:
+    - rule: When a machine is wedged, snapshot its state before any repair, and ship the repair in bootstrap or bootstrap-stuck-fix rather than fixing the machine by hand.
+      keywords: [wedged machine, snapshot first, hand repair, manual fix, anti-pattern, ship the repair]
+      why: A hand-repair reaches one machine and destroys the evidence every other machine's fix depends on. See the never_hand_repair_a_wedge insight and the anti-pattern section in Bootstrap.
     - rule: When adding a new plugin Python dependency, update <plugin>/pyproject.toml AND <plugin>/bootstrap.json venv.check_imports together.
       keywords: [pyproject.toml, bootstrap.json, dependency, venv, check_imports]
       why: pyproject.toml drives the actual install (via uv); check_imports tells the bootstrap engine what to verify post-install. Skipping check_imports leads to silent install failures.
