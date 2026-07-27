@@ -12,7 +12,7 @@ import sys
 import pytest
 
 from bootstrap_lib import shared_lib
-from bootstrap_lib.engine import _process_manifest
+from bootstrap_lib.engine import _process_manifest, _SharedLibLinkLog
 
 
 def _make_pkg(src_dir, name, modules=None, value=1):
@@ -229,15 +229,21 @@ class TestEngineWiring:
         monkeypatch.setattr(shared_lib, "find_standalone_python", lambda: None)
 
         manifest = {"shared_libs": [{"name": "mylib", "src": "lib"}]}
-        action_entries, ok_entries = [], []
+        action_entries, ok_entries, quiet_entries = [], [], []
+        link_log = _SharedLibLinkLog()
         failures = _process_manifest(
             manifest, "windows", str(data_dir), str(plugin_root),
             action_entries, ok_entries, plugin_name="myplugin",
+            quiet_entries=quiet_entries, shared_lib_links=link_log,
         )
 
         assert failures == []
         assert (shared_root / "mylib" / "mylib" / "__init__.py").exists()
-        assert any("shared-lib mylib" in e for e in action_entries + ok_entries)
+        # The publish is LOG-ONLY (quiet): the display line is the pass-level
+        # aggregate built from link_log, not a per-plugin entry.
+        assert any("shared-lib mylib" in e for e in quiet_entries)
+        assert not any("shared-lib mylib" in e for e in action_entries)
+        assert link_log.summary() == "synced mylib"
 
     def test_consumer_link_skips_without_venv(self, tmp_path):
         data_dir, plugin_root, shared_root = self._dirs(tmp_path)
@@ -302,12 +308,17 @@ class TestConvergenceSweep:
             pytest.skip(f"could not create venv: {e}")
 
         plugins = [PluginInfo(name="consumer", install_path=str(install), version="1.0", marketplace="mkt")]
-        actions, oks, failures = _shared_lib_convergence_sweep(plugins, str(bootstrap_data))
+        link_log = _SharedLibLinkLog()
+        actions, quiets, oks, failures = _shared_lib_convergence_sweep(
+            plugins, str(bootstrap_data), link_log)
 
         assert failures == []
-        assert any("shared-lib mylib" in a and "linked" in a.lower() for a in actions), (
-            f"sweep should have linked the consumer; actions={actions} oks={oks}"
+        # The link itself is log-only; the pass reports it via the aggregate.
+        assert any("shared-lib mylib" in q and "linked" in q.lower() for q in quiets), (
+            f"sweep should have linked the consumer; quiets={quiets} oks={oks}"
         )
+        assert actions == []
+        assert link_log.summary() == "linked mylib (consumer)"
 
         # The link is real: the consumer venv can now import the shared package.
         from bootstrap_lib.venv_check import _find_python
@@ -344,9 +355,13 @@ class TestConvergenceSweep:
         plugins = [PluginInfo(name="consumer", install_path=str(install), version="1.0", marketplace="mkt")]
         _shared_lib_convergence_sweep(plugins, str(bootstrap_data))
         # Second sweep: already linked -> "cached" (verbose-only), no new actions.
-        actions, oks, failures = _shared_lib_convergence_sweep(plugins, str(bootstrap_data))
+        link_log = _SharedLibLinkLog()
+        actions, quiets, oks, failures = _shared_lib_convergence_sweep(
+            plugins, str(bootstrap_data), link_log)
         assert failures == []
         assert actions == [], f"second sweep should be a silent no-op, got {actions}"
+        assert quiets == []
+        assert link_log.summary() == ""
         assert any("cached" in o.lower() for o in oks)
 
     def test_no_imports_is_noop(self, tmp_path):
@@ -361,5 +376,84 @@ class TestConvergenceSweep:
         (install / "bootstrap.json").write_text(json.dumps({"tools": []}), encoding="utf-8")
 
         plugins = [PluginInfo(name="plain", install_path=str(install), version="1.0", marketplace="mkt")]
-        actions, oks, failures = _shared_lib_convergence_sweep(plugins, str(data_root / "bootstrap"))
-        assert (actions, oks, failures) == ([], [], [])
+        actions, quiets, oks, failures = _shared_lib_convergence_sweep(plugins, str(data_root / "bootstrap"))
+        assert (actions, quiets, oks, failures) == ([], [], [], [])
+
+
+# --- aggregated display line ---------------------------------------------
+
+class TestSharedLibLinkLog:
+    """One display line per PASS, grouped by lib and naming the consuming
+    plugins -- replacing the former one-line-per-plugin .pth spam."""
+
+    def test_groups_by_lib_and_names_plugins(self):
+        log = _SharedLibLinkLog()
+        for plugin in ("bootstrap", "git-kit", "p4-kit"):
+            log.record("linked", "bootstrap_lib", plugin)
+        log.record("linked", "p4kit_vcs", "p4-kit")
+        assert log.summary() == (
+            "linked bootstrap_lib (bootstrap, git-kit, p4-kit), p4kit_vcs (p4-kit)"
+        )
+
+    def test_dedupes_pairs_from_both_emission_sites(self):
+        # The manifest phase and the Step 4c sweep can both report the same
+        # lib+plugin pair; it must appear once.
+        log = _SharedLibLinkLog()
+        log.record("linked", "skills_kit_lib", "awesome-kit")
+        log.record("linked", "skills_kit_lib", "awesome-kit")
+        assert log.summary() == "linked skills_kit_lib (awesome-kit)"
+
+    def test_publish_reported_separately_and_once(self):
+        log = _SharedLibLinkLog()
+        log.record("published", "mylib", "owner")
+        log.record("published", "mylib", "owner")
+        log.record("linked", "mylib", "consumer")
+        assert log.summary() == "synced mylib; linked mylib (consumer)"
+
+    def test_empty_pass_is_silent(self):
+        assert _SharedLibLinkLog().summary() == ""
+
+    def test_no_paths_in_summary(self):
+        log = _SharedLibLinkLog()
+        log.record("linked", "mylib", "consumer")
+        assert ".pth" not in log.summary()
+
+
+class TestPluginDisplayVsLog:
+    """A shared-lib success is LOGGED per plugin (path included) but never
+    DISPLAYED per plugin -- the pass shows one aggregated line instead."""
+
+    def test_link_is_logged_not_displayed(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        import bootstrap_lib.engine as engine
+
+        monkeypatch.setattr(shared_lib, "find_standalone_python", lambda: None)
+        install = tmp_path / "install"
+        install.mkdir()
+        _make_pkg(str(install / "lib"), "mylib")
+        (install / "bootstrap.json").write_text(
+            json.dumps({"shared_libs": [{"name": "mylib", "src": "lib"}]}), encoding="utf-8"
+        )
+        # _plugin_data_dir walks two dirs up from data_dir; keep it under tmp_path.
+        data_dir = str(tmp_path / "plugins-kit" / "bootstrap")
+        pi = SimpleNamespace(install_path=str(install), name="owner",
+                             version="1.0.0", marketplace="plugins-kit")
+
+        link_log = _SharedLibLinkLog()
+        all_failures, display, deferred = [], [], []
+        engine._bootstrap_single_plugin(
+            pi, "windows", data_dir, all_failures,
+            False, display, deferred, SimpleNamespace(project_dir=None),
+            engine_version="1.0.0", shared_lib_links=link_log,
+        )
+
+        assert all_failures == []
+        # Display section for the plugin carries no shared-lib entry...
+        display_entries = [e for _h, actions, _oks in display for e in actions]
+        assert not any("shared-lib" in e for e in display_entries), display_entries
+        # ...but the log block does, with the destination path.
+        log_entries = [e for _d, _l, entries in deferred for e in entries]
+        assert any("shared-lib mylib" in e and "_shared_libs" in e for e in log_entries), log_entries
+        # And the aggregate knows about it.
+        assert link_log.summary() == "synced mylib"

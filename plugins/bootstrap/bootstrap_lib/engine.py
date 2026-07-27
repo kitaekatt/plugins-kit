@@ -409,8 +409,14 @@ def _main():
     # Bootstrap's own entries (self-bootstrap + user) — written to bootstrap's log
     bootstrap_action_entries = []
     bootstrap_ok_entries = []
+    # Log-only entries (always logged, never displayed) — see _ManifestContext.quiet
+    bootstrap_quiet_entries = []
     # Display sections: list of (header, action_entries, ok_entries)
     display_sections = []
+    # Pass-level shared-lib publish/link collector: both emission sites (each
+    # plugin's manifest phase and the Step 4c sweep) record successes here and
+    # Step 4c renders ONE aggregated display line for the whole pass.
+    shared_lib_links = _SharedLibLinkLog()
 
     if path_repair_result.changed:
         details = []
@@ -551,15 +557,21 @@ def _main():
     if layered_manifest:
         action_entries = []
         ok_entries = []
+        quiet_entries = []
         failures = _process_manifest(
             layered_manifest, current_os, data_dir, plugin_root,
             action_entries, ok_entries, plugin_name="config",
             project_dir=args.project_dir,
+            quiet_entries=quiet_entries, shared_lib_links=shared_lib_links,
         )
         prefixed_action = [f"config: {e}" for e in action_entries]
         prefixed_ok = [f"config: {e}" for e in ok_entries]
         bootstrap_action_entries.extend(prefixed_action)
         bootstrap_ok_entries.extend(prefixed_ok)
+        # Log-only (displayed in aggregate by Step 4c). bootstrap_action_entries
+        # feeds both the log and bootstrap's display section, so quiet entries
+        # ride in the log-only list instead -- see _ManifestContext.quiet.
+        bootstrap_quiet_entries.extend(f"config: {e}" for e in quiet_entries)
         if failures:
             all_failures.extend(failures)
 
@@ -639,7 +651,7 @@ def _main():
         _bootstrap_single_plugin(
             plugin_info, current_os, data_dir, all_failures,
             log_success, display_sections, deferred_plugin_logs, args,
-            engine_version=version,
+            engine_version=version, shared_lib_links=shared_lib_links,
         )
 
     # Step 4b: Re-scan for plugins installed during Steps 3c/4
@@ -662,7 +674,7 @@ def _main():
         _bootstrap_single_plugin(
             plugin_info, current_os, data_dir, all_failures,
             log_success, display_sections, deferred_plugin_logs, args,
-            engine_version=version,
+            engine_version=version, shared_lib_links=shared_lib_links,
         )
 
     # Step 4b2: Self-register bootstrap-dependent plugins for auto-update.
@@ -708,17 +720,29 @@ def _main():
     # its owner no longer waits for the next session. Silent in steady state
     # (already-linked consumers report "cached" -> verbose-only); only a genuinely
     # converged or failed link surfaces. See _shared_lib_convergence_sweep.
-    sweep_actions, sweep_oks, sweep_failures = _shared_lib_convergence_sweep(
-        enabled_plugins + new_plugins, data_dir,
+    sweep_actions, sweep_quiets, sweep_oks, sweep_failures = _shared_lib_convergence_sweep(
+        enabled_plugins + new_plugins, data_dir, shared_lib_links,
     )
     if sweep_failures:
         all_failures.extend(sweep_failures)
-    if sweep_actions or sweep_oks:
+    # ONE aggregated display line for every shared-lib success in the pass, from
+    # BOTH emission sites (per-plugin manifest phase + this sweep), deduped and
+    # grouped by lib -- the per-plugin lines are log-only (see _SharedLibLinkLog).
+    # Failures are untouched: they stay in sweep_actions, per-plugin and loud.
+    link_summary = shared_lib_links.summary()
+    if link_summary:
+        sweep_actions = sweep_actions + [link_summary]
+    if sweep_actions or sweep_quiets or sweep_oks:
         sweep_label = f"{bootstrap_label} shared-libs"
         display_sections.append((sweep_label, sweep_actions, sweep_oks))
-        sweep_log = sweep_actions + (sweep_oks if log_success else [])
+        sweep_log = sweep_actions + sweep_quiets + (sweep_oks if log_success else [])
         if sweep_log and not args.console:
-            write_log_block(data_dir, sweep_label, sweep_log, start_time=start_time)
+            # Deferred to Step 6 (like plugin logs and the Step 4d notice):
+            # writing now would leak the block back through Step 5's
+            # shell_content read, so the block would ALSO be emitted verbatim
+            # into the display -- duplicating the aggregate line and dragging
+            # the log-only quiet entries (with their .pth paths) onto it.
+            deferred_plugin_logs.append((data_dir, sweep_label, sweep_log))
 
     # Step 4d: Reload/restart advisory. Any plugin that ENTERED the registry during
     # this pass -- a layered `plugins:` install (Step 3c), a per-plugin install, or
@@ -764,7 +788,7 @@ def _main():
     # Only include ok_entries when log_success is true — otherwise they leak back
     # through shell_content on the next run (the log reader can't distinguish
     # ok vs action entries, so they bypass the log_success display filter).
-    bootstrap_log_entries = bootstrap_action_entries + (bootstrap_ok_entries if log_success else [])
+    bootstrap_log_entries = bootstrap_action_entries + bootstrap_quiet_entries + (bootstrap_ok_entries if log_success else [])
     if bootstrap_log_entries and not args.console:
         write_log_block(data_dir, bootstrap_label, bootstrap_log_entries, start_time=start_time)
     for plugin_data_dir, plugin_label, plugin_log_entries in deferred_plugin_logs:
@@ -1113,12 +1137,16 @@ def _plugin_log_label(plugin_info, plugin_data_dir, data_dir, engine_version="")
 def _bootstrap_single_plugin(
     plugin_info, current_os, data_dir, all_failures,
     log_success, display_sections, deferred_plugin_logs, args,
-    engine_version="",
+    engine_version="", shared_lib_links=None,
 ):
     """Process a single plugin's bootstrap.json manifest.
 
     Extracted from the Step 4 loop body to allow reuse in Step 4b (Phase 2 re-scan).
     Mutates the shared containers in place (same pattern as the original inline code).
+
+    `shared_lib_links` is the pass-level _SharedLibLinkLog; shared-lib publish/link
+    successes are recorded there (one aggregated display line in Step 4c) instead
+    of producing a per-plugin display entry each.
 
     `engine_version` is the running bootstrap plugin's version; a manifest can
     declare ``requires_bootstrap`` to be skipped (with an "update bootstrap" note)
@@ -1241,11 +1269,13 @@ def _bootstrap_single_plugin(
 
     action_entries = []
     ok_entries = []
+    quiet_entries = []
     failures = _process_manifest(
         plugin_manifest, current_os, plugin_data_dir, plugin_info.install_path,
         action_entries, ok_entries, plugin_name=plugin_info.name,
         project_dir=getattr(args, 'project_dir', None),
         project_detected=project_detected,
+        quiet_entries=quiet_entries, shared_lib_links=shared_lib_links,
     )
     plugin_action_entries.extend(action_entries)
     plugin_ok_entries.extend(ok_entries)
@@ -1255,7 +1285,9 @@ def _bootstrap_single_plugin(
 
     # Collect plugin log info (deferred — written after reading shell entries)
     plugin_label = _plugin_log_label(plugin_info, plugin_data_dir, data_dir, engine_version)
-    plugin_log_entries = plugin_action_entries + (plugin_ok_entries if log_success else [])
+    # quiet_entries are logged unconditionally (they ARE remediations) but stay
+    # out of the display section below -- Step 4c speaks for them in aggregate.
+    plugin_log_entries = plugin_action_entries + quiet_entries + (plugin_ok_entries if log_success else [])
     deferred_plugin_logs.append((plugin_data_dir, plugin_label, plugin_log_entries))
 
     # Add plugin section to display
@@ -1263,7 +1295,52 @@ def _bootstrap_single_plugin(
     display_sections.append((plugin_display_header, list(plugin_action_entries), list(plugin_ok_entries)))
 
 
-def _shared_lib_convergence_sweep(plugins, data_dir):
+class _SharedLibLinkLog:
+    """Pass-level collector for shared-lib publish/link SUCCESSES.
+
+    Shared-lib links fire for every plugin that imports a shared lib, from two
+    emission sites (each plugin's manifest phase and the Step 4c convergence
+    sweep). Reported per-plugin, that is one long display line per plugin, each
+    repeating the lib name and a .pth path -- verbose and unimportant. The
+    events are collected here instead and rendered as ONE line for the pass:
+
+        shared-libs: linked bootstrap_lib (bootstrap, git-kit), p4kit_vcs (p4-kit)
+
+    Paths stay in the per-plugin log entries (debugging substrate); they never
+    reach the display. FAILURES never come here -- they stay per-plugin, loud,
+    and keep populating the fix-all failure list.
+    """
+
+    def __init__(self):
+        self._linked = {}   # lib name -> [plugin short name, ...], first-seen order
+        self._synced = []   # lib names published by their owner this pass
+        self._seen = set()  # (lib, plugin) pairs, so both emission sites dedupe
+
+    def record(self, status, lib, plugin):
+        """Record one successful ``published`` (owner sync) or ``linked`` event."""
+        if status == "published":
+            if lib not in self._synced:
+                self._synced.append(lib)
+            return
+        key = (lib, plugin)
+        if key in self._seen:
+            return
+        self._seen.add(key)
+        self._linked.setdefault(lib, []).append(plugin)
+
+    def summary(self):
+        """The one aggregated display entry, or "" when nothing happened."""
+        parts = []
+        if self._synced:
+            parts.append("synced " + ", ".join(self._synced))
+        if self._linked:
+            parts.append("linked " + ", ".join(
+                f"{lib} ({', '.join(plugins)})" for lib, plugins in self._linked.items()
+            ))
+        return "; ".join(parts)
+
+
+def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None):
     """Re-link every consumer's ``shared_lib_imports`` after all owners published.
 
     Consumer links (writing ``<lib>.pth`` into a plugin's own venv) happen inline
@@ -1279,12 +1356,17 @@ def _shared_lib_convergence_sweep(plugins, data_dir):
     so consumers that linked fine inline are cheap no-ops here (no duplicate
     action entries -- "cached"/"skipped" go to ok_entries, which are verbose-only).
 
-    Returns ``(actions, oks, failures)`` for the caller to log + display.
+    Successful links are recorded on ``link_log`` (a _SharedLibLinkLog, shared
+    with the per-plugin manifest phase so a lib+plugin pair reported by both
+    sites appears once) and their per-plugin entry goes to ``quiets`` -- logged
+    with its .pth path, but displayed only via the aggregated summary line.
+
+    Returns ``(actions, quiets, oks, failures)`` for the caller to log + display.
     """
     from .shared_lib import link_shared_lib
     from .venv_check import _find_python
 
-    actions, oks, failures = [], [], []
+    actions, quiets, oks, failures = [], [], [], []
     seen = set()
     for plugin_info in plugins:
         manifest_path = os.path.join(plugin_info.install_path, "bootstrap.json")
@@ -1313,7 +1395,9 @@ def _shared_lib_convergence_sweep(plugins, data_dir):
             result = link_shared_lib(lib_name, venv_python, shared_root)
             entry = f"{plugin_info.name}: shared-lib {result.name}: {result.message}"
             if result.status == "linked":
-                actions.append(entry)
+                quiets.append(entry)
+                if link_log is not None:
+                    link_log.record(result.status, result.name, plugin_info.name)
             elif result.status == "failed":
                 actions.append(f"{plugin_info.name}: shared-lib {result.name}: FAILED - {result.message}")
                 failures.append({
@@ -1324,7 +1408,7 @@ def _shared_lib_convergence_sweep(plugins, data_dir):
                 })
             else:  # cached / skipped -> verbose-only
                 oks.append(entry)
-    return actions, oks, failures
+    return actions, quiets, oks, failures
 
 
 def _plugin_ships_sessionstart_hook(install_path):
@@ -3075,6 +3159,11 @@ class _ManifestContext:
 
     - ``ok(msg)``     -> ok_entries (verbose-only)
     - ``action(msg)`` -> action_entries (always shown)
+    - ``quiet(msg)``  -> quiet_entries: ALWAYS logged (like an action, never
+      gated on log_success) but never displayed. For remediations whose
+      per-plugin line is noise because the pass reports them in aggregate --
+      currently only the shared-lib publish/link events, which Step 4c renders
+      as one line for the whole pass (see _SharedLibLinkLog).
     - ``fail(msg, **failure)`` -> action entry AND fix-all failure dict in a
       single call, so a registered failure can never be invisible to the user.
 
@@ -3086,13 +3175,15 @@ class _ManifestContext:
 
     def __init__(self, manifest, current_os, data_dir, plugin_root,
                  action_entries, ok_entries, plugin_name, project_dir,
-                 project_detected):
+                 project_detected, quiet_entries=None, shared_lib_links=None):
         self.manifest = manifest
         self.current_os = current_os
         self.data_dir = data_dir
         self.plugin_root = plugin_root
         self.action_entries = action_entries
         self.ok_entries = ok_entries
+        self.quiet_entries = [] if quiet_entries is None else quiet_entries
+        self.shared_lib_links = shared_lib_links
         self.plugin_name = plugin_name
         self.project_dir = project_dir
         self.project_detected = project_detected
@@ -3119,6 +3210,11 @@ class _ManifestContext:
 
     def action(self, message):
         self.action_entries.append(f"{self.prefix}{message}")
+
+    def quiet(self, message):
+        """Log-only remediation entry: written to the log unconditionally, never
+        displayed. Use ONLY when the pass surfaces the same event in aggregate."""
+        self.quiet_entries.append(f"{self.prefix}{message}")
 
     def fail(self, entry, **failure):
         """Append `entry` as an action line AND register `failure` for fix-all.
@@ -3896,7 +3992,9 @@ def _phase_shared_libs(ctx):
     """shared_libs / shared_lib_imports: owner publish + consumer link.
 
     Rule: cached/skipped -> ok_entries (verbose-only); published/linked ->
-    action_entries; failed -> action_entries + failures. Runs after the venv
+    quiet_entries (logged with the .pth path, but NOT displayed per-plugin --
+    Step 4c renders one aggregated line for the whole pass, see
+    _SharedLibLinkLog); failed -> action_entries + failures. Runs after the venv
     handler so a consumer's own .venv already exists as the .pth target.
     """
     from .shared_lib import sync_shared_lib, link_shared_lib, find_standalone_python
@@ -3908,7 +4006,9 @@ def _phase_shared_libs(ctx):
         if result.status in ("cached", "skipped"):
             ctx.ok(f"shared-lib {result.name}: {result.message}")
         elif result.status in ("published", "linked"):
-            ctx.action(f"shared-lib {result.name}: {result.message}")
+            ctx.quiet(f"shared-lib {result.name}: {result.message}")
+            if ctx.shared_lib_links is not None:
+                ctx.shared_lib_links.record(result.status, result.name, ctx.plugin_name)
         else:  # failed
             ctx.fail(
                 f"shared-lib {result.name}: FAILED - {result.message}",
@@ -3973,19 +4073,25 @@ _MANIFEST_PHASES = (
 )
 
 
-def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entries, ok_entries, plugin_name="bootstrap", project_dir=None, project_detected=True):
+def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entries, ok_entries, plugin_name="bootstrap", project_dir=None, project_detected=True, quiet_entries=None, shared_lib_links=None):
     """Process a single plugin's bootstrap manifest. Returns list of failures.
 
     Dispatches to one handler per manifest key via _MANIFEST_PHASES. Entries
-    are split into two lists:
+    are split into three lists:
     - action_entries: actions performed, failures, conditions not met (always displayed)
     - ok_entries: checks that passed (never displayed; written to log file when log_success is true)
+    - quiet_entries: remediations reported in aggregate elsewhere (always logged,
+      never displayed). Optional; when omitted the entries are dropped.
+
+    `shared_lib_links` is the pass-level _SharedLibLinkLog that collects
+    shared-lib publish/link successes for Step 4c's single aggregated line.
 
     When project_detected is False, project-scoped primitives (ini_settings) are skipped.
     """
     ctx = _ManifestContext(
         manifest, current_os, data_dir, plugin_root,
         action_entries, ok_entries, plugin_name, project_dir, project_detected,
+        quiet_entries=quiet_entries, shared_lib_links=shared_lib_links,
     )
     for keys, handler in _MANIFEST_PHASES:
         if any(manifest.get(k) for k in keys):

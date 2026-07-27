@@ -139,14 +139,14 @@ def sync_shared_lib(name: str, src: str, plugin_root: str, shared_root: str) -> 
 
     current = _hash_tree(src_pkg)
     if os.path.isdir(dest_pkg) and _read_text(hash_file) == current:
-        return SharedLibResult(name, "cached", f"shared lib synced (cached, {dest_pkg})")
+        return SharedLibResult(name, "cached", f"synced (cached, {dest_pkg})")
 
     os.makedirs(entry_dir, exist_ok=True)
     shutil.rmtree(dest_pkg, ignore_errors=True)
     shutil.copytree(src_pkg, dest_pkg)
     with open(hash_file, "w", encoding="utf-8") as f:
         f.write(current + "\n")
-    return SharedLibResult(name, "published", f"synced shared lib -> {dest_pkg}")
+    return SharedLibResult(name, "published", f"synced -> {dest_pkg}")
 
 
 def link_shared_lib(name: str, python: Optional[str], shared_root: str) -> SharedLibResult:
@@ -181,7 +181,7 @@ def link_shared_lib(name: str, python: Optional[str], shared_root: str) -> Share
     # .pth lines that begin with "import".
     desired = 'import sys; sys.path.insert(0, r"%s")' % entry_dir
     if _read_text(pth) == desired:
-        return SharedLibResult(name, "cached", f"shared lib {name} linked (cached, {pth})")
+        return SharedLibResult(name, "cached", f"linked (cached, {pth})")
 
     try:
         with open(pth, "w", encoding="utf-8") as f:
@@ -191,4 +191,4 @@ def link_shared_lib(name: str, python: Optional[str], shared_root: str) -> Share
 
     if not _verify_import(python, name):
         return SharedLibResult(name, "failed", f"wrote {pth} but `import {name}` still fails")
-    return SharedLibResult(name, "linked", f"linked shared lib {name} -> {pth}")
+    return SharedLibResult(name, "linked", f"linked -> {pth}")
