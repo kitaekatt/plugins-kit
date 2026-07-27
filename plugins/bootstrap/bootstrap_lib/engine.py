@@ -503,17 +503,32 @@ def _main():
     # Step 3b: Activate bootstrap venv site-packages so PyYAML is available
     _activate_bootstrap_venv(data_dir)
 
-    # Step 3b2: Repair malformed "chimera" registry records (a user-scope
-    # record carrying projectPath, duplicated alongside the healthy one).
+    # Step 3b2: Repair malformed registry records -- "chimera" (a user-scope
+    # record carrying projectPath) and "orphan project" (a project-scope record
+    # naming no project), both duplicated alongside well-formed records.
     # Once per pass and BEFORE any plugins phase (layered Step 3c and the
     # per-plugin Step 4 both run _phase_plugins), so version checks and
     # updates read a clean registry. Silent no-op on a healthy registry.
-    from .registry_repair import apply_repair, describe_repair
-    _repair_dropped = apply_repair(os.path.join(plugins_dir, "installed_plugins.json"))
+    from .registry_repair import (
+        apply_repair,
+        describe_repair,
+        describe_unrepairable,
+        find_unrepairable,
+        load_registry,
+    )
+    _registry_path = os.path.join(plugins_dir, "installed_plugins.json")
+    _repair_dropped = apply_repair(_registry_path)
     if _repair_dropped:
         bootstrap_action_entries.append(describe_repair(_repair_dropped))
     else:
         bootstrap_ok_entries.append("registry: no malformed records")
+
+    # Refs the healthy-survivor guard refused to touch. Read post-repair so the
+    # report reflects the registry as it now stands. Visible (action entry): a
+    # skipped ref is a machine still carrying a defect we chose not to fix.
+    _repair_skipped = find_unrepairable(load_registry(_registry_path))
+    if _repair_skipped:
+        bootstrap_action_entries.append(describe_unrepairable(_repair_skipped))
 
     # Snapshot installed plugin refs BEFORE any layered-manifest / per-plugin /
     # script install runs this pass. Claude Code loaded plugins at session start,

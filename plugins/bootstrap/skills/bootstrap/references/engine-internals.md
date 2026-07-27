@@ -27,7 +27,13 @@ The bootstrap engine has two distinct setup phases:
 
 Discovery results are cached in `plugins/data/plugins-kit/bootstrap/config.json` under `bootstrap_cache` to avoid repeated filesystem scans — entries are added on first discovery and removed if `bootstrap.json` disappears (e.g. after a plugin update). Users can permanently opt out a plugin by adding its ref to `no_bootstrap` in that config file.
 
-### Step 3b2: Registry chimera self-repair (`registry_repair.py`, 0.62.0)
+### Step 3b2: Registry self-repair (`registry_repair.py`, 0.62.0)
+
+Two malformed record shapes are repaired, each by its own rule, both applied in
+the same pass. They matter for the same reason: Claude Code's loader picks
+`entries[0]`, so a malformed record at index 0 decides what loads.
+
+#### Rule 1: the chimera record (0.62.0)
 
 Claude Code's registry can hold a malformed *chimera* record: a `scope: "user"`
 record that also carries a `projectPath`, written by the trust/adoption flow
@@ -49,12 +55,61 @@ bootstrap -- the `entries[0]` pick breaks any plugin the same way:
 > more `scope: user` **with** `projectPath` -> drop the `projectPath`-bearing
 > record(s)
 
-Deliberately narrow: `scope: "project"` records are never touched (a genuine
-per-project install is legitimate), `version` / `installPath` are never
-rewritten (it removes a duplicate, it does not force a version), and a ref is
-skipped entirely unless a healthy user record survives -- better a wedged
-machine than a deregistered plugin. Unreadable or unparseable registries are a
-silent no-op; this runs on every session start and must never break one.
+Deliberately narrow: well-formed `scope: "project"` records are never touched
+(a genuine per-project install is legitimate), `version` / `installPath` are
+never rewritten (it removes a duplicate, it does not force a version), and a
+ref is skipped entirely unless a healthy user record survives -- better a
+wedged machine than a deregistered plugin. Unreadable or unparseable registries
+are a silent no-op; this runs on every session start and must never break one.
+
+#### Rule 2: the orphan project record (0.65.0)
+
+A record can carry `scope: "project"` with **no** `projectPath`. That shape is
+malformed by definition -- a project-scope install is defined by the project it
+belongs to, so a project record without a project names no install:
+
+> one or more `scope: project` records **without** a `projectPath`, and at
+> least one record that is not itself such a record -> drop the
+> `projectPath`-less project record(s)
+
+Observed live 2026-07-27: `engineer@spryfox-plugins` held 4 records with 2
+orphans (one at index 0) and `prototyping@spryfox-plugins` held 3 with 1 orphan
+at index 0. Both appeared under "Needs attention" in `/plugin` with a "not
+cached" error, while every ref holding a single clean record was healthy. Treat
+that as a strong correlation, **not** a proven cause: the orphans' installPaths
+existed on disk and named the same version as their well-formed siblings.
+
+That last detail is the consequential difference from rule 1. A chimera pins an
+**old** version, so its symptom is stale code running silently. These orphans
+agreed with their siblings on both `version` and `installPath`, so nothing
+stale could load -- the damage is confined to whatever Claude Code does when it
+cannot resolve a project record to a project.
+
+Rule 2 keeps rule 1's narrowness: it never rewrites `version` or `installPath`,
+and its healthy-survivor guard refuses to act when *every* record for a ref is
+an orphan (dropping them would deregister the plugin). Such refs are reported
+by `find_unrepairable` and logged as an `action_entry`, so the skip is visible
+rather than silent.
+
+**Duplicates are deliberately left in place.** Deduping identical
+`(scope, projectPath, version, installPath)` tuples was considered and
+declined: equality on those four fields does not imply equality of the whole
+record, so a dedupe would silently pick a winner among records that may differ
+in unmodelled fields -- the version-choosing behavior both rules refuse. It is
+also unnecessary for the observed defect, whose duplicates are all orphans rule
+2 already removes.
+
+**Why this ships in bootstrap, not `bootstrap-stuck-fix`.** The escape-hatch
+test asks whether the change would have to be installed by the thing it
+repairs. Here it would not: the affected refs are `engineer` / `prototyping`,
+bootstrap's own record is well-formed, so bootstrap installs and runs normally
+and can carry the fix. If this shape ever lands on the **bootstrap** ref, that
+inverts -- a ref Claude Code will not load is a ref whose SessionStart hook
+never fires -- and the remediation would have to move to `bootstrap-stuck-fix`.
+It is not pre-emptively mirrored there; the trigger to revisit is a bootstrap
+ref found carrying an orphan record.
+
+#### Shared write discipline
 
 Write discipline mirrors `ensure_registry_scope`: back up to
 `installed_plugins.json.registry-repair.bak` (best-effort), write atomically,
@@ -67,9 +122,10 @@ verbose-only `ok_entry`.
 Takes effect on the **next** session: Claude Code reads the registry and loads
 plugins at startup, before SessionStart hooks fire.
 
-This is the root-cause fix, for machines that are **not yet** wedged. It does
-not remediate machines already stuck on an older bootstrap -- they cannot adopt
-0.62.0 by the very mechanism that is broken there. Those still need the
+For rule 1, this is the root-cause fix, for machines that are **not yet**
+wedged. It does not remediate machines already stuck on an older bootstrap --
+they cannot adopt 0.62.0 by the very mechanism that is broken there. Those
+still need the
 separate `bootstrap-stuck-fix` plugin (`scripts/repair_registry.py`), which has
 no prior version to be wedged on. See the delivery-path rule in the repo
 CLAUDE.md and the `update_lifecycle` fact in the bootstrap SKILL.md.
