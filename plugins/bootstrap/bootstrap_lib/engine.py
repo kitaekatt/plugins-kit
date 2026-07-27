@@ -55,8 +55,17 @@ def main():
     elevation flow's own child-engine relaunch (_spawn_recheck_pass)
     sidesteps this entirely by releasing the lock early via
     proc_lock.release_lock() before spawning its child.
+
+    Version-aware arbitration: an engine that CARRIES the update (its own
+    version > the global engine_ran_version stamp) does not stand down on the
+    first contended attempt. session-bootstrap.sh's _provision step runs
+    before the lock, so a harvest-launched NEW engine can reach the lock
+    seconds after a resident OLD engine already took it -- yielding there
+    hands the pass to the older binary. Such an engine retries for
+    _LOCK_RETRY_SECONDS instead; engines that are not newer keep the
+    immediate stand-down.
     """
-    data_dir, project_dir = _peek_lock_args()
+    data_dir, project_dir, plugin_root = _peek_lock_args()
     if not data_dir:
         # --data-dir is a required arg; _main()'s own parser will reject a
         # genuinely missing one with the standard argparse error.
@@ -65,59 +74,163 @@ def main():
 
     from .proc_lock import engine_lock
     with engine_lock(data_dir) as acquired:
-        if not acquired:
-            _stand_down_lock_contended(data_dir, project_dir)
+        if acquired:
+            _run_with_containment()
             return
-        _run_with_containment()
+
+    if _carries_update(data_dir, plugin_root):
+        with _retry_engine_lock(data_dir) as acquired:
+            if acquired:
+                _run_with_containment()
+                return
+
+    _stand_down_lock_contended(data_dir, project_dir, plugin_root)
+
+
+# Bounds for the version-aware retry in main(). Module constants, not inlined
+# literals, so tests can shrink them without sleeping for real.
+_LOCK_RETRY_SECONDS = 10.0
+_LOCK_RETRY_INTERVAL = 0.5
+
+
+def _retry_engine_lock(data_dir):
+    """Re-attempt proc_lock's NON-BLOCKING acquisition on an interval until
+    _LOCK_RETRY_SECONDS elapses, yielding True on the attempt that wins.
+
+    Deliberately a loop over ``engine_lock`` rather than a blocking mode
+    inside proc_lock: proc_lock's contract (one non-blocking attempt, caller
+    decides how to stand down) is what every other launcher depends on, and
+    the release-on-exit ownership check stays proc_lock's.
+    """
+    import time
+    from contextlib import contextmanager
+
+    from .proc_lock import engine_lock
+
+    @contextmanager
+    def _loop():
+        deadline = time.monotonic() + _LOCK_RETRY_SECONDS
+        while True:
+            with engine_lock(data_dir) as acquired:
+                if acquired:
+                    yield True
+                    return
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(_LOCK_RETRY_INTERVAL)
+        yield False
+
+    return _loop()
+
+
+def _plugin_root_version(plugin_root) -> str:
+    """This process's own bootstrap version, read from its plugin root's
+    plugin.json. Empty string when unavailable -- callers treat that as
+    "not newer" so an unreadable manifest can never escalate behavior."""
+    if not plugin_root:
+        return ""
+    path = os.path.join(plugin_root, ".claude-plugin", "plugin.json")
+    try:
+        with open(path, "r") as f:
+            return json.load(f).get("version", "") or ""
+    except (OSError, ValueError):
+        return ""
+
+
+def _carries_update(data_dir, plugin_root) -> bool:
+    """True when THIS engine is strictly newer than the last engine to
+    complete a pass -- i.e. it is the one carrying an update forward."""
+    own = _plugin_root_version(plugin_root)
+    if not own:
+        return False
+    try:
+        from .stamps import global_stamp
+        ran = global_stamp(data_dir, "engine_ran_version").read()
+    except Exception:
+        return False
+    return _parse_semver(own) > _parse_semver(ran or "0")
 
 
 def _peek_lock_args() -> tuple:
-    """Lenient pre-parse of --data-dir/--project-dir only, so the lock can be
-    acquired (and, on stand-down, this launch's guards rolled back) before
-    the full argparse (which requires --plugin-root too) runs."""
+    """Lenient pre-parse of --data-dir/--project-dir/--plugin-root only, so the
+    lock can be acquired (and, on stand-down, this launch's guards rolled back
+    and its own version reported) before the full argparse runs."""
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--data-dir", default=None)
     parser.add_argument("--project-dir", default=None)
+    parser.add_argument("--plugin-root", default=None)
     args, _ = parser.parse_known_args()
-    return args.data_dir or "", args.project_dir or ""
+    return args.data_dir or "", args.project_dir or "", args.plugin_root or ""
 
 
-def _stand_down_lock_contended(data_dir, project_dir):
+def _stand_down_lock_contended(data_dir, project_dir, plugin_root=""):
     """Another engine instance already holds the lock -- this pass never ran.
     Roll back the ONE guard that is unambiguously OURS: the per-project
     cooldown stamp session-bootstrap.sh writes BEFORE launching the engine.
     Left alone, the project this launch was for would get no bootstrap pass
     until that cooldown naturally expires.
 
-    Deliberately does NOT touch the global harvest/import-retry/registry-
-    relaunch marker stamps: those belong to whichever launch trigger fired --
-    which may not be THIS launch (a plain SessionStart losing the race can
-    stand down at the same moment a genuinely in-flight harvest pass, spawned
-    moments earlier, is still running and holds the lock). Clearing a marker
-    this stand-down doesn't own would falsely tell that OTHER, still-running
-    launcher's caller "not yet launched", inviting a duplicate spawn. Those
-    markers are safe to leave alone: ANY completed pass (this project's next
-    one included) stamps engine_ran_version, which is the first thing
-    should_harvest checks -- the marker only matters while that's still
-    behind, and self-clears the moment some pass finishes. Logged so a stand-
-    down is visible in bootstrap.log rather than silently invisible (the
-    "every remediation-like action logs its outcome" rule this repo's
-    CLAUDE.md holds tooling to). Best-effort; never raises -- a failure here
-    just costs one retry cycle, never a crash.
+    Also RE-ARMS the harvest when this process carries an update it never got
+    to apply (own version > engine_ran_version). The earlier reasoning for
+    leaving harvest_launched_version alone -- "ANY completed pass stamps
+    engine_ran_version, so the marker self-clears" -- is false when the
+    completing pass is an OLDER engine: it stamps a version still behind the
+    installed one, so should_harvest stays true while the per-installed-
+    version marker keeps the harvest permanently disarmed. That is a wedge no
+    later session recovers from. Clearing the marker is safe now that the
+    stamp is MONOTONIC (an older engine can no longer regress it): if a NEWER
+    engine holds the lock, it completes and stamps >= our own version, making
+    should_harvest false -- so a cleared marker cannot produce a duplicate
+    spawn storm.
+
+    Still deliberately does NOT touch the import-retry / registry-relaunch
+    markers: those belong to whichever launch trigger fired, which may not be
+    THIS launch, and neither is version-keyed, so neither can wedge the way
+    the harvest marker did.
+
+    Logged so a stand-down is visible in bootstrap.log rather than silently
+    invisible (the "every remediation-like action logs its outcome" rule this
+    repo's CLAUDE.md holds tooling to). Best-effort; never raises -- a failure
+    here just costs one retry cycle, never a crash.
     """
     try:
         _clear_project_cooldown(data_dir, project_dir)
     except Exception:
         pass
+    own_version = _plugin_root_version(plugin_root)
+    rearmed = False
     try:
-        from .log import write_log_block
-        write_log_block(data_dir, "bootstrap lock", [
-            "stand-down: another engine instance already holds the "
-            "single-instance lock; this project's cooldown was cleared "
-            "for a retry on the next opportunity",
-        ])
+        if _carries_update(data_dir, plugin_root):
+            from .stamps import global_stamp
+            global_stamp(data_dir, "harvest_launched_version").clear()
+            rearmed = True
     except Exception:
         pass
+    try:
+        from .log import write_log_block
+        holder = _lock_holder_pid(data_dir)
+        who = f"engine {own_version}" if own_version else "engine"
+        where = f" (pid {holder})" if holder else ""
+        entry = (
+            f"stand-down: {who} yielded to running engine pass{where}; "
+            "this project's cooldown was cleared for a retry on the next "
+            "opportunity"
+        )
+        if rearmed:
+            entry += "; harvest re-armed (this engine carries an update)"
+        write_log_block(data_dir, "bootstrap lock", [entry])
+    except Exception:
+        pass
+
+
+def _lock_holder_pid(data_dir):
+    """PID recorded in the single-instance lock file, or None. Best-effort
+    diagnostics only -- the holder may exit between this read and the log."""
+    try:
+        from .proc_lock import LOCK_FILENAME, _read_lock_pid
+        return _read_lock_pid(os.path.join(data_dir, LOCK_FILENAME))
+    except Exception:
+        return None
 
 
 def _run_with_containment():
@@ -343,12 +456,29 @@ def _main():
     if version:
         last_version_stamp = global_stamp(data_dir, "last_version")
         last_version = last_version_stamp.read()
-        if last_version and last_version != version:
-            action_entries.append(f"updated: {last_version} -> {version}")
-        elif not last_version:
+        if last_version:
+            # Compared by semver, not string equality: only a genuine UPGRADE
+            # is an action. The reverse direction (an older binary running
+            # after a newer one) is normal -- a dev tree, or a resident older
+            # session -- and reporting it as "updated: 0.62.0 -> 0.61.0" reads
+            # as a downgrade that never happened.
+            if _parse_semver(version) > _parse_semver(last_version):
+                action_entries.append(f"updated: {last_version} -> {version}")
+            elif _parse_semver(version) < _parse_semver(last_version):
+                ok_entries.append(
+                    f"engine {version} ran (a newer {last_version} ran "
+                    "previously -- dev tree or older resident session)"
+                )
+        else:
             action_entries.append(f"installed: {version}")
-        last_version_stamp.write(version)
+        # --console returns before the engine_ran_version stamp, so a console
+        # run that advanced last_version would leave the two stamps
+        # inconsistent and manufacture a phantom transition on the next real
+        # pass. Console debug runs write no state; this is that contract.
+        if not args.console:
+            last_version_stamp.write(version)
     bootstrap_action_entries.extend(action_entries)
+    bootstrap_ok_entries.extend(ok_entries)
 
     # Step 3: Self-setup (tools, PATH, venv from config.self_setup) — runs every session
     self_setup = config.get("self_setup", {})
@@ -609,7 +739,8 @@ def _main():
             _reload_advice(newly_installed),
             # Bootstrap self-staleness: a newer bootstrap is cached but this session
             # loaded the old one. /reload-plugins won't re-fire its SessionStart pass.
-            _bootstrap_stale_advice(version, boot_plugin_name, marketplace_name, prod_registry),
+            _bootstrap_stale_advice(version, boot_plugin_name, marketplace_name, prod_registry,
+                                    data_dir=data_dir),
         ) if a]
         for advice in notices:
             advice_label = f"{bootstrap_label} notice"
@@ -764,8 +895,16 @@ def _main():
     # EXECUTED); only a crash (handled in main()) skips it, and console mode
     # returns earlier so manual --console debug runs never stamp. See
     # references/plugin-reload-lifecycle.md "Single-session update protocol".
+    #
+    # MONOTONIC by semver: an OLDER engine completing a pass must never regress
+    # the stamp. Under rapid restarts a resident 0.61.0 engine can win the lock
+    # while the harvest-launched 0.62.0 stands down; an unconditional write
+    # there re-opened the update as un-run forever. An unreadable/garbage stored
+    # value parses as (0,0,0); ties still rewrite (idempotent).
     if version:
-        global_stamp(data_dir, "engine_ran_version").write(version)
+        ran_stamp = global_stamp(data_dir, "engine_ran_version")
+        if _parse_semver(version) >= _parse_semver(ran_stamp.read() or "0"):
+            ran_stamp.write(version)
 
     # A pass COMPLETED, so any transient partial-download import race has resolved.
     # Clear the retry markers so the UserPromptSubmit harvest stops relaunching
@@ -950,6 +1089,27 @@ def _plugin_data_dir(data_dir, plugin_info):
     return os.path.join(data_root, mkt, plugin_info.name)
 
 
+def _plugin_log_label(plugin_info, plugin_data_dir, data_dir, engine_version=""):
+    """``<name>@<version>`` for a plugin's own log section.
+
+    Disambiguated for bootstrap ITSELF (the one plugin whose data dir IS the
+    engine data dir): its per-plugin label carries the REGISTRY version while
+    bootstrap's other log sections carry the RUNNING binary's version, so one
+    pass could emit two "bootstrap@X" headers with different X and no way to
+    tell which was which. When the two differ, name both.
+    """
+    if not plugin_info.version:
+        return plugin_info.name
+    label = f"{plugin_info.name}@{plugin_info.version}"
+    is_self = (
+        os.path.normcase(os.path.normpath(plugin_data_dir))
+        == os.path.normcase(os.path.normpath(data_dir))
+    )
+    if is_self and engine_version and engine_version != plugin_info.version:
+        return f"{label} (engine {engine_version})"
+    return label
+
+
 def _bootstrap_single_plugin(
     plugin_info, current_os, data_dir, all_failures,
     log_success, display_sections, deferred_plugin_logs, args,
@@ -1094,7 +1254,7 @@ def _bootstrap_single_plugin(
         all_failures.extend(failures)
 
     # Collect plugin log info (deferred — written after reading shell entries)
-    plugin_label = f"{plugin_info.name}@{plugin_info.version}" if plugin_info.version else plugin_info.name
+    plugin_label = _plugin_log_label(plugin_info, plugin_data_dir, data_dir, engine_version)
     plugin_log_entries = plugin_action_entries + (plugin_ok_entries if log_success else [])
     deferred_plugin_logs.append((plugin_data_dir, plugin_label, plugin_log_entries))
 
@@ -1274,9 +1434,17 @@ def _reload_advice(newly_installed):
     )
 
 
-def _bootstrap_stale_advice(running_version, plugin_name, marketplace_name, registry_path):
+def _bootstrap_stale_advice(running_version, plugin_name, marketplace_name, registry_path,
+                            data_dir=""):
     """Restart notice (informational, not action-required) when the registry
     records a NEWER bootstrap than the one running this session, else None.
+
+    Suppressed once provisioning has CONVERGED: when the global
+    engine_ran_version stamp is already >= the registry version, the new
+    engine has completed a pass (via the harvest or an earlier restart) and a
+    restart would only reload plugin CODE. Without this, every subsequent
+    old-binary session in the same window re-fired the same nag against an
+    update that had already landed.
 
     autoUpdate caches the new bootstrap and rewrites ``installed_plugins.json`` at
     session start, but the session already loaded the OLD hook -- and
@@ -1303,6 +1471,11 @@ def _bootstrap_stale_advice(running_version, plugin_name, marketplace_name, regi
     from .marketplace_lifecycle import _version_greater
     if not _version_greater(registry_version, running_version):
         return None
+    if data_dir:
+        from .stamps import global_stamp
+        ran_version = global_stamp(data_dir, "engine_ran_version").read()
+        if ran_version and _parse_semver(ran_version) >= _parse_semver(registry_version):
+            return None
     return (
         f"bootstrap was updated to {registry_version}; "
         f"it will load next time you restart Claude (or your IDE)."

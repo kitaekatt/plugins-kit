@@ -16,6 +16,7 @@ import pytest
 from bootstrap_lib import harvest
 from bootstrap_lib.harvest import (
     read_installed_bootstrap,
+    read_path_version,
     run_harvest,
     should_harvest,
 )
@@ -188,6 +189,78 @@ class TestRunHarvestDecision:
         data_dir, reg, calls = self._setup(tmp_path, monkeypatch, "0.22.0", None)
         run_harvest(data_dir, "/proj", reg, "plugins-kit")
         assert len(calls) == 1
+
+
+class TestLaunchLogsActualPathVersion:
+    """The harvest launches an installPath, not a version number. When the code
+    sitting at that path declares a DIFFERENT version than the registry claims,
+    the log must say so -- otherwise a mismatch is invisible and the status line
+    reports a version that never ran."""
+
+    def _install_path(self, tmp_path, version):
+        ip = tmp_path / "cache" / "bootstrap" / "ON-DISK"
+        (ip / ".claude-plugin").mkdir(parents=True)
+        (ip / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "bootstrap", "version": version}), encoding="utf-8"
+        )
+        return str(ip)
+
+    def _run(self, tmp_path, monkeypatch, installed, path_version):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        global_stamp(str(data_dir), "engine_ran_version").write("0.61.0")
+        install_path = self._install_path(tmp_path, path_version)
+        reg = _registry(tmp_path, {
+            "bootstrap@plugins-kit": [{"version": installed, "installPath": install_path}],
+        })
+        monkeypatch.setattr(harvest, "launch_new_engine", lambda ip, pd, dd: True)
+        return run_harvest(str(data_dir), "/proj", reg, "plugins-kit")
+
+    def test_mismatch_is_named_in_the_status(self, tmp_path, monkeypatch):
+        status = self._run(tmp_path, monkeypatch, "0.63.0", "0.62.0")
+        assert status is not None
+        assert "0.63.0" in status, "the registry-claimed version still leads the line"
+        assert "0.62.0" in status, "the version actually at installPath must be named"
+
+    def test_match_adds_no_noise(self, tmp_path, monkeypatch):
+        status = self._run(tmp_path, monkeypatch, "0.63.0", "0.63.0")
+        assert status is not None
+        assert "installPath is" not in status
+
+    def test_unreadable_path_manifest_adds_no_noise(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        global_stamp(str(data_dir), "engine_ran_version").write("0.61.0")
+        reg = _registry(tmp_path, {
+            "bootstrap@plugins-kit": [
+                {"version": "0.63.0", "installPath": str(tmp_path / "nope")},
+            ],
+        })
+        monkeypatch.setattr(harvest, "launch_new_engine", lambda ip, pd, dd: True)
+        status = run_harvest(str(data_dir), "/proj", reg, "plugins-kit")
+        assert status is not None and "installPath is" not in status
+
+
+class TestReadPathVersion:
+    def test_reads_version_from_plugin_json(self, tmp_path):
+        ip = tmp_path / "ip"
+        (ip / ".claude-plugin").mkdir(parents=True)
+        (ip / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"version": "1.2.3"}), encoding="utf-8"
+        )
+        assert read_path_version(str(ip)) == "1.2.3"
+
+    def test_missing_path_is_empty(self, tmp_path):
+        assert read_path_version(str(tmp_path / "nope")) == ""
+
+    def test_empty_path_is_empty(self):
+        assert read_path_version("") == ""
+
+    def test_malformed_json_is_empty(self, tmp_path):
+        ip = tmp_path / "ip"
+        (ip / ".claude-plugin").mkdir(parents=True)
+        (ip / ".claude-plugin" / "plugin.json").write_text("{ not json", encoding="utf-8")
+        assert read_path_version(str(ip)) == ""
 
 
 class TestLaunchNewEngine:

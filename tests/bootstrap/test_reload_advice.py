@@ -169,6 +169,65 @@ class TestBootstrapStaleAdvice:
         assert _bootstrap_stale_advice("", "bootstrap", "plugins-kit", self._registry(tmp_path, "0.15.0")) is None
 
 
+class TestBootstrapStaleAdviceConvergence:
+    """Once engine_ran_version has caught up with the registry version,
+    provisioning has converged: the new engine completed a pass (harvest or an
+    earlier restart) and a restart would only reload plugin CODE. Re-firing the
+    "restart to load it" nag from every later old-binary session is a moot nag."""
+
+    def _registry(self, tmp_path, version):
+        reg = tmp_path / "installed_plugins.json"
+        reg.write_text(
+            json.dumps({"plugins": {"bootstrap@plugins-kit": [{"version": version, "installPath": "/x"}]}}),
+            encoding="utf-8",
+        )
+        return str(reg)
+
+    def _data_dir(self, tmp_path, ran_version):
+        d = tmp_path / "data"
+        d.mkdir(exist_ok=True)
+        if ran_version is not None:
+            (d / "engine_ran_version").write_text(ran_version, encoding="utf-8")
+        return str(d)
+
+    def test_suppressed_when_ran_version_caught_up(self, tmp_path):
+        assert _bootstrap_stale_advice(
+            "0.62.0", "bootstrap", "plugins-kit", self._registry(tmp_path, "0.63.0"),
+            data_dir=self._data_dir(tmp_path, "0.63.0"),
+        ) is None
+
+    def test_suppressed_when_ran_version_is_ahead(self, tmp_path):
+        assert _bootstrap_stale_advice(
+            "0.62.0", "bootstrap", "plugins-kit", self._registry(tmp_path, "0.63.0"),
+            data_dir=self._data_dir(tmp_path, "0.64.0"),
+        ) is None
+
+    def test_kept_when_ran_version_still_behind(self, tmp_path):
+        msg = _bootstrap_stale_advice(
+            "0.62.0", "bootstrap", "plugins-kit", self._registry(tmp_path, "0.63.0"),
+            data_dir=self._data_dir(tmp_path, "0.62.0"),
+        )
+        assert msg is not None and "0.63.0" in msg
+
+    def test_kept_when_no_ran_stamp(self, tmp_path):
+        assert _bootstrap_stale_advice(
+            "0.62.0", "bootstrap", "plugins-kit", self._registry(tmp_path, "0.63.0"),
+            data_dir=self._data_dir(tmp_path, None),
+        ) is not None
+
+    def test_kept_when_no_data_dir_supplied(self, tmp_path):
+        assert _bootstrap_stale_advice(
+            "0.62.0", "bootstrap", "plugins-kit", self._registry(tmp_path, "0.63.0"),
+        ) is not None
+
+    def test_numeric_semver_not_string_compare(self, tmp_path):
+        # ran "0.9.0" vs registry "0.63.0": a string compare would call it caught up.
+        assert _bootstrap_stale_advice(
+            "0.9.0", "bootstrap", "plugins-kit", self._registry(tmp_path, "0.63.0"),
+            data_dir=self._data_dir(tmp_path, "0.9.0"),
+        ) is not None
+
+
 class TestEmitNoRelayDirective:
     """emit_success_response must NOT wrap reload/restart notices in an
     'ACTION REQUIRED -- surface this now' relay directive. The directive made the

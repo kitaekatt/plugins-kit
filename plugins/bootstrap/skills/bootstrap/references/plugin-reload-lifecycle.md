@@ -138,7 +138,10 @@ layers above: `UserPromptSubmit` *does* re-fire within a session. So bootstrap's
    `engine._main` pass, the engine writes its own running `version` to a global
    stamp `engine_ran_version` ("the bootstrap engine version that last actually
    executed a pass"). A crash skips it (not a completed pass); `--console` debug
-   runs return earlier and never stamp.
+   runs return earlier and never stamp. The write is **monotonic** -- `max(stored,
+   own)` by semver -- so an older engine that wins the single-instance lock and
+   completes a pass can never regress the stamp and re-open a landed update as
+   un-run.
 2. **Harvest reads two values per prompt.** On each `UserPromptSubmit`, the helper
    reads the installed bootstrap `version` + `installPath` from
    `installed_plugins.json` (entry key `bootstrap@<marketplace>`) and the
@@ -157,6 +160,13 @@ layers above: `UserPromptSubmit` *does* re-fire within a session. So bootstrap's
    re-trigger itself. A per-installed-version marker (`harvest_launched_version`)
    additionally caps relaunches at one while the engine converges (guards against
    several quick prompts spawning concurrent passes).
+5. **Arbitration under contention.** The harvest-launched engine still has to win
+   the single-instance lock, and `session-bootstrap.sh`'s provisioning step runs
+   *before* the lock -- so it can arrive seconds after a resident OLD engine took
+   it. An engine that carries the update retries acquisition for ~10s before
+   yielding; if it still has to stand down, it **clears
+   `harvest_launched_version`** so the next prompt's harvest retries rather than
+   staying disarmed forever. See engine-internals.md, "Single-instance lock".
 
 **The one inherent caveat (documented, NOT solved):** the *running* bootstrap must
 already contain the harvest hook to harvest a newer version. The version that
@@ -305,7 +315,10 @@ Under `~/.claude/plugins/data/<marketplace>/bootstrap/` unless noted:
 - **The "it will load next time you restart" notice is emitted by the *old* engine**
   *before* the harvest runs. If `engine_ran_version` has since reached the installed
   version, provisioning is done and the notice is **moot** — a restart then only
-  refreshes loaded code. Say so rather than parroting "you must restart." (The notice
+  refreshes loaded code. The engine suppresses the notice itself once
+  `engine_ran_version >= ` the registry version, so a converged update stops
+  nagging from later old-binary sessions; if you still see it, `engine_ran_version`
+  is genuinely behind. Say so rather than parroting "you must restart." (The notice
   is informational by design — no relay directive; the user decides when to restart.)
 - **`claude --resume` works after an update:** both guards bypass on a newer registry
   file, so the resumed pass runs (it does **not** silently skip), and the harvest
@@ -325,10 +338,15 @@ These mean the normal flow did **not** happen. Raise them; do not report success
   or two → the new engine isn't running. Check `bootstrap.log` for a `bootstrap@<new>`
   run and a `bootstrap harvest` line; check `harvest_launched_version`. A silent no-op
   here is a real bug — this is exactly how the 0.25.0 harvest-script-path bug presented
-  (the harvest fired on every prompt but threw on import and was swallowed).
+  (the harvest fired on every prompt but threw on import and was swallowed). Also read
+  the `bootstrap lock` stand-down lines: they name the standing-down engine's own
+  version and the lock holder's PID, which is how you tell "lost the race repeatedly"
+  apart from "never launched."
 - **The hook label keeps showing the *old* version** after the update should have
   landed → the new engine hasn't executed. On `--resume`, suspect a guard stamp newer
-  than the registry write (so the bypass didn't fire).
+  than the registry write (so the bypass didn't fire). A `bootstrap@<registry-version>
+  (engine <running-version>)` log header is **not** this anomaly -- it is the label
+  deliberately naming both versions when a pass's registry and binary versions differ.
 - **`installed` itself never advances** after a publish → the *fetch* didn't happen
   (autoUpdate off? marketplace clone stale? offline?). Check the clone HEAD vs
   `origin/master` and `known_marketplaces.json` `autoUpdate`.

@@ -36,10 +36,12 @@ def _fake_root(tmp_path, version):
     return str(root)
 
 
-def _run_main(tmp_path, monkeypatch, version):
+def _run_main(tmp_path, monkeypatch, version, ran_version=None):
     root = _fake_root(tmp_path, version)
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
+    if ran_version is not None:
+        (data_dir / "engine_ran_version").write_text(ran_version, encoding="utf-8")
     iso_home = tmp_path / "home"
     iso_home.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HOME", str(iso_home))
@@ -65,3 +67,36 @@ class TestEngineRanVersionStamp:
         # A newer engine running a pass overwrites it (what a harvested run does).
         data_dir2 = _run_main(tmp_path / "second", monkeypatch, "0.22.0")
         assert global_stamp(data_dir2, "engine_ran_version").read() == "0.22.0"
+
+
+class TestEngineRanVersionMonotonic:
+    """The stamp must never move BACKWARD. Under rapid restarts a resident OLD
+    engine can win the single-instance lock while the harvest-launched NEW one
+    stands down; if the old engine's completion regressed the stamp, the update
+    would read as un-run forever and every future harvest would be re-triggered
+    against a marker that had already been consumed -- a permanent wedge."""
+
+    def test_older_engine_does_not_regress_the_stamp(self, tmp_path, monkeypatch):
+        data_dir = _run_main(tmp_path, monkeypatch, "0.61.0", ran_version="0.62.0")
+        assert global_stamp(data_dir, "engine_ran_version").read() == "0.62.0"
+
+    def test_newer_engine_still_advances_the_stamp(self, tmp_path, monkeypatch):
+        data_dir = _run_main(tmp_path, monkeypatch, "0.63.0", ran_version="0.62.0")
+        assert global_stamp(data_dir, "engine_ran_version").read() == "0.63.0"
+
+    def test_equal_version_rewrites_idempotently(self, tmp_path, monkeypatch):
+        data_dir = _run_main(tmp_path, monkeypatch, "0.62.0", ran_version="0.62.0")
+        assert global_stamp(data_dir, "engine_ran_version").read() == "0.62.0"
+
+    def test_numeric_semver_not_string_compare(self, tmp_path, monkeypatch):
+        # "0.9.0" > "0.62.0" as strings; numerically 62 > 9, so 0.9.0 must NOT win.
+        data_dir = _run_main(tmp_path, monkeypatch, "0.9.0", ran_version="0.62.0")
+        assert global_stamp(data_dir, "engine_ran_version").read() == "0.62.0"
+
+    def test_empty_stored_value_counts_as_zero(self, tmp_path, monkeypatch):
+        data_dir = _run_main(tmp_path, monkeypatch, "0.61.0", ran_version="")
+        assert global_stamp(data_dir, "engine_ran_version").read() == "0.61.0"
+
+    def test_garbage_stored_value_counts_as_zero(self, tmp_path, monkeypatch):
+        data_dir = _run_main(tmp_path, monkeypatch, "0.61.0", ran_version="not-a-version")
+        assert global_stamp(data_dir, "engine_ran_version").read() == "0.61.0"

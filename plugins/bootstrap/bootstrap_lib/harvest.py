@@ -172,6 +172,24 @@ def should_harvest(installed_version: str, ran_version: str) -> bool:
     return _parse_semver(installed_version) > _parse_semver(ran_version or "0")
 
 
+def read_path_version(install_path: str) -> str:
+    """The version recorded in ``<install_path>/.claude-plugin/plugin.json``, or
+    ``""`` when unreadable.
+
+    The registry's claimed version and the code actually sitting at its
+    installPath can disagree (a half-written cache dir, a dev-tree repoint, a
+    version dir carrying different code). The harvest launches the PATH, so the
+    path's own version is what actually ran -- worth logging when it differs.
+    """
+    if not install_path:
+        return ""
+    try:
+        with open(Path(install_path) / ".claude-plugin" / "plugin.json") as f:
+            return json.load(f).get("version", "") or ""
+    except (OSError, ValueError):
+        return ""
+
+
 def launch_new_engine(install_path: str, project_dir: str, data_dir: str) -> bool:
     """Detach a full bootstrap pass via the NEW engine's session-bootstrap.sh.
 
@@ -277,10 +295,14 @@ def run_harvest(
 
     if not launch_new_engine(install_path, project_dir, data_dir):
         return None
-    return (
+    status = (
         f"harvest: launched bootstrap {installed_version} engine "
         f"(engine_ran_version was {ran_version or 'none'})"
     )
+    path_version = read_path_version(install_path)
+    if path_version and path_version != installed_version:
+        status += f"; on-disk engine at installPath is {path_version}"
+    return status
 
 
 def run_registry_relaunch(

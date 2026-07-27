@@ -9,6 +9,7 @@ the lock permanently when a prior holder crashed or was killed.
 """
 
 import hashlib
+import json
 import os
 import sys
 import threading
@@ -19,10 +20,21 @@ import pytest
 from bootstrap_lib import engine, proc_lock
 
 
-def _argv(data_dir, **extra):
+def _plugin_root(tmp_path, version, name="root"):
+    """A minimal plugin root carrying just the plugin.json the lock path reads
+    to learn THIS engine's own version."""
+    root = tmp_path / name
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "bootstrap", "version": version}), encoding="utf-8"
+    )
+    return str(root)
+
+
+def _argv(data_dir, plugin_root="unused-root", **extra):
     argv = [
         "bootstrap_engine.py",
-        "--plugin-root", "unused-root",
+        "--plugin-root", str(plugin_root),
         "--data-dir", str(data_dir),
     ]
     for k, v in extra.items():
@@ -284,6 +296,164 @@ class TestEngineMainLock:
         assert not (data_dir / proc_lock.LOCK_FILENAME).exists(), (
             "a crashed pass must not wedge the lock for the next session"
         )
+
+
+class TestStandDownReArmsHarvest:
+    """A stand-down by an engine that CARRIES an update must clear
+    harvest_launched_version. That marker is keyed per installed version, so an
+    older engine completing the pass (stamping engine_ran_version behind the
+    installed version) leaves should_harvest true forever while the consumed
+    marker disarms every retry -- a wedge no later session recovers from."""
+
+    def _contended(self, tmp_path, monkeypatch, own_version, ran_version):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / proc_lock.LOCK_FILENAME).write_text(f"{os.getpid()}\n123.0\n")
+        (data_dir / "engine_ran_version").write_text(ran_version, encoding="utf-8")
+        harvest_stamp = data_dir / "harvest_launched_version"
+        harvest_stamp.write_text("0.62.0")
+
+        monkeypatch.setattr(engine, "_main", lambda: (_ for _ in ()).throw(
+            AssertionError("_main must not run while the lock is held")
+        ))
+        # Not newer -> no retry; newer -> retry must exhaust against a live
+        # holder that never releases, then stand down. Keep both fast.
+        monkeypatch.setattr(engine, "_LOCK_RETRY_SECONDS", 0.02)
+        monkeypatch.setattr(engine, "_LOCK_RETRY_INTERVAL", 0.001)
+        monkeypatch.setattr(sys, "argv", _argv(
+            data_dir, plugin_root=_plugin_root(tmp_path, own_version), background=True,
+        ))
+        engine.main()
+        return data_dir, harvest_stamp
+
+    def test_clears_marker_when_this_engine_is_newer(self, tmp_path, monkeypatch):
+        _, harvest_stamp = self._contended(tmp_path, monkeypatch, "0.63.0", "0.61.0")
+        assert not harvest_stamp.exists(), (
+            "an engine carrying an update must re-arm the harvest when it stands down"
+        )
+
+    def test_keeps_marker_when_this_engine_is_not_newer(self, tmp_path, monkeypatch):
+        _, harvest_stamp = self._contended(tmp_path, monkeypatch, "0.61.0", "0.63.0")
+        assert harvest_stamp.read_text() == "0.62.0"
+
+    def test_keeps_marker_when_versions_are_equal(self, tmp_path, monkeypatch):
+        _, harvest_stamp = self._contended(tmp_path, monkeypatch, "0.63.0", "0.63.0")
+        assert harvest_stamp.read_text() == "0.62.0"
+
+    def test_log_line_names_own_version_and_holder_pid(self, tmp_path, monkeypatch):
+        data_dir, _ = self._contended(tmp_path, monkeypatch, "0.61.0", "0.63.0")
+        text = (data_dir / "bootstrap.log").read_text()
+        assert "stand-down" in text
+        assert "0.61.0" in text, "the stand-down line must name THIS engine's version"
+        assert f"pid {os.getpid()}" in text, "the stand-down line must name the lock holder"
+
+    def test_log_line_records_the_re_arm(self, tmp_path, monkeypatch):
+        data_dir, _ = self._contended(tmp_path, monkeypatch, "0.63.0", "0.61.0")
+        assert "harvest re-armed" in (data_dir / "bootstrap.log").read_text()
+
+
+class TestVersionAwareLockRetry:
+    """session-bootstrap.sh's _provision step runs BEFORE the lock, so a
+    harvest-launched NEW engine can reach the lock seconds after a resident OLD
+    one already took it. Yielding there hands the pass to the older binary and
+    the update never applies; an engine carrying the update retries instead."""
+
+    def test_newer_engine_acquires_after_the_holder_releases(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        lock_path = data_dir / proc_lock.LOCK_FILENAME
+        lock_path.write_text(f"{os.getpid()}\n123.0\n")  # live holder
+        (data_dir / "engine_ran_version").write_text("0.61.0", encoding="utf-8")
+
+        released = threading.Event()
+
+        def _release_soon():
+            time.sleep(0.05)
+            try:
+                os.remove(str(lock_path))
+            except OSError:
+                pass
+            released.set()
+
+        called = []
+        monkeypatch.setattr(engine, "_main", lambda: called.append(True))
+        monkeypatch.setattr(engine, "_LOCK_RETRY_SECONDS", 5.0)
+        monkeypatch.setattr(engine, "_LOCK_RETRY_INTERVAL", 0.01)
+        monkeypatch.setattr(sys, "argv", _argv(
+            data_dir, plugin_root=_plugin_root(tmp_path, "0.63.0"), background=True,
+        ))
+
+        releaser = threading.Thread(target=_release_soon)
+        releaser.start()
+        try:
+            engine.main()
+        finally:
+            releaser.join()
+
+        assert released.is_set()
+        assert called == [True], "the engine carrying the update must run its pass"
+        assert not lock_path.exists(), "the retried acquisition must still release"
+
+    def test_non_newer_engine_stands_down_without_retrying(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / proc_lock.LOCK_FILENAME).write_text(f"{os.getpid()}\n123.0\n")
+        (data_dir / "engine_ran_version").write_text("0.63.0", encoding="utf-8")
+
+        monkeypatch.setattr(engine, "_main", lambda: (_ for _ in ()).throw(
+            AssertionError("_main must not run while the lock is held")
+        ))
+        monkeypatch.setattr(engine, "_retry_engine_lock", lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("an engine that is not newer must not enter the retry loop")
+        ))
+        monkeypatch.setattr(sys, "argv", _argv(
+            data_dir, plugin_root=_plugin_root(tmp_path, "0.61.0"), background=True,
+        ))
+
+        engine.main()  # must return quietly
+
+    def test_unreadable_plugin_root_stands_down_immediately(self, tmp_path, monkeypatch):
+        """An unknown own-version can never escalate to the retry path."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / proc_lock.LOCK_FILENAME).write_text(f"{os.getpid()}\n123.0\n")
+
+        monkeypatch.setattr(engine, "_main", lambda: None)
+        monkeypatch.setattr(engine, "_retry_engine_lock", lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("no version -> no retry")
+        ))
+        monkeypatch.setattr(sys, "argv", _argv(data_dir, background=True))
+
+        engine.main()
+
+    def test_retry_gives_up_and_stands_down_when_holder_never_releases(
+        self, tmp_path, monkeypatch
+    ):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / proc_lock.LOCK_FILENAME).write_text(f"{os.getpid()}\n123.0\n")
+        (data_dir / "engine_ran_version").write_text("0.61.0", encoding="utf-8")
+
+        project_dir = str(tmp_path / "proj")
+        key = hashlib.sha1(project_dir.encode("utf-8")).hexdigest()
+        cooldowns = data_dir / "cooldowns"
+        cooldowns.mkdir()
+        stamp = cooldowns / f"last_run_epoch.{key}"
+        stamp.write_text("123")
+
+        monkeypatch.setattr(engine, "_main", lambda: (_ for _ in ()).throw(
+            AssertionError("_main must not run while the lock is held")
+        ))
+        monkeypatch.setattr(engine, "_LOCK_RETRY_SECONDS", 0.02)
+        monkeypatch.setattr(engine, "_LOCK_RETRY_INTERVAL", 0.001)
+        monkeypatch.setattr(sys, "argv", _argv(
+            data_dir, plugin_root=_plugin_root(tmp_path, "0.63.0"),
+            background=True, project_dir=project_dir,
+        ))
+
+        engine.main()
+
+        assert not stamp.exists(), "an exhausted retry must still roll back the cooldown"
 
 
 class TestSpawnRecheckPassReleasesLock:
