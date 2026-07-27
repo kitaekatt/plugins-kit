@@ -110,7 +110,26 @@ python .../bootstrap/0.63.0/engine/bootstrap_engine.py \
   --project-dir <project> --console
 ```
 
-The pass fetched the marketplace, installed 0.64.1 into the cache, and rewrote the registry. The machine came back healthy and the root cause became permanently unrecoverable. No code shipped, so every other machine that hits the same wedge is still wedged, and the next occurrence here will be equally undiagnosable. The wedge was a specification; it was spent as a chore.
+The pass fetched the marketplace, installed 0.64.1 into the cache, and rewrote the registry, and the wedge stopped being observable.
+
+Read the consequences carefully, because they are the reason this is an anti-pattern rather than a shortcut:
+
+- **The root cause is permanently unrecoverable.** The failing state existed only while it was failing. It cannot be reconstructed, so no repair can be written and no test can be built against it.
+- **Nothing shipped.** Every other machine that hits the same wedge is still wedged. The one machine that could have specified the fix was spent clearing itself.
+- **The "fix" was never even verified.** Afterwards, only bootstrap was confirmed to load (its hook fired at 0.64.1). The other eight affected plugins were never re-checked. "The machine recovered" was asserted, believed, and written into documentation without evidence -- a hand-repair produces a *feeling* of resolution that outruns what was actually established.
+- **The causal link is unproven.** What the pass did -- a routine version update -- has no evident connection to a cache-resolution error. It is entirely possible the wedge cleared for an unrelated reason, which means even the folk remedy this produced ("run the engine by hand") may be worthless.
+
+The wedge was a specification. It was spent as a chore, and it did not even demonstrably complete the chore.
+
+**Both entry points are the anti-pattern.** This applies equally to the engine (`bootstrap_engine.py`) and to the hook (`plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh`). Hand-invoking either runs a full live pass outside the conditions bootstrap is designed for, so what you observe generalizes to nobody. (An earlier insight in this file, `run_bootstrap_hook_directly`, advised the opposite; it is retracted and replaced by `never_run_bootstrap_hook_directly`.)
+
+**The legitimate way to make bootstrap run again** is to clear the throttle and let a real session start do the work:
+
+```bash
+bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh   # then start a session
+```
+
+That exercises the same code path under the same conditions a user gets, so the result means something. Resetting the cooldown is not the anti-pattern -- forcing the pass yourself is.
 
 **The discipline.** When a machine is wedged:
 
@@ -367,18 +386,26 @@ claude_md:
         bootstrap.json.
       origin: User directive 2026-04-28 during YAML contract refactor; existing pattern in unreal-kit/bootstrap.json + p4-kit/bootstrap.json.
       added: "2026-04-28"
-    - id: run_bootstrap_hook_directly
-      keywords: [bootstrap hook, sessionstart, force update, plugin refresh, install update]
-      summary: To force a plugin install or update outside a normal session start, run the bootstrap hook directly.
+    - id: never_run_bootstrap_hook_directly
+      keywords: [bootstrap hook, sessionstart, force update, plugin refresh, install update, session-bootstrap.sh, run hook directly, force a pass, anti-pattern, superseded]
+      summary: "SUPERSEDES the former run_bootstrap_hook_directly guidance (2026-04-28), which was wrong. Do NOT hand-invoke session-bootstrap.sh or bootstrap_engine.py to force a pass. Reset the cooldown and let the next real session run it."
       detail: |
-        The bootstrap hook lives at plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh
-        and is the entry point Claude Code calls on SessionStart. To force-refresh plugins or
-        re-run dependency installs, invoke it directly via bash. The engine reads the layered
-        bootstrap.json hierarchy, runs the manifest+script phases, and emits the same hook JSON
-        it would on a real session start. Useful when a plugin's bootstrap.json has changed and
-        you need the venv refreshed before the next session.
-      origin: User directive 2026-04-28.
-      added: "2026-04-28"
+        The former guidance told you to invoke plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh
+        directly to force a refresh. Treat that as retracted. Hand-invoking either entry point --
+        the hook or the engine -- runs a full live pass outside the conditions bootstrap is
+        designed for, and it is how a diagnosable wedge gets converted into an unexplained one
+        (see never_hand_repair_a_wedge and the anti-pattern section in the Bootstrap chapter).
+        The legitimate way to make bootstrap run again is to clear the throttle and let a REAL
+        session start do it:
+          bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh   # then start a session
+        That path exercises the same code under the same conditions users get, so what you
+        observe is what they would observe. A hand-invoked pass does not, and its success or
+        failure generalizes to nobody.
+        Narrow exception: a hand-invoked pass is a diagnostic of last resort, permitted only
+        AFTER the machine's state has been snapshotted, and preferred only when no read-only
+        probe would answer the question.
+      origin: "User directive 2026-07-27, superseding the 2026-04-28 directive. The original guidance was followed during a 'not cached' investigation and destroyed the failing state before it could be diagnosed."
+      added: "2026-07-27"
     - id: bootstrap_cooldown_reset
       keywords: [cooldown, bootstrap not running, force bootstrap, plugin update not applying, last_run_epoch, bootstrap-reset-cooldown, silent skip, no bootstrap log]
       summary: Bootstrap throttles itself per-project via a cooldown file; clear it with bootstrap-reset-cooldown.sh when bootstrap appears to be ignoring you.
