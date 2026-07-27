@@ -22,6 +22,7 @@ from bootstrap_lib.marketplace_lifecycle import (
     check_plugin_scope,
     ensure_registry_scope,
     update_marketplace,
+    update_plugin,
 )
 
 
@@ -1171,3 +1172,85 @@ class TestCheckPluginScopeDuplicateRecords:
         result = check_plugin_scope("plugins-kit:bootstrap", "user")
         assert result.matches is True
         assert result.installed_scope == "user"
+
+
+class TestUpdatePluginRecordedScope:
+    """update_plugin must target the scope the plugin is INSTALLED at.
+
+    The CLI resolves by scope and refuses ("Plugin X is not installed at scope
+    user") when the passed scope differs from the recorded one, which wedged
+    updates forever for genuinely project-scoped installs.
+    """
+
+    def _write_registry(self, tmp_path, monkeypatch, plugins_data):
+        ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        ip.parent.mkdir(parents=True, exist_ok=True)
+        ip.write_text(json.dumps({"version": 2, "plugins": plugins_data}))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        return ip
+
+    def _run(self, desired_scope="user"):
+        """Return the scope actually used, asserting the CLI arg and the
+        _run_claude_scoped argument agree.
+
+        They must: _run_claude_scoped uses its scope to pick which settings.json
+        to make writable (settings_path_for_scope), so a mismatch would guard
+        one file while the CLI rewrites another.
+        """
+        with patch("bootstrap_lib.marketplace_lifecycle._run_claude_scoped") as mock_run:
+            mock_run.return_value = (True, "", "")
+            result = update_plugin("plugins-kit:bootstrap", scope=desired_scope)
+        assert result.passed is True
+        args, scoped_scope, _project_dir = mock_run.call_args[0]
+        cli_scope = args[args.index("--scope") + 1]
+        assert cli_scope == scoped_scope, (
+            "--scope arg and the settings-writable guard must target one scope"
+        )
+        return cli_scope
+
+    def test_uses_recorded_scope_not_desired_scope(self, tmp_path, monkeypatch):
+        self._write_registry(tmp_path, monkeypatch, {
+            "bootstrap@plugins-kit": [{"scope": "project", "version": "0.52.0"}]
+        })
+        assert self._run(desired_scope="user") == "project"
+
+    def test_falls_back_to_passed_scope_when_no_record(self, tmp_path, monkeypatch):
+        """Registry-v2 keeps "plugins" empty -> nothing to resolve; use the caller's scope."""
+        self._write_registry(tmp_path, monkeypatch, {})
+        assert self._run(desired_scope="user") == "user"
+
+    def test_falls_back_when_registry_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        assert self._run(desired_scope="project") == "project"
+
+    def test_falls_back_when_record_has_empty_scope(self, tmp_path, monkeypatch):
+        self._write_registry(tmp_path, monkeypatch, {
+            "bootstrap@plugins-kit": [{"version": "0.52.0"}]
+        })
+        assert self._run(desired_scope="user") == "user"
+
+    def test_chimera_preferring_pick_wins(self, tmp_path, monkeypatch):
+        """pick_registry_record prefers the non-projectPath record's scope."""
+        self._write_registry(tmp_path, monkeypatch, {
+            "bootstrap@plugins-kit": [
+                {"scope": "project", "version": "0.99.0", "projectPath": "D:/dev/x"},
+                {"scope": "user", "version": "0.52.0"},
+            ]
+        })
+        assert self._run(desired_scope="project") == "user"
+
+    def test_project_dir_forwarded_to_scoped_runner(self, tmp_path, monkeypatch):
+        """project_dir must reach _run_claude_scoped so a project-scope update
+        guards (and runs in) the right project settings file."""
+        self._write_registry(tmp_path, monkeypatch, {
+            "bootstrap@plugins-kit": [{"scope": "project", "version": "0.52.0"}]
+        })
+        with patch("bootstrap_lib.marketplace_lifecycle._run_claude_scoped") as mock_run:
+            mock_run.return_value = (True, "", "")
+            update_plugin("plugins-kit:bootstrap", scope="user", project_dir="D:/dev/x")
+        args, scoped_scope, project_dir = mock_run.call_args[0]
+        assert scoped_scope == "project"
+        assert project_dir == "D:/dev/x"
+        assert args[args.index("--scope") + 1] == "project"

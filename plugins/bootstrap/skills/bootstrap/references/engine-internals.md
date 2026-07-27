@@ -27,6 +27,79 @@ The bootstrap engine has two distinct setup phases:
 
 Discovery results are cached in `plugins/data/plugins-kit/bootstrap/config.json` under `bootstrap_cache` to avoid repeated filesystem scans — entries are added on first discovery and removed if `bootstrap.json` disappears (e.g. after a plugin update). Users can permanently opt out a plugin by adding its ref to `no_bootstrap` in that config file.
 
+### Step 3b2: Registry chimera self-repair (`registry_repair.py`, 0.62.0)
+
+Claude Code's registry can hold a malformed *chimera* record: a `scope: "user"`
+record that also carries a `projectPath`, written by the trust/adoption flow
+when a plugin is enabled in a tracked **project** `.claude/settings.json` while
+the plugin wants user scope. A later `claude plugin install --scope user`
+does not match it and **appends**, leaving two records under one ref. Claude
+Code's own loader picks `entries[0]`, so the stale record decides which cache
+dir the plugin loads from -- for bootstrap that means the old engine runs
+forever while its log claims it updated (reported upstream as
+claude-code#79892).
+
+The engine repairs this once per pass, immediately after the venv activation
+and **before any plugins phase** (the layered manifest in Step 3c and the
+per-plugin manifests in Step 4 both run `_phase_plugins`), so version checks
+and updates read a clean registry. The rule applies to **every ref**, not just
+bootstrap -- the `entries[0]` pick breaks any plugin the same way:
+
+> \>1 records, at least one `scope: user` **without** `projectPath`, and one or
+> more `scope: user` **with** `projectPath` -> drop the `projectPath`-bearing
+> record(s)
+
+Deliberately narrow: `scope: "project"` records are never touched (a genuine
+per-project install is legitimate), `version` / `installPath` are never
+rewritten (it removes a duplicate, it does not force a version), and a ref is
+skipped entirely unless a healthy user record survives -- better a wedged
+machine than a deregistered plugin. Unreadable or unparseable registries are a
+silent no-op; this runs on every session start and must never break one.
+
+Write discipline mirrors `ensure_registry_scope`: back up to
+`installed_plugins.json.registry-repair.bak` (best-effort), write atomically,
+and **only when records are actually dropped** -- the registry's mtime arms the
+SessionStart cooldown's registry-change bypass, so a no-op rewrite every pass
+would re-arm a full bootstrap pass every session. Dropping records emits an
+`action_entry` naming the refs and versions; a clean registry emits a
+verbose-only `ok_entry`.
+
+Takes effect on the **next** session: Claude Code reads the registry and loads
+plugins at startup, before SessionStart hooks fire.
+
+This is the root-cause fix, for machines that are **not yet** wedged. It does
+not remediate machines already stuck on an older bootstrap -- they cannot adopt
+0.62.0 by the very mechanism that is broken there. Those still need the
+separate `bootstrap-stuck-fix` plugin (`scripts/repair_registry.py`), which has
+no prior version to be wedged on. See the delivery-path rule in the repo
+CLAUDE.md and the `update_lifecycle` fact in the bootstrap SKILL.md.
+
+### Plugin updates target the recorded scope
+
+`marketplace_lifecycle.update_plugin` runs `claude plugin update <ref> --scope
+<scope>` with the scope the registry says the plugin is **installed at**, not
+the scope the manifest wants. Update where it lives, not where the manifest
+wishes it lived: the CLI resolves by scope and refuses outright ("Plugin X is
+not installed at scope user") on a mismatch, which wedged updates forever for
+genuinely project-scoped installs. The authoritative record comes from
+`plugin_resolve.pick_registry_record` (which prefers the non-`projectPath`
+shape); the caller's `scope` argument is only the fallback for a registry with
+no usable record (the registry-v2 empty `plugins` map). Scope *correction* is a
+separate concern, handled by `ensure_registry_scope` and the scope-remediation
+path in `_phase_plugins`.
+
+The resolved scope drives **both** the `--scope` argument and the
+`_run_claude_scoped(args, scope, project_dir)` call, so the settings file made
+writable ahead of the CLI's rewrite (`settings_path_for_scope`) is the same one
+the CLI actually writes. `install_plugin` / `uninstall_plugin` keep using the
+caller's scope: those genuinely choose where a plugin should live, whereas an
+update only follows where it already lives.
+
+Same split as above: this prevents the stall, it does not clear one. A machine
+already stalled needs `bootstrap-stuck-fix`'s
+`scripts/repair_update_scope.py`, which runs the scoped update from outside the
+broken path.
+
 ### Step 4 Processing Order
 
 Plugins are processed in a deterministic order:

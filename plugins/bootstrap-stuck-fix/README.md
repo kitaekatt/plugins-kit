@@ -1,7 +1,8 @@
 # bootstrap-stuck-fix
 
-**Remediation plugin, kept published indefinitely as a safety net -- see
-"Distribution and withdrawal" below.**
+**Remediation plugin, kept published as a safety net until every known
+machine runs bootstrap >= 0.62.0 -- see "Distribution and withdrawal"
+below.**
 
 Repairs the defects that permanently wedge a machine on an old bootstrap
 version. Two are covered, independent of each other -- a machine can have
@@ -164,11 +165,38 @@ python plugins/bootstrap-stuck-fix/scripts/repair_registry.py --dry-run
 ## Distribution and withdrawal
 
 Distributed by enabling it in a tracked project `settings.json`, so anyone who
-syncs that file and starts a session receives the fix. **Kept published
-indefinitely as a safety net** (decision 2026-07-22): the repair is idempotent
-and silent on healthy machines, so leaving it in place costs nothing and
-covers stragglers that surface late. If it is ever withdrawn, remove that
-enablement.
+syncs that file and starts a session receives the fix. Kept published as a
+safety net (decision 2026-07-22): the repair is idempotent and silent on
+healthy machines, so leaving it in place costs nothing and covers stragglers
+that surface late. If it is ever withdrawn, remove that enablement.
+
+**Superseded natively as of 2026-07-26.** bootstrap >= 0.62.0 carries both
+repairs itself, so a machine running it never reaches either wedge:
+
+- `plugins/bootstrap/bootstrap_lib/registry_repair.py` -- the chimera
+  registry repair, and
+  generalized to **every** ref rather than just `bootstrap@plugins-kit`
+  (Claude Code's loader picks `entries[0]` for every plugin, so any ref's
+  chimera pins that plugin to old code). Runs once per bootstrap pass, before
+  any plugins phase.
+- `marketplace_lifecycle.update_plugin` -- updates at the scope the registry
+  records rather than the scope the manifest wants, so a genuine project-scope
+  install is no longer refused by the CLI. This is the root-cause fix that
+  `scripts/repair_update_scope.py` remediates after the fact.
+
+Per user decision 2026-07-26 this plugin can therefore be **deleted** once
+every known machine reports
+`~/.claude/plugins/data/plugins-kit/bootstrap/engine_ran_version` >= 0.62.0:
+
+```bash
+cat ~/.claude/plugins/data/plugins-kit/bootstrap/engine_ran_version
+```
+
+Until then it stays published, because the native fix only protects machines
+that are **not yet** wedged. A machine already stuck on a pre-0.62.0 bootstrap
+cannot adopt 0.62.0 by itself -- the stall blocks delivery of its own fix -- so
+it still needs this plugin to heal first, and only then does its
+`engine_ran_version` advance.
 
 Two notes for whoever withdraws it:
 

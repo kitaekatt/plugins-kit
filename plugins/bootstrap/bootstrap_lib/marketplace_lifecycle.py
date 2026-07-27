@@ -691,11 +691,42 @@ def uninstall_plugin(
     return LifecycleResult(passed=False, ref=plugin_ref, message=f"uninstall failed: {stderr.strip()}")
 
 
+def _recorded_scope(cli_ref: str, plugin_ref: str) -> str:
+    """Scope the registry says a plugin is actually installed at ("" if unknown)."""
+    ip_path = os.path.expanduser("~/.claude/plugins/installed_plugins.json")
+    try:
+        with open(ip_path, "r") as f:
+            data = json.load(f)
+        plugins = data.get("plugins", {})
+        entries = plugins.get(cli_ref) or plugins.get(plugin_ref) or []
+        rec = pick_registry_record(entries)
+        if rec is not None:
+            return rec.get("scope", "") or ""
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    return ""
+
+
 def update_plugin(
     plugin_ref: str, scope: str = "user", project_dir: Optional[str] = None
 ) -> LifecycleResult:
-    """Update a plugin via `claude plugin update`."""
+    """Update a plugin via `claude plugin update`, at the scope it lives at.
+
+    Update where it lives, not where the manifest wishes it lived. The CLI
+    resolves the plugin by scope and refuses outright ("Plugin X is not
+    installed at scope user") when the passed scope differs from the recorded
+    one -- so passing the caller's DESIRED scope wedges updates forever for a
+    genuinely project-scoped install. The registry's authoritative record
+    (pick_registry_record, which prefers the non-projectPath shape) decides;
+    `scope` is only the fallback for a registry with no usable record
+    (registry-v2's empty "plugins" map). Scope correction is a separate
+    concern -- see ensure_registry_scope / the scope-remediation path.
+
+    The resolved scope drives BOTH the --scope arg and _run_claude_scoped, so
+    the settings file made writable is the one the CLI actually rewrites.
+    """
     cli_ref = _to_cli_ref(plugin_ref)
+    scope = _recorded_scope(cli_ref, plugin_ref) or scope
     ok, stdout, stderr = _run_claude_scoped(
         ["plugin", "update", cli_ref, "--scope", scope], scope, project_dir
     )
