@@ -1232,3 +1232,24 @@ class TestSelfRegistrationWiring:
         assert result.returncode == 0, result.stderr
         # Declared in ~/.claude/bootstrap.json -> no local entry is written.
         assert not os.path.exists(local_path)
+
+    def test_display_line_is_not_duplicated(self, tmp_path):
+        """Step 4b2's log block must be DEFERRED to Step 6.
+
+        Writing it inline (before Step 5 reads new log entries back into
+        `shell_content`) puts the same text in the emitted display twice: once
+        from its display section, once verbatim from the log it just wrote.
+        Same leak the Step 4c sweep and the Step 4d notice defer to avoid.
+        """
+        fake_root, data_dir, env, local_path = self._setup(tmp_path)
+        result = run_engine(data_dir, plugin_root=str(fake_root), env=env)
+        assert result.returncode == 0, result.stderr
+
+        message = json.loads(result.stdout)["systemMessage"]
+        occurrences = message.count("self-register: added kit:dep-plugin")
+        assert occurrences == 1, (
+            f"self-register line emitted {occurrences} times (expected 1):\n{message}"
+        )
+        # It IS still logged (deferring the write must not drop it).
+        with open(os.path.join(data_dir, "bootstrap.log")) as f:
+            assert "self-register: added kit:dep-plugin" in f.read()

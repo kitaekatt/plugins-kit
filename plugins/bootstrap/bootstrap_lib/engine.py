@@ -713,7 +713,12 @@ def _main():
         display_sections.append((sr_label, sr_actions, sr_oks))
         sr_log = sr_actions + (sr_oks if log_success else [])
         if sr_log and not args.console:
-            write_log_block(data_dir, sr_label, sr_log, start_time=start_time)
+            # Deferred to Step 6 (like plugin logs, the Step 4c sweep, and the
+            # Step 4d notice): writing now would leak the block back through
+            # Step 5's shell_content read, so every self-register line would be
+            # emitted twice -- once from its display section, once verbatim from
+            # the log.
+            deferred_plugin_logs.append((data_dir, sr_label, sr_log))
 
     # Step 4c: Shared-lib convergence sweep. Every owner has now published (Steps
     # 4 + 4b), so re-link all consumers in one go -- a consumer processed before
