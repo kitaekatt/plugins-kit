@@ -267,6 +267,49 @@ class TestEngineMainLock:
         assert log_file.is_file(), "a stand-down must be visible in bootstrap.log"
         assert "stand-down" in log_file.read_text()
 
+    def test_stand_down_reports_to_console_caller(self, tmp_path, monkeypatch, capsys):
+        """A --console stand-down must SAY it did nothing. Exiting 0 with empty
+        stdout is indistinguishable from a clean pass, which is how three
+        consecutive no-op fix-all runs each got diagnosed as a different bug."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / proc_lock.LOCK_FILENAME).write_text(f"{os.getpid()}\n123.0\n")
+
+        monkeypatch.setattr(engine, "_main", lambda: None)
+        monkeypatch.setattr(sys, "argv", _argv(data_dir, console=True))
+
+        engine.main()
+
+        out = capsys.readouterr().out
+        assert "stand-down" in out, "a console stand-down must report on stdout"
+        assert "DID NO WORK" in out, (
+            "the notice must state plainly that nothing ran, not merely that a "
+            "stand-down occurred"
+        )
+        assert f"pid {os.getpid()}" in out, "name the lock holder so it can be waited on"
+
+    def test_stand_down_reports_to_non_console_caller(self, tmp_path, monkeypatch, capsys):
+        """SessionStart callers read hook JSON, not stdout text -- the same
+        stand-down must reach them through emit_success_response."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / proc_lock.LOCK_FILENAME).write_text(f"{os.getpid()}\n123.0\n")
+
+        emitted = []
+        monkeypatch.setattr(engine, "_main", lambda: None)
+        monkeypatch.setattr(engine, "emit_success_response",
+                            lambda content, **kw: emitted.append(content))
+        monkeypatch.setattr(sys, "argv", _argv(data_dir))
+
+        engine.main()
+
+        assert emitted, "a non-console stand-down must emit a hook response"
+        assert "stand-down" in emitted[0]
+        assert "DID NO WORK" in emitted[0]
+        assert capsys.readouterr().out == "", (
+            "non-console mode must not print bare text -- it would corrupt the JSON"
+        )
+
     def test_main_runs_and_releases_lock_when_uncontended(self, tmp_path, monkeypatch):
         data_dir = tmp_path / "data"
         data_dir.mkdir()

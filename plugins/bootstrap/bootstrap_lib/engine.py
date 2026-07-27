@@ -65,7 +65,7 @@ def main():
     _LOCK_RETRY_SECONDS instead; engines that are not newer keep the
     immediate stand-down.
     """
-    data_dir, project_dir, plugin_root = _peek_lock_args()
+    data_dir, project_dir, plugin_root, console, background = _peek_lock_args()
     if not data_dir:
         # --data-dir is a required arg; _main()'s own parser will reject a
         # genuinely missing one with the standard argparse error.
@@ -84,7 +84,8 @@ def main():
                 _run_with_containment()
                 return
 
-    _stand_down_lock_contended(data_dir, project_dir, plugin_root)
+    _stand_down_lock_contended(data_dir, project_dir, plugin_root,
+                               console=console, background=background)
 
 
 # Bounds for the version-aware retry in main(). Module constants, not inlined
@@ -152,18 +153,24 @@ def _carries_update(data_dir, plugin_root) -> bool:
 
 
 def _peek_lock_args() -> tuple:
-    """Lenient pre-parse of --data-dir/--project-dir/--plugin-root only, so the
-    lock can be acquired (and, on stand-down, this launch's guards rolled back
-    and its own version reported) before the full argparse runs."""
+    """Lenient pre-parse of the few args needed before the full argparse runs:
+    --data-dir/--project-dir/--plugin-root so the lock can be acquired (and, on
+    stand-down, this launch's guards rolled back and its own version reported),
+    plus --console/--background so a stand-down can REPORT itself on whichever
+    channel the caller is listening to."""
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--data-dir", default=None)
     parser.add_argument("--project-dir", default=None)
     parser.add_argument("--plugin-root", default=None)
+    parser.add_argument("--console", action="store_true")
+    parser.add_argument("--background", action="store_true")
     args, _ = parser.parse_known_args()
-    return args.data_dir or "", args.project_dir or "", args.plugin_root or ""
+    return (args.data_dir or "", args.project_dir or "", args.plugin_root or "",
+            args.console, args.background)
 
 
-def _stand_down_lock_contended(data_dir, project_dir, plugin_root=""):
+def _stand_down_lock_contended(data_dir, project_dir, plugin_root="",
+                               console=False, background=False):
     """Another engine instance already holds the lock -- this pass never ran.
     Roll back the ONE guard that is unambiguously OURS: the per-project
     cooldown stamp session-bootstrap.sh writes BEFORE launching the engine.
@@ -206,19 +213,45 @@ def _stand_down_lock_contended(data_dir, project_dir, plugin_root=""):
             rearmed = True
     except Exception:
         pass
+    holder = _lock_holder_pid(data_dir)
+    who = f"engine {own_version}" if own_version else "engine"
+    where = f" (pid {holder})" if holder else ""
+    entry = (
+        f"stand-down: {who} yielded to running engine pass{where}; "
+        "this project's cooldown was cleared for a retry on the next "
+        "opportunity"
+    )
+    if rearmed:
+        entry += "; harvest re-armed (this engine carries an update)"
     try:
         from .log import write_log_block
-        holder = _lock_holder_pid(data_dir)
-        who = f"engine {own_version}" if own_version else "engine"
-        where = f" (pid {holder})" if holder else ""
-        entry = (
-            f"stand-down: {who} yielded to running engine pass{where}; "
-            "this project's cooldown was cleared for a retry on the next "
-            "opportunity"
-        )
-        if rearmed:
-            entry += "; harvest re-armed (this engine carries an update)"
         write_log_block(data_dir, "bootstrap lock", [entry])
+    except Exception:
+        pass
+
+    # Also report on whatever channel the CALLER is listening to. The log
+    # alone is not enough: a stand-down exits 0 having done nothing, which
+    # from outside is indistinguishable from a clean pass. An agent driving
+    # `--console --fix-all` sees empty output plus exit 0, reads it as
+    # success, and either reports a fix that never ran or starts debugging
+    # the wrong layer entirely (observed live, 0.66.2 -- three no-op fix-all
+    # invocations in a row were each diagnosed as a different bug). Say it
+    # out loud, and say explicitly that no work happened.
+    notice = (
+        f"{entry}. THIS INVOCATION DID NO WORK -- retry once the running pass "
+        "finishes; if that pass is a fix-all, its elevated console window may "
+        "still be open waiting for input."
+    )
+    try:
+        if console:
+            print(f"--- bootstrap lock: {notice} ---")
+        else:
+            emit_success_response(
+                f"--- bootstrap lock: {notice} ---",
+                label="bootstrap",
+                output_file=(os.path.join(data_dir, "bootstrap_display.pending")
+                             if background else None),
+            )
     except Exception:
         pass
 
