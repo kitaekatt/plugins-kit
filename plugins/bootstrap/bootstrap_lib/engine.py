@@ -3789,8 +3789,11 @@ def _phase_plugins(ctx):
             # Sync installed_plugins.json scope to match desired scope.
             # CLI commands (update, uninstall) read scope from this file and
             # fail if it's stale. Fix the data before running those commands.
+            # An add is a remediation, a refusal is a defect left unrepaired,
+            # and an unreadable registry is a failed check -- all three are
+            # always-visible action entries, never verbose-only ok entries.
             _scope_sync = ensure_registry_scope(plugin_ref, desired_scope)
-            if _scope_sync.added:
+            if _scope_sync.added or _scope_sync.refused or not _scope_sync.passed:
                 ctx.action(f"plugin {plugin_ref}: {_scope_sync.message}")
 
         if install_mode == "manual":

@@ -156,15 +156,32 @@ already stalled needs `bootstrap-stuck-fix`'s
 `scripts/repair_update_scope.py`, which runs the scoped update from outside the
 broken path.
 
-### Registry scope sync: the missing user-scope record (0.66.0)
+### Registry scope sync: the missing user-scope record (0.66.2)
 
 `marketplace_lifecycle.ensure_registry_scope(plugin_ref, desired_scope)` runs
 once per plugin per pass from `_phase_plugins`, with `desired_scope` taken from
 the manifest. It performs two remediations.
 
 **1. Rewrite a stale scope** on a record that carries no `projectPath` (the
-original behavior). Records carrying `projectPath` are skipped: stamping a
-scope onto one manufactures the chimera of rule 1 above.
+original behavior). Two guards, one per malformed shape above:
+
+- Records carrying `projectPath` are skipped -- stamping a scope onto one
+  manufactures the **chimera** of rule 1.
+- The rewrite never targets scope `"project"` -- every record reaching it is
+  pathless, so that flip manufactures the **orphan** of rule 2. Composed with
+  rule 2 the damage is delayed rather than avoided: flip (write 1), delete on
+  the next pass (write 2), and a legitimate user-scope install record is gone.
+  Add remediation 2 declaring the same ref at user scope elsewhere and the pair
+  oscillates -- a registry write and a full bootstrap pass every session, with
+  an orphan transiently at index 0.
+
+  The live shape this protects: `engineer@spryfox-plugins` and
+  `prototyping@spryfox-plugins` are declared `scope: "project"` in one project's
+  `bootstrap.json` while enabled at **user** scope in `~/.claude/settings.json`.
+  If Claude Code ships the claude-code#81706 fix and begins writing the missing
+  user-scope record itself, an unguarded rewrite would convert it straight back
+  into the orphan upstream had just fixed -- the workaround fighting the real
+  fix, indefinitely.
 
 **2. Add a missing pathless user-scope record.** When a plugin is enabled at
 **both** user scope (`~/.claude/settings.json` `enabledPlugins`) and project
@@ -177,7 +194,7 @@ against a path that exists (reported upstream as claude-code#81706; related
 
 Remediation 1 cannot reach this shape by construction -- it can only rewrite
 the scope of a record that already exists, and the sole record here carries
-`projectPath`. So the rule **adds a sibling**:
+`projectPath` (which it must not touch). So the rule **adds a sibling**:
 
 > `desired_scope == "user"`, and no record for the ref is both pathless and at
 > user scope -> derive `{scope: "user", installPath, version, gitCommitSha}`
@@ -203,9 +220,30 @@ Narrowness, in the same spirit as the repair rules:
   SessionStart cooldown bypass, so an unconditional rewrite would re-arm a full
   pass every session.
 
-The function returns a `ScopeSyncResult(passed, ref, added, message)`; the call
-site emits an `action_entry` whenever `added` is true, since an add is a
-remediation and must be visible, not verbose-only.
+The function returns a `ScopeSyncResult(passed, ref, added, refused, message)`.
+The call site emits an `action_entry` when `added` (a remediation), when
+`refused` (the add was warranted but declined for lack of install evidence),
+and when `passed` is false (the registry could not be read) -- three outcomes
+that must all be visible rather than verbose-only. A machine still carrying the
+defect that bootstrap decided not to repair, logging nothing, is
+indistinguishable from a healthy one; this is the same reasoning that gave rule
+2 its `find_unrepairable` reporting.
+
+**Watch items** (known limitations, not remediated -- revisit if observed):
+
+- After an add, `_recorded_scope` resolves through `pick_registry_record`,
+  which prefers pathless records, so every later `update_plugin` targets
+  `--scope user` and the surviving project record is never updated again. Its
+  `version` then diverges. This lands first on bootstrap's own delivery path at
+  the next version bump. Pre-decided: if that divergence appears on the first
+  post-publish bump, the remediation moves to `bootstrap-stuck-fix`.
+- `_derive_user_record` copies `version` from the source record, which may
+  itself be a chimera or orphan carrying a stale version -- converting a
+  visibly-malformed state into an invisibly-stale one that no repair rule
+  revisits.
+- The synthesized record omits `installedAt` / `lastUpdated` / `source`, which
+  every Claude-Code-authored record carries. No evidence they are required;
+  nobody has checked.
 
 **Why this ships in bootstrap, not `bootstrap-stuck-fix`.** A machine in this
 state still loads bootstrap inside the bound project -- that is where the one

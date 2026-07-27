@@ -738,7 +738,8 @@ def update_plugin(
 class ScopeSyncResult(NamedTuple):
     passed: bool
     ref: str
-    added: bool   # a pathless user-scope record was ADDED (a remediation)
+    added: bool     # a pathless user-scope record was ADDED (a remediation)
+    refused: bool   # an add was warranted but declined (no install evidence)
     message: str
 
 
@@ -781,7 +782,8 @@ def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> ScopeSyncResul
     Two remediations, in order:
 
     1. REWRITE the scope of an existing pathless record (the original
-       behavior). Records carrying projectPath are never touched.
+       behavior). Records carrying projectPath are never touched, and the
+       rewrite never targets scope "project" -- see the guard below.
     2. ADD a pathless user-scope record when none exists (claude-code#81706).
        When a plugin is enabled at BOTH user and project scope, Claude Code
        writes ONLY a project-scoped record. The user-level enablement then has
@@ -792,8 +794,11 @@ def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> ScopeSyncResul
        user-scope+projectPath chimera of claude-code#79892), so we add a
        well-formed sibling and leave every existing record byte-identical.
 
-    Returns ScopeSyncResult; ``added`` is True only for remediation 2, which
-    the caller must surface as an action entry.
+    Returns ScopeSyncResult. ``added`` is True only for remediation 2;
+    ``refused`` is True when remediation 2 was warranted but declined for lack
+    of install evidence. The caller must surface an action entry for either,
+    and for ``passed`` False -- an unrepaired defect that logs nothing is
+    indistinguishable from a healthy machine.
 
     Write discipline: the registry is shared with Claude Code itself and its
     mtime arms the SessionStart cooldown's registry-change bypass, so we only
@@ -811,7 +816,7 @@ def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> ScopeSyncResul
         entries = plugins.get(cli_ref) or plugins.get(plugin_ref)
         if not entries:
             # not in registry, nothing to fix
-            return ScopeSyncResult(True, plugin_ref, False, "not in registry")
+            return ScopeSyncResult(True, plugin_ref, False, False, "not in registry")
         changed = False
         for entry in entries:
             if not isinstance(entry, dict) or entry.get("projectPath"):
@@ -819,12 +824,25 @@ def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> ScopeSyncResul
                 # scope onto it manufactures the user-scope+projectPath
                 # chimera that wedges updates (claude-code#79892).
                 continue
+            if desired_scope == "project":
+                # Every record reaching here is PATHLESS, so stamping
+                # scope "project" onto it manufactures the orphan shape --
+                # a project install with no project -- that registry_repair's
+                # rule 2 deletes on the next pass. Composed, that is
+                # flip-then-delete: a legitimate user-scope install record
+                # destroyed across two passes, and (when another manifest
+                # declares the same ref at user scope) remediation 2 re-adds
+                # it, so the pair oscillates forever, rewriting the registry
+                # and re-arming a full bootstrap pass every session. Same
+                # narrowness as remediation 2 below, for the same reason.
+                continue
             if entry.get("scope") != desired_scope:
                 entry["scope"] = desired_scope
                 changed = True
 
         message = f"rewrote stale scope to {desired_scope}" if changed else "scope in sync"
         added = False
+        refused = False
         # Remediation 2 is USER-SCOPE ONLY. A pathless record at scope
         # "project" is malformed by definition -- a project install is defined
         # by the project it belongs to -- and is exactly the orphan shape
@@ -838,9 +856,13 @@ def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> ScopeSyncResul
         ):
             new_rec = _derive_user_record(entries)
             if new_rec is None:
+                # A machine still carrying the defect that we decided NOT to
+                # repair. Report it so the skip is logged rather than silent
+                # (engine-internals.md: every check must log its outcome).
+                refused = True
                 message = (
-                    "no pathless user record and no installed record to derive "
-                    "one from (installPath missing on disk); left as-is"
+                    "missing user-scope registry record not added: no usable "
+                    "source record (installPath missing on disk); left as-is"
                 )
             else:
                 # Insert FIRST: Claude Code resolves entries[0], and it is not
@@ -859,12 +881,14 @@ def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> ScopeSyncResul
 
         if not changed:
             # already correct, leave the file (and its mtime) alone
-            return ScopeSyncResult(True, plugin_ref, False, message)
+            return ScopeSyncResult(True, plugin_ref, False, refused, message)
         from .atomic_write import write_atomic
         write_atomic(ip_path, json.dumps(data, indent=2) + "\n")
-        return ScopeSyncResult(True, plugin_ref, added, message)
+        return ScopeSyncResult(True, plugin_ref, added, refused, message)
     except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
-        return ScopeSyncResult(False, plugin_ref, False, f"registry unreadable: {exc}")
+        return ScopeSyncResult(
+            False, plugin_ref, False, False, f"registry unreadable: {exc}"
+        )
 
 
 def _to_cli_ref(plugin_ref: str) -> str:

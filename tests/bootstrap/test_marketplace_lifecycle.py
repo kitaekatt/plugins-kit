@@ -1157,6 +1157,83 @@ class TestEnsureRegistryScopeProjectPathGuard:
         assert ip.read_text() == before
 
 
+class TestEnsureRegistryScopeNeverCreatesOrphan:
+    """The scope-REWRITE remediation must never stamp scope "project" onto a
+    pathless record.
+
+    Every record reaching the rewrite is pathless, so a flip to "project"
+    manufactures the orphan shape (a project install naming no project) that
+    registry_repair's rule 2 deletes on the next pass. Composed, that is
+    flip-then-delete: a legitimate user-scope install record destroyed across
+    two passes, and -- when another manifest declares the same ref at user
+    scope -- re-added by the add remediation, oscillating forever.
+
+    Live shape this protects: engineer@spryfox-plugins and
+    prototyping@spryfox-plugins are declared scope "project" in spiritcrossing's
+    bootstrap.json while enabled at USER scope in ~/.claude/settings.json. If
+    Claude Code ships the claude-code#81706 fix and starts writing the missing
+    user-scope record itself, an unguarded rewrite would convert it straight
+    back into the orphan upstream just fixed.
+    """
+
+    def _write_registry(self, tmp_path, monkeypatch, plugins_data):
+        ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        ip.parent.mkdir(parents=True, exist_ok=True)
+        ip.write_text(json.dumps({"version": 2, "plugins": plugins_data}, indent=2))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        return ip
+
+    def test_pathless_user_record_not_flipped_to_project(self, tmp_path, monkeypatch):
+        ip = self._write_registry(tmp_path, monkeypatch, {
+            "engineer@spryfox-plugins": [
+                {"scope": "user", "installPath": str(tmp_path), "version": "0.3.0"},
+            ]
+        })
+        before = ip.read_text()
+
+        result = ensure_registry_scope("spryfox-plugins:engineer", "project")
+
+        assert result.passed is True
+        assert result.added is False
+        entries = json.loads(ip.read_text())["plugins"]["engineer@spryfox-plugins"]
+        assert entries[0]["scope"] == "user", (
+            "flipping a pathless record to project manufactures the orphan "
+            "shape registry_repair deletes"
+        )
+        assert ip.read_text() == before, "a refused rewrite must not write"
+
+    def test_no_flip_no_add_means_no_oscillation(self, tmp_path, monkeypatch):
+        """Two passes at project scope over a pathless user record are both
+        no-ops -- the flip/delete/re-add cycle never starts."""
+        ip = self._write_registry(tmp_path, monkeypatch, {
+            "engineer@spryfox-plugins": [
+                {"scope": "user", "installPath": str(tmp_path), "version": "0.3.0"},
+            ]
+        })
+        os.utime(ip, (1_000_000_000, 1_000_000_000))
+        mtime_before = ip.stat().st_mtime_ns
+
+        ensure_registry_scope("spryfox-plugins:engineer", "project")
+        ensure_registry_scope("spryfox-plugins:engineer", "project")
+
+        assert ip.stat().st_mtime_ns == mtime_before
+
+    def test_projectpath_record_still_rewritten_to_user(self, tmp_path, monkeypatch):
+        """The guard is scope-directional: rewriting TO user is untouched."""
+        ip = self._write_registry(tmp_path, monkeypatch, {
+            "engineer@spryfox-plugins": [
+                {"scope": "local", "installPath": str(tmp_path), "version": "0.3.0"},
+            ]
+        })
+
+        result = ensure_registry_scope("spryfox-plugins:engineer", "user")
+
+        assert result.passed is True
+        entries = json.loads(ip.read_text())["plugins"]["engineer@spryfox-plugins"]
+        assert entries[0]["scope"] == "user"
+
+
 class TestEnsureRegistryScopeAddsUserRecord:
     """ensure_registry_scope must ADD a pathless user-scope record when a
     plugin enabled at user scope is recorded ONLY at project scope.
@@ -1278,6 +1355,9 @@ class TestEnsureRegistryScopeAddsUserRecord:
 
         assert result.passed is True
         assert result.added is False
+        assert result.refused is True, (
+            "a defect left unrepaired must be reportable, not silent"
+        )
         assert "installPath missing on disk" in result.message
         assert ip.read_text() == before
 
