@@ -229,9 +229,30 @@ def launch_new_engine(install_path: str, project_dir: str, data_dir: str) -> boo
         popen_kwargs["cwd"] = project_dir
     if os.name == "posix":
         popen_kwargs["start_new_session"] = True
-    else:  # Windows: detach from the parent console/job
+    else:  # Windows: detach from the parent job without allocating a console
+        # CREATE_NO_WINDOW, not DETACHED_PROCESS. Both detach the child from the
+        # parent's console, but they differ in what the child gets INSTEAD, and
+        # only one of them is invisible:
+        #
+        #   DETACHED_PROCESS -- child has no console, so Windows allocates it a
+        #     brand-new one the moment it runs a console-subsystem program. A new
+        #     console is a real window. Measured on Windows 11 via
+        #     GetConsoleWindow + IsWindowVisible: hwnd non-zero, visible True.
+        #   CREATE_NO_WINDOW -- child gets a console with no window attached.
+        #     Same measurement: hwnd zero, nothing to show.
+        #
+        # The hook process this runs from is spawned console-less by Claude Code,
+        # so DETACHED_PROCESS made every harvest launch flash a console window on
+        # screen -- once per bootstrap version bump and once per mid-session
+        # registry change, which on an actively-updating machine is many times a
+        # day. The two flags are mutually exclusive; this is a swap, not an add.
+        #
+        # Detachment intent is preserved. The child still outlives this
+        # short-lived hook: on Windows that follows from process independence,
+        # not from DETACHED_PROCESS. CREATE_NEW_PROCESS_GROUP is kept so a Ctrl-C
+        # delivered to the parent's group does not reach the spawned pass.
         popen_kwargs["creationflags"] = (
-            getattr(subprocess, "DETACHED_PROCESS", 0)
+            getattr(subprocess, "CREATE_NO_WINDOW", 0)
             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         )
     try:
