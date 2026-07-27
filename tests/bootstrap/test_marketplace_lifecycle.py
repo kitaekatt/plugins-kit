@@ -763,7 +763,7 @@ class TestEnsureRegistryScope:
             "bootstrap@plugins-kit": [{"scope": "project", "version": "0.8.4"}]
         })
         result = ensure_registry_scope("plugins-kit:bootstrap", "user")
-        assert result is True
+        assert result.passed is True
         data = json.loads(ip.read_text())
         assert data["plugins"]["bootstrap@plugins-kit"][0]["scope"] == "user"
 
@@ -773,7 +773,7 @@ class TestEnsureRegistryScope:
             "bootstrap@plugins-kit": [{"scope": "user", "version": "0.8.4"}]
         })
         result = ensure_registry_scope("plugins-kit:bootstrap", "user")
-        assert result is True
+        assert result.passed is True
         data = json.loads(ip.read_text())
         assert data["plugins"]["bootstrap@plugins-kit"][0]["scope"] == "user"
 
@@ -781,14 +781,14 @@ class TestEnsureRegistryScope:
         """Plugin not in registry → returns True (nothing to fix)."""
         self._write_registry(tmp_path, monkeypatch, {})
         result = ensure_registry_scope("plugins-kit:bootstrap", "user")
-        assert result is True
+        assert result.passed is True
 
     def test_no_registry_file(self, tmp_path, monkeypatch):
         """No registry file → returns False."""
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
         result = ensure_registry_scope("plugins-kit:bootstrap", "user")
-        assert result is False
+        assert result.passed is False
 
     def test_no_op_leaves_registry_file_untouched(self, tmp_path, monkeypatch):
         """Scope already correct → NO write at all (B3).
@@ -806,7 +806,7 @@ class TestEnsureRegistryScope:
 
         result = ensure_registry_scope("plugins-kit:bootstrap", "user")
 
-        assert result is True
+        assert result.passed is True
         assert ip.stat().st_mtime_ns == before, (
             "no-op pass must not rewrite installed_plugins.json"
         )
@@ -818,7 +818,7 @@ class TestEnsureRegistryScope:
             "bootstrap@plugins-kit": [{"scope": "project", "version": "0.8.4"}]
         })
         result = ensure_registry_scope("plugins-kit:bootstrap", "user")
-        assert result is True
+        assert result.passed is True
         data = json.loads(ip.read_text())
         assert data["plugins"]["bootstrap@plugins-kit"][0]["scope"] == "user"
         assert sorted(os.listdir(ip.parent)) == ["installed_plugins.json"], (
@@ -1141,7 +1141,7 @@ class TestEnsureRegistryScopeProjectPathGuard:
                 {"scope": "project", "version": "0.52.0"},
             ]
         })
-        assert ensure_registry_scope("plugins-kit:bootstrap", "user") is True
+        assert ensure_registry_scope("plugins-kit:bootstrap", "user").passed is True
         entries = json.loads(ip.read_text())["plugins"]["bootstrap@plugins-kit"]
         assert entries[0]["scope"] == "project"  # projectPath record: untouched
         assert entries[1]["scope"] == "user"     # healthy record: fixed
@@ -1153,7 +1153,153 @@ class TestEnsureRegistryScopeProjectPathGuard:
             ]
         })
         before = ip.read_text()
-        assert ensure_registry_scope("plugins-kit:bootstrap", "user") is True
+        assert ensure_registry_scope("plugins-kit:bootstrap", "user").passed is True
+        assert ip.read_text() == before
+
+
+class TestEnsureRegistryScopeAddsUserRecord:
+    """ensure_registry_scope must ADD a pathless user-scope record when a
+    plugin enabled at user scope is recorded ONLY at project scope.
+
+    Claude Code writes a single project-scoped record when a plugin is enabled
+    at both user and project scope (claude-code#81706), leaving the user-level
+    enablement unsatisfied everywhere except the bound project. The fixtures
+    below reproduce the live shape captured in
+    tmp/wedge-snapshot-20260727T160421Z/installed_plugins.json.
+    """
+
+    def _write_registry(self, tmp_path, monkeypatch, plugins_data):
+        ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        ip.parent.mkdir(parents=True, exist_ok=True)
+        ip.write_text(json.dumps({"version": 2, "plugins": plugins_data}, indent=2))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        return ip
+
+    def _wedged_record(self, install_dir):
+        """The live bootstrap@plugins-kit record from the wedge snapshot."""
+        return {
+            "scope": "project",
+            "projectPath": "C:\\dev\\spiritcrossing\\main",
+            "installPath": str(install_dir),
+            "version": "0.64.1",
+            "installedAt": "2026-07-25T17:05:08.450Z",
+            "lastUpdated": "2026-07-27T15:44:55.238Z",
+            "gitCommitSha": "e8f1526ebef4a7eb1a46c4487a35bc27aac90fa9",
+        }
+
+    def _wedged_registry(self, tmp_path, monkeypatch):
+        install_dir = tmp_path / "cache" / "plugins-kit" / "bootstrap" / "0.64.1"
+        install_dir.mkdir(parents=True)
+        rec = self._wedged_record(install_dir)
+        ip = self._write_registry(
+            tmp_path, monkeypatch, {"bootstrap@plugins-kit": [dict(rec)]}
+        )
+        return ip, rec
+
+    def test_adds_pathless_user_record(self, tmp_path, monkeypatch):
+        ip, original = self._wedged_registry(tmp_path, monkeypatch)
+
+        result = ensure_registry_scope("plugins-kit:bootstrap", "user")
+
+        assert result.passed is True
+        assert result.added is True
+        assert "81706" in result.message
+        entries = json.loads(ip.read_text())["plugins"]["bootstrap@plugins-kit"]
+        assert len(entries) == 2
+        new_rec = entries[0]
+        assert new_rec == {
+            "scope": "user",
+            "installPath": original["installPath"],
+            "version": "0.64.1",
+            "gitCommitSha": original["gitCommitSha"],
+        }
+        assert "projectPath" not in new_rec
+
+    def test_new_record_is_first(self, tmp_path, monkeypatch):
+        """Claude Code resolves entries[0]; a pathless user record is valid in
+        every project including the bound one, so it must lead."""
+        ip, _ = self._wedged_registry(tmp_path, monkeypatch)
+        ensure_registry_scope("plugins-kit:bootstrap", "user")
+        entries = json.loads(ip.read_text())["plugins"]["bootstrap@plugins-kit"]
+        assert entries[0]["scope"] == "user"
+        assert "projectPath" not in entries[0]
+
+    def test_existing_record_left_byte_identical(self, tmp_path, monkeypatch):
+        ip, original = self._wedged_registry(tmp_path, monkeypatch)
+        ensure_registry_scope("plugins-kit:bootstrap", "user")
+        entries = json.loads(ip.read_text())["plugins"]["bootstrap@plugins-kit"]
+        assert entries[1] == original
+
+    def test_idempotent_second_pass_writes_nothing(self, tmp_path, monkeypatch):
+        """The registry's mtime arms the SessionStart cooldown bypass, so a
+        second pass must not rewrite the file."""
+        ip, _ = self._wedged_registry(tmp_path, monkeypatch)
+        first = ensure_registry_scope("plugins-kit:bootstrap", "user")
+        assert first.added is True
+
+        after_first = ip.read_text()
+        os.utime(ip, (1_000_000_000, 1_000_000_000))
+        mtime_before = ip.stat().st_mtime_ns
+
+        second = ensure_registry_scope("plugins-kit:bootstrap", "user")
+
+        assert second.passed is True
+        assert second.added is False
+        assert ip.read_text() == after_first
+        assert ip.stat().st_mtime_ns == mtime_before
+
+    def test_no_add_when_pathless_user_record_exists(self, tmp_path, monkeypatch):
+        install_dir = tmp_path / "cache" / "plugins-kit" / "bootstrap" / "0.64.1"
+        install_dir.mkdir(parents=True)
+        ip = self._write_registry(tmp_path, monkeypatch, {
+            "bootstrap@plugins-kit": [
+                self._wedged_record(install_dir),
+                {"scope": "user", "installPath": str(install_dir), "version": "0.64.1"},
+            ]
+        })
+        before = ip.read_text()
+
+        result = ensure_registry_scope("plugins-kit:bootstrap", "user")
+
+        assert result.passed is True
+        assert result.added is False
+        assert ip.read_text() == before
+
+    def test_refuses_when_install_path_missing(self, tmp_path, monkeypatch):
+        """No evidence the plugin is installed -> do nothing, and say so."""
+        rec = self._wedged_record(tmp_path / "cache" / "does-not-exist")
+        ip = self._write_registry(
+            tmp_path, monkeypatch, {"bootstrap@plugins-kit": [rec]}
+        )
+        before = ip.read_text()
+
+        result = ensure_registry_scope("plugins-kit:bootstrap", "user")
+
+        assert result.passed is True
+        assert result.added is False
+        assert "installPath missing on disk" in result.message
+        assert ip.read_text() == before
+
+    def test_never_adds_at_project_scope(self, tmp_path, monkeypatch):
+        """A pathless scope: "project" record is the malformed orphan shape
+        registry_repair.py removes -- never manufacture one."""
+        install_dir = tmp_path / "cache" / "plugins-kit" / "bootstrap" / "0.64.1"
+        install_dir.mkdir(parents=True)
+        ip = self._write_registry(tmp_path, monkeypatch, {
+            "bootstrap@plugins-kit": [{
+                "scope": "user",
+                "projectPath": "C:\\dev\\other",
+                "installPath": str(install_dir),
+                "version": "0.64.1",
+            }]
+        })
+        before = ip.read_text()
+
+        result = ensure_registry_scope("plugins-kit:bootstrap", "project")
+
+        assert result.passed is True
+        assert result.added is False
         assert ip.read_text() == before
 
 

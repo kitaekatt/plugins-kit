@@ -3789,7 +3789,9 @@ def _phase_plugins(ctx):
             # Sync installed_plugins.json scope to match desired scope.
             # CLI commands (update, uninstall) read scope from this file and
             # fail if it's stale. Fix the data before running those commands.
-            ensure_registry_scope(plugin_ref, desired_scope)
+            _scope_sync = ensure_registry_scope(plugin_ref, desired_scope)
+            if _scope_sync.added:
+                ctx.action(f"plugin {plugin_ref}: {_scope_sync.message}")
 
         if install_mode == "manual":
             # Manual-install plugins: only manage version updates. Skip

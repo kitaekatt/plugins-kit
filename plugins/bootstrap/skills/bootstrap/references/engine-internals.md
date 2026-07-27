@@ -156,6 +156,66 @@ already stalled needs `bootstrap-stuck-fix`'s
 `scripts/repair_update_scope.py`, which runs the scoped update from outside the
 broken path.
 
+### Registry scope sync: the missing user-scope record (0.66.0)
+
+`marketplace_lifecycle.ensure_registry_scope(plugin_ref, desired_scope)` runs
+once per plugin per pass from `_phase_plugins`, with `desired_scope` taken from
+the manifest. It performs two remediations.
+
+**1. Rewrite a stale scope** on a record that carries no `projectPath` (the
+original behavior). Records carrying `projectPath` are skipped: stamping a
+scope onto one manufactures the chimera of rule 1 above.
+
+**2. Add a missing pathless user-scope record.** When a plugin is enabled at
+**both** user scope (`~/.claude/settings.json` `enabledPlugins`) and project
+scope (a repo's tracked `.claude/settings.json`), Claude Code writes **only** a
+project-scoped install record. The user-level enablement then has no record
+satisfying it, so the plugin is enabled-but-uninstalled in every project except
+the bound one, surfacing as a misleading `Plugin "X" not cached at <path>`
+against a path that exists (reported upstream as claude-code#81706; related
+#79892).
+
+Remediation 1 cannot reach this shape by construction -- it can only rewrite
+the scope of a record that already exists, and the sole record here carries
+`projectPath`. So the rule **adds a sibling**:
+
+> `desired_scope == "user"`, and no record for the ref is both pathless and at
+> user scope -> derive `{scope: "user", installPath, version, gitCommitSha}`
+> from `pick_registry_record` and insert it at index 0
+
+Narrowness, in the same spirit as the repair rules:
+
+- **User scope only.** A pathless `scope: "project"` record is precisely the
+  malformed orphan that rule 2 above deletes; adding one would manufacture the
+  shape we reported upstream. Guarded explicitly.
+- **Only when the plugin is genuinely installed.** The new record is derived
+  from the ref's authoritative existing record, and its `installPath` must
+  exist on disk. No install evidence -> no record, and the reason is reported.
+- **Nothing existing is mutated or removed.** The project-scoped record stays
+  byte-identical; this adds a sibling, it does not replace.
+- **Insert first.** Claude Code resolves `entries[0]`, and it is not
+  established whether that pick is scope-aware when a project record precedes
+  a user record. A pathless user-scope install is valid in *every* project,
+  including the bound one, so leading with it is correct under either
+  semantics.
+- **Idempotent; a no-op writes nothing.** A second pass finds the pathless user
+  record and returns without writing -- the registry's mtime arms the
+  SessionStart cooldown bypass, so an unconditional rewrite would re-arm a full
+  pass every session.
+
+The function returns a `ScopeSyncResult(passed, ref, added, message)`; the call
+site emits an `action_entry` whenever `added` is true, since an add is a
+remediation and must be visible, not verbose-only.
+
+**Why this ships in bootstrap, not `bootstrap-stuck-fix`.** A machine in this
+state still loads bootstrap inside the bound project -- that is where the one
+valid record points -- so bootstrap can be delivered, updated, and run there,
+and the repair it writes is global. The escape-hatch test therefore answers
+"no": the change does not have to be installed by the thing it repairs. The
+inversion to watch for is a ref whose *only* record is project-scoped **and**
+whose bound project the user never opens again; that machine cannot run
+bootstrap anywhere, and remediation would have to move to `bootstrap-stuck-fix`.
+
 ### Step 4 Processing Order
 
 Plugins are processed in a deterministic order:

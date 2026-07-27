@@ -735,14 +735,65 @@ def update_plugin(
     return LifecycleResult(passed=False, ref=plugin_ref, message=f"update failed: {stderr.strip()}")
 
 
-def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> bool:
-    """Ensure installed_plugins.json has the correct scope for a plugin.
+class ScopeSyncResult(NamedTuple):
+    passed: bool
+    ref: str
+    added: bool   # a pathless user-scope record was ADDED (a remediation)
+    message: str
+
+
+def _has_pathless_record_at(entries, scope: str) -> bool:
+    """True when some record has the given scope and carries no projectPath."""
+    return any(
+        isinstance(e, dict) and not e.get("projectPath") and e.get("scope") == scope
+        for e in entries
+    )
+
+
+def _derive_user_record(entries):
+    """Build a pathless user-scope record from the ref's authoritative record.
+
+    Copies only the fields that identify the installed code (installPath,
+    version, gitCommitSha). Nothing is invented: if the ref has no usable
+    record, or its installPath is not on disk, there is no evidence the
+    plugin is installed and we return None rather than assert an install.
+    """
+    rec = pick_registry_record(entries)
+    if not isinstance(rec, dict):
+        return None
+    install_path = rec.get("installPath") or ""
+    if not install_path or not os.path.isdir(install_path):
+        return None
+    new_rec = {"scope": "user", "installPath": install_path}
+    for field in ("version", "gitCommitSha"):
+        if rec.get(field):
+            new_rec[field] = rec[field]
+    return new_rec
+
+
+def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> ScopeSyncResult:
+    """Ensure installed_plugins.json records the plugin at the desired scope.
 
     The CLI reads scope from this file for update/uninstall commands.
     If the scope is stale (e.g., says 'project' when the plugin is actually
     at 'user' scope), CLI commands fail. This fixes the data before we run them.
 
-    Returns True if the scope was already correct or was updated.
+    Two remediations, in order:
+
+    1. REWRITE the scope of an existing pathless record (the original
+       behavior). Records carrying projectPath are never touched.
+    2. ADD a pathless user-scope record when none exists (claude-code#81706).
+       When a plugin is enabled at BOTH user and project scope, Claude Code
+       writes ONLY a project-scoped record. The user-level enablement then has
+       no record satisfying it, so the plugin reads as enabled-but-uninstalled
+       in every project except the bound one -- surfacing as a misleading
+       `Plugin "X" not cached at <path>` against a path that exists. Rewriting
+       the project record's scope in place is NOT the fix (it manufactures the
+       user-scope+projectPath chimera of claude-code#79892), so we add a
+       well-formed sibling and leave every existing record byte-identical.
+
+    Returns ScopeSyncResult; ``added`` is True only for remediation 2, which
+    the caller must surface as an action entry.
 
     Write discipline: the registry is shared with Claude Code itself and its
     mtime arms the SessionStart cooldown's registry-change bypass, so we only
@@ -759,7 +810,8 @@ def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> bool:
         plugins = data.get("plugins", {})
         entries = plugins.get(cli_ref) or plugins.get(plugin_ref)
         if not entries:
-            return True  # not in registry, nothing to fix
+            # not in registry, nothing to fix
+            return ScopeSyncResult(True, plugin_ref, False, "not in registry")
         changed = False
         for entry in entries:
             if not isinstance(entry, dict) or entry.get("projectPath"):
@@ -770,13 +822,49 @@ def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> bool:
             if entry.get("scope") != desired_scope:
                 entry["scope"] = desired_scope
                 changed = True
+
+        message = f"rewrote stale scope to {desired_scope}" if changed else "scope in sync"
+        added = False
+        # Remediation 2 is USER-SCOPE ONLY. A pathless record at scope
+        # "project" is malformed by definition -- a project install is defined
+        # by the project it belongs to -- and is exactly the orphan shape
+        # registry_repair.py removes. Adding one would manufacture the invalid
+        # record we reported upstream, so this path never runs for any other
+        # desired scope.
+        if (
+            desired_scope == "user"
+            and isinstance(entries, list)
+            and not _has_pathless_record_at(entries, "user")
+        ):
+            new_rec = _derive_user_record(entries)
+            if new_rec is None:
+                message = (
+                    "no pathless user record and no installed record to derive "
+                    "one from (installPath missing on disk); left as-is"
+                )
+            else:
+                # Insert FIRST: Claude Code resolves entries[0], and it is not
+                # established whether that pick is scope-aware when a
+                # project-scoped record precedes a user-scoped one. A pathless
+                # user record is valid in EVERY project, including the bound
+                # one, so leading with it is correct under either semantics.
+                entries.insert(0, new_rec)
+                added = True
+                changed = True
+                message = (
+                    f"added missing user-scope registry record "
+                    f"(version {new_rec.get('version', 'unknown')}; "
+                    f"was recorded only at project scope, claude-code#81706)"
+                )
+
         if not changed:
-            return True  # already correct, leave the file (and its mtime) alone
+            # already correct, leave the file (and its mtime) alone
+            return ScopeSyncResult(True, plugin_ref, False, message)
         from .atomic_write import write_atomic
         write_atomic(ip_path, json.dumps(data, indent=2) + "\n")
-        return True
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return False
+        return ScopeSyncResult(True, plugin_ref, added, message)
+    except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+        return ScopeSyncResult(False, plugin_ref, False, f"registry unreadable: {exc}")
 
 
 def _to_cli_ref(plugin_ref: str) -> str:
