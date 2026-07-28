@@ -71,8 +71,11 @@ claude_md:
         Standards-configuration surface (configurable optional rules + layered
         user/project standards):
         - skills_kit_lib/rule_catalog.py -- SSOT mapping every audit rule id to
-          one bucket (architectural / optional / inoffensive); consumed by the
-          resolver's reject-un-tunable-rule check and by the M4 config docs.
+          its bucket (architectural / optional / inoffensive), sub-group, and
+          user-facing description (RULES); consumed by the resolver's
+          reject-un-tunable-rule check and rendered into
+          configuring-standards.md's catalog tables by
+          scripts/gen_standards_doc.py (drift-tested).
         - skills_kit_lib/standards_resolve.py -- self-contained (stdlib+pyyaml,
           no bootstrap_lib) resolver of the layered config: shipped -> user_dir
           skills-kit/ -> its config.local.yaml -> project .claude/skills-kit/ ->

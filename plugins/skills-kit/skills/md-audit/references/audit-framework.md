@@ -20,7 +20,7 @@ The thing being audited. A subject is either a primitive (a single file) or a co
 
 ### subject_type
 
-The cardinality axis of an audit-skill's subject, declared in the SKILL.md's `audit_skill.subject.subject_type` field. Two values today: `single-file` (the audit evaluates one subject per invocation, like claude-md-audit on one CLAUDE.md) and `corpus` (the audit operates over a discovered set, like skill-audit over the User + Project + Plugins skill pool). `subject` (kind) and `subject_type` (cardinality) are orthogonal: skill-md-audit has `subject_type: corpus` but each rule application targets one `skill_md` primitive at a time inside a `skill` composition.
+The cardinality axis of an audit-skill's subject, declared in the SKILL.md's `audit_skill.subject.subject_type` field. Two values today: `single-file` (the audit evaluates one subject per invocation) and `corpus` (the audit operates over a discovered set, like skill-audit over the User + Project + Plugins skill pool). `subject` (kind) and `subject_type` (cardinality) are orthogonal: skill-md-audit has `subject_type: corpus` but each rule application targets one `skill_md` primitive at a time inside a `skill` composition.
 
 ### procedure
 
@@ -33,31 +33,17 @@ Procedures within a skill share the subject but do not have to share rules; the 
 
 ### primitive
 
-An atomic, identifiable content kind. Today's primitives:
-
-- **md** -- a Markdown file. Sub-kinds: `skill_md` (a `SKILL.md`), `reference_doc` (any other `.md` inside a skill directory), `claude_md` (a `CLAUDE.md`), `plain_md` (anything else).
-- **yaml** -- a YAML file or a fenced YAML block inside markdown.
-- **json** -- a JSON file. Sub-kinds: `plugin_manifest` (`.claude-plugin/plugin.json`), `marketplace_manifest` (`.claude-plugin/marketplace.json`), `bootstrap_manifest` (`bootstrap.json`).
-- **script** -- an executable file (`.py`, `.sh`, `.ps1`). Sub-kinds: `facade` (a CLI entry point invoked by a skill or command) and `library` (an importable module, typically named with a leading underscore).
-
-The list is open under addition. Adding a primitive means: declaring a detection rule, naming the sub-kinds that matter, and updating `audit-framework.yaml`.
+An atomic, identifiable content kind -- a Markdown file, a YAML file or fenced block, a JSON manifest, a script -- optionally refined into sub-kinds (`md` splits into `skill_md` / `reference_doc` / `claude_md` / `plain_md`). The registered instances, each with its detection rule and sub-kinds, live in `audit-framework.yaml::primitives`; this doc does not restate the list. Adding a primitive means declaring a detection rule and the sub-kinds that matter in that registry.
 
 ### composition
 
-A directory structure that aggregates primitives (and possibly other compositions) under a named rule set. Today's compositions:
-
-- **directory** -- a plain directory; the fallback when no other composition matches.
-- **skill** -- a directory marked by a `SKILL.md` at its root.
-- **plugin** -- a directory marked by `.claude-plugin/plugin.json` at its root.
-- **project** -- the scan-root composition, implicit when scanning a CWD that is not a more specific composition.
-
-Compositions nest. A plugin contains skills; a project contains plugins. The framework is open under addition: new compositions declare a marker, a contains spec, and a rule set.
+A directory structure that aggregates primitives (and possibly other compositions) under a named rule set. Each declares a marker (e.g. a `SKILL.md` at the root marks a `skill`; `.claude-plugin/plugin.json` marks a `plugin`), what it contains, and what it nests inside. Compositions nest: a plugin contains skills; a project contains plugins. The registered instances -- with markers, `contains` / `nests` specs, and discovery priorities -- live in `audit-framework.yaml::compositions`; this doc does not restate the list.
 
 ### discovery
 
 The act of finding subjects in scope. Two sub-shapes:
 
-- **Tree-walk discovery** -- walking a scan tree and toggling rule sets per discovered composition. When the walker enters a directory, it checks markers in priority order (plugin > skill > directory) and activates that composition's rules for the subtree. Rules layer rather than override.
+- **Tree-walk discovery** -- walking a scan tree and toggling rule sets per discovered composition. When the walker enters a directory, it checks markers in registered priority order (each composition's `discovery_priority` in `audit-framework.yaml`) and activates that composition's rules for the subtree. Rules layer rather than override.
 - **Corpus discovery** -- enumerating a known namespace (the User + Project + installed-Plugin skill pool, via `skills_kit_lib.corpus`). Returns a flat list of subjects without rule toggling.
 
 Discovery is its own scaffolding (e.g. `discover.py`, `skills_kit_lib.corpus`) -- separate from the evaluator scaffolding that applies rules. Discovery answers "what subjects?"; the evaluator answers "what findings on this subject?".
@@ -71,12 +57,7 @@ A named audit, declared by:
 - which **rules** it applies per composition (the bindings table)
 - which **taxonomy** it uses to categorize findings
 
-Today's audit-kinds:
-
-- **references-audit** -- consumes `md`; traverses `directory`, `skill`, `plugin`, `project`; rule families: resolve-soft-refs, resolve-hard-deps, honor-allow-stale, (plugin, future) manifest-declarations-resolve / no-cross-scope-personal-refs.
-- **skill-md-audit** -- consumes `skill_md`, `yaml`; traverses `skill`; rule families: required-frontmatter, description-quality, yaml-contract-block, mixed-type-signal, CCP / CRP / ADP placement, load-graph reachability (references-reachable-from-skill-md), decision-provenance, hygiene-thresholds.
-
-The framework is open under addition: a new audit-kind declares its primitives, compositions, rule bindings, and taxonomy in `audit-framework.yaml`. No framework-side code change is needed beyond the registry entry.
+The registered audit-kinds -- with their consumed primitives, traversed compositions, and exact rule-id bindings -- live in `audit-framework.yaml::audit_kinds`; this doc does not restate the roll-call (a restated list here has drifted from the registry before). The framework is open under addition: a new audit-kind declares its primitives, compositions, rule bindings, and taxonomy in `audit-framework.yaml`. No framework-side code change is needed beyond the registry entry.
 
 ### rule
 
@@ -108,7 +89,7 @@ A category's DEFAULT disposition (a starting point); the final per-finding dispo
 - **SERIOUS** -- surfaced summarized at the TOP of the report, never auto-fixed, never buried: secrets, a protective rail whose documented mechanism is fictional (the real finding is the unprotected invariant), or a doc problem that reveals a real-world problem.
 - **IMPROVE** -- reported as a count + one-line pitches; discussion is opt-in. Structural moves (graduate / fold / absorb / split / orphan-link / placement) and trims of true content that pass the one-line test. Declined IMPROVEs are recorded per-file (`md-audit-declined:` frontmatter) so re-audits do not re-pitch them.
 - **SILENT** -- not surfaced at all, no hedging: do-nothing conclusions, validator detection artifacts, accepted structural patterns (agent-definition files with zero inbound citations, historical records, companion-source PDFs).
-- **SPECIAL** -- the escape hatch (category K); the finding did not fit any other category and the user proposes a strategy.
+- **SPECIAL** -- not one of the four: the category-K escape hatch, when the finding did not fit any other category and the user proposes a strategy.
 
 Report contract: SERIOUS (summarized, top) -> FIX (applied count + CL) -> IMPROVE (count + one-liners, opt-in); SILENT omitted. FIX and IMPROVE dispatch in parallel; the user's foreground IMPROVE answers do not gate the background FIX edits; both merge at the end.
 
@@ -138,7 +119,7 @@ Scaffolding is the load-bearing convention this framework rests on. Any operatio
 - **Detection and remediation are separate phases.** An audit pass produces findings. A remediation pass consumes findings. Mixing the two in one procedure breaks idempotency -- the audit must produce the same findings on rerun, regardless of which remediations have been applied in between.
 - **Rules live where they are owned.** Each rule's canonical definition (id, severity, summary, detail) lives in the SKILL.md `criteria:` block of the audit-skill that owns it. The framework registry references rule ids; it does not redefine them. A rule change touches one file, not two.
 - **Open under addition.** Primitives, compositions, audit-kinds, and rule bindings grow as needed. Each addition is a registry entry (in `audit-framework.yaml`) plus the rule definition in the owning SKILL.md; no framework-side refactor.
-- **Build only what we need today.** Today the framework supports references-audit and skill-md-audit over the current primitives and compositions. Forward concerns (marketplace-audit, project-audit, code-primitive scanning, orphan-detection in scripts) are listed in the YAML's `future:` section as registry stubs, not implemented surfaces.
+- **Build only what we need today.** The framework supports exactly the audit-kinds registered in `audit-framework.yaml::audit_kinds`. Forward concerns are registry stubs, not implemented surfaces: planned audit-kinds and primitives under the YAML's `future:` key, planned rules under `future_rules:` -- nothing in either list is checked by any audit today.
 
 ## How the skills use this framework
 
@@ -165,6 +146,16 @@ Operationalizes the **skill-md-audit** audit-kind (plus two corpus-wide inventor
 
 In framework terms: the subject is `skill_md` inside a `skill` composition; the primitives consumed are `skill_md` and `yaml` (the embedded contract block); rules come from the audit-kind's bindings table. The skill's existing `criteria:` block names the same rules that the framework's bindings table references -- the YAML and the SKILL.md must stay in sync.
 
+### `claude-md-audit` (via `/md-audit claude-md`)
+
+Operationalizes the **claude-md-audit** audit-kind. The skill:
+
+1. Picks its **subjects** of type `claude_md` via `discover.py`, which enumerates the CLAUDE.md files visible from cwd and tags each with a role (root / ancestor / child / local) and a dimension (`classic` | `code-directory`, the Level-1 trigger).
+2. Applies the cohesion/hygiene criteria via agent-judgment lanes, plus the mechanical schema-validation and record-floor rows from `skills_kit_lib/audit.py`. The `cd_*` criteria run only for `code-directory` targets; the `dd_*` density lens only when requested.
+3. Classifies findings into its **taxonomy** and assigns each a **disposition** (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL) instance-level.
+
+In framework terms: the subject is `claude_md` over the `directory` / `project` compositions; rules come from the audit-kind's bindings table.
+
 ### `project-doc-audit` (via `/md-audit project-doc`)
 
 Operationalizes the **project-doc-audit** audit-kind. The skill:
@@ -186,14 +177,11 @@ A viewer-kind is the analogue of an audit-kind:
 - It declares the **subject** it visualizes (typically a composition: marketplace, plugin, skill, project).
 - It uses **discovery** to find subjects in scope (the same walk-and-mark logic; marketplaces are a corpus, projects are single subjects).
 - It declares **per-primitive summary projections** -- the short representation each primitive contributes at each container level (e.g. a `skill_md` contributes name + description + skill-type; a `reference_doc` contributes filename + first heading).
-- It supports **layered personalization** through per-composition override YAML files (each authored by a different party: the marketplace maintainer, the plugin author, the project owner, the viewer's operator). The viewer reads sensible defaults from existing primitives when no override is present; the override files only customize what would otherwise default.
-- It is **self-parameterizing**: when an override YAML is missing or has gaps, the viewer scaffolding generates a skeleton with the inferred defaults, so the operator can edit a real file rather than write one from a blank page. The next run reads back what was generated and applies any edits.
-- It uses **viewer scaffolding** (a generator script) to walk the discovered tree, apply projections, fill in defaults, write skeleton overrides where missing, and emit the representation.
+- It supports **layered personalization** through per-composition override YAML files (each authored by a different party: the marketplace maintainer, the plugin author, the project owner, the viewer's operator). The override files only customize what would otherwise default.
+- It MAY be **self-parameterizing** -- generating a skeleton override with inferred defaults when one is missing, so the operator edits a real file rather than writing one from a blank page. Whether a viewer-kind does this is declared per entry in the registry (`self_parameterizing`); a viewer-kind may instead gate participation on an override file existing (`discovery_gate`).
+- It uses **viewer scaffolding** (a generator script) to walk the discovered tree, apply projections, fill in defaults, and emit the representation.
 
-Today's viewer-kinds:
-
-- **`plugin_ecosystem`** (in `awesome-kit:plugin-ecosystem`) -- visualizes the installed marketplace corpus. Subject: `marketplace`; traverses `marketplace ⊃ plugin ⊃ skill` (stops at skill name level). Layered ownership via per-composition `poster.yaml` overrides.
-- **`claude_explorer`** (in `prototypes:claude-explorer`, v1 implemented) -- visualizes the user's Claude filesystem (`~/.claude/` + current project) deeply. Subject: multi-root (`claude_user_dir` + `project`); traverses `claude_user_dir ⊃ marketplace ⊃ plugin ⊃ skill ⊃ {references/, scripts/, CLAUDE.md}` plus the project root similarly. Summary projection per container; deep renderer per primitive (markdown rendered inline, scripts shown in `<pre>`, JSON as key/value table). Omarchy-style aesthetic (dark Catppuccin, monospace, keyboard-first with Walker overlay and mouse-park).
+The registered viewer-kinds -- with their subjects, traversals, override layers, and self-parameterization flags -- live in `audit-framework.yaml::viewer_kinds`; this doc does not restate the roll-call.
 
 Audit scaffolding produces findings; viewer scaffolding produces representations. The substrate is shared. Adding a viewer-kind is the same as adding an audit-kind from the framework's perspective: a registry entry + a generator script. The framework does not need to change.
 

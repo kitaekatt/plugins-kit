@@ -87,7 +87,7 @@ thresholds:
   body_max_lines: 750
 ```
 
-A threshold override must be a positive integer and must name one of the five
+A threshold override must be a positive integer and must name one of the
 thresholds below. Tuning a threshold is independent of disabling a rule: a
 threshold consumed by an architectural or inoffensive rule (for example
 `mixed_min_score` or `name_max_chars`) is still tunable even though that rule
@@ -98,9 +98,7 @@ cannot be disabled.
 Every rule id the audit emits (the `rule` field on a finding) belongs to exactly
 one bucket. The tables below are the complete catalog.
 
-<!-- SSOT: these tables are derived from skills_kit_lib/rule_catalog.py (BUCKETS).
-     rule_catalog.py is the single source of truth; regenerate this section when
-     it changes so every id appears here exactly once. -->
+<!-- BEGIN GENERATED: rule-catalog (gen_standards_doc.py; SSOT: rule_catalog.py + audit.py THRESHOLDS) -->
 
 ### Architectural -- never configurable
 
@@ -182,6 +180,8 @@ them in `thresholds:`; an override must be a positive integer.
 | `body_max_tokens` | 3000 | `body-size-signal` |
 | `mixed_min_score` | 2 | `mixed-type` |
 
+<!-- END GENERATED: rule-catalog -->
+
 ## Additive standards files
 
 Beyond disabling and tuning skills-kit's own rules, a layer may ADD standards of
@@ -214,7 +214,7 @@ disable it: read the id, decide the opinion is not for this project, add
 `rules: {<id>: off}` (for a skills-kit rule) or disable the criterion.
 
 At the design level, the audit lanes consume the resolved configuration as
-follows (these capabilities land alongside this reference):
+follows:
 
 - A per-run resolver (`scripts/resolve_standards.py`) computes, for the file
   under audit, the disabled-rule set, the threshold overrides, and the additive
@@ -253,8 +253,11 @@ degrading to an empty config, and the message names the problem:
 
 ## Source of truth
 
-The rule-id catalog above is derived from `skills_kit_lib/rule_catalog.py`
-(`BUCKETS`). That module is the single source of truth for which bucket each id
-belongs to; the resolver's reject-un-tunable-rule check reads it directly.
-Regenerate the three catalog tables here whenever `rule_catalog.py` changes so
-every id continues to appear exactly once.
+The rule-id catalog and threshold table above are GENERATED (the marked
+region): rule ids, buckets, and descriptions come from
+`skills_kit_lib/rule_catalog.py` (`RULES`), threshold defaults from
+`skills_kit_lib/audit.py` (`THRESHOLDS`). Edit those sources, then run
+`scripts/gen_standards_doc.py`; never hand-edit the generated region.
+`tests/skills-kit/test_standards_doc_drift.py` fails when the region is
+stale. The resolver's reject-un-tunable-rule check reads the same module
+directly, so the doc and the enforcement cannot disagree.

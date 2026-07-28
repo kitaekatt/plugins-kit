@@ -137,3 +137,56 @@ class TestCollectAtCwd:
         _write(tmp_path / "CLAUDE.local.md")
         out = discover.collect_at_cwd(tmp_path, has_ancestor_root=True)
         assert "local" in [role for _, role in out]
+
+
+class TestClassifyDimension:
+    """classify_dimension Level-1 trigger: Signal A (code siblings), Signal B
+    (review-claim markers), and the narrowed gotcha rule -- bare "do not" /
+    "don't" / "never" prose flips a file only when the same line anchors the
+    claim to code (inline-code span, line anchor, or source-file name)."""
+
+    def test_bare_gotcha_prose_alone_is_classic(self, tmp_path):
+        # The over-fire case the narrowing fixes: opinionated policy prose
+        # with no code anchor in a docs-only directory.
+        md = tmp_path / "CLAUDE.md"
+        _write(md, "# Conventions\n\nNever use the memory system.\nDo not overthink placement.\n")
+        assert discover.classify_dimension(md) == "classic"
+
+    def test_gotcha_with_inline_code_span_is_code_directory(self, tmp_path):
+        md = tmp_path / "CLAUDE.md"
+        _write(md, "# Notes\n\nNever call `frobnicate()` before init.\n")
+        assert discover.classify_dimension(md) == "code-directory"
+
+    def test_gotcha_with_source_file_name_is_code_directory(self, tmp_path):
+        md = tmp_path / "CLAUDE.md"
+        _write(md, "# Notes\n\nDo not edit generated_bindings.cpp by hand.\n")
+        assert discover.classify_dimension(md) == "code-directory"
+
+    def test_gotcha_and_code_anchor_on_different_lines_is_classic(self, tmp_path):
+        # The anchor must be on the SAME line as the gotcha phrasing.
+        md = tmp_path / "CLAUDE.md"
+        _write(md, "# Notes\n\nNever skip the checklist.\n\nSee the config file.\n")
+        assert discover.classify_dimension(md) == "classic"
+
+    def test_review_checks_heading_is_code_directory(self, tmp_path):
+        md = tmp_path / "CLAUDE.md"
+        _write(md, "## Review Checks\n\n- check the thing\n")
+        assert discover.classify_dimension(md) == "code-directory"
+
+    def test_code_siblings_signal_a_is_code_directory(self, tmp_path):
+        md = tmp_path / "CLAUDE.md"
+        _write(md, "# Plain notes with no markers.\n")
+        _write(tmp_path / "main.py", "print('x')\n")
+        assert discover.classify_dimension(md) == "code-directory"
+
+    def test_schema_block_guard_forces_classic(self, tmp_path):
+        # A declared claude_md: contract block wins over Signal B markers.
+        md = tmp_path / "CLAUDE.md"
+        _write(md, "# Notes\n\nNever call `frobnicate()`.\n\n```yaml\nclaude_md:\n  scope: {}\n```\n")
+        assert discover.classify_dimension(md) == "classic"
+
+    def test_skill_dir_guard_forces_classic(self, tmp_path):
+        md = tmp_path / "CLAUDE.md"
+        _write(md, "Never call `frobnicate()`.\n")
+        _write(tmp_path / "SKILL.md", "---\nname: x\n---\n")
+        assert discover.classify_dimension(md) == "classic"

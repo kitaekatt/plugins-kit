@@ -1,0 +1,51 @@
+{
+  "references_audit": {
+    "scope": "references,skills",
+    "source_files_scanned": 2,
+    "source_files_by_kind": {
+      "skill": 2
+    },
+    "skill_pool": {
+      "project": 2,
+      "user": 0,
+      "plugin": 0
+    },
+    "findings": [
+      {
+        "severity": "ERROR",
+        "category_hint": "hard-dep",
+        "message": "ERROR: referencing-skill (project, skill) at <CORPUS>/references/.claude/skills/referencing-skill/SKILL.md:13 has hard dep `skill: \"absent-skill\"` but \"absent-skill\" does not exist",
+        "file": "<CORPUS>/references/.claude/skills/referencing-skill/SKILL.md",
+        "line": 13,
+        "ref": "absent-skill",
+        "owner": "referencing-skill",
+        "source": "project",
+        "kind": "skill"
+      },
+      {
+        "severity": "WARNING",
+        "category_hint": "soft-ref",
+        "message": "WARNING: referencing-skill (project, skill) at <CORPUS>/references/.claude/skills/referencing-skill/SKILL.md:10 references `/missing-skill` but \"missing-skill\" does not exist",
+        "file": "<CORPUS>/references/.claude/skills/referencing-skill/SKILL.md",
+        "line": 10,
+        "ref": "missing-skill",
+        "owner": "referencing-skill",
+        "source": "project",
+        "kind": "skill"
+      }
+    ],
+    "hard_dep_edges": [
+      {
+        "owner": "referencing-skill",
+        "dep": "absent-skill",
+        "line": 13
+      }
+    ],
+    "summary": {
+      "errors": 1,
+      "warnings": 1,
+      "info": 0,
+      "hard_dep_edges": 1
+    }
+  }
+}

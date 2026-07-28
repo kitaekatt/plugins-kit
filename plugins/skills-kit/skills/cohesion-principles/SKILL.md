@@ -82,6 +82,18 @@ reference_skill:
         to) that CLAUDE.md, NOT graduated to a skill. Knowledge with BOTH shapes: prefer the
         location home and let a skill point at it via summarize-and-reference. See
         placement_follows_trigger_shape in the framework block.
+    - id: skill_packaging_razor
+      summary: "The two-step packaging razor for skill-shaped content. Step 1: does invoking it EXECUTE a structured process now, or pull dynamic information? No -> reference document homed with its primary citer, never a skill. Step 2 (yes): fold the technique into a domain skill iff BOTH the vocabulary test (realistic request phrasings name the domain's subject) and the cadence test (content changes in the same diffs as the domain's knowledge) pass; either failure -> separate skill."
+      keywords: [packaging razor, two-step razor, fold into domain, separate skill, reference document not a skill, vocabulary test, cadence test, reachability, static text, domain wraps techniques, external citers, when to fold]
+      detail: |
+        Complements placement_follows_trigger_shape: that razor picks the HOME for mature
+        knowledge by trigger shape; this one decides whether skill-shaped content is a skill
+        at all, and if so whether it stands alone or folds into a domain. Both tests are
+        auditable, not taste: the vocabulary test via a written phrasing list checked against
+        the domain's front door, the cadence test via change drivers. A domain wrapping
+        multiple techniques is by design. Before folding, check for external by-name citers
+        -- skill names are version-stable addresses, reference-doc paths are not. See
+        skill_packaging_razor in the framework block.
     - id: summarize_and_reference
       summary: Facts live in one place (SSOT); elsewhere you reference. The canonical compact form is REMINDER PLUS REFERENCE together -- an inline summary that spares the reader loading the target, plus the reference that names the SSOT and makes it checkable.
       keywords: [summarize and reference, reminder plus reference, ssot pointer, dedup, cross-reference budget, collapse to pointer, guardrail plus pointer]
@@ -615,6 +627,46 @@ content_allocation:
       skill-graduation (taxonomy B) ONLY for task-shaped knowledge; recommend folding into /
       referencing from a directory CLAUDE.md (taxonomy C) for location-shaped knowledge -- the
       PREFERRED destination for directory-scoped content, not a lesser fallback.
+
+  skill_packaging_razor:
+    description: |
+      The two-step razor for PACKAGING skill-shaped content: is this a skill at all, and if
+      so, does it stand alone or fold into a domain skill? placement_follows_trigger_shape
+      picks the home for mature knowledge by trigger shape; this razor governs the skill
+      branch of that decision. Both steps are auditable, preference-free tests.
+    step_1:
+      question: Does invoking it EXECUTE a structured process now, or pull dynamic information?
+      if_no: |
+        It is a reference document, homed with its primary citer. Static text that reads the
+        same whenever it is loaded is never a skill -- a skill spends session-wide context
+        budget on its trigger description, and static content earns none of that back.
+      if_yes: proceed to step_2.
+    step_2:
+      question: Fold the technique into a domain skill, or keep a separate skill?
+      rule: fold iff BOTH tests pass; either failure -> separate skill.
+      tests:
+        - name: vocabulary test (reachability)
+          test: |
+            The realistic request phrasings that should invoke the technique name the
+            domain's SUBJECT, so the domain's front door catches them. Auditable via a
+            written phrasing list checked against the domain's trigger description.
+        - name: cadence test (CCP)
+          test: |
+            The technique's content changes in the same diffs as the domain's knowledge.
+            Auditable via change drivers -- what kinds of change touch this content, and do
+            those same changes touch the domain's other members?
+    notes:
+      - A domain wrapping multiple techniques is by design, not a smell; techniques are
+        placed by the same CCP / reachability algebra as facts.
+      - Before folding an existing skill, check for EXTERNAL by-name citers. A skill name is
+        a version-stable address; a reference-doc path inside another skill is not. An
+        external citer that names the skill needs the name to survive, or needs re-routing
+        in the same change.
+    declared_evidence: |
+      Each technique folded into a domain declares (a) its invocation-phrasing list and (b)
+      its change-driver note, so the fold stays auditable after the fact: the phrasing list
+      can be checked against the domain's trigger description, and the change drivers
+      against actual diff history.
 
   summarize_and_reference:
     description: |

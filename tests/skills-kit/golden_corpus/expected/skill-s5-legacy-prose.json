@@ -1,0 +1,114 @@
+{
+  "audit": {
+    "path": "<CORPUS>/skill/s5-legacy-prose/SKILL.md",
+    "declared_type": null,
+    "yaml_root": null,
+    "universal": [
+      {
+        "row": "frontmatter present",
+        "verdict": "pass",
+        "note": "",
+        "rule": "frontmatter-present"
+      },
+      {
+        "row": "frontmatter.name present",
+        "verdict": "pass",
+        "note": "",
+        "rule": "name-present"
+      },
+      {
+        "row": "name <= 64 chars",
+        "verdict": "pass",
+        "note": "len=15",
+        "rule": "name-length"
+      },
+      {
+        "row": "name charset (lowercase/digits/hyphens)",
+        "verdict": "pass",
+        "note": "s5-legacy-prose",
+        "rule": "name-charset"
+      },
+      {
+        "row": "name not reserved",
+        "verdict": "pass",
+        "note": "s5-legacy-prose",
+        "rule": "name-reserved"
+      },
+      {
+        "row": "frontmatter.description present",
+        "verdict": "pass",
+        "note": "",
+        "rule": "desc-present"
+      },
+      {
+        "row": "description <= 160 chars",
+        "verdict": "pass",
+        "note": "len=96",
+        "rule": "desc-160-char"
+      },
+      {
+        "row": "directive form ('Use when...' / 'Invoke when...')",
+        "verdict": "pass",
+        "note": "",
+        "rule": "desc-directive-form"
+      },
+      {
+        "row": "exclusion clause (Do NOT use for...)",
+        "verdict": "pass",
+        "note": "",
+        "rule": "desc-exclusion-clause"
+      },
+      {
+        "row": "skill-type advisory tag",
+        "verdict": "judgment-required",
+        "note": "no skill-type frontmatter; agent infers type from content",
+        "rule": "skill-type-tag"
+      },
+      {
+        "row": "SKILL.md line count",
+        "verdict": "pass",
+        "note": "10",
+        "rule": "body-line-count"
+      },
+      {
+        "row": "SKILL.md token count (approx)",
+        "verdict": "pass",
+        "note": "52",
+        "rule": "body-token-count"
+      },
+      {
+        "row": "progressive disclosure (conditional)",
+        "verdict": "n/a",
+        "note": "lines=10, tokens~52",
+        "rule": "body-size-signal"
+      },
+      {
+        "row": "references one-hop-deep (ADP)",
+        "verdict": "n/a",
+        "note": "no references/ directory",
+        "rule": "refs-one-hop-deep"
+      },
+      {
+        "row": "references cited in body all exist",
+        "verdict": "n/a",
+        "note": "no references cited in body",
+        "rule": "refs-cited-exist"
+      }
+    ],
+    "yaml_contract": [
+      {
+        "row": "yaml: contract block",
+        "verdict": "judgment-required",
+        "note": "no fenced yaml contract block with a recognized root key; falling back to legacy markdown heuristics",
+        "rule": "yaml-contract"
+      }
+    ],
+    "type_specific": [],
+    "mixed_type": {
+      "row": "mixed-type signal (legacy heuristic)",
+      "verdict": "pass",
+      "note": "score=1",
+      "rule": "mixed-type"
+    }
+  }
+}

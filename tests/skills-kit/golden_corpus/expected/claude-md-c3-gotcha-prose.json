@@ -1,0 +1,32 @@
+{
+  "discover": [
+    {
+      "index": 1,
+      "path": "<CORPUS>/claude-md/c3-gotcha-prose/CLAUDE.md",
+      "role": "root",
+      "dimension": "classic"
+    }
+  ],
+  "audit": {
+    "path": "<CORPUS>/claude-md/c3-gotcha-prose/CLAUDE.md",
+    "kind": "claude_md",
+    "declared_type": null,
+    "yaml_root": null,
+    "universal": [],
+    "yaml_contract": [
+      {
+        "row": "yaml: claude_md contract block",
+        "verdict": "fail",
+        "note": "no fenced yaml block with a claude_md root key found",
+        "rule": "yaml-contract"
+      }
+    ],
+    "type_specific": [],
+    "mixed_type": {
+      "row": "mixed-type signal (n/a for CLAUDE.md)",
+      "verdict": "n/a",
+      "note": "",
+      "rule": "mixed-type"
+    }
+  }
+}

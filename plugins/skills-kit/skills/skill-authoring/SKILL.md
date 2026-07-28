@@ -41,6 +41,7 @@ domain_skill:
       along those boundaries, not forcing the skill into a single type. Read glossary first
       (vocabulary), framework second (contracts), example-audit third (worked example).
     behavioral_guardrails:
+      - 'Do not create a skill for static content, and do not default a technique to standalone. Apply the two-step packaging razor first (step 1 execute-or-fetch; step 2 vocabulary + cadence tests for fold-vs-separate) -- see cohesion-principles skill_packaging_razor.'
       - 'Do not declare a "recommended" pattern. Only required, conditionally required, prohibited.'
       - Do not silently expand a skill across type boundaries. Recognize and split.
       - Do not invent frontmatter. A SKILL.md without YAML frontmatter is flagged, not patched.

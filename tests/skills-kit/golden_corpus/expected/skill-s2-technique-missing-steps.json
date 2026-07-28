@@ -1,0 +1,126 @@
+{
+  "audit": {
+    "path": "<CORPUS>/skill/s2-technique-missing-steps/SKILL.md",
+    "declared_type": "technique-skill",
+    "yaml_root": "technique_skill",
+    "universal": [
+      {
+        "row": "frontmatter present",
+        "verdict": "pass",
+        "note": "",
+        "rule": "frontmatter-present"
+      },
+      {
+        "row": "frontmatter.name present",
+        "verdict": "pass",
+        "note": "",
+        "rule": "name-present"
+      },
+      {
+        "row": "name <= 64 chars",
+        "verdict": "pass",
+        "note": "len=26",
+        "rule": "name-length"
+      },
+      {
+        "row": "name charset (lowercase/digits/hyphens)",
+        "verdict": "pass",
+        "note": "s2-technique-missing-steps",
+        "rule": "name-charset"
+      },
+      {
+        "row": "name not reserved",
+        "verdict": "pass",
+        "note": "s2-technique-missing-steps",
+        "rule": "name-reserved"
+      },
+      {
+        "row": "frontmatter.description present",
+        "verdict": "pass",
+        "note": "",
+        "rule": "desc-present"
+      },
+      {
+        "row": "description <= 160 chars",
+        "verdict": "pass",
+        "note": "len=92",
+        "rule": "desc-160-char"
+      },
+      {
+        "row": "directive form ('Use when...' / 'Invoke when...')",
+        "verdict": "pass",
+        "note": "",
+        "rule": "desc-directive-form"
+      },
+      {
+        "row": "exclusion clause (Do NOT use for...)",
+        "verdict": "pass",
+        "note": "",
+        "rule": "desc-exclusion-clause"
+      },
+      {
+        "row": "skill-type value valid",
+        "verdict": "pass",
+        "note": "technique-skill",
+        "rule": "skill-type-valid"
+      },
+      {
+        "row": "SKILL.md line count",
+        "verdict": "pass",
+        "note": "21",
+        "rule": "body-line-count"
+      },
+      {
+        "row": "SKILL.md token count (approx)",
+        "verdict": "pass",
+        "note": "81",
+        "rule": "body-token-count"
+      },
+      {
+        "row": "progressive disclosure (conditional)",
+        "verdict": "n/a",
+        "note": "lines=21, tokens~81",
+        "rule": "body-size-signal"
+      },
+      {
+        "row": "references one-hop-deep (ADP)",
+        "verdict": "n/a",
+        "note": "no references/ directory",
+        "rule": "refs-one-hop-deep"
+      },
+      {
+        "row": "references cited in body all exist",
+        "verdict": "n/a",
+        "note": "no references cited in body",
+        "rule": "refs-cited-exist"
+      }
+    ],
+    "yaml_contract": [
+      {
+        "row": "yaml: root key 'technique_skill'",
+        "verdict": "pass",
+        "note": "",
+        "rule": "yaml-contract"
+      },
+      {
+        "row": "yaml: technique_skill.techniques[0].steps",
+        "verdict": "fail",
+        "note": "required key missing",
+        "rule": "yaml-contract"
+      },
+      {
+        "row": "yaml: >=1 gotcha OR >=1 anti_pattern record (caution-surface OR-rule)",
+        "verdict": "pass",
+        "note": "",
+        "rule": "caution-floor"
+      }
+    ],
+    "type_specific": [],
+    "mixed_type": {
+      "row": "mixed-type signal (deterministic)",
+      "verdict": "pass",
+      "note": "single root: technique_skill",
+      "rule": "mixed-type"
+    }
+  }
+}

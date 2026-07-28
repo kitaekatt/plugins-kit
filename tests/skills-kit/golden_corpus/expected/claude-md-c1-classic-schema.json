@@ -1,0 +1,44 @@
+{
+  "discover": [
+    {
+      "index": 1,
+      "path": "<CORPUS>/claude-md/c1-classic-schema/CLAUDE.md",
+      "role": "root",
+      "dimension": "classic"
+    }
+  ],
+  "audit": {
+    "path": "<CORPUS>/claude-md/c1-classic-schema/CLAUDE.md",
+    "kind": "claude_md",
+    "declared_type": null,
+    "yaml_root": "claude_md",
+    "universal": [],
+    "yaml_contract": [
+      {
+        "row": "yaml: root key 'claude_md'",
+        "verdict": "pass",
+        "note": "",
+        "rule": "yaml-contract"
+      },
+      {
+        "row": "yaml: schema validation",
+        "verdict": "pass",
+        "note": "all required keys present, all rules satisfied",
+        "rule": "yaml-contract"
+      },
+      {
+        "row": "yaml: >=1 record across insights/conventions (union floor)",
+        "verdict": "pass",
+        "note": "1 insight(s), 0 convention(s)",
+        "rule": "claude-md-record-floor"
+      }
+    ],
+    "type_specific": [],
+    "mixed_type": {
+      "row": "mixed-type signal (n/a for CLAUDE.md)",
+      "verdict": "n/a",
+      "note": "",
+      "rule": "mixed-type"
+    }
+  }
+}

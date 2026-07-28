@@ -1,0 +1,44 @@
+{
+  "discover": [
+    {
+      "index": 1,
+      "path": "<CORPUS>/project-doc/CLAUDE.md",
+      "kind": "other_claude_artifact",
+      "role_hint": null,
+      "generated": false,
+      "generation_record": null,
+      "lines": 5,
+      "approx_tokens": 30,
+      "inbound_citations": 1,
+      "cited_by": [
+        "docs/cited.md"
+      ]
+    },
+    {
+      "index": 2,
+      "path": "<CORPUS>/project-doc/docs/cited.md",
+      "kind": "project_doc",
+      "role_hint": null,
+      "generated": false,
+      "generation_record": null,
+      "lines": 3,
+      "approx_tokens": 22,
+      "inbound_citations": 1,
+      "cited_by": [
+        "CLAUDE.md"
+      ]
+    },
+    {
+      "index": 3,
+      "path": "<CORPUS>/project-doc/docs/orphan.md",
+      "kind": "project_doc",
+      "role_hint": null,
+      "generated": false,
+      "generation_record": null,
+      "lines": 3,
+      "approx_tokens": 17,
+      "inbound_citations": 0,
+      "cited_by": []
+    }
+  ]
+}

@@ -29,6 +29,24 @@ claude_md:
         (e.g. a worked-examples corpus readers skip on normal placement calls).
       origin: Arch-review finding S18 (2026-06-09); CRP evaluated during the S2-S18 remediation pass 2026-06-10.
       added: "2026-06-10"
+    - id: skill_packaging_razor_added
+      keywords: [packaging razor, two-step razor, fold vs separate, vocabulary test, cadence test, execute-or-fetch, md-domain restructure, razor provenance]
+      summary: "The skill_packaging_razor record (Index fact + framework block, beside placement_follows_trigger_shape) documents the two-step packaging razor settled with the user 2026-07-28: step 1 execute-or-fetch (static text is never a skill), step 2 fold-into-domain iff vocabulary + cadence tests both pass. Documented ahead of the md-domain restructure that implements it, so the restructure executes a written rule rather than taste."
+      detail: |
+        Two razor forms were considered and retracted during the 2026-07-28
+        discussion before this one was settled (rationale in
+        tmp/improve-md-audit/log.md -- gitignored working task); the
+        surviving form is the one whose steps are each auditable (see
+        skill_packaging_razor.declared_evidence in SKILL.md). The
+        declared_evidence fields it names on folded techniques are a
+        documentation contract; mechanical checking of those fields is
+        part of the planned md-domain restructure, not shipped with the
+        razor text.
+      origin: |
+        User-settled decision 1 + 4 of the skills-kit improvement discussion
+        (2026-07-28), following the two-agent accuracy audit of skills-kit
+        0.34.0.
+      added: "2026-07-28"
     - id: stress_test_total_ownership_extensions
       keywords: [steam-analysis stress test, directory load trigger, file access trigger, readme role, in-code contract doc, generated artifact, asset dependency edge, total ownership]
       summary: "The 2026-07 steam-analysis stress test drove five spine extensions toward total ownership (every md file has a named role): (1) directory/subsystem CLAUDE.md load_trigger models BOTH cwd descent and file access beneath the directory; (2) readme_md surface + role (agent-facing copy is SSOT, README is the derived human brief); (3) in_code_contract_doc surface (validator's in-code doc is SSOT for code-enforced schemas) + the md_restates_code_enforced_contract anti-pattern; (4) generated_artifact role (provenance-only audit); (5) the asset_dependency edge (runtime consumption declared via the asset_dependencies: portable unit, mechanically resolved)."

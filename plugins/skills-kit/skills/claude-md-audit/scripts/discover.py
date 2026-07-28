@@ -66,11 +66,18 @@ _SIGNAL_B = re.compile(
     r"|\bFORBIDDEN\b"                             # Shape C safety rail
     r"|gitignored|is a leak|clean checkout"       # negative-existence / Shape C
     r"|\(see\s+/"                                 # Shape D repo-root pointer
-    r"|\bdo not\b|\bdon't\b|\bnever\b"            # gotcha phrasing
     r"|must match|don't copy|silent at build|search for usages"
     r"|lines?\s*~?\d"                             # line anchors
     r"|`[^`]+\.(?:cpp|h|hpp|cs|py|go|rs|ts|js|lua|yaml|yml|fbs)`"  # file anchors
     r")"
+)
+# Gotcha phrasing ("do not" / "don't" / "never") is too common in ordinary
+# policy prose to flip a file on its own; it counts as Signal B only when the
+# same line anchors the claim to code -- an inline-code span, a line anchor,
+# or a source-file name.
+_SIGNAL_B_GOTCHA = re.compile(
+    r"(?im)^(?=.*\b(?:do not|don'?t|never)\b)"
+    r".*(?:`[^`]+`|lines?\s*~?\d|\b\w+\.(?:cpp|h|hpp|cs|py|go|rs|ts|js|lua|yaml|yml|fbs)\b)"
 )
 # Negative guard: a declared claude_md: contract block forces classic.
 _HAS_SCHEMA_BLOCK = re.compile(r"(?m)^\s*claude_md:\s*$")
@@ -112,7 +119,7 @@ def classify_dimension(claude_md_path: Path) -> str:
         body = claude_md_path.read_text(encoding="utf-8", errors="ignore")
         if _HAS_SCHEMA_BLOCK.search(body):
             return "classic"
-        signal_b = bool(_SIGNAL_B.search(body))
+        signal_b = bool(_SIGNAL_B.search(body) or _SIGNAL_B_GOTCHA.search(body))
 
         return "code-directory" if (signal_a or signal_b) else "classic"
     except OSError:

@@ -191,9 +191,9 @@ compositions:
 # Each entry binds primitives + compositions + rule-ids into a named audit.
 # Rule ids reference the canonical definitions in the owning SKILL.md's
 # audit_skill.criteria block (single source of truth per rule -- the framework
-# only catalogs the binding, not the rule itself). Rules whose id appears in
-# rules_per_composition but does NOT yet exist in the owning SKILL.md are
-# planned future work; track them under future_rules below.
+# only catalogs the binding, not the rule itself). Every id listed in
+# rules_per_composition is implemented; planned-but-unimplemented rules are
+# never bound here -- they live under future_rules below until they ship.
 # ---------------------------------------------------------------------------
 
 audit_kinds:
@@ -217,8 +217,8 @@ audit_kinds:
     skill: skills-kit:skill-audit
     subject_type: corpus
     discovery: plugins/skills-kit/skills/skill-audit/scripts/discover.py (cwd-relative)
-    corpus_discovery: plugins/skills-kit/scripts/_corpus.py (User + Project + Plugins; shared with roster/hierarchy procedures)
-    evaluator_scaffolding: plugins/skills-kit/skills/skill-authoring/scripts/audit.py
+    corpus_discovery: plugins/skills-kit/skills_kit_lib/corpus.py (User + Project + Plugins; shared with roster/hierarchy procedures)
+    evaluator_scaffolding: plugins/skills-kit/skills_kit_lib/audit.py (invoked as python -m skills_kit_lib.audit)
     consumes_primitives: [skill_md, yaml]
     traverses_compositions: [skill]
     rules_owned_in: plugins/skills-kit/skills/skill-audit/SKILL.md (audit_skill.criteria)
@@ -236,6 +236,20 @@ audit_kinds:
         - hygiene_thresholds
     taxonomy_in_skill: 'plugins/skills-kit/skills/skill-audit/SKILL.md (audit_skill.taxonomy)'
 
+  - id: claude_md_audit
+    skill: skills-kit:claude-md-audit
+    subject_type: corpus
+    discovery: plugins/skills-kit/skills/claude-md-audit/scripts/discover.py (cwd-relative; emits the role -- root / ancestor / child / local -- and the code-directory|classic dimension Level-1 trigger per file)
+    evaluator_scaffolding: plugins/skills-kit/skills/claude-md-audit/workflow/detect.js (LLM lanes apply the criteria; skills_kit_lib/audit.py contributes the mechanical schema-validation and record-floor rows)
+    consumes_primitives: [claude_md, yaml]
+    traverses_compositions: [directory, project]
+    rules_owned_in: plugins/skills-kit/skills/claude-md-audit/SKILL.md (audit_skill.criteria)
+    rules_per_composition:
+      directory: [ccp_change_cadence, ccp_cross_file_duplication, crp_size_signal, crp_role_appropriate, adp_no_forward_dependency, hygiene_thresholds, schema_validation, cd_anchor_modality_classify, cd_fidelity_anchor_resolves, cd_fidelity_line_anchor, cd_fidelity_claim_holds, cd_value_insight_earns_place, cd_silent_failure_preserved, dd_density_in_place, dd_extract_to_reference, dd_intra_file_redundancy, dd_value_earns_tokens]
+      project: [ccp_change_cadence, ccp_cross_file_duplication, crp_size_signal, crp_role_appropriate, adp_no_forward_dependency, hygiene_thresholds, schema_validation, cd_anchor_modality_classify, cd_fidelity_anchor_resolves, cd_fidelity_line_anchor, cd_fidelity_claim_holds, cd_value_insight_earns_place, cd_silent_failure_preserved, dd_density_in_place, dd_extract_to_reference, dd_intra_file_redundancy, dd_value_earns_tokens]
+    taxonomy_in_skill: 'plugins/skills-kit/skills/claude-md-audit/SKILL.md (audit_skill.taxonomy)'
+    note: 'Not every bound rule runs on every file: cd_* criteria fire only for targets discover.py flagged dimension=code-directory (the Level-1 trigger), and dd_* criteria only when the density lens is requested. The role (root / ancestor / child / local) further selects which hygiene checks apply.'
+
   - id: project_doc_audit
     skill: skills-kit:project-doc-audit
     subject_type: corpus
@@ -251,11 +265,13 @@ audit_kinds:
     note: 'Subject is plain_md (a standalone project doc outside any skill references/ and outside the CLAUDE.md hierarchy). Skill-attached reference_doc is audited transitively via skill_md_audit; CLAUDE.md via claude_md_audit (claude-md-audit). This audit enforces the generic cohesion-principles project_reference_md role + skill_maturation_pipeline, NOT any project-specific documentation-home policy.'
 
 # ---------------------------------------------------------------------------
-# Future rules -- bindings declared in audit_kinds.*.rules_per_composition but
-# not yet implemented (no entry in the owning SKILL.md criteria block).
-# Adding the rule means: (1) author the criteria entry in the owning SKILL.md,
-# (2) implement detection in the evaluator scaffolding, (3) remove from this
-# list. No framework-side change required.
+# Future rules -- NOT IMPLEMENTED. Nothing in this list is checked by any
+# audit today: no criteria entry exists in the owning SKILL.md, no evaluator
+# detects it, and no rules_per_composition table binds it. Each entry's
+# `intent` describes the invariant the rule WOULD enforce once built.
+# Shipping one means: (1) author the criteria entry in the owning SKILL.md,
+# (2) implement detection in the evaluator scaffolding, (3) bind the id in
+# the audit_kind's rules_per_composition, (4) remove it from this list.
 # ---------------------------------------------------------------------------
 
 future_rules:
@@ -268,7 +284,7 @@ future_rules:
   - id: manifest_declarations_resolve
     audit_kind: references_audit
     target_composition: plugin
-    intent: Every skill/command/agent declared in plugin.json exists on disk. Powers manifest reverse-orphan detection.
+    intent: Every skill/command/agent declared in plugin.json exists on disk. Would power manifest reverse-orphan detection; nothing checks this today.
   - id: no_cross_scope_personal_refs
     audit_kind: references_audit
     target_composition: plugin
