@@ -2,7 +2,7 @@
 
 Covers the hermetic surface: the MockBackend seam and process-level routing.
 The two live transports (OpenRouterBackend, ClaudeCliBackend) are thin adapters
-that delegate to ``openrouter_kit.completion`` -- the ported transport itself is
+that delegate to ``llm_scripting_kit.completion`` -- the ported transport itself is
 covered in tests/llm-scripting-kit (fake-runner subprocess seam, envelope parse,
 retry, hard-stop, timeout, halt classification, OpenRouter fake client). Here we
 only verify the adapters construct without the shared lib and raise a clear
@@ -80,9 +80,9 @@ def test_mock_default_model_when_blank():
 # --- live-backend delegation (adapter boundary) ------------------------------
 
 
-def _has_openrouter_kit() -> bool:
+def _has_llm_scripting_kit() -> bool:
     try:
-        import openrouter_kit  # noqa: F401
+        import llm_scripting_kit  # noqa: F401
         return True
     except ImportError:
         return False
@@ -96,17 +96,17 @@ def test_openrouter_backend_constructs_without_lib():
 
 def test_openrouter_backend_requires_lib_when_driven():
     backend = OpenRouterBackend()
-    if _has_openrouter_kit():  # pragma: no cover - env-dependent
-        pytest.skip("openrouter_kit importable; delegation path exercised in llm-scripting-kit")
-    with pytest.raises(ImportError, match="openrouter_kit"):
+    if _has_llm_scripting_kit():  # pragma: no cover - env-dependent
+        pytest.skip("llm_scripting_kit importable; delegation path exercised in llm-scripting-kit")
+    with pytest.raises(ImportError, match="llm_scripting_kit"):
         backend.complete("s", "u", model="x")
 
 
 def test_claude_cli_backend_requires_lib_when_driven():
     backend = ClaudeCliBackend()
-    if _has_openrouter_kit():  # pragma: no cover - env-dependent
-        pytest.skip("openrouter_kit importable; delegation path exercised in llm-scripting-kit")
-    with pytest.raises(ImportError, match="openrouter_kit"):
+    if _has_llm_scripting_kit():  # pragma: no cover - env-dependent
+        pytest.skip("llm_scripting_kit importable; delegation path exercised in llm-scripting-kit")
+    with pytest.raises(ImportError, match="llm_scripting_kit"):
         backend.complete("s", "u", model="x")
 
 

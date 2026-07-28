@@ -146,7 +146,7 @@ class TestStandardConfigLayers:
     def test_full_stack_order_and_paths(self, tmp_path):
         layers = standard_config_layers(
             "openrouter-models.yaml",
-            plugin="openrouter-kit",
+            plugin="llm-scripting-kit",
             marketplace="plugins-kit",
             shipped_default=tmp_path / "defaults" / "openrouter-models.yaml",
             project_root=tmp_path / "proj",
@@ -154,8 +154,8 @@ class TestStandardConfigLayers:
         )
         assert layers == [
             tmp_path / "defaults" / "openrouter-models.yaml",
-            tmp_path / "data" / "plugins-kit" / "openrouter-kit" / "openrouter-models.yaml",
-            tmp_path / "proj" / ".local-data" / "plugins-kit" / "openrouter-kit" / "openrouter-models.yaml",
+            tmp_path / "data" / "plugins-kit" / "llm-scripting-kit" / "openrouter-models.yaml",
+            tmp_path / "proj" / ".local-data" / "plugins-kit" / "llm-scripting-kit" / "openrouter-models.yaml",
         ]
 
     def test_user_only_when_no_shipped_or_project(self, tmp_path):
@@ -183,13 +183,13 @@ class TestStandardConfigLayers:
         # End-to-end: seed user + project files at the standard locations, resolve.
         data_root = tmp_path / "data"
         proj = tmp_path / "proj"
-        user_file = data_root / "plugins-kit" / "openrouter-kit" / "openrouter-models.yaml"
-        proj_file = proj / ".local-data" / "plugins-kit" / "openrouter-kit" / "openrouter-models.yaml"
+        user_file = data_root / "plugins-kit" / "llm-scripting-kit" / "openrouter-models.yaml"
+        proj_file = proj / ".local-data" / "plugins-kit" / "llm-scripting-kit" / "openrouter-models.yaml"
         _write(user_file, "models: {cheap: {slug: qwen/qwen3-32b}}\ndefault: cheap\n")
         _write(proj_file, "default: mini\nmodels: {mini: {slug: openai/gpt-4o-mini}}\n")
         layers = standard_config_layers(
             "openrouter-models.yaml",
-            plugin="openrouter-kit",
+            plugin="llm-scripting-kit",
             project_root=proj,
             data_root=data_root,
         )

@@ -1,4 +1,4 @@
-"""openrouter-kit CLI -- inspect, set, and validate an endpoint's API key.
+"""llm-scripting-kit CLI -- inspect, set, and validate an endpoint's API key.
 
 Subcommands (all accept ``--endpoint NAME``; default is the config's
 ``default_endpoint``, i.e. ``openrouter``):
@@ -12,8 +12,7 @@ Subcommands (all accept ``--endpoint NAME``; default is the config's
                 round-trip.
     which       Print the resolved key's source path (or "missing").
 
-The command name stays ``openrouter-kit`` even though the plugin now ships as
-``llm-scripting-kit``. Stdlib-only -- no third-party packages required.
+Stdlib-only -- no third-party packages required.
 """
 
 import argparse
@@ -28,11 +27,11 @@ _LIB_DIR = _HERE.parent / "lib"
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
-from openrouter_kit.account import AccountCheckError, validate_endpoint  # noqa: E402
-from openrouter_kit.api_key import get_api_key  # noqa: E402
-from openrouter_kit.constants import USER_ENV_FILE  # noqa: E402
-from openrouter_kit.env_file import read_env_file, write_env_file  # noqa: E402
-from openrouter_kit.models import EndpointResolveError, resolve_endpoint  # noqa: E402
+from llm_scripting_kit.account import AccountCheckError, validate_endpoint  # noqa: E402
+from llm_scripting_kit.api_key import get_api_key  # noqa: E402
+from llm_scripting_kit.constants import USER_ENV_FILE  # noqa: E402
+from llm_scripting_kit.env_file import read_env_file, write_env_file  # noqa: E402
+from llm_scripting_kit.models import EndpointResolveError, resolve_endpoint  # noqa: E402
 
 
 def _add_endpoint_arg(p: argparse.ArgumentParser) -> None:
@@ -45,7 +44,7 @@ def _add_endpoint_arg(p: argparse.ArgumentParser) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="openrouter-kit",
+        prog="llm-scripting-kit",
         description="Manage LLM endpoint API keys for plugins-kit consumers.",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -95,7 +94,7 @@ def _cmd_status(endpoint: str | None) -> int:
     lookup = get_api_key(endpoint=endpoint)
     if lookup.key is None:
         print(f"No API key found for endpoint '{ep['name']}' ({ep['key_env']}).")
-        print(f"Set one with `openrouter-kit set-key --endpoint {ep['name']}`.")
+        print(f"Set one with `llm-scripting-kit set-key --endpoint {ep['name']}`.")
         return 1
 
     print(f"Endpoint: {ep['name']} ({ep['base_url']})")

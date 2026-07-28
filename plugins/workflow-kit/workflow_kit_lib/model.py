@@ -191,7 +191,7 @@ class ScriptSpec:
 class OpenRouterSpec:
     """An `openrouter:` node -- one non-Claude model call whose reply lands in `$OUT`.
 
-    `model` is an openrouter-kit registry alias or a raw slug (NOT a Claude model);
+    `model` is an llm-scripting-kit registry alias or a raw slug (NOT a Claude model);
     omit it to use the configured `default`, or set `cheap: true` for `defaultCheap`.
     """
 

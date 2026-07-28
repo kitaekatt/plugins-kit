@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from openrouter_kit import (
+from llm_scripting_kit import (
     EndpointResolveError,
     KeyLookupResult,
     ModelResolveError,
@@ -19,9 +19,9 @@ from openrouter_kit import (
     resolve_model,
     validate_endpoint,
 )
-from openrouter_kit import account as account_mod
-from openrouter_kit import api_key as api_key_mod
-from openrouter_kit.env_file import write_env_file
+from llm_scripting_kit import account as account_mod
+from llm_scripting_kit import api_key as api_key_mod
+from llm_scripting_kit.env_file import write_env_file
 
 
 # A pre-endpoints user config: top-level registry only, no `endpoints` map.
@@ -102,14 +102,14 @@ class TestCustomEndpoint:
 class TestGetApiKeyPerEndpoint:
     def test_named_endpoint_uses_its_key_env(self, monkeypatch, tmp_path):
         user_env = tmp_path / "user" / ".env"
-        monkeypatch.setattr("openrouter_kit.constants.USER_ENV_FILE", user_env)
-        monkeypatch.setattr("openrouter_kit.api_key.USER_ENV_FILE", user_env)
+        monkeypatch.setattr("llm_scripting_kit.constants.USER_ENV_FILE", user_env)
+        monkeypatch.setattr("llm_scripting_kit.api_key.USER_ENV_FILE", user_env)
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         monkeypatch.delenv("MY_VLLM_KEY", raising=False)
         # Both endpoints' keys live in the same .env, keyed by their key_env.
         write_env_file(user_env, {"OPENROUTER_API_KEY": "or-key", "MY_VLLM_KEY": "vllm-key"})
         # Patch config resolution so resolve_endpoint uses CUSTOM_CFG.
-        monkeypatch.setattr("openrouter_kit.models.load_model_config", lambda **kw: CUSTOM_CFG)
+        monkeypatch.setattr("llm_scripting_kit.models.load_model_config", lambda **kw: CUSTOM_CFG)
 
         default_key = api_key_mod.get_api_key(project_root=tmp_path / "proj")
         custom_key = api_key_mod.get_api_key(project_root=tmp_path / "proj", endpoint="local-vllm")

@@ -4,7 +4,7 @@ The ``shared_libs`` capability lets an owner plugin publish a first-party Python
 package to a stable, version-independent location, and lets consuming plugins
 import it WITHOUT declaring a dependency on the owner plugin (reuse-by-availability).
 
-Mechanism (a generalization of openrouter-kit's B1 prototype):
+Mechanism (a generalization of llm-scripting-kit's B1 prototype):
 
 - The owner declares ``shared_libs: [{ "name": <pkg>, "src": <dir> }]`` in its
   bootstrap.json. The engine syncs ``<plugin_root>/<src>/<pkg>/`` to a per-lib,
@@ -21,7 +21,7 @@ Mechanism (a generalization of openrouter-kit's B1 prototype):
   the ``.pth`` exposes only that one package (opt-in isolation).
 
 This module shares first-party SOURCE only. Third-party deps the package needs
-(e.g. ``openai`` for ``openrouter_kit``) are the importing plugin's own concern,
+(e.g. ``openai`` for ``llm_scripting_kit``) are the importing plugin's own concern,
 declared in its ``pyproject.toml`` -- NOT installed here. A separate static test
 (tests/bootstrap/test_dependency_completeness.py) catches missing declarations.
 

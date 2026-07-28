@@ -1,4 +1,4 @@
-"""Tests for openrouter_kit.account.check_account.
+"""Tests for llm_scripting_kit.account.check_account.
 
 The transport boundary is mocked at ``urllib.request.urlopen`` so we never
 make real network calls. The test focuses on response interpretation:
@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openrouter_kit.account import AccountCheckError, check_account
+from llm_scripting_kit.account import AccountCheckError, check_account
 
 
 def _ok_response(payload):

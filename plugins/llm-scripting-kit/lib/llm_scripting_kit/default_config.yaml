@@ -1,16 +1,13 @@
 # Model registry, selection defaults, and named endpoints (shipped baseline).
 #
 # This is the lowest-precedence layer. Bootstrap seeds an editable copy at
-#   ~/.claude/plugins/data/plugins-kit/openrouter-kit/config.yaml
+#   ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/config.yaml
 # and a project may override at
-#   <project_root>/.local-data/plugins-kit/openrouter-kit/config.yaml
+#   <project_root>/.local-data/plugins-kit/llm-scripting-kit/config.yaml
 # Higher layers are deep-merged over this one (project wins); new model or
 # endpoint entries union in, so an override file only states what it changes.
 #
-# The data/config namespace stays `openrouter-kit` (matching the importable
-# `openrouter_kit` package) even though the plugin ships as `llm-scripting-kit`.
-#
-# Consumed by any plugin that makes LLM calls via openrouter_kit.resolve_model()
+# Consumed by any plugin that makes LLM calls via llm_scripting_kit.resolve_model()
 # / make_openai_client() (e.g. workflow-kit, content-pipeline-kit).
 #
 # Keep in sync with DEFAULT_MODEL_CONFIG in models.py (a test enforces this).

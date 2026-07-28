@@ -101,7 +101,7 @@ A **step** is exactly one of: an agent step, a pipeline step, a `script` node, o
 - **openrouter node** -- `openrouter: { prompt_file, model?, cheap?, system?, out?,
   status?, label? }`. One non-Claude model call whose reply lands in `$OUT`.
   `prompt_file` is a path (an input, or an upstream node's `{{ steps.ID.path }}`).
-  Omit `model` to use openrouter-kit's configured `default` (or set `cheap: true`
+  Omit `model` to use llm-scripting-kit's configured `default` (or set `cheap: true`
   for `defaultCheap`); or pass a registry alias / raw slug. See `node-strategies.md`.
 
 **Templating** -- `{{ inputs.X }}`, `{{ steps.ID }}`, `{{ steps.ID[*].field }}`

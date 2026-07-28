@@ -1,10 +1,10 @@
 {
   "shared_libs": [
-    { "name": "openrouter_kit", "src": "lib" }
+    { "name": "llm_scripting_kit", "src": "lib" }
   ],
   "config": {
     "file": "config.yaml",
-    "defaults_source": "lib/openrouter_kit/default_config.yaml"
+    "defaults_source": "lib/llm_scripting_kit/default_config.yaml"
   },
   "script": {
     "path": "custom_bootstrap.py",

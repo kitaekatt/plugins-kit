@@ -24,7 +24,7 @@ domain_skill:
   identity: Content-pipeline-domain owns the architecture vocabulary and abstraction map for LLM-in-the-loop batch content pipelines, and routes to the content_pipeline library that implements it.
   companions:
     siblings: []
-    note: No sibling domains at this layer. openrouter-kit's openrouter-account skill is a companion at the plugin-dependency level (this domain's llm/ package consumes openrouter-kit for key + model + client) but is not a sibling domain -- it owns a different subject (API-key/account management).
+    note: No sibling domains at this layer. llm-scripting-kit's openrouter-account skill is a companion at the plugin-dependency level (this domain's llm/ package consumes llm-scripting-kit for key + model + client) but is not a sibling domain -- it owns a different subject (API-key/account management).
   scope:
     covers:
       - the abstraction map (attributed store, freshness, validate, providers, llm, pipeline, deliver, vcs, roundtrip, audit, cli)
@@ -34,7 +34,7 @@ domain_skill:
       - the design-discipline philosophy behind the library's opt-in guardrails
     excludes:
       - one-off / interactive LLM chat usage (not a batch pipeline)
-      - API key or model-registry management (see openrouter-kit's openrouter-account skill)
+      - API key or model-registry management (see llm-scripting-kit's openrouter-account skill)
       - any project-specific pipeline instance (this domain carries zero project-specific knowledge)
   orientation:
     summary: |

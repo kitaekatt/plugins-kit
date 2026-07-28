@@ -214,7 +214,7 @@ of this.
 `llm.backends` ships three transports and a process-level `route`:
 
 - **`OpenRouterBackend`** -- the real completion transport (consumes
-  openrouter-kit for key + model + client).
+  llm-scripting-kit for key + model + client).
 - **`ClaudeCliBackend`** -- an agent-loop transport.
 - **`MockBackend`** -- deterministic and scriptable, for every test.
 

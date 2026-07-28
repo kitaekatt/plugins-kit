@@ -10,7 +10,7 @@ model to call; that is ``backends``'s job.
 
 Key resolution, the model registry, and the ready-made OpenAI-compatible
 client are NOT reimplemented here -- ``backends.OpenRouterBackend`` consumes
-them from ``openrouter_kit`` (an ImportError-tolerant optional seam). This
+them from ``llm_scripting_kit`` (an ImportError-tolerant optional seam). This
 module is stdlib-only plus the two permitted cross-package imports
 (``freshness.hashing`` for the cache key, ``validate.contract`` for the
 submission loop).

@@ -291,7 +291,7 @@ def _run_with_containment():
 # cache download can land some of a package's modules before others, so the
 # SessionStart hook may import one of these and hit a submodule that has not been
 # written YET -- a ModuleNotFoundError that self-heals once the download finishes.
-_FIRST_PARTY_LIBS = ("bootstrap_lib", "skills_kit_lib", "openrouter_kit")
+_FIRST_PARTY_LIBS = ("bootstrap_lib", "skills_kit_lib", "llm_scripting_kit")
 
 
 def _is_transient_import_crash(exc) -> bool:

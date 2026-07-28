@@ -1,17 +1,17 @@
-"""Unit tests for openrouter_kit.models (registry resolution + layered config)."""
+"""Unit tests for llm_scripting_kit.models (registry resolution + layered config)."""
 
 from pathlib import Path
 
 import pytest
 import yaml
 
-from openrouter_kit import (
+from llm_scripting_kit import (
     DEFAULT_MODEL_CONFIG,
     ModelResolveError,
     load_model_config,
     resolve_model,
 )
-from openrouter_kit import models as models_mod
+from llm_scripting_kit import models as models_mod
 
 
 def _write(path, text):
@@ -84,9 +84,9 @@ class TestLoadModelConfig:
         proj = tmp_path / "proj"
         user_file = (
             tmp_path / ".claude" / "plugins" / "data"
-            / "plugins-kit" / "openrouter-kit" / "config.yaml"
+            / "plugins-kit" / "llm-scripting-kit" / "config.yaml"
         )
-        proj_file = proj / ".local-data" / "plugins-kit" / "openrouter-kit" / "config.yaml"
+        proj_file = proj / ".local-data" / "plugins-kit" / "llm-scripting-kit" / "config.yaml"
         _write(user_file, "default: qwen\n")  # override the default selector
         _write(
             proj_file,
@@ -105,7 +105,7 @@ class TestLoadModelConfig:
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
         proj = tmp_path / "proj"
-        proj_file = proj / ".local-data" / "plugins-kit" / "openrouter-kit" / "config.yaml"
+        proj_file = proj / ".local-data" / "plugins-kit" / "llm-scripting-kit" / "config.yaml"
         _write(proj_file, "models: {custom: {slug: foo/bar}}\n")
         load_model_config(project_root=str(proj))
         # the module constant must be unchanged by the merge

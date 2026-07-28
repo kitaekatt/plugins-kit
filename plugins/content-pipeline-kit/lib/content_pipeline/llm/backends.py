@@ -8,12 +8,12 @@ Three transports implement :class:`~content_pipeline.llm.platform.LLMBackend`:
 - :class:`MockBackend` -- deterministic, scriptable responses. The always-wins
   test seam: no network, no subprocess, no shared lib.
 
-The two live transports are THIN ADAPTERS over ``openrouter_kit.completion``
+The two live transports are THIN ADAPTERS over ``llm_scripting_kit.completion``
 (from llm-scripting-kit): that shared lib owns the actual completion
 transport -- the ``claude -p`` subprocess runner, retry, timeout, hard-stop
 detection, and the OpenAI-compatible client + prompt-cache message shaping.
 This module keeps only the content-pipeline-specific glue; it does NOT
-reimplement the transport. ``openrouter_kit`` is a LAZY / optional import: it is
+reimplement the transport. ``llm_scripting_kit`` is a LAZY / optional import: it is
 reached for only when a live backend's ``complete`` / ``classify_halt`` actually
 runs, so this module (and the MockBackend path, and process import graph
 guards) load with no shared lib and no ``openai`` SDK installed. The per-call
@@ -40,23 +40,23 @@ from content_pipeline.llm import platform
 from content_pipeline.llm.platform import BackendOptions, LLMResponse
 
 # The message a live backend raises when the shared lib is missing. The
-# claude-cli / openrouter transports genuinely require openrouter_kit; only the
+# claude-cli / openrouter transports genuinely require llm_scripting_kit; only the
 # MockBackend path is hermetic.
 _MISSING_LIB_MSG = (
-    "needs the 'openrouter_kit' shared lib (from llm-scripting-kit). Declare it "
+    "needs the 'llm_scripting_kit' shared lib (from llm-scripting-kit). Declare it "
     "via the plugin's shared_lib_imports, or use MockBackend for tests."
 )
 
 
 def _to_completion_options(opts: BackendOptions) -> Any:
-    """Build an ``openrouter_kit.completion.BackendOptions`` from ours.
+    """Build an ``llm_scripting_kit.completion.BackendOptions`` from ours.
 
     Field-for-field: the two option bundles are intentionally identical, but the
     conversion is explicit so a future field drift surfaces here rather than
     silently mis-binding across the seam. Lazy import -- only reached once a live
     backend is actually driven.
     """
-    from openrouter_kit.completion import BackendOptions as _CompletionOptions
+    from llm_scripting_kit.completion import BackendOptions as _CompletionOptions
 
     return _CompletionOptions(
         max_tokens=opts.max_tokens,
@@ -73,7 +73,7 @@ def _to_completion_options(opts: BackendOptions) -> Any:
 
 
 def _from_completion_response(resp: Any) -> LLMResponse:
-    """Adapt an ``openrouter_kit.completion.LLMResponse`` into ours."""
+    """Adapt an ``llm_scripting_kit.completion.LLMResponse`` into ours."""
     return LLMResponse(
         text=resp.text,
         model=resp.model,
@@ -87,16 +87,16 @@ def _from_completion_response(resp: Any) -> LLMResponse:
 
 
 # ---------------------------------------------------------------------------
-# OpenRouter (OpenAI-compatible HTTP) backend -- delegates to openrouter_kit
+# OpenRouter (OpenAI-compatible HTTP) backend -- delegates to llm_scripting_kit
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class OpenRouterBackend:
-    """OpenAI-compatible HTTP completion, delegated to ``openrouter_kit``.
+    """OpenAI-compatible HTTP completion, delegated to ``llm_scripting_kit``.
 
     ``endpoint`` / ``project_root`` / ``client`` are forwarded to
-    ``openrouter_kit.completion.OpenRouterBackend`` (a caller may inject a
+    ``llm_scripting_kit.completion.OpenRouterBackend`` (a caller may inject a
     pre-built ``client`` as the test seam). The delegate is built lazily on
     first use, so constructing this adapter never requires the shared lib.
     """
@@ -110,7 +110,7 @@ class OpenRouterBackend:
     def _backend(self) -> Any:
         if self._delegate is None:
             try:
-                from openrouter_kit.completion import (  # noqa: PLC0415
+                from llm_scripting_kit.completion import (  # noqa: PLC0415
                     OpenRouterBackend as _CompletionOpenRouter,
                 )
             except ImportError as exc:  # pragma: no cover - env-dependent
@@ -141,18 +141,18 @@ class OpenRouterBackend:
 
 
 # ---------------------------------------------------------------------------
-# Claude CLI backend -- delegates to openrouter_kit
+# Claude CLI backend -- delegates to llm_scripting_kit
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class ClaudeCliBackend:
-    """Local ``claude -p`` completion, delegated to ``openrouter_kit``.
+    """Local ``claude -p`` completion, delegated to ``llm_scripting_kit``.
 
     Spawns the CLI in pure-completion mode (JSON output, no tools by default),
     enforces a per-call timeout, retries transient 5xx envelopes, and maps
     rate-limit / auth markers to a hard stop -- all inside
-    ``openrouter_kit.completion.ClaudeCliBackend``. Cost is flat zero (the CLI
+    ``llm_scripting_kit.completion.ClaudeCliBackend``. Cost is flat zero (the CLI
     bills at its own subscription, not per call).
 
     Config fields forward to the delegate; ``runner`` is the subprocess seam
@@ -173,7 +173,7 @@ class ClaudeCliBackend:
     def _backend(self) -> Any:
         if self._delegate is None:
             try:
-                from openrouter_kit.completion import (  # noqa: PLC0415
+                from llm_scripting_kit.completion import (  # noqa: PLC0415
                     ClaudeCliBackend as _CompletionClaudeCli,
                 )
             except ImportError as exc:  # pragma: no cover - env-dependent

@@ -5,10 +5,10 @@ validate-until-valid loop, a content-addressed response cache, cost/budget
 accounting, process-level backend routing (openrouter completion vs. a
 claude-cli agent loop), a mock seam for tests, and the convergence gate. Key
 resolution, the model registry, and the ready-made client are NOT
-reimplemented here -- they are consumed from openrouter-kit via
+reimplemented here -- they are consumed from llm-scripting-kit via
 ``shared_lib_imports`` (reuse-by-availability). This package is the
 domain-free machinery both source systems this plugin unifies share; it is
-not "which provider / which key," which stays openrouter-kit's job.
+not "which provider / which key," which stays llm-scripting-kit's job.
 
 Submodules:
 
@@ -20,7 +20,7 @@ Submodules:
   ``validate.contract`` validators).
 - ``backends`` -- the three transports (``OpenRouterBackend``,
   ``ClaudeCliBackend``, ``MockBackend``) and process-level ``route``. The two
-  live transports are THIN ADAPTERS over ``openrouter_kit.completion`` (from
+  live transports are THIN ADAPTERS over ``llm_scripting_kit.completion`` (from
   llm-scripting-kit), which owns the actual completion transport -- the
   ``claude -p`` subprocess runner, retry, timeout, hard-stop detection, and the
   OpenAI-compatible client + prompt-cache message shaping. This layer keeps only
@@ -72,7 +72,7 @@ but several details differ deliberately.
    ``BackendOptions``. This library folds all per-call knobs onto
    ``BackendOptions`` so the ``LLMBackend`` protocol signature is uniform; the
    behavioral effect (temperature / max-tokens flow to the provider and into the
-   cache key) is unchanged. The ``openrouter_kit.completion`` seam this layer now
+   cache key) is unchanged. The ``llm_scripting_kit.completion`` seam this layer now
    delegates its transport to shares this folded shape, so the adapter passes
    options across the boundary field-for-field.
 
@@ -97,7 +97,7 @@ collide with a submodule name (``platform``, ``backends``, ``convergence``,
 ``yaml_extract``) are re-exported -- the repo's name-shadowing discipline -- so
 ``content_pipeline.llm.platform`` always resolves to the submodule, never a
 re-exported symbol. The re-exports are import-safe: ``platform`` and
-``backends`` load with no ``openai`` / ``openrouter_kit`` present (both are lazy
+``backends`` load with no ``openai`` / ``llm_scripting_kit`` present (both are lazy
 imports reached only when a live backend actually runs), so importing this
 package never drags in an optional transport dependency.
 

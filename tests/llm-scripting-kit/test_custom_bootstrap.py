@@ -6,7 +6,8 @@ Exercises the four bootstrap states:
 - key present + 401     -> add_failure with rotation hint
 - key present + 402     -> add_failure with credit hint
 
-And the autodetect path: legacy loc-ops .env present -> migrated.
+And the autodetect path: legacy loc-ops .env present -> migrated. Plus the
+0.5.0 user-data-dir rename (openrouter-kit -> llm-scripting-kit).
 """
 
 from unittest.mock import patch
@@ -14,9 +15,9 @@ from unittest.mock import patch
 import pytest
 
 import custom_bootstrap as cb
-from openrouter_kit import constants
-from openrouter_kit.account import AccountCheckError, AccountStatus
-from openrouter_kit.env_file import read_env_file, write_env_file
+from llm_scripting_kit import constants
+from llm_scripting_kit.account import AccountCheckError, AccountStatus
+from llm_scripting_kit.env_file import read_env_file, write_env_file
 
 
 class FakeContext:
@@ -44,7 +45,7 @@ def env_setup(monkeypatch, tmp_path):
     """Redirect USER_ENV_FILE to tmp_path and clear the env var."""
     user_env = tmp_path / "user_data" / ".env"
     monkeypatch.setattr(constants, "USER_ENV_FILE", user_env)
-    monkeypatch.setattr("openrouter_kit.api_key.USER_ENV_FILE", user_env)
+    monkeypatch.setattr("llm_scripting_kit.api_key.USER_ENV_FILE", user_env)
     monkeypatch.setattr(cb, "USER_ENV_FILE", user_env)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
@@ -80,7 +81,7 @@ class TestBootstrapMissingKey:
         # The brief user_msg points at the fix-all flow; the detailed remediation
         # (set-key + where to get a key) lives in the agent_msg.
         assert "fix-all" in f["user_msg"]
-        assert "openrouter-kit set-key" in f["agent_msg"]
+        assert "llm-scripting-kit set-key" in f["agent_msg"]
         assert "openrouter.ai/keys" in f["agent_msg"]
 
 
@@ -205,6 +206,64 @@ class TestBootstrapValidationFailures:
         assert any("validation skipped" in m for m in ctx.actions)
         # Cache must NOT be written when validation didn't happen
         assert not (env_setup["data_dir"] / "last_validated.sha256").is_file()
+
+
+class TestDataDirMigration:
+    """0.5.0 hard cutover: the user data dir moved openrouter-kit -> llm-scripting-kit."""
+
+    def _legacy_dir(self, env_setup):
+        return env_setup["user_env"].parent.parent / "openrouter-kit"
+
+    def test_old_dir_moved_when_new_absent(self, env_setup):
+        legacy = self._legacy_dir(env_setup)
+        write_env_file(legacy / ".env", {"OPENROUTER_API_KEY": "sk-or-v1-moved"})
+        (legacy / "config.yaml").write_text("default: qwen\n", encoding="utf-8")
+        ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
+
+        with patch.object(cb, "check_account", return_value=_ok_status()):
+            cb.bootstrap(ctx)
+
+        assert not legacy.exists()
+        new_dir = env_setup["user_env"].parent
+        assert read_env_file(new_dir / ".env")["OPENROUTER_API_KEY"] == "sk-or-v1-moved"
+        assert (new_dir / "config.yaml").is_file()
+        assert any("migrated user data dir" in m for m in ctx.actions)
+        assert ctx.failures == []
+
+    def test_noop_and_quiet_when_no_legacy_dir(self, env_setup):
+        write_env_file(env_setup["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-only"})
+        ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
+
+        with patch.object(cb, "check_account", return_value=_ok_status()):
+            cb.bootstrap(ctx)
+
+        assert not any("migrated user data dir" in m for m in ctx.actions)
+
+    def test_new_dir_wins_when_both_exist(self, env_setup):
+        legacy = self._legacy_dir(env_setup)
+        write_env_file(legacy / ".env", {"OPENROUTER_API_KEY": "sk-or-v1-stale"})
+        write_env_file(env_setup["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-current"})
+        ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
+
+        with patch.object(cb, "check_account", return_value=_ok_status()):
+            cb.bootstrap(ctx)
+
+        assert legacy.is_dir()
+        assert read_env_file(env_setup["user_env"])["OPENROUTER_API_KEY"] == "sk-or-v1-current"
+        assert not any("migrated user data dir" in m for m in ctx.actions)
+
+    def test_migration_is_idempotent(self, env_setup):
+        legacy = self._legacy_dir(env_setup)
+        write_env_file(legacy / ".env", {"OPENROUTER_API_KEY": "sk-or-v1-once"})
+
+        for _ in range(2):
+            ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
+            with patch.object(cb, "check_account", return_value=_ok_status()):
+                cb.bootstrap(ctx)
+
+        # Second pass finds nothing to move and says nothing.
+        assert not any("migrated user data dir" in m for m in ctx.actions)
+        assert read_env_file(env_setup["user_env"])["OPENROUTER_API_KEY"] == "sk-or-v1-once"
 
 
 class TestLegacyMigration:

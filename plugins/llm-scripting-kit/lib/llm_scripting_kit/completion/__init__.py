@@ -1,10 +1,10 @@
-"""openrouter_kit.completion -- the completion seam.
+"""llm_scripting_kit.completion -- the completion seam.
 
 One ``complete()`` protocol over two transports, so a pipeline can run the same
 completion-shaped task against either an OpenAI-compatible HTTP endpoint or the
 local ``claude -p`` CLI (subscription-billed) purely by configuration:
 
-    from openrouter_kit.completion import (
+    from llm_scripting_kit.completion import (
         LLMResponse, BackendOptions, LLMBackend,
         OpenRouterBackend, ClaudeCliBackend,
         HaltError, classify_halt_text,

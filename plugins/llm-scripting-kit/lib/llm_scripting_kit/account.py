@@ -165,7 +165,7 @@ def validate_endpoint(
     """Validate a key against an endpoint per its ``account_check`` mode.
 
     ``endpoint_cfg`` is a dict as returned by
-    ``openrouter_kit.models.resolve_endpoint`` (needs ``base_url`` and
+    ``llm_scripting_kit.models.resolve_endpoint`` (needs ``base_url`` and
     ``account_check``). Modes:
 
     - ``"openrouter"`` -- OpenRouter's ``GET /auth/key`` (returns AccountStatus).

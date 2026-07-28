@@ -5,10 +5,10 @@ transport, selected by configuration:
 
 - :class:`OpenRouterBackend` -- an OpenAI-compatible HTTP completion via
   ``make_openai_client(endpoint=...)`` + ``chat.completions.create``. Costs
-  real money per the provider's pricing. Consumes ``openrouter_kit``'s own
+  real money per the provider's pricing. Consumes ``llm_scripting_kit``'s own
   client factory and model resolver so a named endpoint is honored end to end.
 - :class:`ClaudeCliBackend` -- the local ``claude -p`` CLI in pure completion
-  mode (no tools, JSON envelope) over :mod:`openrouter_kit.completion
+  mode (no tools, JSON envelope) over :mod:`llm_scripting_kit.completion
   .claude_runner`. Auth and billing come from the CLI's own login (Claude Max /
   a Claude subscription), so the run is subscription-billed rather than metered
   per API call. Recorded cost is flat zero by design.
@@ -51,7 +51,7 @@ from .types import BackendOptions, LLMResponse
 
 @dataclass
 class OpenRouterBackend:
-    """OpenAI-compatible HTTP completion via an ``openrouter_kit`` client.
+    """OpenAI-compatible HTTP completion via an ``llm_scripting_kit`` client.
 
     A caller may inject a pre-built ``client`` (the test seam / a custom HTTP
     client); when absent, ``make_openai_client(endpoint=...)`` builds one on

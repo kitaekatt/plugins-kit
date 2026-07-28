@@ -1,10 +1,10 @@
-"""Tests for openrouter_kit.api_key precedence resolution."""
+"""Tests for llm_scripting_kit.api_key precedence resolution."""
 
 import pytest
 
-from openrouter_kit import constants
-from openrouter_kit.api_key import get_api_key
-from openrouter_kit.env_file import write_env_file
+from llm_scripting_kit import constants
+from llm_scripting_kit.api_key import get_api_key
+from llm_scripting_kit.env_file import write_env_file
 
 
 @pytest.fixture
@@ -14,7 +14,7 @@ def isolated_paths(monkeypatch, tmp_path):
     user_env = tmp_path / "user" / ".env"
     monkeypatch.setattr(constants, "USER_ENV_FILE", user_env)
     # api_key.py imported USER_ENV_FILE at module level; also patch there.
-    monkeypatch.setattr("openrouter_kit.api_key.USER_ENV_FILE", user_env)
+    monkeypatch.setattr("llm_scripting_kit.api_key.USER_ENV_FILE", user_env)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     return tmp_path
 
@@ -30,7 +30,7 @@ class TestGetApiKey:
         # Populate every layer; env should still win.
         monkeypatch.setenv("OPENROUTER_API_KEY", "from-env")
         write_env_file(
-            isolated_paths / "project" / ".local-data" / "openrouter-kit" / ".env",
+            isolated_paths / "project" / ".local-data" / "llm-scripting-kit" / ".env",
             {"OPENROUTER_API_KEY": "from-project"},
         )
         write_env_file(
@@ -44,7 +44,7 @@ class TestGetApiKey:
 
     def test_project_wins_over_user(self, isolated_paths):
         write_env_file(
-            isolated_paths / "project" / ".local-data" / "openrouter-kit" / ".env",
+            isolated_paths / "project" / ".local-data" / "llm-scripting-kit" / ".env",
             {"OPENROUTER_API_KEY": "from-project"},
         )
         write_env_file(
@@ -54,7 +54,7 @@ class TestGetApiKey:
         result = get_api_key(project_root=isolated_paths / "project")
         assert result.key == "from-project"
         assert result.source == "project"
-        assert result.source_path == isolated_paths / "project" / ".local-data" / "openrouter-kit" / ".env"
+        assert result.source_path == isolated_paths / "project" / ".local-data" / "llm-scripting-kit" / ".env"
 
     def test_user_when_only_user_set(self, isolated_paths):
         write_env_file(

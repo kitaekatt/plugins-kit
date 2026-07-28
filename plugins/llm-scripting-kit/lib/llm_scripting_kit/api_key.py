@@ -3,8 +3,8 @@
 Precedence (highest to lowest), for the endpoint's ``key_env`` variable:
 
 1. the ``<key_env>`` environment variable
-2. ``<project_root>/.local-data/openrouter-kit/.env`` (per-project override)
-3. ``~/.claude/plugins/data/plugins-kit/openrouter-kit/.env`` (user default)
+2. ``<project_root>/.local-data/llm-scripting-kit/.env`` (per-project override)
+3. ``~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env`` (user default)
 
 The default endpoint (``openrouter``) uses ``OPENROUTER_API_KEY``; a named
 endpoint uses its own ``key_env``. Keys for multiple endpoints coexist as

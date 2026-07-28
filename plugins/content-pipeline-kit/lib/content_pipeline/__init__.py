@@ -6,7 +6,7 @@ plugin carries zero project-specific knowledge) collapse onto: an attributed
 canonical store, a two-tier content-hash freshness engine, a one-rule-many-
 call-sites validator contract, a tiered context-provider registry, an LLM
 platform binding (transport / cache / cost / budget / convergence over an
-OpenAI-compatible endpoint, reusing openrouter-kit for key + model + client),
+OpenAI-compatible endpoint, reusing llm-scripting-kit for key + model + client),
 stage orchestration for both a single-pass and a convergence-loop pipeline
 shape, two delivery modes (in-place mutation and append-only projection), a
 VCS seam (git-default, Perforce ships in p4-kit), a human-in-the-loop

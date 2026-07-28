@@ -113,7 +113,7 @@ def deep_merge(base, override):
     """Recursively merge two plain dicts; override wins for scalar conflicts.
 
     The supported public entry point for generic dict deep-merging (other
-    plugins import this — e.g. openrouter-kit's model-config layering). For
+    plugins import this — e.g. llm-scripting-kit's model-config layering). For
     bootstrap *manifest* dicts use merge_manifests, which adds the
     identity-keyed array semantics.
     """

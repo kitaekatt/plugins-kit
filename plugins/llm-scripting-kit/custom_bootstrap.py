@@ -2,13 +2,16 @@
 
 Single entry point ``bootstrap(ctx)`` runs at session start and:
 
+0. Migrates the user data dir from the pre-rename ``openrouter-kit`` namespace
+   to ``llm-scripting-kit`` if the old one is still there (one-shot, silent
+   when there is nothing to move).
 1. Resolves the OpenRouter API key from env var, per-project .env, or the
    user-scoped credential file under ``ctx.data_dir``.
 2. If the key is missing, autodetects it from legacy locations (the env var
    itself, and loc-ops's ``<project>/.local-data/loc/.env``). When a legacy
    key is found, it is migrated into the canonical user-scoped .env.
 3. If still missing, registers a fix-all failure so Claude prompts the user
-   to obtain a key from openrouter.ai/keys and run ``openrouter-kit set-key``.
+   to obtain a key from openrouter.ai/keys and run ``llm-scripting-kit set-key``.
 4. If present, validates the key against ``GET /auth/key``. Failures (401,
    402) become fix-all entries with specific remediation. Successful checks
    are content-hashed into ``last_validated.sha256`` (hash + validation
@@ -16,7 +19,7 @@ Single entry point ``bootstrap(ctx)`` runs at session start and:
    key has not changed -- but only for ~7 days, so revocation or credit
    exhaustion is re-detected without a key change.
 
-The script is stdlib-only -- it imports ``openrouter_kit`` from ``lib/``
+The script is stdlib-only -- it imports ``llm_scripting_kit`` from ``lib/``
 beside this file. No venv required.
 """
 
@@ -32,10 +35,10 @@ _LIB_DIR = os.path.join(os.path.dirname(__file__), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-from openrouter_kit.api_key import get_api_key  # noqa: E402
-from openrouter_kit.account import AccountCheckError, check_account  # noqa: E402
-from openrouter_kit.constants import API_KEY_ENV, USER_ENV_FILE  # noqa: E402
-from openrouter_kit.env_file import read_env_file, write_env_file  # noqa: E402
+from llm_scripting_kit.api_key import get_api_key  # noqa: E402
+from llm_scripting_kit.account import AccountCheckError, check_account  # noqa: E402
+from llm_scripting_kit.constants import API_KEY_ENV, USER_ENV_FILE  # noqa: E402
+from llm_scripting_kit.env_file import read_env_file, write_env_file  # noqa: E402
 
 
 # Where loc-ops historically stored the key on this project. Honored once,
@@ -48,16 +51,48 @@ _LEGACY_LOC_OPS_RELATIVE = Path(".local-data") / "loc" / ".env"
 # exhaustion is detected even when the key text has not changed.
 _REVALIDATE_AFTER_SECONDS = 7 * 24 * 60 * 60  # ~7 days
 
+# Pre-rename user data dir name. The plugin, package, CLI, and data namespace
+# were all cut over to ``llm-scripting-kit`` at 0.5.0; every machine provisioned
+# before that keeps its API key (and config.yaml) under the old name, so the
+# directory is moved once, on the first 0.5.0 session. Resolved relative to
+# USER_ENV_FILE so the old and new dirs are always siblings.
+_LEGACY_DATA_DIR_NAME = "openrouter-kit"
+
+
+def _migrate_legacy_data_dir(ctx: Any) -> None:
+    """Move the pre-0.5.0 ``openrouter-kit`` user data dir to the new name.
+
+    Idempotent and silent when there is nothing to do: acts only when the old
+    directory exists and the new one does not.
+    """
+    new_dir = USER_ENV_FILE.parent
+    legacy_dir = new_dir.parent / _LEGACY_DATA_DIR_NAME
+    if legacy_dir == new_dir or not legacy_dir.is_dir() or new_dir.exists():
+        return
+    try:
+        new_dir.parent.mkdir(parents=True, exist_ok=True)
+        legacy_dir.rename(new_dir)
+    except OSError as e:
+        ctx.log(f"llm-scripting-kit: data dir migration failed ({e})")
+        return
+    ctx.log(
+        f"llm-scripting-kit: migrated user data dir "
+        f"{legacy_dir} -> {new_dir}"
+    )
+
 
 def bootstrap(ctx: Any) -> None:
     """Validate or initialize the OpenRouter credential.
 
-    openrouter_kit is published as a shared library to the standalone Python (and
+    llm_scripting_kit is published as a shared library to the standalone Python (and
     consuming plugin venvs) declaratively via the ``shared_libs`` key in this
     plugin's bootstrap.json -- the bootstrap engine handles the .pth registration,
     so this script only manages the API credential.
     """
     project_root = _resolve_project_root(ctx)
+
+    # 0. One-shot data-dir rename for machines provisioned before 0.5.0.
+    _migrate_legacy_data_dir(ctx)
 
     # 1. Try the canonical resolution path (env -> project .env -> user .env).
     lookup = get_api_key(project_root)
@@ -74,25 +109,25 @@ def bootstrap(ctx: Any) -> None:
             "openrouter_credential",
             field=API_KEY_ENV,
             user_msg=(
-                "openrouter-kit needs an OpenRouter API key. Ask Claude to "
+                "llm-scripting-kit needs an OpenRouter API key. Ask Claude to "
                 "'fix-all' and Claude will walk you through it."
             ),
             agent_msg=(
-                "openrouter-kit needs an OpenRouter API key. Give the user "
+                "llm-scripting-kit needs an OpenRouter API key. Give the user "
                 "this prepared statement, verbatim:\n\n"
-                "  > openrouter-kit needs an API key. Two ways to set it:\n"
+                "  > llm-scripting-kit needs an API key. Two ways to set it:\n"
                 "  >   1. (preferred -- key stays out of the transcript) Type "
                 "this in the prompt with the leading `!`:\n"
-                "  >        ! openrouter-kit set-key\n"
+                "  >        ! llm-scripting-kit set-key\n"
                 "  >      It'll prompt for the key with a hidden input. "
                 "Paste from https://openrouter.ai/keys (starts with `sk-or-v1-`).\n"
                 "  >   2. If you'd rather paste the key here and have me set "
                 "it for you, paste it. WARNING: the key will be visible in "
                 "the transcript, so prefer option 1 unless you don't mind.\n\n"
                 "If the user picks option 2 and pastes a key, run:\n"
-                "  openrouter-kit set-key --key <THE_KEY>\n"
+                "  llm-scripting-kit set-key --key <THE_KEY>\n"
                 "It validates against GET /auth/key before writing to "
-                f"{USER_ENV_FILE}. Do NOT run `openrouter-kit set-key` "
+                f"{USER_ENV_FILE}. Do NOT run `llm-scripting-kit set-key` "
                 "without --key yourself -- it requires an interactive hidden "
                 "prompt you cannot provide; it must be the user who runs the "
                 "bang-prefixed form."
@@ -139,12 +174,12 @@ def bootstrap(ctx: Any) -> None:
             user_msg=(
                 "Your OpenRouter API key was rejected (HTTP 401). "
                 "Generate a new one at https://openrouter.ai/keys and run "
-                "`openrouter-kit set-key`."
+                "`llm-scripting-kit set-key`."
             ),
             agent_msg=(
                 f"OpenRouter rejected the API key currently in {lookup.source_path or USER_ENV_FILE} "
                 f"with HTTP 401. Ask the user to generate a fresh key at "
-                f"https://openrouter.ai/keys and run `openrouter-kit set-key`."
+                f"https://openrouter.ai/keys and run `llm-scripting-kit set-key`."
             ),
         )
         ctx.log("openrouter: key REJECTED (HTTP 401)")

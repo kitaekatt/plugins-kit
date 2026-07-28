@@ -28,7 +28,7 @@ def bootstrap(ctx: Any) -> None:
     marker = Path(ctx.data_dir) / MARKER_NAME
     if marker.exists():
         # Steady state: nothing to do. Verbose-only so a healthy bootstrap stays
-        # silent instead of re-displaying this every session (see openrouter-kit's
+        # silent instead of re-displaying this every session (see llm-scripting-kit's
         # cached-validation branch for the same idiom).
         ctx.log_ok("html-pdf: chromium already installed (cached)")
         return

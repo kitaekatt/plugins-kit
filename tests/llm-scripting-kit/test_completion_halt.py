@@ -1,4 +1,4 @@
-"""Tests for openrouter_kit.completion.halt -- the shared halt taxonomy."""
+"""Tests for llm_scripting_kit.completion.halt -- the shared halt taxonomy."""
 from __future__ import annotations
 
 import sys
@@ -6,8 +6,8 @@ import types
 
 import pytest
 
-from openrouter_kit.completion import halt
-from openrouter_kit.completion.claude_runner import AgentTimeoutError
+from llm_scripting_kit.completion import halt
+from llm_scripting_kit.completion.claude_runner import AgentTimeoutError
 
 
 class TestClassifyHaltText:

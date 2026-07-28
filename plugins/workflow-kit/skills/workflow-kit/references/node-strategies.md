@@ -41,21 +41,21 @@ code. Anything `bash -c` can run is a script node.
 
 ## openrouter strategy
 
-One non-Claude model call via openrouter-kit's openai runner
-(`scripts/openrouter_run.py`, which uses `openrouter_kit.make_openai_client`),
-writing the reply text to `$OUT`. workflow-kit reuses `openrouter_kit` (owned by
+One non-Claude model call via llm-scripting-kit's openai runner
+(`scripts/openrouter_run.py`, which uses `llm_scripting_kit.make_openai_client`),
+writing the reply text to `$OUT`. workflow-kit reuses `llm_scripting_kit` (owned by
 the llm-scripting-kit plugin) WITHOUT declaring a dependency on that plugin -- it
 gets the library on its venv via the bootstrap shared-libs `.pth`. The one
 third-party dep the call needs, `openai`, IS declared by workflow-kit (its own
 `pyproject.toml`).
 
 Run the runner with **workflow-kit's own venv python** -- bootstrap provisions it
-with `openai` (declared) and links `openrouter_kit` onto it (declared via
-`shared_lib_imports`). The API key is resolved the openrouter-kit way; run
-`openrouter-kit set-key` once to provision it.
+with `openai` (declared) and links `llm_scripting_kit` onto it (declared via
+`shared_lib_imports`). The API key is resolved the llm-scripting-kit way; run
+`llm-scripting-kit set-key` once to provision it.
 
 ```js
-// workflow-kit's venv python: has openai + openrouter_kit (shared-libs .pth).
+// workflow-kit's venv python: has openai + llm_scripting_kit (shared-libs .pth).
 const venvPy = args.workflowKitVenvPython
 //   ~/.claude/plugins/data/plugins-kit/workflow-kit/.venv/Scripts/python.exe  (Windows)
 //   ~/.claude/plugins/data/plugins-kit/workflow-kit/.venv/bin/python          (macOS/Linux)
@@ -64,7 +64,7 @@ const runner = `"${venvPy}" "${args.pluginRoot}/scripts/openrouter_run.py"`
 const req = `./.workflow-kit/${args.runId}/req.txt`  // prompt written first (a script node or upstream)
 const out = `./.workflow-kit/${args.runId}/gpt.txt`
 const r = await wkOpenRouter(runner, {
-  // model omitted + cheap:true -> openrouter-kit's configured 'defaultCheap'.
+  // model omitted + cheap:true -> llm-scripting-kit's configured 'defaultCheap'.
   // (Or pass model: 'qwen' for a registry alias, or a raw slug like
   // 'qwen/qwen3-32b'. Omit cheap to use the configured 'default'.)
   cheap: true,
@@ -77,7 +77,7 @@ const r = await wkOpenRouter(runner, {
 
 ### Choosing the model
 
-Don't hardcode slugs. openrouter-kit owns a model **registry** in its
+Don't hardcode slugs. llm-scripting-kit owns a model **registry** in its
 `config.yaml` -- named models plus a `default` and a `defaultCheap` selector --
 resolved through bootstrap's layered config (shipped baseline, then the user
 file, then a per-project override; project wins). `wkOpenRouter`'s `spec`:
@@ -87,11 +87,11 @@ file, then a per-project override; project wins). `wkOpenRouter`'s `spec`:
 - omit `model` -- use the configured `default` (or `defaultCheap` with
   `cheap: true`). This is the usual choice: pick the *role*, not the slug.
 
-Change the models or the default/defaultCheap once, in openrouter-kit's config,
+Change the models or the default/defaultCheap once, in llm-scripting-kit's config,
 and every openrouter node across every plugin follows:
 
-- user (all projects): `~/.claude/plugins/data/plugins-kit/openrouter-kit/config.yaml`
-- per-project override: `<project_root>/.local-data/plugins-kit/openrouter-kit/config.yaml`
+- user (all projects): `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/config.yaml`
+- per-project override: `<project_root>/.local-data/plugins-kit/llm-scripting-kit/config.yaml`
 
 Use it for model diversity (a non-Claude judge in a panel) or a cheaper/faster
 model for bulk work. Cost shape: you pay haiku tokens for the executor shim PLUS
@@ -99,9 +99,9 @@ the OpenRouter call -- the cost-savings case is weaker than the model-diversity
 case (the reply still bypasses context via `$OUT`).
 
 Provisioning:
-- `openrouter_kit` (owned by openrouter-kit) is published as a shared library by
-  the bootstrap engine and linked onto workflow-kit's venv because workflow-kit
-  declares `"shared_lib_imports": ["openrouter_kit"]` -- the runner imports it
+- `llm_scripting_kit` (owned by the llm-scripting-kit plugin) is published as a
+  shared library by the bootstrap engine and linked onto workflow-kit's venv because workflow-kit
+  declares `"shared_lib_imports": ["llm_scripting_kit"]` -- the runner imports it
   directly, no path discovery, no dependency on the llm-scripting-kit plugin.
 - `openai` is a declared workflow-kit dependency (`pyproject.toml` +
   `venv.check_imports`), so bootstrap installs it into workflow-kit's venv.

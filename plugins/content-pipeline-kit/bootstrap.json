@@ -2,7 +2,7 @@
   "shared_libs": [
     { "name": "content_pipeline", "src": "lib" }
   ],
-  "shared_lib_imports": ["openrouter_kit"],
+  "shared_lib_imports": ["llm_scripting_kit"],
   "venv": {
     "check_imports": ["yaml", "content_pipeline"]
   },

@@ -8,9 +8,11 @@ Plugins in this marketplace that make LLM calls (workflow-kit,
 content-pipeline-kit, ...) all read the same credentials and the same model
 registry from this plugin, so keys are set up once and consumed everywhere.
 
-> The importable Python package stays **`openrouter_kit`** and the CLI command
-> stays **`openrouter-kit`** -- only the *plugin* is renamed. Consumers that
-> `import openrouter_kit` or call `openrouter-kit set-key` need no changes.
+> One name throughout: the plugin, the importable Python package
+> (`llm_scripting_kit`), the CLI command (`llm-scripting-kit`), and the
+> data/config namespace are all `llm-scripting-kit`. The name *OpenRouter*
+> survives only where it names the service itself (`OPENROUTER_API_KEY`, the
+> `openrouter` endpoint, openrouter.ai).
 
 ## What it does
 
@@ -19,7 +21,7 @@ registry from this plugin, so keys are set up once and consumed everywhere.
   `account_check` mode. `default_endpoint` (default: `openrouter`) is used when
   a caller names none. Point a script at OpenRouter today, a local vLLM or any
   OpenAI-compatible server tomorrow, without touching the code.
-- **Key setup that validates before writing.** `openrouter-kit set-key`
+- **Key setup that validates before writing.** `llm-scripting-kit set-key`
   checks the key before anything lands on disk, so a typo is rejected instead
   of stored. For an OpenRouter endpoint it uses `GET /auth/key` and
   distinguishes HTTP 401 (key revoked/rotated -- get a new one) from HTTP 402
@@ -27,9 +29,9 @@ registry from this plugin, so keys are set up once and consumed everywhere.
   generic `GET /models` probe or skip validation (`account_check: none`).
 - **Resolution with source attribution.** A key resolves in order:
   `<endpoint key_env>` env var > project `.env`
-  (`<project>/.local-data/openrouter-kit/.env`) > user `.env`
-  (`~/.claude/plugins/data/plugins-kit/openrouter-kit/.env`). Keys for multiple
-  endpoints coexist in the same `.env`. `openrouter-kit which` tells you which
+  (`<project>/.local-data/llm-scripting-kit/.env`) > user `.env`
+  (`~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env`). Keys for multiple
+  endpoints coexist in the same `.env`. `llm-scripting-kit which` tells you which
   source won.
 - **Shared model registry.** A layered `config.yaml` maps aliases (plus
   `default` / `defaultCheap` selectors) to concrete slugs, per endpoint. One
@@ -41,7 +43,7 @@ All calls take an optional `endpoint=` -- `None` means the default endpoint, so
 every existing endpoint-less call behaves exactly as before:
 
 ```python
-from openrouter_kit import get_api_key, make_openai_client, resolve_model
+from llm_scripting_kit import get_api_key, make_openai_client, resolve_model
 
 resolve_model("qwen")                         # default endpoint (openrouter)
 resolve_model(cheap=True, endpoint="local")   # a named endpoint's defaultCheap
@@ -64,12 +66,12 @@ endpoints:
 
 ## Completion seam
 
-`openrouter_kit.completion` puts two transports behind one `complete()` so a
+`llm_scripting_kit.completion` puts two transports behind one `complete()` so a
 pipeline can switch between a paid HTTP endpoint and the local `claude -p` CLI
 (subscription-billed, no per-call metering) purely by configuration:
 
 ```python
-from openrouter_kit.completion import (
+from llm_scripting_kit.completion import (
     OpenRouterBackend, ClaudeCliBackend, BackendOptions,
 )
 
@@ -106,8 +108,8 @@ writes are atomic (temp file + rename).
 /plugin install llm-scripting-kit
 ```
 
-Then run `openrouter-kit status` (the plugin's `bin/` shim is on PATH). If no
-key is set, run `openrouter-kit set-key` yourself -- the hidden prompt is
+Then run `llm-scripting-kit status` (the plugin's `bin/` shim is on PATH). If no
+key is set, run `llm-scripting-kit set-key` yourself -- the hidden prompt is
 interactive, so an agent cannot drive it. The `openrouter-account` skill covers
 verify / rotate / diagnose flows.
 

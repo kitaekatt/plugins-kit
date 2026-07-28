@@ -1,4 +1,4 @@
-"""Tests for openrouter_kit.completion.claude_runner -- the claude -p runner.
+"""Tests for llm_scripting_kit.completion.claude_runner -- the claude -p runner.
 
 The real ``claude`` CLI is never spawned. Each test drives the runner against a
 tiny ``python -c`` child that mimics one facet of the CLI's behavior: a hang, a
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from openrouter_kit.completion.claude_runner import (
+from llm_scripting_kit.completion.claude_runner import (
     AgentTimeoutError,
     HARD_STOP_STDERR_MARKERS,
     looks_like_hard_stop,
@@ -131,7 +131,7 @@ def test_popen_uses_utf8_encoding(tmp_path: Path, monkeypatch):
         captured.update(kwargs)
         return real_popen(*args, **kwargs)
 
-    import openrouter_kit.completion.claude_runner as runner_mod
+    import llm_scripting_kit.completion.claude_runner as runner_mod
     monkeypatch.setattr(runner_mod.subprocess, "Popen", spy_popen)
 
     cmd = [sys.executable, "-c", "import sys; sys.stdin.read()"]

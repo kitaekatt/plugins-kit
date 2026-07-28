@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# openrouter-kit -- shim that invokes the bundled CLI via the standalone
+# llm-scripting-kit -- shim that invokes the bundled CLI via the standalone
 # Python that bootstrap installs. The CLI is stdlib-only and adds its own
 # lib/ to sys.path, so no venv is needed.
 
@@ -7,7 +7,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-CLI="$PLUGIN_ROOT/scripts/openrouter_kit_cli.py"
+CLI="$PLUGIN_ROOT/scripts/llm_scripting_kit_cli.py"
 
 OS="$(uname -s 2>/dev/null || echo Unknown)"
 if [[ "$OS" == MINGW* ]] || [[ "$OS" == MSYS* ]] || [[ "$OS" == CYGWIN* ]]; then
@@ -24,7 +24,7 @@ if [ ! -x "$PY" ]; then
     elif command -v python >/dev/null 2>&1; then
         PY="python"
     else
-        echo "openrouter-kit: no Python interpreter found" >&2
+        echo "llm-scripting-kit: no Python interpreter found" >&2
         exit 1
     fi
 fi

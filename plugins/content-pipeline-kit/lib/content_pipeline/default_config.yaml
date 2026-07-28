@@ -1,6 +1,6 @@
 # Machine-global defaults for content-pipeline-kit.
 #
-# Everything here rides on top of openrouter-kit's own layered config.yaml
+# Everything here rides on top of llm-scripting-kit's own layered config.yaml
 # (model registry, API key resolution) -- this file only carries settings
 # that are specific to content_pipeline itself (the content-addressed
 # response cache directory, model-binding overrides). Per-project values

@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 """workflow-kit openrouter node-strategy runner.
 
-Make ONE OpenRouter chat-completion call using openrouter-kit's openai runner
-support (`openrouter_kit.make_openai_client`) and write the reply text to --out.
+Make ONE OpenRouter chat-completion call using llm-scripting-kit's openai runner
+support (`llm_scripting_kit.make_openai_client`) and write the reply text to --out.
 
 Run this with WORKFLOW-KIT's OWN venv python, which bootstrap provisions with:
-  - `openrouter_kit` -- owned by the llm-scripting-kit plugin, published as a shared
+  - `llm_scripting_kit` -- owned by the llm-scripting-kit plugin, published as a shared
     library and linked onto this venv via the bootstrap shared-libs .pth because
-    workflow-kit declares `shared_lib_imports: ["openrouter_kit"]`. No path
+    workflow-kit declares `shared_lib_imports: ["llm_scripting_kit"]`. No path
     discovery -- just import.
   - the `openai` SDK -- a declared workflow-kit dependency (pyproject.toml +
     venv.check_imports), installed into this venv by bootstrap.
@@ -49,13 +49,13 @@ def _write_status(path, obj):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="workflow-kit: one OpenRouter call via openrouter-kit's openai runner."
+        description="workflow-kit: one OpenRouter call via llm-scripting-kit's openai runner."
     )
     ap.add_argument(
         "--model",
         default=None,
         help="Model: a registry alias (e.g. qwen) or a raw OpenRouter slug "
-        "(e.g. qwen/qwen3-32b). If omitted, openrouter-kit's configured 'default' "
+        "(e.g. qwen/qwen3-32b). If omitted, llm-scripting-kit's configured 'default' "
         "(or 'defaultCheap' with --cheap) is used.",
     )
     ap.add_argument(
@@ -73,16 +73,16 @@ def main(argv=None):
     ap.add_argument("--status", help="optional path for a small JSON status object ($STATUS)")
     args = ap.parse_args(argv)
 
-    # openrouter_kit is linked onto workflow-kit's venv by the bootstrap shared-libs
+    # llm_scripting_kit is linked onto workflow-kit's venv by the bootstrap shared-libs
     # .pth (workflow-kit declares shared_lib_imports). No path discovery -- just
     # import. It owns model resolution (alias / slug / default / defaultCheap) and
     # the openai client factory; workflow-kit does not reimplement either.
     try:
-        from openrouter_kit import ModelResolveError, make_openai_client, resolve_model
+        from llm_scripting_kit import ModelResolveError, make_openai_client, resolve_model
     except ImportError:
         print(
-            "openrouter_kit not importable. Enable the llm-scripting-kit plugin and run this "
-            "with workflow-kit's venv python (bootstrap links openrouter_kit onto it via "
+            "llm_scripting_kit not importable. Enable the llm-scripting-kit plugin and run this "
+            "with workflow-kit's venv python (bootstrap links llm_scripting_kit onto it via "
             "the shared-libs .pth).",
             file=sys.stderr,
         )

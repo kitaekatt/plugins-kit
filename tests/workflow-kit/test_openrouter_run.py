@@ -1,6 +1,6 @@
 """Unit tests for the workflow-kit openrouter runner's pure helpers.
 
-The runner lazy-imports openrouter_kit / openai inside main(), so importing the
+The runner lazy-imports llm_scripting_kit / openai inside main(), so importing the
 module here needs no network and no SDK.
 """
 
@@ -34,16 +34,16 @@ def test_build_messages_with_system():
     ]
 
 
-def test_missing_openrouter_kit_exits_2_via_single_guard(monkeypatch, capsys, tmp_path):
+def test_missing_llm_scripting_kit_exits_2_via_single_guard(monkeypatch, capsys, tmp_path):
     # W11: the two duplicated import guards are merged into one. Force the
     # import to fail (None in sys.modules raises ImportError) and check the
     # single actionable message; pin the dedup structurally.
     import sys
 
-    monkeypatch.setitem(sys.modules, "openrouter_kit", None)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
     rc = orr.main(["--prompt", "hi", "--out", str(tmp_path / "o.txt")])
     assert rc == 2
     err = capsys.readouterr().err
-    assert "openrouter_kit not importable" in err
+    assert "llm_scripting_kit not importable" in err
     assert "shared-libs .pth" in err
-    assert _SCRIPT.read_text(encoding="utf-8").count("from openrouter_kit import") == 1
+    assert _SCRIPT.read_text(encoding="utf-8").count("from llm_scripting_kit import") == 1

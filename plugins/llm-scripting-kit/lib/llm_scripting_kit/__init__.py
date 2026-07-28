@@ -1,15 +1,15 @@
-"""openrouter_kit -- shared OpenRouter API key resolution and account validation.
+"""llm_scripting_kit -- shared OpenRouter API key resolution and account validation.
 
 Consumers (loc-ops, future tooling) import from here:
 
-    from openrouter_kit import get_api_key, make_openai_client, check_account
-    from openrouter_kit import BASE_URL, API_KEY_ENV
+    from llm_scripting_kit import get_api_key, make_openai_client, check_account
+    from llm_scripting_kit import BASE_URL, API_KEY_ENV
 
 Stdlib-only by default. ``make_openai_client`` lazy-imports the ``openai`` SDK
 so callers that only need the raw key (or use a different HTTP client) do not
 pay the SDK install cost.
 
-The completion seam (``openrouter_kit.completion``) adds one ``complete()``
+The completion seam (``llm_scripting_kit.completion``) adds one ``complete()``
 protocol over two transports -- an OpenAI-compatible HTTP endpoint
 (:class:`OpenRouterBackend`) and the local ``claude -p`` CLI, subscription
 billed (:class:`ClaudeCliBackend`) -- so a pipeline can run the same task on

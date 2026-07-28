@@ -337,11 +337,11 @@ class TestNestedToolOverride:
 
 class TestSharedLibsUnion:
     def test_shared_libs_merge_by_name(self):
-        base = {"shared_libs": [{"name": "openrouter_kit", "src": "lib"}]}
+        base = {"shared_libs": [{"name": "llm_scripting_kit", "src": "lib"}]}
         override = {"shared_libs": [{"name": "bootstrap_lib", "src": "."}]}
         merged = merge_manifests(base, override)
         names = {e["name"] for e in merged["shared_libs"]}
-        assert names == {"openrouter_kit", "bootstrap_lib"}
+        assert names == {"llm_scripting_kit", "bootstrap_lib"}
 
     def test_shared_libs_same_name_deep_merged(self):
         base = {"shared_libs": [{"name": "lib", "src": "lib", "keep": 1}]}
@@ -354,10 +354,10 @@ class TestSharedLibsUnion:
 
 class TestSharedLibImportsUnion:
     def test_string_list_dedup_union(self):
-        base = {"shared_lib_imports": ["bootstrap_lib", "openrouter_kit"]}
+        base = {"shared_lib_imports": ["bootstrap_lib", "llm_scripting_kit"]}
         override = {"shared_lib_imports": ["bootstrap_lib", "skills_kit_lib"]}
         merged = merge_manifests(base, override)
         # dedup-union, order preserved (not a concat with duplicates)
         assert merged["shared_lib_imports"] == [
-            "bootstrap_lib", "openrouter_kit", "skills_kit_lib",
+            "bootstrap_lib", "llm_scripting_kit", "skills_kit_lib",
         ]

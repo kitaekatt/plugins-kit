@@ -5,14 +5,8 @@ by the ``default`` / ``defaultCheap`` selectors -- and this module resolves it t
 a concrete provider slug, reading a layered ``config.yaml``:
 
     shipped baseline (DEFAULT_MODEL_CONFIG, below)
-      -> user    (~/.claude/plugins/data/plugins-kit/openrouter-kit/config.yaml)
-        -> project (<project_root>/.local-data/plugins-kit/openrouter-kit/config.yaml)
-
-The data/config namespace stays ``openrouter-kit`` (matching the stable
-importable package name ``openrouter_kit``) even though the plugin ships as
-``llm-scripting-kit`` -- keeping it stable means existing users' credentials,
-config, and per-project overrides keep resolving across the rename with no
-migration.
+      -> user    (~/.claude/plugins/data/plugins-kit/llm-scripting-kit/config.yaml)
+        -> project (<project_root>/.local-data/plugins-kit/llm-scripting-kit/config.yaml)
 
 The file layering + deep-merge is bootstrap's job (bootstrap_lib.config_resolve);
 this module owns the schema: the model registry, the default/defaultCheap
@@ -65,8 +59,7 @@ DEFAULT_MODEL_CONFIG = {
 }
 
 # The plugin/marketplace identity under which the config.yaml lives.
-# Kept as ``openrouter-kit`` (see module docstring) across the plugin rename.
-CONFIG_PLUGIN = "openrouter-kit"
+CONFIG_PLUGIN = "llm-scripting-kit"
 CONFIG_MARKETPLACE = "plugins-kit"
 CONFIG_FILE = "config.yaml"
 
@@ -91,7 +84,7 @@ def load_model_config(*, project_root: Optional[str] = None) -> dict:
         from bootstrap_lib.manifest_merge import deep_merge
     except ImportError:
         print(
-            "openrouter-kit: bootstrap_lib unavailable; using the shipped model "
+            "llm-scripting-kit: bootstrap_lib unavailable; using the shipped model "
             "baseline (user/project config.yaml layers ignored)",
             file=sys.stderr,
         )

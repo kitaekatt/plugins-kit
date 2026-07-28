@@ -26,7 +26,7 @@ steps:
       label: wordcount
 
   # openrouter strategy: one non-Claude model call (model diversity). Reply -> $OUT.
-  # model omitted + cheap:true -> openrouter-kit's configured 'defaultCheap' model.
+  # model omitted + cheap:true -> llm-scripting-kit's configured 'defaultCheap' model.
   - id: classify
     phase: classify
     openrouter:

@@ -2,7 +2,7 @@
 
 Goal: fail when a plugin USES a third-party package -- directly in its own .py
 files, or transitively through a first-party library it imports (e.g. workflow-kit
--> openrouter_kit -> openai) -- but does NOT DECLARE it in the plugin's
+-> llm_scripting_kit -> openai) -- but does NOT DECLARE it in the plugin's
 pyproject.toml. That is the failure mode that only surfaces on a fresh machine,
 after the dep was hand-installed on the dev box.
 
@@ -163,7 +163,7 @@ def _imports_in(tree):
     OWN files (its own optional-dependency handling). A guard inside a first-party
     lib owned by ANOTHER plugin reflects that lib's optional stance, not the
     consumer's: a consumer importing the guarded path genuinely needs the dep
-    (openrouter_kit guards ``openai``, but workflow-kit calling make_openai_client
+    (llm_scripting_kit guards ``openai``, but workflow-kit calling make_openai_client
     requires it).
     """
     guarded_ids = _guarded_import_nodes(tree)
@@ -317,4 +317,4 @@ def test_every_plugin_declares_its_third_party_deps():
 def test_first_party_map_is_sane():
     # Sanity guard so a refactor that breaks package discovery is caught.
     assert "bootstrap_lib" in _FIRST_PARTY
-    assert "openrouter_kit" in _FIRST_PARTY
+    assert "llm_scripting_kit" in _FIRST_PARTY

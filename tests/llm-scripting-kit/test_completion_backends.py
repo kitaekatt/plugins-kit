@@ -1,4 +1,4 @@
-"""Tests for openrouter_kit.completion.backends -- both transports.
+"""Tests for llm_scripting_kit.completion.backends -- both transports.
 
 Hermetic: OpenRouterBackend goes through an injected fake client (no ``openai``,
 no network); ClaudeCliBackend goes through a stub runner (no real ``claude``
@@ -12,11 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from openrouter_kit.completion import backends as backends_mod
-from openrouter_kit.completion import halt
-from openrouter_kit.completion.backends import ClaudeCliBackend, OpenRouterBackend
-from openrouter_kit.completion.claude_runner import AgentTimeoutError
-from openrouter_kit.completion.types import BackendOptions, LLMBackend, LLMResponse
+from llm_scripting_kit.completion import backends as backends_mod
+from llm_scripting_kit.completion import halt
+from llm_scripting_kit.completion.backends import ClaudeCliBackend, OpenRouterBackend
+from llm_scripting_kit.completion.claude_runner import AgentTimeoutError
+from llm_scripting_kit.completion.types import BackendOptions, LLMBackend, LLMResponse
 
 
 # ---------------------------------------------------------------------------

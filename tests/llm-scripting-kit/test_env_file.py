@@ -1,11 +1,11 @@
-"""Tests for openrouter_kit.env_file."""
+"""Tests for llm_scripting_kit.env_file."""
 
 import os
 import sys
 
 import pytest
 
-from openrouter_kit.env_file import read_env_file, write_env_file
+from llm_scripting_kit.env_file import read_env_file, write_env_file
 
 
 class TestReadEnvFile:
@@ -88,7 +88,7 @@ class TestWriteEnvFile:
             seen["tmp_mode"] = os.stat(src).st_mode & 0o777
             return real_replace(src, dst)
 
-        monkeypatch.setattr("openrouter_kit.env_file.os.replace", spy)
+        monkeypatch.setattr("llm_scripting_kit.env_file.os.replace", spy)
         old_umask = os.umask(0o000)
         try:
             write_env_file(env, {"K": "v"})
@@ -107,7 +107,7 @@ class TestWriteEnvFile:
         def boom(src, dst):
             raise OSError("simulated rename failure")
 
-        monkeypatch.setattr("openrouter_kit.env_file.os.replace", boom)
+        monkeypatch.setattr("llm_scripting_kit.env_file.os.replace", boom)
         with pytest.raises(OSError, match="simulated"):
             write_env_file(env, {"NEW": "value"})
 

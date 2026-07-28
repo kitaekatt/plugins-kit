@@ -140,7 +140,7 @@ def test_llm_package_reexports_advertised_surface(plugin_root):
 
 
 def test_llm_import_does_not_require_optional_transport_deps(plugin_root):
-    """Importing content_pipeline.llm must not import openai / openrouter_kit.
+    """Importing content_pipeline.llm must not import openai / llm_scripting_kit.
 
     The re-exports pull in ``platform`` and ``backends``, whose transport deps
     are lazy (reached only when a live backend actually runs). A plain import of
@@ -148,7 +148,7 @@ def test_llm_import_does_not_require_optional_transport_deps(plugin_root):
     """
     import sys
 
-    for mod in ("openai", "openrouter_kit"):
+    for mod in ("openai", "llm_scripting_kit"):
         assert mod not in sys.modules or sys.modules[mod] is not None
     # A fresh reimport of the llm package leaves the optional deps untouched by
     # the act of importing (they may already be present from another test, but
@@ -168,7 +168,7 @@ def test_llm_import_does_not_require_optional_transport_deps(plugin_root):
             imported_names.append(node.module or "")
         elif isinstance(node, ast.Import):
             imported_names.extend(alias.name for alias in node.names)
-    assert all(not m.startswith(("openai", "openrouter_kit")) for m in imported_names), (
+    assert all(not m.startswith(("openai", "llm_scripting_kit")) for m in imported_names), (
         f"llm/__init__.py must not import a transport dep at module scope: {imported_names}"
     )
 

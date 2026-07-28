@@ -52,7 +52,7 @@ def make_openai_client(
         if result.key is None:
             raise RuntimeError(
                 f"No API key found for endpoint '{endpoint or 'openrouter'}'. "
-                f"Set {key_env_hint} or run `openrouter-kit set-key"
+                f"Set {key_env_hint} or run `llm-scripting-kit set-key"
                 + ("`." if endpoint is None else f" --endpoint {endpoint}`.")
             )
         api_key = result.key
