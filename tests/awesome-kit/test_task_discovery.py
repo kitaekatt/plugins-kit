@@ -103,7 +103,7 @@ class TestProjectScope:
 
     def test_ref_only_task_discovered(self, tmp_path):
         write_doc(
-            tmp_path / "notes.md",
+            tmp_path / "tmp" / "notes.md",
             fenced_task_list([{"path": "dev/tasks/shipped"}]),
         )
         records = d("project", tmp_path)
@@ -113,18 +113,46 @@ class TestProjectScope:
     def test_folder_and_ref_task_appears_once(self, tmp_path):
         make_task(tmp_path, "tmp/both")
         write_doc(
-            tmp_path / "notes.md", fenced_task_list([{"path": "tmp/both"}])
+            tmp_path / "tmp" / "notes.md", fenced_task_list([{"path": "tmp/both"}])
         )
         records = d("project", tmp_path)
         assert [r.id for r in records] == ["tmp/both"]
         assert records[0].classification == "active"
 
-    def test_skill_md_docs_are_scanned_in_project_scope(self, tmp_path):
+    def test_docs_outside_the_task_roots_are_not_scanned(self, tmp_path):
+        # Project scope scans *.md under tmp/ + dev/tasks/ only. A ref in a
+        # SKILL.md is still reachable -- by naming its document (skill scope).
         write_doc(
             tmp_path / "skills" / "foo" / "SKILL.md",
             fenced_task_list([{"path": "dev/tasks/from-skill"}]),
         )
-        assert "dev/tasks/from-skill" in ids(d("project", tmp_path))
+        assert "dev/tasks/from-skill" not in ids(d("project", tmp_path))
+        assert "dev/tasks/from-skill" in ids(
+            d("skill", tmp_path, target="foo")
+        )
+
+    def test_a_documented_example_block_is_not_read_as_live_tasks(self, tmp_path):
+        # The regression this restriction exists for: a design doc that
+        # DOCUMENTS the task_list format used to resolve as live tasks,
+        # because a whole-tree crawl cannot tell it from one USING the format.
+        write_doc(
+            tmp_path / "design" / "task-system-design.md",
+            fenced_task_list(
+                [
+                    {"path": "dev/tasks/reterminate-office-closet"},
+                    {"path": "tmp/spike-ipv6-diag", "host": OTHER},
+                ]
+            ),
+        )
+        assert d("project", tmp_path) == []
+
+    def test_parked_archived_tmp_docs_do_not_contribute_refs(self, tmp_path):
+        # Parity with the folder crawl, which skips tmp/archived-tasks/.
+        write_doc(
+            tmp_path / "tmp" / "archived-tasks" / "old" / "CLAUDE.md",
+            fenced_task_list([{"path": "dev/tasks/from-parked"}]),
+        )
+        assert "dev/tasks/from-parked" not in ids(d("project", tmp_path))
 
     def test_record_projection_fields(self, tmp_path):
         make_task(tmp_path, "tmp/full", title="Full task", priority="P1")
@@ -154,7 +182,7 @@ class TestUserScope:
         make_task(project_root, "tmp/project-task")
         make_task(user_root, "tmp/user-task")
         write_doc(
-            user_root / "notes.md",
+            user_root / "tmp" / "notes.md",
             fenced_task_list([{"path": "dev/tasks/user-ref"}]),
         )
         records = d("user", project_root, user_root=user_root)
@@ -164,7 +192,7 @@ class TestUserScope:
         user_root = tmp_path / "userhome"
         make_task(user_root, "tmp/here")
         write_doc(
-            user_root / "notes.md", fenced_task_list([{"path": "tmp/here"}])
+            user_root / "tmp" / "notes.md", fenced_task_list([{"path": "tmp/here"}])
         )
         records = d("user", tmp_path / "proj", user_root=user_root)
         assert [r.id for r in records] == ["tmp/here"]
@@ -244,17 +272,17 @@ class TestFileScope:
 class TestDedupe:
     def test_folder_plus_two_docs_yields_one_record(self, tmp_path):
         make_task(tmp_path, "tmp/dup")
-        write_doc(tmp_path / "a.md", fenced_task_list([{"path": "tmp/dup"}]))
+        write_doc(tmp_path / "tmp" / "a.md", fenced_task_list([{"path": "tmp/dup"}]))
         write_doc(
-            tmp_path / "b.md", fenced_task_list([{"path": "./tmp/../tmp/dup"}])
+            tmp_path / "tmp" / "b.md", fenced_task_list([{"path": "./tmp/../tmp/dup"}])
         )
         records = d("project", tmp_path)
         assert [r.id for r in records] == ["tmp/dup"]
 
     def test_host_tag_from_any_ref_is_retained(self, tmp_path):
-        write_doc(tmp_path / "a.md", fenced_task_list([{"path": "tmp/spike"}]))
+        write_doc(tmp_path / "tmp" / "a.md", fenced_task_list([{"path": "tmp/spike"}]))
         write_doc(
-            tmp_path / "b.md",
+            tmp_path / "tmp" / "b.md",
             fenced_task_list([{"path": "tmp/spike", "host": OTHER}]),
         )
         (rec,) = d("project", tmp_path)
@@ -268,7 +296,7 @@ class TestRemote:
         # short-circuit means nothing local is read.
         make_task(tmp_path, "tmp/spike", yaml_text="task: [unclosed\n")
         write_doc(
-            tmp_path / "notes.md",
+            tmp_path / "tmp" / "notes.md",
             fenced_task_list([{"path": "tmp/spike", "host": OTHER}]),
         )
         (rec,) = d("project", tmp_path)
@@ -279,7 +307,7 @@ class TestRemote:
 
     def test_remote_ref_with_absent_folder(self, tmp_path):
         write_doc(
-            tmp_path / "notes.md",
+            tmp_path / "tmp" / "notes.md",
             fenced_task_list([{"path": "tmp/ghost", "host": OTHER}]),
         )
         (rec,) = d("project", tmp_path)
@@ -288,7 +316,7 @@ class TestRemote:
     def test_matching_host_is_local(self, tmp_path):
         make_task(tmp_path, "tmp/here")
         write_doc(
-            tmp_path / "notes.md",
+            tmp_path / "tmp" / "notes.md",
             fenced_task_list([{"path": "tmp/here", "host": LOCAL}]),
         )
         (rec,) = d("project", tmp_path)
@@ -299,7 +327,7 @@ class TestRemote:
 class TestTriStateProjection:
     def test_orphaned_tmp_ref_no_host_folder_absent(self, tmp_path):
         write_doc(
-            tmp_path / "notes.md", fenced_task_list([{"path": "tmp/vanished"}])
+            tmp_path / "tmp" / "notes.md", fenced_task_list([{"path": "tmp/vanished"}])
         )
         (rec,) = d("project", tmp_path)
         assert rec.classification == "orphaned"
@@ -307,7 +335,7 @@ class TestTriStateProjection:
 
     def test_folderless_nontmp_ref_is_archived(self, tmp_path):
         write_doc(
-            tmp_path / "notes.md",
+            tmp_path / "tmp" / "notes.md",
             fenced_task_list([{"path": "dev/tasks/long-done"}]),
         )
         (rec,) = d("project", tmp_path)
@@ -338,7 +366,7 @@ class TestFilters:
 
     def test_filters_match_computed_classification(self, tmp_path):
         write_doc(
-            tmp_path / "notes.md", fenced_task_list([{"path": "tmp/vanished"}])
+            tmp_path / "tmp" / "notes.md", fenced_task_list([{"path": "tmp/vanished"}])
         )
         assert ids(d("project", tmp_path, status="orphaned")) == {"tmp/vanished"}
         assert d("project", tmp_path, status="active") == []
@@ -348,7 +376,7 @@ class TestSkipWithNote:
     def test_malformed_task_list_block_skipped_with_note(self, tmp_path):
         make_task(tmp_path, "tmp/good")
         write_doc(
-            tmp_path / "bad.md",
+            tmp_path / "tmp" / "bad.md",
             "```yaml\ntask_list:\n  refs: not-a-list\n```\n",
         )
         notes: list[str] = []
@@ -358,7 +386,7 @@ class TestSkipWithNote:
 
     def test_ref_entry_missing_path_skipped_with_note(self, tmp_path):
         write_doc(
-            tmp_path / "bad.md",
+            tmp_path / "tmp" / "bad.md",
             fenced_task_list([{"host": OTHER}]),
         )
         notes: list[str] = []
@@ -366,14 +394,14 @@ class TestSkipWithNote:
         assert any("malformed task_list block" in n for n in notes)
 
     def test_unparseable_yaml_block_mentioning_task_list_noted(self, tmp_path):
-        write_doc(tmp_path / "bad.md", "```yaml\ntask_list: [unclosed\n```\n")
+        write_doc(tmp_path / "tmp" / "bad.md", "```yaml\ntask_list: [unclosed\n```\n")
         notes: list[str] = []
         d("project", tmp_path, notes=notes)
         assert any("unparseable YAML block" in n for n in notes)
 
     def test_unresolvable_ref_path_skipped_with_note(self, tmp_path):
         write_doc(
-            tmp_path / "doc.md",
+            tmp_path / "tmp" / "doc.md",
             fenced_task_list(
                 [{"path": "elsewhere/thing"}, {"path": "tmp/ok-but-gone"}]
             ),
@@ -384,7 +412,7 @@ class TestSkipWithNote:
         assert any("unresolvable ref 'elsewhere/thing'" in n for n in notes)
 
     def test_non_task_list_yaml_blocks_ignored_silently(self, tmp_path):
-        write_doc(tmp_path / "doc.md", "```yaml\nother_unit:\n  a: 1\n```\n")
+        write_doc(tmp_path / "tmp" / "doc.md", "```yaml\nother_unit:\n  a: 1\n```\n")
         notes: list[str] = []
         assert d("project", tmp_path, notes=notes) == []
         assert notes == []
@@ -415,7 +443,7 @@ class TestSkipWithNote:
     def test_unreadable_document_skipped_with_note(self, tmp_path):
         make_task(tmp_path, "tmp/good")
         locked = write_doc(
-            tmp_path / "locked.md", fenced_task_list([{"path": "tmp/good"}])
+            tmp_path / "tmp" / "locked.md", fenced_task_list([{"path": "tmp/good"}])
         )
         locked.chmod(0o000)
         try:
@@ -498,7 +526,7 @@ class TestListCLI:
 
     def test_remote_line_shape(self, tmp_path):
         write_doc(
-            tmp_path / "notes.md",
+            tmp_path / "tmp" / "notes.md",
             fenced_task_list([{"path": "tmp/spike", "host": OTHER}]),
         )
         proc = run_cli(["list", "--root", str(tmp_path)], tmp_path)
@@ -548,7 +576,7 @@ class TestListCLI:
 
     def test_notes_go_to_stderr_exit_zero(self, tmp_path):
         write_doc(
-            tmp_path / "bad.md",
+            tmp_path / "tmp" / "bad.md",
             "```yaml\ntask_list:\n  refs: not-a-list\n```\n",
         )
         proc = run_cli(["list", "--root", str(tmp_path)], tmp_path)

@@ -319,6 +319,7 @@ def update(
     blocked_by: list[str] | None = None,
     agent_hint: str | None = None,
     skills_to_invoke: list[str] | None = None,
+    durable_outputs: list[str] | None = None,
     ref_host: str | None = None,
     local_host: str | None = None,
 ) -> UpdateResult:
@@ -373,6 +374,7 @@ def update(
         ("blocked_by", blocked_by),
         ("agent_hint", agent_hint),
         ("skills_to_invoke", skills_to_invoke),
+        ("durable_outputs", durable_outputs),
     ):
         if value is not None:
             edits[name] = value

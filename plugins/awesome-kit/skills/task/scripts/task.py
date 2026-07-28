@@ -59,8 +59,11 @@ State-op conventions (Step 4):
   re-validation classification to stdout and findings to stderr; exits 0 iff
   there are no findings -- but the field edits persist regardless (update is
   a write op; validate reports). List-valued flags (``--depends-on``,
-  ``--blocked-by``, ``--skill-to-invoke``) are repeatable and REPLACE the
-  stored list (no append/remove micro-ops in v1).
+  ``--blocked-by``, ``--skill-to-invoke``, ``--durable-output``) are
+  repeatable and REPLACE the stored list (no append/remove micro-ops in v1).
+  ``--durable-output`` declares a document that OUTLIVES the task, by its
+  path in the owning repo; archive verifies each declaration still resolves
+  outside the folder it is about to park or delete.
 - ``close <ref>`` prints ``closed: <id>``; ``reopen <ref>`` prints the
   re-validation classification (exit 0 iff no findings, like ``update``).
 
@@ -98,7 +101,7 @@ Usage:
     task.py update [<ref>] [--status S] [--priority P] [--description D]
                    [--depends-on PATH ...] [--blocked-by PATH ...]
                    [--agent-hint H] [--skill-to-invoke NAME ...]
-                   [--root PATH] [--pointer PATH]
+                   [--durable-output PATH ...] [--root PATH] [--pointer PATH]
     task.py close <ref> [--root PATH] [--pointer PATH]
     task.py reopen <ref> [--root PATH] [--pointer PATH]
     task.py archive <ref> [--root PATH] [--pointer PATH]
@@ -238,6 +241,7 @@ _SHOW_FIELDS = (
     "blocked_by",
     "agent_hint",
     "skills_to_invoke",
+    "durable_outputs",
 )
 
 
@@ -441,6 +445,7 @@ def _cmd_update(args: argparse.Namespace) -> int:
             blocked_by=args.blocked_by,
             agent_hint=args.agent_hint,
             skills_to_invoke=args.skills_to_invoke,
+            durable_outputs=args.durable_outputs,
         )
     except StateOpError as exc:
         _print_state_op_error(exc)
@@ -498,6 +503,8 @@ def _cmd_archive(args: argparse.Namespace) -> int:
     else:
         disposition = f"moved to {result.archived_to}, status: archived"
     print(f"archived: {result.canonical} ({disposition})")
+    if result.durable_note is not None:
+        print(f"note: {result.durable_note}", file=sys.stderr)
     return 0
 
 
@@ -815,6 +822,17 @@ def main(argv: list[str] | None = None) -> int:
         metavar="NAME",
         help="Set a skills_to_invoke entry (repeatable; REPLACES the stored "
         "list).",
+    )
+    p_update.add_argument(
+        "--durable-output",
+        dest="durable_outputs",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help="Declare a document this task produced that OUTLIVES it: a "
+        "repo-relative path in the owning repo, outside the task folder "
+        "(repeatable; REPLACES the stored list). archive verifies each one "
+        "still has a home.",
     )
     add_state_op_parser(
         "close",

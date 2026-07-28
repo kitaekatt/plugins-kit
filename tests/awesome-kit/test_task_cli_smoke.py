@@ -195,8 +195,11 @@ class TestCliLifecycle:
         assert res.stdout.strip() == "active"
 
         # --- move to dev/tasks: folder relocated, task_list ref rewritten
-        doc = root / "docs" / "notes.md"
-        doc.parent.mkdir()
+        # Under a task root: move's rewrite scans the whole tree, but list's
+        # reference scan is scoped to tmp/ + dev/tasks/ (spec 8 step 1), so
+        # the surviving-ref assertion below needs the doc inside one.
+        doc = root / "tmp" / "notes.md"
+        doc.parent.mkdir(exist_ok=True)
         doc.write_text(DOC_WITH_REF, encoding="utf-8")
         res = run_cli(
             ["move", f"tmp/{STUB}", "dev/tasks", *rootflag, *ptrflag], cwd=root

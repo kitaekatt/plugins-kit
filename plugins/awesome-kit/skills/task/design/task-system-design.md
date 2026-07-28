@@ -212,6 +212,29 @@ sub-task entity: an item needing identity/lifecycle outside its plan is promoted
 is the pre-contract warning). Full contract, evidence, and rationale:
 [`task-items-design.md`](task-items-design.md).
 
+### 2.8 `durable_outputs` — documents that outlive the task
+
+A task folder is a **working surface**, not a home for documentation the work outlives. Archiving a
+`dev/tasks` folder commits the final state, deletes the folder, and commits the removal — so a
+load-bearing document living only in the folder becomes a deleted file: undiscoverable, unindexed,
+findable only by someone who already knows it existed.
+
+`durable_outputs` is an optional `task.yaml` list of **repo-relative paths in the owning repo**,
+set by the repeatable `update --durable-output PATH` (REPLACES the stored list, like `depends_on` /
+`skills_to_invoke`). It declares which documents this task produced that outlive it. **Undeclared
+means task-local by declaration.**
+
+The structural point is that the judgment and the check sit at **different times**. The declaration
+is made at authoring time, when the author still knows the answer; `archive` only confirms
+mechanically that a declaration already made still holds. That separation is what lets archive **ask
+the user nothing** — verification is existence + containment + outside-the-folder, never an
+assessment of what a document is. An absent field yields a note, never a refusal, so folders
+predating the field stay archivable.
+
+**The one-breath authoring test, the placement rule, and the deliberate non-goals are owned by**
+[`../references/handoff-template.md`](../references/handoff-template.md), "Durable outputs" — the
+SSOT for authors. This section defines only the field and its place in the model.
+
 ---
 
 ## 3. Relationships
@@ -319,7 +342,7 @@ inference exception.
 | `update [<ref>]` | script | Upsert: `init` if absent, otherwise refresh the folder's state (and rotate `plan.md`/`log.md` per the hand-off discipline). Writes `task.yaml` field edits (`status`, `priority`, `description`, `depends_on`, `blocked_by`, …). **Re-runs `validate`, classifying the task `active` / `invalid` / `remote`** (§9). |
 | `close <ref>` | script | Mark `status: closed`; **keeps** the folder (reopen-able). Acts on an `active` task. |
 | `reopen <ref>` | script | Reverse a terminal state back to `active`. **Allowed only if the folder still exists** — incl. a tmp `archived` folder parked at `tmp/archived-tasks/<stub>`, which is **restored** to `tmp/<stub>` first. A task with no folder (and nothing parked) cannot be reopened — it is gone. |
-| `archive <ref>` | script | **Operates on an `active` task** (`active → archived`); to archive a `closed` task, `reopen` it first. Per closure policy — **version control is the record** (git is the automated case; no dependency on git): **non-tmp in a git repo** → commit the final state (status + log entry), delete the folder, commit the removal (two folder-scoped commits); **non-tmp outside git** → no git command runs; record the final state, keep the folder (`vcs_pending`), agent submits with the workspace's VCS (e.g. `p4 submit`) then runs `delete`; **tmp** → set `status: archived`, move the folder to `tmp/archived-tasks/<stub>`. |
+| `archive <ref>` | script | **Operates on an `active` task** (`active → archived`); to archive a `closed` task, `reopen` it first. **Durable-outputs check first (§2.8):** every declared path must exist outside the folder, else refuse; absent field → note, proceed. Per closure policy — **version control is the record** (git is the automated case; no dependency on git): **non-tmp in a git repo** → commit the final state (status + log entry), delete the folder, commit the removal (two folder-scoped commits); **non-tmp outside git** → no git command runs; record the final state, keep the folder (`vcs_pending`), agent submits with the workspace's VCS (e.g. `p4 submit`) then runs `delete`; **tmp** → set `status: archived`, move the folder to `tmp/archived-tasks/<stub>`. |
 | `delete <ref>` | script | Operates on an `active` **or `archived`** task (a still-present archived folder — the `vcs_pending` output — is what delete finishes off). **Git-dirty guard** where git can verify (a dirty `dev/tasks` folder refuses; delete never auto-commits; outside a git repo the agent owns VCS state), **and delete the folder even when it is tmp**. Removes the working folder unconditionally. |
 | `move <ref> <dest>` | script | Relocate the folder (commonly `tmp/<stub>` → `dev/tasks/<stub>`) **and rewrite every reference** to the new path (§7.2). |
 | `current` | script | Report the single global `current` task (read the `current` pointer). |
@@ -458,17 +481,25 @@ Two crawl modes, both script-driven:
 
 | Scope | Set crawled |
 |---|---|
-| `user` | user-level documents (`~/.claude`) |
-| `project` | all skills + md files in the project — **always computed**, never a stored master list |
+| `user` | user-level task roots (`~/.claude/{tmp,dev/tasks}`) |
+| `project` | the project's task roots (`<project>/{tmp,dev/tasks}`) — **always computed**, never a stored master list |
 | `skill` | one skill's `SKILL.md` **plus its `references/`** |
 | `file` | a single document |
 
 **Algorithm (`list --scope <s> [target]`):**
 1. **Resolve scope → roots + document set:**
-   - `user` → roots `~/.claude/{dev/tasks,tmp}`-equivalent; docs under `~/.claude`.
-   - `project` → roots `<project>/dev/tasks` + `<project>/tmp`; docs = all `*.md` + `SKILL.md` in the project.
+   - `user` → roots `~/.claude/{dev/tasks,tmp}`-equivalent; docs = `*.md` under those roots.
+   - `project` → roots `<project>/dev/tasks` + `<project>/tmp`; docs = `*.md` **under those roots only**,
+     excluding the parked `tmp/archived-tasks/` subtree (parity with the folder crawl).
    - `skill <name>` → docs = that skill's `SKILL.md` **plus its `references/*.md`**; roots as project.
    - `file <path>` → docs = that one file; roots as project.
+
+   **Why `project`/`user` do not crawl the whole tree.** An embedded `task_list:` block is
+   indistinguishable from an *example* of one, so a whole-tree crawl reports the format's own
+   documentation as live tasks — §2.4's sample block did exactly that in the repo that develops this
+   skill, yielding three phantom tasks with no folders behind them. Association is therefore **explicit
+   rather than implicit**: a `task_list` embedded outside the task roots is reached by naming its
+   document (`--scope skill <name>` / `--scope file <path>`), not by an ambient scan.
 2. **Collect candidate paths:** union of (a) folder crawl — every `task.yaml` under the roots, taken as
    its folder path; and (b) reference scan — every `refs[].path` in a `task_list:` block in the doc set.
 3. **Canonicalize + dedupe** by path (§2.3): one entry per task even if folder-found *and* referenced,
@@ -482,7 +513,9 @@ Two crawl modes, both script-driven:
 References carry no metadata to merge — the folder's `task.yaml` is the single record.
 
 The home-domain `issues.md` is one ordinary embedding host under this model; there is **no canonical
-stored master list**. The project view is the computed `list --scope project`.
+stored master list**. The project view is the computed `list --scope project` — which enumerates the
+task roots. An embedding host that lives outside them (a skill doc, a domain `issues.md`) is queried
+by naming it: `list --scope file <path>` or `--scope skill <name>`.
 
 ---
 

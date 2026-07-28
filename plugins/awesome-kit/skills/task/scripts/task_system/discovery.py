@@ -6,7 +6,9 @@ Two crawl modes, both script-driven (spec 8):
    (``dev/tasks/`` + ``tmp/``) -- the authoritative enumeration of live tasks.
 2. **By reference (scoped association):** every ``refs[].path`` (+ optional
    ``host``) from ``task_list:`` typed-unit blocks embedded in the scope's
-   document set.
+   document set. ``project``/``user`` scope that document set to markdown
+   under the task roots; reaching a ref embedded elsewhere means naming its
+   document (``skill``/``file`` scope). See the scope->documents reading.
 
 Candidates are canonicalized (resolve.py) and deduped by canonical path; each
 survivor is classified via validate.py (classification logic is never
@@ -15,6 +17,16 @@ priority, host).
 
 Readings chosen in Step 3 (flagged in the implementation report):
 
+- **Scope -> documents (``project``/``user``).** The document set is the
+  ``*.md`` under the scope's task roots (``tmp/`` + ``dev/tasks/``), NOT the
+  whole tree, and the parked ``tmp/archived-tasks/`` subtree is excluded for
+  parity with the folder crawl. Rationale: an embedded ``task_list`` block is
+  indistinguishable from an example of one, so a whole-tree crawl reports the
+  format's own documentation as live tasks (this is what it did -- the spec's
+  2.4 sample block resolved as three phantom tasks in plugins-kit, the one
+  project whose tree contains the skill's source). The association feature is
+  unchanged, just no longer implicit: name the document via ``skill``/``file``
+  scope to pick up refs outside the task roots.
 - **Scope -> effective root.** ``user`` discovers against the user root
   (default ``~/.claude``; parameter-injectable for tests): both its task
   roots (``<user_root>/dev/tasks`` + ``<user_root>/tmp``) and its document
@@ -141,9 +153,24 @@ def _scope_docs(
 ) -> list[Path]:
     """Resolve scope -> document set (spec 8 step 1)."""
     if scope in ("project", "user"):
-        # All *.md under the root, SKILL.md files included. Task folders' own
-        # docs are scanned too -- they may legitimately embed a task_list.
-        return sorted(effective_root.rglob("*.md"))
+        # Only *.md under the task roots (tmp/, dev/tasks/) -- task folders'
+        # own docs, which may legitimately embed a task_list. A whole-tree
+        # crawl is deliberately NOT done: it cannot distinguish a document
+        # USING the task_list format from one DOCUMENTING it, so an example
+        # block in a design doc resolves as live tasks. Refs embedded outside
+        # the task roots stay reachable, but only by naming their document --
+        # ``--scope skill <name>`` / ``--scope file <path>``.
+        docs: list[Path] = []
+        for root_tag in resolve.KNOWN_ROOTS:
+            base = effective_root / root_tag
+            if not base.is_dir():
+                continue
+            for doc in base.rglob("*.md"):
+                rel = doc.relative_to(effective_root).parts
+                if rel[:2] == (resolve.LOCATION_TMP, resolve.ARCHIVED_TMP_DIRNAME):
+                    continue  # parked archived tmp tasks: not listed (2a parity)
+                docs.append(doc)
+        return sorted(docs)
     assert target is not None  # guarded in discover()
     if scope == "skill":
         return _resolve_skill_docs(target, project_root)

@@ -58,8 +58,10 @@ Readings chosen in Step 5 (flagged in the implementation report):
   host refuses (spec 7.3) even when a same-named local folder exists. The
   CLI has no host flag in v1 (consistent with Steps 1-4).
 - **Reference-rewrite mechanism** (spec 7.2): after relocating the folder,
-  every ``*.md`` under the project root (discovery's project document set)
-  is scanned. Fenced YAML blocks are located span-accurately with the same
+  every ``*.md`` under the project root is scanned. This is DELIBERATELY
+  broader than discovery's project document set, which covers only the task
+  roots (spec 8 step 1): a stale reference is wrong wherever it lives, so
+  the rewrite must reach documents ``list`` never enumerates. Fenced YAML blocks are located span-accurately with the same
   compiled regex document_walker's ``iter_yaml_blocks`` uses (imported, not
   duplicated -- a public span API in skills-kit would be a cross-plugin
   change out of this step's scope). Each block is parsed with
@@ -86,7 +88,7 @@ import datetime
 import shutil
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 
 import yaml
 
@@ -113,6 +115,10 @@ class ArchiveResult:
     # submission to the workspace's VCS (and the finishing delete) is the
     # agent/user's to do.
     vcs_pending: bool = False
+    # Absent `durable_outputs` (every task predating the field): the rule
+    # degrades to this note rather than refusing -- manifests here stay
+    # backwards-READABLE.
+    durable_note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -121,6 +127,79 @@ class MoveResult:
     new_canonical: str
     folder: Path  # absolute new location
     rewritten_docs: tuple[Path, ...]  # documents whose references were rewritten
+
+
+# --- durable outputs ---------------------------------------------------------
+
+
+def _verify_durable_outputs(
+    data: dict, project_root: Path, folder: Path, canonical: str
+) -> str | None:
+    """Archive's durable-outputs check (spec 2.7). Returns a note when the
+    field is absent; raises StateOpError naming every offender when a
+    declared path has no durable home.
+
+    Deliberately MECHANICAL -- existence plus outside-the-folder, no
+    assessment of what a document is. Archive can ask the user nothing, so
+    the judgment lives at authoring time (the declaration); this only
+    confirms the declaration was honored. A path INSIDE the folder is the
+    load-bearing failure: the folder is about to be parked or deleted, so
+    such a document has no durable home at all -- exactly the mistake the
+    rule exists to catch.
+    """
+    declared = data.get("task", {}).get("durable_outputs")
+    if declared is None:
+        return (
+            f"{canonical} declares no durable_outputs -- if this task produced "
+            "a document that outlives it, its home is the repo it describes, "
+            "not this folder (references/handoff-template.md 'Durable "
+            "outputs')"
+        )
+    if not isinstance(declared, list):
+        raise StateOpError(
+            f"{canonical}: durable_outputs must be a list of repo-relative "
+            f"paths, got {type(declared).__name__}"
+        )
+    folder_resolved = folder.resolve()
+    root_resolved = project_root.resolve()
+    problems: list[str] = []
+    for entry in declared:
+        if not isinstance(entry, str) or not entry.strip():
+            problems.append(f"{entry!r}: not a non-empty path string")
+            continue
+        # Containment is enforced, not assumed. `project_root / entry` DISCARDS
+        # project_root when entry is absolute, and a "../" entry resolves
+        # outside it -- either would declare a durable home the repo does not
+        # carry, which defeats the point (version control is the record).
+        if PurePath(entry).is_absolute() or PureWindowsPath(entry).is_absolute():
+            problems.append(
+                f"{entry}: must be RELATIVE to the project root (a durable "
+                "home outside the repo is not carried by version control)"
+            )
+            continue
+        target = (project_root / entry).resolve()
+        if not target.is_relative_to(root_resolved):
+            problems.append(
+                f"{entry}: resolves OUTSIDE the project root -- a durable "
+                "home must live in the repo that records it"
+            )
+            continue
+        if not target.exists():
+            problems.append(f"{entry}: no such path under the project root")
+            continue
+        if target == folder_resolved or folder_resolved in target.parents:
+            problems.append(
+                f"{entry}: lives INSIDE the task folder, which archive "
+                "parks or deletes -- move it to its durable home first"
+            )
+    if problems:
+        raise StateOpError(
+            f"{canonical}: declared durable_outputs have no durable home:\n"
+            + "\n".join(f"  - {p}" for p in problems)
+            + "\nRelocate each document to the repo it describes, update the "
+            "declaration (update --durable-output PATH ...), then archive."
+        )
+    return None
 
 
 # --- archive / delete --------------------------------------------------------
@@ -248,6 +327,12 @@ def archive_task(
         allowed_statuses=("active",),
         require_committed=False,
     )
+    # Before anything is parked, committed, or removed: a declared durable
+    # output with no home outside the folder must block, while it can still
+    # be relocated.
+    durable_note = _verify_durable_outputs(
+        data, project_root, folder, resolved.canonical
+    )
     folder_resolved = folder.resolve()
     archived_to: str | None = None
     vcs_pending = False
@@ -310,6 +395,7 @@ def archive_task(
         folder_removed=removed,
         archived_to=archived_to,
         vcs_pending=vcs_pending,
+        durable_note=durable_note,
     )
 
 
@@ -414,8 +500,10 @@ def _rewrite_references(
     project_root: Path, old_canonical: str, new_canonical: str
 ) -> list[Path]:
     """Spec 7.2 step 2: rewrite every task_list reference to the old path
-    across the project document set (all *.md under the project root, the
-    same set discovery's project scope scans). Returns the docs rewritten."""
+    across ALL *.md under the project root -- intentionally WIDER than
+    discovery's project document set, which is scoped to the task roots: a
+    stale reference is wrong wherever it lives, including in documents
+    ``list`` never enumerates. Returns the docs rewritten."""
     rewritten: list[Path] = []
     for doc in sorted(project_root.rglob("*.md")):
         try:

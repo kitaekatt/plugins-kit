@@ -41,6 +41,15 @@ TASK_SCHEMA: dict = {
         "blocked_by": {"required": False, "type": "list"},
         "agent_hint": {"required": False, "type": "string"},
         "skills_to_invoke": {"required": False, "type": "list"},
+        # Documents this task produced that outlive it (spec 2.7): repo-
+        # relative paths in the OWNING repo, NOT in the task folder. Absent
+        # is legal and means "nothing durable was declared" -- every task
+        # predating the field reads that way, and archive degrades to a note
+        # rather than refusing. Per-entry checks are location_ops' archive
+        # verification (existence + outside-the-folder), never validate's:
+        # findings gate `work`, and a script cannot tell an architecture
+        # spec from a throwaway analysis.
+        "durable_outputs": {"required": False, "type": "list"},
     },
 }
 

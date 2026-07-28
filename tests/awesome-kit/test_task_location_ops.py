@@ -426,7 +426,7 @@ class TestParkedTmpArchive:
 
         make_task(tmp_path, "tmp/done")
         write_doc(
-            tmp_path / "notes.md", fenced_task_list([{"path": "tmp/done"}])
+            tmp_path / "tmp" / "notes.md", fenced_task_list([{"path": "tmp/done"}])
         )
         location_ops.archive_task("tmp/done", tmp_path, ptr)
         records = discover("project", tmp_path)
@@ -506,7 +506,7 @@ class TestMoveLib:
             "\n"
             "Trailing prose tmp/spike-x.\n"
         )
-        doc = tmp_path / "notes.md"
+        doc = tmp_path / "tmp" / "notes.md"
         doc.write_text(original, encoding="utf-8")
         location_ops.move_task("tmp/spike-x", "dev/tasks", tmp_path, ptr)
         expected = (
@@ -557,7 +557,7 @@ class TestMoveLib:
     def test_demote_dev_tasks_to_tmp(self, tmp_path, ptr):
         old_folder = make_task(tmp_path, "dev/tasks/durable")
         doc = write_doc(
-            tmp_path / "notes.md",
+            tmp_path / "tmp" / "notes.md",
             fenced_task_list([{"path": "dev/tasks/durable"}]),
         )
         result = location_ops.move_task(
@@ -574,7 +574,7 @@ class TestMoveLib:
         old_folder = make_task(tmp_path, "tmp/spike-x")
         make_task(tmp_path, "dev/tasks/spike-x")  # occupies the destination
         doc = write_doc(
-            tmp_path / "notes.md", fenced_task_list([{"path": "tmp/spike-x"}])
+            tmp_path / "tmp" / "notes.md", fenced_task_list([{"path": "tmp/spike-x"}])
         )
         before = doc.read_text(encoding="utf-8")
         with pytest.raises(StateOpError, match="already exists"):
@@ -715,7 +715,7 @@ class TestMoveCLI:
     def test_move_prints_new_path_and_rewrite_count(self, tmp_path, ptr):
         make_task(tmp_path, "tmp/spike-x")
         write_doc(
-            tmp_path / "notes.md", fenced_task_list([{"path": "tmp/spike-x"}])
+            tmp_path / "tmp" / "notes.md", fenced_task_list([{"path": "tmp/spike-x"}])
         )
         write_doc(
             tmp_path / "more.md", fenced_task_list([{"path": "tmp/spike-x"}])
@@ -773,3 +773,179 @@ class TestMoveCLI:
         )
         assert proc.returncode != 0
         assert "no local task folder" in proc.stderr
+
+
+class TestDurableOutputs:
+    """archive's durable-outputs verification (spec 2.8).
+
+    The check is mechanical -- existence plus outside-the-folder -- because
+    archive is forbidden from asking the user to assess anything. The
+    judgment lives at authoring time (the declaration).
+    """
+
+    def test_absent_field_notes_and_archives(self, tmp_path, ptr):
+        # Every folder predating the rule: degrade to a note, never refuse.
+        make_task(tmp_path, "tmp/legacy")
+        result = location_ops.archive_task("tmp/legacy", tmp_path, ptr)
+        assert result.durable_note is not None
+        assert "declares no durable_outputs" in result.durable_note
+        assert not (tmp_path / "tmp" / "legacy").exists()
+        assert (tmp_path / "tmp" / "archived-tasks" / "legacy").is_dir()
+
+    def test_empty_list_is_an_explicit_nothing_durable(self, tmp_path, ptr):
+        # Declaring nothing IS a valid result (content already absorbed
+        # elsewhere); an explicit [] is not the same as an absent field.
+        make_task(tmp_path, "tmp/nothing", durable_outputs=[])
+        result = location_ops.archive_task("tmp/nothing", tmp_path, ptr)
+        assert result.durable_note is None
+
+    def test_declared_path_outside_the_folder_archives(self, tmp_path, ptr):
+        home = tmp_path / "docs" / "architecture"
+        home.mkdir(parents=True)
+        (home / "env-json.md").write_text("# Spec\n", encoding="utf-8")
+        make_task(
+            tmp_path,
+            "tmp/shipped",
+            durable_outputs=["docs/architecture/env-json.md"],
+        )
+        result = location_ops.archive_task("tmp/shipped", tmp_path, ptr)
+        assert result.durable_note is None
+        assert (home / "env-json.md").is_file()
+
+    def test_declared_path_inside_the_folder_refuses(self, tmp_path, ptr):
+        # The load-bearing case: the folder is about to be parked/deleted,
+        # so a document inside it has no durable home at all.
+        folder = make_task(
+            tmp_path,
+            "tmp/spec",
+            durable_outputs=["tmp/spec/analysis.md"],
+        )
+        (folder / "analysis.md").write_text("# THE SPEC\n", encoding="utf-8")
+        with pytest.raises(StateOpError, match="lives INSIDE the task folder"):
+            location_ops.archive_task("tmp/spec", tmp_path, ptr)
+        # Refused BEFORE anything moved -- the document is still recoverable.
+        assert folder.is_dir()
+        assert (folder / "analysis.md").is_file()
+
+    def test_declared_path_that_does_not_exist_refuses(self, tmp_path, ptr):
+        make_task(tmp_path, "tmp/ghostdoc", durable_outputs=["docs/never.md"])
+        with pytest.raises(StateOpError, match="no such path"):
+            location_ops.archive_task("tmp/ghostdoc", tmp_path, ptr)
+        assert (tmp_path / "tmp" / "ghostdoc").is_dir()
+
+    def test_every_offender_is_named(self, tmp_path, ptr):
+        folder = make_task(
+            tmp_path,
+            "tmp/multi",
+            durable_outputs=["docs/gone-a.md", "tmp/multi/inside.md", ""],
+        )
+        (folder / "inside.md").write_text("x\n", encoding="utf-8")
+        with pytest.raises(StateOpError) as exc:
+            location_ops.archive_task("tmp/multi", tmp_path, ptr)
+        msg = str(exc.value)
+        assert "docs/gone-a.md" in msg
+        assert "tmp/multi/inside.md" in msg
+        assert "not a non-empty path string" in msg
+
+    def test_absolute_path_refuses(self, tmp_path, ptr):
+        # `project_root / entry` DISCARDS project_root for an absolute entry,
+        # so without an explicit guard an out-of-repo path would pass -- and
+        # a home version control does not carry is not durable.
+        outside = tmp_path.parent / "outside-the-repo.md"
+        outside.write_text("# Spec\n", encoding="utf-8")
+        make_task(tmp_path, "tmp/abs", durable_outputs=[str(outside)])
+        with pytest.raises(StateOpError, match="must be RELATIVE"):
+            location_ops.archive_task("tmp/abs", tmp_path, ptr)
+        assert (tmp_path / "tmp" / "abs").is_dir()
+
+    def test_parent_escape_refuses(self, tmp_path, ptr):
+        outside = tmp_path.parent / "escaped.md"
+        outside.write_text("# Spec\n", encoding="utf-8")
+        make_task(tmp_path, "tmp/esc", durable_outputs=["../escaped.md"])
+        with pytest.raises(StateOpError, match="resolves OUTSIDE"):
+            location_ops.archive_task("tmp/esc", tmp_path, ptr)
+        assert (tmp_path / "tmp" / "esc").is_dir()
+
+    def test_non_list_field_refuses(self, tmp_path, ptr):
+        make_task(tmp_path, "tmp/bad", durable_outputs="docs/one.md")
+        with pytest.raises(StateOpError, match="must be a list"):
+            location_ops.archive_task("tmp/bad", tmp_path, ptr)
+
+    def test_dev_tasks_folder_survives_a_refusal(self, git_root, ptr):
+        # The whole point: refuse while the document can still be moved,
+        # never after version control became the record.
+        root = git_root
+        folder = make_task(
+            root, "dev/tasks/spec", durable_outputs=["dev/tasks/spec/spec.md"]
+        )
+        (folder / "spec.md").write_text("# THE SPEC\n", encoding="utf-8")
+        _commit_all(root)
+        with pytest.raises(StateOpError, match="lives INSIDE the task folder"):
+            location_ops.archive_task("dev/tasks/spec", root, ptr)
+        assert folder.is_dir()
+        assert (folder / "spec.md").is_file()
+
+
+class TestDurableOutputsCLI:
+    def test_update_flag_persists_and_replaces(self, tmp_path, ptr):
+        make_task(tmp_path, "tmp/decl")
+        rounds = (
+            ["--durable-output", "docs/a.md"],
+            ["--durable-output", "docs/b.md", "--durable-output", "docs/c.md"],
+        )
+        for flags in rounds:
+            proc = run_cli(
+                [
+                    "update",
+                    "tmp/decl",
+                    *flags,
+                    "--root",
+                    str(tmp_path),
+                    "--pointer",
+                    str(ptr),
+                ],
+                tmp_path,
+            )
+            assert proc.returncode == 0, proc.stderr
+        data = yaml.safe_load(
+            (tmp_path / "tmp" / "decl" / "task.yaml").read_text(encoding="utf-8")
+        )
+        # REPLACES, never appends (same convention as --skill-to-invoke).
+        assert data["task"]["durable_outputs"] == ["docs/b.md", "docs/c.md"]
+
+    def test_archive_note_goes_to_stderr_exit_zero(self, tmp_path, ptr):
+        make_task(tmp_path, "tmp/legacy2")
+        proc = run_cli(
+            [
+                "archive",
+                "tmp/legacy2",
+                "--root",
+                str(tmp_path),
+                "--pointer",
+                str(ptr),
+            ],
+            tmp_path,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.startswith("archived: tmp/legacy2")
+        assert "declares no durable_outputs" in proc.stderr
+
+    def test_archive_refusal_exits_nonzero(self, tmp_path, ptr):
+        folder = make_task(
+            tmp_path, "tmp/ref", durable_outputs=["tmp/ref/keep.md"]
+        )
+        (folder / "keep.md").write_text("x\n", encoding="utf-8")
+        proc = run_cli(
+            [
+                "archive",
+                "tmp/ref",
+                "--root",
+                str(tmp_path),
+                "--pointer",
+                str(ptr),
+            ],
+            tmp_path,
+        )
+        assert proc.returncode == 1
+        assert "lives INSIDE the task folder" in proc.stderr
+        assert folder.is_dir()

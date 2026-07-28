@@ -351,6 +351,74 @@ names. The rule: every doc in the folder is named in CLAUDE.md's index with a
 one-line purpose. Budget: an 800-line ceiling (warning), no note tier -- see
 "Document size budgets" above.
 
+## Durable outputs (does this belong in the folder at all?)
+
+The size budgets ask *where a fact goes within the folder*. This asks one axis
+over: **does the document belong in the folder in the first place?**
+
+Apply the test in one breath, at the moment you create the document:
+
+> **If this folder were deleted today, would someone still need this document?
+> If yes, its home is the repo it describes. The task folder references it; it
+> never owns it.**
+
+**Why authoring time, not archive time.** Archiving a `dev/tasks` folder
+commits the final state, deletes the folder, and commits the removal --
+version control is the record. A load-bearing document that lives only in the
+folder therefore becomes a deleted file: not discoverable, not indexed,
+findable only by someone who already knows it existed. But archive is the
+*wrong moment to fix that*. A spec that only reaches its durable home when the
+task ends was undiscoverable for the entire life of the task -- exactly when
+people needed it. Extraction belongs at authoring time; the archive check is a
+backstop for what slipped, not the mechanism.
+
+**Declare what is durable.** A task records its durable outputs as data:
+
+```bash
+task update <ref> --durable-output docs/architecture/env-json.md \
+                  --durable-output docs/reference/software-set.md
+```
+
+This writes `durable_outputs:` into `task.yaml` -- an optional list of paths
+**relative to the owning repo's root**. Repeatable, and it REPLACES the stored
+list (the same convention as `--depends-on` / `--skill-to-invoke`, not an
+append). **A document not declared is task-local by declaration** -- that is
+the point: the judgment is explicit and recorded, not inferred later by
+someone with less context.
+
+**What archive verifies.** Mechanically, and without asking you anything,
+every declared path must:
+
+1. be **relative**, and resolve **inside** the project root -- an absolute or
+   `../`-escaping path names a home the repo does not carry, and version
+   control is what makes the home durable;
+2. **exist**; and
+3. live **outside** the task folder. This is the load-bearing one -- the
+   folder is about to be parked or deleted, so a document inside it has no
+   durable home at all.
+
+Any failure **refuses the archive, naming every offender**, while the
+documents can still be moved. Nothing is parked, committed, or removed first.
+
+**Deliberately not enforced elsewhere.** This is *not* a `validate` warning:
+findings gate `work`, and no script can tell an architecture spec from a
+throwaway analysis, so every folder with an extra `.md` would be blocked.
+There is no content classifier guessing which documents are "architectural" --
+false precision is worse than an explicit declaration. And a folder with no
+`durable_outputs` field (every folder predating the rule) archives normally
+with a reminder note; manifests here stay backwards-readable.
+
+**Where the durable home is** is a lookup, not an assessment: the owning
+repo's conventions say where such documents live. If the repo has no
+convention for it, that gap is the thing to fix -- not a reason to leave the
+document in the folder.
+
+One honest outcome worth naming: **declaring nothing durable is a valid
+result.** If the folder's findings were already absorbed into as-built docs
+elsewhere, the document is historic and relocating it would create a second
+source of truth -- the failure mode one step removed from the one this rule
+fixes. Establish which case you are in *before* moving anything.
+
 ## Rotation discipline (the update passes)
 
 The plan should always answer "where are we now and what's coming." On every
@@ -371,6 +439,11 @@ substantive update of an existing folder, run three passes:
   worse than missing text. Check that every backticked item id referenced in
   CLAUDE.md still resolves to a `task_items` entry (`validate` warns on
   strays).
+- **Durable-outputs pass.** For every non-scaffold doc in the folder (anything
+  beyond CLAUDE.md / plan.md / log.md), apply the one-breath test above. If it
+  would outlive the folder, move it to its home in the owning repo now and
+  declare it (`--durable-output`); the folder keeps a reference, not the
+  document. See "Durable outputs" above.
 - **Vocabulary pass.** Compare the vocabulary the session evolved (names that
   drifted, stage names, paths that retain old names) against what is
   currently in `## Project vocabulary`. Update so the next agent reads
