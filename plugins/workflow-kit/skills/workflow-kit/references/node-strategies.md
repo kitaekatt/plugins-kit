@@ -44,7 +44,7 @@ code. Anything `bash -c` can run is a script node.
 One non-Claude model call via openrouter-kit's openai runner
 (`scripts/openrouter_run.py`, which uses `openrouter_kit.make_openai_client`),
 writing the reply text to `$OUT`. workflow-kit reuses `openrouter_kit` (owned by
-the openrouter-kit plugin) WITHOUT declaring a dependency on that plugin -- it
+the llm-scripting-kit plugin) WITHOUT declaring a dependency on that plugin -- it
 gets the library on its venv via the bootstrap shared-libs `.pth`. The one
 third-party dep the call needs, `openai`, IS declared by workflow-kit (its own
 `pyproject.toml`).
@@ -102,7 +102,7 @@ Provisioning:
 - `openrouter_kit` (owned by openrouter-kit) is published as a shared library by
   the bootstrap engine and linked onto workflow-kit's venv because workflow-kit
   declares `"shared_lib_imports": ["openrouter_kit"]` -- the runner imports it
-  directly, no path discovery, no dependency on the openrouter-kit plugin.
+  directly, no path discovery, no dependency on the llm-scripting-kit plugin.
 - `openai` is a declared workflow-kit dependency (`pyproject.toml` +
   `venv.check_imports`), so bootstrap installs it into workflow-kit's venv.
 

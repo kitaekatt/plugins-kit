@@ -81,7 +81,7 @@ def main(argv=None):
         from openrouter_kit import ModelResolveError, make_openai_client, resolve_model
     except ImportError:
         print(
-            "openrouter_kit not importable. Enable the openrouter-kit plugin and run this "
+            "openrouter_kit not importable. Enable the llm-scripting-kit plugin and run this "
             "with workflow-kit's venv python (bootstrap links openrouter_kit onto it via "
             "the shared-libs .pth).",
             file=sys.stderr,

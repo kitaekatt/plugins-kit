@@ -3,8 +3,8 @@
 A plain uniquely-named module (NOT conftest): `from conftest import ...`
 resolves to whichever suite's conftest.py lands first on sys.path when several
 test directories run in one pytest invocation (e.g.
-`pytest tests/workflow-kit tests/openrouter-kit`), which shadowed these names
-with openrouter-kit's conftest.
+`pytest tests/workflow-kit tests/llm-scripting-kit`), which shadowed these names
+with llm-scripting-kit's conftest.
 """
 
 from pathlib import Path
