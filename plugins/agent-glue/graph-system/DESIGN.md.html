@@ -12,7 +12,7 @@ A pipeline is declared as a `graph.yaml` file plus typed Pydantic contracts and 
 - **Test on real-shape data without production load.** Cohorts of harvested-or-curated fixtures replay deterministically with canned LLM responses.
 - **Forward-looking: cheap to scaffold the next pipeline.** Day 1 of a new system: write `graph.yaml` + contracts, render HTML, harvest a small cohort, iterate.
 - **Real-pipeline validation is post-v1.** Example pipelines (character animation, localization) are planned separately once v1 ships; see top-level `IMPLEMENTATION-PLAN.md.html` for the post-v1 framing.
-- **Lightweight, mature, focused dependencies.** Pydantic (used fully), PyYAML, Jinja2, Mermaid (via Markdeep render). LLM calls delegated to `openrouter-kit` via bootstrap dependency.
+- **Lightweight, mature, focused dependencies.** Pydantic (used fully), PyYAML, Jinja2, Mermaid (via Markdeep render). LLM calls delegated to `llm-scripting-kit` via bootstrap dependency.
 
 ## Non-goals
 
