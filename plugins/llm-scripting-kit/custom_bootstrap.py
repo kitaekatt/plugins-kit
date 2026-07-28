@@ -1,4 +1,4 @@
-"""Bootstrap script for openrouter-kit.
+"""Bootstrap script for llm-scripting-kit.
 
 Single entry point ``bootstrap(ctx)`` runs at session start and:
 
@@ -40,7 +40,7 @@ from openrouter_kit.env_file import read_env_file, write_env_file  # noqa: E402
 
 # Where loc-ops historically stored the key on this project. Honored once,
 # at autodetect time, so existing developers do not have to re-enter the key
-# after installing openrouter-kit.
+# after installing llm-scripting-kit.
 _LEGACY_LOC_OPS_RELATIVE = Path(".local-data") / "loc" / ".env"
 
 # A successful /auth/key validation is cached against the key's hash, but never
