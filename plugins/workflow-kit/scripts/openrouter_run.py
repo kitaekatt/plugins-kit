@@ -5,7 +5,7 @@ Make ONE OpenRouter chat-completion call using openrouter-kit's openai runner
 support (`openrouter_kit.make_openai_client`) and write the reply text to --out.
 
 Run this with WORKFLOW-KIT's OWN venv python, which bootstrap provisions with:
-  - `openrouter_kit` -- owned by the openrouter-kit plugin, published as a shared
+  - `openrouter_kit` -- owned by the llm-scripting-kit plugin, published as a shared
     library and linked onto this venv via the bootstrap shared-libs .pth because
     workflow-kit declares `shared_lib_imports: ["openrouter_kit"]`. No path
     discovery -- just import.
