@@ -119,9 +119,18 @@ const refs = input.refs || {}
 const review = input.review === true
 
 function lanePrompt(f) {
+  // The decline instruction must be reachable BOTH when the caller classified
+  // the file (own-skill path: discover.py ran) AND when no kind was supplied
+  // (review-mode subject-lens call). Asserting "genuine project document" on a
+  // kind-less call re-opens the fake gate for a misrouted claim: the lane gets
+  // told to audit a file its criteria exclude, and DIFF-CLEAN comes back for a
+  // file nobody meaningfully read.
+  const declineInstruction = `Emit exactly ONE finding: group "Placement", criterion "placement_not_in_skill_dir", severity INFO, taxonomy "A_misclassified_skill_ref", bucket IMPROVE, message naming the correct auditor (skill_reference -> /md-audit skill via its owning SKILL.md; other_claude_artifact -> /md-audit skill or /md-audit claude-md) and stating plainly that THIS FILE WAS NOT AUDITED, with a \`remediation\` naming the auditor to re-run it under. Verdict NOT-AUDITED. Do NOT apply the other criteria. The finding is deliberately NOT SILENT: it is the caller's only signal that nothing read this file, and suppressing it next to a passing verdict is what makes a declined file read as an audited one.`
   const routingClause = f.kind && f.kind !== 'project_doc'
-    ? `NOTE: discover.py classified this target as \`${f.kind}\`, NOT a project document. Emit exactly ONE finding: group "Placement", criterion "placement_not_in_skill_dir", severity INFO, taxonomy "A_misclassified_skill_ref", bucket IMPROVE, message naming the correct auditor (skill_reference -> /md-audit skill via its owning SKILL.md; other_claude_artifact -> /md-audit skill or /md-audit claude-md) and stating plainly that THIS FILE WAS NOT AUDITED, with a \`remediation\` naming the auditor to re-run it under. Verdict NOT-AUDITED. Do NOT apply the other criteria. The finding is deliberately NOT SILENT: it is the caller's only signal that nothing read this file, and suppressing it next to a passing verdict is what makes a declined file read as an audited one.`
-    : `This is a genuine project document — apply all the criteria below.`
+    ? `NOTE: discover.py classified this target as \`${f.kind}\`, NOT a project document. ${declineInstruction}`
+    : f.kind === 'project_doc'
+      ? `This is a genuine project document — apply all the criteria below.`
+      : `No discover.py \`kind\` signal was provided (typical for a review-mode subject-lens call, where the caller does not classify). Run the PD-1 routing test YOURSELF from the path shape FIRST: a file inside a \`*/skills/*/references/\` directory is a \`skill_reference\`, and a \`CLAUDE.md\` / \`SKILL.md\` basename is an \`other_claude_artifact\` -- if either matches: ${declineInstruction} Otherwise treat it as a genuine project document and apply all the criteria below.`
 
   const orphanClause = f.inbound_citations === 0
     ? `discover.py reports ZERO inbound citations — this doc is an ORPHAN in the agent load graph. Raise PD-4 (group ADP, criterion adp_discoverability, severity JUDGMENT, taxonomy H_orphan). Disposition IMPROVE by default (orphan-linking is a structural judgment -- offer add-a-CLAUDE.md-pointer or retire as a one-line pitch); but an intentionally human-only / historical-record / companion-source / agent-definition doc is an accepted structural pattern -> SILENT (not surfaced). Do NOT auto-FAIL — a doc can legitimately serve human readers who open it directly.`
