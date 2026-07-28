@@ -1,4 +1,4 @@
-"""Tests for openrouter-kit/custom_bootstrap.py.
+"""Tests for plugins/llm-scripting-kit/custom_bootstrap.py.
 
 Exercises the four bootstrap states:
 - key missing entirely  -> add_failure with set-key instructions
