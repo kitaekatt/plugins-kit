@@ -25,6 +25,11 @@ from datetime import datetime, timedelta, timezone
 # copy, which collided across concurrent sessions — see atomic_write.py.
 from .atomic_write import write_atomic as _write_atomic
 
+# User-facing message text: numbering for collated lines, fits-or-skip label
+# selection instead of truncation. See messages.py / engine-internals.md.
+from .messages import item_label as _item_label, numbered as _numbered
+from .records import reprefix as _reprefix
+
 
 def main():
     """Entry point: acquire the single-instance lock, then run the engine
@@ -216,10 +221,10 @@ def _stand_down_lock_contended(data_dir, project_dir, plugin_root="",
     holder = _lock_holder_pid(data_dir)
     who = f"engine {own_version}" if own_version else "engine"
     where = f" (pid {holder})" if holder else ""
+    headline = f"stand-down: {who} yielded to running engine pass{where}"
     entry = (
-        f"stand-down: {who} yielded to running engine pass{where}; "
-        "this project's cooldown was cleared for a retry on the next "
-        "opportunity"
+        f"{headline}; this project's cooldown was cleared for a retry on the "
+        "next opportunity"
     )
     if rearmed:
         entry += "; harvest re-armed (this engine carries an update)"
@@ -235,19 +240,15 @@ def _stand_down_lock_contended(data_dir, project_dir, plugin_root="",
     # `--console --fix-all` sees empty output plus exit 0, reads it as
     # success, and either reports a fix that never ran or starts debugging
     # the wrong layer entirely (observed live, 0.66.2 -- three no-op fix-all
-    # invocations in a row were each diagnosed as a different bug). Say it
-    # out loud, and say explicitly that no work happened.
-    notice = (
-        f"{entry}. THIS INVOCATION DID NO WORK -- retry once the running pass "
-        "finishes; if that pass is a fix-all, its elevated console window may "
-        "still be open waiting for input."
-    )
+    # invocations in a row were each diagnosed as a different bug). The
+    # caller only needs the headline: "stand-down" already means no work
+    # happened. The retry/cooldown detail stays in the log entry above.
     try:
         if console:
-            print(f"--- bootstrap lock: {notice} ---")
+            print(f"--- bootstrap lock: {headline} ---")
         else:
             emit_success_response(
-                f"--- bootstrap lock: {notice} ---",
+                f"--- bootstrap lock: {headline} ---",
                 label="bootstrap",
                 output_file=(os.path.join(data_dir, "bootstrap_display.pending")
                              if background else None),
@@ -327,6 +328,17 @@ def _defer_transient_retry(tb):
     args, _ = parser.parse_known_args()
     if args.console or not args.data_dir:
         return
+    # Deliberately silent to the user -- but not to the record. This path
+    # swallows a real traceback on purpose (it self-heals), which meant a
+    # recurring, non-self-healing failure wearing this signature would look
+    # like nothing had happened at all.
+    try:
+        from .records import PassRecorder
+        r = PassRecorder(args.data_dir, mode="hook", autoflush=False)
+        r.record("crash", tb, sev="quiet", transient=True)
+        r.flush()
+    except Exception:
+        pass
     from .stamps import global_stamp
     global_stamp(args.data_dir, "import_retry_pending").write("1")
     # Void the in-flight guard: THIS attempt crashed, so the harvest may relaunch
@@ -349,7 +361,24 @@ def _emit_engine_crash(tb):
     parser.add_argument("--project-dir", default=None)
     parser.add_argument("--console", action="store_true")
     args, _ = parser.parse_known_args()
-    if args.console or not args.data_dir:
+    if not args.data_dir:
+        return
+
+    # Record the traceback before the console early-return. A crashed pass is
+    # the one whose evidence matters most, and until now its only home was
+    # engine_output.log -- which the next launch (often seconds later)
+    # truncated. Console crashes were recorded nowhere at all.
+    try:
+        from .records import PassRecorder
+        crash_recorder = PassRecorder(
+            args.data_dir, mode="console" if args.console else "hook",
+            autoflush=False)
+        crash_recorder.record("crash", tb, sev="fail")
+        crash_recorder.flush()
+    except Exception:
+        pass
+
+    if args.console:
         return
 
     first_line = tb.strip().splitlines()[-1] if tb.strip() else "unknown error"
@@ -374,6 +403,88 @@ def _emit_engine_crash(tb):
     # Roll back the shell hook's optimistic cooldown stamp so the next
     # SessionStart re-runs instead of silently throttling on a crashed pass.
     _clear_project_cooldown(args.data_dir, args.project_dir)
+
+
+def _append_detail(entries, text, detail=None, display=None):
+    """Append a log entry, carrying structured detail into the record when the
+    list is a RecordingList (and degrading to a plain append when it is not).
+
+    The detail never reaches the log line or either message surface -- it exists
+    so the record can hold what the line had to leave out.
+    """
+    if display is None and detail is None:
+        entries.append(text)
+        return
+    rich = getattr(entries, "append_rich", None)
+    if rich is not None:
+        rich(text, display=display, detail=detail)
+        return
+    # A PLAIN list -- which is the common case, not the exception: the manifest
+    # phases build a local list and the caller extends a RecordingList with it
+    # afterwards. Attaching both to the entry itself is what carries them
+    # across that hand-off; appending the bare text here silently dropped the
+    # detail on every manifest-phase path.
+    from .records import Entry
+    entries.append(Entry(text, short=display, detail=detail))
+
+
+def _record_failures(recorder, failures):
+    """Record each failure dict verbatim. Tolerates a missing recorder."""
+    if recorder is None:
+        return
+    for f in failures or ():
+        recorder.record("failure", f.get("message") or f.get("type") or "failure",
+                        sev="fail", plugin=f.get("plugin"), failure=f)
+
+
+def _record_emit(recorder, channel, response):
+    """Record a rendered hook payload. Tolerates a missing recorder.
+
+    This is what makes shortening the user-facing surface free: the exact text
+    each audience received is on disk, so a collated line may be as terse as the
+    UX wants without the message becoming the only copy.
+    """
+    if recorder is not None:
+        recorder.record_emit(channel, response)
+
+
+def _record_entries(recorder, sev, entries, section=None, plugin=None):
+    """Record entries produced by a helper that returns plain lists.
+
+    Most entries reach the record through a RecordingList, which is why no call
+    site had to change. A few helpers build and return their own lists; those
+    would otherwise be the one silent gap, so their callers record explicitly.
+    """
+    if not recorder or not entries:
+        return
+    for entry in entries:
+        recorder.record_entry(sev, entry, section=section, plugin=plugin)
+
+
+class _NullRecorder:
+    """Stand-in when the recorder cannot be built. Absorbs every call.
+
+    The record is valuable but never load-bearing: bootstrap's job is to
+    provision the machine, and no observability failure may cost a pass.
+    """
+
+    enabled = False
+
+    def record(self, *a, **kw):
+        pass
+
+    record_entry = record_emit = flush = record
+
+
+def _new_recorder(data_dir, start_time, args):
+    """Build the pass recorder, or a no-op stand-in. Never raises."""
+    try:
+        from .records import PassRecorder
+        mode = "console" if getattr(args, "console", False) else (
+            "background" if getattr(args, "background", False) else "hook")
+        return PassRecorder(data_dir, start_time=start_time, mode=mode)
+    except Exception:
+        return _NullRecorder()
 
 
 def _main():
@@ -438,12 +549,30 @@ def _main():
     from .apt import reset_apt_pass_state
     reset_apt_pass_state()
     log_success = config.get("log_success_checks", False) or args.verbose
+
+    # The pass record. Complete by construction and independent of every
+    # display filter below: `log_success` and the collated-line width decide
+    # what is SHOWN, never what is KEPT. Console mode records too -- it writes
+    # no log and no stamps, but an append-only record touches neither, and a
+    # console pass against a wedged machine is exactly the state worth having
+    # evidence of. See records.py.
+    from .records import entry_list as _entry_list
+    recorder = _new_recorder(data_dir, start_time, args)
+    recorder.record("meta", "engine pass started",
+                    detail={"os": current_os, "project_dir": args.project_dir,
+                            "plugin_root": plugin_root,
+                            "log_success": log_success,
+                            "fix_all": bool(getattr(args, "fix_all", False))})
+
     all_failures = []
-    # Bootstrap's own entries (self-bootstrap + user) — written to bootstrap's log
-    bootstrap_action_entries = []
-    bootstrap_ok_entries = []
+    # Bootstrap's own entries (self-bootstrap + user) — written to bootstrap's log.
+    # RecordingLists: every append lands in the pass record, including the many
+    # sites that hold one of these lists and append to it directly rather than
+    # going through a ctx method.
+    bootstrap_action_entries = _entry_list(recorder, "action")
+    bootstrap_ok_entries = _entry_list(recorder, "ok")
     # Log-only entries (always logged, never displayed) — see _ManifestContext.quiet
-    bootstrap_quiet_entries = []
+    bootstrap_quiet_entries = _entry_list(recorder, "quiet")
     # Display sections: list of (header, action_entries, ok_entries)
     display_sections = []
     # Pass-level shared-lib publish/link collector: both emission sites (each
@@ -612,14 +741,16 @@ def _main():
             project_dir=args.project_dir,
             quiet_entries=quiet_entries, shared_lib_links=shared_lib_links,
         )
-        prefixed_action = [f"config: {e}" for e in action_entries]
-        prefixed_ok = [f"config: {e}" for e in ok_entries]
+        # _reprefix, not an f-string: an f-string produces a plain str and
+        # drops the entry's authored short label and detail (see records.Entry).
+        prefixed_action = [_reprefix(e, "config: ") for e in action_entries]
+        prefixed_ok = [_reprefix(e, "config: ") for e in ok_entries]
         bootstrap_action_entries.extend(prefixed_action)
         bootstrap_ok_entries.extend(prefixed_ok)
         # Log-only (displayed in aggregate by Step 4c). bootstrap_action_entries
         # feeds both the log and bootstrap's display section, so quiet entries
         # ride in the log-only list instead -- see _ManifestContext.quiet.
-        bootstrap_quiet_entries.extend(f"config: {e}" for e in quiet_entries)
+        bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in quiet_entries)
         if failures:
             all_failures.extend(failures)
 
@@ -628,8 +759,8 @@ def _main():
     if project_venv_def and args.project_dir:
         pv_action, pv_ok, pv_failures = _process_project_venv(
             project_venv_def, args.project_dir)
-        bootstrap_action_entries.extend(f"config: {e}" for e in pv_action)
-        bootstrap_ok_entries.extend(f"config: {e}" for e in pv_ok)
+        bootstrap_action_entries.extend(_reprefix(e, "config: ") for e in pv_action)
+        bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in pv_ok)
         all_failures.extend(pv_failures)
 
     # Step 3e: Process the layered env.json manifest (identity-bearing
@@ -647,8 +778,8 @@ def _main():
         args.project_dir, current_os, data_dir, plugin_root,
         env_action_entries, env_ok_entries, engine_version=version,
     )
-    bootstrap_action_entries.extend(f"env: {e}" for e in env_action_entries)
-    bootstrap_ok_entries.extend(f"env: {e}" for e in env_ok_entries)
+    bootstrap_action_entries.extend(_reprefix(e, "env: ") for e in env_action_entries)
+    bootstrap_ok_entries.extend(_reprefix(e, "env: ") for e in env_ok_entries)
     if env_failures:
         all_failures.extend(env_failures)
 
@@ -700,6 +831,7 @@ def _main():
             plugin_info, current_os, data_dir, all_failures,
             log_success, display_sections, deferred_plugin_logs, args,
             engine_version=version, shared_lib_links=shared_lib_links,
+            recorder=recorder,
         )
 
     # Step 4b: Re-scan for plugins installed during Steps 3c/4
@@ -723,6 +855,7 @@ def _main():
             plugin_info, current_os, data_dir, all_failures,
             log_success, display_sections, deferred_plugin_logs, args,
             engine_version=version, shared_lib_links=shared_lib_links,
+            recorder=recorder,
         )
 
     # Step 4b2: Self-register bootstrap-dependent plugins for auto-update.
@@ -756,6 +889,11 @@ def _main():
         os.path.join(home, ".claude", "bootstrap.local.json"),
         sr_candidates, sr_declared_refs, sr_declared_names,
     )
+    # Built by ensure_self_registration as plain lists, so they carry no
+    # RecordingList; record them explicitly rather than let the one code path
+    # that bypasses the list-level hook go unrecorded.
+    _record_entries(recorder, "action", sr_actions, section="self-register")
+    _record_entries(recorder, "ok", sr_oks, section="self-register")
     if sr_actions or sr_oks:
         sr_label = f"{bootstrap_label} self-register"
         display_sections.append((sr_label, sr_actions, sr_oks))
@@ -785,6 +923,9 @@ def _main():
     link_summary = shared_lib_links.summary()
     if link_summary:
         sweep_actions = sweep_actions + [link_summary]
+    _record_entries(recorder, "action", sweep_actions, section="shared-libs")
+    _record_entries(recorder, "quiet", sweep_quiets, section="shared-libs")
+    _record_entries(recorder, "ok", sweep_oks, section="shared-libs")
     if sweep_actions or sweep_quiets or sweep_oks:
         sweep_label = f"{bootstrap_label} shared-libs"
         display_sections.append((sweep_label, sweep_actions, sweep_oks))
@@ -838,9 +979,13 @@ def _main():
 
     # Step 6: Write log entries (bootstrap + plugins) — after reading shell entries
     # Skip in console mode — no file writes.
-    # Only include ok_entries when log_success is true — otherwise they leak back
-    # through shell_content on the next run (the log reader can't distinguish
-    # ok vs action entries, so they bypass the log_success display filter).
+    #
+    # ok_entries remain gated on log_success. That gate still does real work
+    # here -- the log IS read back (_read_new_log_entries), so an ok entry
+    # written now would reappear in the next pass's display -- but it is no
+    # longer a RETENTION decision: every ok entry lands in the pass record
+    # regardless (records.py). Turning it on or off changes what is easy to
+    # read in bootstrap.log, never what is kept.
     bootstrap_log_entries = bootstrap_action_entries + bootstrap_quiet_entries + (bootstrap_ok_entries if log_success else [])
     if bootstrap_log_entries and not args.console:
         write_log_block(data_dir, bootstrap_label, bootstrap_log_entries, start_time=start_time)
@@ -855,7 +1000,12 @@ def _main():
     for header, actions, _oks in display_sections:
         if not actions:
             continue
-        display_lines.append(f"--- {header}: {'; '.join(actions)} ---")
+        # Width-limited like every other collated surface. An entry that would
+        # overflow renders its AUTHORED short label (Entry.short, set via
+        # _append_detail(display=...)) or a whole clause derived at a separator
+        # -- never a mid-word cut. The full diagnostic stays in bootstrap.log
+        # and the pass record.
+        display_lines.append(f"--- {header}: {_numbered(actions)} ---")
 
     # Step 7b: Elevation queue -> ONE per-OS remediation script. Harvest every
     # `elevation` descriptor deferred during this pass (apt packages, elevated
@@ -877,8 +1027,20 @@ def _main():
         if _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
                            bootstrap_label):
             # The runner completed; a re-check pass was spawned and has emitted
-            # its own results -- this pass is done.
+            # its own results -- this pass is done. Record first: the re-check
+            # records the POST-fix state, so without this the pre-fix failures
+            # that motivated the run would exist nowhere.
+            _record_failures(recorder, all_failures)
             return
+
+    # Record every failure dict VERBATIM, before any of it is rendered, and
+    # before the console branch returns. A failure carries far more than its
+    # display line -- agent_msg, user_msg, install_state, the elevation
+    # descriptor, the remediation command -- and every rendered surface keeps
+    # only a projection. Items the elevation aggregate speaks for are suppressed
+    # from BOTH message surfaces entirely (_visible_failures), so without this
+    # they would exist nowhere on disk.
+    _record_failures(recorder, all_failures)
 
     if args.console:
         # Console mode: plain text to stdout, no JSON
@@ -897,11 +1059,19 @@ def _main():
                 detail = f.get("message") or f.get("user_msg") or ""
                 for line in detail.splitlines():
                     print(f"      {line}")
+        # Console writes no log and no stamps -- that is its contract, and it is
+        # why a console pass used to leave no trace of what it changed. An
+        # append-only record breaks neither rule, and a console pass against a
+        # wedged machine is exactly the state worth having evidence of.
+        recorder.record("emit", "\n".join(display_lines), channel="console")
         return
 
     # Build final display: shell entries + section entries
     parts = []
     if shell_content:
+        # The shell hook's own log block, read back from bootstrap.log. Recorded
+        # here so the record covers the whole pass, not just its Python half.
+        recorder.record("shell", shell_content)
         parts.append(shell_content)
     parts.extend(display_lines)
     display_content = "\n".join(parts)
@@ -927,6 +1097,7 @@ def _main():
             all_failures, current_os, display_content,
             label=bootstrap_label, output_file=output_file,
             persistent_output_file=persistent_output_file,
+            recorder=recorder,
         )
         # Clear this project's cooldown stamp so the next SessionStart re-runs
         # bootstrap instead of silently throttling. The shell hook stamps the
@@ -939,6 +1110,7 @@ def _main():
         if display_content:
             emit_success_response(
                 display_content, label=bootstrap_label, output_file=output_file,
+                recorder=recorder,
             )
         # else: nothing to show — silent exit (no file written in background mode)
 
@@ -1190,7 +1362,7 @@ def _plugin_log_label(plugin_info, plugin_data_dir, data_dir, engine_version="")
 def _bootstrap_single_plugin(
     plugin_info, current_os, data_dir, all_failures,
     log_success, display_sections, deferred_plugin_logs, args,
-    engine_version="", shared_lib_links=None,
+    engine_version="", shared_lib_links=None, recorder=None,
 ):
     """Process a single plugin's bootstrap.json manifest.
 
@@ -1271,9 +1443,11 @@ def _bootstrap_single_plugin(
         })
         return
 
-    # Per-plugin entry lists (written to plugin's own log)
-    plugin_action_entries = []
-    plugin_ok_entries = []
+    # Per-plugin entry lists (written to plugin's own log, and -- via the
+    # RecordingList -- to the pass record, tagged with this plugin).
+    from .records import entry_list as _entry_list
+    plugin_action_entries = _entry_list(recorder, "action", plugin=plugin_info.name)
+    plugin_ok_entries = _entry_list(recorder, "ok", plugin=plugin_info.name)
 
     # Version change detection. Skipped for bootstrap itself: its plugin_data_dir
     # IS the engine data_dir, and Step 2b already wrote last_version there with
@@ -1322,7 +1496,9 @@ def _bootstrap_single_plugin(
 
     action_entries = []
     ok_entries = []
-    quiet_entries = []
+    # Recorded directly: unlike action/ok below, quiet entries are never
+    # extended into a RecordingList -- they go straight to the plugin log.
+    quiet_entries = _entry_list(recorder, "quiet", plugin=plugin_info.name)
     failures = _process_manifest(
         plugin_manifest, current_os, plugin_data_dir, plugin_info.install_path,
         action_entries, ok_entries, plugin_name=plugin_info.name,
@@ -2316,6 +2492,7 @@ def _strategy_install_command(ctx):
     from . import tool_paths
     result = ctx.result
     install_state = "no_install_cmd"
+    install_output = ""
     if result.install_cmd == "manual":
         install_state = "manual_install"
     elif result.install_cmd and ctx.elevated and not _privileges_available(ctx.current_os):
@@ -2349,7 +2526,7 @@ def _strategy_install_command(ctx):
     elif result.install_cmd:
         from .tool_check import run_install
         from .path_repair import repair_path
-        ok, _output = run_install(result.install_cmd)
+        ok, install_output = run_install(result.install_cmd)
         # Re-check regardless of the installer's exit code: a non-zero exit can
         # mean "already installed / no upgrade available" (winget 43), which is
         # success from our standpoint. repair_path() first so a registry PATH
@@ -2367,17 +2544,33 @@ def _strategy_install_command(ctx):
         # from "installer itself errored".
         install_state = "installed_but_path_stale" if ok else "install_failed"
 
+    # The installer's own output explains BOTH of the next two states, and it
+    # was captured and thrown away -- while the fix-all directive we emit tells
+    # Claude to "re-run and capture output", i.e. to regenerate the diagnosis we
+    # already had. Attach it to the record instead; the displayed line is
+    # unchanged.
+    install_detail = ({"install_cmd": result.install_cmd,
+                       "install_output": install_output}
+                      if install_output else None)
     if install_state == "installed_but_path_stale":
-        ctx.action_entries.append(
+        _append_detail(
+            ctx.action_entries,
             f"{ctx.prefix}{result.subject}: install succeeded but binary not findable afterward "
-            f"(add an installPath hint, or a download recipe to fetch our own copy)"
+            f"(add an installPath hint, or a download recipe to fetch our own copy)",
+            detail=install_detail,
         )
     elif install_state == "install_failed":
-        ctx.action_entries.append(f"{ctx.prefix}{result.subject}: install command failed - `{result.install_cmd}`")
+        _append_detail(
+            ctx.action_entries,
+            f"{ctx.prefix}{result.subject}: install command failed - `{result.install_cmd}`",
+            detail=install_detail,
+        )
     elif install_state == "manual_install":
-        ctx.action_entries.append(
+        _append_detail(
+            ctx.action_entries,
             f"{ctx.prefix}{result.subject}: not installed — manual install required "
-            f"(no unattended installer for this OS); install it and ensure it's on PATH"
+            f"(no unattended installer for this OS); install it and ensure it's on PATH",
+            display=f"{result.subject}: manual install needed",
         )
     else:
         ctx.action_entries.append(f"{ctx.prefix}{result.subject}: FAILED - {result.message}")
@@ -3261,21 +3454,31 @@ class _ManifestContext:
     def ok(self, message):
         self.ok_entries.append(f"{self.prefix}{message}")
 
-    def action(self, message):
-        self.action_entries.append(f"{self.prefix}{message}")
+    def action(self, message, display=None, detail=None):
+        """Append an action entry.
+
+        `message` is the COMPLETE diagnostic -- write it at whatever length it
+        needs, since the log and the pass record keep it whole. `display` is an
+        optional short label for the collated display line, needed only when the
+        message has no natural short form (no " - " clause to drop); `detail`
+        carries structured context that belongs in the record but on no message
+        surface. See messages.py and records.py.
+        """
+        _append_detail(self.action_entries, f"{self.prefix}{message}",
+                       display=display, detail=detail)
 
     def quiet(self, message):
         """Log-only remediation entry: written to the log unconditionally, never
         displayed. Use ONLY when the pass surfaces the same event in aggregate."""
         self.quiet_entries.append(f"{self.prefix}{message}")
 
-    def fail(self, entry, **failure):
+    def fail(self, entry, display=None, detail=None, **failure):
         """Append `entry` as an action line AND register `failure` for fix-all.
 
         (`entry` deliberately doesn't collide with the failure-dict `message`
-        kwarg most callers pass.)
+        kwarg most callers pass.) `display`/`detail` behave as in `action`.
         """
-        self.action(entry)
+        self.action(entry, display=display, detail=detail)
         failure.setdefault("plugin", self.plugin_name)
         self.failures.append(failure)
 
@@ -3316,11 +3519,16 @@ def _phase_env_vars(ctx):
         name = var_def.get("name")
         value = var_def.get("value")
         if not isinstance(name, str) or not name or not isinstance(value, str):
+            # Name the entry by its KEYS, never by its repr. An env_vars entry
+            # is frequently an API key, and `{var_def!r}` dumps the value
+            # alongside it -- into the log, the message surfaces, and now a
+            # durable record. The keys identify the offending entry just as
+            # well for an authoring error, which is all this failure is.
             ctx.fail(
-                f"env_var: INVALID entry {var_def!r} - needs string 'name' and 'value'",
+                f"env_var: INVALID entry {sorted(var_def)!r} - needs string 'name' and 'value'",
                 type="env_var",
                 name=_entry_label(name),
-                message=f"invalid env_vars entry {var_def!r}: needs string 'name' and 'value'",
+                message=f"invalid env_vars entry {sorted(var_def)!r}: needs string 'name' and 'value'",
             )
             continue
         if name.upper() == "PATH":
@@ -3419,7 +3627,10 @@ def _phase_fonts(ctx):
         if isinstance(dl_def, dict) and "url" not in dl_def:
             dl_def = _resolve_download_def(dl_def, ctx.current_os) or {}
         if not (isinstance(dl_def, dict) and dl_def.get("url") and dl_def.get("sha256")):
-            ctx.action(f"font {name}: not installed and no download declared for {ctx.current_os}")
+            ctx.action(
+                f"font {name}: not installed and no download declared for {ctx.current_os}",
+                display=f"font {name}: no download declared",
+            )
             continue
 
         inst = install_font(dl_def["url"], dl_def["sha256"], archive_type=dl_def.get("archive_type"))
@@ -3635,6 +3846,7 @@ def _phase_marketplaces(ctx):
                 if not source_url:
                     ctx.fail(
                         f"marketplace {mkt_name}: pin '{pin}' declared but the marketplace is not registered and no source is declared to add it",
+                        display=f"marketplace {mkt_name}: pin unresolvable",
                         type="marketplace", name=mkt_name,
                         message="pin declared for an unregistered marketplace with no source",
                     )
@@ -3651,7 +3863,10 @@ def _phase_marketplaces(ctx):
 
             if mkt_def.get("alwaysUpdate"):
                 # pin takes precedence: skip the stale-check/update path.
-                ctx.action(f"marketplace {mkt_name}: alwaysUpdate ignored while pinned")
+                ctx.action(
+                    f"marketplace {mkt_name}: alwaysUpdate ignored while pinned",
+                    display=f"marketplace {mkt_name}: pinned",
+                )
 
             pin_result = apply_marketplace_pin(mkt_name, pin)
             if pin_result.passed:
@@ -3684,6 +3899,7 @@ def _phase_marketplaces(ctx):
                 else:
                     ctx.fail(
                         f"marketplace {mkt_name}: unpinned, {rel.message}; update failed - {upd.message}",
+                        display=f"marketplace {mkt_name}: update failed",
                         type="marketplace", name=mkt_name, message=upd.message,
                     )
             else:
@@ -3814,6 +4030,7 @@ def _phase_plugins(ctx):
                 else:
                     ctx.fail(
                         f"plugin {plugin_ref}: could not enable at {desired_scope} scope - {enabled.message}",
+                        display=f"plugin {plugin_ref}: enable failed",
                         type="plugin", ref=plugin_ref,
                         message=f"enable at {desired_scope} scope failed: {enabled.message}",
                     )
@@ -3890,12 +4107,14 @@ def _phase_plugins(ctx):
                         else:
                             ctx.fail(
                                 f"plugin {plugin_ref}: installed {recheck.installed_version} < required {min_version}, update failed to satisfy constraint{pin_note}",
+                                display=f"plugin {plugin_ref}: min_version unmet",
                                 type="plugin", ref=plugin_ref,
                                 message=f"min_version {min_version} not satisfied (installed {recheck.installed_version}){pin_note}",
                             )
                     else:
                         ctx.fail(
                             f"plugin {plugin_ref}: installed {min_result.installed_version} < required {min_version}, update failed - {upd_result.message}{pin_note}",
+                            display=f"plugin {plugin_ref}: min_version unmet",
                             type="plugin", ref=plugin_ref,
                             message=f"min_version {min_version} not satisfied: {upd_result.message}{pin_note}",
                         )
@@ -4282,8 +4501,13 @@ def _env_phase_symlinks(ctx):
                     "os": ctx.current_os, "id": f"symlink:{name}",
                     # The label stands alone in the runner's plan and in the
                     # session message's item list, so it names the entry rather
-                    # than restating the WinError.
-                    "label": entry.get("description") or f"Link {name}",
+                    # than restating the WinError. `description` is taken only
+                    # when it is short enough to collate; the name-derived
+                    # fallback is guaranteed to be (see messages.item_label).
+                    "label": _item_label(
+                        entry.get("label"), entry.get("description"),
+                        f"Link {name}",
+                    ),
                 },
                 agent_msg=(
                     f"The symlink '{name}' ({tgt} -> {src}) needs elevation on "
@@ -4705,6 +4929,7 @@ def _env_phase_env_checks(ctx):
         if instructions is not None and not (isinstance(instructions, str) and instructions):
             ctx.fail(
                 f"env_check {name}: INVALID agent_instructions - must be a non-empty string",
+                display=f"env_check {name}: invalid entry",
                 type="env_check", name=name,
                 message=f"{name}: invalid agent_instructions: must be a non-empty string",
                 persist_across_sessions=True,
@@ -4767,10 +4992,14 @@ def _env_phase_env_checks(ctx):
                 elevation={
                     "method": "command", "command": fix,
                     "os": ctx.current_os, "id": f"env_check:{name}",
-                    # `description` is the entry's own human phrasing; the name
-                    # is the honest fallback (better a terse slug than an
-                    # invented sentence about what the fix does).
-                    "label": entry.get("description") or name,
+                    # `description` is the entry's own human phrasing, but it
+                    # doubles as prose documentation and is often far too long
+                    # to collate; the name is the honest fallback (better a
+                    # terse slug than a sentence cut off mid-clause). The full
+                    # description still reaches the user via `message` below.
+                    "label": _item_label(
+                        entry.get("label"), entry.get("description"), name,
+                    ),
                     # The entry already declares how long its fix may take; the
                     # engine bounds its fix-all wait by the queue's declarations
                     # rather than one blanket number.
@@ -5161,6 +5390,19 @@ class _ScriptContext:
 def _read_new_log_entries(data_dir, start_time=None):
     """Read log entries since the last time we displayed them.
 
+    Reads EVERY block, not just the shell's. That is deliberate and was briefly
+    got wrong: blocks written by OTHER processes are the whole point of reading
+    the log back at all. The shell hook's pre-Python block is one; so is the
+    `<label> elevation` block a fix-all pass writes for its spawned re-check
+    pass to surface, and the harvest/lock blocks a standing-down engine writes.
+    Scoping this to `Shell` headers silently swallowed the confirmation that an
+    elevated fix had run.
+
+    Retention is decoupled from presentation by the pass record (records.py),
+    NOT by narrowing this reader: bootstrap.log stays curated (ok entries gated
+    on log_success, so they never reappear here) while
+    `bootstrap_events.jsonl` keeps everything unconditionally.
+
     Uses a 'last_displayed_at' file to track the timestamp of the last display.
     Does NOT update the marker — call _update_display_marker() after all entries are written.
 
@@ -5357,7 +5599,8 @@ def _extract_timestamp(line):
     return ""
 
 
-def emit_success_response(log_content, label="bootstrap", output_file=None):
+def emit_success_response(log_content, label="bootstrap", output_file=None,
+                          recorder=None):
     """Emit hook JSON showing bootstrap log to user and agent.
 
     Reload/restart notices ride inside ``log_content`` as ordinary display
@@ -5380,6 +5623,7 @@ def emit_success_response(log_content, label="bootstrap", output_file=None):
             },
         }
         _write_atomic(output_file, json.dumps(response))
+        _record_emit(recorder, "pending", response)
     else:
         # SessionStart hook: supports hookSpecificOutput with hookEventName
         response = {
@@ -5392,6 +5636,7 @@ def emit_success_response(log_content, label="bootstrap", output_file=None):
             },
         }
         print(json.dumps(response))
+        _record_emit(recorder, "stdout", response)
 
 
 # Failure types fix-all can deterministically remediate without user input.
@@ -5611,15 +5856,29 @@ _ASK_REASON_BLURB = {
 }
 
 
-def _short_label(f):
-    """A friendly one-line label for a failure's systemMessage summary.
+def _short_label(f, limit=None):
+    """A friendly one-line label for a failure's summary line.
 
     Prefer the plugin/check-authored `user_msg` (that is where a friendly,
     plain-language phrasing like 'hue-kit wants to pair with your Hue bridge'
-    lives), then `message`, then name/type. First line, capped for a footer.
+    lives), then `message`, then name/type.
+
+    `limit` selects the audience. The systemMessage summary puts ONE item per
+    LINE, so it passes no limit and gets the full phrasing -- that is where the
+    user actually reads what is wrong. A COLLATED caller (the AskUserQuestion
+    directive, which flattens every item onto one line) passes
+    messages.ITEM_MAX and gets the first candidate that FITS, whole; the long
+    ones are skipped rather than cut, so no line ever ends mid-clause. See
+    engine-internals.md, "Collated message text".
     """
-    label = f.get("user_msg") or f.get("message") or f.get("name") or f.get("type") or "issue"
-    return str(label).splitlines()[0][:100]
+    def first_line(value):
+        return str(value).splitlines()[0] if value else ""
+
+    candidates = (first_line(f.get("user_msg")), first_line(f.get("message")),
+                  f.get("name"), f.get("type"), "issue")
+    if limit is None:
+        return next((str(c) for c in candidates if c and str(c).strip()), "issue")
+    return _item_label(*candidates, limit=limit)
 
 
 def _auto_label_lines(auto):
@@ -5637,8 +5896,12 @@ def _auto_label_lines(auto):
     return lines
 
 
-def _ask_label_lines(ask):
+def _ask_label_lines(ask, limit=None):
     """User-facing labels for the ASK items: list[(label, reason)].
+
+    `limit` is passed straight through to _short_label -- None for the
+    one-item-per-line systemMessage, messages.ITEM_MAX for the collated
+    directive.
 
     The elevation_script aggregate expands into one line per queued task (its
     own `labels` field -- do not recompute), each an elevation reason; every
@@ -5650,7 +5913,7 @@ def _ask_label_lines(ask):
             for lbl in f.get("labels") or []:
                 lines.append((lbl, "elevation"))
         else:
-            lines.append((_short_label(f), _ask_reason(f) or "info"))
+            lines.append((_short_label(f, limit=limit), _ask_reason(f) or "info"))
     return lines
 
 
@@ -5678,8 +5941,10 @@ def _ask_agent_directive(failures, ask_idxs):
     the problem once, require a single AskUserQuestion with exactly two options
     ("Do nothing" leading, then "Fix"), act only on "Fix", never re-prompt.
     """
-    labels = _ask_label_lines([failures[i - 1] for i in ask_idxs])
-    listed = "; ".join(lbl for lbl, _ in labels)
+    from .messages import ITEM_MAX
+    labels = _ask_label_lines([failures[i - 1] for i in ask_idxs],
+                              limit=ITEM_MAX)
+    listed = _numbered(lbl for lbl, _ in labels)
     reasons = sorted({reason for _, reason in labels})
     return (
         f"ASK THE USER before touching items {_format_indexes(ask_idxs)} -- they "
@@ -5756,7 +6021,8 @@ def _emit_unsupported_platform(message, data_dir, args):
         print(json.dumps(response))
 
 
-def _emit_focused(failure, label, output_file, persistent_output_file):
+def _emit_focused(failure, label, output_file, persistent_output_file,
+                  recorder=None):
     """Emit ONE failure's own messages as the whole response.
 
     Used when every failure shares a single remediation, so the numbered list
@@ -5789,9 +6055,10 @@ def _emit_focused(failure, label, output_file, persistent_output_file):
             _write_atomic(persistent_output_file, json.dumps(response))
     else:
         print(json.dumps(response))
+    _record_emit(recorder, "focused", response)
 
 
-def emit_failure_response(failures, current_os, log_content, label="bootstrap", output_file=None, persistent_output_file=None):
+def emit_failure_response(failures, current_os, log_content, label="bootstrap", output_file=None, persistent_output_file=None, recorder=None):
     """Emit hook JSON with fix-all directives to stdout or file.
 
     If persistent_output_file is provided AND any failure is marked
@@ -5949,7 +6216,8 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
         focus = next(f for f in failures if f["type"] == "elevation_script")
 
     if focus is not None:
-        _emit_focused(focus, label, output_file, persistent_output_file)
+        _emit_focused(focus, label, output_file, persistent_output_file,
+                      recorder=recorder)
         return
 
     # General path: mixed failures.
@@ -5982,6 +6250,7 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
             },
         }
         print(json.dumps(response))
+    _record_emit(recorder, "pending" if output_file else "stdout", response)
 
 
 if __name__ == "__main__":

@@ -251,7 +251,12 @@ def ensure_venv(
             entries.append("created")
     elif proc.returncode != 0:
         stderr_text = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
-        entries.append(f"uv sync failed (exit {proc.returncode}): {stderr_text[:200]}")
+        # The FULL stderr, not the first 200 chars. uv reports the resolution
+        # conflict that actually explains the failure well past that cut, and
+        # the tail was unrecoverable -- the entry was the only copy. Length is
+        # now a rendering concern: the record and the log keep everything, and
+        # the collated display line shortens it (see messages.py).
+        entries.append(f"uv sync failed (exit {proc.returncode}): {stderr_text}")
     else:
         entries.append(f"uv sync completed but re-check failed: {result.message}")
     return result, entries

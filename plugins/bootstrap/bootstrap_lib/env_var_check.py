@@ -196,11 +196,17 @@ def _check_windows_env_var(name: str, value: str) -> Result:
             subject=name,
             message=f"{name} set in Windows User environment (registry)",
         )
+    # Report the MISMATCH, not the values. An env var bootstrap manages is
+    # routinely an API key, and both the observed and wanted value used to be
+    # quoted verbatim into a message that reaches the log, the user, Claude, and
+    # now a durable record. "differs from the declared value" carries the same
+    # actionable information -- the variable is wrong and bootstrap will set it.
     return Result(
         passed=False,
         subject=name,
         message=(
-            f"{name} is {current!r} in Windows User environment, want {value!r}"
+            f"{name} differs from the declared value in the Windows User "
+            f"environment"
         ),
     )
 

@@ -268,9 +268,11 @@ class TestEngineMainLock:
         assert "stand-down" in log_file.read_text()
 
     def test_stand_down_reports_to_console_caller(self, tmp_path, monkeypatch, capsys):
-        """A --console stand-down must SAY it did nothing. Exiting 0 with empty
+        """A --console stand-down must report on stdout. Exiting 0 with empty
         stdout is indistinguishable from a clean pass, which is how three
-        consecutive no-op fix-all runs each got diagnosed as a different bug."""
+        consecutive no-op fix-all runs each got diagnosed as a different bug.
+        The word "stand-down" plus the holder pid carries that; the retry and
+        cooldown detail stays in the log entry."""
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         (data_dir / proc_lock.LOCK_FILENAME).write_text(f"{os.getpid()}\n123.0\n")
@@ -282,11 +284,11 @@ class TestEngineMainLock:
 
         out = capsys.readouterr().out
         assert "stand-down" in out, "a console stand-down must report on stdout"
-        assert "DID NO WORK" in out, (
-            "the notice must state plainly that nothing ran, not merely that a "
-            "stand-down occurred"
-        )
         assert f"pid {os.getpid()}" in out, "name the lock holder so it can be waited on"
+        assert out.rstrip().endswith(f"pid {os.getpid()}) ---"), (
+            "the caller-facing notice ends at the holder pid -- the cooldown/retry "
+            "detail belongs in the log entry, not on the console line"
+        )
 
     def test_stand_down_reports_to_non_console_caller(self, tmp_path, monkeypatch, capsys):
         """SessionStart callers read hook JSON, not stdout text -- the same
@@ -305,7 +307,7 @@ class TestEngineMainLock:
 
         assert emitted, "a non-console stand-down must emit a hook response"
         assert "stand-down" in emitted[0]
-        assert "DID NO WORK" in emitted[0]
+        assert f"pid {os.getpid()}" in emitted[0]
         assert capsys.readouterr().out == "", (
             "non-console mode must not print bare text -- it would corrupt the JSON"
         )

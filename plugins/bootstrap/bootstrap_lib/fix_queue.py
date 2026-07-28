@@ -51,6 +51,7 @@ from .apt import sudo_noninteractive_available, windows_admin_available
 from .atomic_write import write_atomic
 from .tool_check import resolve_bash
 from .fix_runner import COST_QUICK, COST_SLOW, QUEUE_VERSION
+from .messages import item_label, numbered
 
 
 def privileges_available(current_os: str) -> bool:
@@ -184,6 +185,19 @@ def order_tasks(tasks: List[FixTask]) -> List[FixTask]:
             + [t for t in tasks if t.cost == COST_SLOW])
 
 
+def _command_label(desc: dict, cmd: str, index: int) -> str:
+    """Collated label for a deferred `command` task.
+
+    Author-declared ``label`` wins; the raw command is used only when it is
+    short enough to sit in a collated line (`Enable Developer Mode` yes, a
+    winget invocation with four `--accept-*` flags no); otherwise the
+    descriptor's own id, which is a slug by construction. Never truncated --
+    the full command is on the task itself and in the runner's transcript.
+    """
+    return item_label(desc.get("label"), cmd,
+                      desc.get("id") or f"command:{index}")
+
+
 def queue_from_failures(failures, current_os: str) -> List[FixTask]:
     """Harvest ``elevation`` descriptors from the pass's failures into tasks.
 
@@ -217,7 +231,12 @@ def queue_from_failures(failures, current_os: str) -> List[FixTask]:
                 commands.append(FixTask(
                     id=desc.get("id") or f"command:{len(commands)}",
                     kind="command",
-                    label=desc.get("label") or cmd,
+                    # Falling back to the raw command is the worst collated
+                    # item there is -- a full `winget install --id ... -e
+                    # --accept-package-agreements` line is 100+ chars of flags.
+                    # Take it only when it fits; otherwise name the operation
+                    # by its id, which is a slug by construction.
+                    label=_command_label(desc, cmd, len(commands)),
                     elevated=True,
                     command=cmd,
                     timeout=desc.get("timeout"),
@@ -593,7 +612,7 @@ def fix_queue_failure(tasks: List[FixTask], current_os: str, data_dir: str,
     instruction -- the engine never re-prompts in a loop.
     """
     labels = task_labels(tasks)
-    listed = ", ".join(labels)
+    listed = numbered(labels)
     # The one sentence that states the problem. Shared rather than repeated: it
     # is BOTH what the user reads and (on Windows) the text Claude must put in
     # the AskUserQuestion prompt, and those two drifting apart is how a user

@@ -450,7 +450,7 @@ class TestFixQueueFailure:
         tasks = [FixTask(id="a", kind="command", label="Link starship-config"),
                  FixTask(id="b", kind="command", label="ssh-server-windows")]
         item = fq.fix_queue_failure(tasks, "windows", "C:/data")
-        assert "Link starship-config, ssh-server-windows" in item["user_msg"]
+        assert "(1) Link starship-config; (2) ssh-server-windows" in item["user_msg"]
         assert "fix-all" in item["user_msg"]
         assert "admin prompt" in item["user_msg"]
         assert item["labels"] == ["Link starship-config", "ssh-server-windows"]
@@ -477,7 +477,7 @@ class TestFixQueueFailure:
                  FixTask(id="b", kind="command", label="ssh-server-windows")]
         item = fq.fix_queue_failure(tasks, "windows", "C:/data")
         intro = ("Bootstrap found issues that need admin access: "
-                 "CUDA Toolkit, ssh-server-windows.")
+                 "(1) CUDA Toolkit; (2) ssh-server-windows.")
         assert item["user_msg"].startswith(intro)
         assert f'"{intro} Fix them now?"' in item["agent_msg"]
 

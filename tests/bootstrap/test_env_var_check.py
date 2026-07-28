@@ -164,11 +164,19 @@ class TestWindowsRegistry:
         assert check_env_var("DEVROOT", "C:/dev", "windows").passed is True
 
     def test_check_fails_on_stale_value(self, fake_winreg):
+        """Reports the mismatch WITHOUT quoting either value.
+
+        An env var bootstrap manages is routinely an API key, and this message
+        reaches the log, the user, Claude, and the durable pass record. The
+        variable name plus "differs from the declared value" is all the reader
+        needs -- bootstrap is about to set it either way.
+        """
         fake_winreg.store["DEVROOT"] = "C:/old"
         result = check_env_var("DEVROOT", "C:/dev", "windows")
         assert result.passed is False
-        assert "C:/old" in result.message
-        assert "C:/dev" in result.message
+        assert "DEVROOT" in result.message
+        assert "C:/old" not in result.message
+        assert "C:/dev" not in result.message
 
     def test_skip_registry_flag_short_circuits(self, fake_winreg, monkeypatch):
         monkeypatch.setenv("BOOTSTRAP_SKIP_REGISTRY", "1")

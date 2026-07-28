@@ -503,6 +503,14 @@ if [ -z "$FLAG_CONSOLE" ]; then
     # Background mode: engine writes display JSON to file. Stdout+stderr are
     # captured to a debug log so silent engine failures (which would otherwise
     # vanish into /dev/null) can be inspected after the fact.
+    #
+    # Keep one previous generation. This log is truncated (>) on every launch,
+    # and launches come in quick succession -- the harvest and the mid-session
+    # relaunch both start a new engine within seconds -- so a crash traceback
+    # routinely vanished before anyone could read it. One rotation is enough to
+    # survive the relaunch that would otherwise erase the evidence.
+    [ -f "$PLUGIN_DATA/engine_output.log" ] && \
+        mv -f "$PLUGIN_DATA/engine_output.log" "$PLUGIN_DATA/engine_output.log.1" 2>/dev/null
     "$PYTHON" "${PLUGIN_ROOT}/engine/bootstrap_engine.py" \
         --plugin-root "$PLUGIN_ROOT" \
         --data-dir "$PLUGIN_DATA" \
