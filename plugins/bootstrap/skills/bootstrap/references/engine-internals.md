@@ -373,26 +373,27 @@ pass**. Everything the engine learns goes in it: every check outcome including
 passing ones, every failure dict *verbatim* (`agent_msg`, `user_msg`,
 `install_state`, the `elevation` descriptor), the exact `systemMessage` and
 `additionalContext` payloads each audience was sent, subprocess diagnostics, and
-crash tracebacks — in every mode, `--console` included.
+crash tracebacks -- in every mode, `--console` included.
 
 **Why it exists.** `bootstrap.log` used to be both the record *and* an input to
 the display: the engine read the log back through a marker and pasted it into
 the next pass's output. So any entry written to the log would eventually surface
 to the user, and the only way to keep something out of the display was to keep
 it out of the **log**. That is why `ok_entries` were dropped from the log
-entirely unless `log_success_checks` was set — a *display filter* deciding what
+entirely unless `log_success_checks` was set -- a *display filter* deciding what
 got *recorded*. Retention was a consequence of presentation, and every UX
 decision quietly cost information.
 
 The record breaks that by being a **separate artifact with no display role at
-all**. `bootstrap.log` keeps its existing curation — ok entries still gated on
-`log_success_checks`, so they still cannot leak back through the reader — but
-that gate is now editorial rather than load-bearing, because the record holds
-them either way.
+all**. `bootstrap.log` keeps its curation: ok entries stay gated on
+`log_success_checks`, which still does real work, because the log IS read back
+and an ungated ok entry would reappear in the next pass's display. What the gate
+no longer decides is *retention* -- every ok entry reaches the record whether or
+not it reaches the log.
 
 Note what was NOT done: `_read_new_log_entries` still reads **every** block, not
 just the shell's. Narrowing it to `--- Shell ... ---` headers looks like a
-tidier decoupling and is wrong — blocks written by *other processes* are the
+tidier decoupling and is wrong -- blocks written by *other processes* are the
 reason the log is read back at all. A fix-all pass writes a `<label> elevation`
 block specifically so the re-check pass it spawns can surface "fix runner
 completed successfully"; the harvest and lock stand-down write theirs the same
@@ -400,7 +401,7 @@ way. Scoping the reader to `Shell` swallows all of them.
 
 The payoff is that **presentation became free**. A collated line may be as short
 as the UX wants; a label may be swapped for a slug; a whole section may be
-suppressed — none of it loses anything, because the full text is one `grep`
+suppressed -- none of it loses anything, because the full text is one `grep`
 away. Every rule in the next section is therefore a readability judgement, not a
 safeguard.
 
@@ -409,20 +410,23 @@ safeguard.
 | Artifact | Role | Filtered by |
 |---|---|---|
 | `bootstrap_events.jsonl` | complete record | nothing |
-| `bootstrap.log` | curated human log — the file to `tail`, and the one `bootstrap_guard` keys on | `log_success_checks` (editorial only) |
+| `bootstrap.log` | curated human log -- the file to `tail`, and the one `bootstrap_guard` keys on | `log_success_checks` (display scope, not retention) |
 | `systemMessage` | what the user sees | width + collation rules |
 | `additionalContext` | what Claude is told | remediation relevance |
 
 **How entries reach it without touching call sites.** `records.RecordingList`
 is a `list` subclass that mirrors every `append` into the record. The engine
-collects entries by appending to shared lists — from `ctx.action()`/`ctx.fail()`
-and from dozens of sites holding a list reference directly — so recording at the
-*list* covers all of them. No `ctx.*` caller had to change. Helpers that build
-and return plain lists (`ensure_self_registration`, the shared-lib sweep) are
-recorded explicitly by their callers via `_record_entries`.
+collects entries by appending to shared lists -- from `ctx.action()`/`ctx.fail()`
+and from dozens of sites holding a list reference directly -- so recording at the
+*list* covers all of them: no `ctx.*` caller changed **to be recorded**. (Nine
+sites do carry an authored `display=` label, eight of them `ctx.action()` /
+`ctx.fail()` calls -- that is the separate, opt-in width mechanism in the next
+section, not a cost of recording.) Helpers that build and return plain lists
+(`ensure_self_registration`, the shared-lib sweep) are recorded explicitly by
+their callers via `_record_entries`.
 
 **Retention.** Rotates at 2 MB keeping one generation, by atomic rename (safe
-while a concurrent pass holds the file open in append mode — that writer keeps
+while a concurrent pass holds the file open in append mode -- that writer keeps
 appending to the rotated file and loses nothing). Any single value is bounded at
 64 KB and says so when the bound bites.
 
@@ -430,7 +434,7 @@ appending to the rotated file and loses nothing). Any single value is bounded at
 secret-exposure surface, and "user config: API keys" is a first-class bootstrap
 condition. `records.redact()` masks secret-named mapping keys and secret-shaped
 substrings (`Authorization:`, `token=`, `--password`) at **record time, never at
-render time** — a secret must not exist in the file at all. It is a heuristic and
+render time** -- a secret must not exist in the file at all. It is a heuristic and
 is documented as one: it raises the cost of a leak, it does not prove the
 absence of one.
 
@@ -447,7 +451,7 @@ labels, the ASK-item list in the `AskUserQuestion` directive. Three rules apply
 to every one of them; `bootstrap_lib/messages.py` is the implementation.
 
 **1. Number the items: `(1) x; (2) y`.** A bare separator produces a run-on
-sentence, and most items contain their own commas and semicolons — so the
+sentence, and most items contain their own commas and semicolons -- so the
 boundaries between items are not merely hard to see, they are unrecoverable.
 `numbered()` prefixes each item with its ordinal and leaves a single item
 unnumbered (`(1) x` alone disambiguates nothing). Note the ordinals are
@@ -456,7 +460,7 @@ Claude acts on, which are computed separately over the failure list.
 
 **2. A collated item is at most 40 characters** (`messages.ITEM_MAX`). A
 collated line carries N items plus a header; past roughly this width it stops
-being a scannable list and becomes a paragraph the user skips — which is how a
+being a scannable list and becomes a paragraph the user skips -- which is how a
 real remediation offer goes unread. The limit is per *item*, not per line, and
 it applies to **every** collated surface: the display sections, the fix-all
 offer, and the ASK directive alike.
@@ -465,7 +469,7 @@ offer, and the ASK directive alike.
 label that stops partway through an identifier is unrecognisable, and the reader
 cannot tell what was dropped. Three mechanisms, in order:
 
-1. **An authored `display=` label** — the preferred answer:
+1. **An authored `display=` label** -- the preferred answer:
    ```python
    ctx.action(
        f"font {name}: not installed and no download declared for {os}",
@@ -482,7 +486,7 @@ cannot tell what was dropped. Three mechanisms, in order:
    attempted but uv not found in PATH` becomes `uv: FAILED`. This is why only
    nine sites needed an authored label.
 3. **Nothing.** If neither yields something that fits, the item renders
-   over-length. That is a **bug at the call site**, not a case to paper over —
+   over-length. That is a **bug at the call site**, not a case to paper over --
    and `tests/bootstrap/test_message_width.py` fails the build for it, naming
    the file and line.
 
@@ -501,13 +505,13 @@ tells the reader what the item is, where the first 37 characters of that
 sentence spend the budget on its least distinguishing part.
 
 The full text always reaches the reader through the per-item `message` /
-`agent_msg` — not collated, no width limit — and through the log and the pass
+`agent_msg` -- not collated, no width limit -- and through the log and the pass
 record. **The collated line identifies the items; the per-item message explains
 them; the record keeps everything.**
 
 For manifest authors: an entry whose `description` is documentation should also
-declare a short `label`. Nothing breaks without one — the `name` fallback is
-short by construction — but the label is the friendlier name the user reads.
+declare a short `label`. Nothing breaks without one -- the `name` fallback is
+short by construction -- but the label is the friendlier name the user reads.
 
 ## Execution Flow
 
@@ -601,9 +605,9 @@ Bootstrap keeps several small string-valued **stamp** files — the cooldown epo
 
 **Commit pinning for git_deps.** Git dependencies can optionally specify a `commit` SHA to pin to a specific version. After cloning, the engine checks out the pinned commit. On subsequent runs, it verifies HEAD matches the expected SHA. If mismatched, it fetches and checks out the correct commit.
 
-**Every check must RECORD its outcome.** The log and both message surfaces are *projections*; the pass record (`records.py`) is what must be complete. In practice the rule is unchanged for authors — emit an entry and the recording is automatic, because the entry lists are `RecordingList`s — but the reason it matters has shifted: an entry omitted for display reasons is now an entry omitted from the *evidence*, and there is no longer any excuse for one, since suppressing an entry from the user costs nothing.
+**Every check must log its outcome.** (Cited by that exact name from `CLAUDE.md`, `manifest-reference.md`, and several engine modules -- keep the phrase.) The entry an author emits is also what reaches the pass record, automatically, because the entry lists are `RecordingList`s: the log and both message surfaces are *projections*, and `bootstrap_events.jsonl` is the complete copy. An entry omitted to keep a display quiet is therefore an entry missing from the evidence -- and there is no reason to omit one, because suppressing an entry from the user costs nothing.
 
-The engine uses two entry lists: `action_entries` (always displayed) and `ok_entries` (displayed only in verbose mode). Every check — whether built-in (tools, venv, git deps) or custom (autodetect, bootstrap scripts) — must emit exactly one entry:
+The engine uses two entry lists: `action_entries` (always displayed) and `ok_entries` (displayed only in verbose mode). Every check -- whether built-in (tools, venv, git deps) or custom (autodetect, bootstrap scripts) -- must emit exactly one entry:
 
 - **detect → ok (no change needed)** → append to `ok_entries` (silent unless verbose)
 - **detect → remediate (created, installed, updated)** → append to `action_entries` (always logged)
