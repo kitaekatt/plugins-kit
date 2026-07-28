@@ -101,7 +101,7 @@ const FILE_FINDINGS_SCHEMA = {
         required: ['group', 'severity', 'criterion', 'message', 'line', 'taxonomy', 'bucket', 'remediation', 'attributable'],
       },
     },
-    verdict: { type: 'string', enum: ['COMPLIANT', 'NON-COMPLIANT'] },
+    verdict: { type: 'string', enum: ['COMPLIANT', 'NON-COMPLIANT', 'NOT-AUDITED'], description: 'NOT-AUDITED = the criteria were never applied because the file is outside this audit\'s scope (PD-1 decline). It is NOT a passing verdict and must never be reported as one.' },
   },
   required: ['path', 'kind', 'lines', 'approx_tokens', 'inbound_citations', 'findings', 'verdict'],
 }
@@ -120,7 +120,7 @@ const review = input.review === true
 
 function lanePrompt(f) {
   const routingClause = f.kind && f.kind !== 'project_doc'
-    ? `NOTE: discover.py classified this target as \`${f.kind}\`, NOT a project document. Emit exactly ONE finding: group "Placement", criterion "placement_not_in_skill_dir", severity INFO, taxonomy "A_misclassified_skill_ref", bucket SILENT (a routing conclusion, not surfaced as a finding against the doc), message naming the correct auditor (skill_reference -> /md-audit skill via its owning SKILL.md; other_claude_artifact -> /md-audit skill or /md-audit claude-md). Verdict COMPLIANT. Do NOT apply the other criteria.`
+    ? `NOTE: discover.py classified this target as \`${f.kind}\`, NOT a project document. Emit exactly ONE finding: group "Placement", criterion "placement_not_in_skill_dir", severity INFO, taxonomy "A_misclassified_skill_ref", bucket IMPROVE, message naming the correct auditor (skill_reference -> /md-audit skill via its owning SKILL.md; other_claude_artifact -> /md-audit skill or /md-audit claude-md) and stating plainly that THIS FILE WAS NOT AUDITED, with a \`remediation\` naming the auditor to re-run it under. Verdict NOT-AUDITED. Do NOT apply the other criteria. The finding is deliberately NOT SILENT: it is the caller's only signal that nothing read this file, and suppressing it next to a passing verdict is what makes a declined file read as an audited one.`
     : `This is a genuine project document — apply all the criteria below.`
 
   const orphanClause = f.inbound_citations === 0
@@ -207,8 +207,8 @@ Steps:
 
    FIX (auto-applied; lands in a reviewable CL): the mechanical convention checks N (broken link with identified target), O (non-ASCII), P (foreign abs path / backslash), Q (line drift), R (stale anchor re-pointable), and S (ancestor-declared convention violation, PD-11 -- a mechanical correction against a verbatim-quoted ancestor rule). Deletion of FALSIFIED content is FIX. Loss-free-deletion guard ALWAYS before removing a duplicate/section: fold any local delta into the SSOT/pointer FIRST. (I_duplicates_skill is NOT FIX -- see IMPROVE.)${builtinConventionExceptionClause}
    SERIOUS (surface at the TOP, summarized, NEVER auto-fixed, never buried): a secret / security finding; a protective rail whose documented mechanism is fictional (the real finding is the unprotected invariant -- a stale anchor R guarding a rail with NO surviving mechanism is SERIOUS, not FIX); a doc problem that reveals a real-world problem.
-   IMPROVE (count + one-liners; opt-in): a structural move -- graduate to a skill (B), fold into a CLAUDE.md (C), move into an existing skill (D), a CRP split (E), flatten a chained reference (F), remove a back-reference (G), orphan-linking (H), collapse a skill-duplicating doc to a pointer (I) -- I carries a loss-free precondition (fold the doc's unique deltas into the skill BEFORE removal) that no auto-apply pass can satisfy, so it is opt-in, not FIX; README stranded-fact re-home (L), add a generation record (M); or a trim of TRUE content passing the one-line test.
-   SILENT (do NOT surface; no hedging): a do-nothing conclusion (A misrouted-file routing note, "accept as-is -> PASS"); a validator detection artifact; an accepted structural pattern (an agent-definition file with zero inbound citations, a historical record, a companion-source PDF, an intentionally human-only orphan).
+   IMPROVE (count + one-liners; opt-in): the PD-1 decline notice (A) -- always emitted alongside a NOT-AUDITED verdict, never suppressed, its one-liner naming the auditor that should read the file; a structural move -- graduate to a skill (B), fold into a CLAUDE.md (C), move into an existing skill (D), a CRP split (E), flatten a chained reference (F), remove a back-reference (G), orphan-linking (H), collapse a skill-duplicating doc to a pointer (I) -- I carries a loss-free precondition (fold the doc's unique deltas into the skill BEFORE removal) that no auto-apply pass can satisfy, so it is opt-in, not FIX; README stranded-fact re-home (L), add a generation record (M); or a trim of TRUE content passing the one-line test.
+   SILENT (do NOT surface; no hedging): a do-nothing conclusion ("accept as-is -> PASS"); a validator detection artifact; an accepted structural pattern (an agent-definition file with zero inbound citations, a historical record, a companion-source PDF, an intentionally human-only orphan).
    SPECIAL = K only (escape hatch).
 
    Ambiguity rulings (apply when the disposition is unclear):
@@ -222,7 +222,7 @@ Steps:
    PASS / INFO / JUDGMENT findings that need no remediation get taxonomy "none" and bucket "NONE".
    For each FIX/SERIOUS/IMPROVE/SPECIAL finding write a concrete \`remediation\` (FIX = the edit it will apply; SERIOUS = the one-line top-of-report summary; IMPROVE = the single one-line pitch), with line refs.
 10.5. ATTRIBUTABILITY. ${reviewClause}
-11. Verdict: NON-COMPLIANT if ANY finding has severity FAIL; otherwise COMPLIANT. INFO/JUDGMENT never gate (maturation, orphan, and split-candidacy are all JUDGMENT — a useful-where-it-sits doc is COMPLIANT). Disposition is orthogonal to the verdict.
+11. Verdict: NOT-AUDITED if the PD-1 routing decline fired (the target is not a project document, so the criteria were never applied) — never COMPLIANT, which would assert a clean file nobody read. Otherwise NON-COMPLIANT if ANY finding has severity FAIL; otherwise COMPLIANT. INFO/JUDGMENT never gate (maturation, orphan, and split-candidacy are all JUDGMENT — a useful-where-it-sits doc is COMPLIANT). Disposition is orthogonal to the verdict.
 
 Idempotency matters: apply the fixed criteria and taxonomy deterministically. Do not invent findings; report only what the criteria actually surface. Return the structured object.`
 }
@@ -256,6 +256,13 @@ const isKept = (fnd) => !review || fnd.attributable !== false || fnd.bucket === 
 
 const results = raw.map((r) => {
   if (!review) return r
+  // A DECLINED file is never relabelled. When a lane judges the file outside its
+  // criteria's scope it never applied them, so neither verdict vocabulary is
+  // available -- and the routing finding explaining the decline must survive
+  // regardless of attributability, since it is the only record that nothing was
+  // read. Relabelling this DIFF-CLEAN is the fake gate: a caller reads "audited,
+  // no failure" where the truth is "declined, not my department".
+  if (r.verdict === 'NOT-AUDITED') return { ...r, suppressed: 0 }
   const kept = r.findings.filter(isKept)
   const suppressed = r.findings.length - kept.length
   // The lane's verdict is computed over ALL findings, so it cannot stand once we
@@ -282,11 +289,19 @@ const totals = results.reduce((acc, r) => {
   acc.suppressed += r.suppressed || 0
   if (r.verdict === 'NON-COMPLIANT') acc.nonCompliant++
   if (r.verdict === 'DIFF-CLEAN') acc.diffClean++
+  // Counted separately and never folded into diffClean -- a declined file is
+  // neither a pass nor a failure, and a gate must be able to tell it apart.
+  if (r.verdict === 'NOT-AUDITED') acc.notAudited++
   return acc
-}, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0, diffClean: 0, suppressed: 0 })
+}, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0, diffClean: 0, notAudited: 0, suppressed: 0 })
+
+// The declined count is stated OUTSIDE the pass/fail tallies and never omitted
+// when non-zero -- "N NOT-AUDITED" is the line that stops a reader inferring
+// coverage from a clean run.
+const declined = totals.notAudited ? `, ${totals.notAudited} NOT-AUDITED (declined as out of scope — re-run under the auditor named in each file's routing finding)` : ''
 
 log(review
-  ? `Reviewed ${results.length}/${input.files.length} project docs — ${totals.diffClean} DIFF-CLEAN, ${totals.nonCompliant} NON-COMPLIANT, ${totals.fail} attributable FAIL; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (${totals.suppressed} pre-existing finding(s) suppressed as not caused by this change; SILENT=${totals.silent} omitted)`
-  : `Audited ${results.length}/${input.files.length} project docs — ${totals.nonCompliant} NON-COMPLIANT, ${totals.fail} FAIL findings; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (SILENT=${totals.silent} omitted)`)
+  ? `Reviewed ${results.length}/${input.files.length} project docs — ${totals.diffClean} DIFF-CLEAN, ${totals.nonCompliant} NON-COMPLIANT${declined}, ${totals.fail} attributable FAIL; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (${totals.suppressed} pre-existing finding(s) suppressed as not caused by this change; SILENT=${totals.silent} omitted)`
+  : `Audited ${results.length}/${input.files.length} project docs — ${totals.nonCompliant} NON-COMPLIANT${declined}, ${totals.fail} FAIL findings; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (SILENT=${totals.silent} omitted)`)
 
 return { perFile: results, totals, review }

@@ -16,6 +16,13 @@ materialized to `<bundle_dir>/pre-images/<name>`. Claimed files still contribute
 to `unique_claude_mds` and the submit-gate scan. With no `--claim` the bundle is
 byte-identical to today's (no `claimed_files` key).
 
+A glob prefixed with `!` is an EXCLUSION and beats every positive pattern, so a
+caller can claim a broad shape while carving out a subset that no specialist
+actually reviews -- e.g. `--claim '**/*.md' --claim '!**/skills/*/references/*.md'`.
+Claiming a file removes it from the generic reviewers on the promise that a
+specialist reads it instead; where no specialist does, the exclusion is what keeps
+the file reviewed at all.
+
 Auto-detect resolution order:
     1. Mid-merge (MERGE_HEAD present)            -> review the in-progress merge
     2. Mid-rebase (rebase-merge/-apply present)  -> review the in-progress rebase

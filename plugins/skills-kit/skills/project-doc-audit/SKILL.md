@@ -120,8 +120,8 @@ audit_skill:
       name: "Selected target is actually a skill reference"
       keywords: ["skill reference", "wrong auditor", "references folder", "misrouted"]
       detection_signal: "discover.py classified the path `skill_reference` (it sits inside a `*/skills/*/references/` folder)."
-      default_remediation: "Skip the file in this audit and note it is covered by /md-audit skill (the SKILL.md that owns the references/ folder audits it transitively). No edit to the file -- a routing conclusion, not a finding against the doc."
-      bucket: "SILENT"
+      default_remediation: "Skip the file in this audit, return verdict NOT-AUDITED, and name the auditor that should read it (/md-audit skill, via the SKILL.md that owns the references/ folder). No edit to the file -- a routing conclusion, not a finding against the doc, but it MUST be surfaced: it is the caller's only signal that this audit read nothing."
+      bucket: "IMPROVE"
     - id: "B_graduate_to_skill"
       name: "Matured content should graduate to a skill"
       keywords: ["graduate", "skill type", "technique", "discipline", "reference skill", "capability", "maturation"]
@@ -294,7 +294,7 @@ audit_skill:
         ### Compliance verdict
 
         <P> PASS / <F> FAIL / <I> INFO / <J> JUDGMENT-REQUIRED
-        Verdict: COMPLIANT | NON-COMPLIANT
+        Verdict: COMPLIANT | NON-COMPLIANT | NOT-AUDITED
 
         ## Report (SERIOUS -> FIX -> IMPROVE; SILENT omitted, no hedging)
 
@@ -307,7 +307,7 @@ audit_skill:
         ### IMPROVE -- Audit found <N> improvement opportunit(ies). Do you want to discuss them?
         - <criterion>: <one-line pitch>
       gotchas:
-        - "discover.py classifies skill-attached references (*/skills/*/references/*.md) as `skill_reference` and CLAUDE.md/SKILL.md as `other_claude_artifact`. The audit only evaluates `project_doc`; a selected non-project-doc target produces a single A_misclassified_skill_ref INFO routing it to the right auditor."
+        - "discover.py classifies skill-attached references (*/skills/*/references/*.md) as `skill_reference` and CLAUDE.md/SKILL.md as `other_claude_artifact`. The audit only evaluates `project_doc`; a selected non-project-doc target produces a single A_misclassified_skill_ref INFO routing it to the right auditor, and the file's verdict is NOT-AUDITED -- never COMPLIANT or DIFF-CLEAN, which would report a pass for a file this audit declined to read."
         - "Orphan (H) is a JUDGMENT, never an auto-FAIL. A project doc can legitimately serve human readers outside the agent load graph (a published design record, a runbook a person opens). The audit surfaces the orphan; the user decides whether to add a pointer, retire it, or accept it."
         - "Maturation (B/C/D) findings are advisory -- a project doc doing useful work where it sits is COMPLIANT. Never FAIL a doc for not yet being a skill; a skill is NOT the default mature home. Route by TRIGGER SHAPE (cohesion-principles placement_follows_trigger_shape): task-shaped (a verb) -> skill (B); location-shaped (scoped to a directory) -> directory CLAUDE.md reference (C, the PREFERRED home for directory-scoped knowledge, since a CLAUDE.md auto-loads when files beneath it are touched); existing-skill-owns -> that skill's references/ (D). Do NOT pitch skill-graduation for location-scoped knowledge."
         - "Size is a SIGNAL (INFO/J), never a verdict. A large single-reading-task doc that passes CRP is correct; only escalate to E_crp_split when a CRP-passing decomposition genuinely exists."
@@ -332,7 +332,7 @@ audit_skill:
   # mechanical convention checks N-S are FIX. I dedup is IMPROVE, not FIX: its
   # loss-free precondition (fold the doc's unique deltas into the skill BEFORE
   # removal) is a judgment no auto-apply pass can satisfy. discuss = SERIOUS
-  # (never auto) + IMPROVE (opt-in) + SILENT-default (A routing) categories,
+  # (never auto) + IMPROVE (opt-in) categories,
   # disposition noted per entry. special = K. The final per-finding disposition
   # is assigned instance-level by the detect.js classifier.
   remediations:
@@ -357,7 +357,7 @@ audit_skill:
         agent_template: "Background agent receives the subject line + the verbatim ancestor rule quote + the ancestor source path; applies the convention-satisfying edit, or escalates a real-world-problem violation to the SERIOUS surface."
     discuss:
       - category: "A_misclassified_skill_ref"
-        procedure: "[SILENT] Note the file is a skill reference and is audited via /md-audit skill (its owning SKILL.md). Skip it here; no edit. A routing conclusion, not surfaced as a finding against the doc (mention only in the operational skipped-files line)."
+        procedure: "[IMPROVE] Note the file is a skill reference and is audited via /md-audit skill (its owning SKILL.md). Skip it here; no edit. The file's verdict is NOT-AUDITED, and this one-liner rides alongside it naming the correct auditor -- never suppressed, because a declined file with no visible note and a passing verdict is indistinguishable from an audited one."
       - category: "B_graduate_to_skill"
         procedure: "[IMPROVE] Recommend ONLY when the trigger is TASK-shaped (a verb the session performs). Propose the skill type + task trigger and whether content becomes SKILL.md body or references/. Hand the actual authoring to /md-authoring skill. One-line pitch; user opts in. If the trigger is location-shaped, recommend C instead."
       - category: "C_fold_into_claude_md"
@@ -458,10 +458,11 @@ Attributability is judgment, not arithmetic -- it rests on re-detection, so a pr
 
 ## Decision rules
 
+- **PD-1 declined the file** (it is not a project doc, so the criteria never ran) -> file is `NOT-AUDITED`, in BOTH modes. This rule is checked FIRST and overrides the rest: a verdict is a claim about criteria that were applied, and none were. NOT-AUDITED is not a passing verdict and is never folded into the COMPLIANT / DIFF-CLEAN counts -- a caller gating on those must be able to tell "clean" from "nobody read it".
 - Any FAIL finding -> file is NON-COMPLIANT.
 - Only PASS / INFO / JUDGMENT findings -> file is COMPLIANT.
 - INFO and JUDGMENT findings are advisory; they do not escalate to FAIL on subsequent runs even if unaddressed.
-- **Review mode:** any *attributable* FAIL -> NON-COMPLIANT; otherwise DIFF-CLEAN. Non-attributable FAILs do not gate -- they predate the change -- but a non-attributable SERIOUS is still reported above the verdict.
+- **Review mode:** any *attributable* FAIL -> NON-COMPLIANT; otherwise DIFF-CLEAN. Non-attributable FAILs do not gate -- they predate the change -- but a non-attributable SERIOUS is still reported above the verdict. A NOT-AUDITED file skips the attributability filter entirely: its routing finding survives regardless, since it is the record that nothing was read.
 
 ## Cross-references
 

@@ -28,6 +28,8 @@ Project references are the **escape-hatch / nursery** for still-emerging content
 
 **Severity:** INFO (a routing note, not a defect in the file).
 
+**Verdict:** `NOT-AUDITED` -- never `COMPLIANT`. Skipping the rest of the criteria means this audit never read the file, so it cannot report a passing verdict; a caller gating on one would read "audited, clean" where the truth is "declined, not my department". The routing finding carries bucket IMPROVE (not SILENT) so the decline is visible next to the verdict, and its `remediation` names the auditor that should read the file.
+
 ### PD-2. Content earns its place as a project doc (maturation)
 
 **Rule:** if the doc's content has stabilized past the nursery stage, route it to its trigger-appropriate mature home. Match the home to the natural TRIGGER SHAPE (not "always a skill"):

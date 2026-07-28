@@ -3,12 +3,31 @@
 When skills-kit's md-audit skill is available in the session, `git-code-review` treats it
 as the SUBJECT-lens reviewer for EVERY changed Markdown file -- `**/*.md`, which is CLAUDE.md,
 SKILL.md, and generic project docs alike (`.md.html` Markdeep files are NOT `.md` and stay with
-the generic reviewers). Those files are CLAIMED out of the generic reviewer fan-out
-(prepare_review.py's `--claim '**/*.md'` flag) and audited by skills-kit's headless `detect.js`
+the generic reviewers) -- with ONE carve-out: a skill's `references/*.md` is deliberately NOT
+claimed. Those files are CLAIMED out of the generic reviewer fan-out
+(prepare_review.py's `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` flags) and audited
+by skills-kit's headless `detect.js`
 Workflow instead; its findings render as a separate labeled section. When md-audit is ABSENT the
 mechanism degrades silently -- no `--claim`, no claimed files, the md files get the ordinary thin
 data_only coverage. This doc is the operational detail behind step 6 (launch) and step 9 (render);
 the SKILL body carries the decision flow.
+
+## Why skill references are carved out
+
+Reproduced 2026-07-28. A changed `plugins/bootstrap/skills/bootstrap/references/engine-internals.md`
+was claimed and routed by basename to project-doc-audit ("every other `.md`"), whose criteria
+explicitly exclude anything inside a skills tree. It declined the file and returned a passing
+verdict. Taking its advice and dispatching skill-audit on the owning SKILL.md does not help either:
+that member audits the SKILL.md's contract, schema and load graph, never the reference's prose.
+
+So **no member of the matrix reads a skill reference's content** -- and claiming the file removed
+the reviewers that would have. An opus generic reviewer given the same diff found five real defects
+(a renamed heading that broke six citing files, a self-contradicting paragraph, an overstated claim,
+temporal deixis, non-ASCII lines), none reachable by either audit member.
+
+The `!**/skills/*/references/*.md` exclusion returns that shape to the generic reviewers. Do not
+remove it to "simplify the claim" -- doing so restores the fake gate. If a member ever gains real
+skill-reference-prose criteria, drop the exclusion in the SAME change that ships those criteria.
 
 ## When it runs
 
@@ -129,11 +148,20 @@ For a **generic project doc** (any other claimed `.md`; project-doc-audit `files
 ## Consuming the result
 
 Each Workflow returns `{ perFile, totals, review }`. `perFile[i]` carries `verdict`
-(`DIFF-CLEAN` = the change introduced no failure, or `NON-COMPLIANT`), and `findings[]` each with
+(`DIFF-CLEAN` = the change introduced no failure; `NON-COMPLIANT`; or `NOT-AUDITED` = the member
+DECLINED the file as outside its criteria and read nothing -- `totals.notAudited` counts these apart
+from `totals.diffClean`), and `findings[]` each with
 `severity`, `bucket`, `group`, `taxonomy`, `attributable`, `message`, `remediation`. Render these
 in the SKILL's step-9 `## md-audit (subject-lens) findings` section -- separate from the
 code-review issues, one decision pass over both. Accepted remediations are applied as normal edits
 after decisions. See the step-9 action for the ruleset self-reference notice.
+
+A `NOT-AUDITED` file gets its own rendered line saying it was NOT reviewed, naming the auditor its
+routing finding points at. Never present it as a result, never count it clean, and never let it
+satisfy a submit gate -- the same rule the `## Mechanical checks (audit skipped)` section follows.
+On a correctly-configured run it should not appear at all: the claim carve-out above keeps the one
+shape that provoked it out of the claim, so a NOT-AUDITED verdict means the routing sent a file to a
+member that cannot audit it. Report that, rather than accepting the verdict.
 
 Scope: this integration is hardcoded to skills-kit's md-audit (claude-md-audit + skill-audit +
 project-doc-audit members). It targets skills-kit's 0.32.0 contract (the release that brought

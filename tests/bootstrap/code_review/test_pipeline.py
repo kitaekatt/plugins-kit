@@ -366,6 +366,66 @@ class TestMatchesClaim:
         assert matches_claim("a/foo.cpp", g) is False
 
 
+class TestClaimExclusions:
+    """`!pattern` carve-outs.
+
+    Motivating defect (2026-07-28): git-kit claimed every changed `.md`, which
+    pulled a skill's `references/*.md` away from the generic reviewers and handed
+    it to project-doc-audit -- an auditor whose criteria exclude anything inside a
+    skills tree. No member of the md-audit matrix reads that file's prose, so
+    claiming it removed its only real review. Without negation the claim could not
+    express "every `.md` EXCEPT skill references".
+    """
+
+    SKILL_REFS = ["**/*.md", "!**/skills/*/references/*.md"]
+
+    def test_excluded_shape_is_not_claimed(self):
+        g = self.SKILL_REFS
+        assert matches_claim("plugins/bootstrap/skills/bootstrap/references/engine-internals.md", g) is False
+        assert matches_claim("plugins/git-kit/skills/git-code-review/references/md-audit-review.md", g) is False
+
+    def test_everything_else_still_claimed(self):
+        g = self.SKILL_REFS
+        assert matches_claim("CLAUDE.md", g) is True
+        assert matches_claim("plugins/skills-kit/skills/md-audit/SKILL.md", g) is True
+        assert matches_claim("docs/design/notes.md", g) is True
+        # A skill's OWN docs that are not references stay claimed.
+        assert matches_claim("plugins/x/skills/y/SKILL.md", g) is True
+
+    def test_exclusion_matches_at_the_root_too(self):
+        # `**/` means "at any depth INCLUDING the root" -- a multi-segment tail
+        # must honour that too, or a repo whose skills/ sits at the top level
+        # silently keeps the fake gate.
+        g = self.SKILL_REFS
+        assert matches_claim("skills/foo/references/bar.md", g) is False
+
+    def test_exclusion_wins_regardless_of_order(self):
+        f = "a/skills/s/references/r.md"
+        assert matches_claim(f, ["**/*.md", "!**/skills/*/references/*.md"]) is False
+        assert matches_claim(f, ["!**/skills/*/references/*.md", "**/*.md"]) is False
+
+    def test_exclusion_beats_an_exact_positive(self):
+        # No positive pattern can re-claim an excluded file, however specific.
+        g = ["a/skills/s/references/r.md", "!**/skills/*/references/*.md"]
+        assert matches_claim("a/skills/s/references/r.md", g) is False
+
+    def test_only_exclusions_claims_nothing(self):
+        assert matches_claim("a/b.md", ["!**/*.md"]) is False
+        assert matches_claim("a/b.cpp", ["!**/*.md"]) is False
+
+    def test_exclusions_apply_to_depot_paths(self):
+        # Shared lib: p4-kit passes depot paths, not repo-relative paths.
+        g = self.SKILL_REFS
+        assert matches_claim("//depot/proj/skills/s/references/r.md", g) is False
+        assert matches_claim("//depot/proj/Docs/Design.md", g) is True
+
+    def test_positive_only_lists_are_unchanged(self):
+        # Regression guard for existing callers: no `!` means the old behavior.
+        assert matches_claim("a/skills/s/references/r.md", ["**/*.md"]) is True
+        assert matches_claim("a/CLAUDE.md", ["**/CLAUDE.md"]) is True
+        assert matches_claim("src/x.py", ["src/*.py"]) is True
+
+
 class TestPreimageRelpath:
     def test_under_pre_images_dir(self):
         rel = preimage_relpath("a/b/CLAUDE.md")

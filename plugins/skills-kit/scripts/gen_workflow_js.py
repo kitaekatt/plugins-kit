@@ -480,6 +480,13 @@ const isKept = (fnd) => !review || fnd.attributable !== false || fnd.bucket === 
 
 const results = raw.map((r) => {
   if (!review) return r
+  // A DECLINED file is never relabelled. When a lane judges the file outside its
+  // criteria's scope it never applied them, so neither verdict vocabulary is
+  // available -- and the routing finding explaining the decline must survive
+  // regardless of attributability, since it is the only record that nothing was
+  // read. Relabelling this DIFF-CLEAN is the fake gate: a caller reads "audited,
+  // no failure" where the truth is "declined, not my department".
+  if (r.verdict === 'NOT-AUDITED') return { ...r, suppressed: 0 }
   const kept = r.findings.filter(isKept)
   const suppressed = r.findings.length - kept.length
   // The lane's verdict is computed over ALL findings, so it cannot stand once we
@@ -506,8 +513,11 @@ const totals = results.reduce((acc, r) => {
   acc.suppressed += r.suppressed || 0
   if (r.verdict === 'NON-COMPLIANT') acc.nonCompliant++
   if (r.verdict === 'DIFF-CLEAN') acc.diffClean++
+  // Counted separately and never folded into diffClean -- a declined file is
+  // neither a pass nor a failure, and a gate must be able to tell it apart.
+  if (r.verdict === 'NOT-AUDITED') acc.notAudited++
   return acc
-}, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0, diffClean: 0, suppressed: 0 })
+}, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0, diffClean: 0, notAudited: 0, suppressed: 0 })
 """
 
 SHARED_CHUNK_TARGETS = {

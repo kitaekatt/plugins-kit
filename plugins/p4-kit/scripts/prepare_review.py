@@ -123,6 +123,11 @@ pre-image materialized to `<bundle_dir>/pre-images/<name>`. Claimed files still
 contribute to `unique_claude_mds` and the submit-gate scan. With no `--claim`
 the bundle is byte-identical to today's (no `claimed_files` key).
 
+A glob prefixed with `!` is an EXCLUSION and beats every positive pattern, so a
+caller can claim a broad shape while carving out a subset that no specialist
+actually reviews -- e.g. `--claim '**/*.md' --claim '!**/skills/*/references/*.md'`.
+Exclusions match depot paths the same way positives do.
+
 Modes:
 - `prepare_review.py <CL>` -- gather context, emit bundle JSON on stdout.
 - `prepare_review.py --cleanup <bundle_dir>` -- read bundle.json, and if
