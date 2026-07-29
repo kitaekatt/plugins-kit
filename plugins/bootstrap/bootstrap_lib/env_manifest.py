@@ -38,6 +38,7 @@ import hashlib
 import json
 import os
 import socket
+import time
 
 from .manifest_merge import merge_env_manifests
 from .stamps import global_stamp
@@ -46,6 +47,12 @@ from .stamps import global_stamp
 # scripts/env-reset-cooldown.sh (shared name convention, like the cooldown's
 # bash/Python path convention in stamps.py).
 ENV_STATE_STAMP = "env_state.json"
+
+# Periodic re-check TTL: a clean, unchanged pass reopens the gate once the
+# stamp is older than this. Bounds the out-of-band-drift window (remote repo
+# drift seen by env_checks like repo-sync, hand-edited rc lines) that the
+# hash/result/version triggers can never observe.
+ENV_STATE_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -321,14 +328,16 @@ def read_env_state(data_dir):
     return state
 
 
-def env_gate_reason(state, manifest_hash, engine_version):
+def env_gate_reason(state, manifest_hash, engine_version, stamp_age=None):
     """Why the env phase must run this pass, or ``None`` to skip.
 
     The phase RUNS iff any of (spec 4.4): no stamp (first run, which an
     explicit reset recreates by deleting the stamp); the merged-manifest
     hash changed; the last result was not clean (any failure -- including
     needs_elevation -- re-runs the phase every session until green); the
-    engine version changed (new features may reinterpret entries).
+    engine version changed (new features may reinterpret entries); or the
+    stamp is older than ENV_STATE_MAX_AGE_SECONDS (``stamp_age`` in seconds,
+    from :func:`env_state_age`; ``None`` disables the age trigger).
     """
     if state is None:
         return "first run (no env stamp)"
@@ -341,7 +350,18 @@ def env_gate_reason(state, manifest_hash, engine_version):
             f"engine updated "
             f"({state.get('engine_version')} -> {engine_version})"
         )
+    if stamp_age is not None and stamp_age >= ENV_STATE_MAX_AGE_SECONDS:
+        return f"periodic re-check (last pass {stamp_age / 3600:.0f}h ago)"
     return None
+
+
+def env_state_age(data_dir):
+    """Seconds since the env stamp was last written, or ``None`` when the
+    stamp is missing/unreadable (those states already reopen the gate)."""
+    mtime = global_stamp(data_dir, ENV_STATE_STAMP).mtime()
+    if mtime is None:
+        return None
+    return max(0.0, time.time() - mtime)
 
 
 def write_env_state(data_dir, manifest_hash, engine_version, result):
