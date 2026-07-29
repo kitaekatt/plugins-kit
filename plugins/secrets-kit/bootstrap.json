@@ -1,0 +1,30 @@
+{
+  "tools": [
+    {
+      "name": "age",
+      "install": {
+        "windows": { "scoop": "main/age" },
+        "macos": { "brew": "age" },
+        "ubuntu": { "apt": "age" }
+      }
+    },
+    {
+      "name": "age-keygen",
+      "install": {
+        "windows": { "scoop": "main/age" },
+        "macos": { "brew": "age" },
+        "ubuntu": { "apt": "age" }
+      }
+    }
+  ],
+  "service": {
+    "name": "secrets",
+    "default": "unknown",
+    "requires": [],
+    "description": "Decrypt fleet secrets from the declared repo onto this machine"
+  },
+  "script": {
+    "path": "custom_bootstrap.py",
+    "entry_point": "bootstrap"
+  }
+}

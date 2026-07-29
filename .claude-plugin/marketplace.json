@@ -175,6 +175,19 @@
       ]
     },
     {
+      "name": "secrets-kit",
+      "description": "Fleet secrets provisioning: materialize age-encrypted credentials from a private repo onto each machine, declaratively. One passphrase-protected identity per fleet, unlocked once per machine; blobs encrypt to the public key so adding or rotating a secret never needs the passphrase. Session-start convergence + CLI.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Christina"
+      },
+      "source": "./plugins/secrets-kit",
+      "category": "development",
+      "dependencies": [
+        "bootstrap"
+      ]
+    },
+    {
       "name": "agent-glue",
       "description": "Lightweight graph-orchestration kit for pipelines that interleave LLM inference, deterministic logic, and config-driven rules. Typed contracts at every boundary; discriminated-union dispatch; on-disk cohorts for replay-based testing. MVC layering with an ECS data model expressed in yaml primitives.",
       "version": "0.2.0",
