@@ -10,10 +10,13 @@ Single entry point ``bootstrap(ctx)`` runs at session start and:
 2. If the key is missing, autodetects it from legacy locations (the env var
    itself, and loc-ops's ``<project>/.local-data/loc/.env``). When a legacy
    key is found, it is migrated into the canonical user-scoped .env.
-3. If still missing, registers a fix-all failure so Claude prompts the user
-   to obtain a key from openrouter.ai/keys and run ``llm-scripting-kit set-key``.
+3. If still missing, records a DEFERRED REQUIREMENT -- never a fix-all entry.
+   An OpenRouter key is a precondition only some sessions need, so bootstrap
+   does not ask for it at session start; the skill that needs the key
+   preflights and asks at the point of need. See the bootstrap skill's
+   deferred-requirement pattern.
 4. If present, validates the key against ``GET /auth/key``. Failures (401,
-   402) become fix-all entries with specific remediation. Successful checks
+   402) are deferred the same way, with specific remediation. Successful checks
    are content-hashed into ``last_validated.sha256`` (hash + validation
    timestamp) so subsequent sessions skip the network round-trip when the
    key has not changed -- but only for ~7 days, so revocation or credit
@@ -57,6 +60,29 @@ _REVALIDATE_AFTER_SECONDS = 7 * 24 * 60 * 60  # ~7 days
 # directory is moved once, on the first 0.5.0 session. Resolved relative to
 # USER_ENV_FILE so the old and new dirs are always siblings.
 _LEGACY_DATA_DIR_NAME = "openrouter-kit"
+
+
+def _defer(ctx: Any, *, user_msg: str, agent_msg: str) -> None:
+    """Record the credential requirement without escalating it.
+
+    An OpenRouter key is a precondition only SOME sessions need -- most never
+    call the API at all -- so bootstrap does not ask for it. It records the
+    requirement and the skill that needs the key asks at the point of need
+    (see the bootstrap skill's deferred-requirement pattern).
+
+    Guarded on the engine actually providing the API: on a bootstrap older
+    than 0.71.0 the requirement is simply logged. Falling back to add_failure
+    there would resurrect the session-start nag this exists to remove.
+    """
+    defer = getattr(ctx, "add_deferred_requirement", None)
+    if defer is None:
+        return
+    defer(
+        "openrouter_credential",
+        user_msg=user_msg,
+        agent_msg=agent_msg,
+        satisfied_by="llm-scripting-kit set-key",
+    )
 
 
 def _migrate_legacy_data_dir(ctx: Any) -> None:
@@ -103,14 +129,13 @@ def bootstrap(ctx: Any) -> None:
         if migrated:
             lookup = get_api_key(project_root)
 
-    # 3. Still missing -> fix-all entry.
+    # 3. Still missing -> deferred requirement, NOT a fix-all entry.
     if lookup.key is None:
-        ctx.add_failure(
-            "openrouter_credential",
-            field=API_KEY_ENV,
+        _defer(
+            ctx,
             user_msg=(
-                "llm-scripting-kit needs an OpenRouter API key. Ask Claude to "
-                "'fix-all' and Claude will walk you through it."
+                "llm-scripting-kit has no OpenRouter API key yet. Nothing to do "
+                "until you run something that calls the API -- it will ask then."
             ),
             agent_msg=(
                 "llm-scripting-kit needs an OpenRouter API key. Give the user "
@@ -133,7 +158,9 @@ def bootstrap(ctx: Any) -> None:
                 "bang-prefixed form."
             ),
         )
-        ctx.log("openrouter: no API key found")
+        # log_ok, not log: a missing key is the expected state on a machine
+        # that has never called the API, so it belongs in verbose output only.
+        ctx.log_ok("openrouter: no API key (deferred until a capability needs it)")
         return
 
     # 4. Have a key. Validate against /auth/key, with content-hash caching.
@@ -168,9 +195,8 @@ def bootstrap(ctx: Any) -> None:
         return
 
     if status.failure_reason == "auth":
-        ctx.add_failure(
-            "openrouter_credential",
-            field=API_KEY_ENV,
+        _defer(
+            ctx,
             user_msg=(
                 "Your OpenRouter API key was rejected (HTTP 401). "
                 "Generate a new one at https://openrouter.ai/keys and run "
@@ -182,13 +208,12 @@ def bootstrap(ctx: Any) -> None:
                 f"https://openrouter.ai/keys and run `llm-scripting-kit set-key`."
             ),
         )
-        ctx.log("openrouter: key REJECTED (HTTP 401)")
+        ctx.log_ok("openrouter: key REJECTED (HTTP 401) -- deferred to point of use")
         return
 
     if status.failure_reason == "no_credit":
-        ctx.add_failure(
-            "openrouter_credential",
-            field=API_KEY_ENV,
+        _defer(
+            ctx,
             user_msg=(
                 "Your OpenRouter account is out of credit (HTTP 402). "
                 "Add credit at https://openrouter.ai/credits."
@@ -199,7 +224,7 @@ def bootstrap(ctx: Any) -> None:
                 "add credit at https://openrouter.ai/credits."
             ),
         )
-        ctx.log("openrouter: account OUT OF CREDIT (HTTP 402)")
+        ctx.log_ok("openrouter: account OUT OF CREDIT (HTTP 402) -- deferred to point of use")
         return
 
 

@@ -20,6 +20,7 @@ technique_skill:
   identity: Manage the shared OpenRouter API credential other plugins depend on -- verify, set, rotate, and diagnose 401/402 -- via the llm-scripting-kit CLI.
   scope:
     covers:
+      - preflighting the credential on behalf of a capability that is about to call OpenRouter
       - verifying whether the OpenRouter key is set and valid
       - setting or rotating the user-scoped key
       - diagnosing HTTP 401 (rejected key) vs 402 (no account balance)
@@ -29,6 +30,22 @@ technique_skill:
       - managing Anthropic / OpenAI / other providers' credentials
       - inspecting or modifying the bootstrap engine
   techniques:
+    - id: preflight-openrouter-credential
+      name: Preflight the credential at the point of need
+      keywords: [preflight, deferred requirement, no key yet, about to call openrouter, ask for key, point of need, first API call]
+      goal: Get the key in place at the moment a capability actually needs it -- bootstrap deliberately does not ask at session start.
+      steps:
+        - n: 1
+          action: Run `llm-scripting-kit status` BEFORE the work that calls OpenRouter. Exit 0 means proceed; do not ask the user anything.
+        - n: 2
+          action: "On non-zero, read the recorded ask from `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/deferred_requirements.json` and present the entry's `agent_msg` VERBATIM. It is the authored copy of the ask; do not paraphrase it."
+          on_failure: If the file is absent (bootstrap not installed, or never ran), fall back to the two options in the Common scenarios section below -- same content, same order.
+        - n: 3
+          action: Set the key per the user's choice (they run `! llm-scripting-kit set-key`, or you run `llm-scripting-kit set-key --key <KEY>` if they pasted it), then retry the original action. No restart is needed.
+      gotchas:
+        - Preflight inside the action that needs the key, never at skill load -- every other action in a consuming skill must keep working without a key.
+        - A declined key is not settled for the rest of the session. Re-ask on the next genuine need.
+        - Do not tell the user to run `fix-all` for this. Bootstrap records the credential as a DEFERRED REQUIREMENT and raises no fix-all entry for it by design; see the bootstrap skill's deferred-requirements reference.
     - id: manage-openrouter-key
       name: Verify, set, or rotate the OpenRouter credential
       keywords: [openrouter key, api key, set-key, rotate credential, 401 402, status check]
@@ -57,7 +74,7 @@ technique_skill:
 
 - The user wants to check whether their OpenRouter key is set up and working.
 - The user wants to set or rotate the key.
-- A bootstrap fix-all entry says `openrouter_credential` is missing or rejected.
+- A capability is about to call OpenRouter and needs the key preflighted (the usual trigger -- bootstrap does not ask at session start).
 - A consumer (loc-ops, etc.) failed with HTTP 401 / 402 and the user needs to know whether the key or the account balance is the problem.
 
 Do NOT use for translating strings, choosing models, debugging chunk failures, or any other LLM work that happens *after* the key is verified -- that is the consumer's responsibility.
@@ -91,13 +108,20 @@ The script is stdlib-only; the shims call the standalone Python that bootstrap i
 
 **No key is set yet** -- run `set-key` and paste the key from <https://openrouter.ai/keys> at the prompt. The script validates against `/auth/key` before writing, so a typo never silently lands on disk. After it returns, `status` should show `OK` with the key's label.
 
+Bootstrap will NOT have prompted for this at session start -- an OpenRouter key is a deferred requirement, asked for only when something needs it. The two ways to set it, in preference order:
+
+> 1. (preferred -- key stays out of the transcript) The user types this in the prompt with the leading `!`:
+>      `! llm-scripting-kit set-key`
+>    It prompts with hidden input. Paste from <https://openrouter.ai/keys> (starts with `sk-or-v1-`).
+> 2. If they would rather paste the key in chat, Claude runs `llm-scripting-kit set-key --key <THE_KEY>`. WARNING: the key is then visible in the transcript.
+
 **Key was rejected (HTTP 401)** -- the key was revoked or rotated on the OpenRouter side. Generate a new one at <https://openrouter.ai/keys> and re-run `set-key`. Old key value is overwritten.
 
 **Account out of credit (HTTP 402)** -- the key is valid but the account has no balance. Top up at <https://openrouter.ai/credits>. The next bootstrap session-start automatically clears the cached `last_validated.sha256` once a successful `/auth/key` call happens, so no manual cache reset is needed.
 
 **Key loaded from the wrong place** -- run `which` to see which file Wins the precedence resolution (env var > project `.env` > user `.env`). If the user wants the user-scoped file to win but a project file is shadowing it, delete `<project>/.local-data/llm-scripting-kit/.env`.
 
-**Bootstrap plugin not installed** -- llm-scripting-kit declares a dependency on `plugins-kit:bootstrap`. If bootstrap isn't installed/enabled, the session-start credential check and fix-all flow won't fire, so a missing or rejected key won't surface automatically. The CLI still works (it self-heals to system Python), so just run `llm-scripting-kit status` and, if needed, `llm-scripting-kit set-key` manually. No hard stop -- this is advisory; installing/enabling bootstrap restores the automatic check on the next session.
+**Bootstrap plugin not installed** -- llm-scripting-kit declares a dependency on `plugins-kit:bootstrap`. If bootstrap isn't installed/enabled, the session-start credential check never runs, so `deferred_requirements.json` is absent and the preflight has no recorded statement to present. Nothing breaks: the CLI still works (it self-heals to system Python), so run `llm-scripting-kit status` and fall back to the two options above. Installing/enabling bootstrap restores the recorded diagnosis on the next session.
 
 ## What lives where
 
@@ -106,6 +130,7 @@ The script is stdlib-only; the shims call the standalone Python that bootstrap i
 | `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env` | Canonical user-scoped credential file. 0600 perms on Unix. |
 | `<project>/.local-data/llm-scripting-kit/.env` | Optional per-project override. Wins over the user file when present. |
 | `OPENROUTER_API_KEY` env var | Highest priority. Useful for CI / one-shot overrides. |
+| `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/deferred_requirements.json` | Bootstrap's recorded diagnosis when the key is missing/rejected, including the verbatim ask the preflight presents. Written each session-start pass and removed once the key validates. |
 | `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/last_validated.sha256` | Cache marker. Contains the SHA-256 of the last key that successfully validated, so subsequent sessions skip the network call when nothing changed. Safe to delete -- the next bootstrap re-validates. |
 
 ## What this skill does NOT do

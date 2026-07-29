@@ -34,7 +34,7 @@ class AccountCheckError(Exception):
 
     For credential-specific failures (401, 402), prefer reading
     ``AccountStatus.ok`` and ``AccountStatus.failure_reason`` -- the call
-    still returns a status object so the caller can render a fix-all hint.
+    still returns a status object so the caller can render a remediation hint.
     """
 
 

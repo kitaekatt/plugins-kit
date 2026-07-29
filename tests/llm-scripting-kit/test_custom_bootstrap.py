@@ -1,10 +1,13 @@
 """Tests for plugins/llm-scripting-kit/custom_bootstrap.py.
 
-Exercises the four bootstrap states:
-- key missing entirely  -> add_failure with set-key instructions
+Exercises the four bootstrap states. None of them escalates: an OpenRouter key
+is a precondition only some sessions need, so every unmet case is recorded as a
+DEFERRED REQUIREMENT for the point-of-need skill to act on, and ctx.failures
+stays empty throughout.
+- key missing entirely  -> add_deferred_requirement with set-key instructions
 - key present + valid   -> log success, write content-hash cache
-- key present + 401     -> add_failure with rotation hint
-- key present + 402     -> add_failure with credit hint
+- key present + 401     -> add_deferred_requirement with rotation hint
+- key present + 402     -> add_deferred_requirement with credit hint
 
 And the autodetect path: legacy loc-ops .env present -> migrated. Plus the
 0.5.0 user-data-dir rename (openrouter-kit -> llm-scripting-kit).
@@ -27,11 +30,15 @@ class FakeContext:
         self.data_dir = str(data_dir)
         self.project_dir = str(project_dir)
         self.failures = []
+        self.deferred = []
         self.actions = []
         self.oks = []
 
     def add_failure(self, failure_type, **kwargs):
         self.failures.append({"type": failure_type, **kwargs})
+
+    def add_deferred_requirement(self, name, **kwargs):
+        self.deferred.append({"name": name, **kwargs})
 
     def log(self, msg):
         self.actions.append(msg)
@@ -71,18 +78,37 @@ def _fail_status(reason):
 
 
 class TestBootstrapMissingKey:
-    def test_no_key_anywhere_emits_failure(self, env_setup):
+    def test_no_key_anywhere_defers_without_escalating(self, env_setup):
         ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
         cb.bootstrap(ctx)
-        assert len(ctx.failures) == 1
-        f = ctx.failures[0]
-        assert f["type"] == "openrouter_credential"
-        assert f["field"] == "OPENROUTER_API_KEY"
-        # The brief user_msg points at the fix-all flow; the detailed remediation
-        # (set-key + where to get a key) lives in the agent_msg.
-        assert "fix-all" in f["user_msg"]
-        assert "llm-scripting-kit set-key" in f["agent_msg"]
-        assert "openrouter.ai/keys" in f["agent_msg"]
+        # The load-bearing assertion: a missing key produces NO fix-all entry,
+        # so a session that never calls the API is never prompted about it.
+        assert ctx.failures == []
+        assert len(ctx.deferred) == 1
+        d = ctx.deferred[0]
+        assert d["name"] == "openrouter_credential"
+        assert d["satisfied_by"] == "llm-scripting-kit set-key"
+        # The brief user_msg says there is nothing to do yet; the detailed
+        # remediation (set-key + where to get a key) lives in the agent_msg,
+        # for the point-of-need skill to present verbatim.
+        assert "fix-all" not in d["user_msg"]
+        assert "llm-scripting-kit set-key" in d["agent_msg"]
+        assert "openrouter.ai/keys" in d["agent_msg"]
+
+    def test_missing_key_is_not_announced_to_the_user(self, env_setup):
+        """The expected state on a machine that never calls the API is quiet."""
+        ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
+        cb.bootstrap(ctx)
+        assert ctx.actions == []
+        assert any("deferred" in m for m in ctx.oks)
+
+    def test_old_engine_without_the_api_stays_silent(self, env_setup):
+        """A bootstrap predating add_deferred_requirement must not fall back to
+        add_failure -- that would resurrect the nag this change removes."""
+        ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
+        ctx.add_deferred_requirement = None  # engine lacks the API
+        cb.bootstrap(ctx)
+        assert ctx.failures == []
 
 
 def _write_cache_file(data_dir, key, epoch=None):
@@ -159,7 +185,8 @@ class TestValidationCacheExpiry:
             cb.bootstrap(ctx)
 
         mock_check.assert_called_once()
-        assert len(ctx.failures) == 1
+        assert ctx.failures == []
+        assert len(ctx.deferred) == 1
 
     def test_legacy_hash_only_cache_revalidates(self, env_setup):
         # Pre-W8 cache files carry no timestamp; treat them as stale, not fresh.
@@ -175,25 +202,30 @@ class TestValidationCacheExpiry:
 
 
 class TestBootstrapValidationFailures:
-    def test_401_emits_rotation_failure(self, env_setup):
+    def test_401_defers_rotation_hint(self, env_setup):
         write_env_file(env_setup["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-bad"})
         ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
 
         with patch.object(cb, "check_account", return_value=_fail_status("auth")):
             cb.bootstrap(ctx)
 
-        assert len(ctx.failures) == 1
-        assert "401" in ctx.failures[0]["user_msg"] or "rejected" in ctx.failures[0]["user_msg"].lower()
+        # A key that exists but is rejected is deferred too: it is still only
+        # the sessions that call the API that need to hear about it.
+        assert ctx.failures == []
+        assert len(ctx.deferred) == 1
+        msg = ctx.deferred[0]["user_msg"]
+        assert "401" in msg or "rejected" in msg.lower()
 
-    def test_402_emits_credit_failure(self, env_setup):
+    def test_402_defers_credit_hint(self, env_setup):
         write_env_file(env_setup["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-broke"})
         ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
 
         with patch.object(cb, "check_account", return_value=_fail_status("no_credit")):
             cb.bootstrap(ctx)
 
-        assert len(ctx.failures) == 1
-        assert "credit" in ctx.failures[0]["user_msg"].lower()
+        assert ctx.failures == []
+        assert len(ctx.deferred) == 1
+        assert "credit" in ctx.deferred[0]["user_msg"].lower()
 
     def test_network_error_does_not_block_bootstrap(self, env_setup):
         write_env_file(env_setup["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-ok"})

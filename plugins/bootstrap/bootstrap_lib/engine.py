@@ -5342,10 +5342,53 @@ def _run_script_phase(script_def, plugin_root, data_dir, config, action_entries,
             return []
 
         func(ctx)
+        # Persist unconditionally, including the empty case: an empty write is
+        # how a requirement that has since been satisfied stops being reported.
+        _write_deferred_requirements(data_dir, plugin_name, ctx.deferred)
         return ctx.failures
     except Exception as e:
         log_entries.append(f"{prefix}script: FAILED - {e}")
+        # Deliberately no deferred write here -- a script that raised part-way
+        # never finished deciding what it needs, so the previous pass's record
+        # is better evidence than a truncated one.
         return []
+
+
+DEFERRED_REQUIREMENTS_FILENAME = "deferred_requirements.json"
+
+
+def _write_deferred_requirements(data_dir, plugin_name, deferred):
+    """Publish a plugin's unmet deferred requirements to its data dir.
+
+    The file is the handoff between the pass that DETECTED the unmet
+    precondition and the action that later needs it: the point-of-need code
+    reads the prepared statement from here rather than carrying its own
+    paraphrase, so there is one authored copy of the ask.
+
+    Rewritten in full on every pass that runs the script, and REMOVED when the
+    plugin defers nothing -- that is what makes a requirement disappear once it
+    is satisfied, with no separate clear step to forget.
+    """
+    path = os.path.join(data_dir, DEFERRED_REQUIREMENTS_FILENAME)
+    if not deferred:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return
+    payload = {
+        "plugin": plugin_name,
+        "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "requirements": deferred,
+    }
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        _write_atomic(path, json.dumps(payload, indent=2) + "\n")
+    except OSError:
+        # Never let a bookkeeping write break the pass -- the requirement is
+        # deferred by definition, so failing to record it costs a prompt at
+        # the point of need, not correctness.
+        pass
 
 
 class _ScriptContext:
@@ -5362,6 +5405,7 @@ class _ScriptContext:
         # for .claude/ since Claude Code itself does not.
         self.project_dir = project_dir
         self.failures = []
+        self.deferred = []
         self._log_entries = log_entries
         self._ok_entries = ok_entries
         self._prefix = prefix
@@ -5377,6 +5421,32 @@ class _ScriptContext:
         failure = {"type": failure_type, "plugin": self._plugin_name}
         failure.update(kwargs)
         self.failures.append(failure)
+
+    def add_deferred_requirement(self, name: str, *, user_msg: str, agent_msg: str,
+                                 satisfied_by: str = None) -> None:
+        """Record an unmet precondition WITHOUT escalating it.
+
+        The counterpart to add_failure, for a requirement only SOME capability
+        needs. It produces no fix-all entry, no elevation task, and no
+        session-start prompt -- bootstrap does not ask. The action that needs
+        the requirement preflights, finds this record in the plugin's
+        deferred_requirements.json, and asks the user then, at the one moment
+        they have the context to decide.
+
+        Use it whenever a developer who never invokes the capability would not
+        notice the precondition was unmet: credentials, paid API access,
+        opt-in plugins, hardware-specific tooling. Use add_failure only for a
+        precondition the machine genuinely needs regardless of what the session
+        goes on to do.
+
+        ``satisfied_by`` names the command or action that resolves it, so the
+        point-of-need code can offer the fix without restating it.
+        """
+        requirement = {"name": name, "plugin": self._plugin_name,
+                       "user_msg": user_msg, "agent_msg": agent_msg}
+        if satisfied_by:
+            requirement["satisfied_by"] = satisfied_by
+        self.deferred.append(requirement)
 
     def log(self, message: str) -> None:
         """Add an action log entry. Always shown to the user."""

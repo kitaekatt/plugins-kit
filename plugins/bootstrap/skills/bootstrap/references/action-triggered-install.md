@@ -7,6 +7,12 @@ user at the moment of need.
 Audience: skill authors wiring an optional plugin dependency, and anyone reading
 a project `bootstrap.json` that lists a plugin nobody seems to install.
 
+This is the plugin-install INSTANCE of bootstrap's general deferred-requirement
+pattern -- detect early, ask late, at the point of need. The principle, the
+`ctx.add_deferred_requirement` API, and the escalate-vs-defer rule live in
+[deferred-requirements.md](deferred-requirements.md); this doc adds the
+mechanics specific to a missing plugin.
+
 ## Motivation
 
 The default way to express "this project needs plugin X" is a `plugins[]` entry

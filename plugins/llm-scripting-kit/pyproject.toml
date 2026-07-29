@@ -1,6 +1,6 @@
 [project]
 name = "llm-scripting-kit"
-version = "0.5.0"
+version = "0.6.0"
 description = "LLM key resolution, model registry, named OpenAI-compatible endpoints, and a completion seam (OpenRouter + local claude-cli backends) for Claude Code plugins"
 requires-python = ">=3.10"
 

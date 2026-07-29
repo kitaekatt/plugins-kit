@@ -194,6 +194,29 @@ reference_skill:
         - Never hand-edit the plugin cache, installed_plugins.json, or settings to force a version -- bootstrap/CC re-sync from the activated version and revert it (and "Never copy files directly into the plugin cache" per the repo CLAUDE.md). Set `autoUpdate` (or run `/plugin update`) and let the update path do it.
         - "`pin` forces `autoUpdate: false` while set (see marketplace_pinning) -- a pinned marketplace will not auto-update its plugins by design."
         - A project settings.json `extraKnownMarketplaces` entry only fires in sessions for THAT project, but it seeds the GLOBAL known_marketplaces.json -- so once any such session runs, that machine auto-updates the marketplace everywhere.
+    - id: deferred_requirements
+      summary: >-
+        A precondition only SOME capability needs is RECORDED, not escalated: `ctx.add_deferred_requirement`
+        writes it to the plugin's deferred_requirements.json and produces no fix-all entry, no elevation
+        task, and no session-start prompt. The action that needs it preflights, reads the recorded
+        prepared statement, and asks the user then.
+      keywords: [deferred requirement, add_deferred_requirement, defer until needed, do not escalate, no fix-all, point of need, ask late, credential prompt, API key nag, optional precondition, deferred_requirements.json, escalate vs defer, session-start noise]
+      detail: |
+        The rule: escalate a precondition only if a developer who never invokes the capability
+        would still notice it was unmet. Otherwise defer it. A missing build tool, a broken venv,
+        an unresolvable pin -> `add_failure`. A paid API credential, an opt-in specialty plugin,
+        a GPU-only SDK -> `add_deferred_requirement`.
+        Signature: `add_deferred_requirement(name, *, user_msg, agent_msg, satisfied_by=None)`.
+        The engine writes every record to `<plugin data dir>/deferred_requirements.json`, rewriting
+        it in full each pass and REMOVING it when the plugin defers nothing -- so a satisfied
+        requirement clears itself with no separate clear step. That file is the handoff: the
+        point-of-need code presents its `agent_msg` verbatim instead of carrying a paraphrase that
+        can drift. Full pattern and wiring: references/deferred-requirements.md.
+      gotchas:
+        - Log a deferred requirement with `log_ok`, never `log` -- it is the EXPECTED state on a machine that does not use the capability, so `log` puts the session-start nag back by a different door.
+        - "In a stdlib-only custom_bootstrap.py, guard the call: `getattr(ctx, \"add_deferred_requirement\", None)`. Fall back to SILENCE on an older engine, never to add_failure -- that fallback resurrects the prompt the deferral exists to remove."
+        - A script that raises part-way deliberately does NOT rewrite the record; the previous pass's is better evidence than a truncated one. Do not add a write to the exception path.
+        - Action-triggered plugin install (action_triggered_install) is the INSTANCE of this pattern where the missing precondition is a plugin -- not a separate mechanism.
     - id: action_triggered_install
       summary: >-
         Specialty plugins are declared with `install` set to `"manual"` and installed at the moment
@@ -287,6 +310,13 @@ reference_skill:
       path: references/remediation-reference.md
       keywords: [condition, remediation, check method, tool missing, venv broken, marketplace, plugin scope, fix-all, blocking, manual operation, pinned wrong commit, pin removed, unresolvable pin]
       summary: Per-condition remediation reference (incl. the marketplace pin conditions).
+    - id: deferred_requirements_ref
+      path: references/deferred-requirements.md
+      keywords: [deferred requirement, add_deferred_requirement, defer until needed, escalate vs defer, no fix-all, session-start nag, API key prompt, optional precondition, deferred_requirements.json, point of need, ask late, custom_bootstrap author guide]
+      summary: >-
+        The deferred-requirement pattern -- detect early, ask late. The escalate-vs-defer rule,
+        the ctx.add_deferred_requirement API and its on-disk record, how point-of-need code
+        consumes it, and the plugin-author wiring steps.
     - id: action_triggered_install_ref
       path: references/action-triggered-install.md
       keywords: [action-triggered install, opt-in by encountering need, install manual, specialty plugin, preflight, guarded import, shared lib path check, ask before install, claude plugin install, mid-session install no restart, skill requirement wiring, auto vs manual, optional dependency]
