@@ -63,6 +63,17 @@ technique_skill:
         Do NOT run `secrets-kit unlock`, `init`, or `rotate-identity` yourself.
         They need an interactive terminal you do not have; they will hang or
         fail. Only the user, via the `!` bang prefix, can run them.
+    - id: never_bypass_the_guard
+      rule: >-
+        NEVER use `git commit --no-verify` in a fleet-secrets clone, and never
+        remove or edit `.git/hooks/pre-commit` there to get a commit through.
+        The guard is an allowlist that refuses anything but manifest.json,
+        identity.age, blobs/*.age, and a README/.gitignore/.gitattributes.
+      instead: >-
+        If a secret is being refused, encrypt it (`secrets-kit add`) instead of
+        committing it. If a legitimate NON-secret file is refused, widen the
+        allowlist in secrets-kit's canonical hook so every clone agrees --
+        a local edit fixes one machine and silently leaves the rest strict.
     - id: deleting_a_blob_is_not_revocation
       rule: >-
         Removing an entry, or rotating the identity, does not un-read the past.
@@ -111,10 +122,11 @@ technique_skill:
             the agent to run.
         - n: 2
           action: >-
-            PREREQ, non-negotiable: land a pre-commit guard on the repo that
-            refuses to commit unencrypted material, BEFORE any plaintext-adjacent
-            operation. Git history is permanent; a single plaintext push cannot
-            be cleanly undone.
+            The pre-commit guard is AUTOMATIC -- every authoring verb installs
+            it before it writes, and refuses to proceed on an unguarded clone.
+            You do not need to install it by hand. Confirm it landed
+            (`.git/hooks/pre-commit` in the clone carries a
+            `secrets-kit-guard-version` marker) and move on.
         - n: 3
           action: >-
             Have the user run `! secrets-kit init`. They choose the passphrase
@@ -181,6 +193,31 @@ technique_skill:
       why_it_is_wrong: "An API key is one revocable service credential; this is the master key to every credential in the fleet. The transcript is a file on disk, so pasting it there is permanent exposure of the root of trust."
       alternative: "Relay `! secrets-kit unlock`. There is no second option, deliberately."
 ```
+
+## The pre-commit guard
+
+Every authoring verb calls `guard.require_guard()` before it writes: it installs
+`.git/hooks/pre-commit` into the clone (idempotently, upgrading an older
+version) and **refuses to proceed if the clone ends up unguarded**. There is no
+"remember to set this up" step, because `.git/hooks` is untracked -- the guard
+cannot ship inside the secrets repo and so has to be established locally on
+every machine, every time.
+
+It is an **allowlist**: only `manifest.json`, `identity.age`, `blobs/*.age`, and
+`README.md` / `.gitignore` / `.gitattributes` may be committed, blobs and the
+identity must be real age ciphertext, and an unwrapped `AGE-SECRET-KEY-` is
+refused anywhere including inside otherwise-allowed files. A denylist would have
+to anticipate every shape a secret can take and would lose to the first one it
+did not; this fails closed, so the worst case is an annoyed human.
+
+It inspects the **index**, not the working tree -- otherwise staging plaintext
+and then tidying the worktree would sail straight through.
+
+A seeded repo also gets a deny-by-default `.gitignore`, so the careless
+`git add -A` never even stages a stray plaintext file. Two independent nets,
+because what they prevent cannot be undone: a plaintext credential pushed once
+survives in the object store, in every clone, and in any fork or backup taken
+meanwhile. Rewriting history does not fix it -- rotating the credential does.
 
 ## Where things live
 

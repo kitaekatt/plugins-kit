@@ -76,6 +76,12 @@ did:
 - **Two outcomes only.** Every failure is AUTO (an agent can fix it now) or ASK
   (only the user can supply it). There is no warning tier; a warning about a
   credential is a failure nobody acted on.
+- **An allowlist pre-commit guard, installed automatically.** Authoring verbs
+  install `.git/hooks/pre-commit` into the clone and refuse to write to an
+  unguarded repo. Only the manifest, the wrapped identity, and age-ciphertext
+  blobs may be committed; the guard reads the index rather than the worktree,
+  and rejects an unwrapped `AGE-SECRET-KEY-` anywhere. It is copied, not
+  sourced, because the plugin's cache path moves on every version bump.
 - **Written against the bootstrap service-provider seam** from day one
   (`service` block in `bootstrap.json`, `bootstrap(ctx)` entry point touching
   only the documented ctx surface, all logic in `lib/secrets_kit/`), so folding

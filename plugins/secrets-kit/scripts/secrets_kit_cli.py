@@ -22,6 +22,7 @@ sys.path.insert(0, str(_PLUGIN_ROOT / "lib"))
 
 from secrets_kit import SecretsError  # noqa: E402
 from secrets_kit import agefile  # noqa: E402
+from secrets_kit import guard  # noqa: E402
 from secrets_kit import repo as repo_mod  # noqa: E402
 from secrets_kit.converge import converge, paths_for  # noqa: E402
 from secrets_kit.manifest import Config, Manifest  # noqa: E402
@@ -64,6 +65,21 @@ def _ensure_clone(config: Config) -> Path:
     if not repo_mod.is_clone(clone):
         print(f"cloning {config.repo} ...")
         repo_mod.clone(config.repo, clone)
+    return clone
+
+
+def _ensure_guarded(config: Config) -> Path:
+    """Clone if needed, then guarantee the pre-commit guard before any write.
+
+    Every authoring verb goes through here rather than ``_ensure_clone``. The
+    guard is per-clone (``.git/hooks`` is untracked), so "the repo is guarded"
+    is not something a machine can inherit -- it has to be established locally,
+    every time, before we hand git anything to record permanently.
+    """
+    clone = _ensure_clone(config)
+    note = guard.require_guard(clone)
+    if note:
+        print(f"pre-commit guard: {note}")
     return clone
 
 
@@ -134,7 +150,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     machine is immediately usable.
     """
     config = _require_config()
-    clone = _ensure_clone(config)
+    clone = _ensure_guarded(config)
     manifest_path = clone / "manifest.json"
     wrapped = clone / "identity.age"
 
@@ -170,6 +186,12 @@ def cmd_init(args: argparse.Namespace) -> int:
     )
     manifest_path.write_text(manifest.dump(), encoding="utf-8")
 
+    # Deny-by-default .gitignore, layered under the pre-commit guard. The guard
+    # stops a deliberate `git add`; this stops a careless `git add -A` from
+    # staging a stray plaintext file at all. Two independent nets, because the
+    # thing they prevent cannot be undone.
+    wrote_ignore = guard.ensure_gitignore(clone)
+
     # Cache the unlocked identity locally so the seeding machine does not have
     # to unlock itself immediately after creating the key it just held.
     paths = paths_for(DATA_DIR)
@@ -179,8 +201,11 @@ def cmd_init(args: argparse.Namespace) -> int:
         fh.write(identity_text)
     tighten(paths["identity"], 0o600)
 
+    seeded_paths = ["identity.age", "manifest.json"]
+    if wrote_ignore:
+        seeded_paths.append(".gitignore")
     repo_mod.commit_and_push(
-        clone, "seed: fleet identity + empty manifest", ["identity.age", "manifest.json"]
+        clone, "seed: fleet identity + empty manifest", seeded_paths
     )
     print(f"\nseeded. recipient = {recipient}")
     print("Add secrets with: secrets-kit add <name> --file <path> --dest <dest>")
@@ -194,7 +219,7 @@ def cmd_init(args: argparse.Namespace) -> int:
 def cmd_add(args: argparse.Namespace) -> int:
     """Encrypt a file into the repo. Public-key op -- no passphrase needed."""
     config = _require_config()
-    clone = _ensure_clone(config)
+    clone = _ensure_guarded(config)
     manifest_path = clone / "manifest.json"
     manifest = Manifest.load(manifest_path)
 
@@ -259,7 +284,7 @@ def cmd_add(args: argparse.Namespace) -> int:
 def cmd_remove(args: argparse.Namespace) -> int:
     """Drop an entry. Every machine deletes its copy on the next pass."""
     config = _require_config()
-    clone = _ensure_clone(config)
+    clone = _ensure_guarded(config)
     manifest_path = clone / "manifest.json"
     manifest = Manifest.load(manifest_path)
 
@@ -294,7 +319,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
 def cmd_rotate_identity(_args: argparse.Namespace) -> int:
     """New keypair + re-encrypt every blob. Needs this machine to be unlocked."""
     config = _require_config()
-    clone = _ensure_clone(config)
+    clone = _ensure_guarded(config)
     manifest_path = clone / "manifest.json"
     manifest = Manifest.load(manifest_path)
     paths = paths_for(DATA_DIR)
