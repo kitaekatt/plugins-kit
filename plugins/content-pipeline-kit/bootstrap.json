@@ -1,6 +1,15 @@
 {
+  "$comment": "content-pipeline-kit's llm/ package consumes the llm_scripting_kit shared lib for the live (openrouter / claude-cli) backends, so the owner plugin plugins-kit:llm-scripting-kit must be installed for that lib to be published to _shared_libs. Declaring it install: auto makes opting into content-pipeline-kit pull its dependency automatically -- dependency semantics, distinct from the action-triggered opt-in pattern (bootstrap skill, references/action-triggered-install.md).",
   "shared_libs": [
     { "name": "content_pipeline", "src": "lib" }
+  ],
+  "plugins": [
+    {
+      "ref": "plugins-kit:llm-scripting-kit",
+      "enabled": true,
+      "scope": "user",
+      "install": "auto"
+    }
   ],
   "shared_lib_imports": ["llm_scripting_kit"],
   "venv": {
