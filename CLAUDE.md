@@ -225,8 +225,7 @@ Some plugins live on `dev` for in-development work and must not reach consumers 
 
 **Current dev-only plugins** (the field, not this list, is load-bearing — this is just a human-readable inventory):
 
-- `agent-glue` — graph-orchestration kit, design + scaffolding phase. Heavy new Python deps (pydantic, jinja2, jsonschema), no `bootstrap.json` yet, no skills wired up. Tested locally via `--plugin-dir`.
-- `workflow-kit` — kit of incremental, native-preserving improvements on top of the native Workflow tool (renamed from `workflow-glue`; 0.2.0). Ships a declarative `*.workflow.yaml` -> native-script compiler (compile-to-native; does not reimplement execution). Adds a generically-named `workflow-kit-agent` executor (extensible) plus script + openrouter node strategies that fulfil a file-passing contract (`$OUT`/`$STATUS`, shell-redirected so payloads bypass the model context -- cheap haiku shim, not a deterministic runtime). The openrouter node reuses llm-scripting-kit's `make_openai_client` runner (via the `llm_scripting_kit` package; `scripts/openrouter_run.py`) + the `openai` SDK (installed into the standalone Python) -- both hosted outside workflow-kit, so workflow-kit's only dep stays pyyaml. Domain-skill container (light index + reference docs). Has `bootstrap.json`; tests in `tests/workflow-kit/`. Conceptually supersedes agent-glue's graph-system + claude-dispatch now that the Workflow tool exists.
+- (none — `agent-glue` and `workflow-kit` graduated to published 2026-07-28; the mechanism above stays for future dev-only plugins.)
 
 When you see commits for a dev-only plugin in `git log origin/master..origin/dev`, that's still gotcha 1 territory — branch from master, cherry-pick only the publish-ready commits, and leave the dev-only commits on `dev`. The regenerator is a backstop for the marketplace listing, not a substitute for picking the right commits to merge.
 
