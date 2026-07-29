@@ -194,6 +194,35 @@ reference_skill:
         - Never hand-edit the plugin cache, installed_plugins.json, or settings to force a version -- bootstrap/CC re-sync from the activated version and revert it (and "Never copy files directly into the plugin cache" per the repo CLAUDE.md). Set `autoUpdate` (or run `/plugin update`) and let the update path do it.
         - "`pin` forces `autoUpdate: false` while set (see marketplace_pinning) -- a pinned marketplace will not auto-update its plugins by design."
         - A project settings.json `extraKnownMarketplaces` entry only fires in sessions for THAT project, but it seeds the GLOBAL known_marketplaces.json -- so once any such session runs, that machine auto-updates the marketplace everywhere.
+    - id: action_triggered_install
+      summary: >-
+        Specialty plugins are declared with `install` set to `"manual"` and installed at the moment
+        of need -- the skill that requires the plugin preflights for it, ASKS the user, then runs
+        `claude plugin install <plugin>@<marketplace>`; the mid-session relaunch provisions it with
+        no restart.
+      keywords: [action-triggered install, opt-in plugin, install manual, specialty plugin, preflight, shared lib missing, ModuleNotFoundError, ask before install, claude plugin install, no restart, mid-session install, skill requirement, optional dependency, per-developer opt-in, do not auto-install for the team]
+      detail: |
+        Use when a plugin is needed by ONE skill / action rather than by the project as a whole
+        (an optional live backend, a credentialed or paid integration, an admin utility). Three
+        parts, all required:
+        1. DECLARE, don't install -- a `plugins[]` entry with `install: "manual"`. The plugin is
+           a named, version-managed marketplace member; the engine never installs/enables/scopes
+           it, but does keep an already-installed copy fresh via `claude plugin update`.
+        2. PREFLIGHT at the point of need -- test the published shared-lib dir
+           (~/.claude/plugins/data/<mkt>/_shared_libs/<lib>/) or do a LAZY guarded import inside
+           the code path. On a miss, name the capability and the owning plugin and ASK the user;
+           offer the no-install fallback (mock backend, dry run) in the same breath.
+        3. INSTALL on consent -- `claude plugin install <plugin>@<marketplace>`, then RETRY the
+           action a prompt or two later. No restart: the UserPromptSubmit mid-session relaunch
+           (plugins_state_hash) provisions the new plugin in the same session.
+        Contrast with `install: "auto"`, which is for genuine dependencies -- a top-level import,
+        a shared lib the plugin cannot load without, anything a developer who never runs the
+        action would still notice missing. Full pattern, wiring steps, and the auto-vs-manual
+        table: references/action-triggered-install.md.
+      gotchas:
+        - "`enabled` and `scope` are IGNORED for `install: \"manual\"` entries and `min_version` is honored only for `auto` -- a manual entry cannot force enablement, scope, or a version floor. Preflight for the capability, not the version."
+        - Preflight with a LAZY import inside the call site. A top-level import of the optional lib turns a missing plugin into an unconditional module-load failure, breaking the code that was supposed to detect and report it.
+        - Advise "retry in a moment", never "restart". An action fired instantly after the install can race the detached provisioning pass; that is a retry, not a restart.
     - id: env_manifest
       summary: env.json is bootstrap.json's identity-bearing sibling -- a separate manifest, same engine and pass, processed after bootstrap.json and before plugin manifests. It requires a `machines` registry (unknown machine = hard error), keys entries by os/hosts, and is GATED by an env_state.json stamp so it runs only when its merged content changed / last pass failed / engine bumped / reset. Carries the five declarative personalization features + the env_checks check/fix contract.
       keywords: [env.json, env.local.json, personalization, machines registry, machine identity, unknown machine, os cross-check, hosts filter, env gate, env_state.json, env-reset-cooldown, symlinks, shell_rc, macos_defaults, macos_hotkeys, login_items, env_checks, contract script, out-of-band drift]
@@ -240,8 +269,8 @@ reference_skill:
       keywords: [engine, session start, processing order, messages, remediation flow, update, harvest, restart, claude --resume]
       fact_ids: [message_outcomes, update_lifecycle, remediation_phases]
     - name: config_files
-      keywords: [bootstrap.json, env.json, manifest, layers, merge, override, pin, auto-update, autoUpdate, plugin not updating, machines registry, env gate, personalization]
-      fact_ids: [config_layers, env_manifest, marketplace_pinning, plugin_autoupdate_propagation, merge_semantics]
+      keywords: [bootstrap.json, env.json, manifest, layers, merge, override, pin, auto-update, autoUpdate, plugin not updating, machines registry, env gate, personalization, install manual, opt-in plugin, action-triggered install]
+      fact_ids: [config_layers, env_manifest, marketplace_pinning, plugin_autoupdate_propagation, action_triggered_install, merge_semantics]
     - name: catalogues
       keywords: [conditions, categories, remediation table]
       fact_ids: [condition_categories]
@@ -258,6 +287,13 @@ reference_skill:
       path: references/remediation-reference.md
       keywords: [condition, remediation, check method, tool missing, venv broken, marketplace, plugin scope, fix-all, blocking, manual operation, pinned wrong commit, pin removed, unresolvable pin]
       summary: Per-condition remediation reference (incl. the marketplace pin conditions).
+    - id: action_triggered_install_ref
+      path: references/action-triggered-install.md
+      keywords: [action-triggered install, opt-in by encountering need, install manual, specialty plugin, preflight, guarded import, shared lib path check, ask before install, claude plugin install, mid-session install no restart, skill requirement wiring, auto vs manual, optional dependency]
+      summary: >-
+        The action-triggered plugin-install pattern -- declare the plugin manual-install, preflight
+        in the action that needs it, ask the user, install mid-session (no restart); plus the
+        skill-author wiring steps and the auto-vs-manual decision table.
     - id: plugin_setup_pattern
       path: references/plugin-setup-pattern.md
       keywords: [setup pattern, config setup, setup.py, interactive setup, --check, --describe, --apply, --init-defaults, missing config, API keys]
