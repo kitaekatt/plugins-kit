@@ -26,7 +26,7 @@ Does individual units of work. A typed WorkRequest goes to a Worker; the Worker 
 
 Four worker types ship in v1:
 
-- **openrouter** -- single-shot LLM completion via openrouter-kit (multi-model). Default deterministic; per-request override to non-deterministic switches to non-zero temperature and skips cache.
+- **openrouter** -- single-shot LLM completion via llm-scripting-kit (multi-model). Default deterministic; per-request override to non-deterministic switches to non-zero temperature and skips cache.
 - **claude_inference** -- single-shot Claude Code subagent dispatch with no tools enabled. Same determinism shape as openrouter.
 - **claude_agent** -- Claude Code subagent with tool + MCP access. Performs autonomous multi-step work with side effects. Determinism is required per-request (no default for side-effect-capable work).
 - **python_script** -- any dotted-name Python function with typed input/output. May shell out internally. Determinism is required per-request.

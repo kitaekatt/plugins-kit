@@ -39,7 +39,7 @@ class Node:
     execute: Callable[[InputModel, PipelineState], tuple[OutputModel, StateDelta]]
 ```
 
-All nodes are the same shape. What varies is what their `impl.py` chooses to do — call openrouter-kit, read a `rules.yaml`, do pure computation, any combination. The kit has no opinion.
+All nodes are the same shape. What varies is what their `impl.py` chooses to do — call llm-scripting-kit, read a `rules.yaml`, do pure computation, any combination. The kit has no opinion.
 
 Optional sidecar files conventionally accompany a node:
 
@@ -104,7 +104,7 @@ Algorithm:
 2. Start at the entry node with `initial_state`.
 3. For each node visited:
    - Validate input against `input_contract`.
-   - If `cohort` is provided, the runtime puts `openrouter-kit` into replay mode pointing at `cohort.llm_recordings/`. Any `openrouter_kit.client` call made by any `impl.py` is intercepted at openrouter-kit's seam — the kit itself doesn't know or care which nodes call LLMs. Missing recordings either fail (strict mode) or fall through to live calls (lenient mode).
+   - If `cohort` is provided, the runtime puts `llm-scripting-kit` into replay mode pointing at `cohort.llm_recordings/`. Any `llm_scripting_kit.client` call made by any `impl.py` is intercepted at llm-scripting-kit's seam — the kit itself doesn't know or care which nodes call LLMs. Missing recordings either fail (strict mode) or fall through to live calls (lenient mode).
    - Call `execute(input, ctx)`.
    - Validate output against `output_contract`.
    - Merge `StateDelta` into `PipelineState`.
@@ -152,7 +152,7 @@ graphs/<name>/
         output.yaml
         ctx_before.yaml
         ctx_after.yaml
-        llm.yaml              # present if execute made any openrouter-kit calls; pass-through
+        llm.yaml              # present if execute made any llm-scripting-kit calls; pass-through
   graph.html                  # rendered design artifact
 ```
 
@@ -184,7 +184,7 @@ nodes:
 
   - name: classify
     in: ClassifyIn
-    out: Disposition[ClassifyOut]     # impl.py calls openrouter-kit; prompt.md sidecar
+    out: Disposition[ClassifyOut]     # impl.py calls llm-scripting-kit; prompt.md sidecar
 
   - name: per_item_validate
     in: ItemIn
@@ -276,10 +276,10 @@ def execute(input: LoadIn, state: PipelineState) -> tuple[LoadResult, StateDelta
         return LoadFailed(error=str(e)), {}
 ```
 
-A node that calls an LLM is no different in shape — `impl.py` calls `openrouter_kit.client` itself, optionally using the rendered `prompt.md` the kit makes available:
+A node that calls an LLM is no different in shape — `impl.py` calls `llm_scripting_kit.client` itself, optionally using the rendered `prompt.md` the kit makes available:
 
 ```python
-from openrouter_kit import client
+from llm_scripting_kit import client
 
 def execute(input: ClassifyIn, state: PipelineState, prompt: str):
     # `prompt` is the rendered Jinja template from prompt.md
@@ -291,7 +291,7 @@ def execute(input: ClassifyIn, state: PipelineState, prompt: str):
 
 If a node has a `rules.yaml` sidecar, the kit passes its loaded content as a `rules` kwarg the same way. Nodes can have both, neither, or either.
 
-The kit imposes no schema on `llm.yaml`. Whatever the `openrouter_kit.client` response object exposes (model, tokens, cost, cache fields, raw response text, attempts) gets serialized as-is. Pipelines that need richer audit (e.g. a domain-specific chunk-record with rejection metadata) read the response object's fields inside `execute` and embed them in their own output contract or canonical persistent artifact.
+The kit imposes no schema on `llm.yaml`. Whatever the `llm_scripting_kit.client` response object exposes (model, tokens, cost, cache fields, raw response text, attempts) gets serialized as-is. Pipelines that need richer audit (e.g. a domain-specific chunk-record with rejection metadata) read the response object's fields inside `execute` and embed them in their own output contract or canonical persistent artifact.
 
 ## Canonical artifacts
 

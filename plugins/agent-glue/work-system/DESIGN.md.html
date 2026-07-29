@@ -83,7 +83,7 @@ A worker is a Python module that knows how to fulfill a WorkRequest. The worker 
 
 **When to use:** the work is a single-shot LLM completion via OpenRouter (multi-model). Stateless. No tool use. No MCP servers.
 
-**How it fulfills:** sends the input as a structured user message, uses `config.system_prompt` as the LLM's system message, calls openrouter-kit's client, parses the response back into a yaml output structure.
+**How it fulfills:** sends the input as a structured user message, uses `config.system_prompt` as the LLM's system message, calls llm-scripting-kit's client, parses the response back into a yaml output structure.
 
 **Determinism:** defaults to `deterministic` (cached, temperature 0). A request that sets `CacheControl.determinism: non_deterministic` is accepted; the worker switches to a non-zero temperature (default 0.7) and the cache lookup is skipped. Temperature itself is NOT a user-facing config field -- it's derived from the declared determinism. To force a fresh call without changing determinism, use `CacheControl.bypass: true`.
 
@@ -354,7 +354,7 @@ metadata:
   cost_usd: 0.00018
 ```
 
-The `metadata` shape is worker-specific; the subsystem treats it as opaque pass-through. openrouter-kit's response object fields land here unchanged.
+The `metadata` shape is worker-specific; the subsystem treats it as opaque pass-through. llm-scripting-kit's response object fields land here unchanged.
 
 ### A WorkRequest for the claude_agent worker
 

@@ -47,11 +47,11 @@ Add the WorkRecord cache that turns audit and cache into one mechanism. The work
 
 ## openrouter worker
 
-Add the first inference worker, wrapping openrouter-kit's client.
+Add the first inference worker, wrapping llm-scripting-kit's client.
 
 **Deliverables:**
 
-- `agent_glue_lib/work/workers/openrouter.py` -- imports openrouter-kit's client, packages the request input + `config.system_prompt` as an LLM call, parses the response back into a structured yaml output, populates Metadata (tokens, duration, model).
+- `agent_glue_lib/work/workers/openrouter.py` -- imports llm-scripting-kit's client, packages the request input + `config.system_prompt` as an LLM call, parses the response back into a structured yaml output, populates Metadata (tokens, duration, model).
 - Temperature handling per the temperature-zero constraint (see `work-system/ARCHITECTURE.md.html`): the worker derives the temperature from `CacheControl.determinism` and rejects requests that supply a `temperature` key in the worker config.
 - `CacheControl.determinism: non_deterministic` honored: worker switches to a non-zero temperature (default 0.7) and `submit()` skips the cache lookup (writes the record for audit, but no read).
 - Worker registered in `agent_glue_lib.work.__init__`.
