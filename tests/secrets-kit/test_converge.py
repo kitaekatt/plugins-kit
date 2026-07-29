@@ -309,3 +309,34 @@ def test_state_records_dest_so_orphans_can_be_swept(fleet):
     _run(fleet)
     state = State.load(paths_for(fleet.data_dir)["state"])
     assert state.get("ha-token")["dest"].endswith("ha-token.txt")
+
+
+def test_cloned_but_unseeded_repo_says_run_init(fleet):
+    """The state a machine is in right after the repo is created.
+
+    Must name the actual next step rather than reading as a broken manifest --
+    otherwise the reader goes off diagnosing a file that was never supposed to
+    exist yet.
+    """
+    fleet.unlock()
+    fleet.manifest_path.unlink()
+
+    result = _run(fleet)
+    assert result.skipped_reason == "repo not seeded yet"
+    assert len(result.failures) == 1
+    failure = result.failures[0]
+    assert failure.ask_reason == "info"
+    assert "! secrets-kit init" in failure.agent_msg
+    assert "not a broken" in failure.agent_msg.lower()
+
+
+def test_unseeded_check_precedes_the_identity_check(fleet):
+    """An unseeded repo on a LOCKED machine must still say 'seed', not 'unlock'.
+
+    Ordering matters: telling someone to unlock a repo that has no identity to
+    unlock is a dead end.
+    """
+    fleet.manifest_path.unlink()
+    result = _run(fleet)
+    assert result.skipped_reason == "repo not seeded yet"
+    assert "init" in result.failures[0].agent_msg

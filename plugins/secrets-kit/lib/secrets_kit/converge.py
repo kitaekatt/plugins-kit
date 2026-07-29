@@ -150,6 +150,42 @@ def converge(
         if note:
             result.notes.append(note)
 
+    # --- not seeded yet ---------------------------------------------------
+    # A cloned-but-empty repo is a legitimate, expected state (the repo exists,
+    # nobody has run `init`). Reporting it as a broken manifest would send the
+    # reader off diagnosing a file that was never supposed to exist yet, so it
+    # gets its own message naming the actual next step.
+    if not (paths["clone"] / "manifest.json").is_file():
+        result.failures.append(
+            Failure(
+                FAILURE_CONFIG,
+                user_msg=(
+                    "The fleet secrets repo exists but has never been seeded, "
+                    "so there is nothing to materialize yet."
+                ),
+                agent_msg=(
+                    f"{paths['clone']} is a valid clone with no manifest.json: "
+                    f"the repo has not been seeded. This is NOT a broken "
+                    f"manifest -- do not try to repair or hand-write one.\n\n"
+                    "Seeding runs once, on the machine holding the plaintext, "
+                    "and needs the user's passphrase. Give them this prepared "
+                    "statement, verbatim:\n\n"
+                    "  > The secrets repo is ready but not seeded yet. Type "
+                    "this in the prompt, with the leading `!`:\n"
+                    "  >\n"
+                    "  >     ! secrets-kit init\n"
+                    "  >\n"
+                    "  > It will ask you to choose the fleet passphrase and "
+                    "type it twice, with hidden input.\n\n"
+                    "Afterwards YOU add the entries with `secrets-kit add` "
+                    "(public-key encryption, no passphrase needed)."
+                ),
+                ask_reason="info",
+            )
+        )
+        result.skipped_reason = "repo not seeded yet"
+        return result
+
     # --- manifest ---------------------------------------------------------
     try:
         manifest = Manifest.load(paths["clone"] / "manifest.json")

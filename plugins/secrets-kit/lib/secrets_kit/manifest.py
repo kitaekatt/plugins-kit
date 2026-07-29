@@ -20,7 +20,19 @@ from typing import Any, Dict, List, Optional
 
 from . import SecretsError
 
-_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+# Both spellings: ${VAR} and bare $VAR. The bare form matters because the
+# natural way to write a fleet-wide root is "$DEVROOT/christina-norman", and a
+# resolver that silently ignored it would materialize a secret into a directory
+# literally named "$DEVROOT".
+_VAR_PATTERN = re.compile(
+    r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))"
+)
+
+# Variables may reference variables (KNOWLEDGE_BANK = "$DEVROOT/bank"), so
+# expansion iterates to a fixpoint. Bounded, because a cycle must fail loudly
+# rather than spin: a self-referential path is a manifest bug, not input to
+# tolerate.
+_MAX_EXPANSION_PASSES = 10
 
 # Mirrors the engine's own host resolution: exact hostname first, then the
 # domain-stripped short form. Keeping the rule identical is what lets
@@ -163,17 +175,22 @@ def _parse_mode(name: str, raw: Any) -> int:
 
 
 def expand(value: str, variables: Dict[str, str], *, where: str) -> str:
-    """Expand ``${VAR}`` then ``~``.
+    """Expand ``${VAR}`` / ``$VAR`` to a fixpoint, then ``~``.
 
     Variables resolve from secrets.json first and the process environment
     second, so a fleet-wide default can be declared once yet still be
     overridden by a machine that exports its own. An unresolvable variable is
     a hard error naming the entry -- silently materializing a secret to a path
-    containing a literal ``${VAR}`` would be worse than failing.
+    containing a literal ``$VAR`` would be worse than failing.
+
+    Iterating to a fixpoint is what makes the natural declaration work:
+    ``KNOWLEDGE_BANK = "$DEVROOT/christina-norman"`` referenced as
+    ``${KNOWLEDGE_BANK}/secrets/x`` needs two passes, and a single-pass
+    resolver would leave ``$DEVROOT`` in the path.
     """
 
     def _sub(match: "re.Match[str]") -> str:
-        key = match.group(1)
+        key = match.group(1) or match.group(2)
         if key in variables:
             return variables[key]
         env = os.environ.get(key)
@@ -185,7 +202,19 @@ def expand(value: str, variables: Dict[str, str], *, where: str) -> str:
             f"machine) or export it in the environment.",
         )
 
-    return os.path.expanduser(_VAR_PATTERN.sub(_sub, value))
+    current = value
+    for _ in range(_MAX_EXPANSION_PASSES):
+        expanded = _VAR_PATTERN.sub(_sub, current)
+        if expanded == current:
+            return os.path.expanduser(expanded)
+        current = expanded
+
+    raise SecretsError(
+        f"{where}: variable expansion did not settle after "
+        f"{_MAX_EXPANSION_PASSES} passes ('{value}')",
+        "This usually means a variable refers to itself, directly or through "
+        "another. Break the cycle in secrets.json vars.",
+    )
 
 
 class Manifest:

@@ -189,3 +189,31 @@ def test_per_os_dest_object(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("secrets_kit.manifest.os.name", "posix")
     assert str(m.entries["one"].dest({})) == "/posix/x"
+
+
+def test_expand_supports_the_bare_dollar_form():
+    """The design's own example writes $DEVROOT, not ${DEVROOT}."""
+    assert expand("$DEVROOT/bank", {"DEVROOT": "/dev"}, where="t") == "/dev/bank"
+
+
+def test_expand_resolves_a_variable_whose_value_holds_a_variable():
+    """KNOWLEDGE_BANK = "$DEVROOT/bank" is the natural fleet-wide declaration.
+
+    A single-pass resolver would leave a literal $DEVROOT in the path and
+    materialize a secret into a directory of that name.
+    """
+    variables = {"DEVROOT": "/dev", "BANK": "$DEVROOT/christina-norman"}
+    assert (
+        expand("${BANK}/secrets/x", variables, where="t")
+        == "/dev/christina-norman/secrets/x"
+    )
+
+
+def test_expand_refuses_a_reference_cycle_rather_than_spinning():
+    variables = {"A": "$B", "B": "$A"}
+    with pytest.raises(SecretsError, match="did not settle"):
+        expand("${A}/x", variables, where="t")
+
+
+def test_expand_leaves_a_lone_dollar_alone():
+    assert expand("/tmp/cost$", {}, where="t") == "/tmp/cost$"
