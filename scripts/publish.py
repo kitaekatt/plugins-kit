@@ -145,11 +145,13 @@ def version_at(ref: str, plugin: str) -> str | None:
 
 # --- preflight -------------------------------------------------------------
 
-def preflight() -> list[str]:
+def preflight(allow_dev_only: set[str] | None = None) -> list[str]:
     """Refuse anything unsafe. Returns the human summary of what will publish.
 
     Every check here refuses rather than fixes: a publish is visible to other
-    machines, so guessing is worse than stopping.
+    machines, so guessing is worse than stopping. `allow_dev_only` names
+    dev-only plugins whose commits the operator has explicitly decided to
+    ship (see --allow-dev-only).
     """
     if git("rev-parse", "--abbrev-ref", "HEAD") != DEV_BRANCH:
         raise PublishError(
@@ -182,19 +184,31 @@ def preflight() -> list[str]:
             f"{DEV_BRANCH} has nothing {REMOTE}/{MASTER_BRANCH} lacks -- "
             f"nothing to publish.")
 
-    _refuse_dev_only_commits()
+    _refuse_dev_only_commits(allow_dev_only or set())
     bumps = _require_version_bump()
     return bumps
 
 
-def _refuse_dev_only_commits() -> None:
+def _refuse_dev_only_commits(allow: set[str]) -> None:
     """Refuse when the range touches a dev-only plugin.
 
     Merging would publish a plugin marked `published: false`. The marketplace
     regenerator filters it out of the LISTING, but its files would still land on
-    master. Which commits ship is a judgement call -- cherry-pick by hand.
+    master. Which commits ship is a judgement call -- cherry-pick by hand, or
+    name the plugin in --allow-dev-only when its commits are finished work that
+    master's tree needs (e.g. a cross-plugin refactor); the allowance is
+    printed so the decision is visible in the publish log.
     """
     dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
+    unknown = allow - dev_only
+    if unknown:
+        raise PublishError(
+            "--allow-dev-only names plugins that are not dev-only here: "
+            + ", ".join(sorted(unknown)))
+    for plugin in sorted(allow):
+        print(f"  allowing dev-only plugin commits to ship: {plugin} "
+              f"(operator decision via --allow-dev-only)")
+    dev_only -= allow
     if not dev_only:
         return
 
@@ -370,11 +384,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--check", action="store_true",
         help="preflight and verify only; make no writes and no pushes")
+    parser.add_argument(
+        "--allow-dev-only", action="append", default=[], metavar="PLUGIN",
+        help="ship commits touching this dev-only (published: false) plugin "
+             "anyway -- an explicit operator decision for finished work "
+             "master's tree needs (repeatable; does NOT add the plugin to "
+             "the marketplace listing)")
     args = parser.parse_args(argv)
 
     try:
         print("preflight:")
-        bumps = preflight()
+        bumps = preflight(set(args.allow_dev_only))
         for bump in bumps:
             print(f"  publishing {bump}")
 

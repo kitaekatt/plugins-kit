@@ -168,6 +168,39 @@ class TestDevOnlyRefusal:
         _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
         assert publish.preflight()  # dev-kit exists, untouched -> fine
 
+    def test_allow_dev_only_ships_the_named_plugins_commits(self, repo):
+        """--allow-dev-only is the operator's explicit decision to ship
+        finished dev-only work master's tree needs."""
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        (repo / "plugins" / "dev-kit" / "feature.py").write_text("done\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "dev-kit: finished refactor slice")
+
+        bumps = publish.preflight(allow_dev_only={"dev-kit"})
+
+        assert bumps == ["pub-kit: 1.0.0 -> 1.1.0"]
+
+    def test_allow_dev_only_does_not_cover_unnamed_plugins(self, repo):
+        """Allowing one dev-only plugin must not silently wave through
+        another's commits."""
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        _write_manifest(repo, "other-kit", "0.1.0", published=False)
+        (repo / "plugins" / "other-kit" / "done.py").write_text("done\n")
+        (repo / "plugins" / "dev-kit" / "feature.py").write_text("wip\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "other-kit done; dev-kit experimental")
+
+        with pytest.raises(publish.PublishError, match="dev-kit"):
+            publish.preflight(allow_dev_only={"other-kit"})
+
+    def test_allow_dev_only_rejects_non_dev_only_names(self, repo):
+        """Naming a published (or unknown) plugin is an operator error, not a
+        no-op -- refuse loudly."""
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+
+        with pytest.raises(publish.PublishError, match="not dev-only"):
+            publish.preflight(allow_dev_only={"pub-kit"})
+
 
 class TestVersionReads:
     def test_version_at_ref(self, repo):
