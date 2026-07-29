@@ -1,0 +1,256 @@
+{
+  "perFile": [
+    {
+      "approx_tokens": 30,
+      "findings": [
+        {
+          "attributable": true,
+          "bucket": "IMPROVE",
+          "criterion": "placement_not_in_skill_dir",
+          "group": "Placement",
+          "line": 1,
+          "message": "THIS FILE WAS NOT AUDITED. discover.py classified it as `other_claude_artifact` (a CLAUDE.md), not a project document, so the project-doc-audit criteria (PD-2 maturation, PD-3/CRP, PD-4/PD-5/PD-6 ADP, PD-8 CCP, PD-H1 hygiene) were never applied to it. The correct auditor for an other_claude_artifact is the /md-audit skill -- specifically `/md-audit claude-md` for a CLAUDE.md target (or `/md-audit skill` for a skill artifact). The NOT-AUDITED verdict is not a passing verdict: no lane has read this file's content against any criteria.",
+          "remediation": "Re-run this file under the /md-audit skill (`/md-audit claude-md`), which owns CLAUDE.md artifacts; project-doc-audit declines it at PD-1 routing.",
+          "severity": "INFO",
+          "taxonomy": "A_misclassified_skill_ref"
+        }
+      ],
+      "inbound_citations": 1,
+      "kind": "other_claude_artifact",
+      "lines": 5,
+      "path": "<CORPUS>/project-doc/CLAUDE.md",
+      "verdict": "NOT-AUDITED"
+    },
+    {
+      "approx_tokens": 22,
+      "findings": [
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "PD-2 placement_maturation",
+          "group": "Placement",
+          "line": null,
+          "message": "Content is a single unstructured sentence with no stabilized procedure, rule-set, or lookup table; no task-shaped or location-shaped trigger fires, so the doc is correctly a project doc (nursery stage).",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "PD-3 unitary_reading_task",
+          "group": "CRP",
+          "line": null,
+          "message": "Single heading and a single sentence; one reading task. No extraction candidate exists.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "PD-7 size_signal",
+          "group": "CRP",
+          "line": null,
+          "message": "3 effective lines / ~22 tokens, far under the 500-line / 3000-token thresholds.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "PD-4 discoverability",
+          "group": "ADP",
+          "line": null,
+          "message": "1 inbound citation (project root CLAUDE.md); the doc is reachable in the agent load graph, not an orphan.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "PD-5 one_hop_cross_reference",
+          "group": "ADP",
+          "line": null,
+          "message": "No outbound doc-to-doc citations; no reading chain exists.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "PD-6 claude_md_back_reference",
+          "group": "ADP",
+          "line": 3,
+          "message": "Line 3 names the project root CLAUDE.md only as the citing surface (orientation mention); it does not cite any CLAUDE.md section content as required reading, so load order is not reversed.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "PD-8 duplicates_skill",
+          "group": "CCP",
+          "line": null,
+          "message": "No skill owns this doc's topic (its own reachability); nothing is restated from a skill's references.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "PD-H1 outbound_link_resolution",
+          "group": "Hygiene",
+          "line": null,
+          "message": "No path-like or relative file references in the body; nothing to resolve.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "mechanical_convention_checks",
+          "group": "Hygiene",
+          "line": null,
+          "message": "Body is ASCII-only with no smart quotes, em dashes, or non-breaking spaces; no absolute or backslash paths; no cited line numbers or concrete anchors, so O/P/Q/R do not fire.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        }
+      ],
+      "inbound_citations": 1,
+      "kind": "project_doc",
+      "lines": 3,
+      "path": "<CORPUS>/project-doc/docs/cited.md",
+      "verdict": "COMPLIANT"
+    },
+    {
+      "approx_tokens": 17,
+      "findings": [
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "placement_maturation",
+          "group": "Placement",
+          "line": null,
+          "message": "PD-2: the body is a single sentence with no stabilized procedure, rule set, or lookup table -- there is no task-shaped verb and no directory-scoped knowledge to route. Nothing has matured past the nursery stage, so the doc is correctly a project doc.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "crp_unitary_reading_task",
+          "group": "CRP",
+          "line": null,
+          "message": "PD-3: the doc has one heading and one sentence -- a single reading task. No section serves a different sub-trigger, so no split candidate exists.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "crp_size_signal",
+          "group": "CRP",
+          "line": null,
+          "message": "PD-7: 3 effective lines / ~17 approx tokens is far under the 500-line / 3000-token threshold; the size signal does not fire.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "IMPROVE",
+          "criterion": "adp_discoverability",
+          "group": "ADP",
+          "line": 1,
+          "message": "PD-4: 0 inbound citations -- no CLAUDE.md, SKILL.md, or sibling doc names this file, so it is an orphan node in the agent load graph and never loads for an agent.",
+          "remediation": "Orphan: add a one-line pointer to this doc from the nearest CLAUDE.md (making it agent-reachable), or retire it if the content is dead -- accept as-is only if it is intentionally human-only.",
+          "severity": "JUDGMENT",
+          "taxonomy": "H_orphan"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "adp_one_hop",
+          "group": "ADP",
+          "line": null,
+          "message": "PD-5: the body contains no outbound doc-to-doc citations, so no required reading chain exists.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "adp_claude_md_back_reference",
+          "group": "ADP",
+          "line": null,
+          "message": "PD-6: no CLAUDE.md is mentioned, so no upstream section content is cited as required reading.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "ccp_duplicates_skill",
+          "group": "CCP",
+          "line": null,
+          "message": "PD-8: the doc states no reusable content; no skill owns this topic and nothing is restated from a skill's references.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "hygiene_link_resolution",
+          "group": "Hygiene",
+          "line": null,
+          "message": "PD-H1: the doc contains no path-like references or relative links, so there is nothing to resolve.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "hygiene_mechanical_conventions",
+          "group": "Hygiene",
+          "line": null,
+          "message": "Mechanical convention scan clean: body is pure ASCII (no look-alike quotes, dashes, or non-breaking spaces), contains no absolute or backslash paths, and cites no line numbers, symbols, or anchors -- so N/O/P/Q/R all pass.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        }
+      ],
+      "inbound_citations": 0,
+      "kind": "project_doc",
+      "lines": 3,
+      "path": "<CORPUS>/project-doc/docs/orphan.md",
+      "verdict": "COMPLIANT"
+    }
+  ],
+  "review": false,
+  "totals": {
+    "diffClean": 0,
+    "fail": 0,
+    "fix": 0,
+    "improve": 2,
+    "nonCompliant": 0,
+    "notAudited": 1,
+    "serious": 0,
+    "silent": 0,
+    "special": 0,
+    "suppressed": 0
+  }
+}

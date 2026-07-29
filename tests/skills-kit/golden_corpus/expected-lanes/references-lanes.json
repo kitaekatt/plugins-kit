@@ -1,0 +1,37 @@
+{
+  "perFile": [
+    {
+      "file": "<CORPUS>/references/.claude/skills/referencing-skill/SKILL.md",
+      "findings": [
+        {
+          "after": "",
+          "before": "",
+          "bucket": "FIX",
+          "category": "I_illustrative",
+          "line": 13,
+          "rationale": "Instruction-type FIX (add the documented `example:` escape prefix to the hard-dep literal on line 13): rewrite `skill: \"absent-skill\"` to `skill: \"example:absent-skill\"`, leaving the rest of the sentence untouched. Category I, not SERIOUS: the sentence spanning lines 12-13 is unambiguously meta-descriptive -- it reads \"Broken hard dependency -- step 1 invokes the Skill tool with skill: \"absent-skill\" and must be flagged as a missing hard dep\", i.e. the doc is *about* the detection of a missing hard dep, not issuing a live step-1 invocation (reinforced by the frontmatter description, \"Use when testing the golden corpus broken-reference paths. Do NOT use for real work; fixture only\"). There is therefore no unguarded runtime-crash path, and a documented mechanical escape resolves it, which excludes the SERIOUS predicate. My verified reading of the prose discharges the hedge, so this stays FIX rather than leaking into IMPROVE.",
+          "ref": "absent-skill",
+          "severity": "ERROR"
+        },
+        {
+          "after": "",
+          "before": "",
+          "bucket": "FIX",
+          "category": "I_illustrative",
+          "line": 10,
+          "rationale": "Instruction-type FIX (add the documented `example:` escape prefix to the slash-form on line 10): rewrite `/missing-skill` to `/example:missing-skill`, leaving the rest of the sentence untouched. Category I: the sentence is self-describing meta-prose -- \"Broken soft reference: see /missing-skill for a skill that does not exist\" -- so the ref is illustrating reference syntax, not issuing a live instruction; the clause \"for a skill that does not exist\" makes the meta-descriptive cue explicit rather than ambiguous, keeping this FIX rather than IMPROVE. The ref genuinely does not resolve against the scanner's skill pool (only `present-skill` and `referencing-skill` are present here), so per ambiguity ruling (2) this is a real convention fix, not a silenced detection artifact.",
+          "ref": "missing-skill",
+          "severity": "WARNING"
+        }
+      ]
+    }
+  ],
+  "totals": {
+    "errors": 1,
+    "fix": 2,
+    "improve": 0,
+    "serious": 0,
+    "silent": 0,
+    "special": 0
+  }
+}

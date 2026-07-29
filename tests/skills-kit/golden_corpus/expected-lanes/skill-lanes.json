@@ -1,0 +1,375 @@
+{
+  "perFile": [
+    {
+      "approx_tokens": 236,
+      "findings": [
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "universal_frontmatter",
+          "group": "Schema",
+          "line": 2,
+          "message": "All 11 universal frontmatter rows pass: name present (18 chars, valid charset, not reserved), description present (102 chars) in directive form with an exclusion clause, skill-type 'reference-skill' valid.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "yaml_contract",
+          "group": "Schema",
+          "line": 12,
+          "message": "YAML contract clean: root key 'reference_skill' matches declared skill-type, schema validation reports all required keys present and all rules satisfied; facts floor met (1 fact) with at least one gotchas entry and one example.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "mixed_type_signal",
+          "group": "Schema",
+          "line": 12,
+          "message": "Single canonical root (reference_skill); deterministic mixed-type heuristic reports no competing type signal. Body shape (identity/scope/facts) matches the declared reference-skill type, so no wrong-type signal is raised.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "ccp_placement",
+          "group": "CCP",
+          "line": null,
+          "message": "Body carries only contract-coupled content (widget limit facts, scope, one reference pointer). No project-convention material that would change with project conventions rather than the skill contract.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "decision_provenance",
+          "group": "CCP",
+          "line": null,
+          "message": "No Dec-N entries, 'audit-finding' tags, dated decision-log lines, or other audit-coupled provenance markers in the body.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "crp_placement",
+          "group": "CRP",
+          "line": null,
+          "message": "Body is 33 lines / ~236 tokens, far under the ~500-line / ~3000-token evaluation signal. The single reference (references/details.md) serves a distinct deeper-background sub-task and is correctly on-demand rather than inlined.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "adp_back_reference",
+          "group": "ADP",
+          "line": 32,
+          "message": "references/details.md is one hop deep and contains no citation back to SKILL.md or its sections; no acyclic-dependency cycle.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "references_reachable_from_skill_md",
+          "group": "ADP",
+          "line": 32,
+          "message": "Load graph complete: 1 reference file, reachable directly from the body link at line 32; no orphaned references/ files, no unlinked member directories, no dangling index entries. Keyword adequacy is sufficient -- the fact's detail and keywords carry 'widget', 'limit', 'per-batch', and 'E_LIMIT', the exact terms the reference doc owns.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "body_size",
+          "group": "Hygiene",
+          "line": null,
+          "message": "33 lines / ~236 tokens; no hygiene threshold crossed and no extraction candidate to name.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        }
+      ],
+      "lines": 33,
+      "path": "<CORPUS>/skill/s1-valid-reference/SKILL.md",
+      "skill_name": "s1-valid-reference",
+      "skill_type": "reference-skill",
+      "verdict": "COMPLIANT"
+    },
+    {
+      "approx_tokens": 182,
+      "findings": [
+        {
+          "attributable": true,
+          "bucket": "IMPROVE",
+          "criterion": "yaml_contract",
+          "group": "Schema",
+          "line": 21,
+          "message": "technique_skill.techniques[0] ('rename_widget') is missing the required 'steps' key -- the technique-skill YAML contract requires a steps list on every technique record.",
+          "remediation": "Add a 'steps:' list to the rename_widget technique record (after 'goal:', line 24) enumerating the ordered procedure for renaming a widget without breaking batch references. Step content is authorial -- no mechanical default exists, so this needs the skill owner to write the actual procedure.",
+          "severity": "FAIL",
+          "taxonomy": "E_schema_validation_failure"
+        }
+      ],
+      "lines": 27,
+      "path": "<CORPUS>/skill/s2-technique-missing-steps/SKILL.md",
+      "skill_name": "s2-technique-missing-steps",
+      "skill_type": "technique-skill",
+      "verdict": "NON-COMPLIANT"
+    },
+    {
+      "approx_tokens": 120,
+      "findings": [
+        {
+          "attributable": true,
+          "bucket": "IMPROVE",
+          "criterion": "yaml_contract",
+          "group": "Schema",
+          "line": 31,
+          "message": "YAML contract violation: the reference_skill block carries a forbidden `rules:` key (validator row \"yaml: reference_skill.rules\" -> fail, note \"forbidden key (mixed-type drift signal)\"). The reference_skill contract admits identity/scope/facts; `rules` is a discipline_skill construct.",
+          "remediation": "Remove the forbidden `rules:` key (lines 31-33) from the reference_skill block -- either restate `never_exceed_limit` as a gotcha on the `max_widgets` fact (line 26-27) or relocate it to a discipline-skill; forbidden-key removal is an authorial structural choice, so offer rather than auto-apply.",
+          "severity": "FAIL",
+          "taxonomy": "E_schema_validation_failure"
+        },
+        {
+          "attributable": true,
+          "bucket": "IMPROVE",
+          "criterion": "mixed_type_signal",
+          "group": "Schema",
+          "line": 31,
+          "message": "Mixed-type drift: the file declares skill-type reference-skill and the deterministic mixed-type row passes (single canonical root `reference_skill`), but the heuristic fires -- a discipline-skill rules construct is smuggled inside the reference_skill block, so the body serves two contracts at once.",
+          "remediation": "Pick one contract: keep the facts here as a pure reference-skill and move the `never_exceed_limit` rule (lines 31-33) into a discipline_skill SKILL.md, or fold it into the max_widgets fact's gotchas so the reference block stays single-typed.",
+          "severity": "JUDGMENT",
+          "taxonomy": "D_mixed_type_signal"
+        }
+      ],
+      "lines": 34,
+      "path": "<CORPUS>/skill/s3-mixed-type/SKILL.md",
+      "skill_name": "s3-mixed-type",
+      "skill_type": "reference-skill",
+      "verdict": "NON-COMPLIANT"
+    },
+    {
+      "approx_tokens": 195,
+      "findings": [
+        {
+          "attributable": true,
+          "bucket": "IMPROVE",
+          "criterion": "references_reachable_from_skill_md",
+          "group": "ADP",
+          "line": null,
+          "message": "Orphaned reference file: references/orphan.md is not reached by any edge from SKILL.md or from any reachable reference. SKILL.md cites no references at all, so the file is unloadable in practice.",
+          "remediation": "Add a one-hop index entry in SKILL.md (e.g. a `references:` list item or an inline citation such as `See [Orphaned reference](references/orphan.md)`) with keywords covering the doc's headings, or delete references/orphan.md if its content is superseded.",
+          "severity": "FAIL",
+          "taxonomy": "L_load_graph_gap"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "universal_frontmatter",
+          "group": "Schema",
+          "line": 1,
+          "message": "Frontmatter complete and valid: name 's4-unreachable-reference' (24 chars, valid charset, not reserved), description 98 chars with directive form and exclusion clause, skill-type 'reference-skill' valid.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "yaml_contract",
+          "group": "Schema",
+          "line": 12,
+          "message": "YAML contract satisfied: single canonical root 'reference_skill', all required keys present, facts floor met (1 fact) with both a gotcha and an example. No mixed-type signal.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "adp_back_reference",
+          "group": "ADP",
+          "line": null,
+          "message": "references/orphan.md contains no back-citation to SKILL.md sections; no dependency cycle.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "ccp_placement",
+          "group": "CCP",
+          "line": null,
+          "message": "No project-convention content and no decision-provenance markers (Dec-N, audit-finding, decision-log lines) in the body; all content changes with the skill's contract.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "crp_placement",
+          "group": "CRP",
+          "line": null,
+          "message": "Body is 25 content lines / ~105 tokens, far under the ~500-line / ~3000-token split signal; single reading task. No extraction candidate exists.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        }
+      ],
+      "lines": 31,
+      "path": "<CORPUS>/skill/s4-unreachable-reference/SKILL.md",
+      "skill_name": "s4-unreachable-reference",
+      "skill_type": "reference-skill",
+      "verdict": "NON-COMPLIANT"
+    },
+    {
+      "approx_tokens": 100,
+      "findings": [
+        {
+          "attributable": true,
+          "bucket": "IMPROVE",
+          "criterion": "skill_type_tag",
+          "group": "Schema",
+          "line": 2,
+          "message": "No skill-type advisory tag in frontmatter; the reading agent must infer the type from body content (validator row 'skill-type advisory tag' = judgment-required).",
+          "remediation": "Add a skill-type frontmatter tag to lines 1-4 (the numbered '## Procedure' body at lines 11-15 reads as a technique/doer skill, so `skill-type: technique`); classify.py confirmation deferred to the Q&A gate.",
+          "severity": "JUDGMENT",
+          "taxonomy": "A_missing_required_frontmatter"
+        },
+        {
+          "attributable": true,
+          "bucket": "IMPROVE",
+          "criterion": "yaml_contract",
+          "group": "Schema",
+          "line": 6,
+          "message": "No fenced YAML contract block with a recognized root key -- the skill is pre-contract prose, so the auditor validates it only via legacy markdown heuristics and no type-specific contract rows can run.",
+          "remediation": "Add a fenced YAML contract block after the intro (around line 9) with the root matching the chosen skill-type, encoding the three Procedure steps (lines 13-15) as contract steps, so type-specific validation applies instead of legacy fallback.",
+          "severity": "JUDGMENT",
+          "taxonomy": "E_schema_validation_failure"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "universal_frontmatter",
+          "group": "Schema",
+          "line": null,
+          "message": "All universal frontmatter rows pass: name present, 15 chars, valid charset, not reserved; description present, 96 chars, directive form, exclusion clause.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "mixed_type_signal",
+          "group": "Schema",
+          "line": null,
+          "message": "Mixed-type heuristic score=1; no competing canonical roots and no mixed-type signal.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "ccp_placement",
+          "group": "CCP",
+          "line": null,
+          "message": "Body carries no project-convention content (no local code-review rules, tool preferences, or project-specific policy); everything present changes with the skill's own contract.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "decision_provenance",
+          "group": "CCP",
+          "line": null,
+          "message": "No Dec-N entries, audit-finding tags, or dated decision-log lines in the body.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "crp_placement",
+          "group": "CRP",
+          "line": null,
+          "message": "Body is 15 lines / ~100 tokens, far under the ~500-line / ~3000-token signal; the single Procedure section is one reading task. No split candidate exists.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "adp_back_reference",
+          "group": "ADP",
+          "line": null,
+          "message": "No references/ directory and no reference docs cited in the body, so there is no back-reference cycle surface.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "references_reachable_from_skill_md",
+          "group": "ADP",
+          "line": null,
+          "message": "Skill directory contains only SKILL.md -- no orphaned reference files, unlinked member directories, dangling index entries, or keyword-routing gaps.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        },
+        {
+          "attributable": true,
+          "bucket": "NONE",
+          "criterion": "body_size",
+          "group": "Hygiene",
+          "line": null,
+          "message": "15 lines / ~100 tokens; well under the hygiene thresholds, so no CRP-evaluation prompt.",
+          "remediation": "",
+          "severity": "PASS",
+          "taxonomy": "none"
+        }
+      ],
+      "lines": 15,
+      "path": "<CORPUS>/skill/s5-legacy-prose/SKILL.md",
+      "skill_name": "s5-legacy-prose",
+      "skill_type": "unspecified (no skill-type frontmatter; no YAML contract root -- validator fell back to legacy markdown heuristics)",
+      "verdict": "COMPLIANT"
+    }
+  ],
+  "review": false,
+  "totals": {
+    "diffClean": 0,
+    "fail": 3,
+    "fix": 0,
+    "improve": 6,
+    "nonCompliant": 3,
+    "notAudited": 0,
+    "serious": 0,
+    "silent": 0,
+    "special": 0,
+    "suppressed": 0
+  }
+}
