@@ -13,16 +13,19 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
 from bootstrap_lib.engine import _process_env_pass
 from bootstrap_lib.env_manifest import (
+    ENV_STATE_MAX_AGE_SECONDS,
     ENV_STATE_STAMP,
     canonical_manifest_hash,
     entry_applies,
     env_gate_reason,
+    env_state_age,
     load_layered_env_manifests,
     read_env_state,
     resolve_machine,
@@ -554,6 +557,31 @@ class TestEnvGate:
         assert "engine updated" in env_gate_reason(
             dict(clean, engine_version="0.9"), h, v)
         assert env_gate_reason(clean, h, v) is None
+
+    def test_gate_reason_periodic_recheck(self):
+        h = "abc123"
+        v = "1.0.0"
+        clean = {"manifest_sha256": h, "engine_version": v, "last_result": "clean"}
+        fresh = ENV_STATE_MAX_AGE_SECONDS - 60
+        stale = ENV_STATE_MAX_AGE_SECONDS + 60
+        assert env_gate_reason(clean, h, v, stamp_age=fresh) is None
+        assert "periodic re-check" in env_gate_reason(clean, h, v, stamp_age=stale)
+        # Other triggers still win over the age check.
+        assert "modified" in env_gate_reason(
+            dict(clean, manifest_sha256="zzz"), h, v, stamp_age=fresh)
+        # No age available (missing stamp path) disables the age trigger only.
+        assert env_gate_reason(clean, h, v, stamp_age=None) is None
+
+    def test_env_state_age(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        assert env_state_age(str(data_dir)) is None
+        write_env_state(str(data_dir), "hash1", "1.2.3", "clean")
+        age = env_state_age(str(data_dir))
+        assert age is not None and 0 <= age < 60
+        old = time.time() - (ENV_STATE_MAX_AGE_SECONDS + 120)
+        os.utime(data_dir / ENV_STATE_STAMP, (old, old))
+        assert env_state_age(str(data_dir)) > ENV_STATE_MAX_AGE_SECONDS
 
     def test_corrupt_stamp_treated_as_absent(self, tmp_path):
         data_dir = tmp_path / "data"
