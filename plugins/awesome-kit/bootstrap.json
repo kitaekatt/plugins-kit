@@ -1,5 +1,5 @@
 {
-  "$comment": "awesome-kit depends on plugins-kit:skills-kit twice over: the plugin-ecosystem skill references the audit framework hosted there (md-audit/references/audit-framework.{md,yaml}), and the task system imports the skills_kit_lib shared library (shared_lib_imports below). Auto-install skills-kit when missing. The html-pdf skill needs Playwright (venv) + a Chromium browser, installed by custom_bootstrap.py.",
+  "$comment": "awesome-kit depends on plugins-kit:skills-kit twice over: the plugin-ecosystem skill references the audit framework hosted there (md-domain/references/audit-framework.{md,yaml}), and the task system imports the skills_kit_lib shared library (shared_lib_imports below). Auto-install skills-kit when missing. The html-pdf skill needs Playwright (venv) + a Chromium browser, installed by custom_bootstrap.py.",
   "plugins": [
     {
       "ref": "plugins-kit:skills-kit",

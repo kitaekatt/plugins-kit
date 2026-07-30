@@ -11,7 +11,7 @@ Generate `~/.claude/plugin-ecosystem.html` -- a self-contained 16:9 poster that 
 
 ## Framework
 
-This skill operationalizes the **plugin_ecosystem** viewer-kind under the shared audit framework. The shared glossary (`subject`, `primitive`, `composition`, `discovery`, `viewer-kind`, `summary projection`, layered personalization, self-parameterizing overrides) is canonical at `plugins/skills-kit/skills/md-audit/references/audit-framework.md`. The sibling viewer `prototypes:claude-explorer` operationalizes a deeper viewer-kind over the same substrate (drills into each skill instead of stopping at skill-name level, and supports leaf-primitive deep-rendering).
+This skill operationalizes the **plugin_ecosystem** viewer-kind under the shared audit framework. The shared glossary (`subject`, `primitive`, `composition`, `discovery`, `viewer-kind`, `summary projection`, layered personalization, self-parameterizing overrides) is canonical at `plugins/skills-kit/skills/md-domain/references/audit-framework.md`. The sibling viewer `prototypes:claude-explorer` operationalizes a deeper viewer-kind over the same substrate (drills into each skill instead of stopping at skill-name level, and supports leaf-primitive deep-rendering).
 
 In framework terms, plugin-ecosystem is:
 

@@ -1,5 +1,5 @@
 {
-  "$comment": "prototypes' claude-explorer skill references the audit framework hosted in plugins-kit:skills-kit (md-audit/references/audit-framework.{md,yaml}); auto-install skills-kit when missing. The crawl uses PyYAML from prototypes' OWN venv (declared below + pyproject.toml) -- it must not reach into another plugin's venv. Without the venv the script degrades to regex frontmatter parsing.",
+  "$comment": "prototypes' claude-explorer skill references the audit framework hosted in plugins-kit:skills-kit (md-domain/references/audit-framework.{md,yaml}); auto-install skills-kit when missing. The crawl uses PyYAML from prototypes' OWN venv (declared below + pyproject.toml) -- it must not reach into another plugin's venv. Without the venv the script degrades to regex frontmatter parsing.",
   "plugins": [
     {
       "ref": "plugins-kit:skills-kit",

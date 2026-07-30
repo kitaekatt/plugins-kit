@@ -38,7 +38,6 @@ RULES: dict[str, tuple[str, str, str]] = {
     "name-charset": ("inoffensive", "integrity", "`frontmatter.name` uses the allowed charset."),
     "name-reserved": ("inoffensive", "integrity", "`frontmatter.name` is not a reserved name."),
     "desc-present": ("inoffensive", "integrity", "`frontmatter.description` is present."),
-    "refs-one-hop-deep": ("inoffensive", "integrity", "`references/` is one hop deep (no nested references directories)."),
     "refs-cited-exist": ("inoffensive", "integrity", "Every reference cited in the body resolves to a file."),
     "asset-paths-resolve": ("inoffensive", "integrity", "Every declared asset-dependency and `tools[].tests` path resolves."),
     "refs-reachable": ("inoffensive", "integrity", "Every file under `references/` is reachable from SKILL.md."),
@@ -52,6 +51,11 @@ RULES: dict[str, tuple[str, str, str]] = {
     "desc-exclusion-clause": ("optional", "description-hygiene", 'The description carries a "Do NOT use for..." exclusion clause.'),
     "skill-type-tag": ("optional", "description-hygiene", "A `skill-type` advisory tag is present in frontmatter (else the agent infers the type)."),
     "skill-type-valid": ("optional", "description-hygiene", "The `skill-type` value is one of the canonical skill types."),
+    # -- optional: layout ------------------------------------------------
+    # Tunability decided 2026-07-29 (md-domain fold): a project may
+    # legitimately cluster a large reference set into subdirectories when
+    # every cluster surface is index-reachable; the rule stays on by default.
+    "refs-one-hop-deep": ("optional", "layout", "`references/` is one hop deep (no nested references directories)."),
     # -- optional: thresholds / signals -----------------------------------
     "body-line-count": ("optional", "thresholds-signals", "Reports the SKILL.md body line count (informational count row)."),
     "body-token-count": ("optional", "thresholds-signals", "Reports the approximate SKILL.md body token count (informational count row)."),

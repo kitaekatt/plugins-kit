@@ -22,7 +22,7 @@ from ..schema_registry import register_schema
 
 REFERENCE_SKILL_SCHEMA = {
     "root": "reference_skill",
-    "owner_doc": "skills/skill-authoring/references/framework.md",
+    "owner_doc": "skills/md-domain/references/skill-domain/schema-fixtures.md",
     "keys": {
         "_schema_version": {"type": "string", "required": False},
         "identity": IDENTITY_RULE,
@@ -56,7 +56,7 @@ REFERENCE_SKILL_SCHEMA = {
 
 PATTERN_SKILL_SCHEMA = {
     "root": "pattern_skill",
-    "owner_doc": "skills/skill-authoring/references/framework.md",
+    "owner_doc": "skills/md-domain/references/skill-domain/schema-fixtures.md",
     "keys": {
         "_schema_version": {"type": "string", "required": False},
         "identity": IDENTITY_RULE,
@@ -103,7 +103,7 @@ PATTERN_SKILL_SCHEMA = {
 # the facts cross-source precedent).
 TECHNIQUE_SKILL_SCHEMA = {
     "root": "technique_skill",
-    "owner_doc": "skills/skill-authoring/references/framework.md",
+    "owner_doc": "skills/md-domain/references/skill-domain/schema-fixtures.md",
     "keys": {
         "_schema_version": {"type": "string", "required": False},
         "identity": IDENTITY_RULE,
@@ -151,7 +151,7 @@ TECHNIQUE_SKILL_SCHEMA = {
 
 DISCIPLINE_SKILL_SCHEMA = {
     "root": "discipline_skill",
-    "owner_doc": "skills/skill-authoring/references/framework.md",
+    "owner_doc": "skills/md-domain/references/skill-domain/schema-fixtures.md",
     "keys": {
         "_schema_version": {"type": "string", "required": False},
         "identity": IDENTITY_RULE,
@@ -203,7 +203,7 @@ DISCIPLINE_SKILL_SCHEMA = {
 
 DOMAIN_SKILL_SCHEMA = {
     "root": "domain_skill",
-    "owner_doc": "skills/skill-authoring/references/framework.md",
+    "owner_doc": "skills/md-domain/references/skill-domain/schema-fixtures.md",
     "keys": {
         "_schema_version": {"type": "string", "required": False},
         "identity": IDENTITY_RULE,
@@ -268,7 +268,7 @@ DOMAIN_SKILL_SCHEMA = {
 
 CAPABILITY_SKILL_SCHEMA = {
     "root": "capability_skill",
-    "owner_doc": "skills/skill-authoring/references/framework.md",
+    "owner_doc": "skills/md-domain/references/skill-domain/schema-fixtures.md",
     "keys": {
         "_schema_version": {"type": "string", "required": False},
         "identity": IDENTITY_RULE,
@@ -337,7 +337,7 @@ CAPABILITY_SKILL_SCHEMA = {
 
 AUDIT_SKILL_SCHEMA = {
     "root": "audit_skill",
-    "owner_doc": "skills/skill-authoring/references/framework.md",
+    "owner_doc": "skills/md-domain/references/skill-domain/schema-fixtures.md",
     "keys": {
         "_schema_version": {"type": "string", "required": False},
         "identity": IDENTITY_RULE,

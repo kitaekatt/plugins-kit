@@ -19,5 +19,5 @@ pythonpath = [
     "plugins/skills-kit",
     # Exception (grandfathered): tests/skills-kit/test_discover.py imports
     # `discover` as a bare module from this per-skill script dir.
-    "plugins/skills-kit/skills/claude-md-audit/scripts",
+    "plugins/skills-kit/skills/md-domain/scripts",
 ]

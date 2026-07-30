@@ -1,12 +1,14 @@
-"""Tests for project-doc-audit/scripts/discover.py.
+"""Tests for the project-doc audit lane's scripts/discover_project_doc.py.
 
-discover.py enumerates standalone PROJECT DOCUMENTS (plain_md outside any skill
-references/ folder and outside the CLAUDE.md hierarchy) and computes the
-mechanical signals the audit lanes consume: kind classification, size, and the
-inbound-citation count that powers orphan detection.
+discover_project_doc.py enumerates standalone PROJECT DOCUMENTS (plain_md
+outside any skill references/ folder and outside the CLAUDE.md hierarchy) and
+computes the mechanical signals the audit lanes consume: kind classification,
+size, and the inbound-citation count that powers orphan detection.
 
-Loaded via importlib under a unique module name because claude-md-audit ships a
-sibling `discover.py`; a bare `import discover` would be ambiguous across the two.
+Loaded via importlib under a unique module name because the md-domain scripts
+directory also ships discover_skill.py and discover_claude_md.py; a bare
+`import discover_project_doc` would collide with pytest's module cache across
+the sibling discover_* test files.
 """
 
 import importlib.util
@@ -15,7 +17,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DISCOVER_PATH = (
     REPO_ROOT / "plugins" / "skills-kit" / "skills"
-    / "project-doc-audit" / "scripts" / "discover.py"
+    / "md-domain" / "scripts" / "discover_project_doc.py"
 )
 
 _spec = importlib.util.spec_from_file_location("pd_discover", DISCOVER_PATH)

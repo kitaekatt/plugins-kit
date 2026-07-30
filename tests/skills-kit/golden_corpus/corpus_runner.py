@@ -31,9 +31,9 @@ EXPECTED = CORPUS_DIR / "expected"
 REPO_ROOT = CORPUS_DIR.parents[2]
 PLUGIN = REPO_ROOT / "plugins" / "skills-kit"
 
-CLAUDE_MD_DISCOVER = PLUGIN / "skills" / "claude-md-audit" / "scripts" / "discover.py"
-PROJECT_DOC_DISCOVER = PLUGIN / "skills" / "project-doc-audit" / "scripts" / "discover.py"
-REFERENCES_AUDIT = PLUGIN / "skills" / "references-audit" / "scripts" / "references_audit.py"
+CLAUDE_MD_DISCOVER = PLUGIN / "skills" / "md-domain" / "scripts" / "discover_claude_md.py"
+PROJECT_DOC_DISCOVER = PLUGIN / "skills" / "md-domain" / "scripts" / "discover_project_doc.py"
+REFERENCES_AUDIT = PLUGIN / "skills" / "md-domain" / "scripts" / "references_audit.py"
 
 if str(PLUGIN) not in sys.path:
     sys.path.insert(0, str(PLUGIN))

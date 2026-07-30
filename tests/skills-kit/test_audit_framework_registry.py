@@ -25,7 +25,7 @@ from skills_kit_lib.document_walker import collect_yaml_units
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRAMEWORK_YAML = (
-    REPO_ROOT / "plugins" / "skills-kit" / "skills" / "md-audit"
+    REPO_ROOT / "plugins" / "skills-kit" / "skills" / "md-domain"
     / "references" / "audit-framework.yaml"
 )
 
@@ -64,14 +64,30 @@ def _registry_paths() -> list[tuple[str, str, str]]:
     return out
 
 
-def _criteria_ids(skill_md: Path) -> set[str]:
-    units, _, parse_error = collect_yaml_units(skill_md.read_text(encoding="utf-8"))
-    assert parse_error is None, f"{skill_md}: yaml parse error {parse_error}"
-    for root, data in units:
-        if root == "audit_skill":
-            block = data.get(root, data)
-            return {c["id"] for c in block.get("criteria") or [] if isinstance(c, dict)}
-    raise AssertionError(f"{skill_md}: no audit_skill unit found")
+def _criteria_ids(owner_doc: Path) -> set[str]:
+    """Extract the implemented rule ids from the doc rules_owned_in names.
+
+    Pre-fold this was the member SKILL.md's audit_skill.criteria block; the
+    md-domain restructure moved the criteria into each artifact's standards
+    doc, where they appear either as table rows whose first column is the
+    backticked id, or (references-standards.md) as prose "Rule id `x`"
+    statements. A SKILL.md owner still parses via its audit_skill unit.
+    """
+    text = owner_doc.read_text(encoding="utf-8")
+    if owner_doc.name == "SKILL.md":
+        units, _, parse_error = collect_yaml_units(text)
+        assert parse_error is None, f"{owner_doc}: yaml parse error {parse_error}"
+        for root, data in units:
+            if root == "audit_skill":
+                block = data.get(root, data)
+                return {
+                    c["id"] for c in block.get("criteria") or [] if isinstance(c, dict)
+                }
+        raise AssertionError(f"{owner_doc}: no audit_skill unit found")
+    ids = set(re.findall(r"^\| `([a-z][a-z0-9_]+)`", text, flags=re.MULTILINE))
+    ids |= set(re.findall(r"[Rr]ule id\s+`([a-z][a-z0-9_]+)`", text))
+    assert ids, f"{owner_doc}: no criteria ids found (table rows or 'Rule id' prose)"
+    return ids
 
 
 def _owning_skill_md(entry: dict) -> Path:

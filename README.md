@@ -78,7 +78,7 @@ rest declare it as a dependency, so installing any of them pulls it in.
 | **bootstrap** | Foundation | Dependency/provisioning engine -- tools, venvs, git deps, marketplaces, and config from a `bootstrap.json`. |
 | **p4-kit** | Code review | Multi-agent review of pending Perforce changelists (`/p4-code-review`). |
 | **git-kit** | Code review | Git + GitHub multi-agent code review (`/git-code-review`) plus `gh` bootstrap. |
-| **skills-kit** | Authoring | Authoring/auditing skills and `CLAUDE.md` -- verb x artifact matrix (`/md-authoring`, `/md-audit`). |
+| **skills-kit** | Authoring | Authoring/auditing skills and `CLAUDE.md` -- verb x artifact matrix (`/md-domain`). |
 | **unreal-kit** | Automation | Unreal Engine automation -- Python asset API, MCP editor control, redirector cleanup. |
 | **hue-kit** | Automation | Philips Hue layered-scene framework -- bridge sync, YAML scenes, meta-group solver. |
 | **awesome-kit** | Utility | Cross-domain skills -- communication framework, `/plugin-ecosystem`, `/html-pdf`, task tracking. |

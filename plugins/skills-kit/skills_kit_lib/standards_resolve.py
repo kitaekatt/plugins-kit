@@ -82,7 +82,7 @@ class ResolvedStandards:
 def _config_dir() -> Path:
     """The harness config dir: $CLAUDE_CONFIG_DIR if set, else ~/.claude.
 
-    A small local reimplementation of project-doc-audit/scripts/discover.py's
+    A small local reimplementation of md-domain/scripts/discover_project_doc.py's
     _config_dir -- copied deliberately rather than imported, so the lib takes no
     dependency on a skill's scripts dir.
     """

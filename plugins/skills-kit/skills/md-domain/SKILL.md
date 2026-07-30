@@ -1,0 +1,415 @@
+---
+_schema_version: 1
+name: md-domain
+author: christina
+skill-type: domain-skill
+description: Use when auditing or authoring project markdown -- SKILL.md, CLAUDE.md, project docs, cross-refs. Do NOT use for knowledge-encoding or update-documentation.
+disable-model-invocation: false
+user-invocable: true
+argument-hint: "[audit|author] [skill|claude-md|project-doc|references] [<path>] [--review] [--density] [fast]"
+---
+
+# md-domain
+
+The single front door for the **verb x artifact matrix** over the `md` artifact:
+two verbs (**audit**, **author**) crossed with four artifacts (`skill` = SKILL.md,
+`claude-md` = CLAUDE.md, `project-doc` = a standalone project document,
+`references` = skill cross-references). It replaces the former `md-audit` and
+`md-authoring` routers and the member skills they dispatched into.
+
+One skill, one dispatch table, two shared verb lanes. The per-artifact "what good
+looks like" lives in `references/standards/`; the per-verb "how to run it" lives
+in `references/lanes/`; the placement spine both verbs judge against lives in
+`references/cohesion-principles.md`.
+
+## Invocation
+
+- **Bare** -- `/md-domain` greets with the menu below; pick a verb + artifact.
+- **Argument-dispatched** -- `/md-domain audit skill <path>`,
+  `/md-domain author claude-md`, `/md-domain audit references [flags]` jump
+  straight into that lane.
+- **Natural language** -- routed by the verb and the artifact named. Each lane
+  record below declares the `invocation_phrasings` that should reach it.
+- **Review mode** -- append `--review` to an `audit` dispatch on `skill`,
+  `claude-md`, or `project-doc` to audit a CHANGE rather than a file. See
+  "Review mode" below.
+
+### Bare-invocation greeting
+
+```
+How can I help you with your project markdown?
+
+Audit:
+ - a SKILL.md (contract + cohesion)            (/md-domain audit skill <path>)
+ - a CLAUDE.md (cohesion + hygiene + schema)   (/md-domain audit claude-md <path>)
+ - a project document (cohesion + placement)   (/md-domain audit project-doc <path>)
+ - broken skill cross-references               (/md-domain audit references)
+ - the whole skill corpus (roster / hierarchy) (/md-domain audit skill roster)
+
+Author:
+ - a SKILL.md (type contracts, scripts)        (/md-domain author skill)
+ - a CLAUDE.md (a valid claude_md block)       (/md-domain author claude-md)
+ - a project document (placement + role)       (/md-domain author project-doc)
+
+Or can I help you with something else?
+```
+
+Show the menu and stop; do not load a lane or a standards doc until the user picks.
+
+## Dispatch table (verb x artifact)
+
+Route by verb AND artifact, then load the verb's lane procedure plus that
+artifact's standards doc -- exactly those two, never the whole tree.
+
+| Verb x artifact | Lane id | Procedure | Standards doc |
+|---|---|---|---|
+| audit x skill | `audit_skill` | `references/lanes/audit-lane.md` | `references/standards/skill-standards.md` |
+| audit x claude-md | `audit_claude_md` | `references/lanes/audit-lane.md` | `references/standards/claude-md-standards.md` |
+| audit x project-doc | `audit_project_doc` | `references/lanes/audit-lane.md` | `references/standards/project-doc-standards.md` |
+| audit x references | `audit_references` | `references/lanes/audit-lane.md` (references special case) | `references/standards/references-standards.md` |
+| author x skill | `author_skill` | `references/lanes/authoring-lane.md` | `references/standards/skill-standards.md` |
+| author x claude-md | `author_claude_md` | `references/lanes/authoring-lane.md` | `references/standards/claude-md-standards.md` |
+| author x project-doc | `author_project_doc` | `references/lanes/authoring-lane.md` | `references/standards/project-doc-standards.md` |
+| author x references | -- (no lane) | -- | -- |
+
+**`author x references` has no lane, deliberately.** Cross-references are not an
+authored artifact -- they are an emergent property of the other three. There is
+nothing to author; a request to "fix my broken references" is a REMEDIATION of
+the `audit_references` lane, and a request to "add a reference" is authoring
+whichever artifact carries it (`author_skill` / `author_claude_md` /
+`author_project_doc`). Say so and route there rather than improvising a lane.
+
+### Lane records
+
+Every lane record carries the two REQUIRED fields -- `invocation_phrasings`
+(>= 3 natural-language phrasings that should route there) and `change_driver`
+(one line naming what class of change makes the lane's content change). A lane
+record missing either is invalid and the registry-integrity test fails.
+
+```yaml
+lanes:
+  _schema_version: "1"
+  records:
+  - id: audit_skill
+    verb: audit
+    artifact: skill
+    standards: references/standards/skill-standards.md
+    procedure: references/lanes/audit-lane.md
+    discover_script: scripts/discover_skill.py
+    workflow_detect: workflow/skill-detect.js
+    workflow_remediate: workflow/skill-remediate.js
+    verdicts: [COMPLIANT, NON-COMPLIANT, DIFF-CLEAN, NOT-AUDITED]
+    review_mode: true
+    invocation_phrasings:
+      - "audit this SKILL.md"
+      - "check my skill against its type contract"
+      - "does this skill satisfy the framework"
+      - "review my skill changes before I submit"
+      - "inventory the skills / skill roster / skill hierarchy"
+    change_driver: >-
+      Changes when the SKILL.md type contract changes -- skill-standards.md,
+      schema_registry.py, or a new per-type rule id.
+  - id: audit_claude_md
+    verb: audit
+    artifact: claude-md
+    standards: references/standards/claude-md-standards.md
+    procedure: references/lanes/audit-lane.md
+    discover_script: scripts/discover_claude_md.py
+    workflow_detect: workflow/claude-md-detect.js
+    workflow_remediate: workflow/claude-md-remediate.js
+    verdicts: [COMPLIANT, NON-COMPLIANT, DIFF-CLEAN, NOT-AUDITED]
+    review_mode: true
+    density_lens: true
+    invocation_phrasings:
+      - "audit this CLAUDE.md"
+      - "check my claude_md block"
+      - "is this CLAUDE.md too verbose / audit for token efficiency"
+      - "review the directory review-notes file"
+      - "audit the diff on CLAUDE.md before I submit"
+    change_driver: >-
+      Changes when the CLAUDE.md standards change -- the C/R/A/H rule set, the
+      CD code-directory dimension, the DD density lens, or CLAUDE_MD_SCHEMA.
+  - id: audit_project_doc
+    verb: audit
+    artifact: project-doc
+    standards: references/standards/project-doc-standards.md
+    procedure: references/lanes/audit-lane.md
+    discover_script: scripts/discover_project_doc.py
+    workflow_detect: workflow/project-doc-detect.js
+    workflow_remediate: workflow/project-doc-remediate.js
+    verdicts: [COMPLIANT, NON-COMPLIANT, DIFF-CLEAN, NOT-AUDITED]
+    review_mode: true
+    invocation_phrasings:
+      - "audit the docs in .claude/docs"
+      - "should this design doc graduate to a skill"
+      - "is this project document an orphan"
+      - "audit my README"
+      - "review the doc changes before I publish"
+    change_driver: >-
+      Changes when the project-doc standards change -- PD-1..PD-11, the
+      maturation pipeline, or a named-role definition (readme, generated).
+  - id: audit_references
+    verb: audit
+    artifact: references
+    standards: references/standards/references-standards.md
+    procedure: references/lanes/audit-lane.md
+    scanner_script: scripts/references_audit.py
+    taxonomy_doc: references/references-finding-taxonomy.md
+    workflow_classify: workflow/references-classify.js
+    workflow_remediate: workflow/references-remediate.js
+    verdicts: [AUTO, DISCUSS, SPECIAL]
+    review_mode: false
+    invocation_phrasings:
+      - "find broken skill references"
+      - "check for dangling skill: hard deps"
+      - "scan the corpus for cross-reference rot"
+      - "did any skill rename break a reference"
+    change_driver: >-
+      Changes when the scanner's detection surface changes -- a new
+      reference syntax, a new escape convention, or a new false-positive class.
+  - id: author_skill
+    verb: author
+    artifact: skill
+    standards: references/standards/skill-standards.md
+    procedure: references/lanes/authoring-lane.md
+    verdicts: [COMPLIANT, NON-COMPLIANT]
+    invocation_phrasings:
+      - "author a new skill"
+      - "refine this SKILL.md"
+      - "what type should this skill be"
+      - "write the contract block for this skill"
+    change_driver: >-
+      Changes when the SKILL.md type contract changes (same driver as
+      audit_skill -- one standards doc read in the producing direction).
+  - id: author_claude_md
+    verb: author
+    artifact: claude-md
+    standards: references/standards/claude-md-standards.md
+    procedure: references/lanes/authoring-lane.md
+    verdicts: [COMPLIANT, NON-COMPLIANT]
+    invocation_phrasings:
+      - "write a claude_md block"
+      - "author a CLAUDE.md for this directory"
+      - "add an insight record to CLAUDE.md"
+      - "write review notes for this code directory"
+    change_driver: >-
+      Changes when the CLAUDE.md standards change (same driver as
+      audit_claude_md, producing direction).
+  - id: author_project_doc
+    verb: author
+    artifact: project-doc
+    standards: references/standards/project-doc-standards.md
+    procedure: references/lanes/authoring-lane.md
+    verdicts: [COMPLIANT, NON-COMPLIANT]
+    invocation_phrasings:
+      - "write a project document / design doc"
+      - "where should this doc live"
+      - "author a README for this project"
+      - "turn these notes into a reference doc"
+    change_driver: >-
+      Changes when the project-doc standards change (same driver as
+      audit_project_doc, producing direction).
+```
+
+## Argument grammar
+
+Positional: `<verb> <artifact> [selector] [flags]`. Verb and artifact may both be
+inferred from natural language; when only one is unambiguous, ask for the other
+rather than guessing.
+
+- **Verb** -- `audit` | `author`. Absent and unrecoverable from phrasing -> show the menu.
+- **Artifact** -- `skill` | `claude-md` | `project-doc` | `references`.
+- **Selector** (audit lanes) -- `(none)` audits the cwd artifact if present;
+  `list` emits a numbered list from the lane's discover script and stops;
+  `<path>` targets a file or directory; `<numbers>` selects by index from the
+  last `list` output. `audit skill` also accepts `roster` / `hierarchy` (with an
+  optional output path or `-` for stdout) for corpus inventory.
+- **`fast` / `--fast` / `--yes` / `-y`** -- non-interactive: skip the Q&A round
+  and infer every IMPROVE/SPECIAL decision. FIX applies by definition, SERIOUS is
+  surfaced. Prose intent ("just apply everything, don't ask me") sets the same flag.
+- **`review` / `--review`** -- review mode (audit lanes on skill / claude-md /
+  project-doc only). Prose intent ("review my changes before I submit", "audit
+  the diff") sets the same flag. Mutually exclusive with `fast`. Off by default.
+- **`density` / `--density`** -- pass-through to the `audit_claude_md` lane only:
+  adds the opt-in DD-1..DD-4 lens. Advisory only, never FAIL. Prose intent ("is
+  this CLAUDE.md too verbose", "audit for token efficiency") sets the same flag.
+  Off by default; the lens never runs unless requested. On any other lane, say the
+  flag does not apply there and continue without it.
+- **`--scope skills|references|md|all`, `--path`, `--json`, `--verbose`,
+  `--ignore-dir`, `--ignore-file`** -- pass-through to the `audit_references`
+  scanner.
+
+## Review mode
+
+Review mode audits a CHANGE rather than a file: same criteria, same lanes, but
+findings the change did not cause are suppressed and nothing is auto-applied. It
+exists to gate a submit / publish / handback. The full mechanics (attributability
+filter, pre-image materialization, the two documented limits) live in
+`references/lanes/audit-lane.md`. The routing rules that belong HERE:
+
+- `--review` flows to the `audit_skill`, `audit_claude_md`, and
+  `audit_project_doc` lanes.
+- **`--review` NEVER flows to `audit_references`.** That lane does not implement
+  it. If `--review` arrives on a references dispatch, **say so and stop** rather
+  than passing it through. The lane would ignore the token silently and return a
+  whole-corpus scan, which a caller gating a submit would read as a passed
+  change-scoped gate. A fake gate is worse than no gate.
+- **`NOT-AUDITED` is not a pass.** It is the verdict a detect lane returns for a
+  file it DECLINED as outside its artifact shape (see the decline contract in
+  `references/lanes/audit-lane.md`). A declined file was never read. It is counted
+  APART from `diffClean` and must never be folded into the clean count or reported
+  as a pass -- a caller gating on `DIFF-CLEAN` must be able to tell "clean" from
+  "nobody read it". This is the same fake-gate failure as the `references` case above.
+- Review mode's fan-out threshold is 1 (always the Workflow path), because a gate
+  must not inherit whatever model the session happens to be running.
+
+## Domain contract
+
+```yaml
+domain_skill:
+  _schema_version: "1"
+  identity: The single front door for the verb x artifact matrix over project markdown -- auditing and authoring SKILL.md, CLAUDE.md, project documents, and skill cross-references against the cohesion framework (CCP / CRP / ADP) and the per-artifact standards docs it owns.
+  companions:
+    siblings: []
+    note: |
+      No sibling domains. The former md-audit / md-authoring routers and their member
+      skills are folded in here. Adjacent non-member skills in skills-kit:
+      knowledge-encoding (encoding a newly discovered insight into a persistent home),
+      update-documentation (end-of-session doc review), materialized-output (the
+      insight-view pattern). This domain owns placement, content shape, and the
+      per-artifact standards; it does not own the encode-an-insight or
+      end-of-session-review triggers.
+  scope:
+    covers:
+      - dispatching audit or authoring intent to exactly one verb x artifact lane
+      - owning the four per-artifact standards docs (what good looks like for skill / claude-md / project-doc / references)
+      - owning the two verb lanes (one shared audit procedure, one shared authoring procedure)
+      - owning the placement spine (cohesion-principles) and the shared audit framework, configuration, and content-shape references
+    excludes:
+      - encoding a newly discovered insight into a persistent location (use knowledge-encoding)
+      - end-of-session review of what the work implies for the docs (use update-documentation)
+      - designing a materialized-insight tool (use materialized-output)
+      - invoking the skills being audited or authored
+  orientation:
+    summary: |
+      One skill, one dispatch table. Pick the verb (audit / author) and the artifact
+      (skill / claude-md / project-doc / references), then load exactly two things: the
+      verb's lane procedure and the artifact's standards doc. The lane is the HOW (the
+      DETECT -> Q&A gate -> REMEDIATE pipeline for audit; the confirm -> place -> apply ->
+      shape -> validate pipeline for authoring); the standards doc is the WHAT, read in
+      the detecting direction by the audit lane and the producing direction by the
+      authoring lane. Placement -- which file a fact belongs in -- is always deferred to
+      references/cohesion-principles.md; it is never re-derived in a lane or a standards doc.
+    behavioral_guardrails:
+      - Route by verb AND artifact. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the authoring lane's producing direction when the user asked for a verdict. Each standards doc is artifact-specific.
+      - One lane at a time. On a bare invocation show the menu and wait; do not co-load two standards docs or both lanes. A typical invocation loads this SKILL.md plus one lane plus one standards doc.
+      - Detection and remediation are separate phases. The audit pass produces a verdict; it does not silently mutate the subject. Remediation is dispatched after the Q&A gate, as its own work.
+      - Findings carry a four-disposition classification (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL), assigned instance-level by the lane's detect classifier -- the taxonomy `bucket` is only the default. Report contract, in this order and with no hedging - SERIOUS summarized at the TOP (never auto-fixed), FIX as an applied count landing in a reviewable CL (review mode - PROPOSED, never applied), IMPROVE as a count plus one-line pitches (opt-in discussion), SILENT omitted entirely. The references lane retains the legacy AUTO / DISCUSS / SPECIAL lanes.
+      - Defer placement to references/cohesion-principles.md -- which CLAUDE.md, which skill, whether content graduates. Do not re-derive the placement algorithm inside a lane, a standards doc, or from memory. A placement already resolved upstream (an audit remediation naming the destination, an orchestrator directive) is followed, not re-derived.
+      - Summarize-and-reference, do not restate. Keep a fact in its SSOT and reference it elsewhere; the compact form is a reminder plus a reference, and only when the fact fits about a dozen tokens -- beyond that, reference only. See cohesion-principles `summarize_and_reference` and its loss-free-deletion guard.
+      - Size is a SIGNAL, not a verdict. An over-threshold file prompts a CRP evaluation (do sections serve different reading tasks?), never an automatic split -- and a split is offered (IMPROVE) only with a named extraction candidate, else it stays SILENT.
+      - Do not author a recommended pattern -- only required, conditionally required, prohibited.
+  index:
+    references:
+      - id: skill_standards
+        path: references/standards/skill-standards.md
+        keywords: [skill.md standards, type contract, required conditional prohibited, description requirements, frontmatter, mixed-type, schemas are floors, content allocation]
+        summary: What a good SKILL.md looks like -- per-type contract tables, description requirements, content-form choice, L1/L2/L3 allocation, hygiene thresholds. Read by both the audit_skill and author_skill lanes. Paired with skills_kit_lib/schema_registry.py, which wins on divergence.
+      - id: claude_md_standards
+        path: references/standards/claude-md-standards.md
+        keywords: [claude.md standards, claude_md block, C-1 R-1 A-1 H-1, ccp crp adp rules, code-directory review notes, CD-1, density DD-1, insight record shape, scope covers excludes]
+        summary: What a good CLAUDE.md looks like -- the classic C/R/A/H rule set, the CD code-directory review-notes dimension (shapes, observation kinds, anchoring discipline), and the opt-in DD density lens. Read by both the audit_claude_md and author_claude_md lanes.
+      - id: project_doc_standards
+        path: references/standards/project-doc-standards.md
+        keywords: [project document standards, PD-1, maturation, graduate to skill, orphan, discoverability, one hop, readme role, generated artifact, ancestor convention]
+        summary: What a good project document looks like -- PD-1..PD-11 (placement, maturation, CRP unitary reading task, ADP discoverability and one-hop, CCP no-skill-duplication, named roles, hygiene). Read by both the audit_project_doc and author_project_doc lanes.
+      - id: references_standards
+        path: references/standards/references-standards.md
+        keywords: [cross-reference standards, hard dep, soft ref, name mismatch, shadowing, documentation convention, example prefix, proposed prefix, allow-stale, code fence masking]
+        summary: What good cross-references look like -- the four scanner criteria (hard-dep missing, soft-ref missing, name mismatch, shadowing), the escape-prefix Documentation Convention, and the per-file allow-stale mechanism. Read by the audit_references lane.
+      - id: cohesion_principles
+        path: references/cohesion-principles.md
+        keywords: [placement, where does this live, ccp crp adp, load graph, per artifact role, placement algorithm, skill packaging razor, placement follows trigger shape, summarize and reference, maturation pipeline]
+        summary: The placement spine -- the content_allocation framework (load graph, CCP/CRP/ADP applied to placement, the placement algorithm, per-artifact roles, the skill maturation pipeline, placement_follows_trigger_shape, the two-step skill_packaging_razor, summarize_and_reference). Every lane and every standards doc defers here for WHERE a fact lives; on divergence, this document wins.
+      - id: audit_framework
+        path: references/audit-framework.md
+        keywords: [audit framework, glossary, subject, primitive, composition, audit-kind, rule, finding, severity, taxonomy, bucket, corpus, scaffolding]
+        summary: Canonical glossary for the audit family -- the vocabulary (subject / primitive / composition / discovery / audit-kind / rule / finding / severity / taxonomy / bucket / corpus / scaffolding) every lane declares its subject and rules in terms of. Also the SSOT for the four-disposition bucket model.
+      - id: audit_framework_data
+        path: references/audit-framework.yaml
+        keywords: [audit framework data, primitives, compositions, audit-kind registry, rules per composition, lane bindings, machine-readable]
+        summary: The machine-readable data side of the framework -- primitives, compositions, and the audit-kind registry (which rule ids bind to which compositions per lane). Authoritative on divergence with the markdown tables.
+      - id: configuring_standards
+        path: references/configuring-standards.md
+        keywords: [configure standards, disable rule, tune threshold, rules off, config.yaml, config.local.yaml, layer model, rule-id catalog, disabledCriteria, thresholds]
+        summary: User-and-Claude-facing configuration reference -- the layer model and precedence, config.yaml format, the generated rule-id catalog by bucket, the thresholds, additive standards files, how disables surface in reports, and troubleshooting. Load when a user wants to configure which opinions skills-kit enforces.
+      - id: authoring_standards
+        path: references/authoring-standards.md
+        keywords: [author standards file, standards_set block, applies_to, criteria, severity, enforcement, verbatim quote, standards schema, additive standards]
+        summary: Authoring spec for an additive standards file -- the standards_set block schema, filename-to-primitive convention, severity (fail/info/judgment) and enforcement (mechanical/judgment) semantics, verbatim-quote posture, and a complete valid example.
+      - id: audit_lane
+        path: references/lanes/audit-lane.md
+        keywords: [audit procedure, detect remediate, q and a gate, workflow fan-out, pre-image, review mode, non-interactive, decline contract, not-audited, output template, four dispositions]
+        summary: The ONE audit procedure, parameterized by artifact -- DETECT (opus/high) -> Q&A gate -> REMEDIATE (sonnet/low), the fan-out thresholds, pre-image materialization, the report contract, non-interactive inference, the generalized decline contract, and the references-lane special case.
+      - id: references_finding_taxonomy
+        path: references/references-finding-taxonomy.md
+        keywords: [references finding taxonomy, A-K categories, hard dep missing, soft ref missing, name mismatch, shadowing, detection signals, disposition defaults, background-agent brief]
+        summary: The references lane's A-K classification taxonomy -- detection signals, default remediations, the scanner-rule disposition table, and the background-agent brief template for cross-reference findings.
+      - id: authoring_lane
+        path: references/lanes/authoring-lane.md
+        keywords: [authoring procedure, confirm artifact, placement, apply standards, shape content, validate, single invocation, produce compliant]
+        summary: The ONE authoring procedure, parameterized by artifact -- confirm the artifact, resolve placement via cohesion-principles, apply the artifact's standards doc in the PRODUCING direction, shape per the authoring-patterns cluster, validate. Single-invocation; no fan-out machinery.
+      - id: authoring_patterns
+        path: references/authoring-patterns/
+        keywords: [content shape, three surfaces, yaml header markdown embedded yaml, structure asserts, area ownership, area config, actions pattern, query tool pattern, how to shape a fact]
+        summary: The verb-generic content-shape cluster -- content-authoring.md (the three content-form surfaces and the choice framework), three-surfaces.md, area-ownership.md, area-config.md, actions-pattern.md, query-tool-pattern.md. The HOW a fact is shaped, orthogonal to the per-artifact WHAT and to cohesion-principles' WHERE.
+      - id: skill_domain
+        path: references/skill-domain/
+        keywords: [glossary, vocabulary, type contract tables, framework records, example audit, example verification, scripts reference, report usage, schema fixtures, domain layering, subdomain schema, patterns actions, skill authoring deep refs]
+        summary: The skill-artifact deep reference cluster -- glossary.md (canonical vocabulary), framework.md (type-contract tables plus structured framework records; schema_registry.py wins on divergence), example-audit.md, example-verification.md, scripts.md (audit/classify/tag CLI + skills_kit_lib.corpus), report-usage.md (roster/hierarchy CLI), schema-fixtures.md (owner_doc validation fixtures), domain-layering.md, subdomain-schema.md, patterns-actions.md. Loaded on demand by the skill lanes.
+      - id: provenance
+        path: references/provenance/
+        keywords: [decision provenance, dec_N, why the contract looks like this, framework decision log, folded skill histories]
+        summary: Inherited decision-provenance logs (the dec_N framework decisions and the per-skill CLAUDE.md histories of the folded skills). Read when reconstructing WHY a contract or standard looks the way it does; never a runtime dependency of a lane.
+  capabilities:
+    - id: audit
+      keywords: [audit, contract check, validate skill, run audit, schema validation]
+      description: Run deterministic contract checks against a SKILL.md or CLAUDE.md (authoring-time and audit-time validation).
+      operation: python -m skills_kit_lib.audit <path>
+      tool: skills_kit_lib/audit.py
+      scope_axes: [single-skill]
+      reference_section: skill-domain/scripts.md (audit)
+    - id: classify
+      keywords: [classify, infer type, type detection, mixed-type detection, suggest type]
+      description: Infer a SKILL.md's type from content shape and YAML root.
+      operation: python -m skills_kit_lib.classify <path>
+      tool: skills_kit_lib/classify.py
+      scope_axes: [single-skill]
+      reference_section: skill-domain/scripts.md (classify)
+    - id: tag
+      keywords: [tag, write skill-type, frontmatter tagging, idempotent skill-type write]
+      description: Write a skill-type value into a SKILL.md's frontmatter idempotently.
+      operation: python -m skills_kit_lib.tag <path> <skill-type>
+      tool: skills_kit_lib/tag.py
+      scope_axes: [single-skill]
+      reference_section: skill-domain/scripts.md (tag)
+  tools:
+    - name: audit
+      command: python -m skills_kit_lib.audit
+      description: YAML-first schema validator with markdown-heuristic fallback for legacy skills. Run from the plugin root (the -m form needs skills_kit_lib importable; see skill-domain/scripts.md).
+    - name: classify
+      command: python -m skills_kit_lib.classify
+      description: Type inference across the canonical skill types.
+    - name: tag
+      command: python -m skills_kit_lib.tag
+      description: Idempotent frontmatter tagger; refuses to invent or overwrite without --force.
+```
+
+## Cross-references
+
+- **Where a fact lives (the placement spine)** -- `references/cohesion-principles.md`.
+- **How to run an audit** -- `references/lanes/audit-lane.md`.
+- **How to author** -- `references/lanes/authoring-lane.md`.
+- **Encoding a newly discovered insight into a persistent home** -- `knowledge-encoding` (in skills-kit).
+- **End-of-session review of what the work implies for the docs** -- `update-documentation` (in skills-kit).
+- **Designing a materialized-insight tool** -- `materialized-output` (in skills-kit).

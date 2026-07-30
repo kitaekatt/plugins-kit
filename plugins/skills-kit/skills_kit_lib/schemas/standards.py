@@ -30,7 +30,7 @@ from ..schema_registry import register_schema
 # lower case per the owner doc.
 STANDARDS_SET_SCHEMA = {
     "root": "standards_set",
-    "owner_doc": "skills/md-audit/references/authoring-standards.md",
+    "owner_doc": "skills/md-domain/references/authoring-standards.md",
     "keys": {
         "identity": {"type": "string", "required": True,
                      "note": "one sentence stating what this set governs and for which file type"},

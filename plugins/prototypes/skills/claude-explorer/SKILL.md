@@ -24,7 +24,7 @@ The refresh button in the header triggers `GET /refresh`, which re-runs the craw
 
 ## Framework
 
-This skill operationalizes the **claude_explorer** viewer-kind under the shared audit framework. The shared glossary (`subject`, `primitive`, `composition`, `discovery`, `audit-kind`, `viewer-kind`, `scaffolding`, `summary projection`) is canonical at `plugins/skills-kit/skills/md-audit/references/audit-framework.md`, with the data model at `audit-framework.yaml`.
+This skill operationalizes the **claude_explorer** viewer-kind under the shared audit framework. The shared glossary (`subject`, `primitive`, `composition`, `discovery`, `audit-kind`, `viewer-kind`, `scaffolding`, `summary projection`) is canonical at `plugins/skills-kit/skills/md-domain/references/audit-framework.md`, with the data model at `audit-framework.yaml`.
 
 In framework terms:
 
@@ -104,8 +104,8 @@ technique_skill:
   trigger_model: user-only
   identity: "Render a self-contained HTML browser of the user's Claude filesystem (~/.claude/ + the current project) via a Python crawl that produces a JSON index plus a local HTTP server that serves the embedded SPA and a path-guarded file-fetch endpoint."
   references:
-    - "skills-kit:md-audit/references/audit-framework.md (canonical glossary)"
-    - "skills-kit:md-audit/references/audit-framework.yaml (audit-kind + viewer-kind registry)"
+    - "skills-kit:md-domain/references/audit-framework.md (canonical glossary)"
+    - "skills-kit:md-domain/references/audit-framework.yaml (audit-kind + viewer-kind registry)"
     - "references/projections.md (per-node summary + deep-render rules)"
     - "references/interactivity.md (aesthetic + planned action layer)"
   scope:
@@ -115,8 +115,8 @@ technique_skill:
       - "a refresh button that triggers a re-crawl and reloads the page"
       - "deep-rendering md to HTML, json to key-value table, scripts inside <pre>"
     excludes:
-      - "auditing skills or references (use /skill-audit or /references-audit)"
-      - "skill authoring (use skills-kit:skill-authoring)"
+      - "auditing skills or references (use /md-domain audit skill or /md-domain audit references)"
+      - "skill authoring (use /md-domain author skill)"
       - "the plugin-ecosystem poster (use awesome-kit:plugin-ecosystem -- different reading task at marketplace-corpus scope)"
       - "invocation of actions from the browser (planned for v2; see references/interactivity.md)"
   techniques:
@@ -157,5 +157,5 @@ technique_skill:
 ## Cross-references
 
 - Sibling viewer: `awesome-kit:plugin-ecosystem` (marketplace-corpus poster; shallower drill, wider corpus).
-- Shared substrate: `skills-kit:md-audit/references/audit-framework.md` and `audit-framework.yaml`.
+- Shared substrate: `skills-kit:md-domain/references/audit-framework.md` and `audit-framework.yaml`.
 - Interactivity research (background-agent report): `tmp/content-explorer-interactive-research.md`.

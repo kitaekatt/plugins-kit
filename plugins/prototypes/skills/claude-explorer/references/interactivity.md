@@ -24,7 +24,7 @@ This UX gating is a real constraint, not a placeholder. Building real-time butto
 
 | Node kind | Actions |
 |---|---|
-| skill | run (copy slash-command to clipboard), audit (queue `/skill-audit <path>`), open path |
+| skill | run (copy slash-command to clipboard), audit (queue `/md-domain audit skill <path>`), open path |
 | reference doc | open path, copy path |
 | script | open path, copy path |
 | plugin | update (queue `/plugin update <plugin>`), disable, reload, open path |

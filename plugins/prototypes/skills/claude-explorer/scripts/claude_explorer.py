@@ -978,7 +978,7 @@ function buildActionPayload(n) {
     const subtitle = (cmd + (p.description ? "\n" + p.description : ""));
     const actions = [
       {label: "run",   meta: "copy slash-command", cmd: cmd},
-      {label: "audit", meta: "copy /skill-audit invocation", cmd: "/skill-audit " + (n.path || "")},
+      {label: "audit", meta: "copy /md-domain audit skill invocation", cmd: "/md-domain audit skill " + (n.path || "")},
       {label: "path",  meta: "copy file path",     cmd: n.path || ""}
     ];
     return { subtitle, actions };

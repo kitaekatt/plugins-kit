@@ -46,8 +46,8 @@ GIT_SKILL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md"
 P4_SKILL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md"
 GIT_SUBMIT_GATES = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/submit-gates.md"
 P4_SUBMIT_GATES = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/submit-gates.md"
-GIT_MD_AUDIT_REVIEW = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/md-audit-review.md"
-P4_MD_AUDIT_REVIEW = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/md-audit-review.md"
+GIT_MD_DOMAIN_REVIEW = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/md-domain-review.md"
+P4_MD_DOMAIN_REVIEW = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/md-domain-review.md"
 GIT_DECLINED_LEDGER = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/declined-ledger.md"
 P4_DECLINED_LEDGER = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/declined-ledger.md"
 
@@ -88,16 +88,17 @@ DISPATCH = """\
 
 
 # ===========================================================================
-# SUBJECT-LENS md-audit CONTRIBUTOR (deliverable of this phase, shared).
+# SUBJECT-LENS md-domain CONTRIBUTOR (deliverable of this phase, shared).
 # ---------------------------------------------------------------------------
-# When skills-kit's md-audit skill is available, the code-review skills hand it
+# When skills-kit's md-domain skill is available, the code-review skills hand it
 # the changed CLAUDE.md / SKILL.md files as a SUBJECT-lens reviewer: those files
 # are claimed out of the generic fan-out (via prepare's `--claim`) and audited
-# by skills-kit's headless detect.js Workflow, whose findings render as their own
-# labeled section. When md-audit is absent, behavior is exactly today's -- the md
-# files get thin generic data_only coverage. All three regions below are SHARED
-# verbatim by both VCS skills. The heavy args/plugin-root/fallback detail lives in
-# the generated references/md-audit-review.md so the step prose stays legible.
+# by md-domain's headless per-artifact detect lanes (workflow/*-detect.js), whose
+# findings render as their own labeled section. When md-domain is absent, behavior
+# is exactly today's -- the md files get thin generic data_only coverage. All three
+# regions below are SHARED verbatim by both VCS skills. The heavy
+# args/plugin-root/fallback detail lives in the generated
+# references/md-domain-review.md so the step prose stays legible.
 # ===========================================================================
 
 # Injected into step 2's action (the prepare invocation) via the STEP2 fragments.
@@ -105,87 +106,89 @@ DISPATCH = """\
 # it never collides with the @TOKEN@ render pass.
 CLAIM_PROBE = """\
             Claim probe -- decide the `--claim` flags BEFORE invoking prepare, and invoke prepare
-            only ONCE. Check whether skills-kit's md-audit skill is available in this session (it
-            appears in the available-skills list as `skills-kit:md-audit`). If it IS available, add
+            only ONCE. Check whether skills-kit's md-domain skill is available in this session (it
+            appears in the available-skills list as `skills-kit:md-domain`). If it IS available, add
             BOTH `--claim '**/*.md'` and `--claim '!**/skills/*/references/*.md'` to the prepare
             invocation below so EVERY changed Markdown file (any `.md` at any depth, root included --
             CLAUDE.md, SKILL.md, and generic docs alike) is held back from the generic reviewers and
             returned under `bundle.claimed_files` (each with a materialized `pre_image`) for the
-            subject-lens md-audit pass in step 6 -- EXCEPT a skill's `references/*.md`, which is
+            subject-lens md-domain pass in step 6 -- EXCEPT a skill's `references/*.md`, which is
             carved out and stays with the generic reviewers. That carve-out is load-bearing, not a
-            tuning preference: no member of the md-audit matrix reads a skill reference's PROSE
-            (skill-audit audits the owning SKILL.md's contract and load graph; project-doc-audit's
-            criteria exclude anything inside a skills tree and it returns NOT-AUDITED), so claiming
-            those files would remove the only review they get. Never "simplify" this back to the
-            single glob -- the reproduced evidence for the carve-out (and the NOT-AUDITED verdict
-            it prevents) is in references/md-audit-review.md. The single `**/*.md` glob supersedes
-            the older two-glob form; `.md.html`
+            tuning preference: no md-domain audit lane reads a skill reference's PROSE (the
+            `audit_skill` lane audits the owning SKILL.md's contract and load graph; the
+            `audit_project_doc` lane's criteria exclude anything inside a skills tree and it returns
+            NOT-AUDITED), so claiming those files would remove the only review they get. Never
+            "simplify" this back to the single glob -- the reproduced evidence for the carve-out (and
+            the NOT-AUDITED verdict it prevents) is in references/md-domain-review.md. The single
+            `**/*.md` glob supersedes the older two-glob form; `.md.html`
             (Markdeep) is NOT `.md`, so it is deliberately left to the generic reviewers. If
-            md-audit is NOT available, invoke
+            md-domain is NOT available, invoke
             prepare with NO `--claim` flags -- degrade silently to today's behavior (the md files get
             thin generic data_only coverage), noting the degradation in one line. Do NOT run prepare
             twice."""
 
 # Inserted into step 6's action, right after the dispatch rule.
-MD_AUDIT_LAUNCH = """\
+MD_DOMAIN_LAUNCH = """\
             Triviality gate (pure-mechanical, decided by prepare_review -- do NOT re-judge it):
             each `bundle.claimed_files` entry carries `trivial` (bool) and `trivial_reasons` (the
             disqualifier codes when false). Partition the claimed files into TRIVIAL (`trivial == true`)
             and NON-TRIVIAL. Only the NON-TRIVIAL claimed files are audited below; a TRIVIAL file is
-            NEVER sent to detect.js and NEVER written to the ledger -- it gets the mechanical-checks line
-            in step 9 instead. If EVERY claimed file is trivial AND `bundle.diff_chunks` is empty (no
-            generic reviewer chunks either), skip the reviewer fan-out AND this md-audit pass ENTIRELY --
+            NEVER sent to a detect lane and NEVER written to the ledger -- it gets the mechanical-checks
+            line in step 9 instead. If EVERY claimed file is trivial AND `bundle.diff_chunks` is empty (no
+            generic reviewer chunks either), skip the reviewer fan-out AND this md-domain pass ENTIRELY --
             launch nothing -- and jump to step 9 to render the mechanical-checks / audit-skipped section.
             The gate is mechanical memory, not a verdict: never label a skipped file DIFF-CLEAN and never
             present the skip as an audit. If the author or user explicitly asks for the full review,
             ignore the gate and audit every claimed file.
-            Subject-lens md-audit pass -- run ONLY when at least one NON-TRIVIAL claimed file exists (per
+            Subject-lens md-domain pass -- run ONLY when at least one NON-TRIVIAL claimed file exists (per
             the triviality gate above); skip this entire paragraph otherwise. In the SAME message that
             launches the reviewer subagents (or the reviewer Workflow, per the dispatch rule above), ALSO
-            invoke the Workflow tool with skills-kit's headless detect.js for the NON-TRIVIAL claimed
+            invoke the Workflow tool with md-domain's headless detect lanes for the NON-TRIVIAL claimed
             files, routed THREE ways by basename -- at
-            most THREE Workflow calls total: (a) every claimed file named `CLAUDE.md` -> claude-md-audit's
-            `workflow/detect.js`; (b) every claimed file named `SKILL.md` -> skill-audit's
-            `workflow/detect.js` (only if any); (c) every OTHER claimed `.md` file (generic docs) ->
-            project-doc-audit's `workflow/detect.js` (only if any). Pass `review: true` and, per claimed
-            file, `preImagePath` = its `pre_image` from the bundle (null for an add), with the per-member
+            most THREE Workflow calls total: (a) every claimed file named `CLAUDE.md` -> the
+            `audit_claude_md` lane's `skills/md-domain/workflow/claude-md-detect.js`; (b) every claimed
+            file named `SKILL.md` -> the `audit_skill` lane's `skills/md-domain/workflow/skill-detect.js`
+            (only if any); (c) every OTHER claimed `.md` file (generic docs) -> the `audit_project_doc`
+            lane's `skills/md-domain/workflow/project-doc-detect.js` (only if any). Pass `review: true`
+            and, per claimed
+            file, `preImagePath` = its `pre_image` from the bundle (null for an add), with the per-lane
             `files[]` fields (CLAUDE.md: role / dimension / parentPath / ancestorClaudeMdPaths; SKILL.md:
             ancestorClaudeMdPaths; project-doc: ancestorClaudeMdPaths) resolved from each claimed file's
-            `claude_mds` per references/md-audit-review.md. Resolve the skills-kit plugin root and
-            venvPython defensively per that reference. On a skills-kit version skew (a detect.js
+            `claude_mds` per references/md-domain-review.md. Resolve the skills-kit plugin root and
+            venvPython defensively per that reference. On a skills-kit version skew (a detect lane
             entry point or documented args contract missing), do NOT guess -- re-run prepare_review.py
-            per the TWO-TIER fallback in references/md-audit-review.md (broad skew re-runs with no
+            per the TWO-TIER fallback in references/md-domain-review.md (broad skew re-runs with no
             `--claim`; project-doc-only skew keeps CLAUDE.md/SKILL.md claims); those are the only
             sanctioned second prepare invocations.
-            Then proceed with the normal fan-out. When the pass runs, the md-audit Workflow(s) execute in
+            Then proceed with the normal fan-out. When the pass runs, the md-domain Workflow(s) execute in
             PARALLEL with the reviewer fan-out; keep each `{perFile, totals, review}` for step 9's labeled
             section."""
 
 # Inserted into step 9's action, right after the unresolved-work section.
-MD_AUDIT_REPORT = """\
-            - When the md-audit subject-lens pass ran (bundle.claimed_files was non-empty and the
+MD_DOMAIN_REPORT = """\
+            - When the md-domain subject-lens pass ran (bundle.claimed_files was non-empty and the
               Workflow did NOT fall back), render its results as a distinct, clearly LABELED section
-              titled `## md-audit (subject-lens) findings`, kept SEPARATE from the code-review issue
-              list -- never merge the two. For each file in the md-audit `perFile` result, show its
+              titled `## md-domain (subject-lens) findings`, kept SEPARATE from the code-review issue
+              list -- never merge the two. For each file in the md-domain `perFile` result, show its
               verdict (DIFF-CLEAN, NON-COMPLIANT, or NOT-AUDITED -- the last is a DECLINE, not a
               pass: state plainly that the file was not reviewed and name the auditor its routing
               finding points at) and, beneath it, each finding's severity, bucket,
               attributable flag, message, and remediation proposal. A SINGLE decision pass covers BOTH
-              this section and the code-review issues; accepted md-audit remediations are applied as
-              normal edits AFTER decisions. If the md-audit pass fell back to the generic review, do NOT
+              this section and the code-review issues; accepted md-domain remediations are applied as
+              normal edits AFTER decisions. If the md-domain pass fell back to the generic review, do NOT
               render this section (the md files were reviewed as ordinary subjects).
             - Mechanical checks (audit-skipped) section: for every claimed file with `trivial == true`,
               render a distinct `## Mechanical checks (audit skipped)` section -- kept SEPARATE from both
-              the code-review issues and the md-audit findings. For each such file, state in one line what
+              the code-review issues and the md-domain findings. For each such file, state in one line what
               was verified mechanically (the change is typo-sized -- <= 5 changed lines; Markdown structure
               unchanged; no link/path/anchor reference changed; no meaning-bearing keyword touched; no
               YAML/front-matter touched) plus its `trivial_checks` results (`ascii_clean`, `no_abs_paths`),
               then state plainly that the full audit was SKIPPED because the change is mechanical. NEVER
               call this DIFF-CLEAN and NEVER present it as an audit result; write NOTHING to the ledger for
-              a skipped file. If the author or user asks for the full review, run the md-audit pass on these
+              a skipped file. If the author or user asks for the full review, run the md-domain pass on these
               files instead of this section. Render this section whenever any claimed file is trivial --
               including the all-trivial fast path where the rest of the review was skipped.
-            - Ruleset self-reference notice: if any claimed CLAUDE.md with a pending or accepted md-audit
+            - Ruleset self-reference notice: if any claimed CLAUDE.md with a pending or accepted md-domain
               change lies on the ancestor chain of OTHER changed files in this review -- a cheap
               path-prefix check of that CLAUDE.md's directory against bundle.unique_claude_mds and the
               other changed files' paths -- print a one-line notice: "ruleset changed -- findings for
@@ -193,42 +196,42 @@ MD_AUDIT_REPORT = """\
               line; it is advisory, not a blocker."""
 
 # Appended to both gotcha blocks (plain text -- no f-string braces).
-MD_AUDIT_GOTCHAS = """
-        - md-audit findings are a SEPARATE, labeled section -- never interleave them with the code-review issue list. They come from skills-kit's detect.js (a subject-lens reviewer), not from the generic reviewer/validator subagents, so they are not filtered by the validators.
-        - The claim decision happens ONCE, at the step-2 probe: md-audit available -> `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` (one glob for CLAUDE.md, SKILL.md and generic docs, one `!` carve-out returning skill references to the generic reviewers because no matrix member reads their prose); md-audit absent -> no `--claim`. Do not run prepare a second time just to add claims -- the only re-runs are the two version-skew FALLBACKS (broad skew re-runs WITHOUT `--claim`; project-doc-only skew re-runs with only `--claim '**/CLAUDE.md' --claim '**/SKILL.md'`).
-        - Claimed `.md` files route THREE ways by basename in step 6 -- `CLAUDE.md` -> claude-md-audit, `SKILL.md` -> skill-audit, every other `.md` -> project-doc-audit (full routing table and exclusions in references/md-audit-review.md; `.md.html` and a skill's `references/*.md` are never claimed). Basename routing has no destination that reads skill-reference prose, which is exactly why that shape must never be claimed.
-        - A `NOT-AUDITED` verdict from a member is NOT a pass. It means the member declined the file as outside its criteria and read nothing. Render it as its own line, never fold it into the clean count, and never let it satisfy a submit gate -- treat it like the `## Mechanical checks (audit skipped)` section: an honest "not reviewed", not a result. Seeing one on a claimed file means the claim routing sent a file somewhere that cannot audit it; report that rather than accepting the verdict.
-        - When skills-kit md-audit is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-audit section -- the md files get today's thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
-        - The triviality gate is pure-mechanical and decided by prepare_review (per-claimed-file `trivial` / `trivial_reasons`); the skill never re-judges it. A TRIVIAL claimed file is reported via the mechanical-checks line and is NEVER sent to detect.js or written to the ledger. When EVERY claimed file is trivial and there are no generic diff chunks, the whole audit is skipped -- render the `## Mechanical checks (audit skipped)` section, never a DIFF-CLEAN verdict, and never present the skip as an audit. A user or author asking for the full review overrides the gate.
-        - The Workflow tool is unavailable inside subagents. Launch the md-audit detect.js Workflow from the MAIN session (the same message that fans out the reviewers), never from within a reviewer subagent."""
+MD_DOMAIN_GOTCHAS = """
+        - md-domain findings are a SEPARATE, labeled section -- never interleave them with the code-review issue list. They come from md-domain's detect lanes (a subject-lens reviewer), not from the generic reviewer/validator subagents, so they are not filtered by the validators.
+        - The claim decision happens ONCE, at the step-2 probe: md-domain available -> `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` (one glob for CLAUDE.md, SKILL.md and generic docs, one `!` carve-out returning skill references to the generic reviewers because no audit lane reads their prose); md-domain absent -> no `--claim`. Do not run prepare a second time just to add claims -- the only re-runs are the two version-skew FALLBACKS (broad skew re-runs WITHOUT `--claim`; project-doc-only skew re-runs with only `--claim '**/CLAUDE.md' --claim '**/SKILL.md'`).
+        - Claimed `.md` files route THREE ways by basename in step 6 -- `CLAUDE.md` -> the `audit_claude_md` lane, `SKILL.md` -> the `audit_skill` lane, every other `.md` -> the `audit_project_doc` lane (full routing table and exclusions in references/md-domain-review.md; `.md.html` and a skill's `references/*.md` are never claimed). Basename routing has no destination that reads skill-reference prose, which is exactly why that shape must never be claimed.
+        - A `NOT-AUDITED` verdict from a lane is NOT a pass. It means the lane declined the file as outside its criteria and read nothing. Render it as its own line, never fold it into the clean count, and never let it satisfy a submit gate -- treat it like the `## Mechanical checks (audit skipped)` section: an honest "not reviewed", not a result. Seeing one on a claimed file means the claim routing sent a file somewhere that cannot audit it; report that rather than accepting the verdict.
+        - When skills-kit md-domain is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-domain section -- the md files get today's thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
+        - The triviality gate is pure-mechanical and decided by prepare_review (per-claimed-file `trivial` / `trivial_reasons`); the skill never re-judges it. A TRIVIAL claimed file is reported via the mechanical-checks line and is NEVER sent to a detect lane or written to the ledger. When EVERY claimed file is trivial and there are no generic diff chunks, the whole audit is skipped -- render the `## Mechanical checks (audit skipped)` section, never a DIFF-CLEAN verdict, and never present the skip as an audit. A user or author asking for the full review overrides the gate.
+        - The Workflow tool is unavailable inside subagents. Launch the md-domain detect-lane Workflow from the MAIN session (the same message that fans out the reviewers), never from within a reviewer subagent."""
 
 
 # ===========================================================================
 # DECLINED-FINDINGS LEDGER (deliverable of this phase, shared by BOTH skills).
 # ---------------------------------------------------------------------------
 # Reviews re-run against the same change re-surface findings the author already
-# declined -- both generic code-review issues and md-audit subject-lens findings.
+# declined -- both generic code-review issues and md-domain subject-lens findings.
 # The HOST kits own change identity, so prepare_review.py emits `ledger_hits`
 # (previously-declined findings still valid at the current baseline); step 9
 # renders matching findings COLLAPSED and does not re-ask them, and a post-
 # decision step records newly-declined findings via `--ledger-record`. Shared
-# implementation lives in bootstrap_lib.code_review.ledger. A SERIOUS md-audit
+# implementation lives in bootstrap_lib.code_review.ledger. A SERIOUS md-domain
 # finding is NEVER collapsed (mirrors skills-kit's reducer rule). All regions
 # below are SHARED verbatim by both VCS skills; the key/baseline detail lives in
 # the generated references/declined-ledger.md so the step prose stays legible.
 # ===========================================================================
 
-# Inserted into step 9's action, right after the md-audit report region.
+# Inserted into step 9's action, right after the md-domain report region.
 LEDGER_STEP9 = """\
             - Declined-findings ledger: `bundle.ledger_hits` lists findings the author previously
               DECLINED for this same @RANGE_OR_CL@ whose baseline is still valid. Before the decision
-              pass, compute each current code-review issue's and md-audit finding's ledger key
-              (code-review: file + reason + normalized-description anchor; md-audit: file + criterion +
+              pass, compute each current code-review issue's and md-domain finding's ledger key
+              (code-review: file + reason + normalized-description anchor; md-domain: file + criterion +
               taxonomy + normalized-message anchor -- never line numbers or exact wording; see
               references/declined-ledger.md) and, when it matches a `bundle.ledger_hits` entry, render it
               COLLAPSED under a one-line `previously declined (N): <labels>` note in its own section
-              (code-review issues under the issue list; md-audit findings under the md-audit section)
-              and do NOT re-ask it in the decision pass. EXCEPTION: a SERIOUS-severity md-audit finding
+              (code-review issues under the issue list; md-domain findings under the md-domain section)
+              and do NOT re-ask it in the decision pass. EXCEPTION: a SERIOUS-severity md-domain finding
               is NEVER collapsed -- it always renders and is always decided, even against a ledger hit.
               The ledger is advisory memory, not a gate."""
 
@@ -240,7 +243,7 @@ LEDGER_RECORD_STEP = """\
           action: |
             Record declined findings so the next review of this same @RANGE_OR_CL@ does not
             re-litigate them. After the decision pass, collect every finding the author DECLINED --
-            both code-review issues they rejected and md-audit remediations they chose NOT to apply.
+            both code-review issues they rejected and md-domain remediations they chose NOT to apply.
             Skip this step entirely when nothing was declined. Otherwise write a JSON file to
             `<bundle.bundle_dir>/declined.json`:
               {"change_id": "<bundle.change_id>", "baseline": "<bundle.ledger_baseline>",
@@ -250,17 +253,19 @@ LEDGER_RECORD_STEP = """\
                  {"kind": "md_audit", "file": "<path>", "criterion": "<criterion/group>",
                   "taxonomy": "<taxonomy>", "message": "<finding message>", "severity": "<severity>"}
                ]}
+            (`"kind": "md_audit"` is the ledger's WIRE value for a md-domain finding -- it is the
+            literal `bootstrap_lib.code_review.ledger` accepts; do not rename it.)
             Then run prepare_review.py --ledger-record on that file. The ledger keys each entry by a
             normalized anchor (never line numbers or exact wording) and NEVER records a SERIOUS
-            md-audit finding (those always re-surface). Do NOT hand-edit the ledger JSON -- always go
+            md-domain finding (those always re-surface). Do NOT hand-edit the ledger JSON -- always go
             through --ledger-record so keying stays deterministic.
           tool: @PREPARE_TOOL@
           input: "--ledger-record <bundle.bundle_dir>/declined.json"
 """
 
-# Appended to both gotcha blocks (after the md-audit gotchas). Plain text.
+# Appended to both gotcha blocks (after the md-domain gotchas). Plain text.
 LEDGER_GOTCHAS = """
-        - The declined-findings ledger is advisory memory, not a gate. A collapsed finding is one the author already declined for THIS change at THIS baseline; when the baseline moves (@BASELINE_DESC@) the entry goes stale and the finding re-surfaces on its own. Never let a ledger hit suppress a SERIOUS md-audit finding.
+        - The declined-findings ledger is advisory memory, not a gate. A collapsed finding is one the author already declined for THIS change at THIS baseline; when the baseline moves (@BASELINE_DESC@) the entry goes stale and the finding re-surfaces on its own. Never let a ledger hit suppress a SERIOUS md-domain finding.
         - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed."""
 
 
@@ -277,7 +282,7 @@ LAUNCH_NARRATION = """\
     launch_message:
       note: |
         Emit ONE short rationale line at launch -- with, or just before, the step-2 prepare
-        narration and BEFORE any reviewer subagent or md-audit Workflow spins up -- so the user
+        narration and BEFORE any reviewer subagent or md-domain Workflow spins up -- so the user
         sees WHY a review is running on THIS change. It exists because a user editing documentation
         can see "code review" launch and cancel it, thinking it a mistake. The table rows below are
         the exact lines to emit -- copy the selected one verbatim.
@@ -378,7 +383,7 @@ technique_skill:
             of `bundle.changed_files`, and pick the most appropriate profile. Default to `code`
             when uncertain.
 @DISPATCH@
-@MD_AUDIT_LAUNCH@
+@MD_DOMAIN_LAUNCH@
             Then launch one subagent per (reviewer @X@ chunk) pair in parallel via
             a single message with R @X@ K Agent calls, where R = len(profile.reviewers) and
             K = len(bundle.diff_chunks). Each subagent gets the chunk's absolute diff path
@@ -403,7 +408,7 @@ technique_skill:
             - When `bundle.submit_gates` is non-empty, prepend a `## Submit checklist`
               section (confirmed and unconfirmed gates both rendered).
 @STEP9_TAIL@
-@MD_AUDIT_REPORT@
+@MD_DOMAIN_REPORT@
 @LEDGER_STEP9@
             Group the review body by file.
 @STEP10@@LEDGER_RECORD_STEP@      checklist:
@@ -634,7 +639,7 @@ __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff, partition it into chunked .diff fragments on disk, enumerate changed files via `git diff --name-status`, map ancestor CLAUDE.md files for each, detect untracked-or-unstaged files in the directories the diff touches, detect unresolved merge conflicts, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this range.
 __LAUNCH_EMIT__
           tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
-          input: "<range or argument from step 1>  (append `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` when md-audit is available, per the claim probe -- both flags, never just the first)"
+          input: "<range or argument from step 1>  (append `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` when md-domain is available, per the claim probe -- both flags, never just the first)"
           expected: |
             JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
           on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
@@ -650,7 +655,7 @@ __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
 __LAUNCH_EMIT__
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
-          input: "<CL>  (append `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` when md-audit is available, per the claim probe -- both flags, never just the first)"
+          input: "<CL>  (append `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` when md-domain is available, per the claim probe -- both flags, never just the first)"
           expected: |
             JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
@@ -736,10 +741,10 @@ GIT_CHECKLIST = f"""\
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
-        - md-audit subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-audit is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-audit is absent
+        - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
-        - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-audit findings never collapsed
-        - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merge conflicts section prepended when bundle.merge_conflicts is non-empty; separate `## md-audit (subject-lens) findings` section when the md-audit pass ran)
+        - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-domain findings never collapsed
+        - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merge conflicts section prepended when bundle.merge_conflicts is non-empty; separate `## md-domain (subject-lens) findings` section when the md-domain pass ran)
         - Newly declined findings recorded to the ledger via `prepare_review.py --ledger-record` (skipped when nothing was declined)"""
 
 P4_CHECKLIST = f"""\
@@ -753,10 +758,10 @@ P4_CHECKLIST = f"""\
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
-        - md-audit subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-audit is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-audit is absent
+        - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
-        - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-audit findings never collapsed
-        - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merges section prepended when bundle.unresolved is non-empty; separate `## md-audit (subject-lens) findings` section when the md-audit pass ran)
+        - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-domain findings never collapsed
+        - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merges section prepended when bundle.unresolved is non-empty; separate `## md-domain (subject-lens) findings` section when the md-domain pass ran)
         - Auto-shelf cleanup invoked when bundle.auto_shelved is true (`prepare_review.py --cleanup <bundle_dir>`)
         - Newly declined findings recorded to the ledger via `prepare_review.py --ledger-record` (skipped when nothing was declined)"""
 
@@ -774,7 +779,7 @@ GIT_GOTCHAS = f"""\
         - Unconfirmed submit gates are NOT errors. Render them with {CRS} so they're visible, but do not block the review or refuse to render the rest.
         - Merge conflicts are NOT findings -- they do NOT go through reviewer subagents. They are detected deterministically by prepare_review.py (`git ls-files -u`). The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the merge-conflicts section is a separate informational warning to the user.
         - Auto-detect is convenient, not authoritative. Always restate the chosen range in the step-1 narration line; a user reviewing the wrong branch will catch it there before subagents spawn.
-        - Detached HEAD with no main/master fallback is a real failure mode; surface the error and ask for an explicit range. Do not guess at a "probably right" base.""" + MD_AUDIT_GOTCHAS + LEDGER_GOTCHAS
+        - Detached HEAD with no main/master fallback is a real failure mode; surface the error and ask for an explicit range. Do not guess at a "probably right" base.""" + MD_DOMAIN_GOTCHAS + LEDGER_GOTCHAS
 
 P4_GOTCHAS = f"""\
         - Always quote the exact CLAUDE.md rule text when flagging a claude_md issue. If you cannot quote it verbatim, do not flag it.
@@ -790,7 +795,7 @@ P4_GOTCHAS = f"""\
         - Unconfirmed submit gates are NOT errors. Render them with {CRS} so they're visible, but do not block the review or refuse to render the rest.
         - Unresolved merges are NOT findings -- they do NOT go through reviewer or validator subagents. They are detected deterministically by prepare_review.py (`p4 resolve -n -c <CL>`) and rendered verbatim in a separate output section. The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the unresolved section is a separate informational warning to the user.
         - Auto-shelf cleanup (step 10) must run whenever `bundle.auto_shelved` is true, no matter what happened in steps 3-9. The cleanup script is deterministic and safe (it only deletes the shelf when the live fingerprint exactly matches what we recorded), so there is no scenario where skipping it is the right call. Skipping leaves an orphan shelf the author didn't ask for.
-        - --claim requires a PENDING CL. On a submitted CL, `#have` pre-images are POST-change once the workspace synced past the CL, so prepare_review exits with an error when --claim is passed on a submitted CL; re-run without --claim for a plain informational review.""" + MD_AUDIT_GOTCHAS + LEDGER_GOTCHAS
+        - --claim requires a PENDING CL. On a submitted CL, `#have` pre-images are POST-change once the workspace synced past the CL, so prepare_review exits with an error when --claim is passed on a submitted CL; re-run without --claim for a plain informational review.""" + MD_DOMAIN_GOTCHAS + LEDGER_GOTCHAS
 
 GIT_NARRATION_TEMPLATES = f"""\
       - when: "Before step 2"
@@ -1041,12 +1046,12 @@ FRAGMENTS = {
     },
 }
 
-# Shared tokens (identical for both VCS): the dispatch rule, the md-audit
+# Shared tokens (identical for both VCS): the dispatch rule, the md-domain
 # contributor regions, and the glyphs.
 _SHARED = {
     "DISPATCH": DISPATCH,
-    "MD_AUDIT_LAUNCH": MD_AUDIT_LAUNCH,
-    "MD_AUDIT_REPORT": MD_AUDIT_REPORT,
+    "MD_DOMAIN_LAUNCH": MD_DOMAIN_LAUNCH,
+    "MD_DOMAIN_REPORT": MD_DOMAIN_REPORT,
     "LEDGER_STEP9": LEDGER_STEP9,
     "LEDGER_RECORD_STEP": LEDGER_RECORD_STEP,
     "LAUNCH_NARRATION": LAUNCH_NARRATION,
@@ -1057,7 +1062,7 @@ _SHARED = {
 
 _SKILL_TOKEN_ORDER = [
     "DISPATCH",  # multi-line, contains no other @tokens@; substitute first
-    "MD_AUDIT_LAUNCH", "MD_AUDIT_REPORT",  # shared, no nested @tokens@
+    "MD_DOMAIN_LAUNCH", "MD_DOMAIN_REPORT",  # shared, no nested @tokens@
     # Ledger regions: shared bodies that DO carry nested per-VCS @tokens@
     # (@RANGE_OR_CL@, @PREPARE_TOOL@, @LEDGER_RECORD_N@, @BASELINE_DESC@) --
     # substitute the region first, then those tokens resolve below.
@@ -1151,21 +1156,21 @@ def render_submit_gates(vcs: str) -> str:
 
 
 # ===========================================================================
-# md-audit-review.md -- one parameterized source rendering both references.
+# md-domain-review.md -- one parameterized source rendering both references.
 # The full args/plugin-root/fallback detail the SKILL step-6/step-9 prose points
 # at, kept out of the drift-tested SKILL body so that body stays legible.
 # ===========================================================================
-MD_AUDIT_REVIEW_TEMPLATE = """\
-# Subject-lens md-audit contributor
+MD_DOMAIN_REVIEW_TEMPLATE = """\
+# Subject-lens md-domain contributor
 
-When skills-kit's md-audit skill is available in the session, `@SKILL_NAME@` treats it
+When skills-kit's md-domain skill is available in the session, `@SKILL_NAME@` treats it
 as the SUBJECT-lens reviewer for EVERY changed Markdown file -- `**/*.md`, which is CLAUDE.md,
 SKILL.md, and generic project docs alike (`.md.html` Markdeep files are NOT `.md` and stay with
 the generic reviewers) -- with ONE carve-out: a skill's `references/*.md` is deliberately NOT
 claimed. Those files are CLAIMED out of the generic reviewer fan-out
 (prepare_review.py's `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` flags) and audited
-by skills-kit's headless `detect.js`
-Workflow instead; its findings render as a separate labeled section. When md-audit is ABSENT the
+by md-domain's headless per-artifact detect lanes (`workflow/*-detect.js`)
+instead; their findings render as a separate labeled section. When md-domain is ABSENT the
 mechanism degrades silently -- no `--claim`, no claimed files, the md files get the ordinary thin
 data_only coverage. This doc is the operational detail behind step 6 (launch) and step 9 (render);
 the SKILL body carries the decision flow.
@@ -1173,23 +1178,24 @@ the SKILL body carries the decision flow.
 ## Why skill references are carved out
 
 Reproduced 2026-07-28. A changed `plugins/bootstrap/skills/bootstrap/references/engine-internals.md`
-was claimed and routed by basename to project-doc-audit ("every other `.md`"), whose criteria
-explicitly exclude anything inside a skills tree. It declined the file and returned a passing
-verdict. Taking its advice and dispatching skill-audit on the owning SKILL.md does not help either:
-that member audits the SKILL.md's contract, schema and load graph, never the reference's prose.
+was claimed and routed by basename to the project-doc audit lane ("every other `.md`"), whose
+criteria explicitly exclude anything inside a skills tree. It declined the file and returned a
+passing verdict. Taking its advice and dispatching the skill audit lane on the owning SKILL.md does
+not help either: that lane audits the SKILL.md's contract, schema and load graph, never the
+reference's prose.
 
-So **no member of the matrix reads a skill reference's content** -- and claiming the file removed
+So **no audit lane reads a skill reference's content** -- and claiming the file removed
 the reviewers that would have. An opus generic reviewer given the same diff found five real defects
 (a renamed heading that broke six citing files, a self-contradicting paragraph, an overstated claim,
-temporal deixis, non-ASCII lines), none reachable by either audit member.
+temporal deixis, non-ASCII lines), none reachable by either audit lane.
 
 The `!**/skills/*/references/*.md` exclusion returns that shape to the generic reviewers. Do not
-remove it to "simplify the claim" -- doing so restores the fake gate. If a member ever gains real
+remove it to "simplify the claim" -- doing so restores the fake gate. If a lane ever gains real
 skill-reference-prose criteria, drop the exclusion in the SAME change that ships those criteria.
 
 ## When it runs
 
-Only when `bundle.claimed_files` is non-empty (i.e. the step-2 probe found md-audit available
+Only when `bundle.claimed_files` is non-empty (i.e. the step-2 probe found md-domain available
 AND at least one `.md` file changed). Otherwise skip everything here.
 
 ## Triviality gate (skip typo-sized changes)
@@ -1205,7 +1211,7 @@ with zero inference. The profile fails CLOSED: an unreadable pre-image or unpars
 `trivial=false`, so the fallback is always the full audit.
 
 The skill uses this to AVOID auditing mechanical changes: only NON-TRIVIAL claimed files are sent to
-detect.js below; a trivial file is reported via the SKILL's `## Mechanical checks (audit skipped)`
+the detect lanes below; a trivial file is reported via the SKILL's `## Mechanical checks (audit skipped)`
 section and is NEVER audited or written to the ledger. When every claimed file is trivial AND there
 are no generic diff chunks, the whole review is skipped. A trivial file is never DIFF-CLEAN and never
 an audit result -- it is an honest "checked mechanically, audit skipped" line. An author/user request
@@ -1213,16 +1219,18 @@ for the full review overrides the gate.
 
 ## Resolve the skills-kit plugin root and venvPython (defensively)
 
-md-audit's `detect.js` is a native Workflow script; the code-review skill (running in the main
-session) invokes it via the Workflow tool. Locate the INSTALLED skills-kit plugin:
+md-domain's detect lanes are native Workflow scripts; the code-review skill (running in the main
+session) invokes them via the Workflow tool. Locate the INSTALLED skills-kit plugin:
 
 - Plugin root (`<root>`): the newest version directory under the plugins cache for this
   marketplace -- `~/.claude/plugins/cache/plugins-kit/skills-kit/<version>/` (pick the highest
   semver dir present). `${CLAUDE_PLUGIN_ROOT}` of the CURRENT skill is NOT it -- that points at
   git-kit / p4-kit, not skills-kit.
-- detect.js entry points: `<root>/skills/claude-md-audit/workflow/detect.js` (for CLAUDE.md
-  subjects), `<root>/skills/skill-audit/workflow/detect.js` (for SKILL.md subjects), and
-  `<root>/skills/project-doc-audit/workflow/detect.js` (for every OTHER `.md` subject).
+- Detect-lane entry points, all under the one md-domain skill:
+  `<root>/skills/md-domain/workflow/claude-md-detect.js` (the `audit_claude_md` lane, for CLAUDE.md
+  subjects), `<root>/skills/md-domain/workflow/skill-detect.js` (the `audit_skill` lane, for
+  SKILL.md subjects), and `<root>/skills/md-domain/workflow/project-doc-detect.js` (the
+  `audit_project_doc` lane, for every OTHER `.md` subject).
 - venvPython: skills-kit's provisioned venv, which lives in the version-independent DATA dir --
   `~/.claude/plugins/data/plugins-kit/skills-kit/.venv/Scripts/python.exe` on Windows,
   `~/.claude/plugins/data/plugins-kit/skills-kit/.venv/bin/python` on macOS/Linux.
@@ -1230,12 +1238,12 @@ session) invokes it via the Workflow tool. Locate the INSTALLED skills-kit plugi
 **Version-coupling safety valve (two-tier fallback).** Do NOT guess when an entry point is
 missing or a documented args contract is not what this doc describes:
 
-- **Broad skew** -- `<root>` cannot be located, OR the claude-md-audit / skill-audit detect.js
+- **Broad skew** -- `<root>` cannot be located, OR the `claude-md-detect.js` / `skill-detect.js`
   entry point or args contract is missing: emit a one-line warning and RE-RUN prepare_review.py
   WITHOUT any `--claim` flags. All claimed md files return to `changed_files` for generic review,
-  and the whole md-audit section is skipped for this run.
-- **project-doc-only skew** -- claude-md-audit and skill-audit are present but ONLY
-  `project-doc-audit/workflow/detect.js` is missing (an older skills-kit that predates
+  and the whole md-domain section is skipped for this run.
+- **project-doc-only skew** -- `claude-md-detect.js` and `skill-detect.js` are present but ONLY
+  `project-doc-detect.js` is missing (a skills-kit that predates
   project-doc review): emit a one-line warning and RE-RUN prepare_review.py with only
   `--claim '**/CLAUDE.md' --claim '**/SKILL.md'`. CLAUDE.md and SKILL.md keep their specialist
   coverage; only the generic `.md` docs rejoin the generic review.
@@ -1246,15 +1254,15 @@ These are the only sanctioned second prepare invocations.
 
 At most three, in the SAME message that launches the reviewer fan-out (or the reviewer Workflow):
 
-1. **claude-md-audit** -- one call for every claimed file whose basename is `CLAUDE.md`.
-   `scriptPath = <root>/skills/claude-md-audit/workflow/detect.js`, `args` =
-   `{ files: [...], review: true, refs: { criteria: <root>/skills/claude-md-audit/references/audit-criteria.md, codeDirFilter: <root>/skills/claude-md-audit/references/code-dir-insight-filter.md, densityCriteria: <root>/skills/claude-md-audit/references/density-criteria.md, pluginRoot: <root>, venvPython: <venvPython> } }`.
-2. **skill-audit** -- one call for every claimed file whose basename is `SKILL.md` (only if any).
-   `scriptPath = <root>/skills/skill-audit/workflow/detect.js`, `args` =
+1. **`audit_claude_md` lane** -- one call for every claimed file whose basename is `CLAUDE.md`.
+   `scriptPath = <root>/skills/md-domain/workflow/claude-md-detect.js`, `args` =
+   `{ files: [...], review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
+2. **`audit_skill` lane** -- one call for every claimed file whose basename is `SKILL.md` (only if any).
+   `scriptPath = <root>/skills/md-domain/workflow/skill-detect.js`, `args` =
    `{ files: [...], review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
-3. **project-doc-audit** -- one call for every OTHER claimed `.md` file (generic docs; only if any).
-   `scriptPath = <root>/skills/project-doc-audit/workflow/detect.js`, `args` =
-   `{ files: [...], review: true, refs: { criteria: <root>/skills/project-doc-audit/references/audit-criteria.md, pluginRoot: <root> } }`.
+3. **`audit_project_doc` lane** -- one call for every OTHER claimed `.md` file (generic docs; only if any).
+   `scriptPath = <root>/skills/md-domain/workflow/project-doc-detect.js`, `args` =
+   `{ files: [...], review: true, refs: { criteria: <root>/skills/md-domain/references/standards/project-doc-standards.md, pluginRoot: <root> } }`.
 
 `args` may be passed as an object or a JSON string; all `refs` paths must be ABSOLUTE (the
 Workflow runs from the session cwd, not the skill dir). `review: true` forces the model pin and
@@ -1263,7 +1271,7 @@ per-file diff attribution; keep it true.
 ## Building `files[]` from `bundle.claimed_files`
 
 Build `files[]` from the NON-TRIVIAL claimed files only (per the triviality gate above); trivial
-files never reach detect.js. Each claimed-file entry carries `local` (absolute path), `pre_image` (absolute path to the
+files never reach a detect lane. Each claimed-file entry carries `local` (absolute path), `pre_image` (absolute path to the
 materialized before-image via @PREIMAGE_ORIGIN@, or `null` for an add), and `claude_mds` (the
 nearest-ancestor-first CLAUDE.md chain, which for a CLAUDE.md subject INCLUDES the subject itself
 as its first element).
@@ -1272,45 +1280,47 @@ Derive, per claimed file:
 
 - `ancestorClaudeMdPaths` = `claude_mds` with the subject's OWN `local` removed (drop the
   self-entry a CLAUDE.md subject carries; a SKILL.md subject has nothing to drop). Nearest-ancestor
-  first, excluding the subject -- exactly md-audit's H-11 / M ancestor-convention input. Compare paths
+  first, excluding the subject -- exactly md-domain's H-11 / M ancestor-convention input. Compare paths
   case-INSENSITIVELY on Windows when removing the self-entry: the emitted `local` and the `claude_mds`
   chain are already normalized to agree byte-for-byte, but a case-insensitive compare is the
   belt-and-braces guard against any residual drive-letter casing skew.
 - `preImagePath` = the entry's `pre_image` (pass `null` through unchanged -- an add is fully
   attributable).
 
-For a **CLAUDE.md** file (claude-md-audit `files[]`):
+For a **CLAUDE.md** file (`audit_claude_md` lane `files[]`):
 - `path` = `local`.
 - `role` = `"child"` when `ancestorClaudeMdPaths` is non-empty, else `"root"` (a standalone file
   with no ancestor CLAUDE.md audits as its natural role). Use `"local"` for a `CLAUDE.local.md`.
 - `dimension` = `"classic"` by default; `"code-directory"` only if the file has code/yaml/csv
-  siblings and no `claude_md:` block (skills-kit's discover.py heuristic). When unsure, `"classic"`.
+  siblings and no `claude_md:` block (the heuristic in
+  `<root>/skills/md-domain/scripts/discover_claude_md.py`). When unsure, `"classic"`.
 - `parentPath` = the FIRST entry of `ancestorClaudeMdPaths` (the nearest ancestor CLAUDE.md), else
   `null`.
 - `parentPreImagePath` = if that `parentPath` is ITSELF a claimed file (it changed in this review),
   its `pre_image`; else `null` (judge against the current parent).
 
-For a **SKILL.md** file (skill-audit `files[]`):
+For a **SKILL.md** file (`audit_skill` lane `files[]`):
 - `path` = `local`.
-- `skillType` = omit (let detect.js read it from the frontmatter) unless you already know it.
+- `skillType` = omit (let the lane read it from the frontmatter) unless you already know it.
 - `ancestorClaudeMdPaths`, `preImagePath` as above. (No `role` / `dimension` / `parentPath` /
-  `density` in the skill-audit contract.)
+  `density` in the `audit_skill` contract.)
 
-For a **generic project doc** (any other claimed `.md`; project-doc-audit `files[]`):
+For a **generic project doc** (any other claimed `.md`; `audit_project_doc` lane `files[]`):
 - `path` = `local`.
 - `ancestorClaudeMdPaths`, `preImagePath` as above. (No `role` / `dimension` / `parentPath` /
-  `kind` / `lines` / `inbound_citations` in the review-mode contract -- the discover.py signals
+  `kind` / `lines` / `inbound_citations` in the review-mode contract -- the
+  `<root>/skills/md-domain/scripts/discover_project_doc.py` signals
   the own-skill path computes are OPTIONAL, and the lane degrades gracefully without them: it
   counts the body itself and skips the orphan check, which needs the citer scan not run here.)
 
 ## Consuming the result
 
 Each Workflow returns `{ perFile, totals, review }`. `perFile[i]` carries `verdict`
-(`DIFF-CLEAN` = the change introduced no failure; `NON-COMPLIANT`; or `NOT-AUDITED` = the member
+(`DIFF-CLEAN` = the change introduced no failure; `NON-COMPLIANT`; or `NOT-AUDITED` = the lane
 DECLINED the file as outside its criteria and read nothing -- `totals.notAudited` counts these apart
 from `totals.diffClean`), and `findings[]` each with
 `severity`, `bucket`, `group`, `taxonomy`, `attributable`, `message`, `remediation`. Render these
-in the SKILL's step-9 `## md-audit (subject-lens) findings` section -- separate from the
+in the SKILL's step-9 `## md-domain (subject-lens) findings` section -- separate from the
 code-review issues, one decision pass over both. Accepted remediations are applied as normal edits
 after decisions. See the step-9 action for the ruleset self-reference notice.
 
@@ -1319,16 +1329,16 @@ routing finding points at. Never present it as a result, never count it clean, a
 satisfy a submit gate -- the same rule the `## Mechanical checks (audit skipped)` section follows.
 On a correctly-configured run it should not appear at all: the claim carve-out above keeps the one
 shape that provoked it out of the claim, so a NOT-AUDITED verdict means the routing sent a file to a
-member that cannot audit it. Report that, rather than accepting the verdict.
+lane that cannot audit it. Report that, rather than accepting the verdict.
 
-Scope: this integration is hardcoded to skills-kit's md-audit (claude-md-audit + skill-audit +
-project-doc-audit members). It targets skills-kit's 0.32.0 contract (the release that brought
-project-doc-audit to review parity); the two-tier defensive probe above is what keeps a later
-skills-kit version skew -- or an OLDER skills-kit that predates project-doc review -- from breaking
-the review.
+Scope: this integration is hardcoded to skills-kit's md-domain skill (its `audit_claude_md`,
+`audit_skill` and `audit_project_doc` detect lanes). It targets the md-domain lane contract --
+one skill directory, one `workflow/<artifact>-detect.js` per lane; the two-tier defensive probe
+above is what keeps a later skills-kit version skew -- or a skills-kit that predates project-doc
+review -- from breaking the review.
 """
 
-MD_AUDIT_REVIEW_FRAGMENTS = {
+MD_DOMAIN_REVIEW_FRAGMENTS = {
     "git": {
         "SKILL_NAME": "git-code-review",
         "PREIMAGE_ORIGIN": "`git show <range-base>:<path>`",
@@ -1340,9 +1350,9 @@ MD_AUDIT_REVIEW_FRAGMENTS = {
 }
 
 
-def render_md_audit_review(vcs: str) -> str:
-    out = MD_AUDIT_REVIEW_TEMPLATE
-    for token, value in MD_AUDIT_REVIEW_FRAGMENTS[vcs].items():
+def render_md_domain_review(vcs: str) -> str:
+    out = MD_DOMAIN_REVIEW_TEMPLATE
+    for token, value in MD_DOMAIN_REVIEW_FRAGMENTS[vcs].items():
         out = out.replace(f"@{token}@", value)
     return out
 
@@ -1356,7 +1366,7 @@ DECLINED_LEDGER_TEMPLATE = """\
 # Declined-findings ledger
 
 Reviews re-run against the same change re-surface findings the author already
-declined -- both generic code-review issues and md-audit subject-lens findings.
+declined -- both generic code-review issues and md-domain subject-lens findings.
 `@SKILL_NAME@` keeps a small ledger so a re-run renders those previously-declined
 findings COLLAPSED instead of re-litigating them. The ledger is advisory memory,
 NOT a gate: it never changes a verdict, only whether a finding is re-asked.
@@ -1382,7 +1392,9 @@ A finding is keyed by criterion/reason + taxonomy + a NORMALIZED anchor -- never
 line numbers, never exact wording (both churn on trivial edits):
 
 - code-review issue: `file` + `reason` (`bug`|`claude_md`) + normalized-`description` anchor.
-- md-audit finding: `file` + `criterion` + `taxonomy` + normalized-`message` anchor.
+- md-domain finding: `file` + `criterion` + `taxonomy` + normalized-`message` anchor.
+  (Its wire `kind` in `declined.json` is the literal `md_audit` -- the value
+  `bootstrap_lib.code_review.ledger` keys on. Do not rename it.)
 
 The normalized anchor is the lowercased first 8 alphanumeric tokens of the
 message/description. File paths are lowercased + posix-slashed for matching.
@@ -1395,10 +1407,10 @@ once" -- never to a wrong verdict -- which is why the ledger is advisory.
 
 ## Collapse (step 9)
 
-For each current issue / md-audit finding, compute its key and check
+For each current issue / md-domain finding, compute its key and check
 `bundle.ledger_hits`. On a match, render it COLLAPSED under a one-line
 `previously declined (N): <labels>` note in its own section and do not re-ask it
-in the decision pass. EXCEPTION: a **SERIOUS** md-audit finding is NEVER collapsed
+in the decision pass. EXCEPTION: a **SERIOUS** md-domain finding is NEVER collapsed
 -- it always renders and is always decided. (SERIOUS findings are never written to
 the ledger in the first place, so a hit can never exist for one; the collapse rule
 is belt-and-braces.)
@@ -1406,14 +1418,14 @@ is belt-and-braces.)
 ## Record (post-decision step)
 
 After the decision pass, collect the findings the author DECLINED (code-review
-issues rejected + md-audit remediations not applied), write them to
+issues rejected + md-domain remediations not applied), write them to
 `<bundle.bundle_dir>/declined.json`, and run:
 
     @PREPARE_TOOL@ --ledger-record <bundle.bundle_dir>/declined.json
 
 The payload is `{change_id, baseline, declined:[{kind, file, ...}, ...]}` using
 `bundle.change_id` and `bundle.ledger_baseline`. `--ledger-record` computes keys
-deterministically, drops SERIOUS md-audit findings, prunes stale entries for the
+deterministically, drops SERIOUS md-domain findings, prunes stale entries for the
 change, and dedups by key. NEVER hand-edit the ledger JSON -- always go through
 `--ledger-record`.
 
@@ -1465,8 +1477,8 @@ def targets() -> dict[Path, str]:
         P4_SKILL: render_skill("p4"),
         GIT_SUBMIT_GATES: render_submit_gates("git"),
         P4_SUBMIT_GATES: render_submit_gates("p4"),
-        GIT_MD_AUDIT_REVIEW: render_md_audit_review("git"),
-        P4_MD_AUDIT_REVIEW: render_md_audit_review("p4"),
+        GIT_MD_DOMAIN_REVIEW: render_md_domain_review("git"),
+        P4_MD_DOMAIN_REVIEW: render_md_domain_review("p4"),
         GIT_DECLINED_LEDGER: render_declined_ledger("git"),
         P4_DECLINED_LEDGER: render_declined_ledger("p4"),
     }

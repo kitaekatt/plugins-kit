@@ -1,0 +1,12 @@
+# skills-kit standards configuration for the plugins-kit repo.
+# Layered per skills_kit_lib/standards_resolve.py; rule ids and tunability
+# per skills_kit_lib/rule_catalog.py (only "optional"/"inoffensive" rules
+# may be turned off; the resolver rejects un-tunable ids loudly).
+rules:
+  # md-domain deliberately clusters its 24 references into meaning-carrying
+  # subdirectories (standards/, lanes/, skill-domain/, authoring-patterns/,
+  # provenance/) -- the accepted deviation is recorded in
+  # plugins/skills-kit/skills/md-domain/CLAUDE.md (references_layout_deviation).
+  # Every cluster surface is reachable via first-class SKILL.md index entries,
+  # which is the load-graph property the rule protects.
+  refs-one-hop-deep: off

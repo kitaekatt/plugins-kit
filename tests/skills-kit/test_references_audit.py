@@ -1,4 +1,5 @@
-"""Tests for references-audit's scanner script (arch-review S5, S13, S16, S17).
+"""Tests for the references-audit scanner script (arch-review S5, S13, S16, S17;
+now md-domain's references audit lane).
 
 - S5: plugin-tier discovery goes through skills_kit_lib.corpus -- ONE
   installed_plugins.json parse feeds the pool, the skill-dir set, and the
@@ -16,7 +17,7 @@ import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = (REPO_ROOT / "plugins" / "skills-kit" / "skills" / "references-audit"
+SCRIPT = (REPO_ROOT / "plugins" / "skills-kit" / "skills" / "md-domain"
           / "scripts" / "references_audit.py")
 
 _spec = importlib.util.spec_from_file_location("references_audit_mod", SCRIPT)

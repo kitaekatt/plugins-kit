@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """resolve_standards.py -- CLI wrapper over skills_kit_lib.standards_resolve.
 
-The md-audit member skills (skill-audit, claude-md-audit, project-doc-audit)
-call this once per run, via the plugin venv python, to obtain the resolved
-standards configuration for the artifact type they audit:
+The md-domain audit lanes (skill, claude-md, project-doc) call this once per
+run, via the plugin venv python, to obtain the resolved standards
+configuration for the artifact type they audit:
 
   - the disabled optional-rule/criterion ids and threshold overrides (threaded
     into the detect lanes as `disabledCriteria` and used by audit.py --config);

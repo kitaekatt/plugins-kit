@@ -1,6 +1,6 @@
 {
   "name": "prototypes",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Experimental skills awaiting graduation; currently /claude-explorer, an HTML browser of your Claude configuration.",
   "author": {
     "name": "Christina"

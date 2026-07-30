@@ -18,15 +18,16 @@ insight into a durable record. It does NOT own the two decisions the procedure
 defers to:
 
 - **Where the fact lives** (which CLAUDE.md / SKILL.md / reference) is decided by
-  `/skills-kit:cohesion-principles` (the canonical placement framework: CCP / CRP /
-  ADP over the load graph). Do not re-derive placement from memory.
+  the placement framework in `skills/md-domain/references/cohesion-principles.md` (CCP /
+  CRP / ADP over the load graph). Do not re-derive placement from memory.
 - **What shape the fact takes** (YAML record vs prose vs frontmatter) is decided by
-  the md-authoring content-shape reference (`content-authoring.md`) (the three content-form surfaces).
+  the md-domain content-shape reference (`skills/md-domain/references/authoring-patterns/content-authoring.md`)
+  (the three content-form surfaces).
 
 A SKILL.md is a gateway: a trigger plus an index into reference docs. Encoding an
 insight into a skill therefore means extending that index (a new reference, or a
 new record in an existing one) or, more often, adding an insight record to the
-co-located CLAUDE.md -- whichever cohesion-principles selects.
+co-located CLAUDE.md -- whichever cohesion-principles.md selects.
 
 The YAML block below is the load-bearing contract; the prose above is orientation.
 
@@ -35,17 +36,17 @@ The YAML block below is the load-bearing contract; the prose above is orientatio
 ```yaml
 technique_skill:
   _schema_version: "1"
-  identity: The ordered procedure for encoding a discovered insight into a durable project artifact, deferring placement to cohesion-principles and content-shape to content-authoring.
+  identity: The ordered procedure for encoding a discovered insight into a durable project artifact, deferring placement to md-domain's cohesion-principles reference and content-shape to content-authoring.
   scope:
     covers:
       - turning a session-discovered insight into a persistent record (CLAUDE.md insight, skill reference, anti-pattern, convention)
       - deciding whether an insight is worth encoding at all (encoding-as-proposition)
-      - routing the placement decision to cohesion-principles and the shape decision to content-authoring
+      - routing the placement decision to cohesion-principles.md and the shape decision to content-authoring.md
       - verifying the encoded insight is discoverable and that schema/framework changes re-audit clean
     excludes:
-      - where a fact should live across CLAUDE.md / SKILL.md / references (use cohesion-principles)
-      - what content form a fact should take -- YAML vs prose vs frontmatter (use content-authoring)
-      - authoring or auditing a skill's type contract (use skill-authoring)
+      - where a fact should live across CLAUDE.md / SKILL.md / references (use md-domain's cohesion-principles.md)
+      - what content form a fact should take -- YAML vs prose vs frontmatter (use content-authoring.md)
+      - authoring or auditing a skill's type contract (use md-domain's author skill lane)
       - end-of-session documentation review / sweep (use update-documentation)
   techniques:
     - id: encode_insight
@@ -65,12 +66,12 @@ technique_skill:
           action: "Identify the trigger -- the future work context that would need this insight, and the keywords an agent in that context would have in mind. The trigger and keywords are what make the record findable later."
           expected: "A named trigger context plus a keyword cluster (>=3 terms)."
         - n: 4
-          action: "Decide WHERE it lives by applying cohesion-principles (CCP change-cadence -> CRP reader-set -> ADP load-order -> frequency tiebreak). Invoke /skills-kit:cohesion-principles rather than re-deriving placement. The output is one target surface (a specific CLAUDE.md, SKILL.md, or reference doc)."
-          tool: "Skill (skills-kit:cohesion-principles)"
+          action: "Decide WHERE it lives by applying cohesion-principles (CCP change-cadence -> CRP reader-set -> ADP load-order -> frequency tiebreak). Read skills/md-domain/references/cohesion-principles.md rather than re-deriving placement. The output is one target surface (a specific CLAUDE.md, SKILL.md, or reference doc)."
+          tool: "Read (${CLAUDE_PLUGIN_ROOT}/skills/md-domain/references/cohesion-principles.md)"
           expected: "Exactly one target surface, justified by the placement algorithm."
         - n: 5
           action: "Decide the CONTENT SHAPE for the target via content-authoring -- a structured YAML record (insight / anti-pattern / convention), a prose section, or a frontmatter field. Default to structured for LLM-facing content; structure asserts completeness a bullet list cannot."
-          tool: "Read (md-authoring/references/content-authoring.md)"
+          tool: "Read (${CLAUDE_PLUGIN_ROOT}/skills/md-domain/references/authoring-patterns/content-authoring.md)"
           expected: "A chosen surface (yaml record / prose / frontmatter) and the record shape if structured."
         - n: 6
           action: "Search the chosen target for existing coverage. If a record or section already owns this area, EXTEND it (SSOT); do not create a parallel doc that will drift. Creating a new home is the last resort, only when nothing existing fits."
@@ -84,7 +85,7 @@ technique_skill:
           tool: "Bash (skills_kit_lib.audit, when schemas/framework/glossary changed)"
           expected: "Record is keyword-reachable; any contract change re-audits clean."
       gotchas:
-        - "Re-deriving placement from memory instead of invoking cohesion-principles -- the canonical placement framework already answers 'where does this live', and ad-hoc reasoning drifts from it."
+        - "Re-deriving placement from memory instead of reading cohesion-principles.md -- the canonical placement framework already answers 'where does this live', and ad-hoc reasoning drifts from it."
         - "Creating a new doc when an existing record/section already owns the area -- duplication breaks SSOT and the two copies drift independently (CCP violation)."
         - "Encoding a COMMON agent error behind a skill's trigger -- a frequently-hit error must live ambient in a CLAUDE.md, not gated behind a skill invocation that may not fire (ADP)."
         - "Importing vocabulary or references from another project -- only name docs, skills, and concepts that actually exist in THIS repo. (This skill itself was an imported wholesale copy whose alien refs went unnoticed for months; do not recreate that.)"
@@ -92,8 +93,8 @@ technique_skill:
         - "Insight stated in one sentence"
         - "Go / no-go decided (encoding is a proposition)"
         - "Trigger + keyword cluster identified"
-        - "Placement chosen via cohesion-principles"
-        - "Shape chosen via content-authoring"
+        - "Placement chosen via cohesion-principles.md"
+        - "Shape chosen via content-authoring.md"
         - "Existing coverage searched; extend-over-create honored"
         - "Encoding written with why + provenance"
         - "Discoverability verified; merge-gate re-audit run if a contract changed"
@@ -102,14 +103,14 @@ technique_skill:
       name: Asking the user where it should live
       keywords: [ask where, defer to user, placement question, cohesion-principles bypass]
       why_it_seems_right: "Placement feels like a judgment call the user should make, so asking 'where should this go?' seems collaborative."
-      why_it_is_wrong: "Placement is a solved, framework-driven decision (cohesion-principles). Punting it to the user adds a round-trip and signals the agent has not consulted the framework it should be using."
+      why_it_is_wrong: "Placement is a solved, framework-driven decision (cohesion-principles.md). Punting it to the user adds a round-trip and signals the agent has not consulted the framework it should be using."
       alternative: "Run the cohesion-principles placement algorithm (step 4). Surface the chosen target and the reasoning; ask the user only to confirm a genuinely ambiguous CRP tie, not to make the call from scratch."
     - id: jam_it_in_anywhere
       name: Transcribing instead of translating
       keywords: [jam it in, transcribe, dump text, wrong shape, no translation]
       why_it_seems_right: "The insight is true and writing it down somewhere feels like progress."
       why_it_is_wrong: "Encoding is translation, not transcription. Dropped into the wrong surface or the wrong shape, the insight is either unreachable (no trigger) or unasserted (prose where a record was needed)."
-      alternative: "Choose the surface via cohesion-principles and the shape via content-authoring before writing (steps 4-5). Match the target's existing format (step 7)."
+      alternative: "Choose the surface via cohesion-principles.md and the shape via content-authoring.md before writing (steps 4-5). Match the target's existing format (step 7)."
     - id: duplicate_instead_of_extend
       name: New doc when one already owns the area
       keywords: [duplicate doc, parallel reference, ssot violation, should have extended, new file reflex]
@@ -122,14 +123,15 @@ technique_skill:
 
 This skill is itself an instance of knowledge encoding: the recurring "where
 should this live, and in what shape?" conversation was encoded once -- as a
-procedure that routes the two sub-decisions to the skills that own them
-(cohesion-principles, content-authoring) -- so the conversation does not repeat.
+procedure that routes the two sub-decisions to the references that own them
+(md-domain's cohesion-principles.md, content-authoring.md) -- so the conversation
+does not repeat.
 
 ## Cross-references
 
-- **Where a fact lives** -- `/skills-kit:cohesion-principles` (placement: CCP / CRP / ADP over the load graph).
-- **What shape a fact takes** -- the md-authoring content-shape reference (`content-authoring.md`) (the three content-form surfaces).
-- **Authoring/auditing a skill's type contract** -- `/skills-kit:skill-authoring`.
+- **Where a fact lives** -- `skills/md-domain/references/cohesion-principles.md` (placement: CCP / CRP / ADP over the load graph).
+- **What shape a fact takes** -- the md-domain content-shape reference (`skills/md-domain/references/authoring-patterns/content-authoring.md`) (the three content-form surfaces).
+- **Authoring/auditing a skill's type contract** -- `Skill(skills-kit:md-domain)`, author skill lane.
 - **End-of-session documentation sweep** -- `/skills-kit:update-documentation` (feeds individual insights to this skill).
 
 ## CLAUDE.md instance example

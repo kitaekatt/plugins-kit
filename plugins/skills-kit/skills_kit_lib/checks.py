@@ -148,8 +148,8 @@ def repo_root() -> Path:
 def _normalize_ref(ref: str) -> str:
     """Strip a leading slash and any plugin qualifier from a member ref.
 
-    `/claude-md-audit` -> `claude-md-audit`
-    `skills-kit:references-audit` -> `references-audit`
+    `/md-domain` -> `md-domain`
+    `skills-kit:md-domain` -> `md-domain`
     `ue-python-api` -> `ue-python-api`
     """
     r = ref.strip()

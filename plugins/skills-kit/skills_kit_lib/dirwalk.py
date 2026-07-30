@@ -1,5 +1,5 @@
 """Depth-limited cwd-downward directory walk shared by the audit discover
-scripts (claude-md-audit/scripts/discover.py, skill-audit/scripts/discover.py).
+scripts (md-domain/scripts/discover_claude_md.py, md-domain/scripts/discover_skill.py).
 
 One walk implementation, one skip-list. The walk prunes noise directories
 (VCS internals, venvs, build output, caches) and every dot-directory except

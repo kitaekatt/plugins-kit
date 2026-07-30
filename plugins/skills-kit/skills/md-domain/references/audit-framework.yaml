@@ -1,0 +1,379 @@
+# Audit framework -- canonical data model
+#
+# Primitives, compositions, and audit-kind registry. Authoritative on divergence
+# with audit-framework.md. Scripts that need machine-readable structural facts
+# (what is a skill, what files a plugin contains, which rules a given audit
+# applies) load this YAML.
+#
+# Open under addition. To add a primitive, composition, or audit-kind, append
+# a record here and implement the corresponding detection / rule code in the
+# relevant scaffolding script. No framework-side refactor required.
+
+_schema_version: "1"
+
+# ---------------------------------------------------------------------------
+# Primitives -- atomic, identifiable content kinds.
+# ---------------------------------------------------------------------------
+
+primitives:
+
+  - id: md
+    description: A Markdown file. The default form for prose, references, and orientation surfaces.
+    detect_by: 'extension == ".md"'
+    sub_kinds:
+      - id: skill_md
+        description: A SKILL.md -- the top-level contract of a skill.
+        detect_by: 'filename == "SKILL.md"'
+      - id: reference_doc
+        description: A .md file inside a skill directory that is not SKILL.md.
+        detect_by: 'inside a skill composition, filename != "SKILL.md"'
+      - id: claude_md
+        description: A CLAUDE.md -- orientation document for a directory's Audience-Claude.
+        detect_by: 'filename == "CLAUDE.md"'
+      - id: plain_md
+        description: Any other .md file (project READMEs, design docs, hand-off plans).
+        detect_by: 'extension == ".md" and not classified above'
+
+  - id: yaml
+    description: A YAML file, or a fenced YAML block embedded in markdown. Carries structured records for LLM-facing data.
+    detect_by: 'extension in [".yaml", ".yml"] OR an embedded ```yaml fence inside a .md file'
+    sub_kinds:
+      - id: embedded
+        description: A ```yaml ... ``` block inside a .md file. Used for contracts in SKILL.md, insight blocks in CLAUDE.md.
+        detect_by: 'fenced block inside an md file'
+      - id: standalone
+        description: A .yaml/.yml file on its own. Used for pure data (this file, schemas).
+        detect_by: 'extension only'
+
+  - id: json
+    description: A JSON file. Used for manifests and runtime state.
+    detect_by: 'extension == ".json"'
+    sub_kinds:
+      - id: plugin_manifest
+        description: A .claude-plugin/plugin.json -- the plugin's declared identity, version, and surface.
+        detect_by: 'path matches **/.claude-plugin/plugin.json'
+      - id: marketplace_manifest
+        description: A .claude-plugin/marketplace.json -- lists available plugins.
+        detect_by: 'path matches **/.claude-plugin/marketplace.json'
+      - id: bootstrap_manifest
+        description: A bootstrap.json -- plugin's dependency manifest read by the bootstrap engine.
+        detect_by: 'filename == "bootstrap.json"'
+
+  - id: script
+    description: An executable file -- Python, Bash, PowerShell. Carries deterministic logic that replaces inference.
+    detect_by: 'extension in [".py", ".sh", ".ps1", ".bat"]'
+    sub_kinds:
+      - id: facade
+        description: A script invoked from a skill or slash command as a single repeatable step (audit.py, references_audit.py, classify.py).
+        detect_by: 'referenced from a SKILL.md procedures step or from a slash command'
+      - id: library
+        description: A script imported by other scripts; not a CLI entry point. Typically prefixed with underscore (_shared.py, _corpus.py).
+        detect_by: 'filename starts with underscore OR not referenced as a CLI entry'
+
+# ---------------------------------------------------------------------------
+# Compositions -- directory structures that aggregate primitives.
+# ---------------------------------------------------------------------------
+
+compositions:
+
+  - id: directory
+    description: A plain directory with no special marker. The fallback when no other composition matches.
+    marker: 'any directory'
+    contains:
+      optional:
+        - kind: "*"
+    nests_inside: []
+    nests: [directory, project, plugin, skill]
+    discovery_priority: 99
+
+  - id: skill
+    description: A directory containing a SKILL.md plus optional references/ and scripts/.
+    marker: 'SKILL.md at the directory root'
+    contains:
+      required:
+        - kind: skill_md
+          count: 1
+          at: '<root>/SKILL.md'
+      optional:
+        - kind: dir
+          name: references
+          contains_primitives: [reference_doc]
+        - kind: dir
+          name: scripts
+          contains_primitives: [script]
+        - kind: claude_md
+          at: '<root>/CLAUDE.md'
+    nests_inside: [plugin, project, directory]
+    nests: []
+    discovery_priority: 30
+
+  - id: plugin
+    description: A directory containing a .claude-plugin/plugin.json -- the publish unit of the Claude Code plugin system.
+    marker: '.claude-plugin/plugin.json at the directory root'
+    contains:
+      required:
+        - kind: plugin_manifest
+          at: '<root>/.claude-plugin/plugin.json'
+      optional:
+        - kind: dir
+          name: skills
+          contains_compositions: [skill]
+        - kind: dir
+          name: commands
+        - kind: dir
+          name: agents
+        - kind: dir
+          name: hooks
+        - kind: bootstrap_manifest
+          at: '<root>/bootstrap.json'
+        - kind: claude_md
+          at: '<root>/CLAUDE.md'
+    nests_inside: [project, directory]
+    nests: [skill]
+    discovery_priority: 20
+
+  - id: marketplace
+    description: A repository that publishes one or more plugins via a marketplace.json. Itself a kind of project.
+    marker: '.claude-plugin/marketplace.json at the directory root'
+    contains:
+      required:
+        - kind: marketplace_manifest
+          at: '<root>/.claude-plugin/marketplace.json'
+      optional:
+        - kind: dir
+          name: plugins
+          contains_compositions: [plugin]
+        - kind: claude_md
+          at: '<root>/CLAUDE.md'
+    nests_inside: [project, directory]
+    nests: [plugin]
+    discovery_priority: 15
+
+  - id: project
+    description: A CWD-rooted working directory. The user's repository or workspace.
+    marker: 'implicit (the scan root, when not a more specific composition)'
+    contains:
+      optional:
+        - kind: claude_md
+          at: '<root>/CLAUDE.md'
+        - kind: dir
+          name: .claude
+        - kind: dir
+          name: .claude/skills
+          contains_compositions: [skill]
+    nests_inside: [directory]
+    nests: [marketplace, plugin, skill]
+    discovery_priority: 10
+
+  - id: claude_user_dir
+    description: The user's ~/.claude/ directory. The home of installed marketplaces, user-level skills, settings, and per-project memory.
+    marker: 'path == ~/.claude/ (one absolute root, not pattern-matched)'
+    contains:
+      optional:
+        - kind: dir
+          name: plugins/marketplaces
+          contains_compositions: [marketplace]
+        - kind: dir
+          name: skills
+          contains_compositions: [skill]
+        - kind: dir
+          name: plugins/cache
+        - at: '<root>/settings.json'
+        - at: '<root>/installed_plugins.json'
+        - at: '<root>/known_marketplaces.json'
+    nests_inside: []
+    nests: [marketplace, skill]
+    discovery_priority: 5
+
+# ---------------------------------------------------------------------------
+# Audit-kind registry -- the load-bearing surface for "what audits exist."
+#
+# Each entry binds primitives + compositions + rule-ids into a named audit.
+# Rule ids reference the canonical definitions in the owning SKILL.md's
+# audit_skill.criteria block (single source of truth per rule -- the framework
+# only catalogs the binding, not the rule itself). Every id listed in
+# rules_per_composition is implemented; planned-but-unimplemented rules are
+# never bound here -- they live under future_rules below until they ship.
+#
+# NOTE (phase-3 md-domain restructure, 2026-07-29): the four member skills
+# (skill-audit, claude-md-audit, project-doc-audit, references-audit) dissolve
+# into lanes of the single md-domain skill. The path-binding fields below
+# (skill:, discovery:, evaluator_scaffolding:, rules_owned_in:,
+# taxonomy_in_skill:) are updated to md-domain lane paths per the design doc's
+# scripts/ and workflow/ layout. Rule ids, primitive/composition ids, and
+# rules_per_composition bindings are UNCHANGED (contract-preservation
+# requirement). taxonomy_doc: for references_audit now points at
+# plugins/skills-kit/skills/md-domain/references/references-finding-taxonomy.md
+# (moved from the pre-restructure references-audit skill dir, S1 consistency pass).
+# ---------------------------------------------------------------------------
+
+audit_kinds:
+
+  - id: references_audit
+    skill: 'skills-kit:md-domain (lane: references_audit)'
+    subject_type: corpus
+    discovery: "in-script (the scanner walks the scan tree itself; future: shared with corpus discovery)"
+    evaluator_scaffolding: plugins/skills-kit/skills/md-domain/scripts/references_audit.py
+    consumes_primitives: [md]
+    traverses_compositions: [directory, skill, plugin, project]
+    rules_owned_in: plugins/skills-kit/skills/md-domain/references/standards/references-standards.md (audit-direction criteria table)
+    rules_per_composition:
+      directory: [hard_dep_missing, soft_ref_missing]
+      skill: [hard_dep_missing, soft_ref_missing, name_mismatch]
+      plugin: [hard_dep_missing, soft_ref_missing]
+      project: [hard_dep_missing, soft_ref_missing, shadowing]
+    taxonomy_doc: plugins/skills-kit/skills/md-domain/references/references-finding-taxonomy.md
+
+  - id: skill_md_audit
+    skill: 'skills-kit:md-domain (lane: skill_md_audit)'
+    subject_type: corpus
+    discovery: plugins/skills-kit/skills/md-domain/scripts/discover_skill.py (cwd-relative)
+    corpus_discovery: plugins/skills-kit/skills_kit_lib/corpus.py (User + Project + Plugins; shared with roster/hierarchy procedures)
+    evaluator_scaffolding: plugins/skills-kit/skills_kit_lib/audit.py (invoked as python -m skills_kit_lib.audit)
+    consumes_primitives: [skill_md, yaml]
+    traverses_compositions: [skill]
+    rules_owned_in: plugins/skills-kit/skills/md-domain/references/standards/skill-standards.md (audit-direction criteria table)
+    rules_per_composition:
+      skill:
+        - required_frontmatter
+        - description_quality
+        - yaml_contract_block
+        - mixed_type_signal
+        - ccp_placement
+        - crp_placement
+        - adp_back_reference
+        - references_reachable_from_skill_md
+        - decision_provenance
+        - hygiene_thresholds
+    taxonomy_in_skill: 'plugins/skills-kit/skills/md-domain/references/standards/skill-standards.md (audit-direction taxonomy table)'
+
+  - id: claude_md_audit
+    skill: 'skills-kit:md-domain (lane: claude_md_audit)'
+    subject_type: corpus
+    discovery: plugins/skills-kit/skills/md-domain/scripts/discover_claude_md.py (cwd-relative; emits the role -- root / ancestor / child / local -- and the code-directory|classic dimension Level-1 trigger per file)
+    evaluator_scaffolding: plugins/skills-kit/skills/md-domain/workflow/claude-md-detect.js (LLM lanes apply the criteria; skills_kit_lib/audit.py contributes the mechanical schema-validation and record-floor rows)
+    consumes_primitives: [claude_md, yaml]
+    traverses_compositions: [directory, project]
+    rules_owned_in: plugins/skills-kit/skills/md-domain/references/standards/claude-md-standards.md (audit-direction criteria table)
+    rules_per_composition:
+      directory: [ccp_change_cadence, ccp_cross_file_duplication, crp_size_signal, crp_role_appropriate, adp_no_forward_dependency, hygiene_thresholds, schema_validation, cd_anchor_modality_classify, cd_fidelity_anchor_resolves, cd_fidelity_line_anchor, cd_fidelity_claim_holds, cd_value_insight_earns_place, cd_silent_failure_preserved, dd_density_in_place, dd_extract_to_reference, dd_intra_file_redundancy, dd_value_earns_tokens]
+      project: [ccp_change_cadence, ccp_cross_file_duplication, crp_size_signal, crp_role_appropriate, adp_no_forward_dependency, hygiene_thresholds, schema_validation, cd_anchor_modality_classify, cd_fidelity_anchor_resolves, cd_fidelity_line_anchor, cd_fidelity_claim_holds, cd_value_insight_earns_place, cd_silent_failure_preserved, dd_density_in_place, dd_extract_to_reference, dd_intra_file_redundancy, dd_value_earns_tokens]
+    taxonomy_in_skill: 'plugins/skills-kit/skills/md-domain/references/standards/claude-md-standards.md (audit-direction taxonomy table)'
+    note: 'Not every bound rule runs on every file: cd_* criteria fire only for targets discover.py flagged dimension=code-directory (the Level-1 trigger), and dd_* criteria only when the density lens is requested. The role (root / ancestor / child / local) further selects which hygiene checks apply.'
+
+  - id: project_doc_audit
+    skill: 'skills-kit:md-domain (lane: project_doc_audit)'
+    subject_type: corpus
+    discovery: plugins/skills-kit/skills/md-domain/scripts/discover_project_doc.py (scan-root relative; enumerates plain_md project docs and computes the mechanical orphan + size signals the lanes consume)
+    evaluator_scaffolding: plugins/skills-kit/skills/md-domain/workflow/project-doc-detect.js (LLM lanes apply the cohesion criteria; discover.py is the only standalone mechanical step -- there is no separate evaluator binary)
+    consumes_primitives: [plain_md]
+    traverses_compositions: [directory, project]
+    rules_owned_in: plugins/skills-kit/skills/md-domain/references/standards/project-doc-standards.md (audit-direction criteria table)
+    rules_per_composition:
+      directory: [placement_not_in_skill_dir, placement_maturation, adp_discoverability, crp_unitary_reading_task, adp_one_hop_deep, adp_no_claude_md_back_reference, ccp_no_skill_content_duplication, hygiene_thresholds]
+      project: [placement_not_in_skill_dir, placement_maturation, adp_discoverability, crp_unitary_reading_task, adp_one_hop_deep, adp_no_claude_md_back_reference, ccp_no_skill_content_duplication, hygiene_thresholds]
+    taxonomy_in_skill: 'plugins/skills-kit/skills/md-domain/references/standards/project-doc-standards.md (audit-direction taxonomy table)'
+    note: 'Subject is plain_md (a standalone project doc outside any skill references/ and outside the CLAUDE.md hierarchy). Skill-attached reference_doc is audited transitively via skill_md_audit; CLAUDE.md via claude_md_audit (claude-md-audit). This audit enforces the generic cohesion-principles project_reference_md role + skill_maturation_pipeline, NOT any project-specific documentation-home policy.'
+
+# ---------------------------------------------------------------------------
+# Future rules -- NOT IMPLEMENTED. Nothing in this list is checked by any
+# audit today: no criteria entry exists in the owning standards doc, no evaluator
+# detects it, and no rules_per_composition table binds it. Each entry's
+# `intent` describes the invariant the rule WOULD enforce once built.
+# Shipping one means: (1) author the criteria entry in the owning SKILL.md,
+# (2) implement detection in the evaluator scaffolding, (3) bind the id in
+# the audit_kind's rules_per_composition, (4) remove it from this list.
+# ---------------------------------------------------------------------------
+
+future_rules:
+  # references_reachable_from_skill_md was un-parked 2026-07-15 (home-domain
+  # missing-load-graph-edge incident). It was originally declared here under
+  # references_audit; its subject is one skill composition, so it shipped in
+  # skill_md_audit's evaluator (skills_kit_lib/audit.py,
+  # check_references_reachable_from_skill_md) with its criteria + taxonomy
+  # category (L) owned by skill-audit's SKILL.md.
+  - id: manifest_declarations_resolve
+    audit_kind: references_audit
+    target_composition: plugin
+    intent: Every skill/command/agent declared in plugin.json exists on disk. Would power manifest reverse-orphan detection; nothing checks this today.
+  - id: no_cross_scope_personal_refs
+    audit_kind: references_audit
+    target_composition: plugin
+    intent: A shipped plugin skill does not reference a personal/project-only skill.
+  - id: markdown_hyperlinks_resolve
+    audit_kind: project_doc_audit
+    target_composition: directory
+    intent: 'Every markdown hyperlink in a project doc -- [text](relative/path) and [text](#anchor) -- resolves to an existing file / heading. Today the audit checks bare file-path references (PD-H1) and doc-to-doc one-hop discipline (PD-5); full [](...) hyperlink + anchor resolution is the planned extension. NOTE the naming boundary: references_audit owns SKILL-LINK integrity (/skill-name, skill:"..."); this rule owns DOCUMENT-to-document hyperlinks. The two do not overlap.'
+
+# ---------------------------------------------------------------------------
+# Viewer-kind registry -- viewers ride on the same substrate as audits but
+# produce a representation (typically self-contained HTML) instead of findings.
+# Each entry binds primitives + compositions + a generator script.
+# ---------------------------------------------------------------------------
+
+viewer_kinds:
+
+  - id: plugin_ecosystem
+    skill: awesome-kit:plugin-ecosystem
+    subject: marketplace
+    subject_type: corpus
+    roots:
+      - '~/.claude/plugins/marketplaces/'
+    discovery_gate: 'marketplace participates only if it ships .claude-plugin/poster.yaml'
+    generator_scaffolding: plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py
+    consumes_primitives: [marketplace_manifest, plugin_manifest, skill_md]
+    traverses_compositions: [marketplace, plugin, skill]
+    drill_depth: skill_name_only
+    layered_overrides:
+      - layer: operator
+        path: '~/.claude/.local-data/awesome-kit/plugin-ecosystem-poster.yaml'
+        owns: title / tagline / per-plugin state overrides
+      - layer: marketplace
+        path: '<marketplace>/.claude-plugin/poster.yaml'
+        owns: subtitle / opt-in / per-plugin state declarations
+      - layer: plugin
+        path: '<plugin>/.claude-plugin/poster.yaml'
+        owns: card description / razor / per-skill blurb overrides
+    self_parameterizing: false
+
+  - id: claude_explorer
+    skill: prototypes:claude-explorer
+    status: implemented (v1 -- deterministic projections only; LLM summaries reserved)
+    subject: 'multi-root: claude_user_dir + project'
+    subject_type: 'multi-root single-pass'
+    roots:
+      - '~/.claude/'
+      - 'CWD (or --project PATH)'
+    generator_scaffolding: plugins/prototypes/skills/claude-explorer/scripts/claude_explorer.py
+    consumes_primitives: [skill_md, claude_md, reference_doc, plain_md, plugin_manifest, marketplace_manifest, bootstrap_manifest, script]
+    traverses_compositions: [claude_user_dir, project, marketplace, plugin, skill, directory]
+    drill_depth: unbounded
+    layered_overrides:
+      - layer: operator
+        path: '~/.claude/.local-data/prototypes/claude-explorer.yaml'
+        owns: title / tagline / included roots / default open-closed state
+      - layer: marketplace
+        path: '<marketplace>/.claude-plugin/claude-explorer.yaml'
+        owns: marketplace card copy / per-plugin display overrides
+      - layer: plugin
+        path: '<plugin>/.claude-plugin/claude-explorer.yaml'
+        owns: plugin card razor / per-skill display overrides
+      - layer: skill
+        path: '<skill>/claude-explorer.yaml'
+        owns: per-reference / per-script blurb overrides
+    self_parameterizing: true
+
+# ---------------------------------------------------------------------------
+# Future -- registry stubs for forward concerns. Not implemented today.
+# Listed so adding them is a registry edit + scaffolding, not a framework refactor.
+# ---------------------------------------------------------------------------
+
+future:
+  primitives:
+    - id: code
+      description: Source code in a language other than markdown / yaml / json / scripted (e.g. .ts, .go). Used when audits or viewers need to scan compiled-language code for references or contracts.
+  audit_kinds:
+    - id: plugin_manifest_audit
+      description: Audit a plugin.json against on-disk skills/commands/agents and against the marketplace.json version.
+    - id: orphan_audit
+      description: "Detect skills, reference docs, and manifest entries with no inbound references inside their containing composition. (Note: project_doc_audit's adp_discoverability rule already does inbound-citation orphan detection for plain_md project docs; this future audit-kind generalizes it to skills/manifest entries.)"

@@ -1,4 +1,4 @@
-"""Tests for claude-md-audit/scripts/discover.py role classification.
+"""Tests for md-domain/scripts/discover_claude_md.py role classification.
 
 Two behaviours under test:
 
@@ -18,7 +18,7 @@ boundary is deterministic regardless of the real filesystem above tmp_path.
 
 from pathlib import Path
 
-import discover
+import discover_claude_md as discover
 
 
 def _write(path: Path, text: str = "# CLAUDE.md\n") -> None:

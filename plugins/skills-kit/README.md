@@ -10,15 +10,29 @@ project docs and READMEs it does not. It treats every md file in a repo as
 one owned surface with a place each fact belongs, rather than a pile of
 files that drift apart independently.
 
-- `/md-authoring` guides writing them. It routes to a per-artifact member
-  (skill-authoring for SKILL.md, claude-md-authoring for CLAUDE.md), each
-  with a per-type contract: what a well-formed artifact of that kind must
-  contain, and in what shape.
-- `/md-audit` checks what you already have: placement (does this fact
-  belong in this file?), cohesion, drift over time, and cross-reference
-  integrity (dangling skill references, broken load-graph edges). It
-  produces a reviewable set of findings -- FIX / SERIOUS / IMPROVE -- for
-  you to accept or decline. It does not auto-rewrite your files.
+There is one front door, `/md-domain`, and it works on a **verb x artifact**
+grammar: pick a verb (`audit` or `author`) and an artifact (`skill`,
+`claude-md`, `project-doc`, or `references`).
+
+```
+/md-domain audit claude-md ./CLAUDE.md
+/md-domain author skill
+/md-domain audit references
+```
+
+- **audit** checks what you already have: placement (does this fact belong
+  in this file?), cohesion, drift over time, and cross-reference integrity
+  (dangling skill references, broken load-graph edges). It produces a
+  reviewable set of findings -- FIX / SERIOUS / IMPROVE -- for you to accept
+  or decline. It does not auto-rewrite your files.
+- **author** guides writing them: the per-type contract for the artifact you
+  are producing, where the content belongs, and what shape it takes.
+
+Both verbs read the same four standards documents -- one per artifact,
+covering SKILL.md, CLAUDE.md, project documents, and cross-references. That
+single-source-of-truth arrangement is the point: "what good looks like" is
+written down once and read in two directions, so an audit can never enforce
+a rule the authoring guidance does not teach.
 
 The underlying methodology is package-design cohesion applied to docs:
 CCP (things that change together live together), CRP (if you load a file
@@ -43,6 +57,15 @@ authors and audits the standards, and the `git-kit` and `p4-kit` reviewers
 change. Authoring and auditing set the standard; review keeps each change
 compliant with it.
 
+## Also included
+
+- **knowledge-encoding** -- encode a newly discovered insight into the right
+  persistent home.
+- **update-documentation** -- an end-of-session pass over what the work
+  implies for your docs.
+- **materialized-output** -- a design pattern for tools that materialize an
+  insight from deep scans over project data.
+
 ## How it relates to neighboring tools
 
 - Anthropic's skill-creator generates new skills from a description.
@@ -58,7 +81,9 @@ advocates -- typed SKILL.md contracts (a YAML contract block per skill
 type), structured CLAUDE.md insight blocks -- which your existing files
 almost certainly do not have yet. Expect the first audit of a mature
 project to propose adopting structure, not just fixing typos. That is
-working as intended, but budget for it.
+working as intended, but budget for it. Which opinions are enforced is
+configurable: individual rules can be turned off and thresholds tuned in a
+layered `config.yaml`.
 
 ## Install
 
@@ -73,11 +98,12 @@ and installs automatically.
 ## Try this first
 
 ```
-/md-audit
+/md-domain
 ```
 
-Bare invocation shows a menu: audit a SKILL.md, a CLAUDE.md, a project
-doc, or cross-references. Point it at your root CLAUDE.md.
+Bare invocation shows the menu: audit or author a SKILL.md, a CLAUDE.md, a
+project doc, or (audit only) cross-references. Point it at your root
+CLAUDE.md.
 
 ## When not to use it
 

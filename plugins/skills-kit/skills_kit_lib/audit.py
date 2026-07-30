@@ -6,7 +6,7 @@ Usage:
 
 Emits a per-row verdict: pass / fail / judgment-required / n/a. Rows flagged
 judgment-required are not deterministic at this level; the agent runs them
-by hand against the contract in skill-authoring's framework.md.
+by hand against the contract in md-domain's skill-domain/framework.md.
 """
 
 from __future__ import annotations
@@ -638,7 +638,7 @@ def check_asset_dependencies_resolve(body_text: str, skill_dir: Path) -> list[Ch
     """Resolve every declared runtime asset dependency (and tools[].tests path)
     against the skill dir, then the nearest project root. A declared path that
     resolves against neither is a broken asset edge: the consumer would break
-    silently at runtime (cohesion-principles runtime_asset_dependencies_declared)."""
+    silently at runtime (md-domain's cohesion-principles.md runtime_asset_dependencies_declared)."""
     if not HAVE_YAML:
         return []
     declared = _declared_asset_paths(body_text)
@@ -795,7 +795,7 @@ def check_references_reachable_from_skill_md(body_text: str, skill_dir: Path) ->
             # relative. A leading slash is a slash-command reference; a bare
             # name is ambiguous (sibling skill name vs directory) -- both are
             # skipped here rather than risk a false dangling-edge FAIL
-            # (skill-name resolution belongs to references-audit).
+            # (skill-name resolution belongs to md-domain's references audit lane).
             if raw.startswith("/") or "/" not in raw:
                 continue
         rel = raw.replace("${CLAUDE_PLUGIN_ROOT}/", "").lstrip("/").rstrip("/")
@@ -1180,7 +1180,7 @@ def render_text(report: dict[str, Any]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Audit a SKILL.md against the skill-authoring framework.",
+        description="Audit a SKILL.md against the md-domain framework.",
     )
     parser.add_argument("path", help="Path to SKILL.md")
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of formatted text")

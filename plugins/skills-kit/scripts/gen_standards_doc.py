@@ -21,7 +21,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 from skills_kit_lib import rule_catalog  # noqa: E402
 from skills_kit_lib.audit import THRESHOLDS  # noqa: E402
 
-DOC = PLUGIN_ROOT / "skills" / "md-audit" / "references" / "configuring-standards.md"
+DOC = PLUGIN_ROOT / "skills" / "md-domain" / "references" / "configuring-standards.md"
 
 BEGIN_MARK = "<!-- BEGIN GENERATED: rule-catalog (gen_standards_doc.py; SSOT: rule_catalog.py + audit.py THRESHOLDS) -->"
 END_MARK = "<!-- END GENERATED: rule-catalog -->"

@@ -11,7 +11,7 @@ user/project standards resolution, and additive per-file-type standards files
 stay hard-coded; inoffensive integrity checks stay knob-less. For the
 configuration surface (layer model, `config.yaml` format, the rule-id catalog,
 thresholds), see
-[../skills/md-audit/references/configuring-standards.md](../skills/md-audit/references/configuring-standards.md).
+[../skills/md-domain/references/configuring-standards.md](../skills/md-domain/references/configuring-standards.md).
 
 ## The observation
 
@@ -39,7 +39,7 @@ Three verbs, one substrate (standards):
   conventions into CLAUDE.md. Standards are authored from observation, not
   invented in a vacuum.
 - **Auditing** -- reviewing a whole file against standards and revising it to
-  compliance. (Today: /md-audit.)
+  compliance. (Today: /md-domain audit.)
 - **Review** -- reviewing a CHANGE against standards and revising it to
   compliance. (Today: git-kit /git-code-review and p4-kit /p4-code-review,
   whose CLAUDE.md-convention-aware reviewer quotes the violated rule

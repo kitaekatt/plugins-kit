@@ -1,7 +1,7 @@
 # Declined-findings ledger
 
 Reviews re-run against the same change re-surface findings the author already
-declined -- both generic code-review issues and md-audit subject-lens findings.
+declined -- both generic code-review issues and md-domain subject-lens findings.
 `p4-code-review` keeps a small ledger so a re-run renders those previously-declined
 findings COLLAPSED instead of re-litigating them. The ledger is advisory memory,
 NOT a gate: it never changes a verdict, only whether a finding is re-asked.
@@ -27,7 +27,9 @@ A finding is keyed by criterion/reason + taxonomy + a NORMALIZED anchor -- never
 line numbers, never exact wording (both churn on trivial edits):
 
 - code-review issue: `file` + `reason` (`bug`|`claude_md`) + normalized-`description` anchor.
-- md-audit finding: `file` + `criterion` + `taxonomy` + normalized-`message` anchor.
+- md-domain finding: `file` + `criterion` + `taxonomy` + normalized-`message` anchor.
+  (Its wire `kind` in `declined.json` is the literal `md_audit` -- the value
+  `bootstrap_lib.code_review.ledger` keys on. Do not rename it.)
 
 The normalized anchor is the lowercased first 8 alphanumeric tokens of the
 message/description. File paths are lowercased + posix-slashed for matching.
@@ -40,10 +42,10 @@ once" -- never to a wrong verdict -- which is why the ledger is advisory.
 
 ## Collapse (step 9)
 
-For each current issue / md-audit finding, compute its key and check
+For each current issue / md-domain finding, compute its key and check
 `bundle.ledger_hits`. On a match, render it COLLAPSED under a one-line
 `previously declined (N): <labels>` note in its own section and do not re-ask it
-in the decision pass. EXCEPTION: a **SERIOUS** md-audit finding is NEVER collapsed
+in the decision pass. EXCEPTION: a **SERIOUS** md-domain finding is NEVER collapsed
 -- it always renders and is always decided. (SERIOUS findings are never written to
 the ledger in the first place, so a hit can never exist for one; the collapse rule
 is belt-and-braces.)
@@ -51,14 +53,14 @@ is belt-and-braces.)
 ## Record (post-decision step)
 
 After the decision pass, collect the findings the author DECLINED (code-review
-issues rejected + md-audit remediations not applied), write them to
+issues rejected + md-domain remediations not applied), write them to
 `<bundle.bundle_dir>/declined.json`, and run:
 
     python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py --ledger-record <bundle.bundle_dir>/declined.json
 
 The payload is `{change_id, baseline, declined:[{kind, file, ...}, ...]}` using
 `bundle.change_id` and `bundle.ledger_baseline`. `--ledger-record` computes keys
-deterministically, drops SERIOUS md-audit findings, prunes stale entries for the
+deterministically, drops SERIOUS md-domain findings, prunes stale entries for the
 change, and dedups by key. NEVER hand-edit the ledger JSON -- always go through
 `--ledger-record`.
 

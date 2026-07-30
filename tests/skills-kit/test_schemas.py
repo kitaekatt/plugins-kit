@@ -531,7 +531,7 @@ class TestStandardsSet:
 
     def test_owner_doc_recorded(self):
         assert OWNER_DOCS.get("standards_set") == (
-            "skills/md-audit/references/authoring-standards.md"
+            "skills/md-domain/references/authoring-standards.md"
         )
 
     def test_declares_forbidden_skill_type_roots(self):

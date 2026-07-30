@@ -1,4 +1,4 @@
-"""Smoke tests for skill-audit's report.py roster rendering (arch-review S17:
+"""Smoke tests for the skill-audit report.py roster rendering (arch-review S17:
 the report belt shipped untested; S1 proved the cost).
 
 Covers render_roster over a corpus discovered from a temp tree (user +
@@ -16,7 +16,7 @@ from skills_kit_lib.corpus import discover_corpus
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "skills-kit"
-REPORT = PLUGIN_ROOT / "skills" / "skill-audit" / "scripts" / "report.py"
+REPORT = PLUGIN_ROOT / "skills" / "md-domain" / "scripts" / "report.py"
 
 # Load report.py under a unique module name (its directory is not on the
 # pytest pythonpath, and `discover` would collide anyway).

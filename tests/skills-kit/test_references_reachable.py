@@ -202,7 +202,7 @@ class TestDanglingIndexEdges:
 
     def test_skill_name_and_command_member_refs_are_not_paths(self, tmp_path):
         """Union-domain skills index sibling SKILLS (ref: skill-audit) and
-        slash commands (ref: /md-audit) -- never dangling-edge FAILs."""
+        slash commands (ref: /md-domain) -- never dangling-edge FAILs."""
         body = _yaml_block({"domain_skill": {"index": {"members": [
             {"name": "skill-audit", "type": "audit-skill",
              "ref": "skill-audit", "keywords": ["a", "b", "c"]},

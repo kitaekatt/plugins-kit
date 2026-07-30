@@ -2,7 +2,7 @@
 
 Per-directory insight repository for the plugin-level Python library that powers audit / classify / tag / schema-validation across the skills-kit ecosystem. Insights captured during the YAML contract refactor (Phase Y1-Y4) and the library extraction (current session).
 
-**Phase / finding identifier legend.** `Phase Y1`-`Y4` = phases of the YAML contract refactor (Y1 = stdlib walker design; Y4 = local-code-review conversion). `Phase 4.2` = corpus audit pass. `F-4-2-N` = numbered findings from Phase 4.2 (e.g. F-4-2-2 / F-4-2-3 = paired user-only technique-skill findings). For the full legend, see ../skills/skill-authoring/CLAUDE.md.
+**Phase / finding identifier legend.** `Phase Y1`-`Y4` = phases of the YAML contract refactor (Y1 = stdlib walker design; Y4 = local-code-review conversion). `Phase 4.2` = corpus audit pass. `F-4-2-N` = numbered findings from Phase 4.2 (e.g. F-4-2-2 / F-4-2-3 = paired user-only technique-skill findings). For the full legend, see ../skills/md-domain/references/provenance/skill-authoring-decisions.md.
 
 ```yaml
 claude_md:
@@ -19,7 +19,7 @@ claude_md:
       - audit / classify / tag (per-skill CLI utilities, invoked via `python -m skills_kit_lib.<module>`)
       - dependency posture (stdlib + pyyaml; editable-installed via pyproject.toml)
     excludes:
-      - skill content authoring (covered by ../skills/skill-authoring/references/glossary.md and framework.md)
+      - skill content authoring (covered by ../skills/md-domain/references/skill-domain/glossary.md and framework.md)
       - bootstrap-engine internals (covered by plugins/bootstrap/skills/bootstrap/SKILL.md)
   insights:
     - id: strip_code_fences_before_heuristics
@@ -167,7 +167,8 @@ claude_md:
         blocks included) -- a false negative is cheaper than a false FAIL across the
         fleet. Taxonomy home: skill-audit category L (L_load_graph_gap); the
         keyword-adequacy half of that category is judgment-only, not mechanical.
-      origin: home-domain skill audit 2026-07-15 (tmp/home-domain-skill-audit.md LG-1/LG-3/LG-4): a pytest suite and an orphaned reference existed in the skill but nothing pointed at them; the mechanical validator passed every row.
+      origin: |
+        home-domain skill audit 2026-07-15 (tmp/home-domain-skill-audit.md LG-1/LG-3/LG-4): a pytest suite and an orphaned reference existed in the skill but nothing pointed at them; the mechanical validator passed every row.
       added: "2026-07-15"
   conventions:
     - rule: When extending heuristics, modify markdown_heuristics.py first; audit.py and classify.py both import from there.

@@ -1,7 +1,7 @@
 """SKILL.md corpus discovery across user/project/plugin tiers.
 
 Single source of truth for "what skills exist in this session's universe?",
-consumed by skill-audit's report.py and skill_hierarchy_report.py.
+consumed by md-domain's report.py and skill_hierarchy_report.py.
 
 The corpus has three tiers:
     - User skills    ~/.claude/skills/**/SKILL.md

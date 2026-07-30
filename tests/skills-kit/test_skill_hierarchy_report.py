@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent / "plugins" / "skills-kit"
-_SCRIPT = _PLUGIN_ROOT / "skills" / "skill-audit" / "scripts" / "skill_hierarchy_report.py"
+_SCRIPT = _PLUGIN_ROOT / "skills" / "md-domain" / "scripts" / "skill_hierarchy_report.py"
 
 
 class TestStandaloneInvocation:

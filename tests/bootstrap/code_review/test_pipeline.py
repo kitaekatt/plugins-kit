@@ -371,8 +371,8 @@ class TestClaimExclusions:
 
     Motivating defect (2026-07-28): git-kit claimed every changed `.md`, which
     pulled a skill's `references/*.md` away from the generic reviewers and handed
-    it to project-doc-audit -- an auditor whose criteria exclude anything inside a
-    skills tree. No member of the md-audit matrix reads that file's prose, so
+    it to md-domain's audit_project_doc lane -- an auditor whose criteria exclude
+    anything inside a skills tree. No md-domain audit lane reads that file's prose, so
     claiming it removed its only real review. Without negation the claim could not
     express "every `.md` EXCEPT skill references".
     """
@@ -382,12 +382,12 @@ class TestClaimExclusions:
     def test_excluded_shape_is_not_claimed(self):
         g = self.SKILL_REFS
         assert matches_claim("plugins/bootstrap/skills/bootstrap/references/engine-internals.md", g) is False
-        assert matches_claim("plugins/git-kit/skills/git-code-review/references/md-audit-review.md", g) is False
+        assert matches_claim("plugins/git-kit/skills/git-code-review/references/md-domain-review.md", g) is False
 
     def test_everything_else_still_claimed(self):
         g = self.SKILL_REFS
         assert matches_claim("CLAUDE.md", g) is True
-        assert matches_claim("plugins/skills-kit/skills/md-audit/SKILL.md", g) is True
+        assert matches_claim("plugins/skills-kit/skills/md-domain/SKILL.md", g) is True
         assert matches_claim("docs/design/notes.md", g) is True
         # A skill's OWN docs that are not references stay claimed.
         assert matches_claim("plugins/x/skills/y/SKILL.md", g) is True

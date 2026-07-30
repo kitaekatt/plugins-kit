@@ -107,8 +107,8 @@ Wait for user approval before making changes. User may accept all, select specif
 ## Integration Points
 
 - **knowledge-encoding** (in plugins-kit:skills-kit) - For deeper analysis of where insights should live in the project structure
-- **md-authoring** (in plugins-kit:skills-kit) - If recommendations include authoring a new skill (`/md-authoring skill`) or a CLAUDE.md (`/md-authoring claude-md`)
-- **content-authoring** (an md-authoring reference) - For how a recommended doc update should be shaped
+- **md-domain** (in plugins-kit:skills-kit) - If recommendations include authoring a new skill (`/md-domain author skill`) or a CLAUDE.md (`/md-domain author claude-md`)
+- **content-authoring** (an md-domain reference) - For how a recommended doc update should be shaped
 
 ## Scope Boundaries
 
@@ -118,6 +118,6 @@ Wait for user approval before making changes. User may accept all, select specif
 - Making approved documentation changes
 
 **OUT OF SCOPE:**
-- Creating new skills (hand off to md-authoring -> skill-authoring)
-- Deep placement design across the load graph (hand off to cohesion-principles / knowledge-encoding)
+- Creating new skills (hand off to md-domain's author skill lane)
+- Deep placement design across the load graph (hand off to md-domain's cohesion-principles.md / knowledge-encoding)
 - Memory system updates (separate from documentation)

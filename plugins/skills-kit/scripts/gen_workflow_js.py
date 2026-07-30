@@ -1,11 +1,12 @@
-"""gen_workflow_js.py -- canonical template for the workflow remediate.js trio.
+"""gen_workflow_js.py -- canonical template for the md-domain remediate lanes.
 
-The three audit skills (claude-md-audit, skill-audit, references-audit) ship a
-fan-out remediation workflow script each. The scripts are ~90% identical: the
+The four md-domain audit lanes (audit_skill, audit_claude_md, audit_project_doc,
+audit_references) ship a fan-out remediation workflow script each. The scripts
+are ~90% identical: the
 same args normalization, result schema shape, actionable filter, parallel
 runner, and summary reducer -- they differ only in field names, the header
 comment, and the lane prompt. That is a copy-paste-with-future-drift shape, so
-the shared skeleton lives HERE as the canonical template, the per-skill
+the shared skeleton lives HERE as the canonical template, the per-lane
 differences live here as fragment data, and a drift test
 (tests/skills-kit/test_workflow_js_drift.py) asserts the shipped .js files are
 byte-identical to the rendered template (the bootstrap_guard vendoring
@@ -29,11 +30,12 @@ from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 SKILLS = PLUGIN_ROOT / "skills"
+MD_DOMAIN = SKILLS / "md-domain"
 
 EM = "\u2014"  # em-dash; the escape keeps this source file ASCII-only
 
 # ---------------------------------------------------------------------------
-# Canonical remediate.js template. Tokens (@...@) are filled per skill.
+# Canonical remediate.js template. Tokens (@...@) are filled per lane.
 # ---------------------------------------------------------------------------
 
 REMEDIATE_TEMPLATE = """\
@@ -116,11 +118,11 @@ return { perFile: results.filter(Boolean), summary }
 """
 
 # ---------------------------------------------------------------------------
-# Per-skill fragments (the data side of the template).
+# Per-lane fragments (the data side of the template).
 # ---------------------------------------------------------------------------
 
 CLAUDE_MD_HEADER = f"""\
-// claude-md-audit {EM} REMEDIATE workflow (after-Q&A phase).
+// md-domain audit_claude_md lane {EM} REMEDIATE workflow (after-Q&A phase).
 //
 // Fan-out remediation, one lane per file, applying the decisions the main loop
 // gathered during the Q&A gate (interactive) or inferred (non-interactive /
@@ -132,7 +134,7 @@ CLAUDE_MD_HEADER = f"""\
 // concurrently; within a lane, remediations are applied in order. No worktree
 // isolation: lanes touch disjoint files, so they cannot conflict.
 //
-// Invoked by the claude-md-audit SKILL.md only when there is remediation work
+// Invoked by the md-domain SKILL.md (audit_claude_md lane) only when there is remediation work
 // spanning 2+ files (the multi-file threshold that equalizes Workflow-tool
 // overhead). Single-file remediation runs inline in the main loop.
 //
@@ -174,7 +176,7 @@ Return a summary: counts of applied/skipped/failed and a per-item action list.`
 }"""
 
 SKILL_AUDIT_HEADER = f"""\
-// skill-audit {EM} REMEDIATE workflow (after-Q&A phase).
+// md-domain audit_skill lane {EM} REMEDIATE workflow (after-Q&A phase).
 //
 // Fan-out remediation, one lane per SKILL.md, applying the decisions the main
 // loop gathered during the Q&A gate (interactive) or inferred (non-interactive).
@@ -189,7 +191,7 @@ SKILL_AUDIT_HEADER = f"""\
 // references/*.md (taxonomy H) {EM} those still live under the skill's own
 // directory, so disjoint-skill lanes remain conflict-free.
 //
-// Invoked by the skill-audit SKILL.md only when there is remediation work
+// Invoked by the md-domain SKILL.md (audit_skill lane) only when there is remediation work
 // spanning 2+ files (the multi-file threshold that equalizes Workflow-tool
 // overhead). Single-file remediation runs inline in the main loop.
 //
@@ -230,7 +232,7 @@ Return a summary: counts of applied/skipped/failed and a per-item action list.`
 }"""
 
 REFERENCES_HEADER = f"""\
-// references-audit {EM} REMEDIATE workflow (after-Q&A phase).
+// md-domain audit_references lane {EM} REMEDIATE workflow (after-Q&A phase).
 //
 // Fan-out remediation, one lane per file, applying the decided reference fixes
 // the main loop gathered during the Q&A gate (interactive IMPROVE/SPECIAL) or the
@@ -242,7 +244,7 @@ REFERENCES_HEADER = f"""\
 // concurrently; within a lane, edits are applied in order. No worktree isolation:
 // lanes touch disjoint files, so they cannot conflict.
 //
-// Invoked by the references-audit SKILL.md only when remediation work spans 2+
+// Invoked by the md-domain SKILL.md (audit_references lane) only when remediation work spans 2+
 // files (the multi-file threshold that equalizes Workflow-tool overhead). A
 // single file's edits are applied inline in the main loop.
 //
@@ -284,7 +286,7 @@ Return a summary: counts of applied/skipped/failed and a per-item action list.`
 }"""
 
 PROJECT_DOC_HEADER = f"""\
-// project-doc-audit {EM} REMEDIATE workflow (after-Q&A phase).
+// md-domain audit_project_doc lane {EM} REMEDIATE workflow (after-Q&A phase).
 //
 // Fan-out remediation, one lane per project document, applying the decisions the
 // main loop gathered during the Q&A gate (interactive) or inferred
@@ -298,10 +300,10 @@ PROJECT_DOC_HEADER = f"""\
 // isolation: lanes touch disjoint files, so they cannot conflict. Some
 // remediations are structural MOVES (graduate-to-skill B, fold-into-CLAUDE.md C,
 // move-into-skill D) {EM} the lane applies the move it is instructed to make;
-// authoring a brand-new skill beyond a simple move is handed to /md-authoring
-// skill by the main loop, not performed blind in a lane.
+// authoring a brand-new skill beyond a simple move is handed to the md-domain
+// author_skill lane by the main loop, not performed blind in a lane.
 //
-// Invoked by the project-doc-audit SKILL.md only when there is remediation work
+// Invoked by the md-domain SKILL.md (audit_project_doc lane) only when there is remediation work
 // spanning 2+ files (the multi-file threshold that equalizes Workflow-tool
 // overhead). Single-file remediation runs inline in the main loop.
 //
@@ -334,17 +336,20 @@ Rules:
 - decision "apply"  -> make the edit exactly as the instruction describes.
 - decision "skip"   -> do nothing for that item; record status "skipped".
 - any other decision text -> treat it as a refined instruction and apply THAT instead of the original.
-- Some remediations are structural moves: fold-into-CLAUDE.md (C) appends the content to the named CLAUDE.md and deletes the standalone doc; move-into-skill (D) moves the file into the named skill's references/ folder; collapse-duplication (I) replaces duplicated prose with a pointer to the owning skill. The instruction names the exact destination. Graduate-to-skill (B) beyond a simple file move is NOT done here -- if the instruction asks for new-skill authoring, record status "skipped" with a note that it is routed to /md-authoring skill.
+- Some remediations are structural moves: fold-into-CLAUDE.md (C) appends the content to the named CLAUDE.md and deletes the standalone doc; move-into-skill (D) moves the file into the named skill's references/ folder; collapse-duplication (I) replaces duplicated prose with a pointer to the owning skill. The instruction names the exact destination. Graduate-to-skill (B) beyond a simple file move is NOT done here -- if the instruction asks for new-skill authoring, record status "skipped" with a note that it is routed to the md-domain author_skill lane.
 - Use the Read tool to load the file (and any destination file) first, then Edit to make precise changes. Preserve surrounding formatting.
 - If an edit cannot be applied safely (anchor not found, ambiguous, destination missing), record status "failed" with a short note rather than guessing.
 
 Return a summary: counts of applied/skipped/failed and a per-item action list.`
 }"""
 
+# Keyed by LANE ID (the md-domain dispatch-table ids), not by the dissolved
+# member-skill names. "FILE" names the generated script inside md-domain/workflow/.
 REMEDIATE_FRAGMENTS = {
-    "claude-md-audit": {
+    "audit_claude_md": {
+        "FILE": "claude-md-remediate.js",
         "HEADER": CLAUDE_MD_HEADER,
-        "META_NAME": "claude-md-audit-remediate",
+        "META_NAME": "md-domain-claude-md-remediate",
         "META_DESC": "Fan-out CLAUDE.md remediation: apply the decided edits, one lane per file (after-Q&A phase)",
         "PHASE_DETAIL": "one lane per file",
         "KEY": "path",
@@ -357,9 +362,10 @@ REMEDIATE_FRAGMENTS = {
         "LABEL_TAIL": ".pop()",
         "LOG_NOUN": "files",
     },
-    "skill-audit": {
+    "audit_skill": {
+        "FILE": "skill-remediate.js",
         "HEADER": SKILL_AUDIT_HEADER,
-        "META_NAME": "skill-audit-remediate",
+        "META_NAME": "md-domain-skill-remediate",
         "META_DESC": "Fan-out SKILL.md remediation: apply the decided edits, one lane per file (after-Q&A phase)",
         "PHASE_DETAIL": "one lane per SKILL.md",
         "KEY": "path",
@@ -372,9 +378,10 @@ REMEDIATE_FRAGMENTS = {
         "LABEL_TAIL": ".slice(-2).join('/')",
         "LOG_NOUN": "skills",
     },
-    "references-audit": {
+    "audit_references": {
+        "FILE": "references-remediate.js",
         "HEADER": REFERENCES_HEADER,
-        "META_NAME": "references-audit-remediate",
+        "META_NAME": "md-domain-references-remediate",
         "META_DESC": "Fan-out reference-fix remediation: apply the decided edits, one lane per file (after-Q&A phase)",
         "PHASE_DETAIL": "one lane per file",
         "KEY": "file",
@@ -387,9 +394,10 @@ REMEDIATE_FRAGMENTS = {
         "LABEL_TAIL": ".pop()",
         "LOG_NOUN": "files",
     },
-    "project-doc-audit": {
+    "audit_project_doc": {
+        "FILE": "project-doc-remediate.js",
         "HEADER": PROJECT_DOC_HEADER,
-        "META_NAME": "project-doc-audit-remediate",
+        "META_NAME": "md-domain-project-doc-remediate",
         "META_DESC": "Fan-out project-document remediation: apply the decided edits/moves, one lane per file (after-Q&A phase)",
         "PHASE_DETAIL": "one lane per project document",
         "KEY": "path",
@@ -405,8 +413,8 @@ REMEDIATE_FRAGMENTS = {
 }
 
 
-def render_remediate(skill: str) -> str:
-    frags = REMEDIATE_FRAGMENTS[skill]
+def render_remediate(lane: str) -> str:
+    frags = REMEDIATE_FRAGMENTS[lane]
     out = REMEDIATE_TEMPLATE
     out = out.replace("@EM@", EM)
     out = out.replace("@HEADER@", frags["HEADER"])
@@ -419,8 +427,8 @@ def render_remediate(skill: str) -> str:
 
 def remediate_targets() -> dict[str, Path]:
     return {
-        skill: SKILLS / skill / "workflow" / "remediate.js"
-        for skill in REMEDIATE_FRAGMENTS
+        lane: MD_DOMAIN / "workflow" / frags["FILE"]
+        for lane, frags in REMEDIATE_FRAGMENTS.items()
     }
 
 
@@ -454,14 +462,14 @@ const totals = results.reduce((acc, r) => {
 }, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0 })
 """
 
-# Review-mode variant of the totals reducer, for the members that implement
-# `--review` (claude-md-audit, skill-audit, project-doc-audit). They cannot share
+# Review-mode variant of the totals reducer, for the lanes that implement
+# `--review` (audit_claude_md, audit_skill, audit_project_doc). They cannot share
 # DETECT_TOTALS_CHUNK: review mode filters non-attributable findings out of the
 # per-file results and relabels the verdict DIFF-CLEAN before totalling, so the
 # reducer legitimately differs from the non-review members'. Splitting the
 # canonical chunk keeps the drift check meaningful -- these three must still match
 # each other verbatim -- rather than exempting them and losing the protection.
-# references-audit is the sole remaining non-review member (its classify.js
+# audit_references is the sole remaining non-review lane (its classify script
 # carries only ARGS_NORM_CHUNK; it has no detect totals reducer to pin).
 DETECT_REVIEW_TOTALS_CHUNK = """\
 const raw = perFile.filter(Boolean)
@@ -521,10 +529,10 @@ const totals = results.reduce((acc, r) => {
 """
 
 SHARED_CHUNK_TARGETS = {
-    SKILLS / "claude-md-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
-    SKILLS / "skill-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
-    SKILLS / "project-doc-audit" / "workflow" / "detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
-    SKILLS / "references-audit" / "workflow" / "classify.js": [ARGS_NORM_CHUNK],
+    MD_DOMAIN / "workflow" / "claude-md-detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    MD_DOMAIN / "workflow" / "skill-detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    MD_DOMAIN / "workflow" / "project-doc-detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    MD_DOMAIN / "workflow" / "references-classify.js": [ARGS_NORM_CHUNK],
 }
 
 
@@ -549,8 +557,8 @@ def check_shared_chunks() -> list[str]:
 
 def check_remediate() -> list[str]:
     problems: list[str] = []
-    for skill, path in remediate_targets().items():
-        rendered = render_remediate(skill)
+    for lane, path in remediate_targets().items():
+        rendered = render_remediate(lane)
         try:
             on_disk = path.read_text(encoding="utf-8")
         except OSError as e:
@@ -573,11 +581,11 @@ def main(argv: list[str]) -> int:
         print(f"workflow-js drift check: {len(problems)} problem(s)")
         return 1 if problems else 0
 
-    for skill, path in remediate_targets().items():
+    for lane, path in remediate_targets().items():
         # newline="\n" forces LF regardless of platform -- without it, Python's
         # text-mode write translates \n to \r\n on Windows, leaving the generated
         # .js files perpetually "modified" (CRLF) against the LF-committed blobs.
-        path.write_text(render_remediate(skill), encoding="utf-8", newline="\n")
+        path.write_text(render_remediate(lane), encoding="utf-8", newline="\n")
         print(f"wrote {path}")
     problems = check_shared_chunks()
     for p in problems:

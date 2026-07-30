@@ -67,41 +67,49 @@ class TestDispatchRulePresent:
             assert "Workflow tool" in body
 
 
-class TestMdAuditContributorPresent:
-    """The subject-lens md-audit wiring must reach BOTH skills verbatim."""
+class TestMdDomainContributorPresent:
+    """The subject-lens md-domain wiring must reach BOTH skills verbatim."""
 
     def test_both_skills_carry_probe_and_fallback(self):
         for vcs in ("git", "p4"):
             body = gen.render_skill(vcs)
             # step-2 claim probe: one `**/*.md` glob supersedes the two-glob form
             assert "Claim probe" in body
-            assert "skills-kit:md-audit" in body
+            assert "skills-kit:md-domain" in body
             assert "--claim '**/*.md'" in body
             assert ".md.html" in body            # Markdeep is NOT claimed
             # step-6 launch: three-way routing + two-tier version-skew fallback
-            assert "Subject-lens md-audit pass" in body
+            assert "Subject-lens md-domain pass" in body
             assert "routed THREE ways by basename" in body
-            assert "project-doc-audit's" in body
-            assert "TWO-TIER version-skew fallback" in body
+            assert "`audit_project_doc`" in body
+            # (assertions repaired at the md-domain cutover: they had gone stale
+            # against the shipped prose, which says "version skew ... per the
+            # TWO-TIER fallback" and states the broad-skew re-run in short form)
+            assert "TWO-TIER fallback" in body
+            assert "version skew" in body
             # broad skew re-runs without --claim; project-doc-only skew keeps the two globs
-            assert "WITHOUT any `--claim` flags" in body
+            assert "broad skew re-runs with no\n            `--claim`" in body
+            # ...and the reference doc carries the long form of both tiers
+            ref = gen.render_md_domain_review(vcs)
+            assert "WITHOUT any `--claim` flags" in ref
+            assert "--claim '**/CLAUDE.md' --claim '**/SKILL.md'" in ref
             assert "--claim '**/CLAUDE.md' --claim '**/SKILL.md'" in body
 
     def test_both_skills_carry_labeled_section_and_notice(self):
         for vcs in ("git", "p4"):
             body = gen.render_skill(vcs)
-            assert "## md-audit (subject-lens) findings" in body
+            assert "## md-domain (subject-lens) findings" in body
             assert "never merge the two" in body
             assert "ruleset changed" in body            # self-reference notice
 
-    def test_both_md_audit_references_render(self):
-        git_ref = gen.render_md_audit_review("git")
-        p4_ref = gen.render_md_audit_review("p4")
+    def test_both_md_domain_references_render(self):
+        git_ref = gen.render_md_domain_review("git")
+        p4_ref = gen.render_md_domain_review("p4")
         for ref in (git_ref, p4_ref):
-            assert "# Subject-lens md-audit contributor" in ref
-            assert "claude-md-audit/workflow/detect.js" in ref
-            assert "skill-audit/workflow/detect.js" in ref
-            assert "project-doc-audit/workflow/detect.js" in ref  # third member (0.32.0)
+            assert "# Subject-lens md-domain contributor" in ref
+            assert "skills/md-domain/workflow/claude-md-detect.js" in ref
+            assert "skills/md-domain/workflow/skill-detect.js" in ref
+            assert "skills/md-domain/workflow/project-doc-detect.js" in ref  # third lane
             assert "venvPython" in ref
             assert "ancestorClaudeMdPaths" in ref
             # three-way routing + two-tier fallback documented
@@ -112,10 +120,11 @@ class TestMdAuditContributorPresent:
         assert "git show" in git_ref and "p4 print" not in git_ref
         assert "p4 print" in p4_ref and "git show" not in p4_ref
 
-    def test_md_audit_reference_targets_exist(self):
+    def test_md_domain_reference_targets_exist(self):
         # The generated references are part of the drift-checked target set.
         target_names = {p.name for p in gen.targets()}
-        assert "md-audit-review.md" in target_names
+        assert "md-domain-review.md" in target_names
+        assert "md-audit-review.md" not in target_names  # renamed at the md-domain cutover
 
 
 class TestDeclinedLedgerPresent:
@@ -128,7 +137,7 @@ class TestDeclinedLedgerPresent:
             assert "Declined-findings ledger" in body
             assert "bundle.ledger_hits" in body
             assert "previously declined (N):" in body
-            assert "SERIOUS-severity md-audit finding" in body
+            assert "SERIOUS-severity md-domain finding" in body
             assert "NEVER collapsed" in body
             # post-decision record step
             assert "--ledger-record" in body
@@ -163,12 +172,12 @@ class TestDeclinedLedgerPresent:
         assert "declined-ledger.md" in target_names
 
 
-class TestMdAuditCaseInsensitiveGuard:
-    """Deliverable 2 (b): the md-audit reference tells consumers to compare case-insensitively."""
+class TestMdDomainCaseInsensitiveGuard:
+    """Deliverable 2 (b): the md-domain reference tells consumers to compare case-insensitively."""
 
     def test_both_references_mention_case_insensitive_compare(self):
         for vcs in ("git", "p4"):
-            ref = gen.render_md_audit_review(vcs)
+            ref = gen.render_md_domain_review(vcs)
             assert "case-INSENSITIVELY on Windows" in ref
 
 
@@ -218,7 +227,7 @@ class TestTrivialityGatePresent:
 
     def test_reference_documents_the_gate(self):
         for vcs in ("git", "p4"):
-            ref = gen.render_md_audit_review(vcs)
+            ref = gen.render_md_domain_review(vcs)
             assert "Triviality gate" in ref
             assert "trivial_checks" in ref
             assert "fails CLOSED" in ref
