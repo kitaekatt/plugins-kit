@@ -75,6 +75,58 @@ def test_invoke_non_dict_raises(clean_registry):
         registry.invoke("p")
 
 
+# -- expect_tier: the opt-in tier guard -------------------------------------
+#
+# Collapsing per-tier entry points (invoke_source / invoke_generation) into one
+# variadic invoke gives up the mismatch check the separate signatures made for
+# free. expect_tier restores it at the call site, which is the only place that
+# knows which tier it meant.
+
+
+def test_expect_tier_passes_on_match(clean_registry):
+    registry.register("p", lambda a: {"v": a}, tier=SOURCE_TIER)
+    assert registry.invoke("p", 1, expect_tier=SOURCE_TIER) == {"v": 1}
+
+
+def test_expect_tier_rejects_mismatch(clean_registry):
+    """The case this exists for: a source provider at a generation call site."""
+    registry.register("glossary", lambda *a: {}, tier=SOURCE_TIER)
+    with pytest.raises(ProviderError, match="registered as tier"):
+        registry.invoke("glossary", expect_tier=GENERATION_TIER)
+
+
+def test_expect_tier_rejects_an_invalid_tier_value(clean_registry):
+    registry.register("p", lambda *a: {}, tier=SOURCE_TIER)
+    with pytest.raises(ProviderError, match="invalid expect_tier"):
+        registry.invoke("p", expect_tier="bogus")
+
+
+def test_expect_tier_omitted_stays_tier_agnostic(clean_registry):
+    """The generic path must not acquire a tier opinion by default."""
+    registry.register("p", lambda *a: {"ok": True}, tier=SOURCE_TIER)
+    assert registry.invoke("p") == {"ok": True}
+
+
+def test_expect_tier_on_unknown_provider_still_raises_unknown(clean_registry):
+    """Unknown-name reporting must not be masked by the tier check."""
+    with pytest.raises(UnknownProviderError):
+        registry.invoke("nope", expect_tier=SOURCE_TIER)
+
+
+def test_expect_tier_checks_before_calling_the_provider(clean_registry):
+    """A mismatch must not execute the provider -- the guard is a precondition."""
+    calls = []
+
+    def fn(*args):
+        calls.append(args)
+        return {}
+
+    registry.register("p", fn, tier=SOURCE_TIER)
+    with pytest.raises(ProviderError):
+        registry.invoke("p", expect_tier=GENERATION_TIER)
+    assert calls == []
+
+
 def test_decorator_self_registration(clean_registry):
     @registry.provider("deco", tier=SOURCE_TIER)
     def my_provider(*args):

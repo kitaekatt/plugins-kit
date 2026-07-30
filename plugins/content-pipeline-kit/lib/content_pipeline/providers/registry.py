@@ -23,7 +23,7 @@ stdlib-only -- providers may import nothing beyond stdlib and
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 Provider = Callable[..., dict]
 
@@ -136,13 +136,37 @@ def clear() -> None:
     _REGISTRY.clear()
 
 
-def invoke(name: str, *args: Any) -> dict:
+def invoke(name: str, *args: Any, expect_tier: Optional[str] = None) -> dict:
     """Look up ``name`` and call it with ``*args``; assert a ``dict`` result.
 
     Source-tier providers are typically called ``invoke(name, source, item)``;
     generation-tier providers ``invoke(name, source, item, variant)`` -- the
     registry does not enforce arity, it forwards whatever the caller passes.
+
+    ``expect_tier`` opts into a tier check the variadic signature otherwise
+    cannot make. A system with per-tier entry points (``invoke_source`` /
+    ``invoke_generation``) gets a mismatch -- wiring a source provider into a
+    generation call site -- rejected by the signature itself; collapsing those
+    into one variadic ``invoke`` gives that up, and the failure it used to
+    catch degrades into a confusing arity or KeyError deep inside the
+    provider. Passing ``expect_tier`` restores the check at the call site,
+    which is the only place that knows which tier it meant.
+
+    Optional by design: the generic path stays tier-agnostic, and a caller
+    that has no per-tier intent should omit it rather than assert a tier it
+    does not care about.
     """
+    if expect_tier is not None:
+        if expect_tier not in _VALID_TIERS:
+            raise ProviderError(
+                f"invalid expect_tier {expect_tier!r}; expected one of {_VALID_TIERS}"
+            )
+        actual = get_tier(name)
+        if actual != expect_tier:
+            raise ProviderError(
+                f"provider {name!r} is registered as tier {actual!r}, "
+                f"but the call site expected {expect_tier!r}"
+            )
     fn = resolve(name)
     result = fn(*args)
     if not isinstance(result, dict):
