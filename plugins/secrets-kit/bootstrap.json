@@ -3,7 +3,7 @@
     {
       "name": "age",
       "install": {
-        "windows": { "scoop": "main/age" },
+        "windows": { "scoop": "extras/age" },
         "macos": { "brew": "age" },
         "ubuntu": { "apt": "age" }
       }
@@ -11,7 +11,7 @@
     {
       "name": "age-keygen",
       "install": {
-        "windows": { "scoop": "main/age" },
+        "windows": { "scoop": "extras/age" },
         "macos": { "brew": "age" },
         "ubuntu": { "apt": "age" }
       }
