@@ -380,7 +380,7 @@ def cmd_add(args: argparse.Namespace) -> int:
     repo_mod.commit_and_push(
         clone, f"{verb}: {args.name}", [blob_rel, "manifest.json"]
     )
-    print(f"{verb}d '{args.name}' -> {blob_rel}")
+    print(f"{'rotated' if exists else 'added'} '{args.name}' -> {blob_rel}")
     return 0
 
 
