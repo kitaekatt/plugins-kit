@@ -1110,7 +1110,13 @@ is skipped entirely):
    clears it" — and why that path needs no `fixed` confirmation);
 4. **the engine version changed** — a new engine may understand a section the old
    one ignored, so re-interpret;
-5. **a reset was requested** (below).
+5. **the stamp is older than the periodic re-check TTL** (24h,
+   `ENV_STATE_MAX_AGE_SECONDS`) — a clean, unchanged machine still re-runs the
+   phase about once a day, which bounds the out-of-band-drift window (see the
+   drift tradeoff below). The stamp's mtime is the clock: every real run
+   rewrites the stamp, so the TTL measures time since the phase last ran, not
+   time since anything changed;
+6. **a reset was requested** (below).
 
 A **parse error** in any layer also forces the pass and stamps it `failed`, so a
 broken `env.json` re-runs every session until the JSON is fixed. A missing/corrupt
@@ -1137,16 +1143,18 @@ The stamp records the *manifest hash*, not the *machine's observed state*, and
 **the hostname is deliberately NOT part of the stamp**. Two consequences, both by
 design:
 
-- **Out-of-band drift is not auto-healed** until an `env.json` edit, a failure, an
-  engine upgrade, or a reset opens the gate. A hand-edited rc line, a deleted
-  symlink, or a changed macOS default sits un-reconverged until then. This is the
-  deliberate trade: personalization changes rarely, so it does not warrant
+- **Out-of-band drift is not auto-healed immediately** — only an `env.json` edit,
+  a failure, an engine upgrade, a reset, or the 24h periodic re-check TTL opens
+  the gate. A hand-edited rc line, a deleted symlink, or a remote repo that
+  drifted ahead (the repo-sync case) sits un-reconverged for at most a day. This
+  is the deliberate trade: personalization changes rarely, so it does not warrant
   `bootstrap.json`'s every-session cadence; the reset script is the explicit lever
-  when you *do* want a full re-check.
-- **A machine rename with an unchanged manifest stays gated.** Because the hostname
-  is not in the stamp, renaming the host does not by itself reopen the phase — the
-  merged manifest is identical, so the gate still reads "up to date." That is
-  out-of-band drift like any other, healed by a manifest edit or an explicit reset.
+  when you want a full re-check *now*.
+- **A machine rename with an unchanged manifest stays gated** (until the TTL).
+  Because the hostname is not in the stamp, renaming the host does not by itself
+  reopen the phase — the merged manifest is identical, so the gate still reads
+  "up to date." That is out-of-band drift like any other, healed by a manifest
+  edit, an explicit reset, or the next periodic re-check.
 
 ## The five declarative feature sections
 

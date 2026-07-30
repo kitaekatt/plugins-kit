@@ -261,11 +261,14 @@ reference_skill:
 
         The gate (env_state.json = merged-manifest sha256 + engine version + last
         result): the phase runs on first-run / hash-change / non-clean-last / engine-bump
-        / reset, else logs one "env: up to date" line. env-reset-cooldown.sh deletes the
-        stamp AND clears the project bootstrap cooldown (which gates the whole pass).
+        / stamp older than 24h (periodic re-check TTL, stamp mtime) / reset, else logs
+        one "env: up to date" line. env-reset-cooldown.sh deletes the stamp AND clears
+        the project bootstrap cooldown (which gates the whole pass).
         DRIFT TRADEOFF: the hostname is NOT in the stamp, so out-of-band drift (a
-        hand-edited rc line, a deleted symlink, a machine rename with unchanged manifest)
-        is not auto-healed until an edit / failure / engine upgrade / reset -- by design.
+        hand-edited rc line, a deleted symlink, a machine rename with unchanged manifest,
+        a remote repo drifting ahead of a repo-sync'd clone) is not auto-healed until an
+        edit / failure / engine upgrade / reset -- but the 24h TTL bounds the window to
+        about a day.
 
         env.json has NO env_vars section and NO PATH edits (both are bootstrap.json's
         alone). All env.json failures are manual-attention -- the engine already ran the

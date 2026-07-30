@@ -5192,14 +5192,16 @@ def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
     env.json exists anywhere). The gate (spec 4.4): the phase runs only when
     there is no stamp (first run or explicit reset via
     scripts/env-reset-cooldown.sh), the merged-manifest hash changed, the
-    last result was not clean, or the engine version changed; otherwise it
-    logs one verbose line and is skipped entirely. A parse error in any
-    layer forces the pass to run and stamps it failed, so it re-runs every
-    session until fixed.
+    last result was not clean, the engine version changed, or the stamp is
+    older than the periodic re-check TTL (ENV_STATE_MAX_AGE_SECONDS);
+    otherwise it logs one verbose line and is skipped entirely. A parse
+    error in any layer forces the pass to run and stamps it failed, so it
+    re-runs every session until fixed.
     """
     from .env_manifest import (
         canonical_manifest_hash, current_hostname, env_gate_reason,
-        load_layered_env_manifests, read_env_state, write_env_state,
+        env_state_age, load_layered_env_manifests, read_env_state,
+        write_env_state,
     )
 
     merged, parse_errors = load_layered_env_manifests(project_dir)
@@ -5211,7 +5213,8 @@ def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
         reason = "manifest parse error"
     else:
         reason = env_gate_reason(
-            read_env_state(data_dir), manifest_hash, engine_version)
+            read_env_state(data_dir), manifest_hash, engine_version,
+            stamp_age=env_state_age(data_dir))
     if reason is None:
         ok_entries.append("up to date (merged manifest unchanged, last pass clean)")
         return []
