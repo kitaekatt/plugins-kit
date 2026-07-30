@@ -199,6 +199,8 @@ technique_skill:
             needed), and write secrets.json's machines/profiles blocks.
       gotchas:
         - "Run ONCE per fleet. `init` on an already-seeded repo refuses, because every existing blob is encrypted to the OLD public key and would be orphaned. Use rotate-identity instead."
+        - "It asks the REMOTE whether the repo is seeded, not the local checkout -- a clone that has not fetched since before someone else seeded would otherwise report 'never seeded'. If init says already seeded, believe it over the session-pass message that sent you here, and run `unlock --new-terminal` instead."
+        - "All-or-nothing: if the seed cannot be pushed, the generated identity is discarded and the machine is left untouched. The passphrase the user chose then applies to nothing -- they choose a fresh one on the retry. Never hand-push a rolled-back seed."
         - "This is the one sanctioned exception to pull-not-push: it must run on the machine holding the plaintext. Every step afterwards is a pull."
     - id: add_rotate
       keywords: [add secret, new credential, rotate, update value, changed token]
@@ -247,6 +249,12 @@ technique_skill:
       why_it_seems_right: "The machine needs the credential now and copying one file is faster than any of this."
       why_it_is_wrong: "It is exactly the per-machine drift this plugin exists to end: invisible to every other machine, unrecorded, and stale the moment the value rotates."
       alternative: "Add it to the fleet (`secrets-kit add`) and let the machine pull it. If something is genuinely urgent, do the copy but LABEL it a stopgap and file the real fix -- do not let it read as the solution."
+    - id: hand_resolving_a_rejected_push
+      name: Making a rejected push go through
+      keywords: [push rejected, fetch first, diverged, force push, merge the secrets repo, resolve and push]
+      why_it_seems_right: "It is the reflex for any git repo, and the rejection looks like ordinary branch drift."
+      why_it_is_wrong: "In THIS repo a rejected push usually means the remote already holds something the local clone never saw -- most often an identity.age seeded elsewhere. Forcing or merging past that replaces the fleet's key with a second one, orphaning every blob encrypted to the first. The rejection is the safety net, not the problem."
+      alternative: "Read what the remote has (`git -C <clone> log --oneline HEAD..@{u}`). An unpushed commit in this clone is always a failed authoring attempt, so `git reset --hard @{u}` and re-run the verb -- which will then tell you the repo is already seeded and send you to `unlock`."
     - id: asking_for_the_passphrase
       name: Offering to set the passphrase for the user
       keywords: [paste the passphrase, i will set it, transcript, convenience]

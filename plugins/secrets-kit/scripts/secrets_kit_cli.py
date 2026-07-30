@@ -84,24 +84,34 @@ def _require_config() -> Config:
     return config
 
 
-def _ensure_clone(config: Config) -> Path:
+def _ensure_clone(config: Config, *, sync: bool = False) -> Path:
     paths = paths_for(DATA_DIR)
     clone = paths["clone"]
     if not repo_mod.is_clone(clone):
         print(f"cloning {config.repo} ...")
         repo_mod.clone(config.repo, clone)
+        return clone
+    if sync:
+        print("syncing with the remote ...")
+        repo_mod.sync(clone)
     return clone
 
 
 def _ensure_guarded(config: Config) -> Path:
-    """Clone if needed, then guarantee the pre-commit guard before any write.
+    """Sync, clone if needed, then guarantee the pre-commit guard before any write.
 
-    Every authoring verb goes through here rather than ``_ensure_clone``. The
-    guard is per-clone (``.git/hooks`` is untracked), so "the repo is guarded"
-    is not something a machine can inherit -- it has to be established locally,
-    every time, before we hand git anything to record permanently.
+    Every authoring verb goes through here rather than ``_ensure_clone``. Two
+    things have to be true before we let git record anything permanently, and
+    neither is inheritable:
+
+    - The clone must be level with the remote. The session pass fetches at most
+      once every few hours, so the working tree an authoring verb would read
+      its decisions from is routinely hours stale -- and "is this repo seeded?"
+      answered about the past is how a second fleet identity gets generated.
+    - The pre-commit guard must exist. It lives in ``.git/hooks``, which is
+      untracked, so it has to be re-established locally every time.
     """
-    clone = _ensure_clone(config)
+    clone = _ensure_clone(config, sync=True)
     note = guard.require_guard(clone)
     if note:
         print(f"pre-commit guard: {note}")
@@ -119,6 +129,18 @@ def cmd_unlock(args: argparse.Namespace) -> int:
         return handed_off
     config = _require_config()
     clone = _ensure_clone(config)
+    # Best-effort, unlike the authoring verbs: unlock only READS the repo, so a
+    # stale clone that already holds identity.age is perfectly unlockable
+    # offline. But a clone last fetched before the repo was seeded would
+    # otherwise report "never seeded" at the one moment the user is trying to
+    # act on the seeding that already happened.
+    if repo_mod.is_clone(clone):
+        try:
+            repo_mod.sync(clone)
+        except SecretsError as e:
+            print(f"note: could not sync the secrets clone ({e.message}); "
+                  f"continuing on the existing checkout")
+
     wrapped = clone / "identity.age"
     if not wrapped.is_file():
         return _fail(
@@ -181,18 +203,51 @@ def cmd_init(args: argparse.Namespace) -> int:
     if handed_off is not None:
         return handed_off
     config = _require_config()
-    clone = _ensure_guarded(config)
+    try:
+        clone = _ensure_guarded(config)
+    except SecretsError as e:
+        # A clone that diverged from an already-seeded remote is the signature
+        # of a failed earlier seed, and the generic "diverged" advice would
+        # leave the user resolving git rather than told what they actually
+        # need. Name the real next step; the divergence is a consequence, not
+        # the problem.
+        clone = paths_for(DATA_DIR)["clone"]
+        if repo_mod.is_clone(clone) and repo_mod.remote_has(clone, "identity.age"):
+            return _fail(
+                f"{e}\n\n"
+                "Note what the remote already holds: an identity.age. This "
+                "repo IS seeded -- the local commit(s) above are a seed "
+                "attempt that never published, and discarding them loses "
+                "nothing. What this machine needs is not another seed but "
+                f"`{cli_command('unlock --new-terminal')}`."
+            )
+        raise
+
     manifest_path = clone / "manifest.json"
     wrapped = clone / "identity.age"
 
-    if wrapped.exists() and not args.force:
+    # Ask the REMOTE, not the checkout. Seeding is the one irreversible act
+    # here -- a second identity orphans every blob encrypted to the first --
+    # and the checkout can only tell us what was true at the last fetch. The
+    # local file is checked too, for the case where the branch has no upstream.
+    if not args.force and (repo_mod.remote_has(clone, "identity.age") or wrapped.exists()):
         return _fail(
-            f"{wrapped} already exists -- this repo is already seeded. "
-            "Re-running init would orphan every existing blob (they are "
-            "encrypted to the OLD public key). Use `rotate-identity` to "
-            "change the passphrase or key, or pass --force if you really mean "
-            "to start over."
+            "this repo is already seeded -- identity.age exists. Re-running "
+            "init would generate a SECOND fleet identity and orphan every "
+            "existing blob (they are encrypted to the first one's public "
+            "key).\n"
+            f"To use the existing fleet identity on this machine, run "
+            f"`{cli_command('unlock --new-terminal')}`.\n"
+            "To change the passphrase or key while keeping the blobs readable, "
+            "use `rotate-identity`. Pass --force only if you really mean to "
+            "abandon the existing secrets and start over."
         )
+
+    # Everything from here to the push is one transaction. A partial seed is
+    # the worst outcome available: this machine would cache an identity the
+    # fleet has never heard of, and every later decrypt would fail with an
+    # error pointing at the wrong thing.
+    before = repo_mod.head_sha(clone)
 
     print("Generating the fleet age identity ...")
     identity_text, recipient = agefile.keygen()
@@ -223,8 +278,31 @@ def cmd_init(args: argparse.Namespace) -> int:
     # thing they prevent cannot be undone.
     wrote_ignore = guard.ensure_gitignore(clone)
 
+    seeded_paths = ["identity.age", "manifest.json"]
+    if wrote_ignore:
+        seeded_paths.append(".gitignore")
+    try:
+        repo_mod.commit_and_push(
+            clone, "seed: fleet identity + empty manifest", seeded_paths
+        )
+    except SecretsError as e:
+        # Publishing is what MAKES the seed real. If it did not land, unwind
+        # rather than leaving a local-only fleet identity behind: the next run
+        # would find identity.age in the checkout, conclude the repo is seeded,
+        # and refuse -- pointing the user at an identity no other machine can
+        # ever obtain.
+        repo_mod.rollback_to(clone, before, created=seeded_paths)
+        return _fail(
+            f"{e}\n"
+            "Nothing was published and nothing was kept: the generated "
+            "identity has been discarded and this machine is unchanged. The "
+            "passphrase you just chose applies to nothing -- re-run init once "
+            "the repo state above is resolved and choose one again."
+        )
+
     # Cache the unlocked identity locally so the seeding machine does not have
-    # to unlock itself immediately after creating the key it just held.
+    # to unlock itself immediately after creating the key it just held. Written
+    # only AFTER the push, so this file can never name a key the fleet lacks.
     paths = paths_for(DATA_DIR)
     tighten_dir(DATA_DIR)
     fd = os.open(str(paths["identity"]), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -232,12 +310,6 @@ def cmd_init(args: argparse.Namespace) -> int:
         fh.write(identity_text)
     tighten(paths["identity"], 0o600)
 
-    seeded_paths = ["identity.age", "manifest.json"]
-    if wrote_ignore:
-        seeded_paths.append(".gitignore")
-    repo_mod.commit_and_push(
-        clone, "seed: fleet identity + empty manifest", seeded_paths
-    )
     print(f"\nseeded. recipient = {recipient}")
     print(f"Add secrets with: {cli_command('add')} <name> --file <path> --dest <dest>")
     return 0

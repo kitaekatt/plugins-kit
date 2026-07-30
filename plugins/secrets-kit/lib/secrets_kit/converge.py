@@ -156,6 +156,16 @@ def converge(
     # reader off diagnosing a file that was never supposed to exist yet, so it
     # gets its own message naming the actual next step.
     if not (paths["clone"] / "manifest.json").is_file():
+        # Confirm against the remote before saying so. This message asks the
+        # agent to seed, and seeding is irreversible -- so it must never be
+        # emitted on the strength of a checkout that last fetched before
+        # someone else seeded the repo. The forced fetch costs one round trip
+        # in a state that is rare and terminal anyway.
+        note = repo_mod.refresh(paths["clone"], paths["fetch_stamp"], force=True)
+        if note:
+            result.notes.append(note)
+
+    if not (paths["clone"] / "manifest.json").is_file():
         result.failures.append(
             Failure(
                 FAILURE_CONFIG,
@@ -177,6 +187,9 @@ def converge(
                     "transcript. Tell them to look for the new window. Do not "
                     "run `init` without --new-terminal: age prompts on a tty "
                     "you do not have, and it will hang or fail.\n\n"
+                    "If `init` reports that the repo is ALREADY seeded, believe "
+                    "it and stop: it asks the remote, this check only sees the "
+                    "checkout. Run the `unlock` it names instead.\n\n"
                     f"Afterwards YOU add the entries with "
                     f"`{cli_command('add')}` (public-key encryption, no "
                     f"passphrase needed)."
