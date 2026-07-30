@@ -2,11 +2,14 @@
 
 import json
 import os
+import re
 import stat
 import sys
+from pathlib import Path
 
 import pytest
 
+from secrets_kit import cli_command
 from secrets_kit.converge import (
     FAILURE_CONFIG,
     FAILURE_LOCKED,
@@ -42,7 +45,7 @@ def test_locked_machine_raises_exactly_one_ask(fleet):
     failure = result.failures[0]
     assert failure.key == FAILURE_LOCKED
     assert failure.ask_reason == "info"
-    assert "! secrets-kit unlock" in failure.agent_msg
+    assert f"! {cli_command('unlock')}" in failure.agent_msg
     assert not (fleet.dest_root / "ha-token.txt").exists()
 
 
@@ -326,8 +329,41 @@ def test_cloned_but_unseeded_repo_says_run_init(fleet):
     assert len(result.failures) == 1
     failure = result.failures[0]
     assert failure.ask_reason == "info"
-    assert "! secrets-kit init" in failure.agent_msg
+    assert f"! {cli_command('init')}" in failure.agent_msg
     assert "not a broken" in failure.agent_msg.lower()
+
+
+def test_cli_command_resolves_the_shim_that_actually_exists():
+    """The rendered invocation must point at a real, runnable file.
+
+    A path that merely looks plausible is the same defect as the bare name it
+    replaced: the user spends their one interactive step on a command that
+    fails.
+    """
+    rendered = cli_command()
+    shim = Path(os.path.expanduser(rendered))
+    assert shim.is_file(), rendered
+    assert shim.name == "secrets-kit"
+
+
+@pytest.mark.parametrize(
+    "verb", ["init", "unlock", "add", "status", "remove", "rotate-identity"]
+)
+def test_no_message_emits_a_bare_command_name(verb):
+    """Nothing may hand out `secrets-kit <verb>` unqualified.
+
+    The shim is not on PATH, so a bare name is `command not found` -- and for a
+    prepared statement the user is told to type verbatim, that wastes the one
+    step they were asked to take. Every emitted command goes through
+    cli_command().
+    """
+    from secrets_kit import converge as converge_mod
+    from secrets_kit import manifest as manifest_mod
+
+    bare = re.compile(rf"(?<![\w/\\.-])secrets-kit {verb}(?![\w-])")
+    for module in (converge_mod, manifest_mod):
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert not bare.search(source), f"{module.__name__} emits a bare command"
 
 
 def test_unseeded_check_precedes_the_identity_check(fleet):

@@ -18,7 +18,7 @@ import socket
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import SecretsError
+from . import SecretsError, cli_command
 
 # Both spellings: ${VAR} and bare $VAR. The bare form matters because the
 # natural way to write a fleet-wide root is "$DEVROOT/christina-norman", and a
@@ -235,8 +235,8 @@ class Manifest:
             raise SecretsError(
                 f"{path} declares no 'recipient'",
                 "The manifest must carry the age public key its blobs are "
-                "encrypted to. Re-run `secrets-kit init` if this repo was "
-                "never seeded.",
+                f"encrypted to. Re-run `{cli_command('init')}` if this repo "
+                f"was never seeded.",
             )
         self._validate_profiles()
 

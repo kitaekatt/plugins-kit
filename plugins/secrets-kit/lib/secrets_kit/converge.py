@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from . import DecryptError, SecretsError
+from . import DecryptError, SecretsError, cli_command
 from .agefile import decrypt_with_identity
 from .manifest import Config, Entry, Manifest
 from .perms import open_private, tighten, tighten_dir
@@ -173,12 +173,13 @@ def converge(
                     "  > The secrets repo is ready but not seeded yet. Type "
                     "this in the prompt, with the leading `!`:\n"
                     "  >\n"
-                    "  >     ! secrets-kit init\n"
+                    f"  >     ! {cli_command('init')}\n"
                     "  >\n"
                     "  > It will ask you to choose the fleet passphrase and "
                     "type it twice, with hidden input.\n\n"
-                    "Afterwards YOU add the entries with `secrets-kit add` "
-                    "(public-key encryption, no passphrase needed)."
+                    f"Afterwards YOU add the entries with "
+                    f"`{cli_command('add')}` (public-key encryption, no "
+                    f"passphrase needed)."
                 ),
                 ask_reason="info",
             )
@@ -224,11 +225,11 @@ def converge(
                     "receive fleet secrets. Type this in the prompt, with the "
                     "leading `!`:\n"
                     "  >\n"
-                    "  >     ! secrets-kit unlock\n"
+                    f"  >     ! {cli_command('unlock')}\n"
                     "  >\n"
                     "  > It prompts for your fleet passphrase with hidden "
                     "input. Nothing is materialized until it succeeds.\n\n"
-                    "Do NOT run `secrets-kit unlock` yourself -- it needs an "
+                    "Do NOT run that yourself -- it needs an "
                     "interactive terminal you do not have. Do NOT ask the user "
                     "to paste the passphrase into the chat under any framing: "
                     "the transcript is written to disk, and this is a master "
@@ -391,8 +392,8 @@ def _entry_failure(entry: Entry, error: SecretsError) -> Failure:
                 "The usual cause is an identity rotation upstream: the new "
                 "identity.age arrived with the fetch, but this machine still "
                 "holds the old unlocked identity. Ask the user to type "
-                "`! secrets-kit unlock` again. Never request the passphrase "
-                "in chat."
+                f"`! {cli_command('unlock')}` again. Never request the "
+                "passphrase in chat."
             ),
             ask_reason="info",
         )

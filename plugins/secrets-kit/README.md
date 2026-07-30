@@ -36,6 +36,16 @@ ever.
 
 ## Usage
 
+The CLI is **not on PATH** -- it ships as a shim inside the plugin's
+version-keyed install directory. Resolve it before using any command below:
+
+```bash
+SK=$(ls -d ~/.claude/plugins/cache/plugins-kit/secrets-kit/*/bin/secrets-kit | tail -1)
+```
+
+Then `$SK <verb>`. The commands are written as `secrets-kit <verb>` for
+readability; substitute the resolved path.
+
 ```bash
 secrets-kit status                  # what this machine holds / waits on (safe, no passphrase)
 secrets-kit add ha-token --file secrets/ha-token.txt \

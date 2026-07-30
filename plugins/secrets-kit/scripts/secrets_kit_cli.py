@@ -20,7 +20,7 @@ from pathlib import Path
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PLUGIN_ROOT / "lib"))
 
-from secrets_kit import SecretsError  # noqa: E402
+from secrets_kit import SecretsError, cli_command  # noqa: E402
 from secrets_kit import agefile  # noqa: E402
 from secrets_kit import guard  # noqa: E402
 from secrets_kit import repo as repo_mod  # noqa: E402
@@ -95,8 +95,8 @@ def cmd_unlock(_args: argparse.Namespace) -> int:
     if not wrapped.is_file():
         return _fail(
             f"no identity.age in the secrets repo ({wrapped}). "
-            "Has the repo been seeded yet? Run `secrets-kit init` on the "
-            "machine holding the plaintext."
+            f"Has the repo been seeded yet? Run `{cli_command('init')}` on "
+            f"the machine holding the plaintext."
         )
 
     paths = paths_for(DATA_DIR)
@@ -208,7 +208,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         clone, "seed: fleet identity + empty manifest", seeded_paths
     )
     print(f"\nseeded. recipient = {recipient}")
-    print("Add secrets with: secrets-kit add <name> --file <path> --dest <dest>")
+    print(f"Add secrets with: {cli_command('add')} <name> --file <path> --dest <dest>")
     return 0
 
 
@@ -326,7 +326,7 @@ def cmd_rotate_identity(_args: argparse.Namespace) -> int:
 
     if not paths["identity"].is_file():
         return _fail(
-            "this machine is locked; run `secrets-kit unlock` first. "
+            f"this machine is locked; run `{cli_command('unlock')}` first. "
             "Rotation re-encrypts every blob, so it has to be able to read "
             "them."
         )
@@ -365,7 +365,7 @@ def cmd_rotate_identity(_args: argparse.Namespace) -> int:
     repo_mod.commit_and_push(clone, "rotate: fleet identity", touched)
     print(
         "\nidentity rotated. Other machines will report a decrypt failure "
-        "once and need `! secrets-kit unlock` again.\n"
+        f"once and need `! {cli_command('unlock')}` again.\n"
         "REMEMBER: this stops the old identity reading FUTURE blobs. It does "
         "not un-read the past. If a machine was lost, rotate the underlying "
         "credentials too -- that is the real revocation."

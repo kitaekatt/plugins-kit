@@ -28,6 +28,25 @@ This asymmetry is the reason the design is usable at all. Do not reach for the
 passphrase to do routine work; if you think you need it, you are on the wrong
 path.
 
+## Resolving the CLI: `secrets-kit` is NOT on PATH
+
+The CLI ships as a shim inside the plugin's own install directory, which is
+version-keyed and never added to PATH. Typing a bare `secrets-kit` fails with
+`command not found` -- so **every `secrets-kit <verb>` written below is
+shorthand, not a command to hand anyone verbatim.** Resolve it first:
+
+```bash
+ls -d ~/.claude/plugins/cache/plugins-kit/secrets-kit/*/bin/secrets-kit | tail -1
+```
+
+That prints the invocation to use, e.g.
+`~/.claude/plugins/cache/plugins-kit/secrets-kit/0.5.0/bin/secrets-kit`. Run it
+with that path, and substitute that path into any prepared statement you relay.
+
+The bootstrap failure messages and the CLI's own error text already render the
+resolved path (`secrets_kit.cli_command()`), so **relay those verbatim** rather
+than rewriting them into a bare command name.
+
 ## Technique
 
 ```yaml
@@ -58,6 +77,17 @@ technique_skill:
       instead: >-
         Relay the prepared statement telling them to type `! secrets-kit unlock`
         in the prompt box. age prompts on the terminal with hidden input.
+    - id: cli_is_not_on_path
+      rule: >-
+        NEVER hand the user (or type yourself) a bare `secrets-kit <verb>`.
+        The shim lives in the plugin's version-keyed install dir and is not on
+        PATH, so a bare name fails with "command not found" -- which, for a
+        relayed prepared statement, wastes the one interactive step the user
+        was asked to take.
+      instead: >-
+        Resolve the shim path first (see "Resolving the CLI" above) and use it,
+        or relay the bootstrap/CLI message verbatim -- those already render the
+        resolved path themselves.
     - id: agent_cannot_run_passphrase_verbs
       rule: >-
         Do NOT run `secrets-kit unlock`, `init`, or `rotate-identity` yourself.
