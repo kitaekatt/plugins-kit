@@ -44,8 +44,25 @@ That prints the invocation to use, e.g.
 with that path, and substitute that path into any prepared statement you relay.
 
 The bootstrap failure messages and the CLI's own error text already render the
-resolved path (`secrets_kit.cli_command()`), so **relay those verbatim** rather
-than rewriting them into a bare command name.
+resolved path (`secrets_kit.cli_command()`), so take the command from those
+rather than rewriting it into a bare command name.
+
+## The passphrase verbs: ask, then run with `--new-terminal`
+
+`unlock`, `init` and `rotate-identity` need a tty, because `age` prompts on the
+terminal itself rather than reading stdin. You have no tty -- and neither does
+the user's `!` prefix, so relaying "type this yourself" does not work either.
+
+Instead: **ask the user for consent, then run the verb yourself with
+`--new-terminal`.** It spawns a real terminal window, returns immediately, and
+the user answers the hidden-input prompt in that window. The passphrase still
+never reaches the transcript, which was the whole point of the tty requirement.
+
+```bash
+<resolved-path> unlock --new-terminal
+```
+
+Then tell them a window has opened and the prompt is in there, not here.
 
 ## Technique
 
@@ -75,8 +92,9 @@ technique_skill:
         Transcripts are written to disk. There is deliberately no
         paste-it-here fallback, unlike an API key.
       instead: >-
-        Relay the prepared statement telling them to type `! secrets-kit unlock`
-        in the prompt box. age prompts on the terminal with hidden input.
+        Ask for consent, then run `secrets-kit unlock --new-terminal`. age
+        prompts with hidden input in the window that opens, which the
+        transcript never sees.
     - id: cli_is_not_on_path
       rule: >-
         NEVER hand the user (or type yourself) a bare `secrets-kit <verb>`.
@@ -88,11 +106,17 @@ technique_skill:
         Resolve the shim path first (see "Resolving the CLI" above) and use it,
         or relay the bootstrap/CLI message verbatim -- those already render the
         resolved path themselves.
-    - id: agent_cannot_run_passphrase_verbs
+    - id: passphrase_verbs_need_new_terminal
       rule: >-
-        Do NOT run `secrets-kit unlock`, `init`, or `rotate-identity` yourself.
-        They need an interactive terminal you do not have; they will hang or
-        fail. Only the user, via the `!` bang prefix, can run them.
+        NEVER run `unlock`, `init`, or `rotate-identity` bare -- age prompts on
+        a tty you do not have, so they hang or fail. And do NOT relay them for
+        the user to type: the `!` prefix has no tty either, and it spends their
+        attention on clerical work.
+      instead: >-
+        ASK the user first, then run the verb yourself with `--new-terminal`.
+        It spawns a real terminal window, returns immediately, and the user
+        answers the hidden-input prompt in that window -- so the passphrase
+        still never touches the transcript. Tell them to look for the window.
     - id: never_bypass_the_guard
       rule: >-
         NEVER use `git commit --no-verify` in a fleet-secrets clone, and never
@@ -117,19 +141,25 @@ technique_skill:
     - id: unlock
       keywords: [unlock, locked, new machine, secrets_locked, passphrase, materialize]
       user_objective: "Let this machine receive fleet secrets for the first time."
-      operation: "! secrets-kit unlock   (THE USER types this; you relay it)"
+      operation: "secrets-kit unlock --new-terminal   (YOU run this, after asking)"
       steps:
         - n: 1
           action: >-
-            Relay the prepared statement from the bootstrap failure's agent_msg
-            verbatim. Do not paraphrase it into an offer to handle the
-            passphrase for them.
+            Ask the user whether to unlock now (AskUserQuestion). Do not offer
+            to handle the passphrase for them -- the offer is the thing that
+            must never exist.
         - n: 2
+          action: >-
+            On consent, run `secrets-kit unlock --new-terminal`. It returns
+            immediately; say plainly that a terminal window has opened and the
+            hidden-input passphrase prompt is in THAT window, not here.
+        - n: 3
           action: >-
             After they report success, nothing else is needed: the failing check
             re-runs every session, so the next pass materializes everything.
             Confirm with `secrets-kit status` if you want evidence.
       gotchas:
+        - "The window holds itself open after the verb finishes, so the user can read the result. A vanished window means the launch failed, not that it succeeded."
         - "A wrong passphrase writes nothing and leaves the machine locked -- they can just retry."
         - "This is once per machine, not once per session. A machine asking repeatedly means the identity file is not persisting; check the data dir's permissions."
     - id: status
@@ -143,7 +173,7 @@ technique_skill:
     - id: seed
       keywords: [seed, init, new repo, first time, birth event, create fleet-secrets]
       user_objective: "Create the fleet identity and manifest in a brand-new secrets repo."
-      operation: "! secrets-kit init   (THE USER types this; interactive)"
+      operation: "secrets-kit init --new-terminal   (YOU run this, after asking)"
       steps:
         - n: 1
           action: >-
@@ -159,9 +189,10 @@ technique_skill:
             `secrets-kit-guard-version` marker) and move on.
         - n: 3
           action: >-
-            Have the user run `! secrets-kit init`. They choose the passphrase
-            and type it twice. Remind them to escrow it in their password
-            manager -- after seeding it is the only remote path back in.
+            Ask the user, then run `secrets-kit init --new-terminal`. They
+            choose the passphrase and type it twice in the window that opens.
+            Remind them to escrow it in their password manager -- after seeding
+            it is the only remote path back in.
         - n: 4
           action: >-
             Then YOU add each entry with `secrets-kit add` (no passphrase
@@ -192,7 +223,7 @@ technique_skill:
     - id: rotate_identity
       keywords: [rotate identity, lost machine, stolen laptop, revoke, new passphrase, compromised]
       user_objective: "Replace the fleet keypair and re-encrypt every blob."
-      operation: "! secrets-kit rotate-identity   (THE USER types this; interactive)"
+      operation: "secrets-kit rotate-identity --new-terminal   (YOU run this, after asking)"
       steps:
         - n: 1
           action: >-
@@ -201,8 +232,8 @@ technique_skill:
         - n: 2
           action: >-
             After it completes, every OTHER machine hits one decrypt failure and
-            needs `! secrets-kit unlock` again. Tell the user that up front so
-            the wave of asks is expected rather than alarming.
+            needs `secrets-kit unlock --new-terminal` again. Tell the user that
+            up front so the wave of asks is expected rather than alarming.
         - n: 3
           action: >-
             Also remove the lost machine's SSH key from the git host, so it

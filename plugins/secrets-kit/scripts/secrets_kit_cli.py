@@ -16,6 +16,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PLUGIN_ROOT / "lib"))
@@ -27,6 +28,7 @@ from secrets_kit import repo as repo_mod  # noqa: E402
 from secrets_kit.converge import converge, paths_for  # noqa: E402
 from secrets_kit.manifest import Config, Manifest  # noqa: E402
 from secrets_kit.perms import tighten, tighten_dir  # noqa: E402
+from secrets_kit.terminal import relaunch_self  # noqa: E402
 
 CONFIG_PATH = Path.home() / ".claude" / "secrets.json"
 
@@ -46,6 +48,29 @@ DATA_DIR = (
 def _fail(message: str) -> int:
     print(f"secrets-kit: {message}", file=sys.stderr)
     return 1
+
+
+# The verbs age prompts for a passphrase on. They need a tty, so an agent runs
+# them with --new-terminal and the user answers in the window that opens.
+_INTERACTIVE_VERBS = ("unlock", "init", "rotate-identity")
+
+
+def _handoff_to_terminal(args: argparse.Namespace) -> Optional[int]:
+    """Spawn a terminal for this verb and return, or None to run inline.
+
+    Sits in front of every interactive verb so the flag behaves identically on
+    all three: the agent never has to know which of them needs special casing.
+    """
+    if not getattr(args, "new_terminal", False):
+        return None
+    extra = ["--force"] if getattr(args, "force", False) else []
+    where = relaunch_self(args.command, extra)
+    print(f"opened {where} for `secrets-kit {args.command}`.")
+    print(
+        "The passphrase prompt is in THAT window -- it is hidden input, and "
+        "nothing here can see it."
+    )
+    return 0
 
 
 def _require_config() -> Config:
@@ -87,8 +112,11 @@ def _ensure_guarded(config: Config) -> Path:
 # unlock
 # --------------------------------------------------------------------------
 
-def cmd_unlock(_args: argparse.Namespace) -> int:
+def cmd_unlock(args: argparse.Namespace) -> int:
     """Decrypt the fleet identity onto this machine. Once per machine, ever."""
+    handed_off = _handoff_to_terminal(args)
+    if handed_off is not None:
+        return handed_off
     config = _require_config()
     clone = _ensure_clone(config)
     wrapped = clone / "identity.age"
@@ -149,6 +177,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     manifest.json, and caches the unlocked identity locally so the seeding
     machine is immediately usable.
     """
+    handed_off = _handoff_to_terminal(args)
+    if handed_off is not None:
+        return handed_off
     config = _require_config()
     clone = _ensure_guarded(config)
     manifest_path = clone / "manifest.json"
@@ -316,8 +347,11 @@ def cmd_remove(args: argparse.Namespace) -> int:
 # rotate-identity
 # --------------------------------------------------------------------------
 
-def cmd_rotate_identity(_args: argparse.Namespace) -> int:
+def cmd_rotate_identity(args: argparse.Namespace) -> int:
     """New keypair + re-encrypt every blob. Needs this machine to be unlocked."""
+    handed_off = _handoff_to_terminal(args)
+    if handed_off is not None:
+        return handed_off
     config = _require_config()
     clone = _ensure_guarded(config)
     manifest_path = clone / "manifest.json"
@@ -373,6 +407,14 @@ def cmd_rotate_identity(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_new_terminal_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--new-terminal",
+        action="store_true",
+        help="open a terminal window and run this there (for agents: age needs a tty)",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="secrets-kit",
@@ -381,6 +423,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("unlock", help="unlock this machine (interactive, once)")
+    _add_new_terminal_flag(p)
     p.set_defaults(func=cmd_unlock)
 
     p = sub.add_parser("status", help="what this machine holds / is waiting on")
@@ -389,6 +432,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("init", help="seed a new secrets repo (once, interactive)")
     p.add_argument("--force", action="store_true", help="re-seed over an existing identity")
+    _add_new_terminal_flag(p)
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("add", help="encrypt a file into the repo")
@@ -409,6 +453,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser(
         "rotate-identity", help="new keypair + re-encrypt everything (interactive)"
     )
+    _add_new_terminal_flag(p)
     p.set_defaults(func=cmd_rotate_identity)
 
     return parser

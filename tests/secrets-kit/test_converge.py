@@ -45,7 +45,7 @@ def test_locked_machine_raises_exactly_one_ask(fleet):
     failure = result.failures[0]
     assert failure.key == FAILURE_LOCKED
     assert failure.ask_reason == "info"
-    assert f"! {cli_command('unlock')}" in failure.agent_msg
+    assert cli_command("unlock --new-terminal") in failure.agent_msg
     assert not (fleet.dest_root / "ha-token.txt").exists()
 
 
@@ -329,7 +329,7 @@ def test_cloned_but_unseeded_repo_says_run_init(fleet):
     assert len(result.failures) == 1
     failure = result.failures[0]
     assert failure.ask_reason == "info"
-    assert f"! {cli_command('init')}" in failure.agent_msg
+    assert cli_command("init --new-terminal") in failure.agent_msg
     assert "not a broken" in failure.agent_msg.lower()
 
 
@@ -344,6 +344,20 @@ def test_cli_command_resolves_the_shim_that_actually_exists():
     shim = Path(os.path.expanduser(rendered))
     assert shim.is_file(), rendered
     assert shim.name == "secrets-kit"
+
+
+@pytest.mark.parametrize("verb", ["init", "unlock", "rotate-identity"])
+def test_passphrase_verbs_are_never_offered_without_new_terminal(verb):
+    """A bare interactive verb in a message is an instruction that hangs.
+
+    age prompts on a tty neither the agent nor the `!` prefix has, so any
+    message naming one of these verbs has to name --new-terminal with it.
+    """
+    from secrets_kit import converge as converge_mod
+
+    source = Path(converge_mod.__file__).read_text(encoding="utf-8")
+    for match in re.finditer(rf"cli_command\(['\"]({verb})([^'\"]*)['\"]\)", source):
+        assert "--new-terminal" in match.group(2), match.group(0)
 
 
 @pytest.mark.parametrize(

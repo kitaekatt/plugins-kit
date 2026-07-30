@@ -53,14 +53,18 @@ secrets-kit add ha-token --file secrets/ha-token.txt \
 secrets-kit remove ha-token         # every machine deletes its copy next pass
 ```
 
-Interactive (must be run by the user, so the passphrase never reaches a
-transcript -- `age` prompts on the terminal itself):
+Interactive -- `age` prompts on the terminal itself, so these need a tty. Pass
+`--new-terminal` and the CLI spawns a window for the prompt and returns
+immediately; the passphrase is typed there and never reaches a transcript,
+which is what lets an agent drive these without ever seeing it:
 
+```bash
+secrets-kit unlock --new-terminal           # once per machine
+secrets-kit init --new-terminal             # once per fleet, on the machine holding the plaintext
+secrets-kit rotate-identity --new-terminal  # new keypair + re-encrypt everything
 ```
-! secrets-kit unlock                # once per machine
-! secrets-kit init                  # once per fleet, on the machine holding the plaintext
-! secrets-kit rotate-identity       # new keypair + re-encrypt everything
-```
+
+Drop the flag when you are already at a terminal and want the prompt inline.
 
 ## What it does not do
 
