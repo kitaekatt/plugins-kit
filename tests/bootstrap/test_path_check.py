@@ -8,9 +8,71 @@ import pytest
 
 from bootstrap_lib.path_check import (
     _add_path_to_windows_registry,
+    _home,
     _path_diagnostic,
     check_path_entry,
 )
+
+
+class TestHomeResolution:
+    """REGRESSION: rc writes must follow $HOME on Windows, not USERPROFILE.
+
+    ntpath.expanduser("~") reads USERPROFILE and ignores HOME entirely, so a
+    HOME-isolated engine subprocess still resolved the developer's real home
+    and appended its fixture path_entries to the real ~/.bashrc.
+    """
+
+    def test_prefers_home_over_userprofile_on_windows(self, tmp_path, monkeypatch):
+        fake_home = tmp_path / "fakehome"
+        fake_home.mkdir()
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "realhome"))
+        assert _home() == str(fake_home)
+
+    def test_falls_back_when_home_is_not_a_real_directory(self, tmp_path, monkeypatch):
+        """Git Bash exports an MSYS HOME (/c/Users/you) that native Python
+        cannot stat -- production must keep using expanduser there."""
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setenv("HOME", "/c/Users/nobody")
+        monkeypatch.setattr(
+            "bootstrap_lib.path_check.os.path.expanduser",
+            lambda p: str(tmp_path) if p == "~" else p,
+        )
+        assert _home() == str(tmp_path)
+
+    def test_posix_keeps_expanduser(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(os, "name", "posix")
+        monkeypatch.setenv("HOME", str(tmp_path / "ignored"))
+        monkeypatch.setattr(
+            "bootstrap_lib.path_check.os.path.expanduser",
+            lambda p: str(tmp_path) if p == "~" else p,
+        )
+        assert _home() == str(tmp_path)
+
+    def test_rc_write_lands_in_home_not_userprofile(self, tmp_path, monkeypatch):
+        """End of the leak, asserted at the writer: with HOME redirected, the
+        export line goes to HOME/.bashrc and USERPROFILE/.bashrc is untouched."""
+        from bootstrap_lib.path_check import add_path_to_shell_config
+
+        fake_home = tmp_path / "fakehome"
+        fake_home.mkdir()
+        real_home = tmp_path / "realhome"
+        real_home.mkdir()
+
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(real_home))
+        monkeypatch.setenv("BOOTSTRAP_SKIP_REGISTRY", "1")
+        monkeypatch.setattr(
+            "bootstrap_lib.path_check.os.path.expanduser",
+            lambda p: p.replace("~", str(real_home), 1) if p.startswith("~") else p,
+        )
+
+        add_path_to_shell_config("/from/user")
+
+        assert "/from/user" in (fake_home / ".bashrc").read_text()
+        assert not (real_home / ".bashrc").exists()
 
 
 class TestCheckPathEntry:
@@ -187,8 +249,9 @@ class TestAddPathToShellConfigWindowsIntegration:
     def test_calls_registry_on_windows(self, mock_registry, tmp_path):
         from bootstrap_lib.path_check import add_path_to_shell_config
         mock_registry.return_value = (True, "added to registry")
-        # Use a fake RC file path to prevent writing to real ~/.bashrc
-        with patch.dict(os.environ, {"MSYSTEM": "MINGW64"}), \
+        # Fake home BOTH ways -- patched expanduser and HOME -- so neither
+        # resolution path can reach the real ~/.bashrc (see path_check._home).
+        with patch.dict(os.environ, {"MSYSTEM": "MINGW64", "HOME": str(tmp_path)}), \
              patch("bootstrap_lib.path_check.os.path.expanduser", side_effect=lambda p: str(tmp_path / p.lstrip("~/")) if p.startswith("~") else p):
             ok, msg = add_path_to_shell_config("/tmp/test_path_xyz_" + str(os.getpid()))
         mock_registry.assert_called_once()
@@ -198,6 +261,7 @@ class TestAddPathToShellConfigWindowsIntegration:
         from bootstrap_lib.path_check import add_path_to_shell_config
         # Ensure MSYSTEM is not set and sys.platform is not win32
         env = {k: v for k, v in os.environ.items() if k != "MSYSTEM"}
+        env["HOME"] = str(tmp_path)
         with patch.dict(os.environ, env, clear=True), \
              patch("bootstrap_lib.path_check.sys") as mock_sys, \
              patch("bootstrap_lib.path_check.os.path.expanduser", side_effect=lambda p: str(tmp_path / p.lstrip("~/")) if p.startswith("~") else p):
@@ -218,6 +282,7 @@ class TestAddPathToShellConfigIdempotency:
 
         env = {k: v for k, v in os.environ.items() if k not in ("MSYSTEM",)}
         env["BOOTSTRAP_SKIP_REGISTRY"] = "1"
+        env["HOME"] = fake_home
         with patch.dict(os.environ, env, clear=True), \
              patch("bootstrap_lib.path_check.sys") as mock_sys, \
              patch("bootstrap_lib.path_check.os.path.expanduser",
@@ -252,6 +317,7 @@ class TestAddPathToShellConfigIdempotency:
 
         env = {k: v for k, v in os.environ.items() if k not in ("MSYSTEM",)}
         env["BOOTSTRAP_SKIP_REGISTRY"] = "1"
+        env["HOME"] = str(tmp_path)
         with patch.dict(os.environ, env, clear=True), \
              patch("bootstrap_lib.path_check.sys") as mock_sys, \
              patch("bootstrap_lib.path_check.os.path.expanduser",

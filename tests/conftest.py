@@ -15,6 +15,16 @@ BOOTSTRAP_ROOT = os.path.normpath(
 # test does to the environment.
 _REAL_USER_SETTINGS = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
 
+# Same reasoning, and deliberately resolved BOTH ways: on Windows
+# expanduser("~") follows USERPROFILE while the writers may follow $HOME, and
+# the guard has to watch whichever one a leak actually lands in.
+_REAL_RC_FILES = sorted({
+    os.path.join(h, name)
+    for h in {os.path.expanduser("~"), os.environ.get("HOME") or ""}
+    if h and os.path.isdir(h)
+    for name in (".bashrc", ".zshrc")
+})
+
 # Bound at import time for the same reason, one layer deeper: tests swap
 # sys.modules["winreg"] for a fake, and they do it with the SHARED monkeypatch
 # fixture -- whose undo runs after the guard's teardown, not before. A plain
@@ -55,6 +65,51 @@ def _guard_real_user_settings():
             f"test mutated the real {_REAL_USER_SETTINGS} -- a bootstrap engine "
             f"run was not HOME-isolated and leaked into the developer's home "
             f"(restored). Isolate HOME for every engine invocation in this test."
+        )
+
+
+@pytest.fixture(autouse=True)
+def _guard_real_shell_rc():
+    """Regression guard: no test may mutate the developer's real shell rc files.
+
+    path_check.add_path_to_shell_config appends `export PATH=...` to ~/.bashrc
+    (and ~/.zshrc on macOS). It used to locate them with expanduser("~"), which
+    on Windows reads USERPROFILE and ignores HOME -- so every HOME-isolated
+    engine test wrote its fixture path_entries into the developer's REAL
+    ~/.bashrc. One machine carried three dead exports (/from/user,
+    /from/project, /from/local -- straight out of
+    test_engine_personal.py::test_priority_project_local_wins) before anyone
+    looked.
+
+    The writer now honors $HOME on Windows; this is the backstop that keeps the
+    bug from recurring through some other rc writer. Mirrors
+    _guard_real_user_settings and _guard_real_user_path: snapshot, restore on
+    change, fail at the source.
+    """
+    before = {}
+    for path in _REAL_RC_FILES:
+        try:
+            before[path] = open(path, "rb").read()
+        except OSError:
+            before[path] = None
+    yield
+    for path in _REAL_RC_FILES:
+        try:
+            after = open(path, "rb").read()
+        except OSError:
+            after = None
+        if after == before[path]:
+            continue
+        if before[path] is None:
+            os.remove(path)
+        else:
+            with open(path, "wb") as f:
+                f.write(before[path])
+        pytest.fail(
+            f"test mutated the real {path} -- a shell-rc writer resolved the "
+            f"developer's home instead of the test's HOME (restored). On "
+            f"Windows expanduser('~') follows USERPROFILE, not HOME: resolve "
+            f"the home directory through path_check._home()."
         )
 
 

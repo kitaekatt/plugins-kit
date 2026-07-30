@@ -17,6 +17,29 @@ def normalize_path_for_compare(path: str) -> str:
     return os.path.normcase(os.path.normpath(path))
 
 
+def _home() -> str:
+    """Home directory for rc-file writes, honoring ``$HOME`` on Windows too.
+
+    On POSIX ``expanduser("~")`` already prefers ``$HOME``, so a HOME-isolated
+    subprocess lands where it intends. On Windows it does NOT -- ``ntpath``
+    consults ``USERPROFILE`` and ignores ``HOME`` entirely -- so every engine
+    test that redirects HOME to a tmp dir still resolved the developer's REAL
+    home and appended its fixture ``path_entries`` to the real ``~/.bashrc``
+    (three dead ``/from/*`` exports on one machine before anyone noticed). Same
+    class of leak as the registry one guarded in tests/conftest.py, one layer
+    over: rc files honor redirection, but only if the code asks for it.
+
+    ``$HOME`` wins only when it names an existing directory: under Git Bash it
+    is an MSYS path (``/c/Users/you``) that native Python cannot stat, and
+    falling back to ``expanduser`` there keeps production behavior unchanged.
+    """
+    if os.name == "nt":
+        env_home = os.environ.get("HOME")
+        if env_home and os.path.isdir(env_home):
+            return env_home
+    return os.path.expanduser("~")
+
+
 def check_path_entry(path_entry: str) -> Result:
     """Check if a directory is present in PATH.
 
@@ -64,7 +87,7 @@ def add_path_to_shell_config(path_entry: str) -> Tuple[bool, str]:
         _reg_ok, registry_msg = _add_path_to_windows_registry(path_entry)
 
     # Build portable export line using $HOME where possible
-    home = os.path.expanduser("~")
+    home = _home()
     if expanded.startswith(home):
         path_expr = '"$HOME' + expanded[len(home):] + ':$PATH"'
     else:
@@ -73,10 +96,10 @@ def add_path_to_shell_config(path_entry: str) -> Tuple[bool, str]:
 
     # Determine RC files by platform
     if sys.platform == "darwin":
-        rc_files = [os.path.expanduser("~/.zshrc"), os.path.expanduser("~/.bashrc")]
+        rc_files = [os.path.join(home, ".zshrc"), os.path.join(home, ".bashrc")]
     else:
         # Linux and Windows (Git Bash)
-        rc_files = [os.path.expanduser("~/.bashrc")]
+        rc_files = [os.path.join(home, ".bashrc")]
 
     # Build a slash-normalized form of the $HOME-relative path we'd write,
     # so the idempotency check matches regardless of whether a previous run
