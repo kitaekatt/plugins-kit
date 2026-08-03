@@ -230,6 +230,22 @@ def test_move_into_accepts_already_in_target_cl_noop():
     assert cs.paths == ["a.txt"]
 
 
+def test_move_into_accepts_nothing_changed_noop():
+    # Idempotent re-move, the other shape p4 emits when the file is ALREADY in
+    # the target CL: "<depotFile>#<rev> - nothing changed." with exit 0. The
+    # desired end state already holds, so it is a success, not a failure.
+    def nothing_changed(args, input=None, cwd=None):
+        if args[:1] == ["reopen"]:
+            path = args[3]
+            return 0, f"//depot/proj/{path}#83 - nothing changed.\n", ""
+        return 0, "", ""
+
+    vcs = P4Vcs(runner=nothing_changed)
+    cs = P4Changeset(cl="99")
+    vcs.move_into(cs, ["a.txt"])
+    assert cs.paths == ["a.txt"]
+
+
 def test_move_into_raises_on_silent_noop():
     # p4 reopen exits 0 but did nothing: the file was never open for edit.
     def noop(args, input=None, cwd=None):

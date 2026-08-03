@@ -30,8 +30,9 @@ discipline) from the proven ``firstpass_ops.cl_creation`` helpers this replaces:
   path containing ``...`` or ``*`` is rejected outright. Beyond that, ``p4
   reopen`` exits 0 even when it did nothing (file not open for edit) or landed
   the file in the wrong CL, so the stdout diagnostic is parsed -- a move is
-  accepted only on ``"reopened"`` or ``"currently opened for edit; change
-  <this-cl>"``, and a silent no-op / wrong-CL outcome raises ``P4VcsError``
+  accepted only on ``"reopened"``, ``"currently opened for edit; change
+  <this-cl>"``, or ``"nothing changed"`` (the file is already in this CL), and a
+  silent no-op / wrong-CL outcome raises ``P4VcsError``
   (ported from ``cl_creation.move_files_to_changelist``'s verification).
 
 P4-specific extensions (beyond the seam)
@@ -294,12 +295,13 @@ class P4Vcs:
         proof the file landed in ``changeset``. This ports the verification
         discipline from ``firstpass_ops.cl_creation.move_files_to_changelist``:
         the stdout diagnostic is parsed and the move is accepted ONLY when it
-        reports ``"reopened"`` (a real move) or ``"currently opened for edit;
-        change <cl>"`` carrying THIS changeset's number (an idempotent re-move
-        of a file already here). Any other outcome -- a silent no-op, or a
-        "currently opened for edit; change <other>" naming a different CL --
-        raises :class:`P4VcsError`, and the path is NOT recorded on the
-        changeset.
+        reports ``"reopened"`` (a real move), ``"currently opened for edit;
+        change <cl>"`` carrying THIS changeset's number, or ``"<depotFile>#<rev>
+        - nothing changed."`` -- the latter two both being idempotent re-moves
+        of a file already in this CL, where the desired end state already holds.
+        Any other outcome -- a silent no-op, or a "currently opened for edit;
+        change <other>" naming a different CL -- raises :class:`P4VcsError`, and
+        the path is NOT recorded on the changeset.
         """
         if changeset.cl is None:
             raise P4VcsError("move_into called on a changeset with no CL number")
@@ -309,7 +311,10 @@ class P4Vcs:
             rc, out, err = self._p4("reopen", "-c", cl, p, check=False)
             stdout = out or ""
             reopened = "reopened" in stdout
-            already_here = f"currently opened for edit; change {cl}" in stdout
+            already_here = (
+                f"currently opened for edit; change {cl}" in stdout
+                or "nothing changed" in stdout
+            )
             if rc != 0 or not (reopened or already_here):
                 reason = (err.strip() or stdout.strip() or "unknown failure")
                 raise P4VcsError(
