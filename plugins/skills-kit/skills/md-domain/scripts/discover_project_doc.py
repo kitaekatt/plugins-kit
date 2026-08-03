@@ -44,6 +44,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -325,6 +326,33 @@ def _measure(path: Path) -> tuple[int, int]:
     return (len(lines), len(text) // 4)
 
 
+def _git_ignored(paths: list[Path], root: Path) -> set[str]:
+    """The subset of `paths` git reports as ignored, as strings.
+
+    Best-effort and VCS-tolerant: returns an empty set when git is absent, the
+    root is not inside a git work tree, or the invocation fails for any reason
+    -- discovery then behaves exactly as before. Uses `git check-ignore
+    --stdin -z` so one subprocess covers the whole candidate list.
+    """
+    if not paths:
+        return set()
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "check-ignore", "--stdin", "-z"],
+            input="\0".join(str(p) for p in paths),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    # Exit 0: some ignored (listed on stdout). Exit 1: none ignored.
+    # Anything else (128: not a repo / bad usage): treat as no information.
+    if proc.returncode not in (0, 1):
+        return set()
+    return {p for p in proc.stdout.split("\0") if p}
+
+
 def collect_candidates(root: Path) -> list[Path]:
     out: list[Path] = []
     for path in _walk_files(root):
@@ -333,6 +361,12 @@ def collect_candidates(root: Path) -> list[Path]:
         if _has_skipped_segment(path, root):
             continue
         out.append(path)
+    # Drop gitignored candidates (build artifacts like *.egg-info that the
+    # skip-dir set does not enumerate). Explicit --path nominations bypass
+    # this by construction -- they never go through collect_candidates.
+    ignored = _git_ignored(out, root)
+    if ignored:
+        out = [p for p in out if str(p) not in ignored]
     out.sort(key=lambda p: str(p))
     return out
 

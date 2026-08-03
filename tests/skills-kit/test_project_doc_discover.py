@@ -78,6 +78,25 @@ class TestCollectCandidates:
         found = {p.name for p in pd.collect_candidates(tmp_path)}
         assert found == {"real.md"}
 
+    def test_skips_gitignored_candidates_in_a_git_repo(self, tmp_path):
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        _write(tmp_path / ".gitignore", "*.egg-info/\n")
+        _write(tmp_path / "pkg.egg-info" / "SOURCES.txt", "src/a.py\n")
+        _write(tmp_path / "Docs" / "real.md")
+        found = {p.name for p in pd.collect_candidates(tmp_path)}
+        assert "real.md" in found
+        assert "SOURCES.txt" not in found
+
+    def test_non_git_root_keeps_all_candidates(self, tmp_path):
+        # No .git anywhere under tmp_path: the ignore filter must be a no-op,
+        # not an error, and the egg-info doc is (still) enumerated.
+        _write(tmp_path / "pkg.egg-info" / "SOURCES.txt", "src/a.py\n")
+        _write(tmp_path / "Docs" / "real.md")
+        found = {p.name for p in pd.collect_candidates(tmp_path)}
+        assert found == {"real.md", "SOURCES.txt"}
+
 
 class TestOrphanDetection:
     def test_uncited_doc_is_orphan(self, tmp_path):
