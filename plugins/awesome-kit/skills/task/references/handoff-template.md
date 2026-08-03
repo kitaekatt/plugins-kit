@@ -147,18 +147,42 @@ template-vs-additional; the consistent eight `##` shape is the contract.
   sentence template, a sequence of skill invocations), it is a Protocol.
   Otherwise it is a Behavior. Subsections:
   - **`### Always-invoke skills (BEFORE any doc reads)`** -- one tool call
-    per listed skill, before reading `plan.md` or any other doc. Skills load
+    per skill, before reading `plan.md` or any other doc. Skills load
     vocabulary that the rest of CLAUDE.md assumes; reading docs first means
     reading them without the right vocabulary in context.
+
+    **A pointer, not a second list.** The required-skill set has ONE home:
+    `task.yaml`'s `skills_to_invoke`, which `task work` merges with the
+    always-required baseline and emits as a single initialization block of
+    `Skill(...)` lines. This section says so and stops -- it does not
+    restate the names. A maintained copy here would be a second source that
+    drifts from `task.yaml` the first time either changes, and the copy is
+    the one nobody updates. Standing text:
+    > Invoke every `Skill(...)` line `task work` emitted, in the order
+    > printed, before reading any doc. That block is the complete required
+    > set (`task.yaml`'s `skills_to_invoke` plus the baseline); there is no
+    > second list to consult. Skill invocations are pre-authorized -- do not
+    > ask.
+
+    To ADD a skill to the set, edit `task.yaml`
+    (`task update --skill-to-invoke <name> ...`, repeatable, REPLACES the
+    stored list), not this section.
   - **`### Required reads on turn 1`** -- explicit list of docs to read
     before acting. At minimum `plan.md`. Add `log.md` only if the next agent
     needs prior rationale to act on turn 1; otherwise leave it on-demand.
   - **`### Opening response protocol`** -- the `orientation moment` for
     session resume. What the agent says after reading the required docs,
     before tool use. Example template (project-specific text varies):
-    > "Read plan.md (+ any other required reads). Current goal: <restated in
-    > own words>. Starting with: <first concrete action>. Unclear / blocked
-    > on: <issue, or 'none'>."
+    > "Invoked: <skills, as emitted by `task work`>. Read plan.md (+ any
+    > other required reads). Current goal: <restated in own words>.
+    > Starting with: <first concrete action>, dispatched to <sub-agent /
+    > inline, with the reason>. Unclear / blocked on: <issue, or 'none'>."
+
+    The `Invoked:` and `dispatched to` clauses are load-bearing: they make a
+    skipped initialization or an un-dispatched build visible to the user in
+    the first turn, rather than surfacing at end of session as "I invoked
+    the task skills but implemented everything inline." Stating the dispatch
+    decision out loud is also what forces it to BE a decision.
   - **`### Communication protocol`** -- default to `/verbose-updates`'s
     three-part end-of-turn template (see framework). Note project-specific
     overrides here (audit-log shape, domain terminology, what NOT to say).

@@ -92,11 +92,22 @@ class StateOpError(Exception):
         self.warnings = list(warnings)
 
 
+#: Skills every worked task needs, regardless of what it declares. Merged
+#: ahead of the task's own ``skills_to_invoke`` so ``work`` emits ONE
+#: initialization list -- adherence tracks what the script emits, not what
+#: prose elsewhere requires, and a requirement that lives only in prose is
+#: the one that gets skipped. ``orchestrate`` gates its own applicability
+#: (its step 1 is "confirm the task warrants orchestration"), so emitting it
+#: unconditionally costs a skill load on a trivial task and nothing else.
+BASELINE_SKILLS: tuple[str, ...] = ("awesome-kit:orchestrate",)
+
+
 @dataclass(frozen=True)
 class WorkResult:
     """Outcome of a successful ``work``: the pointer is written; the skill
     layer acts on ``skills_to_invoke`` / ``agent_hint`` (the script only
-    emits them)."""
+    emits them). ``skills_to_invoke`` is the MERGED list --
+    ``BASELINE_SKILLS`` followed by the task's own entries, deduped."""
 
     canonical: str
     folder: Path  # absolute
@@ -215,6 +226,18 @@ def _clear_pointer_if_names(pointer_path: Path, folder: Path) -> None:
         pointer_mod.clear_current(pointer_path)
 
 
+def _merge_skills(declared: Sequence[str]) -> tuple[str, ...]:
+    """BASELINE_SKILLS then the task's own entries, order-preserving and
+    deduped (a task that already declares a baseline skill is not emitted
+    twice). Baseline first: it governs HOW the task-declared skills get
+    used, so it belongs ahead of them."""
+    merged: list[str] = []
+    for skill in (*BASELINE_SKILLS, *declared):
+        if skill not in merged:
+            merged.append(skill)
+    return tuple(merged)
+
+
 # --- the verbs ---------------------------------------------------------------
 
 
@@ -261,11 +284,12 @@ def work(
     pointer_mod.write_current(pointer_path, folder)
     block = read_task_block(folder) or {}
     raw_skills = block.get("skills_to_invoke")
-    skills = (
+    declared = (
         tuple(s for s in raw_skills if isinstance(s, str))
         if isinstance(raw_skills, list)
         else ()
     )
+    skills = _merge_skills(declared)
     raw_hint = block.get("agent_hint")
     hint = raw_hint if isinstance(raw_hint, str) and raw_hint else None
     return WorkResult(

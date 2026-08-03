@@ -77,11 +77,11 @@ Time-boxed procedures with a defined trigger (e.g. "turn 1", "end of every turn"
 
 ### Always-invoke skills (BEFORE any doc reads)
 
-On turn 1, BEFORE reading `plan.md` / `log.md` / any sibling reference doc, invoke these skills. They load the project vocabulary and overview that the rest of CLAUDE.md assumes. A skill invocation is one tool call; do it first so every later read has the right context.
+On turn 1, BEFORE reading `plan.md` / `log.md` / any sibling reference doc, invoke every `Skill(...)` line `task work` emitted, in the order printed. They load the project vocabulary and overview that the rest of CLAUDE.md assumes; a skill invocation is one tool call, so do them first and every later read has the right context.
 
-- `<skill-name>` -- <one-line description of what knowledge the skill loads and why it's required before doc reads>.
+That emitted block is the complete required set -- this task's `skills_to_invoke` plus the always-required baseline (`awesome-kit:orchestrate`). There is no second list here to consult or maintain; to add a skill, run `task update --skill-to-invoke <name>` (repeatable; REPLACES the stored list).
 
-Skill invocations are pre-authorized; do not ask. The opening response protocol's "Read plan.md and log.md" check still applies AFTER the skill loads.
+Skill invocations are pre-authorized; do not ask. The opening response protocol's "Read plan.md and log.md" check still applies AFTER the skills load.
 
 ### Required reads on turn 1
 
@@ -96,7 +96,9 @@ On-demand siblings (do NOT pre-read; load only when relevant):
 
 After invoking the always-invoke skills AND reading the required docs above, BEFORE any tool use, end the first turn with:
 
-> "Read plan.md and log.md. Current goal: <restated in own words>. Prerequisites verified: <state of dependencies>. Starting with: <first concrete action>. Unclear / blocked on: <issue, or 'none'>."
+> "Invoked: <the skills `task work` emitted>. Read plan.md and log.md. Current goal: <restated in own words>. Prerequisites verified: <state of dependencies>. Starting with: <first concrete action>, dispatched to <sub-agent type / inline, with the reason>. Unclear / blocked on: <issue, or 'none'>."
+
+The `Invoked:` and `dispatched to` clauses are not filler -- they surface a skipped initialization or an un-dispatched build in turn 1, instead of at end of session.
 
 AND surface the question described under "Open questions for the user" above. User explicitly wants you to explain the trade-off and let them decide -- do NOT proceed past Step 1 of plan.md until they pick.
 

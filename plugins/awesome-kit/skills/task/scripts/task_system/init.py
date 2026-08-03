@@ -130,7 +130,14 @@ reference items here by backticked id, never restating their state).
 
 ### Always-invoke skills (BEFORE any doc reads)
 
-- <fill: skills to invoke on turn 1, or "none">
+Invoke every `Skill(...)` line `task work` emitted, in the order printed,
+before reading any doc. That block is the complete required set (this task's
+`skills_to_invoke` plus the always-required baseline); there is no second
+list to consult. Skill invocations are pre-authorized -- do not ask.
+
+To add a skill to the set, edit `task.yaml` via
+`task update --skill-to-invoke <name>` (repeatable; REPLACES the stored
+list) -- never by listing it here.
 
 ### Required reads on turn 1
 

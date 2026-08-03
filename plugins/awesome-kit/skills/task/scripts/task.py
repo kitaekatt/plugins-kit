@@ -48,10 +48,13 @@ Read-op conventions (Step 3):
 State-op conventions (Step 4):
 - ``work <ref>`` exits non-zero when validate blocks (ANY error or warning),
   the ref is remote, or auto-init fails -- findings to stderr, pointer
-  unwritten. On pass it writes the pointer and prints to stdout one
-  ``Skill(skill: "<name>")`` line per ``skills_to_invoke`` entry plus an
-  ``agent_hint: <name>`` dispatch hint line when present (the skill layer
-  acts on these; the script only emits them).
+  unwritten. On pass it writes the pointer and prints to stdout a single
+  initialization block: a ``== task init ... ==`` header, one
+  ``Skill(skill: "<name>")`` line per merged skill
+  (``state_ops.BASELINE_SKILLS`` then the task's own ``skills_to_invoke``,
+  deduped), an ``agent_hint: <name>`` dispatch hint line when present, and
+  a closing ``== then: dispatch ... ==`` directive (the skill layer acts on
+  these; the script only emits them).
 - ``switch <ref>`` first runs ``update`` on the current task when one is
   set and extant (a ``note:`` line on stderr reports it), then behaves
   exactly like ``work <ref>``.
@@ -395,12 +398,26 @@ def _print_state_op_error(exc: StateOpError) -> None:
 
 
 def _emit_work(result) -> None:
-    """The spec 7.1 work output: Skill(...) lines + the dispatch hint. The
-    skill layer acts on these; the script only emits them."""
+    """The spec 7.1 work output, framed as ONE initialization block: every
+    skill the task needs (baseline + declared, merged by state_ops) as
+    Skill(...) lines, the dispatch hint, and the closing directive. The
+    skill layer acts on these; the script only emits them.
+
+    The framing lines are load-bearing, not decoration. A single emitted
+    list makes the rule "invoke every Skill(...) line printed" -- no
+    cross-referencing prose for a requirement the script did not print --
+    and the closing directive is what turns a loaded orchestrate skill into
+    an actual dispatch (the observed miss was invoking the task's own
+    skills and then implementing inline anyway)."""
+    print("== task init -- invoke each of these now, one Skill call each ==")
     for skill in result.skills_to_invoke:
         print(f'Skill(skill: "{skill}")')
     if result.agent_hint is not None:
         print(f"agent_hint: {result.agent_hint}")
+    print(
+        "== then: dispatch the work per orchestrate -- "
+        "do not implement inline in the main context =="
+    )
 
 
 def _cmd_work(args: argparse.Namespace) -> int:

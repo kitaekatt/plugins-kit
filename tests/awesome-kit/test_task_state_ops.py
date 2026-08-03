@@ -140,8 +140,23 @@ class TestWorkLib:
             agent_hint="backend-developer",
         )
         result = state_ops.work("tmp/a", tmp_path, ptr)
-        assert result.skills_to_invoke == ("home-domain", "md-read")
+        assert result.skills_to_invoke == (
+            *state_ops.BASELINE_SKILLS,
+            "home-domain",
+            "md-read",
+        )
         assert result.agent_hint == "backend-developer"
+
+    def test_baseline_skills_emitted_when_task_declares_none(self, tmp_path, ptr):
+        make_task(tmp_path, "tmp/a")
+        result = state_ops.work("tmp/a", tmp_path, ptr)
+        assert result.skills_to_invoke == state_ops.BASELINE_SKILLS
+
+    def test_baseline_skill_declared_by_task_is_not_duplicated(self, tmp_path, ptr):
+        baseline = state_ops.BASELINE_SKILLS[0]
+        make_task(tmp_path, "tmp/a", skills_to_invoke=[baseline, "home-domain"])
+        result = state_ops.work("tmp/a", tmp_path, ptr)
+        assert result.skills_to_invoke == (*state_ops.BASELINE_SKILLS, "home-domain")
 
     def test_error_finding_blocks_and_pointer_unwritten(self, tmp_path, ptr):
         make_task(tmp_path, "tmp/a", status="bogus")  # out of vocabulary
@@ -467,9 +482,13 @@ class TestWorkCLI:
         )
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.splitlines() == [
+            "== task init -- invoke each of these now, one Skill call each ==",
+            *[f'Skill(skill: "{s}")' for s in state_ops.BASELINE_SKILLS],
             'Skill(skill: "home-domain")',
             'Skill(skill: "md-read")',
             "agent_hint: backend-developer",
+            "== then: dispatch the work per orchestrate -- "
+            "do not implement inline in the main context ==",
         ]
         assert read_current(ptr) == str(folder.resolve())
 

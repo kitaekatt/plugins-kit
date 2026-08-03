@@ -148,11 +148,14 @@ class TestCliLifecycle:
         assert res.returncode == 0, res.stderr
         assert res.stdout.strip() == "active"
 
-        # --- work: pointer set; Skill(...) + agent_hint lines emitted ----
+        # --- work: pointer set; one init block emitted -------------------
         res = run_cli(["work", f"tmp/{STUB}", *rootflag, *ptrflag], cwd=root)
         assert res.returncode == 0, res.stderr
+        assert "== task init" in res.stdout
+        assert 'Skill(skill: "awesome-kit:orchestrate")' in res.stdout
         assert 'Skill(skill: "home-domain")' in res.stdout
         assert "agent_hint: backend-developer" in res.stdout
+        assert "do not implement inline in the main context" in res.stdout
         assert ptr.read_text(encoding="utf-8").strip() == str(folder.resolve())
 
         # --- current: id + classification + title ------------------------

@@ -92,7 +92,7 @@ task:
 | `depends_on` | list[path] | no | Reference paths that must be `closed`/`archived` before this is workable. |
 | `blocked_by` | list[path] | no | Reference paths currently blocking this task (a task with non-empty `blocked_by` reads as `blocked`). |
 | `agent_hint` | string | no | Sub-agent type for `work` dispatch (e.g. `backend-developer`). |
-| `skills_to_invoke` | list[string] | no | Skills loaded when the task is worked (the self-documenting-task pattern). |
+| `skills_to_invoke` | list[string] | no | Skills loaded when the task is worked (the self-documenting-task pattern). This is the task's *additional* set: `work` emits `BASELINE_SKILLS` ahead of it, so the always-required skills need not (and should not) be restated here. |
 
 Notes:
 - `status: active` **is** the stored resting state (valid + extant). The single *currently-worked* task
@@ -337,7 +337,7 @@ inference exception.
 | Verb | Kind | Semantics |
 |---|---|---|
 | `init` | script | Create the folder + scaffolding for a new task, seeded from current request context. Establishes identity (path), location (§7.4), and type. **Its output is always a valid `active` task — `init` cannot produce an `invalid` one.** |
-| `work <ref>` | script | Set the task as the single global `current` task. **Auto-runs `init` if the folder doesn't exist yet** (promotion). Loads the task's `skills_to_invoke` / dispatches to `agent_hint`. **Gated by `validate`** (§9). |
+| `work <ref>` | script | Set the task as the single global `current` task. **Auto-runs `init` if the folder doesn't exist yet** (promotion). Emits one initialization block — the baseline skills merged with the task's `skills_to_invoke`, plus `agent_hint` and the dispatch directive (§7.1). **Gated by `validate`** (§9). |
 | `switch <ref>` | script | `update`(the `current` task) then `work`(new). If nothing is current, identical to `work`. After the update the previously-current task becomes a plain `active` task — no lingering claim. |
 | `update [<ref>]` | script | Upsert: `init` if absent, otherwise refresh the folder's state (and rotate `plan.md`/`log.md` per the hand-off discipline). Writes `task.yaml` field edits (`status`, `priority`, `description`, `depends_on`, `blocked_by`, …). **Re-runs `validate`, classifying the task `active` / `invalid` / `remote`** (§9). |
 | `close <ref>` | script | Mark `status: closed`; **keeps** the folder (reopen-able). Acts on an `active` task. |
@@ -368,8 +368,15 @@ file (§2.6).
 - **`work <ref>`** — *activate (set current).*
   Pre: resolve `<ref>`; if **no folder**, auto-`init` at that path (promotion). Run `validate`; **any
   error OR warning BLOCKS** (exit non-zero, print findings). A **remote** task cannot be worked locally
-  (error). Steps: write `current = path`; emit the task's `skills_to_invoke` as `Skill(...)` calls;
-  dispatch to `agent_hint` if present. Writes: `current` pointer (and folder if auto-init).
+  (error). Steps: write `current = path`; emit **one initialization block** — a header line, then the
+  merged skill set (`state_ops.BASELINE_SKILLS`, then the task's `skills_to_invoke`, order-preserving
+  and deduped) as `Skill(...)` calls, then `agent_hint` if present, then the closing dispatch
+  directive. Writes: `current` pointer (and folder if auto-init).
+  **Why merged script-side:** adherence tracks what the script emits, not what prose requires. Before
+  this, `orchestrate` lived only in the skill's prose while the task's own skills were emitted lines —
+  producing the predictable partial failure (invoke the declared skills, skip orchestrate, implement
+  inline). One emitted list makes the rule "invoke every `Skill(...)` line printed"; the closing
+  directive is what converts a loaded `orchestrate` into an actual dispatch.
 - **`switch <ref>`** — *update current, then work new.*
   Steps: read `current`; if set **and** the folder exists → `update` it (it becomes a plain `active`
   task), then `work <ref>`. If nothing is current → identical to `work <ref>`. Writes: prev `task.yaml`
