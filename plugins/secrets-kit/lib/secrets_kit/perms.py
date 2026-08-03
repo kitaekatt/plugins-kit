@@ -50,13 +50,22 @@ def tighten(path: Path, mode: int) -> None:
     if mode == 0o644:
         return
 
+    _icacls(path, "F")
+
+
+def _icacls(path: Path, rights: str) -> None:
+    """Strip inherited ACEs from ``path`` and grant the current user ``rights``.
+
+    ``rights`` is an icacls permission spec. For a DIRECTORY it must carry the
+    inheritance flags -- see tighten_dir, where omitting them is not cosmetic.
+    """
     principal = _current_windows_principal()
     argv = [
         "icacls",
         str(path),
         "/inheritance:r",
         "/grant:r",
-        f"{principal}:F",
+        f"{principal}:{rights}",
     ]
     try:
         proc = subprocess.run(
@@ -80,6 +89,21 @@ def tighten_dir(path: Path) -> None:
     Applied to the data dir holding the unlocked identity and state, so a
     materialized secret is not readable via a permissive parent even if the
     file mode is right.
+
+    The (OI)(CI) inheritance flags are load-bearing, and their absence does NOT
+    show up as a failure here -- it corrupts the CHILDREN. ``/inheritance:r``
+    removes this directory's inherited ACEs, and Windows propagates that
+    removal to every file already inside; a file whose access was entirely
+    inherited is left with an EMPTY DACL -- unreadable and unwritable even by
+    its owner, reported as ``AccessRuleCount: 0``. Granting the owner an
+    inheritable ACE instead both repairs those files (they inherit it
+    immediately) and stops new ones from depending on the creating token's
+    default DACL. Owner-only is unchanged; the ACE is simply allowed to reach
+    the contents, which is what 0700 means on the POSIX side.
+
+    Observed 2026-08-03: without the flags, secrets-kit's own data dir left
+    bootstrap.log with an empty DACL, and the PermissionError from appending to
+    it aborted the entire bootstrap engine on every SessionStart.
     """
     path.mkdir(parents=True, exist_ok=True)
     if not IS_WINDOWS:
@@ -88,7 +112,7 @@ def tighten_dir(path: Path) -> None:
         except OSError as e:
             raise SecretsError(f"chmod 0700 failed on {path}: {e}")
         return
-    tighten(path, 0o600)
+    _icacls(path, "(OI)(CI)F")
 
 
 def open_private(path: Path, mode: int) -> int:

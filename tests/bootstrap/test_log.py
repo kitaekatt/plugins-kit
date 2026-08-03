@@ -86,6 +86,25 @@ class TestWriteLogBlock:
             content = f.read()
         assert "done in" not in content
 
+    def test_unwritable_log_does_not_abort_the_pass(self, data_dir, monkeypatch, capsys):
+        """An unwritable log is a lost record, not a lost SessionStart.
+
+        Real case (2026-08-03): a plugin data dir ended up with an empty DACL on
+        Windows, and the PermissionError raised here took down the whole engine
+        -- every plugin after it went unprovisioned and the user got a traceback
+        instead of a bootstrap.
+        """
+        def _denied(*args, **kwargs):
+            raise PermissionError(13, "Permission denied")
+
+        # Scoped to the module's global namespace, not builtins -- patching
+        # builtins.open breaks pytest's own capture machinery.
+        monkeypatch.setattr("bootstrap_lib.log.open", _denied, raising=False)
+
+        write_log_block(data_dir, "Engine", ["entry"])
+
+        assert "could not write" in capsys.readouterr().err
+
 
 class TestTrimBlockBoundary:
     """B20: trimming must not decapitate a block — the kept tail starts at a header."""

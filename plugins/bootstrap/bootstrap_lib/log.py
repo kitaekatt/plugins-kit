@@ -1,6 +1,7 @@
 """File-based logging for bootstrap operations."""
 
 import os
+import sys
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -50,8 +51,23 @@ def write_log_block(
     # One write() call in append mode: on POSIX, O_APPEND makes a single
     # write land contiguously even when a concurrent session appends too,
     # so blocks don't interleave line-by-line (B20).
-    with open(log_file, "a") as f:
-        f.write("".join(lines))
+    #
+    # A log that cannot be written must not take the pass down with it. An
+    # unwritable log is a lost record; an unhandled exception here is a lost
+    # SessionStart -- every plugin after this one goes unprovisioned, and the
+    # user sees a traceback instead of a bootstrap. Seen in practice when a
+    # plugin's data dir ended up with an empty DACL on Windows: PermissionError
+    # from this open() aborted the whole engine. Degrade to stderr and continue.
+    try:
+        with open(log_file, "a") as f:
+            f.write("".join(lines))
+    except OSError as e:
+        print(
+            f"bootstrap: could not write {log_file} ({e}); "
+            "continuing without logging this block",
+            file=sys.stderr,
+        )
+        return
 
     _trim_log(log_file)
 
