@@ -15,7 +15,7 @@ claude_md:
       - origin and provenance of the skill's content
       - future composition with sibling skills
     excludes:
-      - the materialized-insights model itself (lives in SKILL.md and references)
+      - the materialized-insights model itself (lives in SKILL.md)
       - generic materialized-output practices (taught by the skill, not by this CLAUDE.md)
   insights:
     - id: pattern_skill_classification

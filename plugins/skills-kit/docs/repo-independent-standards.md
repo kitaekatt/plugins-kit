@@ -15,7 +15,7 @@ thresholds), see
 
 ## The observation
 
-skills-kit today is two things fused together:
+As of 2026-07-22 skills-kit is two things fused together:
 
 1. **A toolkit** for authorship, auditing, and review of the markdown artifacts
    Claude loads -- the machinery: audit fan-out, findings taxonomy
@@ -25,7 +25,7 @@ skills-kit today is two things fused together:
    principles (CCP/CRP/ADP) applied to docs, total-ownership of md files.
 
 These are separable, and separating them is the opportunity. The toolkit is
-general; the standards are one (good) opinion. Today a user who wants the
+general; the standards are one (good) opinion. As of 2026-07-22 a user who wants the
 toolkit must adopt the opinion wholesale, and a user who has their own
 standards has no way to plug them in.
 
@@ -39,9 +39,9 @@ Three verbs, one substrate (standards):
   conventions into CLAUDE.md. Standards are authored from observation, not
   invented in a vacuum.
 - **Auditing** -- reviewing a whole file against standards and revising it to
-  compliance. (Today: /md-domain audit.)
+  compliance. (As of 2026-07-22: /md-domain audit.)
 - **Review** -- reviewing a CHANGE against standards and revising it to
-  compliance. (Today: git-kit /git-code-review and p4-kit /p4-code-review,
+  compliance. (As of 2026-07-22: git-kit /git-code-review and p4-kit /p4-code-review,
   whose CLAUDE.md-convention-aware reviewer quotes the violated rule
   verbatim.)
 

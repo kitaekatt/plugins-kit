@@ -76,6 +76,8 @@ claude_md:
         - references/audit-framework.md + audit-framework.yaml -- the audit-family
           glossary and its machine-readable registry (see
           audit_framework_paths_are_cross_plugin_api below).
+        - references/references-finding-taxonomy.md -- the references-artifact
+          finding taxonomy consumed by the references lane.
         - references/configuring-standards.md, references/authoring-standards.md --
           the standards-configuration and additive-standards-file references.
         - references/authoring-patterns/ -- the verb-generic content-shape cluster.
@@ -195,7 +197,7 @@ claude_md:
                    plugins/skills-kit/skills_kit_lib/CLAUDE.md \\
                    plugins/skills-kit/CLAUDE.md \\
                    CLAUDE.md; do
-            (cd plugins/skills-kit && python -m skills_kit_lib.audit --config "../../$f")
+            (cd plugins/skills-kit && uv run python -m skills_kit_lib.audit --config "../../$f")
           done
 
         Catch second-order effects: a tightened technique-skill row may force one or
@@ -217,10 +219,9 @@ claude_md:
         - bootstrap.json declares venv.check_imports = ["yaml"]; pyproject.toml
           declares pyyaml in [project] dependencies.
         - The plugin venv path is ~/.claude/plugins/data/plugins-kit/skills-kit/.venv.
-        - audit.py degrades gracefully when pyyaml is unavailable (HAVE_YAML False):
-          universal rows still pass, the YAML contract row reports judgment-required
-          ("install pyyaml to validate"), and legacy markdown heuristics are skipped
-          (the contract is staged but unvalidated).
+        - audit.py degrades gracefully when pyyaml is unavailable (HAVE_YAML False) --
+          the contract-staged state; mechanics in skills_kit_lib/CLAUDE.md
+          three_audit_states.
     - id: invocation_paths
       keywords:
         - invoke md-domain

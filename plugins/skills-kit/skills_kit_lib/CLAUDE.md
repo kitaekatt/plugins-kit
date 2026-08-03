@@ -1,8 +1,8 @@
 # skills_kit_lib insights
 
-Per-directory insight repository for the plugin-level Python library that powers audit / classify / tag / schema-validation across the skills-kit ecosystem. Insights captured during the YAML contract refactor (Phase Y1-Y4) and the library extraction (current session).
+Per-directory insight repository for the plugin-level Python library that powers audit / classify / tag / schema-validation across the skills-kit ecosystem. Insights accumulate from the work that touches this library -- the YAML contract refactor (Phase Y1-Y4), the library extraction (2026-05-19), the verb x artifact reorg, and subsequent audit stress tests; each record carries its own origin.
 
-**Phase / finding identifier legend.** `Phase Y1`-`Y4` = phases of the YAML contract refactor (Y1 = stdlib walker design; Y4 = local-code-review conversion). `Phase 4.2` = corpus audit pass. `F-4-2-N` = numbered findings from Phase 4.2 (e.g. F-4-2-2 / F-4-2-3 = paired user-only technique-skill findings). For the full legend, see ../skills/md-domain/references/provenance/skill-authoring-decisions.md.
+**Phase / finding identifiers.** `Phase Y1`-`Y7`, `Phase 4.x` / `P5` / `P7`, and `F-4-2-N` are defined in ../skills/md-domain/references/provenance/skill-authoring-decisions.md.
 
 ```yaml
 claude_md:
@@ -17,7 +17,10 @@ claude_md:
       - corpus (SKILL.md discovery across user/project/plugin tiers)
       - checks (owner_doc validation and other corpus-level rules)
       - audit / classify / tag (per-skill CLI utilities, invoked via `python -m skills_kit_lib.<module>`)
-      - dependency posture (stdlib + pyyaml; editable-installed via pyproject.toml)
+      - no stdlib-only YAML parsing (dependency posture lives in the parent CLAUDE.md)
+      - rule_catalog / standards_resolve (the optional-rule catalog and the layered user/project standards resolver)
+      - schemas/standards (the standards_set portable unit)
+      - dirwalk (the shared depth-limited cwd-downward directory walk used by the audit discover scripts)
     excludes:
       - skill content authoring (covered by ../skills/md-domain/references/skill-domain/glossary.md and framework.md)
       - bootstrap-engine internals (covered by plugins/bootstrap/skills/bootstrap/SKILL.md)
@@ -49,15 +52,12 @@ claude_md:
       added: "2026-04-28"
     - id: schema_walker_rule_vocabulary
       keywords: [schema, walker, validator, rule grammar, required, type, min_len, forbid_regex, items, keys, value_schema]
-      summary: schema_engine.py uses a small Python-dict rule vocabulary; no external schema language.
+      summary: schema_engine.py uses a small Python-dict rule vocabulary (enumerated in its module docstring); no external schema language.
       detail: |
-        Each schema row is a dict with keys from a fixed vocabulary: required (bool), type
-        (string|list|dict|int|bool), min_len/max_len (int), forbid_regex (regex with msg), items
-        (subschema for list members), keys (subschema for dict children), value_schema (subschema for
-        every value in a dict with arbitrary keys -- used by ACTIONS_SCHEMA). schema_engine._validate_value
-        walks recursively. Cross-record rules (e.g. facts_must_include_gotcha across nested+top-level
-        sources) live in audit.py as document-level checks evaluated after the walker. No jsonschema
-        or pydantic dependency.
+        Each schema row is a dict using a small fixed rule vocabulary; schema_engine.py's module
+        docstring is the SSOT for the key list (it changes in the same diff as the validator).
+        Cross-record rules (e.g. check_facts_cross_rules) live in audit.py as document-level checks
+        evaluated after the walker. No jsonschema or pydantic dependency.
       origin: Phase Y1 design choice for the YAML contract refactor.
       added: "2026-04-28"
     - id: three_audit_states
@@ -72,9 +72,12 @@ claude_md:
       added: "2026-04-28"
     - id: pyyaml_dependency_posture
       keywords: [pyyaml, dependency, stdlib, plugin venv, bootstrap, optional]
-      summary: pyyaml is a runtime dependency declared in plugins/skills-kit/pyproject.toml; the audit runs without it via the contract-staged state.
+      summary: Library-local rule -- do not add stdlib-only YAML parsing; dependency posture itself is stated in the parent plugin CLAUDE.md.
       detail: |
-        plugins/skills-kit/pyproject.toml declares pyyaml under dependencies. The bootstrap engine sets up a plugin venv at ~/.claude/plugins/data/plugins-kit/skills-kit/.venv/ where the audit script can be invoked with pyyaml available. Outside that venv (e.g. running with bare system Python), audit.py degrades gracefully to the contract-staged state (see three_audit_states). Do not add stdlib-only YAML parsing -- the multi-step YAML sequence pattern uses real YAML (lists, nested mappings) that a hand-rolled subset parser cannot cover.
+        Dependency posture (pyproject.toml, the venv path, graceful degradation) is stated in
+        plugins/skills-kit/CLAUDE.md `dependency_posture`, which loads ambient here. Library-local
+        rule: do not add stdlib-only YAML parsing -- the multi-step YAML sequence pattern uses real
+        YAML (lists, nested mappings) a hand-rolled subset parser cannot cover (see three_audit_states).
       origin: Phase Y1.1 dependency decision; proposal section E.6.
       added: "2026-04-28"
     - id: extra_keys_allowed
@@ -96,7 +99,7 @@ claude_md:
         key the schema doesn't know fails validation. Schemas are Python literals (canonical);
         .md docs are prose specs that must round-trip through validation. The owner_doc field
         does NOT make .md the source of truth -- it's a back-reference, not a forward dependency.
-      origin: Current session library-extraction design.
+      origin: Library-extraction design (2026-05-19).
       added: "2026-05-19"
     - id: portable_units_vs_skill_type_roots
       keywords: [portable unit, skill type, registry role, mutual exclusion, mixed-type drift]
@@ -104,12 +107,13 @@ claude_md:
       detail: |
         schema_registry tracks two role categories: SKILL_TYPE_ROOTS (reference_skill,
         pattern_skill, technique_skill, discipline_skill, domain_skill, capability_skill,
-        audit_skill) and PORTABLE_UNIT_ROOTS (references, facts, area_config, sub_areas, actions).
+        audit_skill) and PORTABLE_UNIT_ROOTS (references, facts, area_config, sub_areas, actions,
+        asset_dependencies, standards_set).
         detect_mixed_type_yaml only flags drift on skill-type roots; portable units are
         first-class typed YAML primitives that can attach to any skill-type unit or stand
         alone. claude_md is a third role -- one document type, no mutual exclusion with anything
         because it identifies a CLAUDE.md not a SKILL.md.
-      origin: Current session typed-unit composition design.
+      origin: Typed-unit composition design (2026-05-19).
       added: "2026-05-19"
     - id: domain_member_resolution_check
       keywords: [member resolution, domain members, index.members, capability members, dangling ref, reorg guardrail, member ref resolve, corpus check]

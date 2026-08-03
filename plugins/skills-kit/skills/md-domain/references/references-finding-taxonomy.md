@@ -106,7 +106,7 @@ references-audit is a corpus-wide scanner with four rules. The taxonomy A-K abov
 - **Default remediation.**
   - **Project / plugin -> personal:** delete the cross-reference. A shipped skill cannot assume the reader has the personal skill installed.
   - **Personal -> project:** usually fine; only flag if the personal skill is meant to be portable.
-- **Example (CL 147036).** project-scoped `claude-feedback` SKILL.md had a "Key Differences vs /retro" section; `/retro` is a personal skill, so the section was deleted entirely.
+- **Example (CL 147036).** project-scoped `claude-feedback` SKILL.md had a "Key Differences vs /example:retro" section; `/example:retro` is a personal skill, so the section was deleted entirely.
 
 ### E. Compound-adjective false positive
 

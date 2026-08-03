@@ -12,6 +12,60 @@ A pattern-skill for tool design. Teaches recognition of when a tool should produ
 
 The primary contribution is the mental model — once you recognize the shape, the design implications follow.
 
+## Contract
+
+```yaml
+pattern_skill:
+  _schema_version: "1"
+  identity: Pattern skill that names the materialized-insight shape and the insight-engineering discipline of producing one by default.
+  scope:
+    covers:
+      - recognizing when a deep scan or inference should emit a materialized insight
+      - distinguishing a materialized insight from metadata, a cache/index, and a plain build artifact
+      - choosing a refresh discipline as part of the design
+    excludes:
+      - one-shot print-and-exit script design
+      - the mechanics of any particular scanner, parser, or build system
+      - schema authoring for the emitted artifact
+  patterns:
+    - id: materialized-insight
+      name: Materialized insight
+      keywords: [materialized insight, insight engineering, deep scan, refresh discipline, structured artifact, precomputed reasoning, derived artifact, staleness detection]
+      problem: Expensive reasoning over project data is recomputed per query, so every future consumer pays the full scan again and the reasoning leaves nothing behind.
+      mechanic: Shape the reasoning product around emitting a structured artifact on disk -- computed from canonical project data, carrying inferences and lineage the source does not, refreshed by an owning build step when its sources change -- and let consumers do a file read plus a lookup.
+      why: The deep scan is paid once per source change rather than once per query, and the reasoning becomes testable, queryable in unanticipated ways, and composable with other insights instead of dying in a transient stdout answer.
+      apply_when:
+        - signal: The reasoning is expensive -- a deep scan, model inference, or multi-pass analysis.
+          example: An LLM pass over every module to summarize what each one does.
+        - signal: Multiple downstream tools or workflows need the same result.
+          example: A symbol reference map consumed by an IDE, a refactoring tool, and a dead-code report.
+        - signal: The result is stable enough across runs that staleness detection is tractable.
+          example: A resolved config graph whose inputs are a known set of layered files, so any write to them marks it stale.
+      do_not_apply_when:
+        - signal: The artifact would be metadata -- a descriptor about the data rather than a reasoned statement about the project.
+          counter_example: A column-type listing or file annotation table; it describes shape, it infers nothing.
+        - signal: The artifact would be a cache or index -- a restructuring of the source with no reasoning added.
+          counter_example: A sorted key-to-offset map over the same records; the canonical source already carries every fact in it.
+        - signal: The artifact is an ordinary deterministic build output whose value is the data, not encoded reasoning.
+          counter_example: A compiled binary or a minified bundle -- a build artifact, but not an insight.
+        - signal: Exactly one consumer needs the result, and no second consumer is in sight.
+          counter_example: A one-off migration script that scans once to decide its own next step; inline the scan.
+        - signal: Staleness cannot be detected, so a wrong answer would outlive its validity silently.
+          counter_example: An insight derived from an external system that reports no change signal -- consumers keep reading a confidently wrong record.
+        - signal: The scan is cheap enough that a lookup and a recompute cost about the same.
+          counter_example: A glob over a few dozen files; the refresh discipline costs more than the scan it removes.
+      examples:
+        - title: Documentation search index
+          before: Each consumer re-walks the doc tree to resolve headings, anchors, and cross-doc links.
+          after: A pre-commit-refreshed index of headings, anchors, and validated links; the search UI and link checker each do a dict lookup.
+        - title: Layered config resolution
+          before: Debugging "why does this key have this value" means manually replaying defaults and overlays by hand.
+          after: The config build step emits the resolved graph plus per-key provenance; deploy tooling and linters read it directly.
+        - title: Throwaway deep scan converted
+          before: A minutes-long script recomputes the same reference map on every invocation and prints it.
+          after: The script's producer emits a structured reference map on commit; the script becomes a lookup over it.
+```
+
 ## Materialized insights
 
 **Materialized insights** (formal: *structured calculated insights on top of project data*) are auto-generated, structured artifacts produced by deep scans plus reasoning over canonical project data, stored on disk, refreshed when their canonical sources change, and consumed on demand by tooling and developers as fast lookups in place of re-running the underlying scan.
@@ -49,6 +103,16 @@ Reach for this pattern when:
 3. The result is stable enough across runs that staleness detection is tractable.
 
 The cost of a materialized insight is its refresh discipline — every new artifact adds a build-step dependency that has to be wired into CI and developer workflows. The benefit is that every consumer becomes trivial; the deep scan is paid for once per source change, not once per query.
+
+### When NOT to apply the pattern
+
+Three cases where materializing costs more than it returns, each with its counter-example:
+
+- **A single consumer, with no second one in sight.** Counter-example: a one-off migration script scans the tree once to decide its own next step -- inline the scan; the artifact would have exactly one reader, once.
+- **Staleness that cannot be detected.** Counter-example: an insight derived from an external system that emits no change signal -- the record goes wrong silently and every consumer reads a confidently wrong answer past its validity.
+- **A scan cheap enough that lookup and recompute cost the same.** Counter-example: a glob over a few dozen files -- the refresh discipline is more machinery than the scan it removes; just recompute.
+
+Beyond these, the conceptual distinctions above are also exclusions: if the artifact would be metadata, a plain cache or index, or an ordinary build output, it is not a materialized insight and does not need one's ceremony.
 
 ## Insight engineering
 
