@@ -162,7 +162,7 @@ claude_md:
         legitimate counter-case exists (a lib/ dir only imported by scripts, a data
         file consumed by a script and declared via asset_dependencies, a doc reached
         by an intentional sibling citation). Member refs that are sibling skill names
-        (ref: skill-audit) or slash commands (ref: /md-audit) are skipped by the
+        (ref: md-domain) or slash commands (ref: /md-domain) are skipped by the
         dangling-path resolution -- only slash-qualified relative refs are treated as
         paths (checks.check_domain_members_resolve owns skill-name resolution).
         references/<name>.md-shaped index paths are also skipped there: the universal
@@ -172,7 +172,7 @@ claude_md:
         fleet. Taxonomy home: skill-audit category L (L_load_graph_gap); the
         keyword-adequacy half of that category is judgment-only, not mechanical.
       origin: |
-        home-domain skill audit 2026-07-15 (tmp/home-domain-skill-audit.md LG-1/LG-3/LG-4): a pytest suite and an orphaned reference existed in the skill but nothing pointed at them; the mechanical validator passed every row.
+        home-domain skill audit 2026-07-15 (findings LG-1/LG-3/LG-4): a pytest suite and an orphaned reference existed in the skill but nothing pointed at them; the mechanical validator passed every row.
       added: "2026-07-15"
   conventions:
     - rule: When extending heuristics, modify markdown_heuristics.py first; audit.py and classify.py both import from there.

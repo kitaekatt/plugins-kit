@@ -226,6 +226,8 @@ The criteria below flag the prohibited cases.
 
 **Severity:** FAIL on stale references.
 
+**Provenance citations to ephemeral artifacts (settled 2026-08-03):** an `origin:` or other provenance field may cite ephemeral or session-scratch work by description, date, and finding ids -- never by path, unless the path is tracked by version control. A path-form citation to a gitignored or otherwise untracked location (e.g. `tmp/...`) is stale the moment it is written: it resolves for no reader except the authoring session, and inviting a chase to a path that cannot exist is the same broken edge A-3 exists to prevent. Severity: FIX, always loss-free -- drop the path, keep the description, date, and finding ids. A tracked, resolvable path in a provenance field is fine and is checked like any other reference. This rule is decisive: do not classify such a citation as an accepted historical pattern.
+
 #### A-4. Skills gating common errors
 
 **Rule:** A common agent error pattern must be reachable from CLAUDE.md (always-loaded layer), not gated solely behind a skill's trigger.
@@ -292,7 +294,7 @@ Style rules that a linter / formatter already enforces are noise, unless documen
 
 Exhaustive API docs, architecture deep-dives, or long reference tables that should be deferred references.
 
-Boundary -- deferred-reference pointer lists: a list of pointers to deferred references is not embedded documentation. The annotation ceiling is one "read when ..." line per pointer; annotating beyond that (multi-line summaries per pointer) re-embeds the documentation and trips this criterion.
+Boundary -- deferred-reference pointer lists: a list of pointers to deferred references is not embedded documentation. The annotation ceiling is one "read when ..." line per pointer, with exactly one exception (settled 2026-08-03): an annotation may exceed the ceiling ONLY where the extra lines state a **constraint or agent-error driver not stated at the target** (e.g. "schema_registry.py wins on divergence", "refuses to overwrite without --force"). Extra lines that summarize the TARGET'S OWN content or structure -- its section list, its file-by-file layout, its config format, its precedence chain -- re-embed the documentation the pointer exists to defer and trip this criterion regardless of the map's routing value; the routing value lives in the pointer plus its one line, not in the recap. "This map is load-bearing for routing" is not an exemption: apply the per-annotation test line by line, keep the error-driver lines, collapse the recap lines.
 
 Severity: FAIL on embedded documentation > 30 lines that has no agent-error driver.
 

@@ -39,7 +39,7 @@ technique_skill:
       - making approved documentation changes
     excludes:
       - creating new skills (hand off to md-domain's author skill lane)
-      - deep placement design across the load graph (hand off to md-domain's cohesion-principles reference / knowledge-encoding)
+      - deep placement design across the load graph (hand off to md-domain's plugins/skills-kit/skills/md-domain/references/cohesion-principles.md / knowledge-encoding)
       - memory system updates (separate from documentation)
   techniques:
     - id: session_doc_review
@@ -153,14 +153,4 @@ technique_skill:
 
 ## Scope Boundaries
 
-The `scope:` block in the contract above is the load-bearing statement; in prose:
-
-**IN SCOPE:**
-- Reviewing session work for documentation candidates
-- Recommending updates to CLAUDE.md files, skills, and reference docs
-- Making approved documentation changes
-
-**OUT OF SCOPE:**
-- Creating new skills (hand off to md-domain's author skill lane)
-- Deep placement design across the load graph (hand off to md-domain's `plugins/skills-kit/skills/md-domain/references/cohesion-principles.md` / knowledge-encoding)
-- Memory system updates (separate from documentation)
+See the `scope:` block in the contract above -- it is the load-bearing statement.

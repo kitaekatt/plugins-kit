@@ -55,46 +55,30 @@ claude_md:
       added: "2026-04-30"
       summary: skills-kit ships four skills -- md-domain (the single verb x artifact front door, owning the standards docs, both verb lanes, the placement spine, the audit framework, and the discover/workflow machinery) plus knowledge-encoding, update-documentation, and materialized-output. The audit/classify/tag validators and the standards-configuration surface live in skills_kit_lib.
       detail: |
-        Plugin layout (post-fold):
+        Plugin layout (post-fold), one line per surface. md-domain's own SKILL.md
+        references block is the file-by-file index.
 
         md-domain -- the single front door.
-        - skills/md-domain/SKILL.md -- ONE dispatch table (verb x artifact -> lane
-          record). Each lane record binds its standards doc, lane procedure,
-          discover/scanner script, workflow scripts, and verdict set, and carries
-          the two REQUIRED fields invocation_phrasings + change_driver.
+        - skills/md-domain/SKILL.md -- the ONE dispatch table (verb x artifact ->
+          lane record); read for routing, the lane roster, and argument grammar.
         - skills/md-domain/CLAUDE.md -- shape decisions about the skill itself.
-        - references/standards/{skill,claude-md,project-doc,references}-standards.md
-          -- the per-artifact "what good looks like", each read in BOTH directions
-          (detecting by the audit lane, producing by the authoring lane).
-        - references/lanes/audit-lane.md, references/lanes/authoring-lane.md -- the
-          two shared verb procedures, parameterized by artifact.
-        - references/cohesion-principles.md -- the placement spine (content
-          allocation, CCP/CRP/ADP applied to placement, the placement algorithm,
-          per-artifact roles, the maturation pipeline, the skill_packaging_razor,
-          summarize_and_reference). Every lane and standards doc defers here for
-          WHERE a fact lives.
-        - references/audit-framework.md + audit-framework.yaml -- the audit-family
-          glossary and its machine-readable registry (see
-          audit_framework_paths_are_cross_plugin_api below).
-        - references/references-finding-taxonomy.md -- the references-artifact
-          finding taxonomy consumed by the references lane.
+        - references/standards/ -- the per-artifact "what good looks like", each
+          read in BOTH directions (detecting for audit, producing for authoring).
+        - references/lanes/ -- the two shared verb procedures.
+        - references/cohesion-principles.md -- the placement spine; read for WHERE
+          a fact lives. Every lane and standards doc defers here.
+        - references/audit-framework.{md,yaml} -- audit-family glossary + registry
+          (see audit_framework_paths_are_cross_plugin_api below).
+        - references/references-finding-taxonomy.md -- the references lane's taxonomy.
         - references/configuring-standards.md, references/authoring-standards.md --
-          the standards-configuration and additive-standards-file references.
+          standards configuration and additive standards files.
         - references/authoring-patterns/ -- the verb-generic content-shape cluster.
-        - references/skill-domain/ -- the skill-artifact deep references:
-          glossary.md (canonical vocabulary, embedded YAML under root key
-          glossary:), framework.md (type-contract tables plus structured framework
-          records; schema_registry.py wins on divergence), scripts.md,
-          example-audit.md, example-verification.md, domain-layering.md,
-          subdomain-schema.md, patterns-actions.md, report-usage.md,
-          schema-fixtures.md.
+        - references/skill-domain/ -- skill-artifact deep references (glossary,
+          framework tables, scripts, examples); schema_registry.py wins on divergence.
         - references/provenance/ -- inherited decision logs (the dec_N framework
           decisions and the folded skills' CLAUDE.md histories).
-        - scripts/ -- discover_skill.py, discover_claude_md.py,
-          discover_project_doc.py, references_audit.py, report.py,
-          skill_hierarchy_report.py.
-        - workflow/ -- skill-detect.js, claude-md-detect.js, project-doc-detect.js,
-          references-classify.js and the four generated *-remediate.js lanes.
+        - scripts/ -- the lanes' discover / scan / report entry points.
+        - workflow/ -- the detect/classify lanes and the generated remediate lanes.
 
         The other three skills: knowledge-encoding (encode a discovered insight),
         update-documentation (end-of-session doc review), materialized-output (the
@@ -111,29 +95,19 @@ claude_md:
           writer; refuses to overwrite existing differing values without --force;
           refuses missing-frontmatter cases (never invents).
 
-        Standards-configuration surface (configurable optional rules + layered
-        user/project standards):
-        - skills_kit_lib/rule_catalog.py -- SSOT mapping every audit rule id to
-          its bucket (architectural / optional / inoffensive), sub-group, and
-          user-facing description (RULES); consumed by the resolver's
-          reject-un-tunable-rule check and rendered into
-          configuring-standards.md's catalog tables by
-          scripts/gen_standards_doc.py (drift-tested).
+        Standards-configuration surface:
+        - skills_kit_lib/rule_catalog.py -- the RULES catalog, SSOT for rule id ->
+          bucket / description.
         - skills_kit_lib/standards_resolve.py -- self-contained (stdlib+pyyaml,
-          no bootstrap_lib) resolver of the layered config: shipped -> user_dir
-          skills-kit/ -> its config.local.yaml -> project .claude/skills-kit/ ->
-          its config.local.yaml; config.yaml carries rules:{<id>: off} +
-          thresholds:; *-standards.md files union across layers. Loud errors
-          (StandardsConfigError) on an un-tunable id, unknown threshold, or
-          malformed config; degrades to defaults + note without pyyaml.
+          no bootstrap_lib) resolver of the layered standards config.
+        - Layer model, config.yaml format, thresholds, rule catalog, and error
+          behavior: skills/md-domain/references/configuring-standards.md.
 
         The fold (2026-07-29): md-audit and md-authoring (the two routers), their
         six member skills, and the standalone cohesion-principles skill were
         dissolved into md-domain; cohesion-principles survives as a reference doc.
-        Rule ids, verdict vocabulary, the PD-1 decline contract, the review-reducer
-        invariants, and the model pinning were preserved verbatim -- the fold is a
-        relocation, not a behavior change. Rationale and the preservation list:
-        skills/md-domain/CLAUDE.md (`md_domain_fold`,
+        The fold was a relocation, not a behavior change -- rationale and the
+        verbatim-preservation list: skills/md-domain/CLAUDE.md (`md_domain_fold`,
         `contracts_preserved_verbatim_through_the_fold`).
     - id: which_surface_for_which_task
       keywords:
