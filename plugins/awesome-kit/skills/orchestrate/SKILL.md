@@ -85,27 +85,45 @@ technique_skill:
         use_for: the default -- searches, well-specified implementation, summarization, most delegated units.
       - tier: high-reasoning
         example: opus
-        use_for: units where reasoning quality is the limiting factor -- tricky debugging, design judgment, nuanced review.
+        use_for: |
+          reasoning-heavy units on well-trodden ground -- tricky debugging, nuanced review,
+          design refinement within an established pattern -- where the orchestrator can verify
+          the conclusion cheaply or a miss is recoverable.
       - tier: top
         example: fable
         use_for: |
-          only when the unit genuinely warrants top-tier judgment AND its result compresses well --
-          the conclusion carries most of the value while generating it would consume heavy context
-          and tool calls in the main session. Efficiency, not prestige, justifies the top tier.
+          units where second-best judgment is the actual risk: difficult NOVEL problems with no
+          established pattern to apply; INITIAL design of something new (maximal downstream
+          leverage -- every later unit builds on the framing, and a subtly wrong framing is the
+          least visible error in a compressed summary); and judgment calls whose conclusion the
+          orchestrator will accept on faith because it is hard to verify from the summary. A
+          plausible-but-wrong conclusion compresses exactly as well as a right one -- when the
+          unit is load-bearing and unverifiable, the tier delta is cheaper than the rework.
     pool_economics: |
       When the orchestrating model is fable: opus/sonnet background agents draw from a SEPARATE
-      usage pool than fable usage. Delegating to them is therefore particularly inexpensive --
-      it both preserves top-tier context AND spends the cheaper pool. Bias strongly toward
-      delegation in that configuration; work the orchestrator keeps inline should earn its
-      top-tier tokens (coordination, synthesis, judgment calls).
+      usage pool than fable usage. This is primarily an argument for DELEGATING vs working
+      inline -- delegation both preserves top-tier context AND spends the cheaper pool, so bias
+      strongly toward it; work the orchestrator keeps inline should earn its top-tier tokens
+      (coordination, synthesis, judgment calls). For TIER selection it is only a tiebreaker:
+      between tiers that would both do the unit justice, prefer the separate pool. Never
+      down-tier a unit that meets the top-tier bar just to harvest the discount.
+    effort: |
+      Effort is a second knob, orthogonal to tier, available only where the dispatch surface
+      exposes it (agent-type definitions; Workflow's agent() opts.effort -- the Agent tool has
+      no per-call effort parameter, so agents there inherit from their type or the session).
+      Where it IS available: the same test that escalates tier escalates effort -- novelty,
+      downstream leverage, and hard-to-verify conclusions warrant more deliberation; mechanical
+      fan-out warrants low effort, not just a cheap model. Up-effort is also an ALTERNATIVE to
+      up-tier: opus at high effort buys deliberation while staying in the separate pool, often
+      the right call for reasoning-heavy units on well-trodden ground.
 
   anti_patterns:
     - id: top_tier_everywhere
       name: Top-tier agents by default
       keywords: [fable default, model overkill, expensive fan-out]
       why_it_seems_right: The best model should give the best results on every unit.
-      why_it_is_wrong: Most delegated units are workhorse-shaped; top-tier agents spend the premium pool on work that doesn't need it and forfeit the separate-pool discount.
-      alternative: Default workhorse, escalate per unit; reserve the top tier for units passing the warrants-it-AND-compresses-well test.
+      why_it_is_wrong: Most delegated units are workhorse-shaped; top-tier agents spend the premium pool on work that doesn't need it.
+      alternative: Default workhorse, escalate per unit; reserve the top tier for units passing the novel / initial-design / load-bearing-and-hard-to-verify test.
     - id: orchestrator_does_the_work
       name: Orchestrator absorbs the work product
       keywords: [context bloat, reading everything, inline generation]
