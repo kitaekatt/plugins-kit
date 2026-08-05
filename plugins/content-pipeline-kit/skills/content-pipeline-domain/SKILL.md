@@ -98,17 +98,13 @@ Only `MockBackend` is hermetic -- tests should use it and need none of this
 (the library's own `_MISSING_LIB_MSG` in `lib/content_pipeline/llm/backends.py`
 says the same; keep any wording here consistent with it).
 
-**Preflight before driving a live backend.** Check that the shared lib is
-published -- `~/.claude/plugins/data/plugins-kit/_shared_libs/llm_scripting_kit/`
-exists -- or attempt a guarded `import llm_scripting_kit` inside the call site
-(lazily, never at module top level). If it is missing, tell the user that live
-generation is unavailable, name the plugin, and ASK whether to install it:
-
-```
-claude plugin install llm-scripting-kit@plugins-kit
-```
-
-Then retry a prompt or two later -- a mid-session install is provisioned
-without a restart. This is bootstrap's action-triggered install pattern; invoke
-`Skill(bootstrap:bootstrap)` and read its action-triggered-install reference for
-the full flow.
+Preflight before driving a live backend: shared lib at
+`~/.claude/plugins/data/plugins-kit/_shared_libs/llm_scripting_kit/`, or a
+guarded lazy `import llm_scripting_kit` at the call site. On a miss, name the
+plugin and ASK, then `claude plugin install llm-scripting-kit@plugins-kit`;
+retry a prompt or two later, no restart needed. This is bootstrap's generic
+action-triggered-install pattern, not specific to this library -- full
+check-ask-install-retry mechanics: `Skill(bootstrap:bootstrap)`'s
+`action-triggered-install.md` reference. OpenRouter key preflight
+specifically (status check, deferred-requirement ask):
+`Skill(llm-scripting-kit:openrouter-account)`.
