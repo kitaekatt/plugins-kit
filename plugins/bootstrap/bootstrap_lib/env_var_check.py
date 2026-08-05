@@ -23,6 +23,7 @@ to ``path_entries`` + tool->PATH linkage.
 """
 
 import os
+import re
 import shlex
 from typing import List, Optional, Tuple
 
@@ -32,6 +33,31 @@ from .result import Result
 def export_line(name: str, value: str) -> str:
     """The canonical rc-file export line for a variable."""
     return f'export {name}="{value}"'
+
+
+def plugin_root_env_var_name(plugin_name: str) -> str:
+    """Compute the env var name holding a plugin's install root.
+
+    Mirrors venv_check.venv_env_var_name and tool_paths.tool_env_var_name:
+    uppercase, with every character outside ``[A-Z0-9_]`` replaced so the
+    result is a valid shell identifier.
+
+    This is the pointer that lets a consumer OUTSIDE a plugin invoke that
+    plugin's shipped scripts. ``CLAUDE_PLUGIN_ROOT`` only tells a component
+    where its OWN plugin lives, and a plugin's install path is version-stamped
+    (``.../hue-kit/0.9.1/``), so a cross-plugin consumer has no other way to
+    resolve one short of globbing the cache for a version directory.
+
+    Exported per session and NEVER persisted to rc files or the registry: the
+    value changes on every plugin upgrade, so a persisted copy would go stale
+    and point at a version directory that no longer exists.
+
+    >>> plugin_root_env_var_name("hue-kit")
+    'HUE_KIT_ROOT'
+    >>> plugin_root_env_var_name("bootstrap")
+    'BOOTSTRAP_ROOT'
+    """
+    return re.sub(r"[^A-Z0-9_]", "_", plugin_name.upper()) + "_ROOT"
 
 
 def _rc_files(current_os: str) -> List[str]:

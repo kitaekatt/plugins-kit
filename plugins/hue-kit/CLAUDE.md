@@ -28,7 +28,13 @@ home's natural structure.
   export / render / validate / apply / init). Re-execs under the plugin venv via
   `bootstrap_guard.py` (vendored, stdlib-only; canonical in bootstrap's
   `bootstrap_lib/`).
-- `bin/hue-kit`, `bin/hue-kit.cmd` -- PATH shims (Claude Code adds `bin/` to PATH).
+- `bin/hue-kit`, `bin/hue-kit.cmd` -- shims for when the dir IS on PATH. Nothing
+  puts it there automatically: Claude Code does not add a plugin's `bin/` to
+  PATH (this doc claimed it did, and the hue-domain SKILL.md repeated it -- both
+  corrected 2026-08-05 after a consumer could not find the command). The
+  portable invocation is
+  `"$HUE_KIT_VENV" "$HUE_KIT_ROOT/scripts/hue_kit_cli.py" <verb>`, using the env
+  vars bootstrap exports per plugin.
 - `examples/scene-groups.yaml`, `examples/scene-designs.yaml`, `examples/index.html`
   -- the author's home (42 lights, 12 scenes). **Example data**; a user
   regenerates their own or overwrites via `hue-kit init`. The rendered report is

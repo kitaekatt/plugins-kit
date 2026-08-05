@@ -15,6 +15,7 @@ from bootstrap_lib.env_var_check import (
     check_env_var,
     export_env_var,
     export_line,
+    plugin_root_env_var_name,
     set_env_var,
 )
 
@@ -212,6 +213,42 @@ class TestExportEnvVar:
         with patch.dict(os.environ):
             export_env_var("BOOTSTRAP_TEST_EV", "/some dir/x")
         assert "export BOOTSTRAP_TEST_EV='/some dir/x'\n" in env_file.read_text()
+
+
+class TestPluginRootEnvVarName:
+    """<PLUGIN>_ROOT lets a consumer outside a plugin find that plugin's files.
+
+    CLAUDE_PLUGIN_ROOT only tells a component where its OWN plugin lives, and an
+    install path is version-stamped, so this is the only non-globbing way for one
+    plugin's scripts to be invoked from another project.
+    """
+
+    @pytest.mark.parametrize("plugin,expected", [
+        ("hue-kit", "HUE_KIT_ROOT"),
+        ("bootstrap", "BOOTSTRAP_ROOT"),
+        ("llm-scripting-kit", "LLM_SCRIPTING_KIT_ROOT"),
+        ("p4-kit", "P4_KIT_ROOT"),
+    ])
+    def test_name_is_a_valid_shell_identifier(self, plugin, expected):
+        assert plugin_root_env_var_name(plugin) == expected
+
+    def test_punctuation_never_survives(self):
+        # A dot or space would produce a name that cannot be `export`ed.
+        name = plugin_root_env_var_name("odd.name kit")
+        assert name == "ODD_NAME_KIT_ROOT"
+        assert name.replace("_", "").isalnum()
+
+    def test_exports_install_path_for_consumers(self, tmp_path, monkeypatch):
+        env_file = tmp_path / "claude-env"
+        monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
+        install_path = str(tmp_path / "plugins" / "hue-kit" / "0.9.1")
+        with patch.dict(os.environ):
+            exported = export_env_var(
+                plugin_root_env_var_name("hue-kit"), install_path)
+            assert exported == "HUE_KIT_ROOT"
+            assert os.environ["HUE_KIT_ROOT"] == install_path
+        assert f"export HUE_KIT_ROOT={shlex.quote(install_path)}\n" \
+            in env_file.read_text()
 
 
 class TestEnvVarsPhase:

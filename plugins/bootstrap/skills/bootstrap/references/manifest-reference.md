@@ -157,6 +157,24 @@ if Path(sys.executable).resolve() != Path(_venv).resolve():
 
 **Fail-fast semantics**: if bootstrap cannot create the venv, no export line is written. Consumer scripts then error out on the unset var rather than re-exec'ing an invalid interpreter path.
 
+### `<PLUGIN>_ROOT` environment variable export
+
+Every plugin carrying a `bootstrap.json` also gets its **install root** exported, using the same name transform:
+
+```sh
+export HUE_KIT_ROOT=/Users/christina/.claude/plugins/cache/plugins-kit/hue-kit/0.9.1
+```
+
+This is the pointer that lets a consumer **outside** a plugin invoke the scripts that plugin ships. `CLAUDE_PLUGIN_ROOT` only tells a component where its *own* plugin lives, and an install path is version-stamped, so without this a cross-plugin caller has no way to resolve one short of globbing the cache for a version directory.
+
+```sh
+"$HUE_KIT_VENV" "$HUE_KIT_ROOT/scripts/hue_kit_cli.py" report
+```
+
+Prefer this over putting a plugin's `bin/` on PATH: PATH would need one entry per plugin per version, and every upgrade would strand the previous one — real cost on Windows, where the engine already repairs PATH bloat that trips `cmd.exe`'s variable-size limit.
+
+**Session-scoped, never persisted.** Unlike `env_vars` entries, this is written only to the live process and `CLAUDE_ENV_FILE` — never to shell rc files or the Windows registry. The value changes on every plugin upgrade, so a persisted copy would point at a version directory that no longer exists.
+
 ## `project_venv` — Project's Own Python Environment
 
 A **layered** manifest (`~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`) declares `project_venv` to have bootstrap provision the *project's* venv — synced from the project's own `pyproject.toml` via `uv sync`, verified with `check_imports`. It runs only when the engine has a `--project-dir` (silently skipped otherwise), and never exports a `*_VENV` env var (the venv belongs to the project, not a plugin).

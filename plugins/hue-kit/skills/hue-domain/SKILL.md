@@ -323,13 +323,20 @@ domain_skill:
         do: Route to discover / pair; do not fall through to other verbs.
   tools:
     - name: hue-kit
-      command: hue-kit <start|report|groups|export|render|validate|apply|init> [--dir PATH]
+      command: hue-kit [--dir PATH] <start|report|groups|export|render|validate|apply|init>
       description: >-
-        The verb CLI over the layered scene tool. PATH shims at bin/hue-kit(.cmd)
-        put it on PATH; or run scripts/hue_kit_cli.py. Re-execs under the plugin's
-        bootstrap-provisioned venv. Working files (scene-groups.yaml /
-        scene-designs.yaml / index.html) default to the plugin data dir
-        (~/.claude/plugins/data/plugins-kit/hue-kit), regardless of cwd.
+        The verb CLI over the layered scene tool. NOTE `--dir` is a top-level
+        option and must precede the VERB (argparse rejects it after). Invocation:
+        bin/hue-kit(.cmd) is a shim for when it is on PATH, but do NOT assume it
+        is -- nothing puts a plugin's bin/ on PATH. The portable form uses the
+        env vars bootstrap exports:
+        `"$HUE_KIT_VENV" "$HUE_KIT_ROOT/scripts/hue_kit_cli.py" <verb>`
+        (HUE_KIT_ROOT needs bootstrap >= the release that added <PLUGIN>_ROOT;
+        see the bootstrap skill's manifest-reference). The CLI re-execs under the
+        plugin's bootstrap-provisioned venv either way. Working files
+        (scene-groups.yaml / scene-designs.yaml / index.html) default to the
+        plugin data dir (~/.claude/plugins/data/plugins-kit/hue-kit),
+        regardless of cwd.
     - name: scene-layers.py
       command: python scripts/scene-layers.py [--html|--export-designs|--validate-design|--apply ...]
       description: >-

@@ -1381,6 +1381,15 @@ def _bootstrap_single_plugin(
     if not os.path.isfile(plugin_manifest_path):
         return
 
+    # Export <PLUGIN>_ROOT so consumers OUTSIDE this plugin can invoke the
+    # scripts it ships. A plugin's install path is version-stamped, so without
+    # this a cross-plugin caller must either glob the cache for a version dir or
+    # rely on a PATH shim -- and PATH is the worse answer here: it would need one
+    # entry per plugin per version, and every upgrade would strand the old one.
+    # Session-scoped only (no rc/registry persistence) for the same reason.
+    from .env_var_check import export_env_var, plugin_root_env_var_name
+    export_env_var(plugin_root_env_var_name(plugin_info.name), plugin_info.install_path)
+
     # Per-plugin data dir and cache -- keyed by the plugin's OWN marketplace so a
     # fork installed alongside upstream doesn't collide on same-named plugins.
     plugin_data_dir = _plugin_data_dir(data_dir, plugin_info)
