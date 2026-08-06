@@ -33,6 +33,26 @@ The default statusline normalizes all three percentages to **capacity remaining*
 
 Always guard nulls with `// 0` or `// ""`. Use `try ... catch` around computations that depend on multiple fields.
 
+### The rate-limit snapshot
+
+A statusline is the only thing Claude Code ever hands `.rate_limits` to, so tools that
+want it have no way to ask. `statusline.sh` therefore writes a snapshot on every render:
+
+```
+~/.claude/plugins/data/plugins-kit/claude-ui-kit/rate-limits.json
+{"captured_at": <epoch>, "rate_limits": {...}}     # verbatim, plus the capture time
+```
+
+Written via a temp file and `mv`, so a reader never sees a partial object; skipped when
+the payload carries no `.rate_limits`; disabled with `STATUSLINE_RATE_LIMIT_SNAPSHOT=0`.
+A write failure is swallowed -- the snapshot must never cost the user their status line.
+
+This is a **file contract, not a dependency**: consumers (awesome-kit's `orchestrate`
+skill reports remaining capacity from it) treat the file as optional and degrade to
+"unknown" when it is absent, and neither plugin declares the other. The windows are
+account-wide, with no per-model breakdown -- nothing downstream can infer that a
+specific model's usage is spent.
+
 ## Out-of-scope (would require external commands)
 
 - Git branch / status — `git branch --show-current`, `git status --porcelain`

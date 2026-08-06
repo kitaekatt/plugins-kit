@@ -18,7 +18,15 @@ Also in the box, one line each:
   (single-page or `--a4` paginated).
 - A task-folder system (the `task` skill) -- file-backed task folders
   with a CLI for create/list/work/close/archive/move.
-- `verbose-updates` and `orchestrate` -- smaller supporting skills.
+- `orchestrate` -- delegate significant work to background agents so the
+  main context holds conclusions rather than work product. Its model
+  tiers, dispatch backends (the Agent tool, the Codex CLI, or one you
+  add), and usage-capacity reporting are configuration: a generator
+  script renders the policy for the machine it runs on, layering
+  `skills/orchestrate/defaults/orchestration.yaml` under a per-user and a
+  per-project override. See
+  [skills/orchestrate/references/configuration.md](skills/orchestrate/references/configuration.md).
+- `verbose-updates` -- a smaller supporting skill.
 
 ## Poster personalization
 

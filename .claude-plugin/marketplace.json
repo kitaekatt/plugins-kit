@@ -84,7 +84,7 @@
     {
       "name": "claude-ui-kit",
       "description": "Claude Code status line with context-window and rate-limit threshold colors, plus the /statusline skill to inspect and customize it.",
-      "version": "0.8.1",
+      "version": "0.9.0",
       "author": {
         "name": "Christina"
       },
@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Render your installed marketplaces, plugins, and skills as a clickable HTML poster; plus file-backed task tracking.",
-      "version": "0.20.0",
+      "version": "0.21.0",
       "author": {
         "name": "Christina"
       },

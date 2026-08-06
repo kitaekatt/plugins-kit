@@ -1,0 +1,421 @@
+# orchestrate -- shipped orchestration policy.
+#
+# This file is the DEFAULT layer. Do not edit it in place: it lives inside the
+# plugin and is replaced on every version update. Override it instead, in
+# either or both of:
+#
+#   user:    ~/.claude/plugins/data/plugins-kit/awesome-kit/orchestration.yaml
+#   project: <project_root>/.claude/orchestration.yaml
+#
+# Later layers win. Override files are SPARSE -- write only the keys you are
+# changing, and everything else keeps tracking these defaults (including keys
+# added by future plugin versions). Merge rules:
+#
+#   - mappings deep-merge, key by key
+#   - lists of records (tiers, backends) merge BY `id`; a record with a known
+#     id patches that record, a record with a new id is appended
+#   - `disabled: true` on a tier or backend removes it from the guidance
+#   - scalars and plain lists replace outright
+#
+# Render the resolved result with:
+#   python <plugin>/skills/orchestrate/scripts/orchestration_guidance.py
+# and inspect the layering with `--explain`.
+
+schema_version: 1
+
+# Backend dispatched through when a unit does not call for a specific one.
+default_backend: agent
+
+# Tier assumed for a delegated unit until something argues for another.
+default_tier: workhorse
+
+# ---------------------------------------------------------------------------
+# Tiers -- the model-selection criteria.
+#
+# `model` names are examples of the current lineup, not a contract; the
+# authority is the dispatch surface's own model enum. Retarget them freely.
+# ---------------------------------------------------------------------------
+tiers:
+  - id: cheapest
+    model: haiku
+    effort: low
+    use_for: >-
+      Trivial mechanical fan-out -- bulk renames, file-by-file checks against a
+      fixed rubric.
+    escalate_when: >-
+      The unit needs any judgement about WHICH rule applies, not just applying
+      a stated one.
+
+  - id: workhorse
+    model: sonnet
+    effort: medium
+    use_for: >-
+      The default -- searches, summarization, most delegated units, and
+      implementation ONLY where it is unambiguous (see the implementation
+      block: the shape is given and the edit is mechanical to describe).
+    escalate_when: >-
+      The unit is reasoning-heavy rather than specification-heavy, or its
+      conclusion is load-bearing for later units. Judge by TOTAL tokens to a
+      verified result, not by apparent difficulty: escalate when the cheaper
+      tier demonstrably fails or burns more in retries than the jump costs.
+
+  - id: high-reasoning
+    model: opus
+    effort: high (xhigh for the hardest units)
+    use_for: >-
+      Reasoning-heavy units on well-trodden ground -- tricky debugging, nuanced
+      review, design refinement within an established pattern -- where the
+      orchestrator can verify the conclusion cheaply or a miss is recoverable.
+      Also the implementation rung for building something NEW against a
+      settled spec, and for specify-then-build as a single unit.
+    escalate_when: >-
+      Raising effort here has already been tried or clearly will not close the
+      gap, AND the unit meets the bar of a higher tier.
+    note: >-
+      Up-EFFORT before up-tier: this tier at xhigh buys real deliberation while
+      staying in the cheaper pool, and clears most units that look like they
+      need something better.
+
+  - id: top
+    model: fable
+    effort: high (max only when the unit is unverifiable)
+    use_for: >-
+      The exceptional case, not the hard case. A unit qualifies only when all
+      three hold: no established pattern applies (genuinely novel, not merely
+      difficult); the conclusion is load-bearing for work that follows; and you
+      could not tell a wrong answer from a right one by reading the summary.
+      The canonical qualifying shape is CRITICAL REVIEW of a proposal, plan, or
+      architecture on a novel or difficult topic -- all three fire at once
+      there, which is why this tier reviews the plan and high-reasoning builds
+      against it.
+    escalate_when: null
+    avoid_when: >-
+      Any one of the three fails. In particular: hard-but-patterned work,
+      anything you can verify cheaply (a diff, a test run, a file you will read
+      anyway), and anything whose failure is recoverable in one more pass --
+      those belong to a tier below this one, at raised effort. Implementation
+      is not this tier's work at all; see the implementation block.
+    note: >-
+      Effort tracks WHICH criterion qualified the unit: novelty and downstream
+      leverage argue for a better model, so `high` is the default here;
+      unverifiability is the one that argues for more deliberation, because
+      thinking time is the only quality control left when you cannot check the
+      answer -- that case takes `max`.
+      Name which of the three criteria applies and why the tier below would
+      plausibly get it wrong. If that sentence is hard to write, the unit does
+      not qualify -- the pull toward this tier is that a
+      plausible-but-wrong conclusion compresses exactly as well as a right one,
+      which is an argument for it ONLY where you genuinely cannot verify.
+
+  # ---- Codex ladder ------------------------------------------------------
+  # A separate ladder, not extra rungs on the Claude one. You arrive here by
+  # choosing the BACKEND (see the codex backend's prefer_for), and only then
+  # pick a rung. Comparing a rung here against a Claude rung on capability is
+  # the wrong axis -- the difference that matters is dispatch shape, pool, and
+  # independence. Every tier below is gated: with Codex absent, the whole
+  # ladder disappears along with the backend.
+  #
+  # Deliberately absent: a cheap Codex rung. Not because cheap work cannot run
+  # here -- a whole SET of cheap items handed to one session is in fact one of
+  # this backend's better cases -- but because no unit has been found for which
+  # a cheap rung HERE is the best choice. A single cheap item does not justify
+  # a session; a set of them is handed over whole and the rung that leads it is
+  # the workhorse. Add a cheap rung only with a case that names units it wins.
+
+  - id: codex-workhorse
+    model: terra
+    effort: medium
+    backend: codex
+    use_for: >-
+      The default rung once the BACKEND choice has landed on Codex. Everything
+      that is here for a dispatch-shape reason rather than a difficulty one: a
+      SET of related units handed over whole, long self-contained migrations,
+      work kept off the Claude pool, and batches whose return shape is enforced
+      with --output-schema.
+    escalate_when: >-
+      The unit is ambiguous or cross-cutting rather than merely long, or a
+      wrong answer would be expensive to discover later.
+
+  - id: codex-top
+    model: sol
+    effort: max
+    backend: codex
+    use_for: >-
+      Hard, ambiguous, or long-horizon work on this backend, and INDEPENDENT
+      second opinions on a conclusion reached on the Claude ladder -- a
+      different model family fails differently, which is the whole value of the
+      cross-check. Run it at max effort or do not run it here at all.
+    escalate_when: null
+    note: >-
+      At max effort this is a peer of the Claude top tier for critical review of
+      a proposal, plan, or architecture -- not a discount substitute. It is also
+      the rung for a unit that meets that tier's bar but whose cost does not
+      justify it. Plan review is the one shape where running BOTH families is
+      defensible rather than wasteful: two independent reviews of a decision
+      everything else builds on, and the disagreements are the finding.
+
+# ---------------------------------------------------------------------------
+# Implementation -- routed by SPECIFICATION QUALITY, not by difficulty.
+#
+# The tier table above routes on how much reasoning a unit needs, which is the
+# wrong axis for writing code. Implementation is bounded by how well the work
+# is specified: a settled spec makes even novel building tractable, and no tier
+# rescues an ambiguous brief.
+# ---------------------------------------------------------------------------
+implementation:
+  routing:
+    - spec: An unambiguous change to existing code -- "make this change", the
+        shape is given and the edit is mechanical to describe.
+      tier: workhorse
+    - spec: Something NEW, but well specified -- interface, constraints and
+        acceptance are settled, so the novelty is in the building, not the
+        deciding.
+      tier: high-reasoning
+    - spec: Not well specified yet.
+      tier: none
+      action: >-
+        SPECIFY IT FIRST. There is no good reason to implement an
+        under-specified unit -- the ambiguity resurfaces as rework, and a
+        higher tier only produces a more confident wrong build.
+  single_unit: >-
+    Specify-then-implement can be ONE unit at high-reasoning when the problem
+    space is not novel: the same agent settles the spec and builds against it,
+    avoiding a hand-off and a second cold orientation. Split them when the
+    space IS novel -- the spec then deserves its own decision, and possibly a
+    different tier from the build.
+  top_tier: >-
+    The top tier is NOT an implementation tier. Its bar is novel, load-bearing,
+    unverifiable judgment; implementation that seems to need it has a
+    specification problem, and the spec is what the top tier would be for.
+
+pool_economics: >-
+  fable draws from a different usage pool than opus/sonnet/haiku -- always,
+  regardless of what the orchestrator is running. So the Claude ladder has a
+  POOL BOUNDARY between high-reasoning and top, and nowhere else. Moving up
+  within opus/sonnet/haiku spends more of one budget; crossing to fable spends
+  a different one. Two consequences: delegating instead of working inline
+  spends the cheaper pool whenever the orchestrator is fable, so bias toward
+  it; and between two tiers that would both do the unit justice, prefer the
+  one below the boundary. Never down-tier a unit that meets the top-tier bar
+  just to harvest the discount.
+
+# ---------------------------------------------------------------------------
+# Effort -- a SEPARATE decision from tier, made per unit.
+#
+# Tier asks "how capable a model does this need". Effort asks "how much does
+# this unit reward deliberation". They are not the same question and do not
+# always move together: a hard-but-mechanical unit is high tier, low effort;
+# an easy-looking but ambiguous one can be the reverse. Each tier's `effort`
+# field is the DEFAULT for that rung, not a fixed pairing -- these tests
+# override it.
+#
+# Up-effort is also the cheap substitute for up-tier: it stays inside the same
+# usage pool, where crossing a tier boundary may not.
+# ---------------------------------------------------------------------------
+effort:
+  raise_when:
+    - The unit is ambiguous, or several plausible approaches exist and picking
+      the wrong one is expensive.
+    - You cannot cheaply verify the result -- deliberation is the only quality
+      control left.
+    - >-
+      Rework is expensive -- a wrong answer propagates into later units rather
+      than being caught by the next step.
+  lower_when:
+    - The unit APPLIES a stated rule rather than deciding which rule applies.
+    - The result is cheaply checkable -- a test run, a diff, a file you will
+      read anyway.
+    - Retry is cheaper than deliberation, so failing fast and re-running beats
+      thinking longer up front.
+  note: >-
+    Try up-effort BEFORE up-tier. Most units that look like they need a better
+    model actually need more thinking time from the one you have, and that
+    keeps you in the same pool.
+
+# ---------------------------------------------------------------------------
+# Backend selection -- the ordered test for WHERE a unit runs.
+#
+# Asked before the tier question, because the ladders are per-backend. Gates
+# are disqualifiers, not preferences: if one fires, the answer is settled and
+# the pulls do not get a vote. Rows naming a backend that is not installed are
+# dropped from the rendered guidance along with that backend.
+# ---------------------------------------------------------------------------
+backend_selection:
+  default: agent
+  gates:
+    - test: The unit needs the session's MCP servers or harness tools.
+      backend: agent
+      why: No other backend can see them.
+    - test: You will iterate on the unit, or expect to ask it follow-ups.
+      backend: agent
+      why: >-
+        SendMessage resumes with context intact; elsewhere a follow-up is a
+        cold re-brief that pays the whole orientation again.
+    - test: You want to be able to stop it mid-run.
+      backend: agent
+      why: >-
+        A background agent can hit the permission layer and be denied. A
+        non-interactive CLI backend runs to completion once launched.
+  pulls:
+    - test: A SET of related units that can be handed over whole.
+      backend: codex
+      why: >-
+        The strongest pull. An agent cannot spawn agents, so fanning out over a
+        set means you write N briefs and take N reports into your own context;
+        one session takes the set and returns one result file.
+    - test: One long, self-contained unit.
+      backend: codex
+      why: Dispatch overhead amortizes to nothing, and nothing lands in your context until it finishes.
+    - test: You want an independent second opinion on a conclusion.
+      backend: codex
+      why: A different model family fails differently -- that IS the cross-check.
+    - test: You want the work off the Claude pool, or its return shape enforced.
+      backend: codex
+      why: "--output-schema validates the final message; the Agent tool has no per-call equivalent."
+
+# ---------------------------------------------------------------------------
+# Backends -- where a delegated unit actually runs.
+#
+# `detect` decides whether a backend appears in the rendered guidance:
+#   {always: true}          always available
+#   {command: [...]}        available if the command exits 0
+#   {path: "..."}           available if the path exists (~ expanded)
+# ---------------------------------------------------------------------------
+backends:
+  - id: agent
+    name: Claude Agent tool
+    detect:
+      always: true
+    prefer_for: >-
+      The default. Everything, unless a unit has a specific reason to run
+      somewhere else.
+    capabilities:
+      tiers: [cheapest, workhorse, high-reasoning, top]
+      isolation: 'built in -- isolation: "worktree"'
+      effort: >-
+        Via agent-type definitions and Workflow's agent() opts.effort. The
+        Agent tool has no per-call effort parameter, so agents there inherit
+        from their type or the session.
+      network: "yes"
+      returns: >-
+        Each agent's report is DELIVERED into the orchestrating context, not
+        fetched -- you cannot skim it and discard it, and there is no per-call
+        schema to constrain its size or shape. Ask for a tight structure in the
+        brief; N verbose agents put N verbose reports where you least want them.
+    dispatch: >-
+      Mechanics (report visibility, SendMessage follow-up, parallel launch,
+      worktree isolation) are in the harness prompt every session -- use them
+      directly. Launch independent units in ONE message so they run
+      concurrently.
+    gotchas:
+      - >-
+        The agent's final report is not shown to the user -- relay what
+        matters in your own message.
+      - >-
+        N agents each pay their own cold-start orientation and build their own
+        cache lineage; a single session over the same set pays it once. The
+        wider the fan-out and the more context the units share, the worse that
+        trade gets.
+
+  - id: codex
+    name: Codex CLI
+    detect:
+      command: [codex, --version]
+    prefer_for: >-
+      An external CLI process, not a first-class agent type. See "Choosing a
+      backend" above for when it wins; the capabilities below are what it can
+      and cannot do once chosen.
+    capabilities:
+      tiers: [codex-workhorse, codex-top]
+      isolation: >-
+        None built in. Create a git worktree per parallel writer and point
+        Codex at it with -C; read-only units can share the tree.
+      effort: >-
+        Selected on the Codex side, not by this skill -- pick the model with
+        `-m` and set reasoning effort through Codex's own config key. Check
+        `codex exec --help` for the exact spelling in your installed version
+        rather than guessing. The codex-top tier assumes max effort.
+      network: >-
+        Yes, via the network_access override in the command below. Without it
+        `-s workspace-write` blocks egress at a loopback proxy.
+      returns: >-
+        The `-o` file holds the final message, and the brief dictates what goes
+        in it; `--output-schema <FILE>` can force that message to satisfy a
+        JSON Schema, which the Agent tool has no per-call equivalent for.
+    command: >-
+      codex exec -s workspace-write
+      -c sandbox_workspace_write.network_access=true
+      --skip-git-repo-check --color never -o <last-message-file> -
+    dispatch: |
+      `codex exec`, NEVER bare `codex` (the TUI needs a TTY and dies when
+      backgrounded). Brief on STDIN via `-` from a file, never as a shell
+      argument. `-o <file>` is the return value; `-C <dir>` sets the working
+      root. Launch as a Bash call with run_in_background: true, then tail the
+      log ONCE -- a bad invocation exits in seconds and notifies exactly like a
+      good one.
+
+      Full flag catalog, the network/sandbox detail, worktree isolation, and
+      result collection: references/codex-dispatch.md. Read it when composing
+      the launch; you do not need it to choose this backend.
+    gotchas:
+      - >-
+        `codex exec`, never bare `codex`: the interactive form needs a TTY and
+        dies under run_in_background.
+      - >-
+        Prompts go on stdin (`-`), never as a shell argument -- a realistic
+        brief contains quotes that break the command line before Codex runs.
+      - >-
+        `--ask-for-approval` is not an exec flag. The sandbox is the whole
+        safety story and the unit cannot be interrupted mid-run.
+      - >-
+        On Windows, `curl.exe` HTTPS fails inside the sandbox
+        (`SEC_E_NO_CREDENTIALS`) even with network open -- that is a TLS-stack
+        problem, not a blocked network. Use an OpenSSL-based client.
+      - >-
+        Codex's internal subagent layer (`--enable multi_agent_v2`) is inert
+        unless the brief explicitly asks for delegation -- enabling the flag
+        alone changes nothing -- and it does not make SMALL items cheaper.
+        Measured at N=8 read-a-file-write-a-sentence items on codex-cli
+        0.146.0: 65s vs 48s for the same session without it. Delegation swaps
+        millisecond shell reads for model round trips (brief, spawn, join) and
+        discards the single context's cache reuse, which at that item size
+        costs more than the parallelism returns. Token accounting was NOT
+        conclusive either way. Says nothing about genuinely independent
+        long-running items -- there the fixed cost amortizes.
+      - >-
+        A mechanical fan-out is ONE unit here, not N -- the model collapses
+        "check these 8 files" into a single shell command. Do not price such a
+        unit as N dispatches; equally, work a shell one-liner can do rarely
+        needs delegating at all.
+      - >-
+        Use `-C <dir>` for the working root; a `cd` inside a backgrounded Bash
+        call does not persist.
+      - >-
+        Parallel Codex sessions writing to one tree clobber each other -- a
+        worktree per unit, or sequence them.
+
+# ---------------------------------------------------------------------------
+# Capacity -- best-effort awareness of remaining usage.
+#
+# Claude Code does NOT expose per-model usage. What is observable is the
+# overall 5-hour and 7-day rate-limit windows (the statusline hook payload);
+# claude-ui-kit snapshots those to `snapshot_path` if it is installed. So a
+# tier-specific signal ("the top tier is spent") cannot be derived -- set it
+# yourself via `tier_overrides` when you know it.
+#
+#   source: auto     read snapshot_path when it exists (default)
+#           none     no capacity reporting
+#           command  run `command` and parse its stdout as the snapshot JSON
+# ---------------------------------------------------------------------------
+capacity:
+  source: auto
+  snapshot_path: ~/.claude/plugins/data/plugins-kit/claude-ui-kit/rate-limits.json
+  command: null
+  # Older than this and the snapshot is reported as stale rather than trusted.
+  max_age_minutes: 30
+  thresholds:
+    warn_remaining_pct: 25
+    critical_remaining_pct: 10
+  # Manual per-tier availability. Keys are tier ids; values are
+  # `available` | `limited` | `unavailable`. E.g. {top: unavailable}.
+  tier_overrides: {}

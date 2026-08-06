@@ -46,6 +46,31 @@ IFS=$'\x1f' read -r MODEL MODEL_ID DIR PCT SESS WEEK SESS_RESET WEEK_RESET EFFOR
     ] | map(tostring) | join("\u001f")' | tr -d '\r'
 )
 
+# Rate-limit snapshot. The statusline hook payload is the ONLY place Claude Code
+# surfaces .rate_limits, and nothing but a statusline ever receives it -- so drop
+# a copy where other tools can read it. Consumed by awesome-kit's orchestrate
+# skill to report remaining capacity. This is a FILE contract, not an import
+# edge: consumers treat the file as optional and neither plugin depends on the
+# other. Disable with STATUSLINE_RATE_LIMIT_SNAPSHOT=0.
+#
+# Under `set -euo pipefail` a snapshot failure must never take the statusline
+# with it, hence the trailing `|| true`; the write goes via a temp file so a
+# concurrent reader never sees a partial object.
+# `${HOME:-}` deliberately: under `set -u` a bare $HOME with HOME unset aborts
+# the whole script, turning a skipped snapshot into a blank status line -- the
+# exact failure this block promises never to cause.
+if [ "${STATUSLINE_RATE_LIMIT_SNAPSHOT:-1}" = "1" ] && [ -n "${HOME:-}" ] &&
+   printf '%s' "$DATA" | "$JQ" -e '.rate_limits != null' >/dev/null 2>&1; then
+    SNAP_DIR="${HOME}/.claude/plugins/data/plugins-kit/claude-ui-kit"
+    SNAP_TMP="$SNAP_DIR/rate-limits.json.$$.tmp"
+    {
+        mkdir -p "$SNAP_DIR" &&
+        printf '%s' "$DATA" | "$JQ" -c --argjson now "$(date +%s)" \
+            '{captured_at: $now, rate_limits: .rate_limits}' > "$SNAP_TMP" &&
+        mv -f "$SNAP_TMP" "$SNAP_DIR/rate-limits.json"
+    } 2>/dev/null || rm -f "$SNAP_TMP" 2>/dev/null || true
+fi
+
 # Model segment: display name with version tokens stripped ("Fable 5" -> "Fable",
 # "Opus 4.8" -> "Opus"), prefixed with an effort meter glyph when the session
 # reports a reasoning effort (absent for models without the effort parameter).

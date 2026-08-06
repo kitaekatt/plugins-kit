@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Use when accomplishing significant multi-part work -- delegate to background agents to preserve main-agent context. Do NOT use for quick single-step tasks.
+description: Use when accomplishing significant multi-part work -- delegate to background agents or a CLI backend to preserve context. Do NOT use for single-step tasks.
 skill-type: technique-skill
 ---
 
@@ -9,10 +9,18 @@ skill-type: technique-skill
 Take on the orchestrator role: accomplish significant work by delegating it to background
 agents, keeping the main agent's context reserved for coordination, judgment, and synthesis.
 The economics: an agent's *results* hold most of the value while *generating* them consumes
-most of the context and tool calls -- so generation belongs in background agents and only the
-compressed conclusions come home. Agent-tool mechanics (report visibility, follow-up via
-SendMessage, parallel launch, worktree isolation) are already in the harness prompt every
-session; this skill adds the economics and the procedure, not the mechanics.
+most of the context and tool calls -- so generation belongs in a background unit and only the
+compressed conclusions come home. Agent-tool mechanics are already in the harness prompt every
+session; what this skill adds is the economics, the procedure, and -- through the rendered
+policy below -- the machine's own dispatch options and their mechanics.
+
+**Policy is configuration, and it is rendered, not remembered.** Which tier suits which unit,
+which dispatch backends exist on this machine and how to drive them, and how much usage
+capacity is left all vary by user and by machine. Step 3 runs a script that prints the
+resolved policy. Do not answer those questions from this file or from memory -- this file has
+no tier table, deliberately. Users tune the policy by overriding
+[defaults/orchestration.yaml](defaults/orchestration.yaml); see
+[references/configuration.md](references/configuration.md) for the schema and layering.
 
 ```yaml
 technique_skill:
@@ -21,12 +29,59 @@ technique_skill:
   scope:
     covers:
       - decomposing significant work into delegable units and running them via background agents
-      - per-unit model-tier selection and the usage-pool economics behind it
+      - rendering the machine's orchestration policy (tiers, backends, capacity) and dispatching by it
       - keeping the main context clean while agents run, and synthesizing results on completion
     excludes:
       - small or single-step tasks cheaper to do inline than to delegate
       - the Workflow tool's deterministic multi-agent orchestration (use Workflow when the user opts in)
       - subagent authoring (defining new agent types)
+
+  policy:
+    keywords: [model choice, model tier, backend, codex, custom orchestrator, usage limit, capacity, rate limit, configurable, override, pool]
+    render: |
+      Use the plugin venv's Python explicitly -- not `uv run python`, which resolves the
+      venv from the cwd and misses this plugin's dependencies when run from another project
+      (macOS/Linux path shown; Windows uses .venv/Scripts/python.exe):
+
+        ~/.claude/plugins/data/plugins-kit/awesome-kit/.venv/bin/python \
+          ${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/scripts/orchestration_guidance.py
+
+      Add `--project-root <path>` when the project whose policy applies is not the cwd.
+    emits: |
+      A markdown block covering (a) the model tiers with their use-for and escalation
+      criteria, (b) every dispatch backend detected on this machine -- the Agent tool,
+      Codex CLI, or whatever the user configured -- with its exact mechanics, capabilities
+      and gotchas, and (c) best-effort usage capacity plus any manual tier overrides.
+    when: |
+      Once per orchestration, at step 3, before choosing tiers or launching anything. The
+      script is deterministic and sub-second -- it is not a delegable unit, run it inline.
+      Budget a few thousand tokens for its output; it grows with each installed backend.
+    reading_it: |
+      Treat the rendered block as authoritative over anything you believe about model
+      lineups or dispatch mechanics. Two parts carry decisions rather than description:
+      a tier marked UNAVAILABLE or LIMITED must not be dispatched to (route down a tier and
+      say so when you relay results), and the tiers and backends listed are the only ones
+      that exist here. Anything not installed on this machine is omitted from the output
+      entirely rather than shown as unavailable, so the rendered list is exhaustive by
+      construction -- do not reach for a backend or tier you remember but cannot see, and do
+      not tell the user something is "unavailable" on the strength of its absence. (`--explain`
+      reports what was gated and why, if you need to answer that question.)
+    capacity_caveat: >-
+      The rendered Capacity section states the account-wide-not-per-model limit; heed it
+      there rather than restating it here. When the user knows a tier is depleted, that
+      belongs in capacity.tier_overrides.
+
+  asset_dependencies:
+    - path: defaults/orchestration.yaml
+      consumer: scripts/orchestration_guidance.py
+      purpose: the shipped policy layer the renderer merges under the user and project overrides
+      invariant: >-
+        Every key under a backend's `capabilities:` is rendered from an allowlist in
+        render_backends(); a key added here that is missing there is silently dropped.
+    - path: references/codex-dispatch.md
+      consumer: defaults/orchestration.yaml (backends[codex].dispatch)
+      purpose: the flag catalog and launch mechanics the rendered summary points at
+      invariant: The one-line `command:` in the backend record matches the worked example here.
 
   techniques:
     - id: orchestrate
@@ -36,11 +91,12 @@ technique_skill:
       checklist:
         - "[ ] 1 warrants orchestration"
         - "[ ] 2 units decomposed and classified"
-        - "[ ] 3 model tier picked per unit"
-        - "[ ] 4 agents launched"
-        - "[ ] 5 orchestrator-only work while running"
-        - "[ ] 6 results synthesized"
-        - "[ ] 7 substance relayed to user"
+        - "[ ] 3 policy rendered"
+        - "[ ] 4 backend + tier picked per unit"
+        - "[ ] 5 agents launched"
+        - "[ ] 6 orchestrator-only work while running"
+        - "[ ] 7 results synthesized"
+        - "[ ] 8 substance relayed to user"
       steps:
         - n: 1
           action: Confirm the task warrants orchestration.
@@ -59,63 +115,38 @@ technique_skill:
             sequence; (b) compression profile -- does the result compress to a small conclusion?
             High-generation-cost / small-conclusion units are the ideal delegations.
         - n: 3
-          action: Pick a model tier per unit from the model_selection block.
+          action: Render the orchestration policy by running the script in the policy block above.
+          detail: >-
+            Run it once, inline, and keep the output in view for steps 4-5. It is the source
+            of truth for tiers, backends and capacity on this machine.
         - n: 4
-          action: Launch background agents -- each prompt a standalone brief (goal, paths, constraints, return shape).
+          action: Pick a backend per unit, then a tier from that backend's ladder.
+          detail: >-
+            Backend first: the rendered policy gives one tier ladder per backend, and rungs
+            are comparable only within a ladder -- across them the decision is dispatch
+            shape, pool, and independence, not model capability. Default backend and default
+            tier are stated in the output; deviate per unit when the unit's shape argues for
+            it. Honour UNAVAILABLE/LIMITED markings.
         - n: 5
-          action: While agents run, do orchestrator-level work only (plan synthesis, inline units, or wait).
+          action: Launch background units -- each prompt a standalone brief (goal, paths, constraints, return shape).
+          detail: >-
+            Use the launch mechanics the rendered policy gives for the chosen backend; they
+            differ materially between backends (a CLI backend has no built-in isolation or
+            completion report). Launch independent units in one message so they run
+            concurrently.
         - n: 6
-          action: Synthesize completed results; cross-check units that disagree before accepting either.
+          action: While units run, do orchestrator-level work only (plan synthesis, inline units, or wait).
         - n: 7
+          action: Synthesize completed results; cross-check units that disagree before accepting either.
+          detail: >-
+            A report describes what the unit intended, not necessarily what it did -- verify
+            file-writing units against the actual diff before treating the work as done.
+        - n: 8
           action: Relay the substance -- findings, decisions, verified-vs-reported -- in your final message.
       gotchas:
         - Delegating then redoing the work inline pays both costs; once dispatched, wait for the result.
-        - Parallel agents editing the same files clobber each other -- use worktree isolation or sequence them.
-
-  model_selection:
-    keywords: [model choice, model tier, usage pool, separate pool, cost, cheap delegation]
-    default: workhorse
-    note: Tiers are the durable guidance; concrete names come from the Agent tool's current model enum -- the names below are examples of the current lineup, not the contract.
-    tiers:
-      - tier: cheapest
-        example: haiku
-        use_for: trivial mechanical fan-out -- bulk renames, file-by-file checks with a fixed rubric.
-      - tier: workhorse
-        example: sonnet
-        use_for: the default -- searches, well-specified implementation, summarization, most delegated units.
-      - tier: high-reasoning
-        example: opus
-        use_for: |
-          reasoning-heavy units on well-trodden ground -- tricky debugging, nuanced review,
-          design refinement within an established pattern -- where the orchestrator can verify
-          the conclusion cheaply or a miss is recoverable.
-      - tier: top
-        example: fable
-        use_for: |
-          units where second-best judgment is the actual risk: difficult NOVEL problems with no
-          established pattern to apply; INITIAL design of something new (maximal downstream
-          leverage -- every later unit builds on the framing, and a subtly wrong framing is the
-          least visible error in a compressed summary); and judgment calls whose conclusion the
-          orchestrator will accept on faith because it is hard to verify from the summary. A
-          plausible-but-wrong conclusion compresses exactly as well as a right one -- when the
-          unit is load-bearing and unverifiable, the tier delta is cheaper than the rework.
-    pool_economics: |
-      When the orchestrating model is fable: opus/sonnet background agents draw from a SEPARATE
-      usage pool than fable usage. This is primarily an argument for DELEGATING vs working
-      inline -- delegation both preserves top-tier context AND spends the cheaper pool, so bias
-      strongly toward it; work the orchestrator keeps inline should earn its top-tier tokens
-      (coordination, synthesis, judgment calls). For TIER selection it is only a tiebreaker:
-      between tiers that would both do the unit justice, prefer the separate pool. Never
-      down-tier a unit that meets the top-tier bar just to harvest the discount.
-    effort: |
-      Effort is a second knob, orthogonal to tier, available only where the dispatch surface
-      exposes it (agent-type definitions; Workflow's agent() opts.effort -- the Agent tool has
-      no per-call effort parameter, so agents there inherit from their type or the session).
-      Where it IS available: the same test that escalates tier escalates effort -- novelty,
-      downstream leverage, and hard-to-verify conclusions warrant more deliberation; mechanical
-      fan-out warrants low effort, not just a cheap model. Up-effort is also an ALTERNATIVE to
-      up-tier: opus at high effort buys deliberation while staying in the separate pool, often
-      the right call for reasoning-heavy units on well-trodden ground.
+        - Parallel units editing the same files clobber each other -- use isolation appropriate to the backend, or sequence them.
+        - Backends differ in what they can do (isolation, effort, network, tier selection); read the rendered capabilities before assuming parity with the Agent tool.
 
   anti_patterns:
     - id: top_tier_everywhere
@@ -123,7 +154,17 @@ technique_skill:
       keywords: [fable default, model overkill, expensive fan-out]
       why_it_seems_right: The best model should give the best results on every unit.
       why_it_is_wrong: Most delegated units are workhorse-shaped; top-tier agents spend the premium pool on work that doesn't need it.
-      alternative: Default workhorse, escalate per unit; reserve the top tier for units passing the novel / initial-design / load-bearing-and-hard-to-verify test.
+      alternative: Take the default tier from the rendered policy and escalate per unit against its stated criteria.
+    - id: remembered_policy
+      name: Choosing models and backends from memory
+      keywords: [skipped the script, hardcoded tier table, stale model names, assumed agent tool, ignored override]
+      why_it_seems_right: The tier lineup and dispatch mechanics feel like stable background knowledge, so running a script to restate them looks like ceremony.
+      why_it_is_wrong: >-
+        The policy is per-user and per-machine: a user may have retargeted tiers, added a
+        backend this skill has never heard of, disabled one, or marked a tier unavailable
+        because its usage is spent. Answering from memory silently ignores every one of
+        those and produces confident dispatch to something that is wrong or gone.
+      alternative: Run the policy script at step 3; it is deterministic and sub-second.
     - id: orchestrator_does_the_work
       name: Orchestrator absorbs the work product
       keywords: [context bloat, reading everything, inline generation]

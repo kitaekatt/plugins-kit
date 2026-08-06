@@ -214,3 +214,84 @@ class TestSegmentApi:
         assert result.returncode == 0
         assert "X" * 120 in result.stdout
         assert "X" * 200 not in result.stdout
+
+
+@pytest.mark.skipif(not _HAS_TOOLS, reason="bash + jq required")
+class TestRateLimitSnapshot:
+    """The hook payload is the only place Claude Code surfaces .rate_limits, and
+    only a statusline ever receives it -- so the statusline snapshots it for
+    other tools (awesome-kit's orchestrate skill). File contract, not an import
+    edge: a failure here must never cost the user their status line."""
+
+    SNAPSHOT = Path("plugins/data/plugins-kit/claude-ui-kit/rate-limits.json")
+
+    def _payload(self, cwd, **limits):
+        body = {"model": {"display_name": "TestModel", "id": "m-1"}, "cwd": str(cwd)}
+        if limits:
+            body["rate_limits"] = limits
+        return json.dumps(body)
+
+    def _run(self, tmp_path, payload):
+        home = tmp_path / "home"
+        home.mkdir()
+        result = run_statusline(payload, tmp_path, extra_env={"HOME": str(home)})
+        return result, home / ".claude" / self.SNAPSHOT
+
+    def test_snapshot_is_written_from_the_payload(self, tmp_path):
+        payload = self._payload(
+            tmp_path,
+            five_hour={"used_percentage": 42.5, "resets_at": 1800000000},
+            seven_day={"used_percentage": 61.0, "resets_at": 1800000000},
+        )
+        result, snapshot = self._run(tmp_path, payload)
+        assert result.returncode == 0
+        data = json.loads(snapshot.read_text(encoding="utf-8"))
+        assert data["rate_limits"]["five_hour"]["used_percentage"] == 42.5
+        assert data["rate_limits"]["seven_day"]["resets_at"] == 1800000000
+        assert isinstance(data["captured_at"], int)
+
+    def test_payload_without_rate_limits_writes_nothing(self, tmp_path):
+        result, snapshot = self._run(tmp_path, self._payload(tmp_path))
+        assert result.returncode == 0
+        assert not snapshot.exists()
+
+    def test_snapshot_can_be_disabled(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        payload = self._payload(tmp_path, five_hour={"used_percentage": 10.0})
+        result = run_statusline(
+            payload, tmp_path,
+            extra_env={"HOME": str(home), "STATUSLINE_RATE_LIMIT_SNAPSHOT": "0"})
+        assert result.returncode == 0
+        assert not (home / ".claude" / self.SNAPSHOT).exists()
+
+    def test_no_temp_files_are_left_behind(self, tmp_path):
+        payload = self._payload(tmp_path, five_hour={"used_percentage": 10.0})
+        _, snapshot = self._run(tmp_path, payload)
+        assert list(snapshot.parent.glob("*.tmp")) == []
+
+    def test_statusline_still_renders_when_the_snapshot_cannot_be_written(self, tmp_path):
+        """An unwritable HOME degrades the snapshot, never the status line."""
+        blocker = tmp_path / "blocked"
+        blocker.write_text("not a directory", encoding="utf-8")
+        payload = self._payload(tmp_path / "myproj", five_hour={"used_percentage": 10.0})
+        result = run_statusline(payload, tmp_path, extra_env={"HOME": str(blocker)})
+        assert result.returncode == 0
+        # Assert the real content rendered. `or result.stdout.strip()` would
+        # pass on ANY non-empty output, including a degraded fallback line.
+        assert "myproj" in result.stdout
+
+    def test_unset_home_does_not_kill_the_statusline(self, tmp_path):
+        """Under `set -u` a bare $HOME aborts the script; the snapshot must be
+        skipped instead, or an env without HOME loses its status line."""
+        env = dict(os.environ)
+        env.pop("HOME", None)
+        env.pop("BOOTSTRAP_BIN_JQ", None)
+        payload = self._payload(tmp_path / "myproj", five_hour={"used_percentage": 10.0})
+        result = subprocess.run(
+            ["bash", str(_STATUSLINE)], input=payload, cwd=tmp_path, env=env,
+            capture_output=True, text=True, timeout=30,
+            encoding="utf-8", errors="replace")
+        assert result.returncode == 0, result.stderr
+        assert "myproj" in result.stdout
+        assert "unbound variable" not in result.stderr
