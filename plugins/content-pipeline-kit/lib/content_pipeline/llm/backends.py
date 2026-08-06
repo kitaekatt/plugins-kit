@@ -32,6 +32,7 @@ stays truthful.
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -230,6 +231,14 @@ class MockBackend:
     ``classify_halt`` maps a raised entry to a halt kind when its message
     carries a marker, so a scripted ``HaltError``-shaped exception halts. Every
     call's kwargs are recorded on ``self.calls``.
+
+    THREAD SAFETY: one instance may be shared across worker threads. The
+    ``calls`` recording and the ``responses`` FIFO drain are both guarded by
+    an internal lock, so a concurrent stage cannot interleave call records or
+    race the check-then-pop of the queue. Note this makes each ENTRY atomic,
+    not the ORDER: under concurrency, ``responses`` is drained in completion
+    order, so a test asserting a specific per-thread response pairing wants
+    ``keyed_responses`` (matched on the prompt) rather than the FIFO.
     """
 
     responses: Optional[List[Any]] = None
@@ -240,6 +249,13 @@ class MockBackend:
 
     def __post_init__(self) -> None:
         self._queue: List[Any] = list(self.responses) if self.responses else []
+        # Concurrent pipelines share ONE backend across worker threads (the
+        # convergence-loop stages dispatch through a ThreadPoolExecutor), so
+        # the recording and the FIFO drain must be atomic: without this,
+        # ``if not self._queue`` / ``pop(0)`` is a check-then-act race that
+        # surfaces as an IndexError instead of the intended "exhausted"
+        # error, and interleaved appends scramble call ordering.
+        self._lock = threading.Lock()
 
     def _coerce(self, entry: Any, model: str) -> LLMResponse:
         if isinstance(entry, LLMResponse):
@@ -267,9 +283,10 @@ class MockBackend:
         model: str,
         options: Optional[BackendOptions] = None,
     ) -> LLMResponse:
-        self.calls.append(
-            {"system": system, "user": user, "model": model, "options": options}
-        )
+        with self._lock:
+            self.calls.append(
+                {"system": system, "user": user, "model": model, "options": options}
+            )
         effective_model = model or self.default_model
         if self.keyed_responses is not None:
             for substring, entry in self.keyed_responses.items():
@@ -281,9 +298,10 @@ class MockBackend:
                 f"MockBackend keyed_responses: no key matched (keys: "
                 f"{list(self.keyed_responses)})"
             )
-        if not self._queue:
-            raise RuntimeError("MockBackend exhausted")
-        entry = self._queue.pop(0)
+        with self._lock:
+            if not self._queue:
+                raise RuntimeError("MockBackend exhausted")
+            entry = self._queue.pop(0)
         if isinstance(entry, BaseException):
             raise entry
         return self._coerce(entry, effective_model)

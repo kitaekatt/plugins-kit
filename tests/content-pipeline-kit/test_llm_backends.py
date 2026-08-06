@@ -156,3 +156,75 @@ def test_routed_model_substitutes_for_claude(monkeypatch):
 
 def test_routed_model_no_substitution_for_openrouter():
     assert routed_model("deepseek/deepseek-v4") == "deepseek/deepseek-v4"
+
+
+def test_mock_backend_exhaustion_race_raises_documented_error():
+    """Threads racing the LAST scripted entry get RuntimeError, not IndexError.
+
+    Regression: ``complete`` used to do an unguarded ``if not self._queue`` /
+    ``self._queue.pop(0)``. Both threads could pass the emptiness check and
+    the loser popped an empty list -- an IndexError leaking out of the mock
+    instead of the documented "MockBackend exhausted" RuntimeError. Consumers
+    share one backend across a ThreadPoolExecutor stage, so this is the shape
+    that runs in real pipelines.
+
+    It hammers the boundary directly (queue of one, many threads released
+    together) across many rounds at a minimal switch interval.
+
+    HONESTY NOTE: this is an INVARIANT test, not a proven regression test.
+    It was run against the pre-fix code and PASSED there too -- the window is
+    one bytecode wide and CPython's GIL makes the individual list ops
+    effectively atomic, so the race is real by inspection but not practically
+    reachable on this interpreter. It is kept because it pins the CONTRACT
+    (the entry is served exactly once; exhaustion raises the documented
+    RuntimeError, never IndexError), which WOULD catch a future change that
+    genuinely breaks atomicity: a swap to a non-atomic container, any I/O
+    added between the check and the pop, or a free-threaded (no-GIL) build.
+    Do not read a pass here as evidence the lock is unnecessary.
+    """
+    import sys
+    import threading
+
+    n_threads = 16
+    rounds = 300
+    old_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        for _ in range(rounds):
+            backend = MockBackend(responses=["only"])
+            served: list[str] = []
+            exhausted = 0
+            unexpected: list[BaseException] = []
+            lock = threading.Lock()
+            gate = threading.Barrier(n_threads)
+
+            def worker() -> None:
+                nonlocal exhausted
+                gate.wait()
+                try:
+                    resp = backend.complete("sys", "user", model="m")
+                except RuntimeError:
+                    with lock:
+                        exhausted += 1
+                    return
+                except BaseException as exc:  # noqa: BLE001 -- the defect
+                    with lock:
+                        unexpected.append(exc)
+                    return
+                with lock:
+                    served.append(resp.text)
+
+            threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            assert not unexpected, (
+                f"unguarded check-then-pop leaked {unexpected[0]!r}; "
+                "expected the documented RuntimeError"
+            )
+            assert served == ["only"], f"entry served {len(served)} times"
+            assert exhausted == n_threads - 1
+    finally:
+        sys.setswitchinterval(old_interval)
