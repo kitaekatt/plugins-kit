@@ -1,0 +1,12 @@
+task:
+  _schema_version: '1'
+  type: hand-off
+  title: md-domain code review audit gap
+  status: active
+  priority: P1
+  description: Determine which CLAUDE.md code-review deficiencies found by two independent
+    assessments are valid, then diagnose why a full md-domain audit of the same corpus
+    did not surface them -- the conceptual gap in how md-domain audits for code-review
+    fitness.
+  skills_to_invoke:
+  - skills-kit:md-domain

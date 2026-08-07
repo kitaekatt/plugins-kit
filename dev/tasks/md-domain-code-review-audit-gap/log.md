@@ -1,0 +1,5 @@
+# Log: md-domain code review audit gap
+
+(no entries yet -- rotate completed-step detail and decision rationale here)
+- 2026-08-07: update: priority = 'P1'; description = 'Determine which CLAUDE.md code-review deficiencies found by two independent assessments are valid, then diagnose why a full md-domain audit of the same corpus did not surface them -- the conceptual gap in how md-domain audits for code-review fitness.'; skills_to_invoke = ['skills-kit:md-domain']
+- 2026-08-07: update: refresh (no field edits)

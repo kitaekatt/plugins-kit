@@ -16,4 +16,9 @@ CLAUDE.local.md
 .claude/workflows/
 .workflow-kit/
 .DS_Store
-dev/
+# dev/* rather than dev/: git cannot re-include a path inside an EXCLUDED
+# directory, and task folders are the durable, version-controlled half of the
+# task system (awesome-kit:task treats dev/tasks/<stub> as "version control IS
+# the record"). A blanket dev/ ignore silently defeats that contract.
+dev/*
+!dev/tasks/
