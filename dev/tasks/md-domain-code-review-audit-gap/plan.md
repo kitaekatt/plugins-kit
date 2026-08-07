@@ -29,73 +29,42 @@
 ```yaml
 task_items:
   items:
-    - id: settle-m2-attribution
-      title: "Re-run ONLY existing A-3 / P criteria against the flecs root file"
-      state: available
-      priority: P1
-      note: >-
-        The one open disagreement between the two reviews. Opus says M2 is
-        overstated; sol says it is wrong outright (discover_claude_md.py:86-124
-        classifies the flecs root as code-directory) and the misses are
-        criterion-APPLICATION failures. Different root cause, different fix.
-        Justified re-run: the question is whether existing rules fire, not
-        whether the pipeline reproduces its misses.
-    - id: ship-part-1-verdict-vocabulary
-      title: "Redefine COMPLIANT + state coverage-not-assessed in the report"
-      state: available
-      priority: P1
-      note: >-
-        The only change BOTH reviewers endorse shipping as-is. Reconcile
-        claude-md-standards.md:50-56 with audit-lane.md:339-349. Zero new checks.
-    - id: spec-count-typing
-      title: "Spec exact-enumeration vs illustrative-magnitude as a scope extension of P_stale_factual_claim"
-      state: available
-      priority: P2
-      note: >-
-        Both reviewers converged on this independently. NOT a new rule -- extend
-        the existing P to code-directory files, plus a lane-prompt instruction to
-        enumerate count-shaped claims (P is currently only in the taxonomy enum
-        and mapping line). Needs a provenance entry narrowing :369.
-    - id: spec-part-4-invariant-check
-      title: "Define subject, severity, verdict interaction and remediation owner for invariant-vs-code"
-      state: available
-      priority: P2
-      note: >-
-        Opus calls it the best idea; sol says it fails as specified. Both right:
-        sound idea (H2 precedent at :551-552), absent specification. Blocked on
-        deciding what a code finding does to a document verdict.
     - id: prototype-coverage-lane
-      title: "Prototype sol's opt-in coverage/suggest lane, replacing the old Part 5"
+      title: "Implement the opt-in coverage lane per coverage-lane-spec.md"
+      state: available
+      priority: P2
+      note: >-
+        Spec is written and reviewed (coverage-lane-spec.md); implementation is
+        not started. Unit = (code subtree, ambient ancestor chain); verdict
+        GAPS-FOUND / COVERAGE-ASSESSED, never touching document COMPLIANT;
+        routes candidates to code-fix / test-enforcement BEFORE documentation.
+        Gate before shipping: precision on a held-out corpus + the N4 near-miss
+        control (MB_HAZARD_CAP / MB_MAX_CHARS).
+    - id: validate-other-language-families
+      title: "Precision-test the count/CD-2b criteria on TypeScript, Rust or Go"
+      state: blocked-user
+      priority: P2
+      note: >-
+        BLOCKED: no TS/Rust/Go repo with >=2 CLAUDE.md files exists on this
+        machine (scanned D:/dev). The C#/C++ run found 2 false positives and
+        produced 2 new gates, so this is not hypothetical -- each new language
+        family has found real overfitting. Needs the user to name a corpus.
+    - id: flecs-code-fixes
+      title: "Fix the flecs-ecs defects that documentation can only describe"
       state: available
       priority: P3
       note: >-
-        Reuses the AUTHORING direction's existing present-and-silent observation
-        kinds (:352-359, :448-450) + the placement algorithm. Unit = (code
-        subtree, ambient ancestor chain); verdict GAPS-FOUND/COVERAGE-ASSESSED;
-        never alters document COMPLIANT; routes to code-fix/test-enforcement
-        BEFORE documentation (hazards are often bugs -- documenting fossilizes
-        them). Held-out multilingual corpora required before publishing.
-    - id: regression-audit-flecs
-      title: "Targeted re-audit of flecs-ecs with the CHANGED md-domain, as a regression test"
-      state: deferred
+        The doc pass recorded these as defect records naming the remedy rather
+        than as designs to preserve. Strongest candidate: test_rest.sh:46-47
+        (two-line scope change removes the tracked-fixture deletion entirely).
+        Also archive.py fail-open, native_registry_register silence, and the
+        127-coord / MAX_UNITS / matched[1024] silent truncations. Separate repo,
+        needs its own authorization.
+    - id: follow-up-two-unassigned-findings
+      title: "bridge_named_config indentation coupling + tools/lib/api.py YAML-subset coupling"
+      state: available
       priority: P3
-      note: >-
-        Depends on propose-md-domain-change landing. MUST run BEFORE
-        improve-flecs-docs: the answer key is the valid-deficiency list from
-        triage-report-findings, and it only tests anything while the flecs-ecs
-        corpus is still the one the clean audit passed. Improving the docs first
-        would mean auditing docs written to satisfy the change under test.
-        Targeted, not a full re-run -- scope it to the surfaces the valid
-        deficiencies live on.
-    - id: improve-flecs-docs
-      title: "Improve the flecs-ecs documentation via a background agent"
-      state: deferred
-      priority: P3
-      note: >-
-        User-requested (2026-08-07), towards the end of the task. Runs AFTER
-        regression-audit-flecs. flecs-ecs is a separate repo -- confirm commit
-        authorization there before writing; the read-only rule below covers the
-        investigation phase only.
+      note: "Verified-adjacent during triage but outside the assigned 13; not documented."
 ```
 
 ## Working hypotheses (to confirm or kill, not to assume)

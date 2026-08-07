@@ -29,3 +29,19 @@
   task folder in this repo from version control, defeating the task system's own
   durability contract. This folder is now tracked.
 - Authored coverage-lane-spec.md (replaces the failed Part 5).
+- SHIPPED (dev, bea0cf7): skills-kit 0.40.0 -- count typing (P scope extension to
+  code-directory, exact-enumeration vs illustrative-magnitude) + CD-2b
+  invariant_violated_by_code. Validated BEFORE shipping: flecs regression 6/6
+  answer-key rows with all 4 negative controls silent, which caught a blocking
+  defect (unspecified enumeration depth under an APPLIED FIX could write a NEW
+  wrong number); held-out C#/C++ precision run 4 TP / 2 FP, whose false positives
+  produced the closed-set and unit-ambiguity gates. Residual gap recorded: no
+  TS/Rust/Go corpus available, generality unvalidated.
+- flecs-ecs docs improved on branch docs/coverage-improvements (6 commits, not
+  pushed). Control branch md-audit/skills-compliance preserved at d2073ee with its
+  dirty-tree evidence intact. Net +42 lines across a ~3,200-line corpus; two
+  previously uncovered directories (engine/src, engine/tests) now have ambient
+  files. All 4 count claims corrected by independent enumeration.
+- NOTE: marketplace.json deliberately left uncommitted -- a regen swept a
+  concurrent session's bootstrap 0.72.0 -> 0.73.0 bump. Whoever commits next
+  should regen and carry both.
