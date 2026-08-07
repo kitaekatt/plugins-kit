@@ -123,7 +123,7 @@ tiers:
   # the workhorse. Add a cheap rung only with a case that names units it wins.
 
   - id: codex-workhorse
-    model: terra
+    model: gpt-5.6-terra
     effort: medium
     backend: codex
     use_for: >-
@@ -137,7 +137,7 @@ tiers:
       wrong answer would be expensive to discover later.
 
   - id: codex-top
-    model: sol
+    model: gpt-5.6-sol
     effort: max
     backend: codex
     use_for: >-
