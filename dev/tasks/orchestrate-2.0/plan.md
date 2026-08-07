@@ -19,7 +19,7 @@
   `/git-code-review`, fixed four confirmed defects plus one the smoke test
   caught, shipped as awesome-kit 0.22.0 (`23ef7f3`).
 
-- **`drift-guard` built** (uncommitted). `scripts/check_orchestration_drift.py`,
+- **`drift-guard` built** (`6ff549a`, pushed to dev). `scripts/check_orchestration_drift.py`,
   chained from `scripts/pre-commit-version-check.sh`. Fingerprints the
   canonicalized decision-half YAML SUBTREE (sha256), NOT the render -- the
   render is machine-dependent (Codex ladder present or absent) and, worse,
@@ -32,13 +32,13 @@
   named in the failure message. 544 tests pass (was 523).
   **Independently verified, not taken on report:** neutered `check()` to
   `return []` and confirmed all three positive controls fail, then restored.
-- **`skill-md-partition` applied** (uncommitted). SKILL.md 2,629 -> 1,695
+- **`skill-md-partition` applied** (`20fb227`, pushed to dev). SKILL.md 2,629 -> 1,695
   tokens measured (-35.5%), paid on every invocation. Rationale moved to a new
   `references/why-delegate.md` (823 tokens, on-demand). Verified independently:
   5 anti-pattern records moved WHOLE with all 10 required rationale fields
   intact, reference cited from SKILL.md, mechanical audit COMPLIANT.
 
-- **`machine-half-prose` applied** (uncommitted). Machine half 1,205 -> 799
+- **`machine-half-prose` applied** (`4a3c1ae`, pushed to dev). Machine half 1,205 -> 799
   tokens with Codex (-406), 444 -> 344 without (-100). Fell SHORT of the ~500
   target and was reported as such rather than padded: after removing the two
   genuine duplicates (`codex exec` rule, stdin rule -- both already stated in
@@ -53,7 +53,7 @@ Detail for each of these is in `log.md`.
 
 Do NOT sum a per-invocation figure with a per-render one without saying so.
 
-| basis | pre-2.0 | 0.22.0 | now (uncommitted) |
+| basis | pre-2.0 | 0.22.0 | now (on dev, unbumped) |
 |---|---:|---:|---:|
 | whole render, Codex present | 3,204 | 2,547 | **2,141** |
 | whole render, Codex absent | 1,861 | 1,447 | **1,347** |
@@ -71,11 +71,11 @@ number is used.
 ```yaml
 task_items:
   items:
-    - id: review-and-commit
-      title: "Review + commit the three uncommitted changes; the tree is contaminated by other sessions"
-      state: available
+    - id: version-bumps-and-publish
+      title: "Two version bumps + publish; consumers see nothing until then"
+      state: blocked-user
       priority: P1
-      note: "stage by explicit path only -- bootstrap/, skills-kit/, marketplace.json and a second task folder are dirty from unrelated work; also `dev/tasks/orchestrate-2.0/` is UNTRACKED"
+      note: "committed+pushed to dev as 6ff549a/4a3c1ae/20fb227, but the cache keys on version -- unbumped work is structurally invisible. TWO bumps (user decision), separate bases. /git-code-review was NOT run on these commits."
     - id: promote-design-docs
       title: "Move principles + lexicon into the skill's references/ once code reads them"
       state: available
