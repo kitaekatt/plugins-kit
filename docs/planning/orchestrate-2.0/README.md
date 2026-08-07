@@ -82,8 +82,34 @@ something that cannot see the old tree, it cannot drift.
    today: every section is a flat record with named leaf fields, and `fold()` collapses
    multi-line scalars to one line.
 3. Move these two documents into the skill's `references/` once the renderer reads
-   them, and add a check that fails when a rendered tree changes without a
-   corresponding principles change.
+   them. (The drift check that was the other half of this item is built -- see
+   below.)
+
+## The drift check
+
+`scripts/check_orchestration_drift.py`, chained from
+`scripts/pre-commit-version-check.sh`, enforces the one-way authorship rule at
+commit time. [decision-fingerprint.txt](decision-fingerprint.txt) stores a hash of
+the decision half of `orchestration.yaml`; the check blocks a commit when the
+policy no longer matches that baseline, and separately when a staged diff *moves*
+the baseline without staging any other change in this directory. Regenerate the
+baseline with one command after a legitimate principles-then-derive change:
+
+```
+uv run python scripts/check_orchestration_drift.py --update
+```
+
+**What it does not guarantee.** It catches "changed *without* a principles change",
+not "*disagrees with* the principles" -- a one-character edit to
+tier-principles.md satisfies it. Deriving the tree from the principles at build
+time would be the strong guarantee; that was deferred, because these documents are
+deliberately prose-with-rationale so a human can audit them. The fingerprint is
+also taken over the YAML subtree rather than the rendered output, so a renderer
+change that alters the tree without touching the YAML is invisible to it -- a
+deliberate trade, since the rendered output is machine-dependent (the Codex ladder
+renders only where `codex` is on PATH) and a render-derived baseline would fail
+spuriously across the fleet. The machine half (`backends`, `capacity`) is outside
+the fingerprint entirely.
 
 ## Known gaps, carried deliberately
 
