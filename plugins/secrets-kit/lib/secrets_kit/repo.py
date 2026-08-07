@@ -8,10 +8,11 @@ the pass proceeds on what is on disk.
 """
 
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Tuple
 
 from . import SecretsError
 
@@ -29,20 +30,102 @@ QUERY_TIMEOUT = 10
 REFRESH_COOLDOWN_SECONDS = 6 * 60 * 60
 
 
-def _git(
-    args: List[str],
-    *,
-    cwd: Optional[Path],
-    timeout: int,
-    scrub_env: Sequence[str] = (),
-) -> Tuple[int, str]:
+# Two distinct families of inherited environment are removed before every git
+# invocation in this module. They are kept separate because the reasoning that
+# justifies scrubbing each differs, and so does the reasoning about what is
+# deliberately LEFT alone -- collapsing them into one list is how the retained
+# exclusions below stop looking like decisions and start looking like gaps.
+#
+# Both are removed for EVERY invocation rather than per call site: a default
+# cannot be forgotten by whoever adds the next caller, and forgetting it is
+# exactly how this got missed the first time.
+
+# Family 1 -- variables that RELOCATE the repository git operates on. Every
+# call in this module names the repo it means by passing an explicit `cwd`, so
+# any of these arriving from an outer process can only ever redirect us away
+# from what we asked for; there is no case where inheriting one is wanted.
+#
+# It matters most on the verbs that WRITE. A stale GIT_DIR does not merely make
+# `rev-parse` misreport -- it can make `add`/`commit`/`push` record blobs into
+# a repository nobody intended, which is the failure this whole plugin exists
+# to prevent.
+#
+# Scrubbed, and why each earns its place:
+#   GIT_DIR            - names the repo outright; the primary redirect.
+#                        REPRODUCED: diverts commit_and_push and sync.
+#   GIT_WORK_TREE      - repoints the working tree under any repo.
+#                        REPRODUCED: diverts commit_and_push.
+#   GIT_INDEX_FILE     - git SETS this for hooks and rebases, so a nested run
+#                        really can see one. REPRODUCED, and it is DESTRUCTIVE
+#                        rather than merely misdirecting: pointed at a path
+#                        that does not exist, `git add -- <path>` succeeds into
+#                        a fresh EMPTY index and the commit then records a tree
+#                        containing ONLY that path. Every other tracked file --
+#                        identity.age, the other blobs -- is committed as
+#                        deleted and pushed that way. Do not drop this one.
+#   GIT_COMMON_DIR     - resolves refs/config for linked worktrees; a leftover
+#                        one still misdirects after GIT_DIR is gone.
+#   GIT_OBJECT_DIRECTORY - where new objects are WRITTEN: a stale value puts
+#                        our ciphertext in someone else's object store.
+#   GIT_ALTERNATE_OBJECT_DIRECTORIES - extra object lookup paths; would let
+#                        `remote_has` see an object this repo does not have,
+#                        and that call decides "is this repo already seeded".
+#   GIT_CEILING_DIRECTORIES - stops upward discovery, so a real repo can read
+#                        as no repo at all -- the permissive verdict.
+#   GIT_NAMESPACE      - rewrites ref names, so a push would publish where no
+#                        other machine looks.
+#
+# The last four are scrubbed on family membership and cost-nil grounds; only
+# the first three have a reproduced failure behind them (see the tests).
+_RELOCATING_ENV = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_NAMESPACE",
+)
+
+# Family 2 -- variables that INJECT config into the invocation. These do not
+# move the repo; they rewrite what it is configured to do, which reaches the
+# same outcome by a different door. REPRODUCED: with the relocating family
+# fully scrubbed,
+#     GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url \
+#     GIT_CONFIG_VALUE_0=<attacker>
+# makes `commit_and_push` publish the encrypted blobs to an attacker-controlled
+# remote and exit 0. GIT_CONFIG_PARAMETERS is the same hazard from the other
+# direction: git sets it ITSELF for subprocesses, so inheriting it is precisely
+# the nested-run case already accepted for GIT_INDEX_FILE.
+#
+# The indexed GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n> pairs cannot live in a
+# fixed tuple, so they are matched by pattern -- and ALL of them are removed,
+# not just those below the inherited GIT_CONFIG_COUNT. A pair left behind above
+# the count is inert only until something re-sets the count, and leaving armed
+# ammunition next to a removed trigger is not a defence.
+_INJECTING_ENV = ("GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
+_INDEXED_CONFIG_RE = re.compile(r"\AGIT_CONFIG_(?:KEY|VALUE)_\d+\Z")
+
+# NOT scrubbed, deliberately, and this stays a decision rather than an
+# oversight: GIT_TERMINAL_PROMPT and GIT_SSH_COMMAND, which `_git` sets below
+# (the scrub runs first so the ordering is explicit); and GIT_CONFIG_GLOBAL /
+# GIT_CONFIG_SYSTEM, which are how test harnesses and CI legitimately isolate
+# config -- scrubbing those would break correct setups to defend against a
+# threat the indexed-override mechanism above already covers. Do not add a
+# variable to either family just because it starts with GIT_.
+
+
+def _git(args: List[str], *, cwd: Optional[Path], timeout: int) -> Tuple[int, str]:
     env = dict(os.environ)
+    for name in _RELOCATING_ENV + _INJECTING_ENV:
+        env.pop(name, None)
+    for name in [n for n in env if _INDEXED_CONFIG_RE.match(n)]:
+        env.pop(name, None)
     # Never let git stop to ask for credentials inside a session-start pass:
     # it would hang the hook rather than fail it.
     env["GIT_TERMINAL_PROMPT"] = "0"
     env.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
-    for name in scrub_env:
-        env.pop(name, None)
     try:
         proc = subprocess.run(
             ["git"] + args,
@@ -94,15 +177,6 @@ DEST_UNDETERMINED = "undetermined"
 #: the case where the guard is silently not guarding.
 DEST_UNDETERMINED_UNAVAILABLE = "git-unavailable"
 DEST_UNDETERMINED_ANOMALY = "git-anomaly"
-
-# git resolves a repository from the environment before it looks at the cwd, so
-# a stale GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE inherited from an outer
-# process makes these queries answer about a DIFFERENT repository -- or fail
-# with "fatal: not a git repository", which classifies the dest as safe. That
-# is the same fail-open shape as an unparseable answer, arriving by a different
-# route, so the queries run with those three removed and ask strictly about the
-# directory we hand them.
-_QUERY_ENV_SCRUB = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 
 
 class DestExposure:
@@ -277,8 +351,16 @@ def _git_path(path: Path) -> str:
 
 
 def _query(args: List[str], cwd: Path) -> Tuple[int, str]:
-    """Run one exposure query, insulated from an inherited git environment."""
-    return _git(args, cwd=cwd, timeout=QUERY_TIMEOUT, scrub_env=_QUERY_ENV_SCRUB)
+    """Run one exposure query. Local-only, so it gets the short timeout.
+
+    Note what it does NOT have to do. git resolves a repository from the
+    environment before it looks at the cwd, so an inherited GIT_DIR would make
+    these queries answer about a DIFFERENT repository -- or fail with "fatal:
+    not a git repository", which classifies the dest as safe. That is handled
+    for every invocation in this module by the scrubbing in :func:`_git`, so
+    the queries need no special casing of their own.
+    """
+    return _git(args, cwd=cwd, timeout=QUERY_TIMEOUT)
 
 
 def _undetermined(dest: Path, code: int, output: str) -> DestExposure:
