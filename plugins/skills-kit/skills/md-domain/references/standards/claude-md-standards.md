@@ -53,6 +53,22 @@ Section 4 (DD-1..DD-4) is an **opt-in** lens that fires in addition to the class
 - Only PASS and INFO findings -> file is COMPLIANT.
 - INFO findings are advisory improvements, not compliance failures.
 - INFO findings do not escalate to FAIL on subsequent runs even if unaddressed.
+
+**What COMPLIANT asserts, and what it does not.** COMPLIANT means: *no FAIL
+under the document criteria listed in this file*. It is a statement about the
+document as an artifact -- its schema, its internal cohesion, and the truth of
+the assertions it makes. It is NOT a statement that the document is sufficient
+for any downstream task, and specifically **not** that a reviewer working from
+it would catch a defective change: no criterion here evaluates whether the
+directory's real hazard surface is covered, because the audit validates existing
+claims and does not crawl for absent ones (section 3, "not a gotcha crawler").
+A thin file that says little, accurately, is COMPLIANT.
+
+Report accordingly: a COMPLIANT verdict is reported as *no document-criteria
+failures*, with coverage explicitly noted as not assessed. This mirrors the
+weaker-and-honest posture review mode already takes with `DIFF-CLEAN` (see the
+audit lane's "Review mode"). Do not present COMPLIANT as an endorsement of the
+document's usefulness.
 - Idempotency: same file + same tree -> same findings, same verdict. Criteria, taxonomy, and bucket assignments are fixed; do not re-rank or re-order session-to-session.
 
 ---

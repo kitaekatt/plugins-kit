@@ -344,6 +344,12 @@ results for untouched files stand, and re-auditing them wastes runs.
 - Only PASS / INFO / JUDGMENT findings -> `COMPLIANT`.
 - INFO findings are advisory improvements, not compliance failures, and do not
   escalate to FAIL on subsequent runs.
+- **`COMPLIANT` is scoped to the document criteria that ran.** It asserts no
+  FAIL among them -- not that the document is sufficient for review. No
+  criterion assesses whether the subject's hazard surface is covered, so a
+  thin-but-accurate file is COMPLIANT. When reporting a COMPLIANT verdict, say
+  which it is: *no document-criteria failures; code-review coverage not
+  assessed*. Same weaker-and-honest posture as `DIFF-CLEAN` below.
 - **Review mode:** any *attributable* FAIL -> `NON-COMPLIANT`; otherwise
   `DIFF-CLEAN`. Non-attributable FAILs do not gate -- they predate the change --
   but a non-attributable SERIOUS is still reported above the verdict.
