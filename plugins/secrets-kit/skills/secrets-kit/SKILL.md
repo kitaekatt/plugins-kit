@@ -208,13 +208,73 @@ technique_skill:
       operation: >-
         secrets-kit add <name> --file <path> --dest '${VAR}/rel/path'
         [--mode 0600] [--newline lf] [--profile <p>] [--doc <pointer>]
-        [--update]
+        [--update] [--allow-tracked-dest]
       gotchas:
         - "AGENT-RUNNABLE: public-key encryption, no passphrase, no terminal. This is the routine path."
         - "`--update` is the rotation path (keeps the blob filename and dest). Adding a name that exists without --update refuses, so a typo cannot silently clobber a different secret."
         - "`--newline lf` ASSERTS the plaintext has no CRLF and fails if it does. Use it for ssh keys and tokens: a CRLF-seeded key breaks the consumer in ways that are miserable to diagnose later."
         - "`--dest` supports ${VAR} and ~. Variables resolve from secrets.json (machine block first, then global, then the environment). An unresolvable variable is a hard failure, never a literal path."
+        - "A non-secret file a consumer still requires (e.g. an ssh known_hosts pin every consuming script passes to ssh) is a fleet entry like any other -- do not treat 'not a credential' as out of scope. Omitting it leaves a freshly-unlocked machine holding every credential and still unable to connect."
         - "Every other machine converges on its next session. There is nothing to run there."
+
+    - id: choosing_a_dest
+      keywords: [dest, destination, where does this go, collection directory, --allow-tracked-dest, tracked working tree, gitignore, materialize path]
+      user_objective: "Decide where a new entry's dest should point, and understand the tracked-tree guard."
+      operation: "n/a -- policy, applied when choosing --dest for add_rotate"
+      steps:
+        - n: 1
+          action: >-
+            Default: materialize at the path the consumer already reads. It
+            removes a copy step and a second working copy that can drift from
+            the fleet-managed one. Only fall back to a per-repo collection
+            directory (then teach the consumer that path, via a copy step,
+            symlink, or config option) when the consumer cannot accept an
+            arbitrary path -- e.g. a build tool reading a fixed filename
+            adjacent to its input.
+        - n: 2
+          action: >-
+            If the resolved dest falls inside a git working tree, `add`
+            refuses unless the path is gitignored, and prints the exact
+            `.gitignore` line that would fix it. This is a hard failure, not
+            a warning. Where the check cannot be run -- git unavailable, or
+            a dest naming a variable this machine does not resolve (a
+            legitimate cross-machine or per-OS entry) -- `add` notes the
+            skip and proceeds; convergence checks it on each machine.
+            Convergence separates the two causes: git being unavailable is
+            systemic and reported plainly, while git being present and
+            answering unreadably is reported as an ANOMALY naming the
+            secret, the dest, and git's raw output -- the guard did not run
+            and the destination needs checking by hand.
+        - n: 3
+          action: >-
+            For the intentional case (the dest belongs inside a tracked
+            repo and will stay ignored there, e.g. a per-repo secrets
+            directory covered by a pattern), pass `--allow-tracked-dest`.
+            The override is persisted, so it is not re-typed on every
+            `--update`. It is scoped to the entry AND the destination it
+            was granted for, not to the entry alone: an `--update` that
+            moves the entry to a different `--dest` does NOT inherit it,
+            the check runs against the new path, and granting consent
+            there means passing `--allow-tracked-dest` again.
+        - n: 4
+          action: >-
+            Convergence re-runs the same check on every session, honouring
+            a persisted `--allow-tracked-dest`, and runs it BEFORE the
+            unchanged-content fast path so an exposed entry is reported
+            every pass rather than going quiet once it has settled. If the
+            dest is inside a work tree and unignored it is recorded as a
+            failure and surfaced; other entries still converge normally.
+            Two cases, with different remediation: a pending write is
+            WITHHELD, while a dest already materialized is reported and
+            left alone -- nothing is rewritten or deleted, because the
+            plaintext is already on disk and removing a file the user may
+            depend on is not secrets-kit's call. The already-materialized
+            message also names the `git rm --cached` to untrack it, and
+            says that a value ever committed must be rotated: deleting it
+            from the tree is not revocation.
+      gotchas:
+        - "The convergence re-check is not redundant with the add-time check: add-time can only validate the authoring machine's variable resolution, and a dest can be per-OS or per-machine, so it may be ignored where it was added and land tracked on a machine that resolves the variable differently. It also catches a .gitignore that changes after the entry was created."
+        - "This mirrors the secrets repo's own posture: an allowlist pre-commit hook plus a deny-by-default .gitignore, because a plaintext credential pushed once survives in the object store, in every clone, and in any fork or backup taken meanwhile -- rewriting history does not fix it. A consumer repo has the same irreversible outcome; this guard is its first net."
     - id: remove
       keywords: [remove secret, delete credential, stop distributing]
       user_objective: "Stop distributing a credential; delete it everywhere."

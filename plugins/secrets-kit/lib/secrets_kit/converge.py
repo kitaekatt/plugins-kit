@@ -27,6 +27,7 @@ from .state import State, sha256_bytes, sha256_file
 FAILURE_LOCKED = "secrets_locked"
 FAILURE_CONFIG = "secrets_config"
 FAILURE_ENTRY = "secrets_entry"
+FAILURE_DEST = "secrets_dest"
 
 
 class Failure:
@@ -315,6 +316,19 @@ def _converge_entry(
         and dest_sha is not None
         and dest_sha == row.get("dest_sha256")
     )
+    # Deliberately ABOVE the `unchanged` fast path, and therefore paying a git
+    # query on every pass for every entry that lives inside a repo at all. The
+    # steady state is otherwise free, and that was the argument for checking
+    # only when about to write -- but it made the guard go silent in exactly
+    # the scenario it exists for: a .gitignore edited AFTER the entry
+    # converged. An exposed credential is on disk being staged by every
+    # `git add -A`, and withholding some future write does nothing about it.
+    # Visibility beats a zero-cost steady state when what is being made
+    # visible cannot be undone. (Cost is bounded: the override skips the check
+    # outright, and a dest in no repo costs one `rev-parse`.)
+    if not _dest_is_writable_here(entry, dest, result, already_present=dest_sha is not None):
+        return
+
     if unchanged:
         # Cheap repair path: content is right, only the mode drifted.
         if recorded_mode != format(entry.mode, "04o"):
@@ -361,6 +375,169 @@ def _converge_entry(
         dest=str(dest),
     )
     result.written += 1
+
+
+def _dest_is_writable_here(
+    entry: Entry, dest: Path, result: Result, *, already_present: bool
+) -> bool:
+    """False when ``dest`` sits unignored inside someone's git working tree.
+
+    This re-check is not redundant with the one `add` performs. `add` can only
+    validate the AUTHORING machine's answer, and the answer is per-machine in
+    two ways: the variables in a dest resolve differently on every box, and
+    ``dest_spec`` may be a per-OS object, so a destination that is gitignored
+    where it was added can be tracked where it lands. It also covers the case
+    no add-time check can: a ``.gitignore`` that changes after the entry was
+    created.
+
+    There is no warning tier here by design (see the module docstring), and
+    "warn but write it anyway" would leave the credential in the tracked tree
+    exactly as if nothing had checked. The other entries still converge; only
+    this one is skipped.
+
+    ``already_present`` selects the message, and getting it right matters: when
+    the plaintext is ALREADY at the exposed path, "the write was withheld" is
+    false and the remedy is different -- the file has to come out of the index,
+    not merely stay out of it. Either way nothing here writes, tightens, or
+    deletes: removing a file the user may be relying on, over a policy
+    violation, would be a second unasked-for act on top of the first.
+    """
+    if entry.allow_tracked_dest:
+        return True
+
+    exposure = repo_mod.dest_exposure(dest)
+    if exposure.undetermined:
+        # Fail OPEN, deliberately: a machine that only CONSUMES secrets may
+        # have no git at all, and failing closed would make the guard a new way
+        # for a working machine to stop working.
+        #
+        # But the two causes are not the same event, so they must not read the
+        # same. git being absent is systemic and expected; git being present
+        # and answering something we cannot parse means the guard is silently
+        # not guarding, and the raw output is the only diagnostic anyone gets.
+        # Both go to result.notes, which custom_bootstrap.py forwards through
+        # ctx.log -- the ALWAYS-shown channel (ctx.log_ok is the verbose-only
+        # one), so no new tier is needed to make the anomaly visible.
+        result.notes.append(_undetermined_note(entry, dest, exposure))
+        return True
+    if not exposure.exposed:
+        return True
+
+    # Rendered posix, like every other command this package prints: these
+    # strings get pasted into a shell, and a mixed "C:\dev\repo/.gitignore" is
+    # both ugly and, in the `git -C` line, needlessly fragile.
+    shown = dest.as_posix()
+    consent = (
+        f"If the destination is deliberate, re-add the entry with "
+        f"`{cli_command('add')} {entry.name} ... --allow-tracked-dest`, which "
+        f"records the consent in the manifest for every machine. Do NOT work "
+        f"around this by moving or deleting the file by hand -- the next pass "
+        f"would put it back."
+    )
+
+    # Without a verified repo root there is no correct `git -C <root>` to
+    # print. Say so in prose instead of interpolating a placeholder into a
+    # command: bad remediation in a security tool is worse than none, because
+    # the user pastes it, watches it fail, and learns to distrust the whole
+    # message. (Reachable whenever _toplevel refuses to trust git's answer.)
+    if exposure.toplevel:
+        where = exposure.toplevel.as_posix()
+        fix = exposure.gitignore_line or "(the dest path, repo-root-relative)"
+        rel = exposure.repo_relative or dest.name
+        located = f"inside the git repository at {where}"
+        located_agent = f"inside the git working tree at {where}"
+        ignore_step = f"Add this line to {where}/.gitignore and commit it:\n    {fix}"
+        ignore_step_agent = f"Add this line to {where}/.gitignore and commit it --\n        {fix}"
+        untrack_step = (
+            f"If the file is already tracked, also take it out of the index:\n"
+            f"    git -C {where} rm --cached -- {rel}"
+        )
+        untrack_step_agent = (
+            f"If the path is already tracked, remove it from the index "
+            f"(this keeps the file on disk) --\n"
+            f"        git -C {where} rm --cached -- {rel}"
+        )
+    else:
+        located = "inside a git repository whose root could not be determined"
+        located_agent = "inside a git working tree whose root could not be determined"
+        ignore_step = (
+            "Find the repository that contains that path, add an ignore rule "
+            "covering it to that repository's .gitignore, and commit the change."
+        )
+        ignore_step_agent = ignore_step
+        untrack_step = (
+            "If the file is already tracked there, untrack it as well "
+            "(`git rm --cached`), which leaves it on disk."
+        )
+        untrack_step_agent = untrack_step
+
+    if already_present:
+        user_msg = (
+            f"secrets-kit: '{entry.name}' is already materialized at {shown}, "
+            f"which is {located} and is NOT gitignored. Nothing further was "
+            f"written. {ignore_step}\n{untrack_step}"
+        )
+        agent_msg = (
+            f"Entry '{entry.name}' resolves to {shown}, which is {located_agent} "
+            f"and is NOT ignored -- and the plaintext is ALREADY on disk there. "
+            f"This is not a withheld write; the credential is exposed right "
+            f"now, and every `git add -A` in that repo stages it. A credential "
+            f"pushed once survives in the object store, in every clone, and in "
+            f"any fork taken meanwhile; rewriting history does not undo it.\n\n"
+            f"Fix, in order:\n"
+            f"  1. {ignore_step_agent}\n"
+            f"  2. {untrack_step_agent}\n"
+            f"  3. If it was ever COMMITTED, the value is compromised: rotate "
+            f"the underlying credential. Deleting it from the tree is not "
+            f"revocation.\n\n"
+            f"Confirm with the user before editing another repository's "
+            f".gitignore or index. This pass wrote nothing and removed "
+            f"nothing.\n\n{consent}"
+        )
+    else:
+        user_msg = (
+            f"secrets-kit did NOT write '{entry.name}': its destination {shown} "
+            f"is {located} and is NOT gitignored. {ignore_step}"
+        )
+        agent_msg = (
+            f"Entry '{entry.name}' resolves to {shown}, which is {located_agent} "
+            f"and is NOT ignored. The write was WITHHELD: a convergence pass "
+            f"rewrites that file every session, so a routine `git add -A` would "
+            f"stage a plaintext credential, and a credential pushed once "
+            f"survives in the object store, in every clone, and in any fork "
+            f"taken meanwhile.\n\n"
+            f"Fix: {ignore_step_agent}\n"
+            f"-- then the next pass materializes the secret. Confirm with the "
+            f"user before editing another repository's .gitignore.\n\n{consent}"
+        )
+
+    result.failures.append(
+        Failure(FAILURE_DEST, user_msg=user_msg, agent_msg=agent_msg, ask_reason="info")
+    )
+    return False
+
+
+def _undetermined_note(entry: Entry, dest: Path, exposure) -> str:
+    """One line for the always-shown log, worded by how alarming the cause is.
+
+    The systemic case (no git) is a standing fact about the machine and reads
+    as one. The anomaly gets named as an anomaly and carries git's raw output,
+    which is the only diagnostic that will ever exist for it -- the state is
+    not reproducible after the fact.
+    """
+    detail = exposure.detail or "no output"
+    if exposure.anomalous:
+        return (
+            f"ANOMALY: git could not answer whether {dest.as_posix()} is inside "
+            f"a working tree, so the tracked-tree guard did NOT run for "
+            f"'{entry.name}' and the secret was materialized anyway. Check by "
+            f"hand that the destination is not inside an unignored git "
+            f"repository. git said: {detail}"
+        )
+    return (
+        f"git is unavailable, so the tracked-tree check was skipped for "
+        f"'{entry.name}' ({detail})"
+    )
 
 
 def _atomic_write(dest: Path, data: bytes, mode: int) -> None:

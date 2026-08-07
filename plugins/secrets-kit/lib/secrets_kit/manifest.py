@@ -134,6 +134,27 @@ class Entry:
         self.mode: int = _parse_mode(name, data.get("mode", "0600"))
         self.newline: Optional[str] = data.get("newline")
         self.doc: str = data.get("doc", "")
+        # Recorded consent to materialize into a non-ignored git working tree.
+        # It has to PERSIST rather than be an add-time flag: the convergence
+        # pass re-checks the destination on every machine, and an override that
+        # existed only at authoring time would leave that re-check refusing a
+        # deliberate choice forever. Absent (every manifest written before this
+        # field existed) means False, which is the safe direction.
+        #
+        # KNOWN LIMITATION, and the reason it is worth stating rather than
+        # rediscovering: consent is FLEET-WIDE. It lives beside the blobs, so
+        # granting it on the one machine where an in-tree dest is genuinely
+        # intended silences the check on EVERY machine -- including machines
+        # where the same dest resolves somewhere else entirely (different vars,
+        # or the other branch of a per-OS dest object). There is no per-machine
+        # scoping, and adding one would mean a second machine vocabulary in the
+        # manifest, which this design refuses elsewhere for good reasons. Grant
+        # it knowing it is a fleet-wide waiver, not a local one.
+        #
+        # The other inherent gap: the predicate answers about the INNERMOST
+        # working tree, so a dest inside a submodule is judged against the
+        # submodule's ignore rules, not the superproject's.
+        self.allow_tracked_dest: bool = bool(data.get("allow_tracked_dest", False))
         if not self.blob:
             raise SecretsError(f"manifest entry '{name}' declares no 'blob'")
         if not self.dest_spec:
@@ -144,23 +165,33 @@ class Entry:
             )
 
     def dest(self, variables: Dict[str, str]) -> Path:
-        """Resolve the destination path for this machine.
+        """Resolve the destination path for this machine."""
+        return resolve_dest(self.name, self.dest_spec, variables)
 
-        ``dest`` may be a plain string or a per-OS object; the object form
-        exists only for the rare path no single variable can express.
-        """
-        spec = self.dest_spec
-        if isinstance(spec, dict):
-            key = "windows" if os.name == "nt" else "default"
-            raw = spec.get(key) or spec.get("default")
-            if not raw:
-                raise SecretsError(
-                    f"manifest entry '{self.name}': dest object has no "
-                    f"'{key}' or 'default' key"
-                )
-        else:
-            raw = spec
-        return Path(expand(str(raw), variables, where=f"entry '{self.name}'"))
+
+def resolve_dest(name: str, dest_spec: Any, variables: Dict[str, str]) -> Path:
+    """Resolve a raw ``dest`` declaration to a path on THIS machine.
+
+    The single dest-resolution choke point. It takes a raw spec rather than an
+    :class:`Entry` so the CLI can resolve a ``--dest`` it has not yet recorded
+    -- checking a destination before writing it needs the same answer the
+    convergence pass will get, and a second resolver would be a second set of
+    rules to drift.
+
+    ``dest_spec`` may be a plain string or a per-OS object; the object form
+    exists only for the rare path no single variable can express.
+    """
+    if isinstance(dest_spec, dict):
+        key = "windows" if os.name == "nt" else "default"
+        raw = dest_spec.get(key) or dest_spec.get("default")
+        if not raw:
+            raise SecretsError(
+                f"manifest entry '{name}': dest object has no "
+                f"'{key}' or 'default' key"
+            )
+    else:
+        raw = dest_spec
+    return Path(expand(str(raw), variables, where=f"entry '{name}'"))
 
 
 def _parse_mode(name: str, raw: Any) -> int:
@@ -305,4 +336,8 @@ def _entry_dict(entry: Entry) -> Dict[str, Any]:
         out["newline"] = entry.newline
     if entry.doc:
         out["doc"] = entry.doc
+    # Written only when true, so a manifest that predates the field round-trips
+    # byte-for-byte instead of gaining a line of "no, nothing special here".
+    if entry.allow_tracked_dest:
+        out["allow_tracked_dest"] = True
     return out

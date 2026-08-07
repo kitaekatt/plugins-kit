@@ -53,6 +53,35 @@ secrets-kit add ha-token --file secrets/ha-token.txt \
 secrets-kit remove ha-token         # every machine deletes its copy next pass
 ```
 
+### Choosing a destination
+
+Default: materialize at the path the consumer already reads. It removes the
+copy step and the second working copy that drifts from source. Fall back to
+a per-repo collection directory, with the consumer taught that path (a copy
+step, a symlink, or a config option), only when the consumer cannot accept
+an arbitrary path -- e.g. a build tool reading a fixed filename adjacent to
+its input.
+
+If the resolved dest falls inside a git working tree, `add` refuses unless
+the path is gitignored, printing the exact `.gitignore` line that would fix
+it; `--allow-tracked-dest` overrides this for the intentional case and the
+override is persisted -- scoped to the entry and the destination it was
+granted for, so moving the entry to a different `--dest` does not inherit it.
+Convergence re-checks the same condition
+every session (add-time can only validate the authoring machine's variable
+resolution, and a dest can be per-OS or per-machine, so it may be ignored
+where it was added and tracked where it lands), ahead of its unchanged-content
+fast path so an exposed entry is reported every pass instead of going quiet
+once it has settled. A pending write is withheld rather than writing plaintext
+into tracked history; a dest already materialized is reported and left alone,
+with the `git rm --cached` to untrack it and a reminder that a value ever
+committed must be rotated, since deleting it from the tree is not revocation.
+This mirrors the secrets repo's own two-net posture (an allowlist pre-commit
+hook plus a deny-by-default `.gitignore`): a plaintext credential pushed
+once survives in the object store, in every clone, and in any fork or
+backup taken meanwhile, and a consumer repo has the same irreversible
+outcome.
+
 Interactive -- `age` prompts on the terminal itself, so these need a tty. Pass
 `--new-terminal` and the CLI spawns a window for the prompt and returns
 immediately; the passphrase is typed there and never reaches a transcript,

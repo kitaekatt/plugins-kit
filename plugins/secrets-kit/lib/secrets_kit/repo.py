@@ -11,12 +11,16 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from . import SecretsError
 
 CLONE_TIMEOUT = 60
 FETCH_TIMEOUT = 15
+
+# Local-only queries (rev-parse / check-ignore). No network, so a value this
+# small only ever trips on a wedged filesystem.
+QUERY_TIMEOUT = 10
 
 # How often to talk to the remote at all. A rotated secret converges on the
 # next pass after this window -- fine, because rotation is rare and the local
@@ -25,12 +29,20 @@ FETCH_TIMEOUT = 15
 REFRESH_COOLDOWN_SECONDS = 6 * 60 * 60
 
 
-def _git(args: List[str], *, cwd: Optional[Path], timeout: int) -> Tuple[int, str]:
+def _git(
+    args: List[str],
+    *,
+    cwd: Optional[Path],
+    timeout: int,
+    scrub_env: Sequence[str] = (),
+) -> Tuple[int, str]:
     env = dict(os.environ)
     # Never let git stop to ask for credentials inside a session-start pass:
     # it would hang the hook rather than fail it.
     env["GIT_TERMINAL_PROMPT"] = "0"
     env.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
+    for name in scrub_env:
+        env.pop(name, None)
     try:
         proc = subprocess.run(
             ["git"] + args,
@@ -49,6 +61,304 @@ def _git(args: List[str], *, cwd: Optional[Path], timeout: int) -> Tuple[int, st
 
 def is_clone(path: Path) -> bool:
     return (path / ".git").is_dir()
+
+
+# --------------------------------------------------------------------------
+# Is a materialization destination exposed to someone else's git repo?
+# --------------------------------------------------------------------------
+#
+# The pre-commit guard in this module's sibling ``guard`` protects the SECRETS
+# repo. It cannot protect a CONSUMER repo that a `--dest` happens to point
+# into: nothing there knows a credential is being written every session, and a
+# routine `git add -A` stages it. A credential pushed once survives in the
+# object store, in every clone, and in any fork or backup taken meanwhile --
+# rewriting history does not fix it. So the destination itself has to be
+# classified before anything writes to it.
+#
+# This lives here rather than in a new module because it is, entirely, a pair
+# of git queries -- and this is the one place the plugin shells out to git.
+
+#: The dest is not inside any git working tree (or git cannot see one). Safe.
+DEST_NOT_IN_REPO = "not-in-repo"
+#: The dest is inside a working tree but gitignored. Safe.
+DEST_IGNORED = "ignored"
+#: The dest is inside a working tree and NOT ignored. The dangerous case.
+DEST_EXPOSED = "exposed"
+#: git could not be asked (absent, timed out, refused). Not an answer.
+DEST_UNDETERMINED = "undetermined"
+
+#: Why a verdict is undetermined. git being missing is SYSTEMIC and expected --
+#: a machine that only consumes secrets need never have installed it, and it
+#: will be true of every entry on every pass. git being present and answering
+#: something we cannot read is an ANOMALY: it should read as one, because it is
+#: the case where the guard is silently not guarding.
+DEST_UNDETERMINED_UNAVAILABLE = "git-unavailable"
+DEST_UNDETERMINED_ANOMALY = "git-anomaly"
+
+# git resolves a repository from the environment before it looks at the cwd, so
+# a stale GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE inherited from an outer
+# process makes these queries answer about a DIFFERENT repository -- or fail
+# with "fatal: not a git repository", which classifies the dest as safe. That
+# is the same fail-open shape as an unparseable answer, arriving by a different
+# route, so the queries run with those three removed and ask strictly about the
+# directory we hand them.
+_QUERY_ENV_SCRUB = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+
+
+class DestExposure:
+    """What git says about one materialization destination.
+
+    Four states, and conflating any two of them is a bug. In particular
+    ``DEST_UNDETERMINED`` is NOT ``DEST_NOT_IN_REPO``: "there is no repo here"
+    and "we could not find out" have opposite risk profiles, and collapsing
+    them into a boolean that reads as *safe* is precisely how a guard fails
+    open. Callers decide what an undetermined answer means for them.
+    """
+
+    def __init__(
+        self,
+        status: str,
+        *,
+        dest: Path,
+        toplevel: Optional[Path] = None,
+        gitignore_line: Optional[str] = None,
+        detail: str = "",
+        cause: Optional[str] = None,
+    ) -> None:
+        self.status = status
+        self.dest = dest
+        self.toplevel = toplevel
+        self.gitignore_line = gitignore_line
+        self.detail = detail
+        #: Only set when undetermined: DEST_UNDETERMINED_UNAVAILABLE (systemic,
+        #: expected) or DEST_UNDETERMINED_ANOMALY (git answered, unreadably).
+        self.cause = cause
+
+    @property
+    def anomalous(self) -> bool:
+        """Undetermined for a reason that should not happen."""
+        return self.cause == DEST_UNDETERMINED_ANOMALY
+
+    @property
+    def repo_relative(self) -> Optional[str]:
+        """The dest as git names it: root-relative, no anchor (``config/x.txt``).
+
+        The spelling `git rm --cached` and friends want, as opposed to the
+        anchored form `.gitignore` wants. Derived from the one computation so
+        the two can never disagree about which file they mean.
+        """
+        if not self.gitignore_line:
+            return None
+        return self.gitignore_line.lstrip("/")
+
+    @property
+    def exposed(self) -> bool:
+        return self.status == DEST_EXPOSED
+
+    @property
+    def undetermined(self) -> bool:
+        return self.status == DEST_UNDETERMINED
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostics only
+        return f"<DestExposure {self.status} {self.dest}>"
+
+
+def dest_exposure(dest: Path) -> DestExposure:
+    """Classify ``dest`` against the git working tree it may sit inside.
+
+    Never raises, matching :func:`refresh`: a machine without git is a normal
+    machine, not a fault. It reports ``DEST_UNDETERMINED`` and lets the caller
+    choose.
+    """
+    dest = _normalize(dest)
+
+    # git has to run somewhere that exists, and the dest file itself normally
+    # does not yet. Walk up to the nearest existing ancestor DIRECTORY rather
+    # than giving up: `dest.parent` is routinely a directory the consuming repo
+    # has not been cloned into yet, and the repo root -- if there is one -- is
+    # always an existing ancestor of anything inside it, so walking up can
+    # never escape the tree we are asking about.
+    base = _nearest_existing_dir(dest.parent)
+    if base is None:
+        # No ancestor exists at all (a bad drive letter, a vanished mount).
+        # Nothing can be inside a working tree we cannot even stat, and there
+        # is nothing for git to answer about.
+        return DestExposure(DEST_NOT_IN_REPO, dest=dest, detail="no existing ancestor")
+
+    code, output = _query(["rev-parse", "--is-inside-work-tree"], base)
+    if code != 0:
+        if _is_not_a_repo(code, output):
+            return DestExposure(DEST_NOT_IN_REPO, dest=dest)
+        return _undetermined(dest, code, output)
+
+    inside = _boolean_answer(output)
+    if inside is None:
+        # Exit 0 but no answer we recognize. This MUST NOT fall through to
+        # "not in a repo": that is the permissive state, and reaching it on
+        # output we failed to parse is the guard failing open.
+        return DestExposure(
+            DEST_UNDETERMINED,
+            dest=dest,
+            detail=f"`rev-parse --is-inside-work-tree` returned 0 with unreadable output: {output!r}",
+            cause=DEST_UNDETERMINED_ANOMALY,
+        )
+    if not inside:
+        # "false" from inside a bare repo's GIT_DIR: no working tree, nothing
+        # anyone can accidentally `git add`.
+        return DestExposure(DEST_NOT_IN_REPO, dest=dest)
+
+    # Exit code only -- `-q` prints nothing, so there is no output to misread.
+    # 0 = ignored, 1 = not ignored, anything else is a fault, not an answer.
+    code, output = _query(["check-ignore", "-q", "--", _git_path(dest)], base)
+    if code == 0:
+        return DestExposure(DEST_IGNORED, dest=dest, toplevel=_toplevel(base, dest))
+    if code != 1:
+        return _undetermined(dest, code, output)
+
+    toplevel = _toplevel(base, dest)
+    return DestExposure(
+        DEST_EXPOSED,
+        dest=dest,
+        toplevel=toplevel,
+        gitignore_line=gitignore_line_for(dest, toplevel) if toplevel else None,
+    )
+
+
+def gitignore_line_for(dest: Path, toplevel: Path) -> Optional[str]:
+    """The exact ``.gitignore`` line that would ignore ``dest``, or None.
+
+    Repo-root-relative and leading-slash-anchored (``/config/ha-token.txt``),
+    because that is the only form that means "this one file" rather than "any
+    path component with this name anywhere in the tree". This is user-facing
+    remediation text, so it is written with forward slashes on every platform
+    -- git's ignore syntax has no other separator.
+    """
+    dest = _normalize(dest)
+    toplevel = _normalize(toplevel)
+    try:
+        rel = os.path.relpath(str(dest), str(toplevel))
+    except ValueError:
+        # Different drives on Windows: not a relative path at all.
+        return None
+    rel = rel.replace(os.sep, "/")
+    if rel.startswith("../"):
+        return None
+    return "/" + rel
+
+
+def _normalize(path: Path) -> Path:
+    """Absolute, ``~``-expanded, and symlink-resolved.
+
+    Resolution matters on macOS, where ``/tmp`` is a symlink to ``/private/tmp``
+    and an unresolved dest would refuse to sit under the resolved toplevel git
+    reports.
+    """
+    expanded = Path(os.path.expanduser(str(path)))
+    try:
+        return expanded.resolve()
+    except OSError:  # pragma: no cover - resolve is non-strict on 3.6+
+        return Path(os.path.abspath(str(expanded)))
+
+
+def _nearest_existing_dir(start: Path) -> Optional[Path]:
+    for candidate in [start] + list(start.parents):
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _git_path(path: Path) -> str:
+    """Hand git a path spelled the way this platform spells one.
+
+    git on Windows accepts both separators here; ``os.path.normpath`` keeps the
+    native form so nothing downstream has to guess which one it got.
+    """
+    return os.path.normpath(str(path))
+
+
+def _query(args: List[str], cwd: Path) -> Tuple[int, str]:
+    """Run one exposure query, insulated from an inherited git environment."""
+    return _git(args, cwd=cwd, timeout=QUERY_TIMEOUT, scrub_env=_QUERY_ENV_SCRUB)
+
+
+def _undetermined(dest: Path, code: int, output: str) -> DestExposure:
+    """Classify a failed query by whether it is expected or alarming."""
+    unavailable = code in (124, 127)
+    return DestExposure(
+        DEST_UNDETERMINED,
+        dest=dest,
+        detail=output,
+        cause=(
+            DEST_UNDETERMINED_UNAVAILABLE if unavailable else DEST_UNDETERMINED_ANOMALY
+        ),
+    )
+
+
+def _boolean_answer(output: str) -> Optional[bool]:
+    """git's own true/false, isolated from anything else on the stream.
+
+    ``_git`` folds stderr into stdout so a failing caller can report the whole
+    story in one string. That is right for the network verbs and hostile here:
+    a config warning, a ``safe.directory`` notice, a broken-ref advisory or an
+    autocrlf grumble arrives CONCATENATED with the answer, and comparing the
+    whole blob to ``"true"`` then reads a real repository as no repository at
+    all -- the permissive state.
+
+    So compare per LINE and return None when neither token appears, leaving the
+    caller to classify that as undetermined. Parsing here rather than dropping
+    ``stderr=STDOUT`` in :func:`_git`: that wrapper is shared with clone,
+    fetch, merge, push and commit, several of which put ``output`` straight
+    into a user-facing :class:`SecretsError`, and quietly draining their stderr
+    would degrade every one of those diagnostics to fix a bug in this one
+    caller.
+    """
+    for line in output.splitlines():
+        token = line.strip()
+        if token == "true":
+            return True
+        if token == "false":
+            return False
+    return None
+
+
+def _is_not_a_repo(code: int, output: str) -> bool:
+    """A clean "there is no repo here", as opposed to git failing to run.
+
+    ``_git`` reserves 127 for "could not run git" and 124 for a timeout, so
+    those are never this. Everything else is judged on git's own words: it
+    exits 128 both for "not a git repository" and for genuine faults, and only
+    the first is an answer.
+    """
+    if code in (124, 127):
+        return False
+    return "not a git repository" in output.lower()
+
+
+def _toplevel(cwd: Path, dest: Path) -> Optional[Path]:
+    """The repo root, or None when we cannot be sure which directory it is.
+
+    Same merged-stderr hazard as :func:`_boolean_answer`, with a different
+    consequence: a warning line glued to the path would not change the
+    exposed/ignored VERDICT, but it would produce a bogus toplevel and hence a
+    bogus ``.gitignore`` line -- remediation text that looks authoritative and
+    silently names the wrong file. `--show-toplevel` prints exactly one line on
+    stdout, so take the last non-empty line and then VERIFY it: a real repo
+    root is always an ancestor of a dest inside it. Anything else yields None,
+    and the caller degrades to a message with no fix line rather than a wrong
+    one.
+    """
+    code, output = _query(["rev-parse", "--show-toplevel"], cwd)
+    if code != 0 or not output:
+        return None
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if not lines:
+        return None
+    # git answers with forward slashes even on Windows ("C:/dev/repo"); Path
+    # normalizes that to the native form.
+    candidate = _normalize(Path(lines[-1]))
+    if candidate == dest or candidate not in dest.parents:
+        return None
+    return candidate
 
 
 def clone(repo_url: str, dest: Path) -> None:

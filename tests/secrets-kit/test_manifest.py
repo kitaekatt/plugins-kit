@@ -158,6 +158,31 @@ def test_dump_round_trips(tmp_path):
     assert again.entries["one"].mode == m.entries["one"].mode
 
 
+def test_an_entry_without_allow_tracked_dest_defaults_to_refusing(tmp_path):
+    """Every manifest written before the field existed must stay safe-by-default."""
+    assert _manifest(tmp_path).entries["one"].allow_tracked_dest is False
+
+
+def test_dump_does_not_add_allow_tracked_dest_to_an_entry_that_lacks_it(tmp_path):
+    """A read-modify-write of an old manifest must not gain a noise field."""
+    m = _manifest(tmp_path)
+    assert "allow_tracked_dest" not in json.loads(m.dump())["entries"]["one"]
+
+
+def test_allow_tracked_dest_survives_a_round_trip(tmp_path):
+    """The override is per-entry state the convergence pass reads on every machine."""
+    m = _manifest(
+        tmp_path,
+        profiles={},
+        entries={
+            "one": {"blob": "b.age", "dest": "~/x", "allow_tracked_dest": True}
+        },
+    )
+    again = Manifest(tmp_path / "manifest.json", json.loads(m.dump()))
+    assert again.entries["one"].allow_tracked_dest is True
+    assert json.loads(m.dump())["entries"]["one"]["allow_tracked_dest"] is True
+
+
 # --- expansion ------------------------------------------------------------
 
 def test_expand_uses_declared_vars_first(monkeypatch):

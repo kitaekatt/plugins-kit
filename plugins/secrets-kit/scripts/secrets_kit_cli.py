@@ -26,7 +26,7 @@ from secrets_kit import agefile  # noqa: E402
 from secrets_kit import guard  # noqa: E402
 from secrets_kit import repo as repo_mod  # noqa: E402
 from secrets_kit.converge import converge, paths_for  # noqa: E402
-from secrets_kit.manifest import Config, Manifest  # noqa: E402
+from secrets_kit.manifest import Config, Manifest, resolve_dest  # noqa: E402
 from secrets_kit.perms import tighten, tighten_dir  # noqa: E402
 from secrets_kit.terminal import relaunch_self  # noqa: E402
 
@@ -319,6 +319,120 @@ def cmd_init(args: argparse.Namespace) -> int:
 # add / remove
 # --------------------------------------------------------------------------
 
+def _refuse_exposed_dest(
+    config: Config,
+    name: str,
+    dest_spec,
+    allowed: bool,
+    *,
+    consent_dropped: bool = False,
+) -> Optional[int]:
+    """Refuse a destination that would drop plaintext into a tracked repo.
+
+    Returns an exit code to stop on, or None to proceed. The secrets repo's own
+    pre-commit guard protects the blobs; it cannot protect a CONSUMER repo the
+    destination points into, and that is the one path here that can push a
+    credential into public history.
+
+    Resolution reuses the manifest's own resolver, so what gets checked is
+    exactly what the convergence pass will later write to.
+
+    A dest that does not resolve HERE is not an error. This is a multi-machine
+    fleet: a dest may deliberately name a variable only the target machine
+    declares, or be a per-OS object whose windows branch is unresolvable on a
+    Mac. Authoring such an entry must not be blocked by whichever machine the
+    author happens to be sitting at -- ``Entry.dest()`` still raises at
+    convergence, on the machine where the path actually matters. Same posture
+    as git being unavailable: cannot determine is not the same as unsafe.
+    """
+    if allowed:
+        return None
+
+    machine_key = config.machine_key()
+    variables = config.vars_for(machine_key) if machine_key else dict(config.vars)
+    try:
+        resolved = resolve_dest(name, dest_spec, variables)
+    except SecretsError as e:
+        print(
+            f"secrets-kit: note: this dest does not resolve on this machine "
+            f"({e.message}), so the tracked-tree check was skipped. It is "
+            f"re-checked at convergence on every machine that holds the entry.",
+            file=sys.stderr,
+        )
+        return None
+
+    exposure = repo_mod.dest_exposure(resolved)
+    if exposure.undetermined:
+        # A machine without git can still author secrets. Say what could not be
+        # established and continue -- refusing here would be a guard breaking
+        # the thing it guards. git ANSWERING unreadably is a different event
+        # from git being absent, and is named as the anomaly it is.
+        if exposure.anomalous:
+            print(
+                f"secrets-kit: ANOMALY: git could not answer whether "
+                f"{resolved.as_posix()} is inside a working tree, so the "
+                f"tracked-tree check did NOT run. Verify by hand that this "
+                f"destination is not inside an unignored git repository. "
+                f"git said: {exposure.detail or 'no output'}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"secrets-kit: note: git is unavailable "
+                f"({exposure.detail or 'git query failed'}), so the "
+                f"tracked-tree check was skipped. It is re-checked at "
+                f"convergence on every machine that holds the entry.",
+                file=sys.stderr,
+            )
+        return None
+    if not exposure.exposed:
+        return None
+
+    # This entry HAS the override, granted for the destination it used to have.
+    # Being refused anyway is surprising, so say why rather than letting it
+    # read as the flag having stopped working.
+    changed = (
+        "This entry already carries --allow-tracked-dest, but that consent was "
+        "granted for its previous destination and does not transfer to a new "
+        "one -- consent is per-destination. Re-run with --allow-tracked-dest "
+        "to grant it for this path as well.\n\n"
+        if consent_dropped
+        else ""
+    )
+    # Without a verified repo root there is no correct path to print, so this
+    # says what to do in prose rather than interpolating a placeholder into
+    # something that looks like a real .gitignore location. Paths are posix,
+    # like every other path this package prints for a human to act on.
+    if exposure.toplevel:
+        where = exposure.toplevel.as_posix()
+        located = f"inside the git working tree at {where}"
+        fix = (
+            f"Add this line to {where}/.gitignore, commit it, and re-run:\n\n"
+            f"    {exposure.gitignore_line}\n"
+        )
+    else:
+        located = "inside a git working tree whose root could not be determined"
+        fix = (
+            "Find the repository that contains that path, add an ignore rule "
+            "covering it to that repository's .gitignore, commit the change, "
+            "and re-run.\n"
+        )
+    return _fail(
+        f"'{name}' would materialize plaintext at {resolved.as_posix()}, which "
+        f"is {located} and is NOT gitignored.\n"
+        "Every convergence pass rewrites that file, so a routine `git add -A` "
+        "stages the credential. A credential pushed once lives in the object "
+        "store, in every clone, and in any fork or backup taken meanwhile -- "
+        "rewriting history does not undo it.\n\n"
+        f"{fix}\n"
+        f"{changed}"
+        "If this destination is deliberate -- the file is genuinely meant to "
+        "be committed, or the repo is ignored some other way this check cannot "
+        "see -- pass --allow-tracked-dest. That records the decision in the "
+        "manifest, so the convergence pass on every machine honours it too."
+    )
+
+
 def cmd_add(args: argparse.Namespace) -> int:
     """Encrypt a file into the repo. Public-key op -- no passphrase needed."""
     config = _require_config()
@@ -347,6 +461,36 @@ def cmd_add(args: argparse.Namespace) -> int:
             "consumer in ways that are painful to diagnose later."
         )
 
+    stored_spec = manifest.entries[args.name].dest_spec if exists else None
+    dest_spec = args.dest or stored_spec
+
+    # Consent is per-DESTINATION, never per-entry-forever. A stored override
+    # carries forward only while the destination is unchanged -- otherwise
+    # `add <name> --update --dest B` would inherit consent granted for dest A,
+    # skip the check on B, AND re-persist the override so convergence honours
+    # it too: a rotation could silently relocate a credential into a different
+    # unignored working tree with nothing ever looking at it.
+    dest_unchanged = not args.dest or args.dest == stored_spec
+    inherited = bool(exists and dest_unchanged and manifest.entries[args.name].allow_tracked_dest)
+    allow_tracked_dest = bool(args.allow_tracked_dest) or inherited
+    # True when we are deliberately NOT honouring a stored override, so the
+    # refusal can explain a rejection the user will not expect.
+    consent_dropped = bool(
+        exists and not dest_unchanged and manifest.entries[args.name].allow_tracked_dest
+    )
+
+    # Before anything is encrypted or committed: refusing after the blob landed
+    # in the repo would leave the ciphertext behind for a value we declined.
+    refusal = _refuse_exposed_dest(
+        config,
+        args.name,
+        dest_spec,
+        allow_tracked_dest,
+        consent_dropped=consent_dropped,
+    )
+    if refusal is not None:
+        return refusal
+
     blob_rel = f"blobs/{source.name}.age"
     if exists:
         blob_rel = manifest.entries[args.name].blob
@@ -355,9 +499,11 @@ def cmd_add(args: argparse.Namespace) -> int:
 
     entry_data = {
         "blob": blob_rel,
-        "dest": args.dest or manifest.entries[args.name].dest_spec,
+        "dest": dest_spec,
         "mode": args.mode,
     }
+    if allow_tracked_dest:
+        entry_data["allow_tracked_dest"] = True
     if args.newline:
         entry_data["newline"] = args.newline
     if args.doc:
@@ -516,6 +662,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--doc", help="pointer into the secrets inventory")
     p.add_argument("--profile", action="append", help="add to this profile (repeatable)")
     p.add_argument("--update", action="store_true", help="rotate an existing entry's value")
+    p.add_argument(
+        "--allow-tracked-dest",
+        action="store_true",
+        help="permit a dest inside a non-ignored git working tree (recorded in the manifest)",
+    )
     p.set_defaults(func=cmd_add)
 
     p = sub.add_parser("remove", help="drop an entry from the repo")
