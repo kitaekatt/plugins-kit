@@ -454,107 +454,71 @@ backends:
     name: Claude Agent tool
     detect:
       always: true
-    prefer_for: >-
-      The default. Everything, unless a unit has a specific reason to run
-      somewhere else.
     capabilities:
       tiers: [workhorse, high-reasoning, top]
-      isolation: 'built in -- isolation: "worktree"'
-      effort: >-
-        Via agent-type definitions and Workflow's agent() opts.effort. The
-        Agent tool has no per-call effort parameter, so agents there inherit
-        from their type or the session.
+      isolation: 'built in -- pass isolation: "worktree"'
+      effort: Only dialable via Workflow's `agent()` `opts.effort`; else inherited.
       network: "yes"
       returns: >-
-        Each agent's report is DELIVERED into the orchestrating context, not
-        fetched -- you cannot skim it and discard it, and there is no per-call
-        schema to constrain its size or shape. Ask for a tight structure in the
-        brief; N verbose agents put N verbose reports where you least want them.
+        Delivered into the orchestrating context, not fetched; no per-call
+        schema -- ask for a tight structure in the brief.
     dispatch: >-
-      Mechanics (report visibility, SendMessage follow-up, parallel launch,
-      worktree isolation) are in the harness prompt every session -- use them
-      directly. Launch independent units in ONE message so they run
-      concurrently.
+      Mechanics (report visibility, SendMessage follow-up, parallel launch)
+      are in the harness prompt -- use directly; launch independent units in
+      ONE message to run concurrently.
     gotchas:
+      - The agent's final report is not shown to the user -- relay what matters yourself.
       - >-
-        The agent's final report is not shown to the user -- relay what
-        matters in your own message.
-      - >-
-        N agents each pay their own cold-start orientation and build their own
-        cache lineage; a single session over the same set pays it once. The
-        wider the fan-out and the more context the units share, the worse that
-        trade gets.
+        N agents each pay their own cold-start orientation and cache lineage
+        that one session over the same set pays once -- worse with wider
+        fan-out and more shared context.
 
   - id: codex
     name: Codex CLI
     detect:
       command: [codex, --version]
-    prefer_for: >-
-      An external CLI process, not a first-class agent type. The decision tree
-      above says when it wins; the capabilities below are what it can and
-      cannot do once chosen.
     capabilities:
       tiers: [codex-workhorse, codex-top]
       isolation: >-
-        None built in. Create a git worktree per parallel writer and point
-        Codex at it with -C; read-only units can share the tree.
+        None built in -- give each parallel writer a worktree (`-C <dir>`) or
+        sequence them; read-only units may share a tree.
       effort: >-
-        Set on the Codex side -- pick the model with `-m` and set reasoning
-        effort through Codex's own config key. Check `codex exec --help` for
-        the exact spelling in your installed version rather than guessing.
+        Model via `-m`; effort via Codex's own config key (see `codex exec
+        --help` for exact spelling).
       network: >-
-        Yes, via the network_access override in the command below. Without it
-        `-s workspace-write` blocks egress at a loopback proxy.
+        Yes, via the network_access override below; otherwise `-s
+        workspace-write` blocks egress at a loopback proxy.
       returns: >-
-        The `-o` file holds the final message, and the brief dictates what goes
-        in it; `--output-schema <FILE>` can force that message to satisfy a
-        JSON Schema, which the Agent tool has no per-call equivalent for.
+        Content per the brief; `--output-schema <FILE>` can force a JSON
+        Schema.
     command: >-
       codex exec -s workspace-write
       -c sandbox_workspace_write.network_access=true
       --skip-git-repo-check --color never -o <last-message-file> -
     dispatch: |
-      `codex exec`, NEVER bare `codex` (the TUI needs a TTY and dies when
-      backgrounded). Brief on STDIN via `-` from a file, never as a shell
-      argument. `-o <file>` is the return value; `-C <dir>` sets the working
-      root. Launch as a Bash call with run_in_background: true, then tail the
-      log ONCE -- a bad invocation exits in seconds and notifies exactly like a
-      good one.
+      `codex exec`, NEVER bare `codex` -- the TUI needs a TTY and dies
+      backgrounded. Brief via
+      stdin (`-`) from a file, never a shell argument. `-o <file>` returns
+      the result; `-C <dir>` sets the working root. Launch backgrounded,
+      then tail the log ONCE: a bad invocation exits in seconds,
+      indistinguishably from a good one.
 
-      Full flag catalog, the network/sandbox detail, worktree isolation, and
-      result collection: references/codex-dispatch.md. Read it when composing
-      the launch; you do not need it to choose this backend.
+      Flag catalog: references/codex-dispatch.md.
     gotchas:
       - >-
-        `codex exec`, never bare `codex`: the interactive form needs a TTY and
-        dies under run_in_background.
+        `--ask-for-approval` is not an exec flag; the unit cannot be
+        interrupted mid-run.
       - >-
-        Prompts go on stdin (`-`), never as a shell argument -- a realistic
-        brief contains quotes that break the command line before Codex runs.
+        On Windows, `curl.exe` HTTPS fails in the sandbox
+        (`SEC_E_NO_CREDENTIALS`) even with network open -- a TLS-stack issue,
+        not a blocked network. Use an OpenSSL-based client instead.
       - >-
-        `--ask-for-approval` is not an exec flag. The sandbox is the whole
-        safety story and the unit cannot be interrupted mid-run.
-      - >-
-        On Windows, `curl.exe` HTTPS fails inside the sandbox
-        (`SEC_E_NO_CREDENTIALS`) even with network open -- that is a TLS-stack
-        problem, not a blocked network. Use an OpenSSL-based client.
-      - >-
-        Codex's internal subagent layer (`--enable multi_agent_v2`) is inert
-        unless the brief explicitly asks for delegation -- enabling the flag
-        alone changes nothing -- and it does not make SMALL items cheaper.
-        Measured at N=8 read-a-file-write-a-sentence items on codex-cli
-        0.146.0: 65s vs 48s for the same session without it. Delegation swaps
-        millisecond shell reads for model round trips (brief, spawn, join) and
-        discards the single context's cache reuse, which at that item size
-        costs more than the parallelism returns. Token accounting was NOT
-        conclusive either way. Says nothing about genuinely independent
-        long-running items -- there the fixed cost amortizes.
-      - >-
-        Use `-C <dir>` for the working root; a `cd` inside a backgrounded Bash
-        call does not persist.
-      - >-
-        Parallel Codex sessions writing to one tree clobber each other -- a
-        worktree per unit, or sequence them.
+        `--enable multi_agent_v2` is inert unless the brief asks for
+        delegation. N=8 trivial read/write items on codex-cli 0.146.0: 65s vs
+        48s without it (token accounting inconclusive) -- it trades cheap
+        shell reads for model round trips, losing single-context cache reuse;
+        long-running independent items amortize that.
+      - A `cd` in a backgrounded Bash call does not persist -- use `-C <dir>`.
 
 # ---------------------------------------------------------------------------
 # Capacity -- best-effort awareness of remaining usage.
