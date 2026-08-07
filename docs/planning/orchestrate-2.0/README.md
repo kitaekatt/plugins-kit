@@ -27,8 +27,29 @@ leaves selection to the reader. Measured at 3,204 tokens rendered.
 Converting it to a tree at **full fidelity saves nothing** -- tree notation tokenises
 worse than markdown tables, and a like-for-like rewrite measured +4.8%. The saving
 comes from *partitioning*: rationale moves to an unrendered file, and ordered
-elimination makes the "escalate when" column redundant. Derived variants measured
-**~1,550 tokens with Codex and ~1,170 without**, against 3,204 / 1,861 today.
+elimination makes the "escalate when" column redundant.
+
+### Measured result
+
+| | before | after |
+|---|---:|---:|
+| whole render, Codex present | 3,204 | **2,547** (-20.5%) |
+| whole render, Codex absent | 1,861 | **1,447** (-22.2%) |
+| decision half only, Codex present | 1,635 | **1,342** (-17.9%) |
+| decision half only, Codex absent | 1,289 | **1,003** (-22.2%) |
+
+**Read the halves separately, and do not compare across them.** An earlier revision of
+this file claimed "~1,550 with Codex and ~1,170 without, against 3,204 / 1,861" --
+which set a *decision-half* figure against a *whole-render* baseline and overstated
+the saving by more than double. The machine half (backend mechanics, the `codex exec`
+line, the gotchas, capacity) is 1,205 tokens with Codex and 444 without, and this work
+deliberately did not touch it, so a 1,550 total was arithmetically impossible from the
+outset.
+
+Roughly 500 further tokens are available in the machine half from prose tightening
+alone -- it restates the `codex exec` rule twice -- but that is an edit to the mechanics
+section, not a consequence of the tree, and it should be measured as its own change
+rather than folded into this one's credit.
 
 ## Method: clean-room derivation
 

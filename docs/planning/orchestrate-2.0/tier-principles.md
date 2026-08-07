@@ -207,17 +207,17 @@ measurable in a way it was not when the rung was seated. Name that population he
 `render: required` -- **there is no haiku rung.** A negative guard, same as P3.4:
 without it a reader who knows the model exists will invent the dispatch.
 
-*Status:* deliberately kept despite low enthusiasm. haiku 4.5 is an older generation
-and sonnet 5 is materially more capable, so the justification must be "haiku will
-clearly knock this out of the park", never "this is cheap enough for haiku". The
-saving does not carry the rung -- one miss costs a retry at sonnet and erases it.
+*Stale text removed 2026-08-07:* this principle carried a `*Status:*` paragraph and a
+`render: required` "any doubt resolves to sonnet" guard, both written when haiku was
+a live rung and both left behind when it was deleted. A `render: required` tag on a
+rung that no longer exists is worse than dead text -- it instructs the derivation to
+render a guard for nothing. The guard itself was worth keeping and moved to P2.5,
+where it applies to the ladder rather than to a removed rung.
 
-**Any doubt resolves to sonnet.** `render: required` -- this is debiasing, not
-rationale, structurally identical to the top rung's gate. Compressing it away removes
-the only guard on this rung.
-
-*Overturned by:* a period in which no dispatched unit chose this rung -- then fold it
-into a clause on sonnet. P4.5's announcements are what make that measurable.
+*Lesson, recorded because it will recur:* deleting a rung is not a local edit. Its
+criteria, its guards, its render tags, its vocabulary terms and its overturn condition
+are all dependent text, and the derivation surfaces them one layer down as
+"the principles did not determine this" rather than as an obvious contradiction.
 
 ### P2.2 -- fable: `novel` + `load-bearing` + `unverifiable`
 
@@ -265,9 +265,14 @@ Reached by fall-through only. It states no test of its own -- "ordinary judgment
 never a vocabulary term, and a rung that both is terminal and carries criteria
 contradicts P2.0's semantics.
 
-Everything that is not `novel`+`load-bearing`+`unverifiable` and not `inference` or
-`known`+`novel` lands here -- including all `known` + `mechanical` work, since P2.1
-removed the rung that formerly took it.
+Everything no rung above matched lands here.
+
+*On describing that population:* it includes what was formerly haiku work, but this
+principle must NOT say so in the rendered artifact -- `mechanical` is `[concept]` since
+P2.1, and concept terms never render. Describing the population by fall-through
+("everything no rung above matched") is the only form available, and it is also the
+honest one: the terminal rung is defined by what did not match, not by a property of
+its own. Naming `mechanical` here would have re-imported a term the lexicon demoted.
 
 **Announced as `(known, default)` or `(open, condensation)`** -- `default` is the
 term for "no escalation test matched", which is the honest description of a
@@ -278,6 +283,14 @@ population.
 *Why terminal rather than tested:* most delegated units are workhorse-shaped, and the
 named anti-pattern is top-tier-everywhere. Making the default reachable only by
 fall-through means every escalation is an explicit match against a stated test.
+
+### P2.5 -- Cross-cutting rules for this ladder
+
+- **Any doubt resolves to the rung below.** `render: required` -- debiasing, not
+  rationale. Moved here from P2.1 when the haiku rung was deleted; it was never
+  specific to that rung, and stating it ladder-wide is what it always meant.
+- Never down-tier a unit that meets the fable bar to harvest the discount.
+- Judge by total tokens to a VERIFIED result, not by apparent difficulty.
 
 ---
 

@@ -48,10 +48,11 @@ technique_skill:
 
       Add `--project-root <path>` when the project whose policy applies is not the cwd.
     emits: |
-      A markdown block covering (a) the model tiers with their use-for and escalation
-      criteria, (b) every dispatch backend detected on this machine -- the Agent tool,
-      Codex CLI, or whatever the user configured -- with its exact mechanics, capabilities
-      and gotchas, and (c) best-effort usage capacity plus any manual tier overrides.
+      A markdown block covering (a) a DECISION TREE -- shape, backend, tier, agent type,
+      effort, announcement -- resolved by ordered elimination, first match wins, (b) every
+      dispatch backend detected on this machine -- the Agent tool, Codex CLI, or whatever
+      the user configured -- with its exact mechanics, capabilities and gotchas, and (c)
+      best-effort usage capacity plus any manual tier overrides.
     when: |
       Once per orchestration, at step 3, before choosing tiers or launching anything. The
       script is deterministic and sub-second -- it is not a delegable unit, run it inline.

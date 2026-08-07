@@ -11,6 +11,7 @@ process itself).
 """
 
 import json
+import re
 import time
 
 import pytest
@@ -136,24 +137,70 @@ class TestResolveConfig:
             og.resolve_config(layered.project_root)
 
 
+def shipped():
+    return yaml.safe_load(og.DEFAULTS_PATH.read_text(encoding="utf-8"))
+
+
 class TestShippedDefaults:
     """The shipped layer is the SSOT for the skill's guidance -- keep it valid."""
 
     def test_shipped_defaults_parse_and_carry_the_expected_shape(self):
-        data = yaml.safe_load(og.DEFAULTS_PATH.read_text(encoding="utf-8"))
-        assert data["schema_version"] == 1
-        tier_ids = [t["id"] for t in data["tiers"]]
-        assert data["default_tier"] in tier_ids
+        data = shipped()
+        assert data["schema_version"] == 2
         backend_ids = [b["id"] for b in data["backends"]]
         assert data["default_backend"] in backend_ids
         assert {"agent", "codex"} <= set(backend_ids)
+        assert [l["id"] for l in data["ladders"]] == ["agent", "codex"]
+        assert data["resolution"]
 
-    def test_codex_backed_tiers_declare_their_gate(self):
-        data = yaml.safe_load(og.DEFAULTS_PATH.read_text(encoding="utf-8"))
-        codex_backend = next(b for b in data["backends"] if b["id"] == "codex")
-        for tier_id in codex_backend["capabilities"]["tiers"]:
-            tier = next(t for t in data["tiers"] if t["id"] == tier_id)
-            assert tier.get("backend") == "codex", tier_id
+    def test_every_ladder_names_a_declared_backend(self):
+        data = shipped()
+        ids = {b["id"] for b in data["backends"]}
+        for ladder in data["ladders"]:
+            assert ladder["id"] in ids, ladder["id"]
+
+    def test_backend_capability_tier_lists_name_that_backends_rungs(self):
+        data = shipped()
+        for backend in data["backends"]:
+            declared = (backend.get("capabilities") or {}).get("tiers")
+            if not declared:
+                continue
+            ladder = next(l for l in data["ladders"] if l["id"] == backend["id"])
+            rungs = {r["id"] for r in ladder["rungs"]}
+            assert set(declared) <= rungs, backend["id"]
+
+    def test_exactly_one_terminal_rung_per_ladder_and_it_is_last(self):
+        """Ordered elimination needs a rung that is unreachable except by
+        falling through -- and it can only be the last one."""
+        for ladder in shipped()["ladders"]:
+            terminal = [r["id"] for r in ladder["rungs"] if r.get("terminal")]
+            assert terminal == [ladder["rungs"][-1]["id"]], ladder["id"]
+
+    def test_only_a_terminal_rung_may_state_no_criteria(self):
+        for ladder in shipped()["ladders"]:
+            for rung in ladder["rungs"]:
+                if not rung.get("criteria"):
+                    assert rung.get("terminal"), rung["id"]
+
+    def test_every_criterion_names_a_skill_term(self):
+        data = shipped()
+        skills = {t["id"] for t in data["lexicon"] if t.get("kind") == "skill"}
+        for ladder in data["ladders"]:
+            for rung in ladder["rungs"]:
+                if rung.get("shape"):
+                    assert rung["shape"] in skills, rung["id"]
+                for group in rung.get("criteria") or []:
+                    ids = group["terms"] if isinstance(group, dict) else group
+                    assert set(ids) <= skills, rung["id"]
+
+    def test_glossed_terms_carry_a_gloss_and_bare_terms_do_not(self):
+        for term in shipped()["lexicon"]:
+            if term.get("kind") != "skill":
+                continue
+            if term.get("render") == "glossed":
+                assert term.get("gloss"), term["id"]
+            else:
+                assert not term.get("gloss"), term["id"]
 
     def test_shipped_policy_mentions_no_codex_when_codex_is_absent(self, monkeypatch, tmp_path):
         """The load-bearing requirement: no Codex content reaches the skill on a
@@ -328,29 +375,55 @@ class TestFormatReset:
 # --------------------------------------------------------------------------
 
 
+def cfg(**over):
+    """A minimal but complete decision-tree config."""
+    base = {
+        "resolution": "first match wins",
+        "lexicon": [
+            {"id": "known", "kind": "skill", "render": "glossed",
+             "gloss": "describe done before doing it"},
+            {"id": "open", "kind": "skill", "render": "bare"},
+            {"id": "novel", "kind": "skill", "render": "glossed", "gloss": "no pattern applies"},
+            {"id": "mechanical", "kind": "concept"},
+        ],
+        "shape": {
+            "title": "Shape the unit",
+            "tests": [{"id": "axes", "text": "{known} or {open}."}],
+        },
+        "ladders": [
+            {
+                "id": "agent",
+                "label": "Claude",
+                "rungs": [
+                    {"id": "top", "model": "fable", "criteria": [["novel"]]},
+                    {"id": "workhorse", "model": "sonnet", "criteria": [], "terminal": True,
+                     "text": "terminal default."},
+                ],
+                "guards": ["There is no haiku rung."],
+            }
+        ],
+        "backends": [{"id": "agent", "name": "Agent", "detect": {"always": True}}],
+        "capacity": {"source": "none"},
+    }
+    base.update(over)
+    return base
+
+
 class TestRender:
     def test_renders_the_shipped_policy_end_to_end(self, layered, monkeypatch):
         monkeypatch.setattr(og, "DEFAULTS_PATH", _shipped_path())
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "## Model tiers" in text
+        assert "## 1. Shape the unit" in text
         assert "## Dispatch backends" in text
         assert "## Capacity" in text
         assert "Layers applied: shipped" in text
 
-    def test_unavailable_tier_is_marked_and_instructed_against(self, layered):
-        layered(
-            "shipped",
-            {
-                "default_tier": "workhorse",
-                "tiers": [{"id": "workhorse", "model": "sonnet"}, {"id": "top", "model": "fable"}],
-                "backends": [{"id": "agent", "detect": {"always": True}}],
-                "capacity": {"source": "none", "tier_overrides": {"top": "unavailable"}},
-            },
-        )
+    def test_unavailable_rung_is_marked_and_instructed_against(self, layered):
+        layered("shipped", cfg(capacity={"source": "none", "tier_overrides": {"top": "unavailable"}}))
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "top (UNAVAILABLE)" in text
+        assert "`top`: unavailable" in text
         assert "Do not dispatch to `top`" in text
 
     def test_undetected_backend_leaves_no_trace(self, layered):
@@ -377,74 +450,39 @@ class TestRender:
         assert "ghost" not in text
         assert "agent" in text
 
-    def test_tier_gated_on_a_missing_backend_is_hidden(self, layered):
-        layered(
-            "shipped",
-            {
-                "default_tier": "workhorse",
-                "tiers": [
-                    {"id": "workhorse", "model": "sonnet"},
-                    {"id": "gated", "model": "phantom", "backend": "ghost"},
-                ],
-                "backends": [
-                    {"id": "agent", "detect": {"always": True}},
-                    {"id": "ghost", "detect": {"command": ["no-such-binary-xyz"]}},
-                ],
-                "capacity": {"source": "none"},
-            },
-        )
+    def test_ladder_gated_on_a_missing_backend_is_hidden(self, layered):
+        ghost = {
+            "id": "ghost",
+            "label": "Ghost",
+            "rungs": [{"id": "gated", "model": "phantom", "criteria": [], "terminal": True}],
+        }
+        layered("shipped", cfg(
+            ladders=cfg()["ladders"] + [ghost],
+            backends=[
+                {"id": "agent", "name": "Agent", "detect": {"always": True}},
+                {"id": "ghost", "detect": {"command": ["no-such-binary-xyz"]}},
+            ],
+        ))
         config, provenance = og.resolve_config(layered.project_root)
         # Body only: the footer echoes tmp paths, which carry the test's own name.
         body = og.render(config, provenance).split("\n---\n")[0]
         assert "phantom" not in body and "gated" not in body
 
-    def test_tier_gated_on_a_present_backend_is_shown(self, layered):
-        layered(
-            "shipped",
-            {
-                "default_tier": "workhorse",
-                "tiers": [
-                    {"id": "workhorse", "model": "sonnet"},
-                    {"id": "gated", "model": "phantom", "backend": "here"},
-                ],
-                "backends": [{"id": "here", "detect": {"always": True}}],
-                "capacity": {"source": "none"},
-            },
-        )
+    def test_ladder_on_a_present_backend_is_shown(self, layered):
+        here = {
+            "id": "here",
+            "label": "Here",
+            "rungs": [{"id": "gated", "model": "phantom", "criteria": [], "terminal": True}],
+        }
+        layered("shipped", cfg(
+            ladders=cfg()["ladders"] + [here],
+            backends=[
+                {"id": "agent", "name": "Agent", "detect": {"always": True}},
+                {"id": "here", "name": "Here", "detect": {"always": True}},
+            ],
+        ))
         config, provenance = og.resolve_config(layered.project_root)
         assert "phantom" in og.render(config, provenance)
-
-    def test_effort_column_appears_only_when_configured(self, layered):
-        layered(
-            "shipped",
-            {
-                "tiers": [{"id": "workhorse", "model": "sonnet"}],
-                "backends": [{"id": "agent"}],
-                "capacity": {"source": "none"},
-            },
-        )
-        config, provenance = og.resolve_config(layered.project_root)
-        assert "| Effort |" not in og.render(config, provenance)
-        layered(
-            "user",
-            {"tiers": [{"id": "workhorse", "effort": "medium"}]},
-        )
-        config, provenance = og.resolve_config(layered.project_root)
-        text = og.render(config, provenance)
-        assert "| Effort |" in text and "medium" in text
-
-    def test_avoid_when_renders_as_a_negative_instruction(self, layered):
-        layered(
-            "shipped",
-            {
-                "tiers": [{"id": "top", "model": "fable", "avoid_when": "the work is patterned"}],
-                "backends": [{"id": "agent"}],
-                "capacity": {"source": "none"},
-            },
-        )
-        config, provenance = og.resolve_config(layered.project_root)
-        text = og.render(config, provenance)
-        assert "NOT this tier when" in text and "the work is patterned" in text
 
     def test_capacity_unknown_says_so_rather_than_guessing(self, layered, tmp_path):
         layered(
@@ -518,212 +556,557 @@ class TestCapabilityRendering:
                 )
 
 
-class TestLadders:
-    """Tiers group into one ladder per backend. Comparing rungs across ladders
-    is the wrong axis -- the decision there is the backend, not the model."""
+class TestOrderedElimination:
+    """Rungs are tested in order and the first match wins. The semantics are
+    not inferable from the content, so they are stated at the top; the order
+    itself is data, so a renderer must not reorder it."""
 
-    CONFIG = {
-        "default_backend": "agent",
-        "default_tier": "workhorse",
-        "tiers": [
-            {"id": "workhorse", "model": "sonnet"},
-            {"id": "top", "model": "fable"},
-            {"id": "other-mid", "model": "terra", "backend": "other"},
-            {"id": "other-top", "model": "sol", "backend": "other"},
-        ],
-        "backends": [
-            {"id": "agent", "name": "Agent", "detect": {"always": True}},
-            {"id": "other", "name": "Other", "detect": {"always": True}},
-        ],
-        "capacity": {"source": "none"},
-    }
-
-    def test_unmarked_tiers_ride_the_default_backend(self):
-        assert og.tier_backend({"id": "workhorse"}, self.CONFIG) == "agent"
-        assert og.tier_backend({"id": "x", "backend": "other"}, self.CONFIG) == "other"
-
-    def test_grouped_by_backend_with_default_first(self):
-        grouped = og.ladders(self.CONFIG, {"agent", "other"})
-        assert [backend for backend, _ in grouped] == ["agent", "other"]
-        assert [t["id"] for t in grouped[0][1]] == ["workhorse", "top"]
-        assert [t["id"] for t in grouped[1][1]] == ["other-mid", "other-top"]
-
-    def test_a_missing_backend_takes_its_whole_ladder(self):
-        grouped = og.ladders(self.CONFIG, {"agent"})
-        assert [backend for backend, _ in grouped] == ["agent"]
-
-    def test_render_emits_one_table_per_ladder(self, layered):
-        layered("shipped", self.CONFIG)
+    def test_resolution_is_stated_before_any_block(self, layered):
+        layered("shipped", cfg())
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "### Agent ladder" in text
-        assert "### Other ladder" in text
-        assert "tiers compare within a ladder" in text
-        assert text.count("| Tier | Model |") == 2
+        assert "**Resolution.** first match wins" in text
+        assert text.index("Resolution.") < text.index("## 1.")
 
-    def test_single_ladder_renders_without_headings(self, layered):
-        single = dict(self.CONFIG)
-        single["tiers"] = [{"id": "workhorse", "model": "sonnet"}]
-        single["backends"] = [{"id": "agent", "name": "Agent", "detect": {"always": True}}]
-        layered("shipped", single)
+    def test_rungs_render_in_declared_order_and_are_numbered(self, layered):
+        layered("shipped", cfg())
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "ladder" not in text.split("## Dispatch backends")[0]
-        assert text.count("| Tier | Model |") == 1
+        assert "1. **fable**" in text
+        assert "2. **sonnet**" in text
+        assert text.index("**fable**") < text.index("**sonnet**")
 
-    def test_cross_cutting_prose_renders_once_not_per_ladder(self, layered):
-        cfg = dict(self.CONFIG, pool_economics="POOL NOTE")
-        layered("shipped", cfg)
-        config, provenance = og.resolve_config(layered.project_root)
-        assert og.render(config, provenance).count("POOL NOTE") == 1
-
-
-class TestEffortRendering:
-    def test_structured_effort_renders_as_tests(self, layered):
-        layered("shipped", {
-            "tiers": [{"id": "workhorse", "model": "sonnet"}],
-            "backends": [{"id": "agent", "detect": {"always": True}}],
-            "capacity": {"source": "none"},
-            "effort": {"raise_when": ["it is ambiguous"], "lower_when": ["it is mechanical"],
-                       "note": "up-effort before up-tier"},
-        })
+    def test_shipped_ladders_keep_their_principle_order(self, layered, monkeypatch):
+        monkeypatch.setattr(og, "DEFAULTS_PATH", _shipped_path())
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "Raise effort when" in text and "it is ambiguous" in text
-        assert "Lower effort when" in text and "it is mechanical" in text
-        assert "up-effort before up-tier" in text
+        for earlier, later in (("**fable**", "**opus**"), ("**opus**", "**sonnet**")):
+            assert text.index(earlier) < text.index(later), (earlier, later)
 
-    def test_legacy_string_effort_still_renders(self, layered):
-        """An override written against the old prose schema must not vanish."""
-        layered("shipped", {
-            "tiers": [{"id": "workhorse"}],
-            "backends": [{"id": "agent"}],
-            "capacity": {"source": "none"},
-            "effort": "just some prose about effort",
-        })
-        config, provenance = og.resolve_config(layered.project_root)
-        assert "just some prose about effort" in og.render(config, provenance)
-
-
-class TestBackendSelection:
-    CONFIG = {
-        "default_backend": "agent",
-        "tiers": [{"id": "workhorse", "model": "sonnet"}],
-        "backends": [
-            {"id": "agent", "name": "Agent", "detect": {"always": True}},
-            {"id": "ghost", "name": "Ghost", "detect": {"command": ["no-such-binary-xyz"]}},
-        ],
-        "capacity": {"source": "none"},
-        "backend_selection": {
-            "default": "agent",
-            "gates": [{"test": "needs MCP tools", "backend": "agent", "why": "only it sees them"}],
-            "pulls": [{"test": "a whole set at once", "backend": "ghost", "why": "one result file"}],
-        },
-    }
-
-    def test_gates_and_pulls_render_for_available_backends(self, layered):
-        cfg = dict(self.CONFIG)
-        cfg["backends"] = [{"id": "agent", "name": "Agent", "detect": {"always": True}},
-                           {"id": "ghost", "name": "Ghost", "detect": {"always": True}}]
-        layered("shipped", cfg)
+    def test_blocks_render_in_principle_order(self, layered, monkeypatch):
+        monkeypatch.setattr(og, "DEFAULTS_PATH", _shipped_path())
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "### Choosing a backend" in text
-        assert "needs MCP tools" in text and "a whole set at once" in text
-        assert "Default: **Agent**" in text
+        expected = ["Shape the unit", "Backend", "Tier", "Agent type", "Effort", "Announce"]
+        headings = [line.split(". ", 1)[1] for line in text.splitlines()
+                    if re.match(r"^## \d+\. ", line)]
+        assert [h.split(" ")[0] for h in headings] == [e.split(" ")[0] for e in expected]
 
-    def test_rows_naming_a_missing_backend_are_dropped(self, layered):
-        """Same omission rule as backends and tiers -- no guidance toward
-        something that is not installed."""
-        layered("shipped", self.CONFIG)
+    def test_block_numbering_closes_the_gap_when_a_block_drops(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(og.shutil, "which", lambda name: None)
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        text = og.render(config, provenance)
+        numbers = [int(m.group(1)) for m in re.finditer(r"^## (\d+)\. ", text, re.M)]
+        assert numbers == list(range(1, len(numbers) + 1))
+
+
+class TestGlossing:
+    """Every orchestration is a fresh read, so a term whose natural reading
+    diverges from its test carries its gloss once, at first occurrence."""
+
+    def _text(self, monkeypatch, tmp_path, with_codex=True):
+        if not with_codex:
+            monkeypatch.setattr(og.shutil, "which", lambda name: None)
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        return og.render(config, provenance).split("\n## Dispatch backends")[0]
+
+    def _glossed(self, term):
+        return {t["id"]: t for t in shipped()["lexicon"]}[term].get("gloss")
+
+    @pytest.mark.parametrize("with_codex", [True, False])
+    def test_every_rendered_glossed_term_is_glossed_exactly_once(
+        self, monkeypatch, tmp_path, with_codex
+    ):
+        text = self._text(monkeypatch, tmp_path, with_codex)
+        for term in shipped()["lexicon"]:
+            if term.get("kind") != "skill" or term.get("render") != "glossed":
+                continue
+            gloss = f"`{term['id']}` ({term['gloss']})"
+            occurrences = text.count(gloss)
+            if f"`{term['id']}`" in text:
+                assert occurrences == 1, f"{term['id']} glossed {occurrences}x"
+            else:
+                assert occurrences == 0, term["id"]
+
+    @pytest.mark.parametrize("with_codex", [True, False])
+    def test_a_gloss_precedes_every_bare_use_of_its_term(
+        self, monkeypatch, tmp_path, with_codex
+    ):
+        text = self._text(monkeypatch, tmp_path, with_codex)
+        for term in shipped()["lexicon"]:
+            if term.get("kind") != "skill" or term.get("render") != "glossed":
+                continue
+            marker = f"`{term['id']}`"
+            if marker not in text:
+                continue
+            first = text.index(marker)
+            gloss_at = text.index(f"{marker} ({term['gloss']})")
+            assert gloss_at == first, term["id"]
+
+    def test_a_glossed_terms_gloss_lands_in_a_block_both_variants_render(
+        self, monkeypatch, tmp_path
+    ):
+        """A term used in both variants may not have its only gloss inside a
+        Codex-only block, or the Codex-absent reader never sees it."""
+        without = self._text(monkeypatch, tmp_path, with_codex=False)
+        for term in shipped()["lexicon"]:
+            if term.get("kind") != "skill" or term.get("render") != "glossed":
+                continue
+            if f"`{term['id']}`" in without:
+                assert f"`{term['id']}` ({term['gloss']})" in without, term["id"]
+
+    def test_bare_terms_never_carry_a_gloss(self, monkeypatch, tmp_path):
+        text = self._text(monkeypatch, tmp_path)
+        assert "`abortable` (" not in text
+        assert "`schema` (" not in text
+
+    def test_second_occurrence_is_bare(self, layered):
+        layered("shipped", cfg(shape={
+            "title": "Shape",
+            "tests": [{"id": "a", "text": "{known} first."}, {"id": "b", "text": "{known} again."}],
+        }))
         config, provenance = og.resolve_config(layered.project_root)
-        body = og.render(config, provenance).split("\n---\n")[0].lower()
-        assert "a whole set at once" not in body
-        assert "ghost" not in body
-        assert "needs mcp tools" in body
+        text = og.render(config, provenance)
+        assert "`known` (describe done before doing it) first." in text
+        assert "`known` again." in text
 
-    def test_section_omitted_entirely_when_no_rows_survive(self, layered):
-        cfg = dict(self.CONFIG)
-        cfg["backend_selection"] = {"default": "agent", "gates": [], "pulls": [
-            {"test": "x", "backend": "ghost"}]}
-        layered("shipped", cfg)
+    def test_concept_terms_never_reach_the_artifact(self, monkeypatch, tmp_path):
+        """A concept term selects no branch, so rendering one as a criterion
+        would put an unactionable word in a decision position."""
+        text = self._text(monkeypatch, tmp_path)
+        for term in shipped()["lexicon"]:
+            if term.get("kind") == "concept":
+                assert f"`{term['id']}`" not in text, term["id"]
+
+
+class TestNegativeGuards:
+    """A rung something must NOT be used for, and a rung that does not exist,
+    are decisions rather than rationale: without them a reader who knows the
+    model exists invents the dispatch."""
+
+    def _both(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        with_codex = og.render(config, provenance)
+        monkeypatch.setattr(og.shutil, "which", lambda name: None)
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        return with_codex, og.render(config, provenance)
+
+    def test_backend_independent_guards_render_in_both_variants(self, monkeypatch, tmp_path):
+        with_codex, without = self._both(monkeypatch, tmp_path)
+        for guard in (
+            "There is no haiku rung.",
+            "Any doubt resolves to sonnet.",
+            "Never this rung:",
+            "is never a rung criterion",
+        ):
+            assert guard in with_codex, guard
+            assert guard in without, guard
+
+    def test_every_shipped_guard_string_reaches_the_with_codex_variant(
+        self, monkeypatch, tmp_path
+    ):
+        with_codex, _ = self._both(monkeypatch, tmp_path)
+        for ladder in shipped()["ladders"]:
+            for guard in ladder.get("guards") or []:
+                assert og.fold(guard).split(" -- ")[0].rstrip(".") in with_codex
+            for rung in ladder["rungs"]:
+                for guard in rung.get("guards") or []:
+                    assert og.fold(guard).split(" --")[0].rstrip(".") in with_codex
+
+    def test_guards_render_without_a_render_required_flag(self, layered):
+        """render_required is a backstop, not the mechanism -- an untagged
+        guard still renders."""
+        ladder = dict(cfg()["ladders"][0], guards=["No untagged guard may vanish."])
+        layered("shipped", cfg(ladders=[ladder]))
         config, provenance = og.resolve_config(layered.project_root)
-        assert "Choosing a backend" not in og.render(config, provenance)
+        assert "No untagged guard may vanish." in og.render(config, provenance)
 
-    def test_absent_block_is_not_an_error(self, layered):
-        cfg = {k: v for k, v in self.CONFIG.items() if k != "backend_selection"}
-        layered("shipped", cfg)
+
+class TestRenderScope:
+    """`render_scope: principles-only` marks genuine policy that is not a
+    per-unit routing decision, so it does not earn tokens in a file read once
+    per orchestration."""
+
+    @staticmethod
+    def _probe(raw: str) -> str:
+        """A probe string as it would ACTUALLY appear in rendered output.
+
+        Two traps, both hit for real:
+        - `Terms.fill()` rewrites every `{term}` reference on every render
+          path, so probing the raw YAML text asserts on a string the renderer
+          can never emit; the assertion then passes whether or not the record
+          rendered.
+        - Expanding through `Terms` does not fix it either, because glossing is
+          stateful: a fresh `Terms` yields the glossed first-occurrence form,
+          while the same term renders bare once seen earlier in the document.
+
+        So probe on the longest BRACE-FREE literal run instead -- text the
+        renderer passes through untouched regardless of gloss state.
+        """
+        literal = max(re.split(r"\{[a-z][a-z0-9-]*\}", raw), key=len)
+        probe = og.fold(literal).strip(" :;,.-")[:40]
+        assert len(probe) >= 12, f"no usable brace-free probe in {raw!r}"
+        return probe
+
+    def _principles_only_probes(self):
+        for test in shipped()["shape"]["tests"]:
+            if test.get("render_scope") == "principles-only":
+                yield test["id"], self._probe(test["text"])
+        for ladder in shipped()["ladders"]:
+            for note in ladder.get("notes") or []:
+                if note.get("render_scope") == "principles-only":
+                    yield note["id"], self._probe(note["text"])
+
+    def test_principles_only_records_do_not_render(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        text = og.render(config, provenance)
+        probes = list(self._principles_only_probes())
+        for record_id, probe in probes:
+            assert probe not in text, record_id
+        assert len(probes) >= 3, (
+            "the shipped data should still carry principles-only records"
+        )
+
+    def test_the_principles_only_probes_are_not_vacuous(self, monkeypatch, tmp_path):
+        """Positive control: with the flag cleared, every probe MUST appear.
+
+        Without this, the assertion above degrades silently the moment a probe
+        stops matching the rendered form -- which is exactly how it was broken
+        before (it probed unexpanded `{term}` braces).
+        """
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        for record in list(config["shape"]["tests"]) + [
+            n for lad in config["ladders"] for n in (lad.get("notes") or [])
+        ]:
+            record.pop("render_scope", None)
+        text = og.render(config, provenance)
+        for record_id, probe in self._principles_only_probes():
+            assert probe in text, (
+                f"probe for {record_id!r} never appears even when rendered -- "
+                "the negative assertion is vacuous"
+            )
+
+    def test_a_principles_only_record_is_still_merged_into_the_config(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, _ = og.resolve_config(tmp_path / "no-project")
+        ids = [t["id"] for t in config["shape"]["tests"]]
+        assert "who-authors-the-specification" in ids
+
+    def test_renders_helper_only_rejects_principles_only(self):
+        assert og.renders({"id": "x"}) is True
+        assert og.renders({"id": "x", "render_scope": "principles-only"}) is False
+        assert og.renders("a plain string") is True
+
+
+class TestCodexAbsentVariant:
+    """One source, two variants. Without Codex the backend block has nothing
+    to choose and the Codex ladder cannot be dispatched to."""
+
+    @pytest.fixture
+    def variants(self, monkeypatch, tmp_path):
+        """Both variants from one source. Rendered with-Codex FIRST: the
+        without-Codex run patches `which` for the rest of the test."""
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        present = og.render(config, provenance)
+        monkeypatch.setattr(og.shutil, "which", lambda name: None)
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        return present, og.render(config, provenance)
+
+    @pytest.fixture
+    def with_codex(self, variants):
+        return variants[0]
+
+    @pytest.fixture
+    def without(self, variants):
+        return variants[1]
+
+    def test_backend_block_is_omitted_entirely(self, without):
+        assert "## 2. Backend" not in without
+        assert "Gates --" not in without
+        assert "Pulls --" not in without
+
+    def test_backend_block_renders_when_codex_is_present(self, with_codex):
+        assert "## 2. Backend" in with_codex
+        assert "Gates --" in with_codex and "Pulls --" in with_codex
+
+    def test_codex_ladder_and_its_rungs_disappear(self, without):
+        for probe in ("Codex ladder", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"):
+            assert probe not in without, probe
+
+    def test_ladder_headings_appear_only_when_more_than_one_renders(self, without, with_codex):
+        assert "### Claude ladder" in with_codex
+        assert "### " not in without.split("## Dispatch backends")[0]
+
+    def test_fan_out_collapse_test_survives_without_codex(self, without):
+        assert "`fan-out`" in without
+        assert "collapses into a single shell command" in without
+
+    def test_the_hole_is_disclosed_in_one_clause(self, without, with_codex):
+        """Silence about a known gap reads as an oversight and invites the
+        reader to invent the answer the collapse test exists to prevent."""
+        assert "sequence the units or handle them inline" in without
+        assert "sequence the units or handle them inline" not in with_codex
+
+    def test_codex_only_effort_and_announce_notes_drop(self, without, with_codex):
+        assert "effort is a real dial" in with_codex
+        assert "effort is a real dial" not in without
+        assert "the pull term instead" in with_codex
+        assert "the pull term instead" not in without
+
+    def test_claude_side_effort_asymmetry_survives_in_both(self, without, with_codex):
+        for text in (without, with_codex):
+            assert "NOT dialable per call" in text
+            assert "opts.effort" in text
+
+
+class TestNoBareCodenames:
+    """The bare codenames are not dispatchable, and a policy that names them
+    is a policy that fails every time it is followed."""
+
+    CODENAMES = ("luna", "terra", "sol")
+
+    @pytest.mark.parametrize("with_codex", [True, False])
+    def test_no_unqualified_codename_anywhere_in_the_output(
+        self, monkeypatch, tmp_path, with_codex
+    ):
+        if not with_codex:
+            monkeypatch.setattr(og.shutil, "which", lambda name: None)
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        text = og.render(config, provenance)
+        for name in self.CODENAMES:
+            # A codename is legal only as the tail of a fully qualified id.
+            for match in re.finditer(rf"\b{name}\b", text, re.I):
+                prefix = text[max(0, match.start() - 8):match.start()]
+                assert prefix.endswith("gpt-5.6-"), f"bare `{name}` at {match.start()}"
+
+    def test_shipped_data_never_writes_a_bare_codename(self):
+        raw = og.DEFAULTS_PATH.read_text(encoding="utf-8")
+        for name in self.CODENAMES:
+            for match in re.finditer(rf"\b{name}\b", raw):
+                prefix = raw[max(0, match.start() - 8):match.start()]
+                assert prefix.endswith("gpt-5.6-"), f"bare `{name}` in the shipped data"
+
+
+class TestRungRendering:
+    def test_or_groups_and_conjunctions_render(self, layered):
+        rung = {
+            "id": "top", "model": "fable",
+            "criteria": [["known", "novel"], ["open"]],
+        }
+        ladder = dict(cfg()["ladders"][0])
+        ladder["rungs"] = [rung, cfg()["ladders"][0]["rungs"][1]]
+        layered("shipped", cfg(ladders=[ladder]))
         config, provenance = og.resolve_config(layered.project_root)
-        assert "Choosing a backend" not in og.render(config, provenance)
+        text = og.render(config, provenance)
+        assert "+ `novel` (no pattern applies); or `open`" in text
+
+    def test_a_where_clause_qualifies_only_its_group(self, layered):
+        rung = {"id": "top", "model": "fable",
+                "criteria": [["open"], {"terms": ["novel"], "where": "up-effort would not do"}]}
+        ladder = dict(cfg()["ladders"][0], rungs=[rung, cfg()["ladders"][0]["rungs"][1]])
+        layered("shipped", cfg(ladders=[ladder]))
+        config, provenance = og.resolve_config(layered.project_root)
+        text = og.render(config, provenance)
+        assert "`open`; or `novel` (no pattern applies) where up-effort would not do" in text
+
+    def test_shape_restriction_renders(self, layered):
+        rung = {"id": "top", "model": "fable", "shape": "open", "criteria": [["novel"]]}
+        ladder = dict(cfg()["ladders"][0], rungs=[rung, cfg()["ladders"][0]["rungs"][1]])
+        layered("shipped", cfg(ladders=[ladder]))
+        config, provenance = og.resolve_config(layered.project_root)
+        assert "`open` work only" in og.render(config, provenance)
+
+    def test_effort_renders_only_where_it_is_dialable(self, layered):
+        rung = {"id": "top", "model": "gpt", "effort": "max", "criteria": [["novel"]]}
+        ladder = dict(cfg()["ladders"][0], rungs=[rung, cfg()["ladders"][0]["rungs"][1]])
+        layered("shipped", cfg(ladders=[ladder]))
+        config, provenance = og.resolve_config(layered.project_root)
+        text = og.render(config, provenance)
+        assert "**gpt** at `max` effort" in text
+        assert "**sonnet** at" not in text
+
+    def test_the_gate_and_announcement_forms_render(self, layered, monkeypatch):
+        monkeypatch.setattr(og, "DEFAULTS_PATH", _shipped_path())
+        config, provenance = og.resolve_config(layered.project_root)
+        text = og.render(config, provenance)
+        assert "Gate: write \"qualifies on <criterion>" in text
+        assert "Announced as `(known, default)` or `(open, condensation)`" in text
+
+    def test_terminal_rung_states_no_test_of_its_own(self, layered):
+        layered("shipped", cfg())
+        config, provenance = og.resolve_config(layered.project_root)
+        text = og.render(config, provenance)
+        assert "2. **sonnet** -- terminal default." in text
 
 
-class TestShippedBackendSelection:
-    def test_shipped_selection_names_only_declared_backends(self):
-        data = yaml.safe_load(og.DEFAULTS_PATH.read_text(encoding="utf-8"))
-        ids = {b["id"] for b in data["backends"]}
-        sel = data["backend_selection"]
-        assert sel["default"] in ids
-        for row in sel["gates"] + sel["pulls"]:
-            assert row["backend"] in ids, row
-
-
-class TestImplementationRouting:
-    """Implementation routes on specification quality; the tier table's
-    reasoning axis is the wrong one for code."""
-
-    BLOCK = {
-        "routing": [
-            {"spec": "unambiguous change", "tier": "workhorse"},
-            {"spec": "new but well specified", "tier": "high-reasoning"},
-            {"spec": "not specified", "tier": "none", "action": "specify it first"},
-        ],
-        "single_unit": "one unit at high-reasoning when not novel",
-        "top_tier": "the top tier is NOT an implementation tier",
-    }
-
-    def _render(self, layered, block):
-        layered("shipped", {
-            "tiers": [{"id": "workhorse", "model": "sonnet"}],
-            "backends": [{"id": "agent", "detect": {"always": True}}],
-            "capacity": {"source": "none"},
-            "implementation": block,
-        })
+class TestAgentTypesAndAnnouncement:
+    def _shipped_text(self, layered, monkeypatch):
+        monkeypatch.setattr(og, "DEFAULTS_PATH", _shipped_path())
         config, provenance = og.resolve_config(layered.project_root)
         return og.render(config, provenance)
 
-    def test_routes_render_with_their_tiers(self, layered):
-        text = self._render(layered, self.BLOCK)
-        assert "unambiguous change -> `workhorse`" in text
-        assert "new but well specified -> `high-reasoning`" in text
+    def test_agent_types_render_after_the_tier_and_before_effort(self, layered, monkeypatch):
+        text = self._shipped_text(layered, monkeypatch)
+        assert text.index("Agent type") > text.index(". Tier")
+        assert text.index("Agent type") < text.index("Effort")
+        for name in ("`Explore`", "`Plan`", "`general-purpose`"):
+            assert name in text
 
-    def test_unspecified_work_routes_to_specify_not_to_a_tier(self, layered):
-        text = self._render(layered, self.BLOCK)
-        assert "not specified -> **specify first**" in text
-        assert "specify it first" in text
+    def test_announcement_form_and_examples_render(self, layered, monkeypatch):
+        text = self._shipped_text(layered, monkeypatch)
+        assert "delegating <what> to <model> (<terms that fired>)" in text
+        assert "delegating crash diagnosis to opus (open, inference)" in text
 
-    def test_single_unit_and_top_tier_notes_render(self, layered):
-        text = self._render(layered, self.BLOCK)
-        assert "one unit at high-reasoning when not novel" in text
-        assert "the top tier is NOT an implementation tier" in text
+    def test_announcement_examples_use_only_skill_terms(self):
+        data = shipped()
+        skills = {t["id"] for t in data["lexicon"] if t.get("kind") == "skill"}
+        for example in data["announce"]["examples"]:
+            inside = re.search(r"\(([^)]*)\)$", example["text"]).group(1)
+            assert {t.strip() for t in inside.split(",")} <= skills, example["id"]
 
-    def test_legacy_string_form_still_renders(self, layered):
-        assert "just prose" in self._render(layered, "just prose")
+    def test_no_prices_dates_or_now_relative_phrasing(self, layered, monkeypatch):
+        text = self._shipped_text(layered, monkeypatch).split("## Dispatch backends")[0]
+        assert not re.search(r"\$\d", text)
+        assert not re.search(r"\b20\d\d-\d\d-\d\d\b", text)
+        for word in ("recently", "currently", "new ", "just shipped"):
+            assert word not in text.lower(), word
+
+
+class TestLayeringOverridesTheTree:
+    """Users have override files against this data; patching by id must keep
+    working across the reshape."""
+
+    def test_a_user_layer_patches_a_rung_by_id(self, layered):
+        layered("shipped", cfg())
+        layered("user", {"ladders": [{"id": "agent", "rungs": [
+            {"id": "workhorse", "model": "my-model"}]}]})
+        config, provenance = og.resolve_config(layered.project_root)
+        rungs = config["ladders"][0]["rungs"]
+        assert [r["id"] for r in rungs] == ["top", "workhorse"]
+        assert rungs[1]["model"] == "my-model"
+        assert rungs[1]["terminal"] is True  # untouched fields survive
+        assert "**my-model**" in og.render(config, provenance)
+
+    def test_a_user_layer_appends_a_rung(self, layered):
+        layered("shipped", cfg())
+        layered("user", {"ladders": [{"id": "agent", "rungs": [
+            {"id": "mine", "model": "extra", "criteria": [["novel"]]}]}]})
+        config, _ = og.resolve_config(layered.project_root)
+        assert [r["id"] for r in config["ladders"][0]["rungs"]] == ["top", "workhorse", "mine"]
+
+    def test_a_user_layer_disables_a_rung(self, layered):
+        layered("shipped", cfg())
+        layered("user", {"ladders": [{"id": "agent", "rungs": [
+            {"id": "top", "disabled": True}]}]})
+        config, provenance = og.resolve_config(layered.project_root)
+        text = og.render(config, provenance)
+        assert "**fable**" not in text
+        assert "1. **sonnet**" in text  # renumbered, not left with a hole
+
+    def test_a_user_layer_patches_a_lexicon_gloss(self, layered):
+        layered("shipped", cfg())
+        layered("user", {"lexicon": [{"id": "known", "gloss": "my own gloss"}]})
+        config, provenance = og.resolve_config(layered.project_root)
+        assert "`known` (my own gloss)" in og.render(config, provenance)
+
+    def test_a_user_layer_disables_a_whole_ladder(self, layered):
+        layered("shipped", cfg())
+        layered("user", {"ladders": [{"id": "agent", "disabled": True}]})
+        config, provenance = og.resolve_config(layered.project_root)
+        assert "**fable**" not in og.render(config, provenance)
+
+    def test_visible_rungs_tracks_the_merged_data(self, layered):
+        layered("shipped", cfg())
+        layered("user", {"ladders": [{"id": "agent", "rungs": [{"id": "mine"}]}]})
+        config, _ = og.resolve_config(layered.project_root)
+        assert og.visible_rungs(config, {"agent"}) == {"top", "workhorse", "mine"}
+        assert og.visible_rungs(config, set()) == set()
+
+
+class TestBackendBlock:
+    CONFIG = dict(
+        cfg(),
+        backend={
+            "title": "Backend",
+            "requires_backend": "other",
+            "intro": "where does it run",
+            "default": "agent",
+            "gates_intro": "Gates. Any one resolves to",
+            "pulls_intro": "Pulls. To",
+            "gates": [{"id": "g", "term": "known", "backend": "agent"}],
+            "pulls": [{"id": "p", "term": "novel", "backend": "other"}],
+        },
+    )
+
+    def _render(self, layered, backends):
+        layered("shipped", dict(self.CONFIG, backends=backends))
+        config, provenance = og.resolve_config(layered.project_root)
+        return og.render(config, provenance)
+
+    BOTH = [
+        {"id": "agent", "name": "Agent", "detect": {"always": True}},
+        {"id": "other", "name": "Other", "detect": {"always": True}},
+    ]
+    ONE = [{"id": "agent", "name": "Agent", "detect": {"always": True}}]
+
+    def test_gates_and_pulls_group_under_their_backend(self, layered):
+        text = self._render(layered, self.BOTH)
+        assert "Gates. Any one resolves to **Agent**:" in text
+        assert "Pulls. To **Other**:" in text
+        assert "Default: **Agent**." in text
+
+    def test_block_disappears_when_its_required_backend_is_absent(self, layered):
+        text = self._render(layered, self.ONE)
+        assert "where does it run" not in text
+        assert "Gates." not in text
+
+    def test_rows_naming_a_missing_backend_are_dropped(self, layered):
+        cfgd = dict(self.CONFIG)
+        cfgd["backend"] = dict(self.CONFIG["backend"], requires_backend=None)
+        layered("shipped", dict(cfgd, backends=self.ONE))
+        config, provenance = og.resolve_config(layered.project_root)
+        body = og.render(config, provenance).split("\n---\n")[0]
+        assert "Gates." in body
+        assert "Pulls." not in body
 
     def test_absent_block_is_not_an_error(self, layered):
-        layered("shipped", {
-            "tiers": [{"id": "workhorse"}],
-            "backends": [{"id": "agent"}],
-            "capacity": {"source": "none"},
-        })
+        layered("shipped", cfg())
         config, provenance = og.resolve_config(layered.project_root)
-        assert "Implementation" not in og.render(config, provenance)
+        assert "Gates" not in og.render(config, provenance)
 
-    def test_shipped_routing_targets_are_real_tiers(self):
-        data = yaml.safe_load(og.DEFAULTS_PATH.read_text(encoding="utf-8"))
-        ids = {t["id"] for t in data["tiers"]}
-        for row in data["implementation"]["routing"]:
-            if row["tier"] != "none":
-                assert row["tier"] in ids, row
+
+class TestEffortBlock:
+    def test_structured_effort_renders_as_tests(self, layered):
+        layered("shipped", cfg(effort={
+            "title": "Effort",
+            "intro": "after the tier",
+            "note": "not dialable",
+            "raise_when": ["it is ambiguous"],
+            "lower_when": ["it is mechanical"],
+        }))
+        config, provenance = og.resolve_config(layered.project_root)
+        text = og.render(config, provenance)
+        assert "after the tier" in text and "not dialable" in text
+        assert "- Raise: it is ambiguous." in text
+        assert "- Lower: it is mechanical." in text
+
+    def test_legacy_string_effort_still_renders(self, layered):
+        """An override written against the old prose schema must not vanish."""
+        layered("shipped", cfg(effort="just some prose about effort"))
+        config, provenance = og.resolve_config(layered.project_root)
+        assert "just some prose about effort" in og.render(config, provenance)
+
+    def test_absent_block_is_not_an_error(self, layered):
+        layered("shipped", cfg())
+        config, provenance = og.resolve_config(layered.project_root)
+        assert "Effort" not in og.render(config, provenance)
 
 
 class TestGateLeaks:
@@ -731,45 +1114,52 @@ class TestGateLeaks:
     Each of these rendered an absent backend's tier by name."""
 
     def _cfg(self, **over):
-        cfg = {
-            "default_backend": "agent",
-            "tiers": [
-                {"id": "workhorse", "model": "sonnet"},
-                {"id": "gated", "model": "phantom", "backend": "ghost"},
+        base = cfg(
+            ladders=[
+                cfg()["ladders"][0],
+                {
+                    "id": "ghost",
+                    "label": "Ghost",
+                    "rungs": [{"id": "gated", "model": "phantom", "criteria": [],
+                               "terminal": True}],
+                },
             ],
-            "backends": [
+            backends=[
                 {"id": "agent", "name": "Agent", "detect": {"always": True},
                  "capabilities": {"tiers": ["workhorse", "gated"]}},
                 {"id": "ghost", "detect": {"command": ["no-such-binary-xyz"]}},
             ],
-            "capacity": {"source": "none"},
-        }
-        cfg.update(over)
-        return cfg
+        )
+        base.update(over)
+        return base
 
-    def _body(self, layered, cfg):
-        layered("shipped", cfg)
+    def _body(self, layered, config_data):
+        layered("shipped", config_data)
         config, provenance = og.resolve_config(layered.project_root)
         return og.render(config, provenance).split("\n---\n")[0]
 
-    def test_tier_override_naming_a_gated_tier_does_not_leak_it(self, layered):
-        cfg = self._cfg(capacity={"source": "none", "tier_overrides": {"gated": "unavailable"}})
-        body = self._body(layered, cfg)
+    def test_rung_override_naming_a_gated_rung_does_not_leak_it(self, layered):
+        body = self._body(
+            layered,
+            self._cfg(capacity={"source": "none", "tier_overrides": {"gated": "unavailable"}}),
+        )
         assert "gated" not in body and "phantom" not in body
 
-    def test_tier_override_on_a_visible_tier_still_renders(self, layered):
-        cfg = self._cfg(capacity={"source": "none", "tier_overrides": {"workhorse": "unavailable"}})
-        body = self._body(layered, cfg)
-        assert "workhorse (UNAVAILABLE)" in body
+    def test_rung_override_on_a_visible_rung_still_renders(self, layered):
+        body = self._body(
+            layered,
+            self._cfg(capacity={"source": "none", "tier_overrides": {"workhorse": "unavailable"}}),
+        )
+        assert "`workhorse`: unavailable" in body
         assert "Do not dispatch to" in body
 
-    def test_backend_capabilities_do_not_advertise_a_gated_tier(self, layered):
+    def test_backend_capabilities_do_not_advertise_a_gated_rung(self, layered):
         assert "gated" not in self._body(layered, self._cfg())
 
-    def test_backend_capabilities_do_not_advertise_a_disabled_tier(self, layered):
-        cfg = self._cfg()
-        cfg["tiers"][0] = {"id": "workhorse", "model": "sonnet", "disabled": True}
-        assert "workhorse" not in self._body(layered, cfg)
+    def test_backend_capabilities_do_not_advertise_a_disabled_rung(self, layered):
+        data = self._cfg()
+        data["ladders"][0]["rungs"][1] = {"id": "workhorse", "disabled": True}
+        assert "workhorse" not in self._body(layered, data)
 
 
 class TestDetectFailsClosed:
@@ -846,3 +1236,153 @@ class TestHostileCapacityInput:
 
     def test_missing_rate_limits_degrades(self):
         assert og.window_rows({"captured_at": 0}, {})[0] == []
+
+
+class TestCriteriaFailClosed:
+    """A criteria group is a CONJUNCTION.
+
+    Dropping one unresolvable conjunct renders a strictly WIDER test than the
+    data specifies. On this ladder that silently widens the gate on the most
+    expensive rung -- the exact direction every guard in the policy exists to
+    prevent -- so an unresolvable id must invalidate its whole group, and a
+    non-terminal rung left with no group at all must raise rather than render
+    an empty test that first-match-wins reads as unconditional.
+    """
+
+    @staticmethod
+    def _claude_ladder(config):
+        for ladder in config["ladders"]:
+            if str(ladder.get("id")) == "agent":
+                return ladder
+        raise AssertionError("no agent ladder in shipped data")
+
+    @staticmethod
+    def _guarded_rung(ladder):
+        for rung in ladder["rungs"]:
+            for group in rung.get("criteria") or []:
+                ids = group.get("terms") if isinstance(group, dict) else group
+                if ids and len(ids) > 1:
+                    return rung
+        raise AssertionError("no multi-term conjunction in shipped data")
+
+    def test_a_disabled_conjunct_drops_the_whole_group_not_just_the_term(self):
+        """Group granularity: a surviving alternative still renders, but the
+        group containing the unresolvable id vanishes WHOLE -- its other
+        conjuncts must not survive on their own, which would widen the test."""
+        rung = {
+            "id": "probe",
+            "model": "probe-model",
+            "criteria": [["alpha", "beta"], ["gamma"]],
+        }
+        lexicon = [
+            {"id": "alpha", "kind": "skill", "name": "alpha"},
+            {"id": "beta", "kind": "skill", "name": "beta"},
+            {"id": "gamma", "kind": "skill", "name": "gamma"},
+        ]
+        full = og.rung_criteria(rung, og.Terms(list(lexicon)))
+        assert "`alpha`" in full and "`beta`" in full and "`gamma`" in full
+
+        degraded_lexicon = [dict(r) for r in lexicon]
+        for record in degraded_lexicon:
+            if record["id"] == "beta":
+                record["disabled"] = True
+        degraded = og.rung_criteria(rung, og.Terms(degraded_lexicon))
+
+        assert "`gamma`" in degraded, "the surviving alternative should still render"
+        assert "`beta`" not in degraded
+        assert "`alpha`" not in degraded, (
+            "alpha survived after its sibling conjunct was disabled -- "
+            "the conjunction was widened rather than dropped"
+        )
+
+    def test_shape_alone_cannot_stand_in_as_a_rungs_whole_test(self):
+        """`shape` NARROWS a criteria match; it is not a test on its own.
+
+        Caught by a smoke test, not by the assertion above: after every group was
+        invalidated the top rung still rendered as "`open` work only", which
+        matches every unit of that shape -- the same widening, through a
+        different door.
+        """
+        rung = {
+            "id": "probe",
+            "model": "probe-model",
+            "shape": "open",
+            "criteria": [["nonexistent-term"]],
+        }
+        terms = og.Terms([{"id": "open", "kind": "skill", "name": "open"}])
+        with pytest.raises(og.UnrenderableRung):
+            og.rung_criteria(rung, terms)
+
+    def test_a_rung_whose_only_test_is_shape_still_renders(self):
+        """A rung that declares no criteria at all is a different case -- it was
+        authored as shape-only, so shape IS its test."""
+        rung = {"id": "probe", "model": "probe-model", "shape": "open"}
+        terms = og.Terms([{"id": "open", "kind": "skill", "name": "open"}])
+        assert "work only" in og.rung_criteria(rung, terms)
+
+    def test_disabling_a_conjunct_raises_rather_than_rendering_a_shape_only_rung(
+        self, monkeypatch, tmp_path
+    ):
+        """End-to-end: the shipped top rung has both criteria and a shape."""
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, _ = og.resolve_config(tmp_path / "no-project")
+        rung = self._guarded_rung(self._claude_ladder(config))
+        group = rung["criteria"][0]
+        ids = list(group.get("terms") if isinstance(group, dict) else group)
+        if not rung.get("shape"):
+            pytest.skip("shipped guarded rung carries no shape restriction")
+        for record in config["lexicon"]:
+            if str(record.get("id")) in ids:
+                record["disabled"] = True
+        with pytest.raises(og.UnrenderableRung):
+            og.rung_criteria(rung, og.Terms(config["lexicon"]))
+
+    def test_a_non_terminal_rung_with_no_resolvable_criteria_raises(self):
+        rung = {
+            "id": "probe",
+            "model": "probe-model",
+            "criteria": [["nonexistent-term"]],
+        }
+        with pytest.raises(og.UnrenderableRung) as excinfo:
+            og.rung_criteria(rung, og.Terms([]))
+        assert "nonexistent-term" in str(excinfo.value)
+
+    def test_a_terminal_rung_may_state_no_criteria(self):
+        rung = {"id": "probe", "model": "probe-model", "terminal": True}
+        assert og.rung_criteria(rung, og.Terms([])) == ""
+
+    def test_a_typo_in_a_term_id_cannot_widen_a_conjunction(self):
+        rung = {
+            "id": "probe",
+            "model": "probe-model",
+            "terminal": True,
+            "criteria": [["real", "typoed"]],
+        }
+        terms = og.Terms([{"id": "real", "kind": "skill", "name": "real"}])
+        assert og.rung_criteria(rung, terms) == ""
+
+
+class TestStaleOverrideWarning:
+    """A schema-1 override merges cleanly and then contributes nothing.
+
+    Silence is the worst outcome there: the user's policy is not in force and
+    nothing says so. The layering half was preserved precisely for these users.
+    """
+
+    def test_a_schema_1_key_warns_in_the_rendered_output(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        assert "Stale override" not in og.render(config, provenance)
+
+        config["tiers"] = [{"id": "cheapest", "model": "haiku"}]
+        text = og.render(config, provenance)
+        assert "Stale override" in text
+        assert "`tiers`" in text
+        assert "configuration.md" in text
+
+    def test_every_legacy_key_is_detected(self):
+        for key in og.LEGACY_SCHEMA_1_KEYS:
+            assert og.legacy_schema_keys({key: "x"}) == [key]
+
+    def test_a_clean_schema_2_config_reports_no_stale_keys(self):
+        assert og.legacy_schema_keys(shipped()) == []
