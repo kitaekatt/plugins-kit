@@ -1,7 +1,12 @@
 {
+  "$comment": "The venv exists for the CLI, not for the library: models.resolve_endpoint() reads the layered config.yaml via bootstrap_lib.config_resolve, which requires PyYAML. The standalone Python the shims used to call carries only .pth links and no third-party packages, so every subcommand -- set-key included -- died on ModuleNotFoundError: yaml. bootstrap_lib is linked in because config_resolve lives there.",
   "shared_libs": [
     { "name": "llm_scripting_kit", "src": "lib" }
   ],
+  "shared_lib_imports": ["bootstrap_lib"],
+  "venv": {
+    "check_imports": ["yaml"]
+  },
   "config": {
     "file": "config.yaml",
     "defaults_source": "lib/llm_scripting_kit/default_config.yaml"

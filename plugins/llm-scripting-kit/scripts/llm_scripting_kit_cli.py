@@ -12,7 +12,10 @@ Subcommands (all accept ``--endpoint NAME``; default is the config's
                 round-trip.
     which       Print the resolved key's source path (or "missing").
 
-Stdlib-only -- no third-party packages required.
+Runs under the plugin venv when bootstrap has provisioned it (PyYAML there lets
+the layered config.yaml be read), and degrades to stdlib-only otherwise: without
+PyYAML the shipped model baseline is used and a warning goes to stderr, but key
+management keeps working. The shims in ``bin/`` pick the interpreter.
 """
 
 import argparse

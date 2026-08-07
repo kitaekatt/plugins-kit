@@ -76,11 +76,21 @@ def load_model_config(*, project_root: Optional[str] = None) -> dict:
     """Resolve the effective model config: shipped baseline deep-merged with the
     user and (optional) project ``config.yaml`` layers.
 
-    Falls back to the shipped baseline alone if bootstrap_lib is unavailable.
+    Falls back to the shipped baseline alone if the layers cannot be read --
+    either because bootstrap_lib is unavailable, or because reading them raised
+    (most commonly PyYAML missing from whatever interpreter is running us).
+    Resolution degrades; it never raises. A caller that hard-fails here would
+    take down key management along with model lookup -- which is how a missing
+    PyYAML turned every `llm-scripting-kit` subcommand, including `set-key`,
+    into a traceback with no way to recover.
     """
     base = copy.deepcopy(DEFAULT_MODEL_CONFIG)
     try:
-        from bootstrap_lib.config_resolve import resolve_config, standard_config_layers
+        from bootstrap_lib.config_resolve import (
+            ConfigError,
+            resolve_config,
+            standard_config_layers,
+        )
         from bootstrap_lib.manifest_merge import deep_merge
     except ImportError:
         print(
@@ -96,7 +106,15 @@ def load_model_config(*, project_root: Optional[str] = None) -> dict:
         marketplace=CONFIG_MARKETPLACE,
         project_root=project_root,
     )
-    file_cfg = resolve_config(layers)
+    try:
+        file_cfg = resolve_config(layers)
+    except ConfigError as e:
+        print(
+            f"llm-scripting-kit: cannot read layered config ({e}); using the shipped "
+            "model baseline (user/project config.yaml layers ignored)",
+            file=sys.stderr,
+        )
+        return base
     return deep_merge(base, file_cfg)
 
 

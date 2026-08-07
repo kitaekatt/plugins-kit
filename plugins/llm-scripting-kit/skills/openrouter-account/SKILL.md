@@ -102,7 +102,11 @@ llm-scripting-kit which
 
 `set-key` without `--key` requires an interactive hidden prompt -- Claude cannot supply that itself, so the user must run it (prefix with `!` to execute in the current prompt). `--key` is the non-interactive path Claude can run on the user's behalf when the user has already shared the key in chat.
 
-The script is stdlib-only; the shims call the standalone Python that bootstrap installs.
+The shims pick the interpreter: the plugin venv bootstrap provisions (which has
+PyYAML, needed to read the layered `config.yaml`), falling back to the standalone
+Python and then to PATH. On a fallback interpreter the CLI still works -- it warns
+on stderr and uses the shipped model baseline instead of the config layers, so key
+management never depends on the config being readable.
 
 ## Common scenarios
 

@@ -1,32 +1,41 @@
 #!/usr/bin/env bash
-# llm-scripting-kit -- shim that invokes the bundled CLI via the standalone
-# Python that bootstrap installs. The CLI is stdlib-only and adds its own
-# lib/ to sys.path, so no venv is needed.
+# llm-scripting-kit -- shim that invokes the bundled CLI.
+#
+# Interpreter preference:
+#   1. the plugin venv bootstrap provisions -- it has PyYAML, which the CLI
+#      needs to read the layered config.yaml (bootstrap_lib.config_resolve).
+#   2. the standalone Python bootstrap installs -- no third-party packages, so
+#      the CLI degrades to the shipped model baseline (it warns and continues).
+#   3. anything on PATH.
+# The CLI adds its own lib/ to sys.path, so no interpreter needs it installed.
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CLI="$PLUGIN_ROOT/scripts/llm_scripting_kit_cli.py"
+DATA_DIR="${HOME}/.claude/plugins/data/plugins-kit/llm-scripting-kit"
 
 OS="$(uname -s 2>/dev/null || echo Unknown)"
 if [[ "$OS" == MINGW* ]] || [[ "$OS" == MSYS* ]] || [[ "$OS" == CYGWIN* ]]; then
-    PY="${HOME}/.local/share/python-standalone/python/python.exe"
+    VENV_PY="${DATA_DIR}/.venv/Scripts/python.exe"
+    STANDALONE_PY="${HOME}/.local/share/python-standalone/python/python.exe"
 else
-    PY="${HOME}/.local/share/python-standalone/python/bin/python3"
+    VENV_PY="${DATA_DIR}/.venv/bin/python"
+    STANDALONE_PY="${HOME}/.local/share/python-standalone/python/bin/python3"
 fi
 
-if [ ! -x "$PY" ]; then
-    # Fall back to anything on PATH; bootstrap normally guarantees the
-    # standalone interpreter, but degrade gracefully if it is missing.
-    if command -v python3 >/dev/null 2>&1; then
-        PY="python3"
-    elif command -v python >/dev/null 2>&1; then
-        PY="python"
-    else
-        echo "llm-scripting-kit: no Python interpreter found" >&2
-        exit 1
-    fi
+if [ -x "$VENV_PY" ]; then
+    PY="$VENV_PY"
+elif [ -x "$STANDALONE_PY" ]; then
+    PY="$STANDALONE_PY"
+elif command -v python3 >/dev/null 2>&1; then
+    PY="python3"
+elif command -v python >/dev/null 2>&1; then
+    PY="python"
+else
+    echo "llm-scripting-kit: no Python interpreter found" >&2
+    exit 1
 fi
 
 exec "$PY" "$CLI" "$@"

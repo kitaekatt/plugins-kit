@@ -125,3 +125,30 @@ class TestLoadModelConfig:
         captured = capsys.readouterr()
         assert "bootstrap_lib unavailable" in captured.err
         assert captured.out == ""
+
+    def test_unreadable_layer_degrades_to_baseline(self, tmp_path, monkeypatch, capsys):
+        """A ConfigError from the layer read must degrade to the baseline, not
+        propagate. bootstrap_lib is importable but PyYAML is not when the CLI
+        runs under the standalone Python -- letting that escape took down every
+        subcommand, `set-key` included, leaving no way to fix the machine."""
+        from bootstrap_lib import config_resolve
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        user_file = (
+            tmp_path / ".claude" / "plugins" / "data"
+            / "plugins-kit" / "llm-scripting-kit" / "config.yaml"
+        )
+        _write(user_file, "default: qwen\n")
+
+        def _boom(_path):
+            raise config_resolve.ConfigError("PyYAML is required to read layered config files")
+
+        monkeypatch.setattr(config_resolve, "load_config_layer", _boom)
+
+        cfg = load_model_config()
+        assert cfg == DEFAULT_MODEL_CONFIG
+        captured = capsys.readouterr()
+        assert "cannot read layered config" in captured.err
+        assert "PyYAML" in captured.err
+        assert captured.out == ""

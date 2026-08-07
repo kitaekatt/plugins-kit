@@ -1,6 +1,6 @@
 {
   "name": "llm-scripting-kit",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "LLM access for scripts and pipelines: key resolution, model registry, named OpenAI-compatible endpoints (OpenRouter is the default), and a completion seam with OpenRouter + local claude-cli (subscription-billed) backends behind one complete(). CLI + shared library + session-start check.",
   "author": {
     "name": "Christina"
