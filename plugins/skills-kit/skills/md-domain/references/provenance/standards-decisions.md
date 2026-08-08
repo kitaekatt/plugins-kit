@@ -99,10 +99,16 @@ claude_md:
         "document RIGHT, code WRONG" framing was corrected: an incomplete
         catalog is an equally valid reading, so both resolutions are reported
         and the choice is a human's.
-        RESIDUAL GAP: no TypeScript, Rust, or Go corpus was available on this
-        machine. Generality across dynamic-typed-web, ownership-model, and
-        explicit-error-return families is UNVALIDATED. Do not describe these
-        criteria as validated across languages.
+        ACCEPTED LIMITATION (decided 2026-08-08, not an open item): measured on
+        C, Python, C# and C++ only. TypeScript / Rust / Go will not be tested --
+        no corpus is at hand, and a gate nobody can satisfy erodes the whole
+        discipline rather than raising it. Do not describe these criteria as
+        validated across languages, and do not re-file this as pending work.
+        The enumeration half assumes a greppable closed registration site; it
+        broke twice already (C++ trait dispatch, C# partial classes), and the
+        closed-set / unit-ambiguity gates are the general defence. A future
+        false positive from an unmeasured idiom is a bug report against those
+        gates -- widen the unverifiable category, never guess a number.
       origin: Diagnosis of a clean audit coexisting with drifted counts, 2026-08-07 (mechanism M4 of that investigation); both independent reviewers converged on the same type distinction.
       added: "2026-08-07"
     - id: cd2b_invariant_violated_by_code

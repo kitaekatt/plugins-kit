@@ -117,8 +117,37 @@ Recall against a corpus that DERIVED the design is near-1 by construction and
 must never be reported alone. Precision on held-out material is the measure
 that means something.
 
-**Open:** no TypeScript, Rust, or Go corpus has been tested. Generality across
-those families is unvalidated.
+**Scope of the rule, so it stays followable.** "Held out" means a corpus the
+change was not designed against -- ANY such corpus, whichever is at hand. It
+does not mean a specific language, and it is not a licence to block work when
+no ideal corpus exists. When nothing suitable is available: ship, and write the
+limitation down as a limitation (see the next section) rather than as a pending
+action item nobody will clear. A rule that cannot be satisfied is not a higher
+standard; it is a rule that gets ignored, taking the parts that were working
+with it.
+
+### Known limitation, accepted
+
+These criteria were measured on C, Python, C# and C++. They have NOT been
+measured on a dynamic-typed-web (TypeScript), ownership-model (Rust), or
+explicit-error-return (Go) corpus, and -- decided deliberately -- they are not
+going to be. No such corpus is at hand, and holding the work behind a test
+nobody will run converts a real discipline into a rule that gets ignored
+wholesale the first time it is inconvenient.
+
+So this is a LIMITATION, not a pending action. Read it as: the count rule's
+enumeration half assumes a greppable, closed registration site. That assumption
+held for C `register_*()` calls and Python decorators, and broke twice on C++
+trait dispatch and C# partial classes -- which is why the closed-set and
+unit-ambiguity gates exist. Expect it to break again on idioms with no literal
+registration site: decorator-and-metaclass registries, macro-generated tables,
+build-time codegen, anything assembled by reflection at runtime.
+
+The gates already written are the general defence: if membership is not
+mechanically identifiable, the rule SUPPRESSES rather than estimates. A new
+language family that produces false positives here is a bug report against
+those gates, not a surprise -- and the fix is to widen the unverifiable
+category, never to guess a number.
 
 ### The negative controls a coverage test needs
 
