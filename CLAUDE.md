@@ -321,14 +321,33 @@ and they cost seconds:
 
 #### Anti-pattern: unstaging another session's work to scope your own commit
 
-**Never run `git reset`, `git restore --staged`, or `git rm --cached` on a file you did
-not stage.** The index is shared mutable state that you do not own, and unlike the
-working tree it holds no history -- there is no reflog for "what was staged." Undoing
-someone's staging destroys the only record of a decision they made, and you cannot
-reliably put it back, because the index does not tell you WHY a file was staged. A
-`git rm --cached` (a deliberate untrack) and an accidental `git add` of a deleted file
-look identical in `git status`. Restoring one as the other silently corrupts their
-commit.
+**Do not run `git reset`, `git restore --staged`, or `git rm --cached` on a file you did
+not stage in order to scope your own commit.** The index is shared mutable state that
+you do not own, and unlike the working tree it holds no history -- there is no reflog
+for "what was staged." Undoing someone's staging destroys the only record of a decision
+they made, and you cannot reliably put it back, because the index does not tell you WHY
+a file was staged. A `git rm --cached` (a deliberate untrack) and an accidental
+`git add` of a deleted file look identical in `git status`. Restoring one as the other
+silently corrupts their commit.
+
+The operative question is **does the index hold information that exists nowhere else?**
+That is what makes the default so strict, and it also bounds it. A staged deletion or
+untrack encodes an intent recorded in no file and no commit -- irrecoverable. A staged
+snapshot of content that git history already contains encodes nothing new.
+
+So there is one narrow exception, and every clause is mechanically checkable. You may
+discard a staged state when ALL of these hold:
+
+- `git diff HEAD` is empty for those paths -- no working tree, anywhere, holds the
+  staged content; nobody is mid-edit on it.
+- The staged content is strictly SUPERSEDED by HEAD, demonstrably: a version number
+  that goes backwards, or text that is an older revision of what HEAD already carries.
+- No path is staged as a deletion or an untrack.
+
+Then the index is a stale re-add, its content is in history, and discarding it loses
+nothing. Outside that conjunction, assume the index is load-bearing. When it is
+load-bearing and merely inconvenient, you never needed to touch it -- see the correct
+move below.
 
 This is easy to walk into precisely BECAUSE the staging discipline above is right: you
 `git add` your own paths, run the mandatory `git diff --staged`, and find files that are
@@ -354,9 +373,25 @@ available from the start, was:
 git commit -F <msg> -- <your paths>     # commits those paths; index untouched
 ```
 
+**Second worked example, same day -- the exception in practice.** Later that day a
+publish preflight refused on 37 dirty files across four plugins. They looked like
+another session's in-flight refactor. They were not: `git diff HEAD` was empty (the
+working tree was byte-identical to HEAD), while the index held a pre-HEAD snapshot --
+`plugins/unreal-kit/.claude-plugin/plugin.json` staged at `0.11.4` against HEAD's
+`0.11.5`, and docstrings staged at wording HEAD had already superseded. Committing that
+index would have downgraded a published plugin version and reverted 37 files. Nothing
+was staged as a deletion. The index was discarded and the tree went clean. Note the
+limit of that check: the empty-`git diff HEAD` and no-deletion clauses were verified
+across all 37 paths mechanically, but "superseded by HEAD" was confirmed by reading two
+files and generalized to the rest. The clause is only as strong as the sample -- read
+enough of the staged diff to be sure, and say what you actually checked. The first example and this one differ on exactly one axis: whether the
+index was the only record of the decision.
+
 If you have already unstaged something that was not yours, say so plainly rather than
 quietly reconstructing it -- the other session can restate its intent in one line, and
-you cannot read it out of the index.
+you cannot read it out of the index. That disclosure is required even when the exception
+above applied, because "the checks passed" is a claim the other session may want to
+test.
 
 ### Safe-publish practices
 
@@ -854,8 +889,8 @@ claude_md:
       origin: "2026-08-08 -- user pointed out that awesome-kit is published and used by other developers while the orchestrate skill was shipping decision-fingerprint.txt, orchestrate-2.0-design.md, and a tier-principles.md that compile-principles step 1 had grown from 642 to 1,065 lines with generator emits blocks."
       added: "2026-08-08"
     - id: never_unstage_another_sessions_work
-      keywords: [git reset, git restore --staged, git rm --cached, unstage, shared index, scope my commit, staged set must be exactly my files, another session, concurrent staging, git commit -- paths, index has no reflog]
-      summary: Never unstage a file you did not stage. Use `git commit -F <msg> -- <your paths>` to scope a commit without touching a shared index -- the index has no history, so undoing someone's staging destroys the only record of their decision.
+      keywords: [git reset, git restore --staged, git rm --cached, unstage, shared index, scope my commit, staged set must be exactly my files, another session, concurrent staging, git commit -- paths, index has no reflog, narrow exception, stale re-add, superseded by HEAD]
+      summary: Never unstage a file you did not stage, outside one narrow mechanically-checkable exception. Use `git commit -F <msg> -- <your paths>` to scope a commit without touching a shared index -- the index has no history, so undoing someone's staging destroys the only record of their decision.
       detail: |
         The mandatory `git diff --staged` check surfaces foreign files, and the rule that
         the staged set must be exactly your files makes unstaging them FEEL like
@@ -871,7 +906,13 @@ claude_md:
         have already unstaged something that was not yours, SAY SO rather than
         reconstructing it silently -- the owning session can restate its intent in one
         line and you cannot read it out of the index.
-        Full narrative and the worked example: "Anti-pattern: unstaging another session's
+        The exception: discard a staged state only when ALL of `git diff HEAD` is empty
+        for those paths, the staged content is demonstrably superseded by HEAD (a version
+        going backwards, text HEAD already carries a newer revision of), and nothing is
+        staged as a deletion or untrack. Then the index is a stale re-add whose content is
+        already in history. The operative question behind both the rule and its exception
+        is whether the index holds information that exists nowhere else.
+        Full narrative and both worked examples: "Anti-pattern: unstaging another session's
         work to scope your own commit" in Development Workflow.
       origin: "2026-08-08 -- a unreal-kit stub staged as 588,614 deletions was `git restore --staged`-ed to scope an orchestrate commit; it was a deliberate `git rm --cached` paired with a staged .gitignore change, and putting it back required inferring that intent by hand."
       added: "2026-08-08"
