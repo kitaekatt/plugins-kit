@@ -81,6 +81,38 @@ reference_skill:
           the separate dependency-free bootstrap-stuck-fix plugin (no prior version to be wedged on, runs
           current code on its first session). Still fix the root cause in bootstrap for machines not yet stuck
           -- just do not mistake that for remediating the ones that are.
+    - id: manual_convergence
+      summary: >-
+        After a plugin download or version change, run bootstrap MANUALLY to converge
+        provisioning -- a restart is an optimization taken when convenient, never the
+        remediation.
+      keywords: [do I need to restart, restart required, restart not required, converge by hand, manual bootstrap run, bootstrap-reset-cooldown, session-bootstrap.sh, run bootstrap manually, after plugin update, after plugin install, no restart needed, restart vs manual run, three layers, code loading vs provisioning]
+      detail: |
+        Three separable layers, only the last of which a restart actually serves (see
+        update_lifecycle for the state-file mechanics behind each):
+        1. Download/activation (new plugin files onto disk) -- `claude plugin
+           marketplace update <mkt>` + `claude plugin update`. No restart.
+        2. Provisioning (bootstrap applying the manifest -- ini writes, venvs, PATH,
+           config merges) -- run `scripts/bootstrap-reset-cooldown.sh` then invoke
+           `hooks/sessionstart/session-bootstrap.sh` directly. No restart.
+        3. Code loading (new hooks/skills REGISTERING in the current session) -- the
+           only residue a manual run cannot converge; this is what /reload-plugins or a
+           restart is for.
+        Converging layers 1-2 by hand means the next restart -- whenever it happens
+        naturally, for unrelated reasons -- starts from an already-converged machine:
+        a clean session, not a remediation session. Restarts stop being a step in a
+        procedure.
+        Corollary: where the needed thing IS in layer 3, specialized duplicate code is
+        acceptable -- a skill may invoke the underlying script BY PATH rather than
+        waiting for its own registration. Slightly redundant, and it turns a required
+        restart into a no-op.
+      gotchas:
+        - Distinguish "restart to load new code" (layer 3, legitimate) from "restart so
+          the default workflow will remediate something" (layers 1-2, wrong -- run
+          bootstrap manually instead).
+        - Advising a restart as the fix for an unconverged manifest is the anti-pattern
+          this fact exists to block; the advisory is only ever a notice about layer 3,
+          never a remediation step for layers 1-2.
     - id: remediation_phases
       summary: The engine remediates silently first; only escalates to fix-all when user action is required.
       keywords: [auto-remediation, fix-all, two-phase, silent install, remediation flow, autodetect, default values]
@@ -293,7 +325,7 @@ reference_skill:
   groupings:
     - name: engine_behavior
       keywords: [engine, session start, processing order, messages, remediation flow, update, harvest, restart, claude --resume]
-      fact_ids: [message_outcomes, update_lifecycle, remediation_phases]
+      fact_ids: [message_outcomes, update_lifecycle, manual_convergence, remediation_phases]
     - name: config_files
       keywords: [bootstrap.json, env.json, manifest, layers, merge, override, pin, auto-update, autoUpdate, plugin not updating, machines registry, env gate, personalization, install manual, opt-in plugin, action-triggered install]
       fact_ids: [config_layers, env_manifest, marketplace_pinning, plugin_autoupdate_propagation, action_triggered_install, merge_semantics]
