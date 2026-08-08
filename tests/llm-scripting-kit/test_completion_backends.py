@@ -338,3 +338,82 @@ class TestOpenRouterBackend:
 
     def test_classify_halt_uses_openai_taxonomy(self):
         assert OpenRouterBackend().classify_halt(ValueError("boom")) is None
+
+    def test_classify_halt_builds_no_client(self, monkeypatch):
+        """classify_halt must never trigger the lazy build.
+
+        The platform calls it unguarded from inside an ``except`` block, so a
+        build there would raise a SECOND exception while handling the first --
+        and, on the failure this lock exists to prevent, would take another
+        file descriptor at exactly the moment the process has run out.
+        """
+        from llm_scripting_kit import client as client_mod
+
+        def _explode(*_a, **_kw):
+            raise AssertionError("classify_halt must not build a client")
+
+        monkeypatch.setattr(client_mod, "make_openai_client", _explode)
+        assert OpenRouterBackend().classify_halt(ValueError("boom")) is None
+
+    def test_concurrent_first_wave_builds_exactly_one_client(self, monkeypatch):
+        """N threads racing the lazy build must produce exactly ONE client.
+
+        ``_ensure_client`` was an unsynchronized check-then-assign: every
+        thread in a concurrent first wave found ``self.client`` unset and built
+        its own. Each build calls
+        ``ssl.create_default_context(cafile=certifi.where())`` and takes a file
+        descriptor, so the surplus clients are a real fd leak -- measured
+        downstream at 509 distinct clients and 391 ``[Errno 24] Too many open
+        files`` errors from 900 threads through a single shared transport, on
+        Windows' 512-entry table.
+
+        The sleep in the factory is what makes this test meaningful. A draft
+        written downstream with an instantaneous stub PASSED against the broken
+        code, because the race window closes if the build returns before the
+        next thread is scheduled. A real build does key resolution off disk and
+        SSL context setup -- tens of milliseconds -- so the delay models the
+        production timing rather than defeating it.
+        """
+        import threading
+
+        from llm_scripting_kit import client as client_mod
+
+        n_threads = 24
+        built = []
+        built_lock = threading.Lock()
+
+        def slow_factory(*_args, **_kwargs):
+            _time.sleep(0.05)
+            client = object()
+            with built_lock:
+                built.append(client)
+            return client
+
+        monkeypatch.setattr(client_mod, "make_openai_client", slow_factory)
+
+        backend = OpenRouterBackend()
+        gate = threading.Barrier(n_threads)
+        seen = []
+        seen_lock = threading.Lock()
+
+        def worker() -> None:
+            gate.wait()
+            client = backend._ensure_client()
+            with seen_lock:
+                seen.append(client)
+
+        threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(built) == 1, (
+            f"unsynchronized lazy build produced {len(built)} clients for "
+            f"{n_threads} threads -- each one holds a file descriptor"
+        )
+        # Every thread must observe the SAME client (the gate opens on "client
+        # exists", so a late thread never gets a different instance).
+        assert len(seen) == n_threads
+        assert all(c is built[0] for c in seen)
+        assert backend.client is built[0]

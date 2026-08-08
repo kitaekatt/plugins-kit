@@ -110,6 +110,121 @@ def test_claude_cli_backend_requires_lib_when_driven():
         backend.complete("s", "u", model="x")
 
 
+# --- lazy-delegate build under concurrency -----------------------------------
+
+
+def _install_counting_completion(monkeypatch, built, built_lock):
+    """Put a fake ``llm_scripting_kit.completion`` in sys.modules.
+
+    The delegate classes count their own construction and sleep first, so the
+    lazy-build race is exercised with production-shaped timing rather than an
+    instantaneous stub (an instantaneous probe closes the window and passes
+    against broken code). Installed via sys.modules so the test does not depend
+    on the real shared lib being importable from this suite.
+    """
+    import sys
+    import time
+    import types
+
+    class _Counting:
+        def __init__(self, **_kwargs):
+            time.sleep(0.05)
+            with built_lock:
+                built.append(self)
+
+        def classify_halt(self, _exc):
+            return None
+
+    pkg = types.ModuleType("llm_scripting_kit")
+    completion = types.ModuleType("llm_scripting_kit.completion")
+    completion.OpenRouterBackend = _Counting
+    completion.ClaudeCliBackend = _Counting
+    pkg.completion = completion
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", pkg)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.completion", completion)
+
+
+@pytest.mark.parametrize("backend_cls", [OpenRouterBackend, ClaudeCliBackend])
+def test_concurrent_first_wave_builds_exactly_one_delegate(monkeypatch, backend_cls):
+    """N threads racing ``_backend()`` must produce exactly ONE delegate.
+
+    This is the UPPER half of the same defect the shared lib carries in
+    ``_ensure_client``: ``if self._delegate is None: ... self._delegate = ...``
+    is an unsynchronized check-then-assign. Fixing only the lower layer is not
+    sufficient -- each surplus delegate built here is a SEPARATE
+    ``llm_scripting_kit`` backend instance with its own ``client`` slot, so each
+    one goes on to build its own OpenAI client (an SSL context and a file
+    descriptor apiece) no matter how well synchronized that lower build is.
+    """
+    import threading
+
+    built = []
+    built_lock = threading.Lock()
+    _install_counting_completion(monkeypatch, built, built_lock)
+
+    n_threads = 24
+    backend = backend_cls()
+    gate = threading.Barrier(n_threads)
+    seen = []
+    seen_lock = threading.Lock()
+
+    def worker() -> None:
+        gate.wait()
+        delegate = backend._backend()
+        with seen_lock:
+            seen.append(delegate)
+
+    threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(built) == 1, (
+        f"unsynchronized lazy build produced {len(built)} delegates for "
+        f"{n_threads} threads -- each carries its own client slot"
+    )
+    assert len(seen) == n_threads
+    assert all(d is built[0] for d in seen)
+
+
+def test_route_builds_no_delegate(monkeypatch):
+    """Routing must build nothing.
+
+    ``route`` runs BEFORE ``call_llm``'s response-cache lookup, so a build at
+    routing time would pay the cost (and take the file descriptor) on every
+    call including the ones the cache is about to serve.
+    """
+    import threading
+
+    built = []
+    _install_counting_completion(monkeypatch, built, threading.Lock())
+    route()
+    set_active_backend("claude-cli")
+    route()
+    set_active_backend(None)
+    assert built == []
+
+
+def test_classify_halt_does_not_rebuild(monkeypatch):
+    """A warm ``classify_halt`` must not trigger another build.
+
+    The platform calls ``classify_halt`` unguarded from inside an ``except``
+    block. Once the delegate exists the fast path must return it without
+    entering the lock, so error handling never queues behind an in-flight
+    build.
+    """
+    import threading
+
+    built = []
+    _install_counting_completion(monkeypatch, built, threading.Lock())
+    backend = OpenRouterBackend()
+    backend._backend()  # warm it once
+    assert len(built) == 1
+    assert backend.classify_halt(ValueError("boom")) is None
+    assert len(built) == 1
+
+
 # --- routing -----------------------------------------------------------------
 
 

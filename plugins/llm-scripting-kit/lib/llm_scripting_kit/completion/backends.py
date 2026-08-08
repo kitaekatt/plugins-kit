@@ -30,6 +30,7 @@ import json
 import os
 import shutil
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,20 +61,52 @@ class OpenRouterBackend:
     ``endpoint`` is passed through to both ``make_openai_client`` and
     ``resolve_model`` so a named OpenAI-compatible endpoint is honored end to
     end. A request ``model`` that is already a concrete slug is used as-is.
+
+    THREAD SAFETY: one instance may be shared across worker threads, and the
+    lazy client build is guarded by double-checked locking -- see
+    :meth:`_ensure_client`.
     """
 
     endpoint: Optional[str] = None
     project_root: Optional[Path] = None
     client: Any = None
     name: str = field(default="openrouter", init=False)
+    _build_lock: "threading.Lock" = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
 
     def _ensure_client(self) -> Any:
+        """Return the shared client, building it at most once.
+
+        Double-checked locking, and every part of that shape is load-bearing:
+
+        - The build MUST be serialized. It was an unsynchronized
+          check-then-assign, so a concurrent first wave had every thread find
+          ``client`` unset and build its own. Each build calls
+          ``ssl.create_default_context(cafile=certifi.where())`` and takes a
+          file descriptor -- measured downstream at 509 distinct clients and
+          391 ``[Errno 24] Too many open files`` errors from 900 threads
+          through a single shared transport (Windows' 512-entry table).
+        - Only the BUILD is serialized, never the requests behind it. Callers
+          take the lock only to construct; ``complete`` issues its HTTP call
+          outside it, so the pool does not collapse to one in-flight request.
+        - The fast path is lock-free, so the warm case (and ``classify_halt``,
+          which the platform calls unguarded inside ``except`` and which must
+          build nothing) never contends.
+        - The gate opens on CLIENT EXISTS, not REQUEST SUCCEEDED: ``client`` is
+          assigned as soon as the object is constructed. Gating on a successful
+          request instead would leave the slot empty through the whole first
+          round-trip and let the next wave build again.
+        """
         if self.client is not None:
             return self.client
-        from ..client import make_openai_client  # noqa: PLC0415
-        self.client = make_openai_client(
-            project_root=self.project_root, endpoint=self.endpoint
-        )
+        with self._build_lock:
+            # Re-check: another thread may have built while we waited.
+            if self.client is None:
+                from ..client import make_openai_client  # noqa: PLC0415
+                self.client = make_openai_client(
+                    project_root=self.project_root, endpoint=self.endpoint
+                )
         return self.client
 
     def _resolve_model(self, model: str) -> str:

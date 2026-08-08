@@ -49,6 +49,44 @@ _MISSING_LIB_MSG = (
 )
 
 
+def _lazy_build_note() -> None:
+    """Why both live adapters guard their lazy delegate build with a lock.
+
+    Not called -- a documentation anchor the two adapters reference, kept in
+    one place so the reasoning cannot drift between them.
+
+    ``if self._delegate is None: ... self._delegate = ...`` is an unsynchronized
+    check-then-assign: under a concurrent first wave every thread finds the slot
+    unset and builds its own delegate. Each surplus delegate is a separate
+    ``llm_scripting_kit`` backend with its OWN client slot, so each one goes on
+    to build its own OpenAI client -- an ``ssl.create_default_context
+    (cafile=certifi.where())`` and a file descriptor apiece. Measured
+    downstream: 900 threads through a SINGLE shared transport still
+    materialized 509 distinct clients and raised 391 ``[Errno 24] Too many open
+    files`` errors against Windows' 512-entry table. Synchronizing only the
+    shared lib's ``_ensure_client`` does NOT fix this -- surplus delegates each
+    hold a distinct, individually-synchronized client.
+
+    Four properties the fix preserves, each one learned the hard way:
+
+    1. **Nothing builds at routing time.** :func:`route` returns adapter
+       instances and never touches ``_backend()``. Routing precedes
+       ``call_llm``'s response-cache lookup, so building there would pay the
+       cost -- and take the descriptor -- on every call, including the ones the
+       cache is about to serve.
+    2. **``classify_halt`` builds nothing new.** The platform calls it unguarded
+       from inside an ``except``; the lock-free fast path means a warm backend
+       never contends there.
+    3. **The gate opens on DELEGATE EXISTS, not REQUEST SUCCEEDED.** The slot is
+       assigned the moment the object is constructed. Gating on a successful
+       request would leave it empty through the whole first round-trip and let
+       the next wave build again.
+    4. **Only the BUILD is serialized, not the queue behind it.** The lock is
+       held for construction alone; ``complete`` issues its request outside it,
+       so concurrency is not collapsed to one in-flight call.
+    """
+
+
 def _to_completion_options(opts: BackendOptions) -> Any:
     """Build an ``llm_scripting_kit.completion.BackendOptions`` from ours.
 
@@ -100,6 +138,10 @@ class OpenRouterBackend:
     ``llm_scripting_kit.completion.OpenRouterBackend`` (a caller may inject a
     pre-built ``client`` as the test seam). The delegate is built lazily on
     first use, so constructing this adapter never requires the shared lib.
+
+    THREAD SAFETY: one instance may be shared across worker threads; the lazy
+    delegate build is guarded by double-checked locking (see
+    :func:`_lazy_build_note`).
     """
 
     endpoint: Optional[str] = None
@@ -107,20 +149,27 @@ class OpenRouterBackend:
     client: Any = None
     name: str = field(default="openrouter", init=False)
     _delegate: Any = field(default=None, init=False, repr=False, compare=False)
+    _build_lock: "threading.Lock" = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
 
     def _backend(self) -> Any:
-        if self._delegate is None:
-            try:
-                from llm_scripting_kit.completion import (  # noqa: PLC0415
-                    OpenRouterBackend as _CompletionOpenRouter,
+        """Return the shared delegate, building it at most once (see notes)."""
+        if self._delegate is not None:
+            return self._delegate
+        with self._build_lock:
+            if self._delegate is None:
+                try:
+                    from llm_scripting_kit.completion import (  # noqa: PLC0415
+                        OpenRouterBackend as _CompletionOpenRouter,
+                    )
+                except ImportError as exc:  # pragma: no cover - env-dependent
+                    raise ImportError(f"OpenRouterBackend {_MISSING_LIB_MSG}") from exc
+                self._delegate = _CompletionOpenRouter(
+                    endpoint=self.endpoint,
+                    project_root=self.project_root,
+                    client=self.client,
                 )
-            except ImportError as exc:  # pragma: no cover - env-dependent
-                raise ImportError(f"OpenRouterBackend {_MISSING_LIB_MSG}") from exc
-            self._delegate = _CompletionOpenRouter(
-                endpoint=self.endpoint,
-                project_root=self.project_root,
-                client=self.client,
-            )
         return self._delegate
 
     def complete(
@@ -160,6 +209,10 @@ class ClaudeCliBackend:
     (``None`` uses the shared lib's battle-tested ``run_claude_streaming``). The
     delegate is built lazily so constructing this adapter never requires the
     shared lib.
+
+    THREAD SAFETY: one instance may be shared across worker threads; the lazy
+    delegate build is guarded by double-checked locking (see
+    :func:`_lazy_build_note`).
     """
 
     default_timeout_s: float = 900.0
@@ -170,25 +223,32 @@ class ClaudeCliBackend:
     runner: Optional[Callable[..., "tuple[str, str, int]"]] = None
     name: str = field(default="claude-cli", init=False)
     _delegate: Any = field(default=None, init=False, repr=False, compare=False)
+    _build_lock: "threading.Lock" = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
 
     def _backend(self) -> Any:
-        if self._delegate is None:
-            try:
-                from llm_scripting_kit.completion import (  # noqa: PLC0415
-                    ClaudeCliBackend as _CompletionClaudeCli,
-                )
-            except ImportError as exc:  # pragma: no cover - env-dependent
-                raise ImportError(f"ClaudeCliBackend {_MISSING_LIB_MSG}") from exc
-            kwargs: Dict[str, Any] = {
-                "default_timeout_s": self.default_timeout_s,
-                "retry_max_attempts": self.retry_max_attempts,
-                "retry_cooldown_s": self.retry_cooldown_s,
-                "diagnostics_dir": self.diagnostics_dir,
-                "executable": self.executable,
-            }
-            if self.runner is not None:
-                kwargs["runner"] = self.runner
-            self._delegate = _CompletionClaudeCli(**kwargs)
+        """Return the shared delegate, building it at most once (see notes)."""
+        if self._delegate is not None:
+            return self._delegate
+        with self._build_lock:
+            if self._delegate is None:
+                try:
+                    from llm_scripting_kit.completion import (  # noqa: PLC0415
+                        ClaudeCliBackend as _CompletionClaudeCli,
+                    )
+                except ImportError as exc:  # pragma: no cover - env-dependent
+                    raise ImportError(f"ClaudeCliBackend {_MISSING_LIB_MSG}") from exc
+                kwargs: Dict[str, Any] = {
+                    "default_timeout_s": self.default_timeout_s,
+                    "retry_max_attempts": self.retry_max_attempts,
+                    "retry_cooldown_s": self.retry_cooldown_s,
+                    "diagnostics_dir": self.diagnostics_dir,
+                    "executable": self.executable,
+                }
+                if self.runner is not None:
+                    kwargs["runner"] = self.runner
+                self._delegate = _CompletionClaudeCli(**kwargs)
         return self._delegate
 
     def complete(
