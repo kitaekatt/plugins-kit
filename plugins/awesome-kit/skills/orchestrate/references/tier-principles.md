@@ -497,7 +497,7 @@ emits:
 emits:
   ladders.agent.guards:
     - order: 2
-      value: Any doubt resolves to sonnet.
+      value: Any doubt resolves to the rung below.
     - order: 3
       value: Never down-tier a unit that meets the fable bar to harvest the discount.
 ```
@@ -540,7 +540,7 @@ proves the identifier is accepted, nothing more.
 ```yaml
 emits:
   ladders.codex.guards:
-    - order: 2
+    - order: 1
       value: >-
         Model identifiers are FULLY QUALIFIED as written above; the bare
         codenames are not dispatchable by `-m`.
@@ -639,18 +639,10 @@ gpt-5.6-sol is overkill. Add it back when such a class is named, and name it her
 the escalation cliff is leaving gpt-5.6-luna at all. Cost is explicitly not the argument; the
 missing case is.
 
-*Ordering deviation, deliberate and unresolved:* these `order:` values transcribe
-today's `orchestration.yaml`, where this guard precedes P3.0a's. That contradicts
-P5.1's `intra_block_order: principle-number`, which would put P3.0a first. The
-transcription is faithful ON PURPOSE -- step 1 was behaviour-preserving, so it
-carried the conflict forward rather than resolving it by renumbering. Whoever
-writes the generator resolves it: renumber these two, or relax P5.1. Do not
-"fix" it in isolation; the choice changes the generated file.
-
 ```yaml
 emits:
   ladders.codex.guards:
-    - order: 1
+    - order: 2
       value: There is no gpt-5.6-terra rung.
 ```
 
@@ -923,6 +915,14 @@ were moved out of this section for exactly that reason.
 **Within a block, render in the order the principles are numbered.** That makes
 intra-block layout mechanical rather than a judgment call.
 
+**The rule orders each SLOT, not the whole block.** Rungs order among rungs,
+guards among guards, tests among tests. It is not a licence to interleave slots:
+P2.1 is a ladder guard numbered before the rung principles P2.2-P2.4, and strict
+whole-block numbering would try to emit a guard between two rungs, which the
+schema has no shape for. Slot membership is decided by the emit target
+(`ladders.agent.guards` vs `ladders.agent.rungs[...]`); `order:` then sequences
+within it.
+
 **What renders:** every decision in sections 0-4 -- the tests, the routes, the
 defaults -- plus **every negative guard** (a rung something must NOT be used for, a
 rung that does not exist). Rationale does not: the *why*, the *overturned by*, the
@@ -969,6 +969,7 @@ generator:
       path: announce
       label: Announce every dispatch, in one line
   intra_block_order: principle-number
+  intra_block_order_scope: slot
 ```
 
 ### P5.2 -- Two variants, one source

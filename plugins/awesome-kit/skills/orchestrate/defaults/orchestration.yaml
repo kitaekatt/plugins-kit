@@ -36,405 +36,338 @@
 # ===========================================================================
 
 schema_version: 2
-
-# Backend dispatched through when a unit does not call for a specific one.
 default_backend: agent
 
 # ---------------------------------------------------------------------------
-# Resolution semantics. Rendered at the TOP of the artifact: it is not
-# inferable from the content, and a default-plus-exits reading picks different
-# models for the same unit.
+# Resolution semantics
 # ---------------------------------------------------------------------------
 resolution: >-
-  Ordered elimination: within a block, tests are evaluated in the order given
-  and the FIRST match is the answer. There is no comparison step and no
-  tie-break.
+  Ordered elimination: within a block, tests are evaluated in the order given and the FIRST
+  match is the answer. There is no comparison step and no tie-break.
 
 # ---------------------------------------------------------------------------
-# Lexicon -- the controlled vocabulary. Every criterion below is stated in
-# these terms, and dispatch announcements carry only these terms.
-#
-#   kind:   skill    selects a branch -- renders
-#           concept  justifies a choice already made -- NEVER renders
-#   render: bare     the natural reading already matches the test
-#           glossed  the natural reading diverges, so the gloss renders with
-#                    the term at its FIRST occurrence in document order
-#
-# `test` is the audit trail, not rendered; `gloss` is its rendered compression.
+# Lexicon
 # ---------------------------------------------------------------------------
 lexicon:
-  - id: known
-    kind: skill
-    render: glossed
-    test: Can you write what `done` looks like without doing the work?
-    gloss: you can describe what done looks like without doing it
-
-  - id: open
-    kind: skill
-    render: glossed
-    test: Would specifying it require already having the answer?
-    gloss: specifying it would require already having the answer
-
-  - id: sufficient
-    kind: skill
-    render: glossed
-    test: Is there any ambiguity about what `done` looks like?
-    gloss: the one-sentence statement is already unambiguous
-
-  - id: underspecified
-    kind: skill
-    render: bare
-    test: The negation of `sufficient`.
-
-  - id: condensation
-    kind: skill
-    render: glossed
-    test: Does a correct answer restate what the material already says?
-    gloss: the answer is already in the source
-
-  - id: inference
-    kind: skill
-    render: glossed
-    test: Must the agent assert something no source states?
-    gloss: must assert something no source states
-
-  - id: novel
-    kind: skill
-    render: glossed
-    test: Can you name the pattern it follows? If yes, it is not novel.
-    gloss: you cannot name a pattern it follows
-
-  - id: load-bearing
-    kind: skill
-    render: glossed
-    test: Would a wrong answer propagate, or would the next step catch it?
-    gloss: a wrong answer would propagate rather than be caught
-
-  - id: unverifiable
-    kind: skill
-    render: glossed
-    test: Is there a cheap check -- a diff, a test run, a file you would read anyway?
-    gloss: no cheap check exists -- no diff, test, or file you would read anyway
-
-  - id: default
-    kind: skill
-    render: bare
-    test: Did any rung above match? If none did, this is the term.
-
-  - id: conversational
-    kind: skill
-    render: glossed
-    test: Is the output a deliverable you act on, or a thread you continue?
-    gloss: a thread you continue, not a deliverable you act on
-
-  - id: abortable
-    kind: skill
-    render: bare
-    test: Is there a plausible reason to kill it before it finishes?
-
-  - id: fan-out
-    kind: skill
-    render: glossed
-    test: Does it survive collapsing into one shell command? If not, it is one unit.
-    gloss: N similar units that resist collapsing into one command
-
-  - id: bulk-output
-    kind: skill
-    render: glossed
-    test: Would you skim and discard most of the output?
-    gloss: emits much more than you need to keep
-
-  - id: cross-check
-    kind: skill
-    render: glossed
-    test: >-
-      Does a conclusion already exist, and is the point to have it challenged by
-      a different failure mode?
-    gloss: a second opinion on a conclusion Claude already reached
-
-  - id: schema
-    kind: skill
-    render: bare
-    test: Will you parse the result rather than read it?
-
-  # ---- concepts: audit vocabulary only, never rendered --------------------
-  - id: mechanical
-    kind: concept
-    test: Can you verify the result without reading surrounding context?
-
-  - id: stretch
-    kind: concept
-    test: Can you say what the rung below would get wrong?
+- id: known
+  kind: skill
+  render: glossed
+  test: Can you write what `done` looks like without doing the work?
+  gloss: you can describe what done looks like without doing it
+- id: open
+  kind: skill
+  render: glossed
+  test: Would specifying it require already having the answer?
+  gloss: specifying it would require already having the answer
+- id: sufficient
+  kind: skill
+  render: glossed
+  test: Is there any ambiguity about what `done` looks like?
+  gloss: the one-sentence statement is already unambiguous
+- id: underspecified
+  kind: skill
+  render: bare
+  test: The negation of `sufficient`.
+- id: mechanical
+  kind: concept
+  test: Can you verify the result without reading surrounding context?
+- id: condensation
+  kind: skill
+  render: glossed
+  test: Does a correct answer restate what the material already says?
+  gloss: the answer is already in the source
+- id: inference
+  kind: skill
+  render: glossed
+  test: Must the agent assert something no source states?
+  gloss: must assert something no source states
+- id: novel
+  kind: skill
+  render: glossed
+  test: Can you name the pattern it follows? If yes, it is not novel.
+  gloss: you cannot name a pattern it follows
+- id: load-bearing
+  kind: skill
+  render: glossed
+  test: Would a wrong answer propagate, or would the next step catch it?
+  gloss: a wrong answer would propagate rather than be caught
+- id: unverifiable
+  kind: skill
+  render: glossed
+  test: Is there a cheap check -- a diff, a test run, a file you would read anyway?
+  gloss: no cheap check exists -- no diff, test, or file you would read anyway
+- id: default
+  kind: skill
+  render: bare
+  test: Did any rung above match? If none did, this is the term.
+- id: stretch
+  kind: concept
+  test: Can you say what it would get wrong?
+- id: conversational
+  kind: skill
+  render: glossed
+  test: Is the output a deliverable you act on, or a thread you continue?
+  gloss: a thread you continue, not a deliverable you act on
+- id: abortable
+  kind: skill
+  render: bare
+  test: Is there a plausible reason to kill it before it finishes?
+- id: fan-out
+  kind: skill
+  render: glossed
+  test: Does it survive collapsing into one shell command? If not, it is one unit.
+  gloss: N similar units that resist collapsing into one command
+- id: bulk-output
+  kind: skill
+  render: glossed
+  test: Would you skim and discard most of the output?
+  gloss: emits much more than you need to keep
+- id: cross-check
+  kind: skill
+  render: glossed
+  test: >-
+    Does a conclusion already exist, and is the point to have it challenged by a different
+    failure mode?
+  gloss: a second opinion on a conclusion Claude already reached
+- id: schema
+  kind: skill
+  render: bare
+  test: Will you parse the result rather than read it?
 
 # ---------------------------------------------------------------------------
-# Block 0 -- shaping the unit. Runs before everything else: most routing
-# defects trace to a unit that was never shaped.
+# Shape the unit
 # ---------------------------------------------------------------------------
 shape:
   title: Shape the unit
   intro: Two independent axes.
   tests:
-    - id: brief-shape
-      principle: P0.1
-      text: >-
-        Shape -- {known} takes a SPECIFICATION brief; {open} takes a QUESTION
-        brief. That is the only thing shape determines.
-
-    - id: brief-sufficiency
-      principle: P0.1
-      text: >-
-        Sufficiency -- {sufficient} dispatches as stated; otherwise the unit is
-        {underspecified} and you author the brief first. All four combinations
-        occur.
-
-    - id: sufficiency-is-not-a-rung-test
-      principle: P0.2
-      guard: true
-      text: >-
-        {sufficient} is never a rung criterion. It decides whether you author a
-        brief, and nothing else -- no test below may reference it.
-
-    - id: specify-by-volume
-      principle: P0.3
-      render_scope: principles-only
-      text: >-
-        For {known} work that is not {sufficient}: many units -- author the
-        specification once, then execute across them; one unit -- skip it.
-
-    - id: who-authors-the-specification
-      principle: P0.4
-      render_scope: principles-only
-      text: >-
-        Does writing the specification require reading material you do not
-        already have in context? Yes -- a sub-agent writes it. No -- write it
+  - id: brief-shape
+    principle: P0.1
+    text: >-
+      Shape -- {known} takes a SPECIFICATION brief; {open} takes a QUESTION brief. That is
+      the only thing shape determines.
+  - id: brief-sufficiency
+    principle: P0.1
+    text: >-
+      Sufficiency -- {sufficient} dispatches as stated; otherwise the unit is {underspecified}
+      and you author the brief first. All four combinations occur.
+  - id: sufficiency-is-not-a-rung-test
+    principle: P0.2
+    guard: true
+    text: >-
+      {sufficient} is never a rung criterion. It decides whether you author a brief, and nothing
+      else -- no test below may reference it.
+  - id: specify-by-volume
+    principle: P0.3
+    render_scope: principles-only
+    text: >-
+      For {known} work that is not {sufficient}: many units -- author the specification once,
+      then execute across them; one unit -- skip it.
+  - id: who-authors-the-specification
+    principle: P0.4
+    render_scope: principles-only
+    text: >-
+      Does writing the specification require reading material you do not already have in context?
+      Yes -- a sub-agent writes it. No -- write it inline.
+  - id: fan-out-collapse
+    principle: P0.5
+    text: >-
+      Decide {fan-out} before dispatching. One that collapses into a single shell command
+      is ONE unit, and work a one-liner does rarely needs delegating at all.
+    without_backend:
+      codex: A genuine fan-out then has no other route -- sequence the units or handle them
         inline.
 
-    - id: fan-out-collapse
-      principle: P0.5
-      text: >-
-        Decide {fan-out} before dispatching. One that collapses into a single
-        shell command is ONE unit, and work a one-liner does rarely needs
-        delegating at all.
-      # Rendered only when the named backend is ABSENT. Disclosing the hole
-      # costs a clause and invents nothing; silence invites the reader to
-      # invent the answer.
-      without_backend:
-        codex: >-
-          A genuine fan-out then has no other route -- sequence the units or
-          handle them inline.
-
 # ---------------------------------------------------------------------------
-# Block 1 -- backend selection. Renders only when there is a second backend to
-# choose; with one backend there is nothing to decide.
+# Backend
 # ---------------------------------------------------------------------------
 backend:
   title: Backend
   requires_backend: codex
   intro: >-
-    Choose where the work RUNS, then pick a rung on that backend's ladder.
-    Rungs compare within a ladder, never across.
+    Choose where the work RUNS, then pick a rung on that backend's ladder. Rungs compare within
+    a ladder, never across.
   default: agent
   gates_intro: Gates -- disqualifiers, evaluated before pulls. Any one resolves to
-  pulls_intro: Pulls -- any one firing is enough, and their order carries no precedence. To
   gates:
-    - id: gate-conversational
-      term: conversational
-      backend: agent
-    - id: gate-abortable
-      term: abortable
-      backend: agent
+  - id: gate-conversational
+    term: conversational
+    backend: agent
+  - id: gate-abortable
+    term: abortable
+    backend: agent
+  pulls_intro: Pulls -- any one firing is enough, and their order carries no precedence. To
   pulls:
-    - id: pull-fan-out
-      term: fan-out
-      backend: codex
-    - id: pull-bulk-output
-      term: bulk-output
-      backend: codex
-    - id: pull-cross-check
-      term: cross-check
-      backend: codex
-    - id: pull-schema
-      term: schema
-      backend: codex
+  - id: pull-fan-out
+    term: fan-out
+    backend: codex
+  - id: pull-bulk-output
+    term: bulk-output
+    backend: codex
+  - id: pull-cross-check
+    term: cross-check
+    backend: codex
+  - id: pull-schema
+    term: schema
+    backend: codex
 
 # ---------------------------------------------------------------------------
-# Block 2 -- tier. One ladder per backend, tested top-down. A ladder whose
-# backend is not detected disappears whole.
-#
-# `criteria` is a list of OR'd groups; each group is a list of term ids that
-# must ALL hold, or a mapping {terms: [...], where: "..."} carrying a
-# qualifying clause. An empty list means the rung states no test of its own,
-# which is only legal on a terminal rung.
+# Tier
 # ---------------------------------------------------------------------------
 ladders:
-  - id: agent
-    label: Claude
-    rungs:
-      - id: top
-        model: fable
-        shape: open
-        criteria:
-          - [novel, load-bearing, unverifiable]
-        terminal: false
-        gate: >-
-          write "qualifies on <criterion>; opus would plausibly get it wrong
-          because <reason>." If that sentence is hard to write, the unit does
-          not qualify.
-        notes:
-          - id: pool-boundary
-            text: >-
-              fable draws from a different usage pool than the rungs below --
-              the only pool boundary on this ladder, and a pool does not
-              degrade gracefully when spent, it stops.
-        guards:
-          - >-
-            Never this rung: hard-but-patterned work; anything with a cheap
-            check; anything recoverable in one more pass.
-
-      - id: high-reasoning
-        model: opus
-        criteria:
-          - [open, inference]
-          - [known, novel]
-        terminal: false
-
-      - id: workhorse
-        model: sonnet
-        criteria: []
-        terminal: true
-        text: >-
-          terminal default, reached by fall-through only. It states no test of
-          its own -- everything no rung above matched lands here,
-          {condensation} work included.
-        announce_as:
-          - [known, default]
-          - [open, condensation]
-    guards:
-      - There is no haiku rung.
-      - Any doubt resolves to sonnet.
-
-  - id: codex
-    label: Codex
-    rungs:
-      - id: codex-top
-        model: gpt-5.6-sol
-        effort: max
-        criteria:
-          - [cross-check]
-          - terms: [novel, unverifiable]
-            where: raising gpt-5.6-luna to `max` would not resolve it
-        terminal: false
-
-      - id: codex-workhorse
-        model: gpt-5.6-luna
-        effort: high
-        criteria: []
-        terminal: true
-        text: >-
-          terminal default. You are on this backend for dispatch shape, not
-          difficulty, so arriving units are workhorse-difficulty units that
-          happen to be awkwardly shaped.
-    guards:
-      - There is no gpt-5.6-terra rung.
-      - >-
-        Model identifiers are FULLY QUALIFIED as written above; the bare
-        codenames are not dispatchable by `-m`.
+- id: agent
+  label: Claude
+  guards:
+  - There is no haiku rung.
+  - Any doubt resolves to the rung below.
+  - Never down-tier a unit that meets the fable bar to harvest the discount.
+  rungs:
+  - id: top
+    model: fable
+    shape: open
+    criteria:
+    - [novel, load-bearing, unverifiable]
+    terminal: false
+    gate: >-
+      write "qualifies on <criterion>; opus would plausibly get it wrong because <reason>."
+      If that sentence is hard to write, the unit does not qualify.
     notes:
-      - id: both-families-on-plan-review
-        render_scope: principles-only
-        text: >-
-          Running BOTH families on a plan review is never automatic. It
-          requires all of: the unit already qualifies for fable; unwinding the
-          decision later would cost more than a second review; and you will
-          act on a disagreement rather than noting it.
+    - id: pool-boundary
+      text: >-
+        fable draws from a different usage pool than the rungs below -- the only pool boundary
+        on this ladder, and a pool does not degrade gracefully when spent, it stops.
+    guards:
+    - >-
+      Never this rung: hard-but-patterned work; anything with a cheap check; anything recoverable
+      in one more pass.
+  - id: high-reasoning
+    model: opus
+    criteria:
+    - [open, inference]
+    - [known, novel]
+    terminal: false
+  - id: workhorse
+    model: sonnet
+    criteria: []
+    terminal: true
+    text: >-
+      terminal default, reached by fall-through only. It states no test of its own -- everything
+      no rung above matched lands here, {condensation} work included.
+    announce_as:
+    - [known, default]
+    - [open, condensation]
+- id: codex
+  label: Codex
+  guards:
+  - >-
+    Model identifiers are FULLY QUALIFIED as written above; the bare codenames are not dispatchable
+    by `-m`.
+  - There is no gpt-5.6-terra rung.
+  rungs:
+  - id: codex-top
+    model: gpt-5.6-sol
+    criteria:
+    - [cross-check]
+    - terms: [novel, unverifiable]
+      where: raising gpt-5.6-luna to `max` would not resolve it
+    terminal: false
+    effort: max
+  - id: codex-workhorse
+    model: gpt-5.6-luna
+    criteria: []
+    terminal: true
+    text: >-
+      terminal default. You are on this backend for dispatch shape, not difficulty, so arriving
+      units are workhorse-difficulty units that happen to be awkwardly shaped.
+    effort: high
+  notes:
+  - id: both-families-on-plan-review
+    render_scope: principles-only
+    text: >-
+      Running BOTH families on a plan review is never automatic. It requires all of: the unit
+      already qualifies for fable; unwinding the decision later would cost more than a second
+      review; and you will act on a disagreement rather than noting it.
 
 # ---------------------------------------------------------------------------
-# Block 3 -- agent type. A separate dimension from tier, Claude-side only.
+# Agent type
 # ---------------------------------------------------------------------------
 agent_types:
   title: Agent type
   intro: Claude-side only.
   items:
-    - id: explore
-      name: Explore
-      text: >-
-        the default for every {open} + {condensation} unit. Read-only, not
-        command-free -- it may run commands that do not change state. Give it a
-        breadth argument, "medium" or "very thorough"; default "medium".
-    - id: plan
-      name: Plan
-      text: implementation-strategy design.
-    - id: general-purpose
-      name: general-purpose
-      text: >-
-        everything else, including anything that must run commands that CHANGE
-        state. Read-only inspection does not disqualify Explore.
+  - id: explore
+    name: Explore
+    text: >-
+      the default for every {open} + {condensation} unit. Read-only, not command-free -- it
+      may run commands that do not change state. Give it a breadth argument, "medium" or "very
+      thorough"; default "medium".
+  - id: plan
+    name: Plan
+    text: implementation-strategy design.
+  - id: general-purpose
+    name: general-purpose
+    text: >-
+      everything else, including anything that must run commands that CHANGE state. Read-only
+      inspection does not disqualify Explore.
 
 # ---------------------------------------------------------------------------
-# Block 4 -- effort. Orthogonal to tier and decided after it. Deliberately not
-# a tree node: its criteria partly overlap tier criteria with different
-# consequences.
+# Effort
 # ---------------------------------------------------------------------------
 effort:
   title: Effort
   intro: >-
-    Decided separately, after the tier. Scale, low to high: `low`, `medium`,
-    `high`, `xhigh`, `max`.
+    Decided separately, after the tier. Scale, low to high: `low`, `medium`, `high`, `xhigh`,
+    `max`.
   backend_notes:
-    - id: codex-dial
-      backend: codex
-      text: >-
-        Codex-side, effort is a real dial set per dispatch -- the rung defaults
-        are above.
+  - id: codex-dial
+    backend: codex
+    text: Codex-side, effort is a real dial set per dispatch -- the rung defaults are above.
   note: >-
-    Claude-side, effort is NOT dialable per call: the Agent tool has no effort
-    parameter, agents inherit from their type or the session, and it is
-    settable per call only through Workflow's `agent()` `opts.effort`. So a
-    Claude-side effort decision is an input to TIER selection, not a knob to
-    turn afterwards. Where it IS settable on fable, set `max` -- that rung
-    requires {unverifiable}, so deliberation is the only quality control left.
+    Claude-side, effort is NOT dialable per call: the Agent tool has no effort parameter,
+    agents inherit from their type or the session, and it is settable per call only through
+    Workflow's `agent()` `opts.effort`. So a Claude-side effort decision is an input to TIER
+    selection, not a knob to turn afterwards. Where it IS settable on fable, set `max` --
+    that rung requires {unverifiable}, so deliberation is the only quality control left.
   up_effort_note: >-
-    Try up-effort before up-tier -- opus at `xhigh` before reaching for fable at
-    all. That is the move for units that do NOT meet fable's conjunction; a
-    unit meeting all three goes there directly.
+    Try up-effort before up-tier -- opus at `xhigh` before reaching for fable at all. That
+    is the move for units that do NOT meet fable's conjunction; a unit meeting all three goes
+    there directly.
   raise_when:
-    - ambiguous, or several plausible approaches where picking wrong is expensive
-    - you cannot verify the result cheaply
-    - rework propagates rather than being caught by the next step
+  - ambiguous, or several plausible approaches where picking wrong is expensive
+  - you cannot verify the result cheaply
+  - rework propagates rather than being caught by the next step
   lower_when:
-    - it applies a stated rule rather than deciding which rule applies
-    - the result is cheaply checkable
-    - retry beats deliberation
+  - it applies a stated rule rather than deciding which rule applies
+  - the result is cheaply checkable
+  - retry beats deliberation
 
 # ---------------------------------------------------------------------------
-# Block 5 -- the announcement. Makes routing auditable at dispatch time and
-# turns the transcript into the usage record for which rungs get chosen.
+# Announce every dispatch, in one line
 # ---------------------------------------------------------------------------
 announce:
   title: Announce every dispatch, in one line
   form: delegating <what> to <model> (<terms that fired>)
   rule: >-
-    Terms only, no free prose. The parenthetical carries the shape term plus
-    the deciding term(s) -- not the strongest available justification, not a
-    complete characterisation.
+    Terms only, no free prose. The parenthetical carries the shape term plus the deciding
+    term(s) -- not the strongest available justification, not a complete characterisation.
   backend_notes:
-    - id: pull-term
-      backend: codex
-      text: >-
-        Where the tier fell through to a terminal rung after a backend pull,
-        the parenthetical carries the pull term instead.
+  - id: pull-term
+    backend: codex
+    text: >-
+      Where the tier fell through to a terminal rung after a backend pull, the parenthetical
+      carries the pull term instead.
   examples:
-    - id: ex-rename
-      text: delegating rename across 30 files to sonnet (known, default)
-    - id: ex-sweep
-      text: delegating log relevance sweep to sonnet (open, condensation)
-    - id: ex-crash
-      text: delegating crash diagnosis to opus (open, inference)
-    - id: ex-review
-      text: delegating architecture review to fable (novel, load-bearing, unverifiable)
-    - id: ex-migration
-      requires_backend: codex
-      text: delegating per-file API migration to codex/gpt-5.6-luna (fan-out)
+  - id: ex-rename
+    text: delegating rename across 30 files to sonnet (known, default)
+  - id: ex-sweep
+    text: delegating log relevance sweep to sonnet (open, condensation)
+  - id: ex-crash
+    text: delegating crash diagnosis to opus (open, inference)
+  - id: ex-review
+    text: delegating architecture review to fable (novel, load-bearing, unverifiable)
+  - id: ex-migration
+    requires_backend: codex
+    text: delegating per-file API migration to codex/gpt-5.6-luna (fan-out)
 
 # ===========================================================================
 # MACHINE HALF -- not derived from the principles. What this machine has and
