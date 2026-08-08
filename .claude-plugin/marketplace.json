@@ -190,7 +190,7 @@
     {
       "name": "agent-glue",
       "description": "Lightweight graph-orchestration kit for pipelines that interleave LLM inference, deterministic logic, and config-driven rules. Typed contracts at every boundary; discriminated-union dispatch; on-disk cohorts for replay-based testing. MVC layering with an ECS data model expressed in yaml primitives.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "Christina"
       },
