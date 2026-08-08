@@ -77,3 +77,53 @@ class TestBuildVariables:
         variables = build_variables("/opt/plugin", "/data")
         assert "cwd" in variables
         assert variables["cwd"] == os.getcwd()
+
+    def test_plugin_data_dir_uses_project_and_namespace(self, tmp_path):
+        variables = build_variables(
+            "/opt/plugin",
+            "/data/plugins-kit/demo-kit",
+            project_root=str(tmp_path),
+            marketplace="plugins-kit",
+            plugin="demo-kit",
+        )
+        assert variables["plugin_data_dir"] == str(
+            tmp_path / ".plugin-data" / "plugins-kit" / "demo-kit"
+        )
+        assert variables["cwd"] == str(tmp_path)
+
+    def test_plugin_data_dir_honors_relative_override(self, tmp_path):
+        variables = build_variables(
+            "/opt/plugin",
+            "/data/plugins-kit/demo-kit",
+            {"plugin_data_dir": "Generated/PluginData"},
+            project_root=str(tmp_path),
+            marketplace="plugins-kit",
+            plugin="demo-kit",
+        )
+        assert variables["plugin_data_dir"] == str(
+            (tmp_path / "Generated" / "PluginData").resolve()
+        )
+
+    def test_plugin_data_dir_absent_without_project(self):
+        variables = build_variables("/opt/plugin", "/data/plugins-kit/demo-kit")
+        assert "plugin_data_dir" not in variables
+
+    def test_bad_override_raises_rather_than_dropping_silently(self, tmp_path):
+        """A malformed override must surface, not vanish.
+
+        Swallowing it would leave the durable-path variable unexpanded in the
+        manifest with nothing reported -- the silent-misconfiguration failure
+        mode the durable project data pattern exists to prevent. The caller
+        reports the ConfigError; it must not be absorbed here.
+        """
+        from bootstrap_lib.config_resolve import ConfigError
+
+        with pytest.raises(ConfigError):
+            build_variables(
+                "/opt/plugin",
+                "/data/plugins-kit/demo-kit",
+                {"plugin_data_dir": str(tmp_path / "somewhere-absolute")},
+                project_root=str(tmp_path),
+                marketplace="plugins-kit",
+                plugin="demo-kit",
+            )

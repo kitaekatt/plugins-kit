@@ -31,7 +31,7 @@ Design rules:
 """
 
 from pathlib import Path
-from typing import Iterable, List, Optional, Union
+from typing import Iterable, List, Mapping, Optional, Union
 
 from .manifest_merge import _deep_merge_dicts
 
@@ -138,3 +138,33 @@ def standard_config_layers(
     if project_root is not None:
         layers.append(Path(project_root) / ".local-data" / marketplace / plugin / filename)
     return layers
+
+
+def resolve_plugin_data_dir(
+    project_root: PathLike,
+    *,
+    marketplace: str,
+    plugin: str,
+    config: Optional[Mapping[str, object]] = None,
+) -> Path:
+    """Resolve a plugin's durable, project-versioned data directory.
+
+    The default is
+    ``<project_root>/.plugin-data/<marketplace>/<plugin>``. A project config
+    may relocate it with ``plugin_data_dir``; the override must be a relative
+    path and is resolved from ``project_root``.
+
+    This function only resolves a path. It never creates the directory or
+    writes durable data.
+    """
+    root = Path(project_root).resolve()
+    override = config.get("plugin_data_dir") if config else None
+    if override in (None, ""):
+        return root / ".plugin-data" / marketplace / plugin
+    if not isinstance(override, str):
+        raise ConfigError("plugin_data_dir must be a relative path string")
+
+    override_path = Path(override)
+    if override_path.is_absolute():
+        raise ConfigError("plugin_data_dir must be relative to the project root")
+    return (root / override_path).resolve()

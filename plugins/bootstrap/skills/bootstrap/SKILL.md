@@ -285,7 +285,7 @@ reference_skill:
       summary: Layered configs merge by identity key for arrays, deep-merge for objects, override for scalars.
       keywords: [merge semantics, union, identity key, deep merge, path entries, scalar override]
       detail: |
-        - Arrays (tools, plugins, marketplaces): unioned by identity key (name, ref). Same identity in multiple layers is DEEP-merged — a user override for `tools[name=jq].download[macos-arm64].url` keeps every other download key and the sha256 intact. Higher priority wins at any leaf.
+        - Arrays (tools, plugins, marketplaces): unioned by identity key (name, ref). Same identity in multiple layers is DEEP-merged -- a user override for `tools[name=jq].download[macos-arm64].url` keeps every other download key and the sha256 intact. Higher priority wins at any leaf.
         - Objects (venv, config): deep-merged; higher priority wins for conflicts.
         - path_entries: string-list union, deduplicated, order preserved.
         - Scalars: higher priority wins.
@@ -320,6 +320,12 @@ reference_skill:
         The deferred-requirement pattern -- detect early, ask late. The escalate-vs-defer rule,
         the ctx.add_deferred_requirement API and its on-disk record, how point-of-need code
         consumes it, and the plugin-author wiring steps.
+    - id: durable_project_data_ref
+      path: references/durable-project-data.md
+      keywords: [durable project data, plugin data dir, plugin_data_dir, .plugin-data, .local-data, tracked generated artifact, version control, project VCS, explicit refresh, size, churn]
+      summary: >-
+        The plugin-author pattern for choosing durable versus ephemeral project data,
+        resolving the namespaced path and override, and keeping SessionStart read-only.
     - id: action_triggered_install_ref
       path: references/action-triggered-install.md
       keywords: [action-triggered install, opt-in by encountering need, install manual, specialty plugin, preflight, guarded import, shared lib path check, ask before install, claude plugin install, mid-session install no restart, skill requirement wiring, auto vs manual, optional dependency]

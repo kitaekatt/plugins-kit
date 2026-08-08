@@ -1514,6 +1514,7 @@ def _bootstrap_single_plugin(
         project_dir=getattr(args, 'project_dir', None),
         project_detected=project_detected,
         quiet_entries=quiet_entries, shared_lib_links=shared_lib_links,
+        marketplace=plugin_info.marketplace,
     )
     plugin_action_entries.extend(action_entries)
     plugin_ok_entries.extend(ok_entries)
@@ -3437,7 +3438,8 @@ class _ManifestContext:
 
     def __init__(self, manifest, current_os, data_dir, plugin_root,
                  action_entries, ok_entries, plugin_name, project_dir,
-                 project_detected, quiet_entries=None, shared_lib_links=None):
+                 project_detected, quiet_entries=None, shared_lib_links=None,
+                 marketplace=""):
         self.manifest = manifest
         self.current_os = current_os
         self.data_dir = data_dir
@@ -3448,6 +3450,7 @@ class _ManifestContext:
         self.shared_lib_links = shared_lib_links
         self.plugin_name = plugin_name
         self.project_dir = project_dir
+        self.marketplace = marketplace or os.path.basename(os.path.dirname(data_dir))
         self.project_detected = project_detected
         self.failures = []
         self.prefix = ""
@@ -3457,14 +3460,44 @@ class _ManifestContext:
     @property
     def config(self):
         if self._config is self._UNSET:
-            self._config = _load_plugin_config(self.data_dir, self.action_entries)
+            self._config = _load_plugin_config(
+                self.data_dir,
+                self.action_entries,
+                project_dir=self.project_dir,
+                marketplace=self.marketplace,
+                plugin_name=self.plugin_name,
+            )
         return self._config
 
     @property
     def variables(self):
         if self._variables is None:
+            from .config_resolve import ConfigError
             from .var_resolve import build_variables
-            self._variables = build_variables(self.plugin_root, self.data_dir, self.config)
+            try:
+                self._variables = build_variables(
+                    self.plugin_root,
+                    self.data_dir,
+                    self.config,
+                    project_root=self.project_dir,
+                    marketplace=self.marketplace,
+                    plugin=self.plugin_name,
+                )
+            except ConfigError as exc:
+                # Report loudly, then continue without the durable path. A bad
+                # override must not expand to nothing silently, and must not
+                # take the whole pass down either.
+                message = (
+                    "plugin_data_dir is misconfigured (%s) - durable project "
+                    "data cannot be resolved, so any manifest entry using the "
+                    "durable-path variable will not resolve. Fix "
+                    "plugin_data_dir in the project's config.yaml: it must be "
+                    "a path relative to the project root." % exc
+                )
+                self.fail(message, message=message)
+                self._variables = build_variables(
+                    self.plugin_root, self.data_dir, self.config,
+                )
         return self._variables
 
     def ok(self, message):
@@ -4409,7 +4442,7 @@ _MANIFEST_PHASES = (
 )
 
 
-def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entries, ok_entries, plugin_name="bootstrap", project_dir=None, project_detected=True, quiet_entries=None, shared_lib_links=None):
+def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entries, ok_entries, plugin_name="bootstrap", project_dir=None, project_detected=True, quiet_entries=None, shared_lib_links=None, marketplace=""):
     """Process a single plugin's bootstrap manifest. Returns list of failures.
 
     Dispatches to one handler per manifest key via _MANIFEST_PHASES. Entries
@@ -4428,6 +4461,7 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
         manifest, current_os, data_dir, plugin_root,
         action_entries, ok_entries, plugin_name, project_dir, project_detected,
         quiet_entries=quiet_entries, shared_lib_links=shared_lib_links,
+        marketplace=marketplace,
     )
     for keys, handler in _MANIFEST_PHASES:
         if any(manifest.get(k) for k in keys):
@@ -5321,23 +5355,42 @@ def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
     return ctx.failures
 
 
-def _load_plugin_config(data_dir, action_entries=None):
-    """Load plugin config.yaml from data_dir if it exists. Returns dict or empty.
+def _load_plugin_config(data_dir, action_entries=None, *, project_dir=None,
+                        marketplace="", plugin_name=""):
+    """Load standard user and project plugin config layers.
 
-    A load failure is appended to ``action_entries`` when provided — the
-    "every check must log its outcome" contract (B8). (Parse errors inside
-    load_yaml_config still degrade to an empty dict by design; this guards
-    the unexpected: import failures, permission errors, ...)
+    Load failures are reported through ``action_entries`` rather than
+    silently degrading to an empty config.
     """
-    config_path = os.path.join(data_dir, "config.yaml")
+    from pathlib import Path
+
+    config_paths = [Path(data_dir) / "config.yaml"]
+    if project_dir and marketplace and plugin_name:
+        config_paths.append(
+            Path(project_dir) / ".local-data" / marketplace / plugin_name / "config.yaml"
+        )
     try:
-        from .config_check import load_yaml_config
-        if os.path.isfile(config_path):
-            return load_yaml_config(config_path)
+        from .config_resolve import resolve_config
+        config = resolve_config(config_paths)
     except Exception as e:
         if action_entries is not None:
-            action_entries.append(f"config load FAILED - {config_path}: {e}")
-    return {}
+            joined_paths = ", ".join(str(path) for path in config_paths)
+            action_entries.append(f"config load FAILED - {joined_paths}: {e}")
+        return {}
+
+    if project_dir and marketplace and plugin_name and "plugin_data_dir" in config:
+        from .config_resolve import ConfigError, resolve_plugin_data_dir
+        try:
+            resolve_plugin_data_dir(
+                project_dir,
+                marketplace=marketplace,
+                plugin=plugin_name,
+                config=config,
+            )
+        except ConfigError as e:
+            if action_entries is not None:
+                action_entries.append(f"config load FAILED - plugin_data_dir: {e}")
+    return config
 
 
 def _find_plugins_dir(plugin_root):

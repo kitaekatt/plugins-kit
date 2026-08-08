@@ -38,12 +38,18 @@ def build_variables(
     plugin_root: str,
     data_dir: str,
     config: Optional[Dict[str, Any]] = None,
+    *,
+    project_root: Optional[str] = None,
+    marketplace: str = "plugins-kit",
+    plugin: Optional[str] = None,
 ) -> Dict[str, str]:
     """Build the variables dict from static sources and config.
 
     Static variables:
         plugin_root: Plugin install path
         data_dir: Plugin data directory
+        cwd: Canonical project root when supplied, otherwise the process CWD
+        plugin_data_dir: Durable project data directory (project sessions only)
 
     Config-derived variables:
         For each config key whose value looks like a file path,
@@ -53,7 +59,7 @@ def build_variables(
     variables: Dict[str, str] = {
         "plugin_root": plugin_root,
         "data_dir": data_dir,
-        "cwd": os.getcwd(),
+        "cwd": str(Path(project_root)) if project_root else os.getcwd(),
     }
 
     if config:
@@ -65,6 +71,22 @@ def build_variables(
             p = Path(val)
             if p.suffix and len(p.parts) > 1:
                 variables[f"{key}_dir"] = str(p.parent)
+
+    if project_root:
+        from .config_resolve import resolve_plugin_data_dir
+
+        plugin_name = plugin or Path(data_dir).name
+        # A malformed plugin_data_dir override raises ConfigError and the
+        # caller reports it. Do NOT swallow it here: dropping the variable
+        # would leave ${plugin_data_dir} unexpanded in the manifest and the
+        # misconfiguration invisible, which is the failure mode the durable
+        # project data pattern exists to prevent.
+        variables["plugin_data_dir"] = str(resolve_plugin_data_dir(
+            project_root,
+            marketplace=marketplace,
+            plugin=plugin_name,
+            config=config,
+        ))
 
     return variables
 

@@ -8,6 +8,7 @@ from bootstrap_lib.config_resolve import (
     ConfigError,
     default_data_root,
     load_config_layer,
+    resolve_plugin_data_dir,
     resolve_config,
     standard_config_layers,
 )
@@ -196,3 +197,40 @@ class TestStandardConfigLayers:
         merged = resolve_config(layers)
         assert merged["default"] == "mini"  # project override wins
         assert set(merged["models"]) == {"cheap", "mini"}  # unioned
+
+
+class TestResolvePluginDataDir:
+    def test_default_is_namespaced_under_project(self, tmp_path):
+        result = resolve_plugin_data_dir(
+            tmp_path,
+            marketplace="plugins-kit",
+            plugin="demo-kit",
+        )
+        assert result == tmp_path / ".plugin-data" / "plugins-kit" / "demo-kit"
+
+    def test_override_resolves_from_project_root(self, tmp_path):
+        result = resolve_plugin_data_dir(
+            tmp_path,
+            marketplace="plugins-kit",
+            plugin="demo-kit",
+            config={"plugin_data_dir": "Generated/PluginData"},
+        )
+        assert result == (tmp_path / "Generated" / "PluginData").resolve()
+
+    def test_absolute_override_is_rejected(self, tmp_path):
+        with pytest.raises(ConfigError, match="relative to the project root"):
+            resolve_plugin_data_dir(
+                tmp_path,
+                marketplace="plugins-kit",
+                plugin="demo-kit",
+                config={"plugin_data_dir": str((tmp_path / "absolute").resolve())},
+            )
+
+    def test_non_string_override_is_rejected(self, tmp_path):
+        with pytest.raises(ConfigError, match="relative path string"):
+            resolve_plugin_data_dir(
+                tmp_path,
+                marketplace="plugins-kit",
+                plugin="demo-kit",
+                config={"plugin_data_dir": 42},
+            )
