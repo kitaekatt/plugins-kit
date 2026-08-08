@@ -2,7 +2,7 @@
 
 The controlled vocabulary for orchestration decisions. Three artifacts share it:
 
-- **tier-principles.md** states every criterion in these terms.
+- **The criteria source** (maintainer-side) states every criterion in these terms.
 - **The rendered decision tree** carries only `[skill]` terms, as branch questions.
 - **Dispatch announcements** carry only `[skill]` terms, as labels.
 
