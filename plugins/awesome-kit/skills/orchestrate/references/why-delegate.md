@@ -1,9 +1,9 @@
 # Why delegate
 
-Rationale behind the orchestrate procedure and its anti-pattern catalogue. Not needed to
-execute the skill -- see [SKILL.md](../SKILL.md) for the procedure itself, and
-[codex-dispatch.md](codex-dispatch.md) / [configuration.md](configuration.md) for backend
-mechanics and config schema respectively.
+Rationale behind the orchestrate procedure and its anti-pattern catalogue -- why the
+procedure is shaped this way, not how to run it. Nothing here is needed to execute the
+skill. See [codex-dispatch.md](codex-dispatch.md) and [configuration.md](configuration.md)
+for backend mechanics and the config schema respectively.
 
 ## The economics
 

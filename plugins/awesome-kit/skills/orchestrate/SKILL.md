@@ -20,7 +20,9 @@ no tier table, deliberately. Users tune the policy by overriding
 [defaults/orchestration.yaml](defaults/orchestration.yaml); see
 [references/configuration.md](references/configuration.md) for the schema and layering,
 or [references/orchestrate-2.0-design.md](references/orchestrate-2.0-design.md) for the
-design rationale behind the decision tree (`tier-principles.md`, `lexicon.md`).
+design rationale behind the decision tree, derived from
+[references/tier-principles.md](references/tier-principles.md) and
+[references/lexicon.md](references/lexicon.md).
 
 ```yaml
 technique_skill:

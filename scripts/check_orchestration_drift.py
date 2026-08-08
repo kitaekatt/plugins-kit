@@ -191,8 +191,17 @@ def parse_policy(text: str, label: str) -> dict:
     return data
 
 
-def load_policy(policy_path: Path) -> dict:
-    return parse_policy(policy_path.read_text(encoding="utf-8"), str(policy_path))
+def load_policy(policy_path: Path, label: Optional[str] = None) -> dict:
+    """Parse the policy at `policy_path`.
+
+    `label` names the source in any error. Callers pass the repo-relative
+    constant so a reported problem reads the same whether it came from the
+    working tree or the index; the absolute path is only the fallback for a
+    caller that has nothing better to say.
+    """
+    return parse_policy(
+        policy_path.read_text(encoding="utf-8"), label or str(policy_path)
+    )
 
 
 def fingerprint(policy: dict) -> str:
@@ -385,7 +394,7 @@ def check(repo_root: Path, staged: Optional[List[str]] = None) -> List[str]:
         if not policy_path.is_file():
             return [f"{POLICY_REL} is missing -- cannot fingerprint the decision half."]
         try:
-            current = fingerprint(load_policy(policy_path))
+            current = fingerprint(load_policy(policy_path, POLICY_REL))
         except ValueError as exc:
             problems.append(str(exc))
             return problems
@@ -438,7 +447,7 @@ def check(repo_root: Path, staged: Optional[List[str]] = None) -> List[str]:
 
 def update(repo_root: Path) -> str:
     """Rewrite the baseline from the current policy. Returns the new digest."""
-    digest = fingerprint(load_policy(repo_root / POLICY_REL))
+    digest = fingerprint(load_policy(repo_root / POLICY_REL, POLICY_REL))
     write_baseline(repo_root / FINGERPRINT_REL, digest)
     return digest
 
