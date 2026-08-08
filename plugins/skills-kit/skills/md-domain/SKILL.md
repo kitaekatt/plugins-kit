@@ -39,22 +39,59 @@ in `references/lanes/`; the placement spine both verbs judge against lives in
 ```
 How can I help you with your project markdown?
 
-Audit:
- - a SKILL.md (contract + cohesion)            (/md-domain audit skill <path>)
- - a CLAUDE.md (cohesion + hygiene + schema)   (/md-domain audit claude-md <path>)
- - a project document (cohesion + placement)   (/md-domain audit project-doc <path>)
- - broken skill cross-references               (/md-domain audit references)
- - the whole skill corpus (roster / hierarchy) (/md-domain audit skill roster)
+I run two kinds of work. Each entry below names one analysis and says what it
+READS -- that is what separates a cheap run from an expensive one. Before any
+run I state the analysis by the same name and the exact file scope.
 
-Author:
- - a SKILL.md (type contracts, scripts)        (/md-domain author skill)
- - a CLAUDE.md (a valid claude_md block)       (/md-domain author claude-md)
- - a project document (placement + role)       (/md-domain author project-doc)
+AUDIT -- judges documents that already exist. Reads markdown, and opens source
+only to verify a claim a document already makes.
+
+  Skill audit            one SKILL.md against its type contract + cohesion
+                         (/md-domain audit skill <path>)
+  CLAUDE.md audit        one CLAUDE.md: cohesion, hygiene, schema
+                         (/md-domain audit claude-md <path>)
+  Project-doc audit      one standalone document: placement + role
+                         (/md-domain audit project-doc <path>)
+  Cross-reference audit  every skill cross-reference in the corpus, for rot
+                         (/md-domain audit references)
+  Skill roster           an inventory of the skill corpus -- no verdicts
+                         (/md-domain audit skill roster)
+
+  Add --density to a CLAUDE.md audit for the opt-in token-efficiency lens.
+  It is advisory: it never changes a verdict.
+
+AUTHOR -- produces a document, or reshapes one to standard.
+
+  Skill authoring        a new or refined SKILL.md  (/md-domain author skill)
+  CLAUDE.md authoring    a valid claude_md block    (/md-domain author claude-md)
+  Project-doc authoring  placement and role first   (/md-domain author project-doc)
+
+None of the above reads your source tree to DERIVE new documentation. That is a
+separate, more expensive kind of analysis, and I will not start it without your
+say-so.
 
 Or can I help you with something else?
 ```
 
 Show the menu and stop; do not load a lane or a standards doc until the user picks.
+
+### Naming and scope announcement (applies to every run)
+
+The names above are the CANONICAL vocabulary for what this skill does. They are
+not menu decoration:
+
+- **Announce before running.** State the analysis by its exact menu name, then
+  the scope -- the concrete file set with a count, or the directory and what was
+  excluded from it. "Running a CLAUDE.md audit over 3 files: a/CLAUDE.md,
+  b/CLAUDE.md, c/CLAUDE.md."
+- **Echo, do not paraphrase.** A user who picked "Cross-reference audit" must
+  see "Cross-reference audit" when it starts. Inventing a synonym per run is how
+  a user loses track of which analysis they authorized.
+- **Name every analysis you run.** A dispatch that runs two (an audit plus its
+  roster inventory) announces both, not just the headline one.
+- **Scope is part of the announcement, never implied.** "the corpus" is not a
+  scope; the count and the roots are. When a selector expands to more files than
+  the user likely pictured, say the number before starting, not after.
 
 ## Dispatch table (verb x artifact)
 
@@ -301,6 +338,7 @@ domain_skill:
       authoring lane. Placement -- which file a fact belongs in -- is always deferred to
       references/cohesion-principles.md; it is never re-derived in a lane or a standards doc.
     behavioral_guardrails:
+      - Announce every run by its canonical analysis name plus the concrete file scope BEFORE starting (see "Naming and scope announcement"). Echo the menu's name verbatim rather than paraphrasing it, name every analysis a dispatch runs rather than only the headline one, and give scope as a count plus roots -- never as "the corpus". The names are the user's only handle on which analysis they authorized.
       - Route by verb AND artifact. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the authoring lane's producing direction when the user asked for a verdict. Each standards doc is artifact-specific.
       - One lane at a time. On a bare invocation show the menu and wait; do not co-load two standards docs or both lanes. A typical invocation loads this SKILL.md plus one lane plus one standards doc.
       - Detection and remediation are separate phases. The audit pass produces a verdict; it does not silently mutate the subject. Remediation is dispatched after the Q&A gate, as its own work.

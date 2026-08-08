@@ -16,14 +16,20 @@ DOCUMENT is internally coherent and locally accurate, which is orthogonal to
 whether a reviewer working from it would catch a defective change. Of the six
 mechanisms behind that gap, four are closed or scoped; the one that would
 actually deliver the goal -- nothing checks whether a fact is AMBIENT for the
-code it describes -- is what this lane addresses.
+code it describes -- is what this verb addresses.
+
+**Scope, stated up front because it was got wrong once.** md-domain is not a
+code-review tool. This verb reads code only as a SOURCE OF INSIGHT for the
+CLAUDE.md that will be ambient for it. It does not hunt for defects; a defect
+noticed in passing is reported only if severe, and only ever as CLAUDE.md
+content. Finding defects is the job of a code review conducted AGAINST the
+CLAUDE.md this verb helps produce. See the spec's opening section.
 
 ## Contents
 
-- `coverage-lane-spec.md` -- the lane design: unit `(code subtree, ambient
-  CLAUDE.md chain)`, mandatory exclusions, the distinct `GAPS-FOUND` /
-  `COVERAGE-ASSESSED` verdict vocabulary, and the remediation routing that puts
-  code fixes and loud failures AHEAD of documentation.
+- `coverage-lane-spec.md` -- the design: unit `(code subtree, ambient CLAUDE.md
+  chain)`, the report-only third-verb shape, intent gating, exclusions, and the
+  distinct `GAPS-FOUND` / `COVERAGE-ASSESSED` verdict vocabulary.
 - `regression-test-design.md` -- how to measure it: the pre-registered answer
   key, per-mechanism recall, the negative controls, and the circularity
   limitation that makes recall alone meaningless.
@@ -47,9 +53,19 @@ never touching document compliance. Do not rediscover the rejected version.
 
 ## Status
 
-Not started. Unblocked as of 2026-08-08 -- the language-family validation gate
-that previously blocked it was retired as an accepted limitation (see the
-provenance entry in md-domain's `references/provenance/standards-decisions.md`).
+Split, as of 2026-08-08.
+
+- **PIPELINE -- settled and buildable.** Shape (report-only third verb),
+  discovery, ambient-chain resolution, exclusions, intent gating, verdicts,
+  report shape, and their tests. None of it depends on the criteria below.
+- **ANALYSIS CRITERIA -- BLOCKED, awaiting two documents from the owner.** What
+  makes a code-derived fact worth a place in a CLAUDE.md, and the severity bar
+  for the severe-deficiency carve-out. Do not invent these; build the pipeline
+  with the criteria seam left open.
+
+The language-family validation gate that once blocked the whole design was
+retired 2026-08-08 as an accepted limitation (see the provenance entry in
+md-domain's `references/provenance/standards-decisions.md`).
 
 The gate that remains: run the four negative controls in `coverage-gap.md`,
 especially the documented-loud-and-test-enforced near miss, and measure

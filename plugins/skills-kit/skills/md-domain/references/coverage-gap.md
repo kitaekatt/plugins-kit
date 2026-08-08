@@ -40,8 +40,11 @@ Claude, one gpt-5.6-sol) rejected three of its five parts.
    dimension is "a validator over existing claims, not a gotcha crawler", and
    the detect lane repeats it operatively. Of ~40 rules that can fire on a
    CLAUDE.md, four can fire on silence (H-1/H-2/H-3, A-4), and all four concern
-   the doc's self-description or a fact's location. CD-6 is the near miss: it
-   detects EROSION from a prior state, so a file that was always thin passes.
+   the doc's self-description or a fact's location. CD-6 is the near miss -- the
+   one rule that fires on silence about hazards -- but it reads only the current
+   file (there is no pre-image), so it cannot tell a file edited down from one
+   that was always structural, and it emits INFO rather than a finding. It also
+   says nothing about whether the code has anything worth covering.
 2. **The classic/code-directory split withholds source from part of the
    corpus.** A `classic` file never triggers a code read at all.
 3. **Nothing audits ambient coverage.** No rule walks outward from a source file
@@ -77,7 +80,15 @@ mention. Both reviewers rejected it, on grounds worth preserving.
 
 ## The design that would close it
 
-An opt-in `coverage` lane, distinct from document compliance:
+An opt-in `coverage` verb, distinct from document compliance.
+
+**Its purpose is CLAUDE.md content, not code review.** It reads code only as a
+source of insight for the CLAUDE.md that will be ambient for that code. It does
+not hunt for defects -- that is the job of a code review conducted AGAINST the
+resulting CLAUDE.md. A defect noticed in passing is reported only when SEVERE,
+and only ever as CLAUDE.md content. (Owner correction 2026-08-08; an earlier
+revision of this section had it routing candidates to code fixes first, which
+answered a question this verb is not asking.)
 
 - **Unit:** `(code subtree, its ambient CLAUDE.md chain)` -- the first lane whose
   subject is code. This is why it cannot be a criterion inside `audit_claude_md`:
@@ -90,12 +101,16 @@ An opt-in `coverage` lane, distinct from document compliance:
 - **Verdict vocabulary:** `GAPS-FOUND` / `COVERAGE-ASSESSED`. Never emits
   COMPLIANT/NON-COMPLIANT and never alters a document verdict. A file can be
   COMPLIANT and its subtree GAPS-FOUND simultaneously.
-- **Remediation routing, in order:** is it a bug (fix the code); can it be made
-  loud (assert, error return, test); is the constraint intentional and durable
-  (only now document it, placed per the placement algorithm); otherwise report
-  and let a human decide.
-- **Honest posture:** advisory, JUDGMENT throughout, idempotency NOT claimed,
-  a per-run candidate ceiling that is ANNOUNCED when hit.
+- **Intent gating:** stronger than opt-in. Never fires inside an `audit` or
+  `author` run; requires expressed intent to analyze code for CLAUDE.md content;
+  CONFIRMS with AskUserQuestion when the request is ambiguous, because a code
+  analysis costs materially more than a document audit.
+- **Output:** a fact about the code that belongs in a CLAUDE.md and is not
+  ambient for the code it describes, carrying the destination the placement
+  algorithm selects. Reporting a candidate is not a commitment to write it.
+- **Honest posture:** advisory, JUDGMENT throughout, report-only (no remediation
+  phase and no remediate workflow), idempotency NOT claimed, a per-run candidate
+  ceiling that is ANNOUNCED when hit.
 - **Reuses what exists:** the authoring direction already defines the
   present-and-silent observation kinds. The gap is that the audit direction
   refuses to look, not that the vocabulary is missing.
