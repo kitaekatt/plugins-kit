@@ -1,8 +1,7 @@
 """Tests for content_pipeline.validate.floor_guard.
 
-Port-equivalence baseline: these cases translate the floor-guard validation
-mode pinned by first-pass ``transition_diagnostic`` (and its siblings) into
-the plugin's neutral vocabulary -- run a candidate guard over a known-good
+These cases pin the generic floor-guard validation mode: run a candidate guard
+over a known-good
 corpus, measure its flag rate, and REJECT the guard when it disagrees with
 known-good work at/above the threshold (default 0.10), gating each signal
 independently. The advisory application never blocks. No game concepts

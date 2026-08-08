@@ -1,7 +1,7 @@
 """Behavioral tests for content_pipeline.llm.platform.
 
-Translates the cases loc/gen-ops pin for the cache, cost (hard-fail on unknown
-model), budget, and the validate-until-valid loop onto the generic surface.
+Pins cache, cost (hard-fail on unknown model), budget, and validate-until-valid
+loop behavior on the generic surface.
 Everything runs on MockBackend -- no network, no subprocess.
 """
 

@@ -27,8 +27,8 @@ Deviations from the source systems
    value for -- the source ``_apply_assignments`` do-no-harm rule, generalized
    to a caller-supplied ``InplaceSpec`` with zero hardcoded field names.
 3. **The ownership marker is a schema, not a fixed tag.** ``inplace.Marker`` /
-   ``classify_ownership`` generalize the first-pass ``[FIRST PASS]`` tag to a
-   configurable marker + HUMAN/MACHINE/EMPTY classification. The append-only
+   ``classify_ownership`` use a configurable marker and HUMAN/MACHINE/EMPTY
+   classification. The append-only
    ``projection`` writers keep the ``.bak`` rollback + reload-validation and add
    the xliff-aggregation SHAPE (``aggregate_projections``: many ``(artifact,
    unit)`` pairs -> one artifact) with the on-disk format left to the caller.

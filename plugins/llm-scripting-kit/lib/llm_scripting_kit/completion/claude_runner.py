@@ -1,9 +1,8 @@
 """Shared ``claude -p`` subprocess runner for completion pipelines.
 
-Battle-tested transport ported verbatim from a consuming project's gen-ops
-``claude_runner`` (itself extracted after a forked copy drifted into a
-main-thread-blocking ``readline()`` hang and a cp1252 encoding bug). The
-defensive details are the point of this module and must be preserved:
+This shared transport centralizes fixes for a main-thread-blocking
+``readline()`` hang and a cp1252 encoding bug. The defensive details are the
+point of this module and must be preserved:
 
 - UTF-8 pipes (``encoding="utf-8"``, ``errors="replace"``) so CJK / non-Latin
   request bodies survive a Windows cp1252 locale codec instead of corrupting.

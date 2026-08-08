@@ -67,8 +67,8 @@ but several details differ deliberately.
    exactly.
 
 4. **``max_tokens`` / ``temperature`` on ``BackendOptions``, not
-   ``complete()`` parameters.** The original gen-ops source carried these as
-   ``complete()`` keyword args and only the transport-specific knobs on
+   ``complete()`` parameters.** A prior transport API carried these as
+   ``complete()`` keyword args and only transport-specific knobs on
    ``BackendOptions``. This library folds all per-call knobs onto
    ``BackendOptions`` so the ``LLMBackend`` protocol signature is uniform; the
    behavioral effect (temperature / max-tokens flow to the provider and into the

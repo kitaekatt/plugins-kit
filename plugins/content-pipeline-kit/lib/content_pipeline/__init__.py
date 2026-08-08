@@ -1,9 +1,8 @@
 """content_pipeline -- library for LLM-in-the-loop batch content pipelines.
 
-This package is the shared, generic machinery that two SC systems (a
-narrative first-pass tool and a localization tool -- not named here; this
-plugin carries zero project-specific knowledge) collapse onto: an attributed
-canonical store, a two-tier content-hash freshness engine, a one-rule-many-
+This package provides generic machinery shared by LLM-in-the-loop content
+systems, with zero project-specific knowledge: an attributed canonical store,
+a two-tier content-hash freshness engine, a one-rule-many-
 call-sites validator contract, a tiered context-provider registry, an LLM
 platform binding (transport / cache / cost / budget / convergence over an
 OpenAI-compatible endpoint, reusing llm-scripting-kit for key + model + client),

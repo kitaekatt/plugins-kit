@@ -1,13 +1,10 @@
 """Tests for content_pipeline.store.attributed.
 
-Port-equivalence baseline: these cases translate the attribution behaviors
-pinned by BOTH source suites into the plugin's neutral vocabulary --
-first-pass ``conversation_file``'s ``effective_pick`` (human block wins,
-designer-ownership even on an empty sub-field) and ``merge_preserved_fields``
-(carry human overrides + machine blocks + hashes forward across regen,
-retain orphaned answers), and localization's ``translation_human > machine``
-scalar precedence. No game/domain concepts appear: a field carries a
-``sourced`` / ``machine`` / ``human`` slice; a record carries human-authored
+These cases pin scalar and block attribution behavior: a human block wins
+wholesale even when one sub-field is empty; preserved fields carry human
+overrides, machine blocks, and hashes across regeneration; orphaned authored
+answers survive; and scalar precedence is human > machine > sourced. A field
+carries a ``sourced`` / ``machine`` / ``human`` slice; a record carries human-authored
 fields, machine blocks with a driving text, and a per-record hash.
 """
 
@@ -42,7 +39,7 @@ def test_none_slices_fall_through():
     assert effective_value(sourced=None, machine=None, human=None) is None
 
 
-# -- effective_value: block precedence (first-pass effective_pick) ------------
+# -- effective_value: block precedence ---------------------------------------
 
 def _block_present(block):
     return bool(block) and any(block.values())

@@ -1,7 +1,7 @@
 """Tests for content_pipeline.vcs (git_vcs + null_vcs equivalents).
 
-Translates the first-pass cl_creation behaviors into git terms (the changeset
-== staged-set-finalized-as-a-commit mapping): make_changeset creates no git
+Pins changeset behavior in git terms (the changeset == staged-set-finalized-
+as-a-commit mapping): make_changeset creates no git
 object, move_into stages exactly the given paths, finalize_description commits
 only the moved subset with the rebuilt message, revert restores exactly one
 path, delete_if_empty is a no-op. Uses a REAL git repo in tmp_path (git is

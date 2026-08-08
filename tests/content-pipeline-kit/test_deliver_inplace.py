@@ -1,7 +1,6 @@
 """Tests for content_pipeline.deliver.inplace.
 
-Translates the first-pass marker + apply + revert behaviors, generalized to a
-neutral row shape:
+Pins marker, apply, and revert behavior against a neutral row shape:
 
 - marker schema: add/remove idempotent + whitespace-normalizing; HUMAN vs
   MACHINE vs EMPTY ownership classification (test_markers_*).

@@ -1,8 +1,8 @@
 """Behavioral tests for content_pipeline.providers.assembly.
 
-Covers ordered-block assembly with conditional inclusion, the configurable
-slot-syntax tokenizer (generalized from loc slot_syntax), and label indirection
-(generalized from firstpass request_builder).
+Covers ordered-block assembly with conditional inclusion, a configurable
+slot-syntax tokenizer, and label indirection that hides real keys from the
+model.
 """
 
 import pytest

@@ -1,7 +1,7 @@
 """Tests for content_pipeline.audit.auditor.
 
-Translates the first-pass auditor's FN/FP + related buckets into the
-generalized six-kind taxonomy, driven entirely by injected runtime classifiers
+Pins the generalized six-kind FN/FP taxonomy, driven entirely by injected
+runtime classifiers
 (the SAME policy / marker / store-projection callables the runtime uses -- so a
 finding is by construction the runtime's own verdict). Neutral vocabulary: an
 entity is an opaque record read through the AuditSpec callables.

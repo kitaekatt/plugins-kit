@@ -1,11 +1,8 @@
 """Tests for content_pipeline.store.projection.
 
-Port-equivalence baseline: these cases translate the canonical-store ->
-consumer-visible projection seam both source systems converged on (loc's
-active-candidate-projected-into-glossary; first-pass's brief effective-pick
-projected for apply) into the plugin's neutral vocabulary. Projection
-computes the view (effective value / active candidate); it never writes --
-delivery lives in ``deliver``.
+These cases pin the canonical-store -> consumer-visible projection seam.
+Projection computes the view (effective value / active candidate); it never
+writes -- delivery lives in ``deliver``.
 """
 
 from content_pipeline.store.candidate import Candidate, CandidateCell

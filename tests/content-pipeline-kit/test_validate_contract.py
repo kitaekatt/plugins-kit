@@ -1,13 +1,10 @@
 """Tests for content_pipeline.validate.contract.
 
-Port-equivalence baseline: these cases translate the validator behaviors
-pinned by BOTH source suites into the plugin's neutral vocabulary -- the
-first-pass ``validate_assignment`` (one rule set, aggregate every violation,
-raise once) and the localization ``submit/validator`` (list-of-rejections,
-tiered hard/soft/advisory blocking, deterministic ordering, agent-facing
-feedback text). No game/loc concepts appear: a "candidate" is an opaque value
-and "context" an opaque bag; validators are pure functions returning typed
-rejections.
+These cases pin the generic validator contract: one shared rule set,
+aggregation of every violation before raising, list-based rejection results,
+tiered hard/soft/advisory blocking, deterministic ordering, and agent-facing
+feedback text. A "candidate" is an opaque value and "context" an opaque bag;
+validators are pure functions returning typed rejections.
 """
 
 import pytest
@@ -27,8 +24,7 @@ from content_pipeline.validate.contract import (
 # -- rule set shared by many call sites ---------------------------------------
 
 def _required_keys_validator(candidate, context):
-    """One rule: every expected key must be present, no extras. Mirrors the
-    first-pass missing/unexpected-keys check."""
+    """One rule: every expected key must be present, with no extras."""
     expected = set(context["expected"])
     returned = set(candidate)
     rejections = []
@@ -59,7 +55,7 @@ def test_run_rules_accepts_when_clean():
 
 
 def test_run_rules_aggregates_every_violation():
-    # The first-pass invariant: all failures collected, not just the first.
+    # The aggregation invariant: collect all failures, not just the first.
     rejections = run_rules(
         {"a", "x"}, {"expected": ["a", "b"]}, [_required_keys_validator])
     kinds = {r.kind for r in rejections}

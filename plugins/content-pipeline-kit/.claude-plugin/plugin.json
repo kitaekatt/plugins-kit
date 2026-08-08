@@ -1,6 +1,6 @@
 {
   "name": "content-pipeline-kit",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Library + skills for LLM-in-the-loop batch content pipelines.",
   "author": {
     "name": "Christina"

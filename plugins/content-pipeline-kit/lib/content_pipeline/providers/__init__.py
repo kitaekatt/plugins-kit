@@ -41,9 +41,8 @@ Deviations from the two source systems' semantics
    of the tier; the dict-return contract is preserved, the per-tier arity guard
    is the caller's responsibility (it owns what args each tier gets).
 
-3. **Label indirection lives here, not in a request builder.** firstpass keeps
-   its opaque-``item_N`` label technique inside its per-conversation
-   ``request_builder``. Because the technique is generic (opaque labels defeat
-   cross-item collapsing for any batched LLM request), it is promoted to
-   ``assembly`` as ``assign_labels`` / ``relabel``.
+3. **Label indirection lives here, not in a request builder.** Opaque
+   ``item_N`` labels defeat cross-item collapsing for any batched LLM request,
+   so the reusable technique belongs in ``assembly`` as ``assign_labels`` /
+   ``relabel``.
 """

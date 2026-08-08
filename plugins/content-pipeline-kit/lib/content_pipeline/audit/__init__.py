@@ -18,7 +18,7 @@ Deviations from the source systems
 ----------------------------------
 
 1. **The findings taxonomy is generalized to six neutral kinds.**
-   ``auditor.FindingKind`` unifies the first-pass auditor's buckets:
+   ``auditor.FindingKind`` defines the complete set of audit buckets:
    ``FALSE_NEGATIVE`` (policy=apply, store has a value, no machine output),
    ``FALSE_POSITIVE`` (policy=exclude, machine output present),
    ``STORE_OUTPUT_MISMATCH`` (marked output differs from the store's value),

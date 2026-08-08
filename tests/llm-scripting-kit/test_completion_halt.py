@@ -13,19 +13,19 @@ from llm_scripting_kit.completion.claude_runner import AgentTimeoutError
 class TestClassifyHaltText:
     """Substring matcher must accept BOTH historical marker shapes."""
 
-    def test_loc_shape_429(self):
+    def test_bare_key_shape_429(self):
         assert halt.classify_halt_text("blah api_error_status:429 blah") == halt.HALT_RATE_LIMIT
 
-    def test_firstpass_shape_429(self):
+    def test_quoted_key_shape_429(self):
         assert halt.classify_halt_text('x "api_error_status":429 y') == halt.HALT_RATE_LIMIT
 
     def test_hit_your_limit(self):
         assert halt.classify_halt_text("You have HIT YOUR LIMIT for today") == halt.HALT_RATE_LIMIT
 
-    def test_loc_shape_401(self):
+    def test_bare_key_shape_401(self):
         assert halt.classify_halt_text("api_error_status:401") == halt.HALT_AUTH
 
-    def test_firstpass_shape_401(self):
+    def test_quoted_key_shape_401(self):
         assert halt.classify_halt_text('"api_error_status":401') == halt.HALT_AUTH
 
     def test_authentication_error_string(self):

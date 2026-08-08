@@ -10,7 +10,7 @@ runtime: the policy/excluded classifier that ``pipeline`` gates on, the marker-
 ownership classifier from ``deliver.inplace``, and the projected pick from
 ``store.projection``.
 
-The generalized findings taxonomy (from the first-pass auditor's buckets):
+The generalized findings taxonomy:
 
 - ``FALSE_NEGATIVE`` -- policy says this entity SHOULD carry machine output and
   the store has a value for it, but the delivered output is absent / not

@@ -4,12 +4,9 @@ A Validator is a pure function from (candidate value, context) to a list of
 :class:`Rejection` (empty == accept). Every call site -- in-agent validation
 during generation, and post-hoc validation during audit -- runs the SAME
 validators through the SAME :func:`run_rules` helper, so the rule set cannot
-drift between the two. This is the one-rule-set-many-call-sites boundary both
-source systems converged on: the first-pass system had one embedded rule
-string, one hand-rolled post-hoc function, and one dead standalone copy --
-three subtly-different versions of the same rules; the localization system
-shared its per-line validator between the in-loop translator and the post-hoc
-batch check.
+drift between the two. This one-rule-set-many-call-sites boundary prevents
+embedded, post-hoc, and standalone copies from becoming subtly different
+versions of the same rules.
 
 Rejections are tiered by :class:`Severity`:
 
@@ -64,9 +61,8 @@ class Rejection:
 class ValidationError(Exception):
     """Raised by :func:`assert_valid` when any blocking rejection is present.
 
-    Aggregates every blocking rejection's detail into one message (the
-    first-pass "collect all errors, raise once" shape), so a caller fixes
-    them in a single pass rather than one crash at a time. The rejections are
+    Aggregates every blocking rejection's detail into one message, so a caller
+    fixes them in a single pass rather than one crash at a time. The rejections are
     available on ``.rejections`` for programmatic handling.
     """
 
@@ -128,8 +124,8 @@ def run_rules(
 def assert_valid(rejections: Sequence[Rejection], *, block_soft: bool = True) -> None:
     """Raise :class:`ValidationError` if any rejection blocks acceptance.
 
-    The post-hoc / hard-gate surface (the first-pass ``validate_assignment``
-    raise-on-violation shape). Non-blocking (advisory / demoted-soft)
+    The post-hoc / hard-gate, raise-on-violation surface. Non-blocking
+    (advisory / demoted-soft)
     rejections do not raise.
     """
     blocking = [r for r in rejections if blocks(r, block_soft=block_soft)]

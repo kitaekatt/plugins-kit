@@ -13,9 +13,9 @@ carry. Imports nothing from ``llm``; depends only on the standard library
 Deviations from the two source systems' semantics
 --------------------------------------------------
 
-1. **Three severity tiers unify two different blocking models.** The
-   first-pass validator raises ``ValueError`` on any violation -- every rule
-   is effectively hard. The localization validator carries TWO axes: a
+1. **Three severity tiers unify two different blocking models.** One model
+   raises ``ValueError`` on any violation, making every rule effectively hard.
+   Another carries TWO axes: a
    per-rejection ``hard_fail`` bool AND a "soft kinds" set that alone decides
    whether a rejection blocks (an advisory rule with ``hard_fail=False`` still
    blocks; only ``glossary_override_logged`` never blocks). The generic
@@ -26,12 +26,11 @@ Deviations from the two source systems' semantics
    reject predicate every site shares.
 
 2. **A Validator returns a list; the raise is a separate surface.** The
-   generic ``Validator`` protocol returns ``list[Rejection]`` (the
-   localization ``validate_submission`` shape) rather than raising (the
-   first-pass shape). The raise-on-violation behavior is preserved as
+   generic ``Validator`` protocol returns ``list[Rejection]`` rather than
+   raising. The raise-on-violation behavior is preserved as
    ``assert_valid``, which aggregates every blocking rejection into one
-   ``ValidationError`` -- the first-pass "collect all errors, raise once"
-   contract -- so the post-hoc hard gate reads the same rejections the in-loop
+   ``ValidationError`` -- collecting all errors and raising once -- so the
+   post-hoc hard gate reads the same rejections the in-loop
    feedback surface (``format_rejections``) renders.
 
 3. **Riders have two producers, kept distinct.** ``compute_riders`` runs pure

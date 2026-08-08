@@ -11,16 +11,14 @@ the precedence rule is structural, not a runtime check a caller could forget.
 Two shapes of precedence exist and both are supported:
 
 - **Scalar slice precedence** (:func:`effective_value`): three scalar
-  slices, return the highest-priority *present* one. This is the localization
-  ``translation_human > machine`` shape and the first-pass
-  ``conversation_direction_human > conversation_direction_claude`` shape.
+  slices, returning the highest-priority *present* one.
 - **Block (designer-ownership) precedence** (via a ``present`` predicate on a
   compound block): when the human slice is a *block* (a dict of sub-fields),
   "present" means the block as a whole is claimed -- so a human block wins
-  *wholesale* even if one of its sub-fields is empty. This is the first-pass
-  ``effective_pick`` rule (a human ``{body, face}`` block with an empty
-  ``body`` still wins, yielding the empty body -- the designer has taken
-  ownership of the line). The caller supplies the presence predicate; the
+  *wholesale* even if one of its sub-fields is empty. For example, a human
+  ``{body, face}`` block with an empty ``body`` still wins, yielding the empty
+  body -- the designer has taken ownership of the line. The caller supplies
+  the presence predicate; the
   module does not hardcode any sub-field names.
 
 :func:`merge_preserved_fields` carries the do-no-harm boundary across a

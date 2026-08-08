@@ -1,7 +1,7 @@
 """Tests for content_pipeline.pipeline.single_pass.
 
-Translates the first-pass two-phase generate/apply behaviors: the ordered gate
-sequence (sticky-unsupported vs. transient skip), the freshness gate (only
+Pins the two-phase generate/apply behavior: the ordered gate sequence
+(sticky-unsupported vs. transient skip), the freshness gate (only
 missing/stale generate; missing-only sweeps leave stale alone), the
 generate/apply split (dry-run previews without side effects), per-unit error
 isolation, and deterministic per-unit seeding. MockBackend is unnecessary here

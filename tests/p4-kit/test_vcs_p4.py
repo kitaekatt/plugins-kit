@@ -1,7 +1,7 @@
 """Tests for p4kit_vcs.p4_vcs (the Perforce VcsBackend).
 
 Drives P4Vcs against a scripted fake p4 runner -- NO real p4 calls -- asserting
-the exact operation mapping distilled from firstpass_ops.cl_creation:
+the exact operation mapping required for safe changelist handling:
 
 - make_changeset builds a minimal ``p4 change -i`` spec with tab-prefixed
   description lines and NO ``Files:`` section, and parses the new CL number.

@@ -27,7 +27,7 @@ Three generalizations, each domain-free:
   a configurable tag on a row's marker field decides HUMAN vs. MACHINE vs.
   EMPTY. A populated value with the marker is machine-owned; a populated value
   WITHOUT the marker is human-owned (a designer took ownership) and is never
-  touched. Generalizes the first-pass ``[FIRST PASS]`` tag schema.
+  touched. The marker text is caller-supplied rather than hardcoded.
 - **Apply purely from the store** (:func:`apply_inplace`) -- marked rows are
   rebuilt as a pure function of the store's projected value; human rows are
   left untouched; rows the store has no value for are skipped. The store is

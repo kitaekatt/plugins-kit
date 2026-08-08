@@ -1,9 +1,7 @@
 """Tests for content_pipeline.store.intermediary.
 
-Port-equivalence baseline: these cases translate the two-stage
-cheap-hash / full-rebuild behavior pinned by first-pass
-``character_file.ensure_character_file`` into the plugin's neutral
-vocabulary -- cheap-path short-circuit on a matching stored hash, full-path
+These cases pin the two-stage cheap-hash / full-rebuild behavior: cheap-path
+short-circuit on a matching stored hash, full-path
 rebuild on drift / missing / empty-hash, always-write-and-re-stamp on the
 full path, and the no-source no-op. No game/domain concepts appear: an
 "entity" has raw-source-derived inputs, a synthesized intermediary slice, and

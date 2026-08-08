@@ -21,21 +21,18 @@ rather than byte-for-byte.
 
 1. **Presence precedence unifies the scalar-wins and block-wins shapes.**
    ``attributed.effective_value`` resolves ``human > machine > sourced`` by a
-   configurable ``present`` predicate (default: truthiness). The localization
-   system's ``translation_human > machine`` is the scalar case; the
-   first-pass ``effective_pick`` is the block (designer-ownership) case, where
-   a human ``{body, face}`` block wins *wholesale* when any sub-field is set
+   configurable ``present`` predicate (default: truthiness). Plain truthiness
+   handles the scalar case; a block-aware predicate handles designer ownership,
+   where a human ``{body, face}`` block wins *wholesale* when any sub-field is set
    -- even if the value it yields is an empty sub-field. The union expresses
    both: the caller passes a block-aware ``present`` (``any sub-field truthy``)
    for the designer-ownership shape, and the default truthiness predicate for
    the scalar shape. No sub-field name is hardcoded.
 
-2. **``merge_preserved_fields`` is declarative, not hand-wired.** The
-   first-pass ``merge_preserved_fields`` hardcodes its field names and its two
-   machine-field categories (``assignment_claude`` carried verbatim always;
-   ``direction_claude`` carried only when the driving text is unchanged). The
-   generic version lifts those to ``MergePolicy`` data: ``carry_fields``
-   (verbatim-when-present -- machine blocks whose downstream freshness check
+2. **``merge_preserved_fields`` is declarative, not hand-wired.** Field names
+   and machine-field categories are caller-supplied through ``MergePolicy``
+   data: ``carry_fields`` (verbatim-when-present -- machine blocks whose
+   downstream freshness check
    decides validity, plus hashes) versus ``conditional_fields``
    (carried only when a ``unchanged`` predicate holds). ``human_fields`` and
    ``carry_fields`` share the carry-when-present mechanism and are split only

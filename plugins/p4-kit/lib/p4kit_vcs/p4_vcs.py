@@ -11,8 +11,8 @@ The mapping (the protocol is shaped around Perforce's pending changelist)
 
 The ``VcsBackend`` protocol was designed around a Perforce pending changelist,
 so the p4 mapping is the most direct of the backends. Each verb is the p4
-operation the seam was abstracted from, distilled (with its hard-won
-discipline) from the proven ``firstpass_ops.cl_creation`` helpers this replaces:
+operation the seam was abstracted from, with defensive handling for Perforce's
+sharp edges:
 
 - **make_changeset == ``p4 change -i`` with a minimal spec, NO ``Files:``
   section.** A brand-new pending CL is created up front from a hand-built spec
@@ -292,10 +292,9 @@ class P4Vcs:
         ``p4 reopen`` exits 0 even when it did NOTHING (the file was not open
         for edit -- ``"... - file(s) not opened on this client"``) and even when
         the file ends up in the WRONG CL, so a bare ``rc == 0`` check is not
-        proof the file landed in ``changeset``. This ports the verification
-        discipline from ``firstpass_ops.cl_creation.move_files_to_changelist``:
-        the stdout diagnostic is parsed and the move is accepted ONLY when it
-        reports ``"reopened"`` (a real move), ``"currently opened for edit;
+        proof the file landed in ``changeset``. The stdout diagnostic is parsed,
+        and the move is accepted ONLY when it reports ``"reopened"`` (a real
+        move), ``"currently opened for edit;
         change <cl>"`` carrying THIS changeset's number, or ``"<depotFile>#<rev>
         - nothing changed."`` -- the latter two both being idempotent re-moves
         of a file already in this CL, where the desired end state already holds.
@@ -355,10 +354,8 @@ class P4Vcs:
     #
     # These two methods are NOT part of ``content_pipeline.vcs.seam.VcsBackend``
     # -- they are Perforce capabilities the seam deliberately does not model, so
-    # a consumer that previously kept them project-side (as
-    # ``firstpass_ops.cl_creation.cl_open_for_edit`` /
-    # ``cl_assert_matches_description``) can adopt p4-kit's hardened versions
-    # instead. They do not widen the seam; the protocol is unchanged.
+    # consumers can use these hardened implementations without widening the
+    # shared seam; the protocol is unchanged.
 
     def owning_changeset(self, path) -> Optional[str]:
         """[P4 extension] Return the CL currently holding ``path``, or ``None``.

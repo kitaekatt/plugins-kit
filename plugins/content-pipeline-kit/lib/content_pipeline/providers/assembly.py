@@ -19,9 +19,9 @@ domain-free:
   (the compiled regex, construction, parsing, rendering) lives here so a
   delimiter change is one place.
 - **Label indirection** (:func:`assign_labels`, :func:`invert_labels`,
-  :func:`relabel`) -- generalizes firstpass's ``request_builder`` technique of
-  showing an agent opaque ``item_N`` labels instead of real keys. Opaque labels
-  defeat an LLM's tendency to collapse sibling items that share a visible
+  :func:`relabel`) -- shows an agent opaque ``item_N`` labels instead of real
+  keys. Opaque labels defeat an LLM's tendency to collapse sibling items that
+  share a visible
   key-suffix pattern; the mapping round-trips the agent's label-keyed response
   back to real keys. A GENERIC technique, so it lives here, not in a caller.
 
