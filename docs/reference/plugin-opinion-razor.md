@@ -84,7 +84,7 @@ consumer does not have.
 
 **Satisfied by:** moving it to `docs/`, `scripts/`, or a task folder.
 
-**Worked example (real, 2026-08-08).** The orchestrate skill shipped
+**Worked example (real, remediated 2026-08-08).** The orchestrate skill shipped
 `references/decision-fingerprint.txt`, a sha256 baseline whose header instructed the
 reader to regenerate it with `uv run python scripts/check_orchestration_drift.py --update`
 -- a script absent from every consumer install. Alongside it,
@@ -96,6 +96,19 @@ reader to regenerate it with `uv run python scripts/check_orchestration_drift.py
 Note the mechanism: none of that arrived as a decision to publish something. It accreted
 inside files that already shipped, because a build step colocated its inputs with its
 artifact for convenience. **Colocation is a publishing decision.**
+
+**Remediation.** The colocation reason expired once the decision half became GENERATED
+(`scripts/generate_orchestration.py`, compiling the tree from `tier-principles.md` and
+`lexicon.md`) rather than hand-written and checked for drift: a fingerprint can no
+longer disagree with principles compiled from those same principles, so
+`scripts/check_orchestration_drift.py` and `decision-fingerprint.txt` -- the ONLY reason
+the two design docs sat inside the policed `references/` directory -- were deleted.
+`tier-principles.md` and `orchestrate-2.0-design.md` moved to
+`docs/reference/orchestrate/` (outside every published plugin); the SKILL.md links to
+both were dropped rather than repointed, since a consumer install has no `docs/` tree.
+`lexicon.md` was not moved -- it is genuine vocabulary reference a consumer reads
+alongside the rendered tree, not build plumbing -- and stays in the skill's
+`references/`.
 
 **Audit note:** md-domain will not catch this. Its review claims deliberately carve out a
 skill's `references/*.md`, so no audit lane reads their prose. OP-1 must be checked by
