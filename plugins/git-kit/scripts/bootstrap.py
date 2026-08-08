@@ -4,7 +4,7 @@ Verifies the GitHub CLI is authenticated. If the project's bootstrap.json
 declares a required organization under `git_kit.required_organization`,
 verifies the authenticated user is a member; if `git_kit.access_remediation`
 is also set, that text is surfaced as the per-project remediation hint
-(e.g. "ask @dmo for access to the SpryFox repository"). Org membership is
+(e.g. "ask the repo admin for access to the org's repository"). Org membership is
 only checked when the user is authenticated -- otherwise the auth failure
 takes priority.
 

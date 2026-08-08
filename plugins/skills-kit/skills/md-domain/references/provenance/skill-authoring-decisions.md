@@ -682,7 +682,7 @@ claude_md:
         md-authoring domain, which dec_13's "domain | Never nest" row appeared to
         forbid. The user corrected the framing: "domains do not nest, but we can
         have a broader domain so it's a union not a nest," and pointed at
-        spiritcrossing's dialog-domain as a live sub-domain example.
+        a consuming project's content sub-domain as a live example.
 
         Decision: "never nest" is the top-level CRP test, not a topology ban.
         The discriminator is selective-dispatch (UNION, allowed -- a thin

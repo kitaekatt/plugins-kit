@@ -1169,7 +1169,7 @@ class TestEnsureRegistryScopeNeverCreatesOrphan:
     scope -- re-added by the add remediation, oscillating forever.
 
     Live shape this protects: engineer@spryfox-plugins and
-    prototyping@spryfox-plugins are declared scope "project" in spiritcrossing's
+    prototyping@spryfox-plugins are declared scope "project" in one project's
     bootstrap.json while enabled at USER scope in ~/.claude/settings.json. If
     Claude Code ships the claude-code#81706 fix and starts writing the missing
     user-scope record itself, an unguarded rewrite would convert it straight
@@ -1257,7 +1257,7 @@ class TestEnsureRegistryScopeAddsUserRecord:
         """The live bootstrap@plugins-kit record from the wedge snapshot."""
         return {
             "scope": "project",
-            "projectPath": "C:\\dev\\spiritcrossing\\main",
+            "projectPath": "C:\\dev\\othergame\\main",
             "installPath": str(install_dir),
             "version": "0.64.1",
             "installedAt": "2026-07-25T17:05:08.450Z",

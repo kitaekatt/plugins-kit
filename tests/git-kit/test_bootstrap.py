@@ -81,33 +81,33 @@ class TestCheckAuth:
 
 class TestCheckOrgMembership:
     def test_member(self):
-        fake = subprocess.CompletedProcess(["gh"], 0, stdout="acme\nSpryFox\n", stderr="")
+        fake = subprocess.CompletedProcess(["gh"], 0, stdout="acme\nWidgetCo\n", stderr="")
         with patch.object(subprocess, "run", return_value=fake):
-            member, orgs = gb._check_org_membership("gh", "SpryFox")
+            member, orgs = gb._check_org_membership("gh", "WidgetCo")
         assert member is True
-        assert orgs == ["acme", "SpryFox"]
+        assert orgs == ["acme", "WidgetCo"]
 
     def test_membership_is_case_insensitive(self):
-        fake = subprocess.CompletedProcess(["gh"], 0, stdout="spryfox\n", stderr="")
+        fake = subprocess.CompletedProcess(["gh"], 0, stdout="widgetco\n", stderr="")
         with patch.object(subprocess, "run", return_value=fake):
-            member, _ = gb._check_org_membership("gh", "SpryFox")
+            member, _ = gb._check_org_membership("gh", "WidgetCo")
         assert member is True
 
     def test_not_a_member(self):
         fake = subprocess.CompletedProcess(["gh"], 0, stdout="acme\n", stderr="")
         with patch.object(subprocess, "run", return_value=fake):
-            member, orgs = gb._check_org_membership("gh", "SpryFox")
+            member, orgs = gb._check_org_membership("gh", "WidgetCo")
         assert member is False
         assert orgs == ["acme"]
 
     def test_api_failure_returns_false_and_empty(self):
         fake = subprocess.CompletedProcess(["gh"], 1, stdout="", stderr="HTTP 403")
         with patch.object(subprocess, "run", return_value=fake):
-            assert gb._check_org_membership("gh", "SpryFox") == (False, [])
+            assert gb._check_org_membership("gh", "WidgetCo") == (False, [])
 
     def test_subprocess_error_returns_false_and_empty(self):
         with patch.object(subprocess, "run", side_effect=OSError("boom")):
-            assert gb._check_org_membership("gh", "SpryFox") == (False, [])
+            assert gb._check_org_membership("gh", "WidgetCo") == (False, [])
 
 
 # ---------------------------------------------------------------------------
@@ -132,12 +132,12 @@ class TestProjectOrgConfig:
             tmp_path,
             {
                 "git_kit": {
-                    "required_organization": "SpryFox",
-                    "access_remediation": "ask @dmo for access",
+                    "required_organization": "WidgetCo",
+                    "access_remediation": "ask @admin for access",
                 }
             },
         )
-        assert gb._project_org_config(tmp_path) == ("SpryFox", "ask @dmo for access")
+        assert gb._project_org_config(tmp_path) == ("WidgetCo", "ask @admin for access")
 
     def test_whitespace_values_treated_as_absent(self, tmp_path):
         self._write_config(
@@ -195,16 +195,16 @@ class TestBootstrap:
         cfg_dir = tmp_path / ".claude"
         cfg_dir.mkdir()
         (cfg_dir / "bootstrap.json").write_text(
-            json.dumps({"git_kit": {"required_organization": "SpryFox"}}),
+            json.dumps({"git_kit": {"required_organization": "WidgetCo"}}),
             encoding="utf-8",
         )
         ctx = FakeCtx(project_dir=tmp_path)
         with patch.object(gb, "_resolve_gh", return_value="gh"), patch.object(
             gb, "_check_auth", return_value=(True, "christina")
-        ), patch.object(gb, "_check_org_membership", return_value=(True, ["SpryFox"])):
+        ), patch.object(gb, "_check_org_membership", return_value=(True, ["WidgetCo"])):
             gb.bootstrap(ctx)
         assert ctx.failures == []
-        assert any("SpryFox" in m for m in ctx.oks)
+        assert any("WidgetCo" in m for m in ctx.oks)
 
     def test_non_member_registers_org_failure_with_remediation(self, tmp_path):
         cfg_dir = tmp_path / ".claude"
@@ -213,8 +213,8 @@ class TestBootstrap:
             json.dumps(
                 {
                     "git_kit": {
-                        "required_organization": "SpryFox",
-                        "access_remediation": "ask @dmo for access",
+                        "required_organization": "WidgetCo",
+                        "access_remediation": "ask @admin for access",
                     }
                 }
             ),
@@ -228,8 +228,8 @@ class TestBootstrap:
         assert len(ctx.failures) == 1
         kind, kwargs = ctx.failures[0]
         assert kwargs["field"] == "github_org"
-        assert "ask @dmo for access" in kwargs["user_msg"]
-        assert "ask @dmo for access" in kwargs["agent_msg"]
+        assert "ask @admin for access" in kwargs["user_msg"]
+        assert "ask @admin for access" in kwargs["agent_msg"]
         assert "acme" in kwargs["agent_msg"]
 
     def test_auth_failure_takes_priority_over_org_check(self):

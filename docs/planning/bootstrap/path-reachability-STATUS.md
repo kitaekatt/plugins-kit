@@ -111,7 +111,8 @@ environmental:
    `test_cached_run_silent`, `test_engine_background.py` x3, `test_engine_multiplugin.py::test_no_enabled_plugins_emits_log`):
    they run the real engine which reads the real `~/.claude/bootstrap.json` +
    installed plugins, so they see real plugins (awesome-kit, claude-ui-kit,
-   spryfox) and the draw.io fix-all leaking into "should be silent" assertions.
+   private-marketplace plugins) and the draw.io fix-all leaking into "should be
+   silent" assertions.
    Would pass in clean CI; leak on this configured machine.
 2. bash `source` round-trip (`test_engine_multiplugin.py::test_plugin_venv_exports_env_var_via_claude_env_file`,
    `test_venv_check.py::test_path_with_spaces_is_shell_quoted`): "Failed to attach

@@ -52,8 +52,8 @@ class TestResolveProject:
 
     def test_cwd_overrides_config(self, tmp_path, monkeypatch):
         """CWD-based discovery takes priority over config file values."""
-        # Config points to SpiritCrossing (the bug scenario)
-        spirit = tmp_path / "spiritcrossing" / "SpiritCrossing.uproject"
+        # Config points to a different project (the bug scenario)
+        spirit = tmp_path / "othergame" / "OtherGame.uproject"
         _make_uproject(spirit)
 
         # CWD is in StackOBot

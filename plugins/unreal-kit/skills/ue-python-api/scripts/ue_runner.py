@@ -176,7 +176,7 @@ def _try_remote(script_path: str, config: RunnerConfig) -> RunResult | None:
 
     # The editor for THIS workspace is identified by its absolute project dir.
     # Multiple editors on one host share the multicast group and the uproject
-    # basename ("SpiritCrossing"), so the only safe disambiguator is the dir.
+    # basename (e.g. "MyGame"), so the only safe disambiguator is the dir.
     expected_root = os.path.dirname(os.path.abspath(config.uproject)) if config.uproject else ""
 
     class _ProjectFilteredConnection(upyre.PythonRemoteConnection):

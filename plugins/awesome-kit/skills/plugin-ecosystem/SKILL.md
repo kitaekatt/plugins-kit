@@ -27,7 +27,7 @@ In framework terms, plugin-ecosystem is:
 - "Show me the plugin ecosystem"
 - "Regenerate / refresh the plugin poster"
 - "Show the project defaults" / "what would a fresh user see" -> pass `--defaults` (see Invocation Keywords)
-- "Make the poster reflect SpryFox defaults" (use the `states:` override block in the user config)
+- "Make the poster reflect my team's defaults" (use the `states:` override block in the user config)
 - "Set the poster title to X" / "set the tagline to Y" (edit the user config)
 - "Add `<marketplace>` to the poster" (author a `.claude-plugin/poster.yaml` in that marketplace's repo)
 
@@ -107,14 +107,14 @@ For each plugin, the badge is computed in this order (first match wins):
 4. Project `<cwd>/.claude/bootstrap.json` declaration. `enabled: true` -> on, `install: manual` -> opt-in, anything else declared -> off.
 5. Default -> "unmanaged" (installed but neither enabled nor declared).
 
-**SpryFox-defaults poster recipe**: drop a `states:` map into the user config that mirrors what the SpryFox `bootstrap.json` declares. Re-run -- the badges reflect SpryFox defaults regardless of the user's personal overrides.
+**Team-defaults poster recipe**: drop a `states:` map into the user config that mirrors what the team's `bootstrap.json` declares. Re-run -- the badges reflect the team defaults regardless of the user's personal overrides.
 
 ### User config YAML
 
 `~/.claude/.local-data/awesome-kit/plugin-ecosystem-poster.yaml`:
 
 ```yaml
-title: "Spirit Crossing Claude Plugin Ecosystem"
+title: "Acme Claude Plugin Ecosystem"
 tagline: "Use /plugin to change your claude-code plugins, you decide what's active!"
 states:
   spryfox-plugins:designer: on
@@ -132,7 +132,7 @@ All keys optional. Defaults: title = "Claude Plugin Ecosystem", tagline = "" (no
 | "Show this plugin as on/off" | Add `<marketplace>:<plugin>: on` (or off / opt-in) to `states:` in the user config |
 | "Add `<marketplace>` to the poster" | Create `.claude-plugin/poster.yaml` in that marketplace's repo with at least a `subtitle:`, then commit + push |
 | "Change the subtitle for `<marketplace>`" | Edit `.claude-plugin/poster.yaml` in that marketplace's repo (NOT the user config) |
-| "Make the poster reflect SpryFox defaults" | Populate `states:` in the user config to match what SpryFox `bootstrap.json` declares for each plugin |
+| "Make the poster reflect my team's defaults" | Populate `states:` in the user config to match what the team's `bootstrap.json` declares for each plugin |
 
 User config = poster author's knobs. Marketplace `poster.yaml` = marketplace maintainer's knobs. Plugin `poster.yaml` = plugin author's knobs. Don't conflate.
 

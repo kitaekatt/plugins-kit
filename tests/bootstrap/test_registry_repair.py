@@ -30,7 +30,7 @@ CHIMERA = {
 # Defect 2: a project-scope record naming no project.
 ORPHAN = {"scope": "project", "version": "0.3.4", "installPath": "/cache/0.3.4"}
 PROJECT_A = dict(ORPHAN, projectPath="C:/dev/plugins-kit")
-PROJECT_B = dict(ORPHAN, projectPath="C:/dev/spiritcrossing/main")
+PROJECT_B = dict(ORPHAN, projectPath="C:/dev/othergame/main")
 
 
 def _write_registry(tmp_path, plugins_data, wrapper=True):

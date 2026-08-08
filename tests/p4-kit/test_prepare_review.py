@@ -1274,7 +1274,7 @@ class TestBuildBundle:
         assert "+content of b" in diff
 
     def test_mixed_cl_adds_omitted_from_differences(self, tmp_path):
-        """Regression (Spirit Crossing CL 144098): on some p4 servers, `describe -du -S`
+        """Regression (observed on a consuming project's CL): on some p4 servers, `describe -du -S`
         for a shelved mixed CL emits ==== headers ONLY for edits. Pure-adds appear only
         in the Shelved files listing. Previously these were silently dropped.
         """

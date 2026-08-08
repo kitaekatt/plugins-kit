@@ -109,7 +109,7 @@ def test_round_trips_cjk_through_utf8_pipes(tmp_path: Path):
     bytes). The child runs in UTF-8 mode (-X utf8) so its side is deterministic;
     the parent side is what this exercises.
     """
-    request = "Locked atoms: Amano -> 阿马诺; sea -> 海\n"
+    request = "Locked atoms: Sakura -> 樱; sea -> 海\n"
     cmd = [
         sys.executable, "-X", "utf8", "-c",
         "import sys; sys.stdout.write(sys.stdin.read())",

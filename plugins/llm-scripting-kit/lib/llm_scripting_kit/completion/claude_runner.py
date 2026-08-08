@@ -1,7 +1,7 @@
 """Shared ``claude -p`` subprocess runner for completion pipelines.
 
-Battle-tested transport ported verbatim from Spirit Crossing's gen-ops
-``claude_runner`` (itself extracted after a firstpass copy drifted into a
+Battle-tested transport ported verbatim from a consuming project's gen-ops
+``claude_runner`` (itself extracted after a forked copy drifted into a
 main-thread-blocking ``readline()`` hang and a cp1252 encoding bug). The
 defensive details are the point of this module and must be preserved:
 

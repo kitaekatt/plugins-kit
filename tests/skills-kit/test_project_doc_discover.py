@@ -152,7 +152,7 @@ class TestProjectRootCiterScope:
     def test_find_project_root_finds_perforce_marker(self, tmp_path):
         # Non-git project: Perforce workspace marker must also resolve.
         (tmp_path / ".p4config.txt").write_text("P4USER=x\n", encoding="utf-8")
-        deep = tmp_path / "SpiritCrossing" / "Source"
+        deep = tmp_path / "MyGame" / "Source"
         deep.mkdir(parents=True)
         assert pd.find_project_root(deep) == tmp_path
 

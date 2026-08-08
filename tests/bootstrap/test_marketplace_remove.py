@@ -22,7 +22,7 @@ class TestEngineMarketplaceRemove:
         entries = {}
         if registered:
             entries["plugins-kit-sf"] = {
-                "source": {"source": "git", "url": "https://github.com/SpryFox/plugins-kit.git"},
+                "source": {"source": "git", "url": "https://github.com/example-org/plugins-kit.git"},
                 "installLocation": str(tmp_path / "marketplaces" / "plugins-kit-sf"),
                 "autoUpdate": True,
             }
@@ -87,7 +87,7 @@ class TestEngineMarketplaceRemove:
         self._setup_home(tmp_path, monkeypatch)
         manifest = {"marketplaces": [
             {"name": "plugins-kit-sf", "remove": True, "pin": "f7f6276a",
-             "source": "https://github.com/SpryFox/plugins-kit.git"}
+             "source": "https://github.com/example-org/plugins-kit.git"}
         ]}
         with patch("bootstrap_lib.marketplace_lifecycle.remove_marketplace",
                    return_value=LifecycleResult(True, "plugins-kit-sf", "marketplace removed")) as mock_rm, \

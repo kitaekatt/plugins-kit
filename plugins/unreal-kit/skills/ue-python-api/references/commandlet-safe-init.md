@@ -58,4 +58,4 @@ The pattern: silent skip on import failure (a routine, expected condition), trac
 
 Run a UE commandlet (any one -- the discovery commandlet from `fix-up-redirectors` is fast at ~13 seconds) and grep the output for `Error|Traceback|attach_debugger|init_sc_tools|main_menu|pydevd`. After applying all three patterns, the only remaining `Error` matches should be unrelated UE-internal noise (e.g. `LogWindows: Failed to load 'aqProf.dll'` and similar conditional-DLL loads).
 
-Surfaced 2026-05-05 in the spiritcrossing/main project; fixed there in CL 146111. The same patterns apply to any UE project that ships project-side Python init scripts.
+Surfaced 2026-05-05 in a consuming UE project and fixed there. The same patterns apply to any UE project that ships project-side Python init scripts.
