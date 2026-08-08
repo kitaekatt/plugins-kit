@@ -121,4 +121,64 @@ claude_md:
         corpus at tests/skills-kit/golden_corpus/ (mechanical goldens byte-compare;
         recorded lane verdicts re-run).
       added: "2026-07-29"
+    - id: coverage_is_a_report_only_third_verb
+      keywords: [coverage verb, third verb, not an audit lane, not a density lens, report-only, GAPS-FOUND, COVERAGE-ASSESSED, code subject, ambient chain, no remediate workflow, registration is go-live]
+      summary: The coverage capability is a REPORT-ONLY third verb (coverage_code_subtree, own coverage-lane.md), not a fifth audit lane and not a --coverage flag. Three contract facts decide it; the report-only narrowing is what makes a third verb cheap.
+      detail: |
+        Three shapes were considered: (A) a third verb with its own procedure,
+        (B) a --coverage lens threaded through audit_claude_md exactly as
+        --density is, (C) a fifth audit lane binding into audit-lane.md the way
+        audit_references does.
+
+        B is refuted by the NULL CASE. Density's subject is a file that by
+        definition exists -- it is a lens over an already-enumerated CLAUDE.md.
+        Coverage's canonical instance is a code subtree with NO CLAUDE.md at all,
+        so a per-file lens never fires on precisely the case the capability
+        exists to catch. discover_claude_md.py returns no subjects when no such
+        file exists, and claude-md-detect.js rejects a non-CLAUDE basename as
+        NOT-AUDITED, so a virtual-subject workaround is A or C behind a flag.
+
+        C is refuted by three facts, each verified against source:
+          - audit-lane.md:19-22 -- everything before the references section
+            "applies to the three per-file lanes". audit_references is an
+            explicitly carved-out outlier, not a general extension point.
+          - audit-lane.md:485-487 -- "The same input produces the same verdict"
+            is an audit INVARIANT. Coverage disclaims idempotency (candidate
+            selection is a judgment over ~10^4 constructs), so it cannot be an
+            audit lane without breaking a contract the audit family relies on.
+          - tests/skills-kit/test_domain_members_resolve.py:213-217 forces every
+            audit_* lane but references to declare NOT-AUDITED + DIFF-CLEAN, and
+            :236 forces every verb == "audit" record to bind a
+            workflow_remediate. A third verb satisfies both by not matching them,
+            rather than by exception.
+
+        REPORT-ONLY is what keeps A cheap. With no remediation phase there is no
+        coverage-remediate.js, the sonnet+low pin does not apply, and
+        gen_workflow_js.py -- which assumes per-file edits and
+        applied/skipped/failed results -- is not involved at all.
+
+        One place coverage must NOT copy the audit lane: audit-lane.md:110-117
+        runs a single-subject job INLINE at the session model. A coverage run
+        normally has exactly ONE subtree, so reusing that shortcut would put the
+        COMMON case off-pin. The detect workflow is entered regardless of count.
+
+        REGISTRATION IS THE GO-LIVE SWITCH. The verb is deliberately absent from
+        SKILL.md's menu, dispatch table and lane registry until its assessment
+        criteria are authored -- a menu entry for a verb that cannot assess
+        anything is worse than no entry, the same reasoning that kept it off the
+        menu when the analysis vocabulary shipped. Two obligations land in that
+        same go-live commit, not before: the lane record (with the golden-corpus
+        re-record the verdict vocabulary requires per
+        contracts_preserved_verbatim_through_the_fold) and deleting SKILL.md's
+        "None of the above reads your source tree" paragraph, which the entry
+        falsifies. tests/skills-kit/test_coverage_workflow_contract.py pins both
+        halves so neither can drift ahead of the other.
+      origin: |
+        Surface: the coverage-lane spec argued "separate lane" from subject
+        enumeration alone. Finding: an adversarial cross-check (gpt-5.6-sol,
+        2026-08-08) refuted the fifth-audit-lane reading with the three contract
+        facts above; the null-case argument against the lens survived. Follow-up:
+        the criteria seam (coverage-detect.js refuses without refs.criteria) and
+        the registration/go-live pairing above.
+      added: "2026-08-08"
 ```

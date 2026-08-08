@@ -109,8 +109,8 @@ answered a question this verb is not asking.)
   ambient for the code it describes, carrying the destination the placement
   algorithm selects. Reporting a candidate is not a commitment to write it.
 - **Honest posture:** advisory, JUDGMENT throughout, report-only (no remediation
-  phase and no remediate workflow), idempotency NOT claimed, a per-run candidate
-  ceiling that is ANNOUNCED when hit.
+  phase and no remediate workflow), idempotency NOT claimed, a candidate ceiling per
+  subtree that is ANNOUNCED when hit.
 - **Reuses what exists:** the authoring direction already defines the
   present-and-silent observation kinds. The gap is that the audit direction
   refuses to look, not that the vocabulary is missing.

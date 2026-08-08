@@ -147,7 +147,8 @@ pre-read exclusions, which was not implementable.)
 ## Cost and idempotency bounds
 
 - Bounded by the named subtree or diff, never the repo.
-- A per-run candidate ceiling; when it is hit, SAY SO in the report rather than
+- A candidate ceiling PER SUBTREE (not per run; a per-run cap divided across
+  subjects gives each an arbitrary share). When it is hit, SAY SO rather than
   silently truncating. Silent truncation in the tool that reports silent
   truncation would be its own joke, and the repo's own rule requires a capped run
   to announce the cap.
