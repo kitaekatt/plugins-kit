@@ -3823,7 +3823,23 @@ def _phase_marketplaces(ctx):
         check_marketplace_exists, check_marketplace_current,
         add_marketplace, remove_marketplace, update_marketplace,
         apply_marketplace_pin, release_marketplace_pin, load_pin_markers,
+        resolve_claude_cli,
     )
+
+    # Precondition: every operation below shells out to the `claude` CLI, so
+    # without it there is nothing to attempt. Stand down in one line rather
+    # than letting each entry fail separately -- and report it with action(),
+    # NOT fail(): the tools phase has already surfaced the real, actionable
+    # problem, so adding per-entry failures here would only pad the fix-all
+    # list with items that cannot succeed.
+    if not resolve_claude_cli():
+        skipped = len(ctx.manifest.get("marketplaces", []))
+        ctx.action(
+            f"{ctx.prefix}marketplaces: skipped {skipped} "
+            f"{'entry' if skipped == 1 else 'entries'} - claude CLI unavailable "
+            f"(see the `claude` tool entry)"
+        )
+        return
 
     for mkt_def in ctx.manifest.get("marketplaces", []):
         mkt_name = mkt_def.get("name", "")
@@ -3976,7 +3992,20 @@ def _phase_plugins(ctx):
         check_plugin_version, check_plugin_min_version,
         update_plugin, ensure_registry_scope,
         pinned_marketplace_sha,
+        resolve_claude_cli,
     )
+
+    # See the matching gate in _phase_marketplaces: resolve once, stand down in
+    # one line, and add no failures -- the `claude` tool entry owns the
+    # actionable report.
+    if not resolve_claude_cli():
+        skipped = len(ctx.manifest.get("plugins", []))
+        ctx.action(
+            f"{ctx.prefix}plugins: skipped {skipped} "
+            f"{'entry' if skipped == 1 else 'entries'} - claude CLI unavailable "
+            f"(see the `claude` tool entry)"
+        )
+        return
 
     plugins_installed = {}      # mkt -> [(name, detail)]
     plugins_re_installed = {}   # mkt -> [(name, detail)]

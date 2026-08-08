@@ -123,6 +123,23 @@ def _find_claude_cli() -> Optional[str]:
     return None
 
 
+def resolve_claude_cli() -> Optional[str]:
+    """Public probe: the path to the `claude` CLI, or None when unresolvable.
+
+    Exists so a phase can ask ONCE, up front, instead of letting every
+    marketplace and plugin entry rediscover the same absence. Without this the
+    failure fans out: each entry independently re-resolves, independently
+    fails, and independently reports, turning one missing binary into a
+    numbered list of ten broken things whose ordering hides the actual cause.
+
+    Deliberately NOT memoized. The tools phase runs before the marketplace and
+    plugin phases and may install `claude` mid-pass, so a cached miss taken
+    early in a pass could still be held after the install that fixed it. One
+    resolution per phase is cheap; a stale negative is not.
+    """
+    return _find_claude_cli()
+
+
 def _run_claude(args: list, timeout: int = 120, cwd: Optional[str] = None) -> tuple:
     """Run a claude CLI command. Returns (success, stdout, stderr).
 
