@@ -350,6 +350,33 @@ python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootst
 python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/bootstrap --console --verbose
 ```
 
+## Task folders are gitignored here
+
+`dev/` is gitignored, and that **includes `dev/tasks/`**. Task folders in this
+repo are working state, not repo content: they are local scratch for the agent
+and the developer driving it, and they do not belong in the history other
+people pull.
+
+This is a deliberate deviation from `awesome-kit:task`'s model, which treats
+`dev/tasks/<stub>` as the DURABLE half of the system ("version control is the
+record") and `tmp/<stub>` as the ephemeral half. That contract does not apply
+to this repo. Consequences to know rather than rediscover:
+
+- The task CLI's validate/work verbs may warn that a `dev/tasks` folder is
+  uncommitted, and `archive` on a dev/tasks folder expects to commit a final
+  state and delete the folder. Here, treat those as noise -- the folder is
+  intentionally invisible to git.
+- **Do not add a `!dev/tasks/` negation to `.gitignore` to "fix" this.** It has
+  been done once and reverted. (Note also that a negation under a bare `dev/`
+  rule is inert: git cannot re-include a path inside an excluded directory, so
+  the exception silently does nothing until someone also rewrites `dev/` to
+  `dev/*` -- which is how the mistake looks like it worked.)
+- A task folder's contents are therefore **one clean tree away from gone**.
+  Anything that must outlive the task -- a spec, a decision record, a
+  reference -- belongs in its owning repo at authoring time, which is what the
+  task system's `durable_outputs` rule already requires. Follow that rule
+  strictly here, because the folder is not a backstop.
+
 ## Preferences
 
 - **No temporal deixis in documentation.** Never "recent(ly)", "new", "just
