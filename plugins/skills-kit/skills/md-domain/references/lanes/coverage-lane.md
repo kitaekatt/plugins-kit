@@ -4,12 +4,10 @@ The third verb's procedure. Unlike `audit` and `author`, this one is NOT
 parameterized by artifact -- it has exactly one subject shape, and its subject is
 CODE.
 
-**Status as of 2026-08-08: the pipeline is built; the ASSESSMENT CRITERIA are
-unauthored.** Step 3 is a declared seam. Its filled state is: a standards doc
-exists, `refs.criteria` points at it, and the verb is registered in SKILL.md.
-Until all three hold, do not invent criteria and do not register the verb --
-registration is the go-live switch, and a menu entry for a verb that cannot
-assess anything is worse than no entry.
+**Status as of 2026-08-08: filled and registered.** The assessment criteria live
+in `references/standards/coverage-standards.md`, callers pass that document's
+absolute path as `refs.criteria`, and `coverage_code_subtree` is registered in
+SKILL.md. Registration is the go-live switch; all three parts landed together.
 
 ## What this verb is for, before anything else
 
@@ -41,8 +39,9 @@ never reaches.
 | detect workflow | `workflow/coverage-detect.js` |
 | remediate workflow | NONE -- report-only, deliberately |
 | verdicts | `GAPS-FOUND` / `COVERAGE-ASSESSED` |
-| standards | the step-3 seam; unauthored as of 2026-08-08 |
-| supported flags | `--diff`, `--json` |
+| standards | `references/standards/coverage-standards.md` |
+| analysis depth | `basic` / `advanced` |
+| supported flags | `--diff`, `--json`, `--advanced` |
 
 ## Model pinning (not negotiable)
 
@@ -64,7 +63,7 @@ There is no remediate lane, so the `sonnet` + `low` remediation pin and
 ```
 Step 1  Resolve + INTENT GATE
 Step 2  Discover (mechanical, side-effect free)
-Step 3  Assess            <-- SEAM: see the status note above
+Step 3  Assess (coverage-standards.md)
 Step 4  Report and stop
 ```
 
@@ -83,6 +82,12 @@ flag is not sufficient protection.
    or the scope is unstated -- CONFIRM with `AskUserQuestion` before running.
    Put the cost AND the scope in the same question. Never infer intent from the
    mere presence of code in a named directory.
+4. Resolve analysis depth before discovery. An explicit `--advanced` flag wins
+   silently. Otherwise, in an interactive dispatch, PROMPT via
+   `AskUserQuestion`: `basic` is the bounded power-user run and `advanced` is the
+   full experience. In a non-interactive dispatch, take `basic` and disclose
+   exactly `defaults: depth=basic`. Never silently choose between the modes in
+   an interactive run.
 
 Resolve the target: a named directory, or `--diff`. **There is no whole-repo
 default** -- an unbounded default is how this becomes expensive and
@@ -114,14 +119,17 @@ Structural exclusions (vendored, generated, symlink-resolving-outside, nested
 repo) are already applied and RECORDED. Surface them in the report; never drop
 them silently.
 
-### Step 3 -- Assess  [SEAM]
+### Step 3 -- Assess
 
-**This step is deliberately unspecified** (unauthored as of 2026-08-08). Its
-criteria -- what makes a code-derived fact worth ambient cost, and the severity
-bar for the severe-deficiency carve-out -- are owner-authored.
+Apply `references/standards/coverage-standards.md` verbatim. The caller MUST
+resolve that document to an ABSOLUTE path and pass it as `refs.criteria` to
+`workflow/coverage-detect.js`; never embed or paraphrase the criteria in the
+JavaScript workflow. Apply the depth selected at the intent gate: `basic` uses a
+bounded read and one assessment pass; `advanced` reads every source file
+completely, discovers invariants before assessment, and verifies surviving
+candidates after assessment.
 
-What is already settled about this step, so the seam is filled correctly rather
-than freely:
+The following settled rules remain part of the assessment contract:
 
 - It reuses the AUTHORING direction's existing observation kinds
   (`claude-md-standards.md:385-390`), which already define what is worth writing
@@ -154,6 +162,8 @@ Ambient chain (<N>, root-most first):
 Code files assessed: <N>
 Skipped: <N>  (<reason> <path>, ...)
 Candidate ceiling (per subtree): <not reached | REACHED -- N not shown>
+Analysis depth: basic | advanced
+<only for a non-interactive implicit basic selection: defaults: depth=basic>
 
 ### Candidates
 - <fact>  ->  destination: <CLAUDE.md the placement algorithm selects>
@@ -161,6 +171,7 @@ Candidate ceiling (per subtree): <not reached | REACHED -- N not shown>
 
 ### Coverage verdict
 GAPS-FOUND | COVERAGE-ASSESSED
+Meaning: <basic: not found within budget | advanced: verified absent>
 ```
 
 Each candidate carries the destination the placement algorithm selects --
@@ -236,6 +247,7 @@ review; a fossilized one is not.
 ## Cross-references
 
 - Why this verb exists, and the four negative controls -- `references/coverage-gap.md`.
+- What earns ambient cost, including analysis depth -- `references/standards/coverage-standards.md`.
 - Where a candidate's destination goes -- `references/cohesion-principles.md`.
 - The observation kinds Step 3 reuses -- `references/standards/claude-md-standards.md`.
 - The audit verb's procedure (a different subject, different contract) -- `audit-lane.md`.

@@ -14,11 +14,10 @@
 // done the wrong work. The unit of output is always a fact about the code that
 // belongs in a CLAUDE.md and is not ambient for the code it describes.
 //
-// STATUS: the pipeline is built; the ASSESSMENT CRITERIA are not. `refs.criteria`
-// has no standards doc behind it yet, and this lane REFUSES to run without one
-// (see the guard below) rather than improvising a hazard sweep -- the design two
-// independent adversarial reviews rejected. Do not fill the seam here; author the
-// standards doc and point refs.criteria at it.
+// ASSESSMENT CRITERIA live in references/standards/coverage-standards.md. The
+// seam is filled through `refs.criteria`, never by embedding or paraphrasing the
+// criteria in JavaScript. The guard below remains fail-closed so a miswired
+// caller cannot improvise the hazard sweep two adversarial reviews rejected.
 //
 // NO REMEDIATE LANE, deliberately. Nothing is ever applied, so there is no
 // coverage-remediate.js, the sonnet+low remediation pin does not apply, and
@@ -37,6 +36,7 @@
 //     nearest .git so a nested repo never inherits the outer repo's chain. Both
 //     are easy to get wrong by eye.)
 //   ceiling: integer|undefined   // candidate cap PER SUBTREE; default below
+//   depth: 'basic'|'advanced'    // resolved by the lane's intent gate
 //   refs: { criteria: <abs path to the coverage standards doc>,
 //           observationKinds: <abs path to references/standards/claude-md-standards.md>,
 //           placement: <abs path to references/cohesion-principles.md>,
@@ -106,7 +106,7 @@ const SUBJECT_FINDINGS_SCHEMA = {
 
 const subjects = Array.isArray(input.subjects) ? input.subjects : []
 
-// The seam guard. Without a criteria doc this lane has no basis for deciding what
+// The criteria guard. Without a criteria doc this lane has no basis for deciding what
 // earns ambient cost, and the failure mode of guessing is the rejected hazard
 // sweep -- which looks like it works. Refuse loudly instead.
 //
@@ -117,10 +117,18 @@ const criteriaPath = input.refs && input.refs.criteria
 if (typeof criteriaPath !== 'string' || criteriaPath.trim() === '') {
   throw new Error(
     'coverage-detect: refs.criteria is not set. The coverage assessment criteria ' +
-    'are not yet authored, and this lane will not improvise them -- an invented ' +
+    'were not wired into this call, and this lane will not improvise them -- an invented ' +
     'predicate reproduces the hazard sweep that two adversarial reviews rejected. ' +
-    'Author the coverage standards doc, point refs.criteria at it, then re-run. ' +
+    'Pass the absolute path to coverage-standards.md as refs.criteria, then re-run. ' +
     'See references/lanes/coverage-lane.md, "Step 3 -- Assess".'
+  )
+}
+
+const depth = input.depth
+if (depth !== 'basic' && depth !== 'advanced') {
+  throw new Error(
+    `coverage-detect: input.depth must be 'basic' or 'advanced'; resolve it at ` +
+    'the coverage lane intent gate before dispatch.'
   )
 }
 
@@ -138,6 +146,14 @@ const lanePrompt = (s) => {
     ? `\nNOTE: this root is itself ${s.rootExclusion}. It is being assessed because the user named it explicitly; say so in notes.`
     : ''
 
+  const depthClause = depth === 'advanced'
+    ? `ANALYSIS DEPTH: advanced. Read every source file completely. First run an
+invariant-discovery pass and carry those invariants into assessment. After
+assessment, run a verification pass over every surviving candidate against the
+source. At this depth COVERAGE-ASSESSED means verified absent.`
+    : `ANALYSIS DEPTH: basic. Use a bounded, sampled read and one assessment pass.
+At this depth COVERAGE-ASSESSED means not found within budget.`
+
   return `Assess the CLAUDE.md COVERAGE of one code subtree.
 
 Subtree: ${s.root}
@@ -145,6 +161,8 @@ Code files (${(s.codeFiles || []).length}):
 ${(s.codeFiles || []).map((p) => `  - ${p}`).join('\n')}
 
 ${chainClause}${exclusionClause}${rootClause}
+
+${depthClause}
 
 WHAT YOU ARE LOOKING FOR -- read this before anything else.
 
@@ -226,7 +244,7 @@ const results = perSubject.filter(Boolean).map((r) => {
   if (r.ceilingReached && !notes.some((n) => /ceiling|set aside|capped/i.test(n))) {
     notes.push(`candidate ceiling of ${ceiling} reached; results are capped, not complete`)
   }
-  return { ...r, candidates, verdict: derived, notes }
+  return { ...r, candidates, verdict: derived, depth, notes }
 })
 
 // The ambient chain is an INPUT fact, not something the lane reports back, so
@@ -259,6 +277,6 @@ const uncoveredNote = totals.uncovered
   ? `, ${totals.uncovered} subtree(s) with NO ambient CLAUDE.md at all`
   : ''
 
-log(`Coverage: assessed ${results.length}/${subjects.length} subtree(s): ${totals.gapsFound} GAPS-FOUND, ${totals.assessed} COVERAGE-ASSESSED, ${totals.candidates} candidate(s)${severeNote}${uncoveredNote}${ceilingNote}. Advisory and non-idempotent: re-runs may differ, and nothing is applied.`)
+log(`Coverage (depth=${depth}): assessed ${results.length}/${subjects.length} subtree(s): ${totals.gapsFound} GAPS-FOUND, ${totals.assessed} COVERAGE-ASSESSED, ${totals.candidates} candidate(s)${severeNote}${uncoveredNote}${ceilingNote}. Advisory and non-idempotent: re-runs may differ, and nothing is applied.`)
 
-return { perSubject: results, totals, ceiling }
+return { perSubject: results, totals, ceiling, depth }

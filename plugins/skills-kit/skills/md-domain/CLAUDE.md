@@ -162,17 +162,28 @@ claude_md:
         normally has exactly ONE subtree, so reusing that shortcut would put the
         COMMON case off-pin. The detect workflow is entered regardless of count.
 
-        REGISTRATION IS THE GO-LIVE SWITCH. The verb is deliberately absent from
-        SKILL.md's menu, dispatch table and lane registry until its assessment
-        criteria are authored -- a menu entry for a verb that cannot assess
-        anything is worse than no entry, the same reasoning that kept it off the
-        menu when the analysis vocabulary shipped. Two obligations land in that
-        same go-live commit, not before: the lane record (with the golden-corpus
-        re-record the verdict vocabulary requires per
-        contracts_preserved_verbatim_through_the_fold) and deleting SKILL.md's
-        "None of the above reads your source tree" paragraph, which the entry
-        falsifies. tests/skills-kit/test_coverage_workflow_contract.py pins both
-        halves so neither can drift ahead of the other.
+        REGISTRATION WAS THE GO-LIVE SWITCH, and it has been thrown (2026-08-08).
+        The verb was deliberately absent from SKILL.md's menu, dispatch table and
+        lane registry until its assessment criteria were authored -- a menu entry
+        for a verb that cannot assess anything is worse than no entry, the same
+        reasoning that kept it off the menu when the analysis vocabulary shipped.
+        Criteria landed as references/standards/coverage-standards.md; the lane
+        record, menu entry, dispatch row and argument grammar landed with them,
+        and SKILL.md's "None of the above reads your source tree" paragraph was
+        deleted in the same commit because the entry falsifies it. The two
+        contract tests that pinned the switch OFF were inverted in that commit --
+        their failure at registration was the designed reminder, not a
+        regression.
+        GOLDEN CORPUS: NOT re-recorded, deliberately. The obligation recorded
+        here anticipated new verdicts changing recorded expectations, but the
+        corpus fixtures are markdown FILES and its expected-lanes files are
+        per-artifact (claude-md, project-doc, references, skill). Coverage's
+        subject is a code subtree plus its ambient chain, so it has no fixture
+        shape in this corpus and adds no expectation to any existing one; no
+        existing verdict changes meaning. Re-recording would have produced a
+        no-op diff. Stated rather than skipped, because
+        contracts_preserved_verbatim_through_the_fold requires the decision to
+        be deliberate, not merely correct.
       origin: |
         Surface: the coverage-lane spec argued "separate lane" from subject
         enumeration alone. Finding: an adversarial cross-check (gpt-5.6-sol,

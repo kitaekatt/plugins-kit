@@ -14,9 +14,9 @@ a specific way of silently regressing:
   * It must have NO remediate lane. Report-only is what keeps a third verb cheap;
     a remediate lane would drag in the sonnet+low pin and the generator, which
     assumes per-file edits and applied/skipped/failed results.
-  * It must REFUSE to run without authored criteria rather than improvising. An
-    invented predicate reproduces the hazard sweep two adversarial reviews
-    rejected -- and it would look like it was working.
+  * It must REFUSE to run when the authored criteria path is missing rather than
+    improvising. An invented predicate reproduces the hazard sweep two
+    adversarial reviews rejected -- and it would look like it was working.
 
 These are text-level assertions because the lane is a Workflow script (top-level
 `return`, `agent()` / `parallel()` injected at run time), so it cannot be
@@ -31,6 +31,7 @@ MD_DOMAIN = REPO_ROOT / "plugins" / "skills-kit" / "skills" / "md-domain"
 DETECT = MD_DOMAIN / "workflow" / "coverage-detect.js"
 LANE = MD_DOMAIN / "references" / "lanes" / "coverage-lane.md"
 DISCOVER = MD_DOMAIN / "scripts" / "discover_coverage.py"
+STANDARDS = MD_DOMAIN / "references" / "standards" / "coverage-standards.md"
 
 
 def _detect() -> str:
@@ -118,7 +119,7 @@ class TestModelPinning:
         assert "regardless of subject count" in text
 
 
-class TestCriteriaSeam:
+class TestCriteriaWiring:
     def test_detect_refuses_without_criteria(self):
         """The throw must be INSIDE the guard, not merely present somewhere."""
         src = _detect()
@@ -145,8 +146,13 @@ class TestCriteriaSeam:
         src = _detect()
         assert "hazard sweep" in src
 
-    def test_lane_marks_step_three_as_a_seam(self):
-        assert "SEAM" in _lane()
+    def test_lane_marks_step_three_as_filled(self):
+        text = _lane()
+        assert "### Step 3 -- Assess" in text
+        assert "references/standards/coverage-standards.md" in text
+        assert "ABSOLUTE path" in text
+        assert "refs.criteria" in text
+        assert "[SEAM]" not in text
 
 
 class TestReportOnlyPosture:
@@ -174,6 +180,26 @@ class TestReportOnlyPosture:
 
     def test_result_is_described_as_a_sample(self):
         assert "SAMPLE" in _lane() or "sample" in _lane().lower()
+
+
+class TestAnalysisDepth:
+    def test_lane_prompts_when_depth_is_unspecified(self):
+        text = _lane()
+        assert "analysis depth" in text.lower()
+        assert "AskUserQuestion" in text
+        assert "defaults: depth=basic" in text
+
+    def test_detect_applies_both_depth_contracts(self):
+        src = _detect()
+        assert "input.depth" in src
+        assert "bounded, sampled read and one assessment pass" in src
+        assert "invariant-discovery pass" in src
+        assert "verification pass" in src
+
+    def test_detect_returns_the_depth_with_the_verdict(self):
+        src = _detect()
+        assert "verdict: derived, depth" in src
+        assert "return { perSubject: results, totals, ceiling, depth }" in src
 
 
 class TestScopeCorrection:
@@ -233,20 +259,25 @@ class TestSubjectContract:
         assert "not an error and not a skip" in src
 
 
-class TestNotRegisteredUntilCriteriaLand:
-    """Registration is the go-live switch, so it must not precede the criteria.
+class TestCoverageRegisteredWithCriteria:
+    """Registration and its criteria binding are one atomic go-live contract."""
 
-    A menu entry for a verb that cannot assess anything is worse than no entry --
-    the same reasoning that kept `coverage` off the menu when the vocabulary
-    shipped.
-    """
-
-    def test_skill_md_does_not_advertise_coverage_yet(self):
+    def test_skill_md_advertises_the_coverage_invocation(self):
         skill_md = (MD_DOMAIN / "SKILL.md").read_text(encoding="utf-8")
-        assert "/md-domain coverage" not in skill_md
-        assert "coverage_code_subtree" not in skill_md
+        assert "/md-domain coverage" in skill_md
 
-    def test_skill_md_states_that_nothing_on_the_menu_reads_the_source_tree(self):
-        """The disclaimer that must be deleted in the same commit as go-live."""
+    def test_skill_md_registers_coverage_code_subtree(self):
         skill_md = (MD_DOMAIN / "SKILL.md").read_text(encoding="utf-8")
-        assert "None of the above reads your source tree" in skill_md
+        assert "coverage_code_subtree" in skill_md
+
+    def test_source_tree_disclaimer_is_absent(self):
+        skill_md = (MD_DOMAIN / "SKILL.md").read_text(encoding="utf-8")
+        assert "None of the above reads your source tree" not in skill_md
+
+    def test_coverage_standards_exist(self):
+        assert STANDARDS.is_file()
+
+    def test_lane_record_binds_coverage_standards(self):
+        skill_md = (MD_DOMAIN / "SKILL.md").read_text(encoding="utf-8")
+        record = skill_md.split("- id: coverage_code_subtree", 1)[1]
+        assert "standards: references/standards/coverage-standards.md" in record

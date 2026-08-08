@@ -3,13 +3,13 @@
 Successor of the old member-resolution integration test. Before the md-domain
 fold (2026-07-29) skills-kit expressed its verb x artifact matrix as TOPOLOGY --
 two router skills declaring members that had to resolve against the on-disk skill
-pool. The fold replaced that with DATA: one skill, one dispatch table, seven lane
+pool. The fold replaced that with DATA: one skill, one dispatch table, eight lane
 records. The member-resolution question became vacuous (there are no members to
 dangle); the questions that replaced it are the ones the phase-3 design's "Router
 enforcement" section names:
 
 (a) the skills-kit skill roster on disk is exactly the four surviving skills;
-(b) md-domain's dispatch table holds exactly the seven lanes, and
+(b) md-domain's dispatch table holds exactly the eight lanes, and
     `author x references` is deliberately absent;
 (c) every lane record carries the two REQUIRED fields (settled decision 3) --
     invocation_phrasings (>= 3) and change_driver;
@@ -55,13 +55,14 @@ DISSOLVED = (
 )
 
 EXPECTED_LANES = {
-    "audit_skill": ("audit", "skill"),
-    "audit_claude_md": ("audit", "claude-md"),
-    "audit_project_doc": ("audit", "project-doc"),
-    "audit_references": ("audit", "references"),
-    "author_skill": ("author", "skill"),
-    "author_claude_md": ("author", "claude-md"),
-    "author_project_doc": ("author", "project-doc"),
+    "audit_skill": {"verb": "audit", "artifact": "skill"},
+    "audit_claude_md": {"verb": "audit", "artifact": "claude-md"},
+    "audit_project_doc": {"verb": "audit", "artifact": "project-doc"},
+    "audit_references": {"verb": "audit", "artifact": "references"},
+    "author_skill": {"verb": "author", "artifact": "skill"},
+    "author_claude_md": {"verb": "author", "artifact": "claude-md"},
+    "author_project_doc": {"verb": "author", "artifact": "project-doc"},
+    "coverage_code_subtree": {"verb": "coverage", "subject": "code_subtree"},
 }
 
 # Lane-record keys whose value is a path relative to the md-domain skill dir.
@@ -130,7 +131,7 @@ class TestSkillsKitRoster:
 
 
 class TestDispatchTable:
-    """(b) -- exactly seven lanes, and author x references is deliberately absent."""
+    """(b) -- exactly eight lanes, and author x references is deliberately absent."""
 
     def test_lane_roster_is_exact(self):
         assert sorted(LANE_IDS) == sorted(EXPECTED_LANES), (
@@ -141,11 +142,16 @@ class TestDispatchTable:
         assert len(LANE_IDS) == len(set(LANE_IDS))
 
     @pytest.mark.parametrize("lane_id", sorted(EXPECTED_LANES))
-    def test_lane_declares_its_verb_and_artifact(self, lane_id):
+    def test_lane_declares_its_verb_and_subject_axis(self, lane_id):
         record = next(r for r in LANE_RECORDS if r["id"] == lane_id)
-        verb, artifact = EXPECTED_LANES[lane_id]
-        assert record.get("verb") == verb
-        assert record.get("artifact") == artifact
+        expected = EXPECTED_LANES[lane_id]
+        assert record.get("verb") == expected["verb"]
+        if "artifact" in expected:
+            assert record.get("artifact") == expected["artifact"]
+            assert "subject" not in record
+        else:
+            assert record.get("subject") == expected["subject"]
+            assert "artifact" not in record
 
     def test_author_references_lane_is_absent(self):
         assert not any(
@@ -166,8 +172,12 @@ class TestDispatchTable:
                 continue
             rows[cells[0]] = cells[1]
         assert rows, "could not parse the dispatch table"
-        for lane_id, (verb, artifact) in EXPECTED_LANES.items():
-            key = f"{verb} x {artifact}"
+        for lane_id, expected in EXPECTED_LANES.items():
+            key = (
+                f"{expected['verb']} x {expected['artifact']}"
+                if "artifact" in expected
+                else "coverage (code subtree)"
+            )
             assert key in rows, f"dispatch table has no `{key}` row"
             assert rows[key] == f"`{lane_id}`", (
                 f"dispatch table row `{key}` points at {rows[key]}, not `{lane_id}`"
@@ -210,7 +220,7 @@ class TestRequiredLaneFields:
         assert isinstance(verdicts, list) and verdicts, f"{lane_id}: no verdict set"
         if lane_id == "audit_references":
             assert verdicts == ["AUTO", "DISCUSS", "SPECIAL"]
-        elif lane_id.startswith("audit_"):
+        elif record["verb"] == "audit":
             assert "NOT-AUDITED" in verdicts, (
                 f"{lane_id}: an audit lane that cannot express a decline is a fake gate"
             )
@@ -239,6 +249,11 @@ class TestBoundPathsResolve:
             assert ("workflow_detect" in record) or ("workflow_classify" in record), (
                 f"{record['id']}: no detect/classify lane"
             )
+
+    def test_coverage_lane_is_report_only(self):
+        record = next(r for r in LANE_RECORDS if r["verb"] == "coverage")
+        assert "workflow_remediate" not in record
+        assert record["verdicts"] == ["GAPS-FOUND", "COVERAGE-ASSESSED"]
 
     def test_authoring_lanes_bind_standards_and_procedure(self):
         for record in LANE_RECORDS:

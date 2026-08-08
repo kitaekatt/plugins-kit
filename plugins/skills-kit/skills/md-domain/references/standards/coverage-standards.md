@@ -247,11 +247,10 @@ file-type primitive, and registers four (`skill_md`, `claude_md`,
 `reference_doc`, `plain_md`) in `references/audit-framework.yaml`. Coverage's
 subject is a directory plus its ancestor chain -- a composition, not a file
 type -- so it fits none of them, and forcing it into one would misdescribe it.
-The workflow is unaffected: `coverage-detect.js` requires only a readable
-document at `refs.criteria` and never inspects `applies_to`. Registering
-`code_subtree` in the framework belongs to the coverage go-live commit, with
-the lane-roster and test updates it already carries; until then this reference
-is deliberately forward-looking, and is recorded here rather than left silent.
+The go-live registration therefore adds `code_subtree` under the framework's
+compositions, while leaving the primitive roster unchanged. The workflow is
+unaffected: `coverage-detect.js` requires only a readable document at
+`refs.criteria` and never inspects `applies_to`.
 
 The one opinion worth naming explicitly, because a competent team genuinely
 disagrees with it: `already-ambient-suppressed` refuses a second placement at a

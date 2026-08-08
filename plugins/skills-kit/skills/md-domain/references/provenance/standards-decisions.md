@@ -143,4 +143,48 @@ claude_md:
         claude-md-detect.js step 6.5.
       origin: Diagnosis of a clean audit coexisting with code-violated invariants, 2026-08-07 (mechanism M5 of that investigation); the earlier version of this proposal was rejected for leaving subject, severity, verdict interaction, and remediation owner undefined.
       added: "2026-08-07"
+    - id: coverage_criteria_desk_validated_precision_unmeasured
+      keywords: [coverage criteria, negative controls, validation, held-out corpus, precision unmeasured, accepted limitation, judgment enforcement, MB_HAZARD_CAP]
+      summary: The eight coverage criteria satisfy all four of coverage-gap.md's negative controls BY CONSTRUCTION -- each control maps to a fail-severity criterion -- but empirical precision was NOT measured, because no held-out corpus exists. Shipped with the limitation recorded, per the documented rule.
+      detail: |
+        Control-to-criterion map, each verified by reading the criterion text
+        against the control text (coverage-gap.md:173-188):
+        (1) a correctly non-ambient fact must not be relocated ->
+            no-cross-apply-placement, whose example IS the control's seed-variable
+            case: the destination must be an ancestor of every file the fact
+            governs AND of no file it does not, so a sibling placement is refused.
+        (2) already-ambient facts must not be re-proposed ->
+            already-ambient-suppressed, stated absolutely, trigger sites included.
+        (3) good prose must not be flagged as low-value ->
+            present-content-not-re-audited. Also structural: coverage proposes
+            only ABSENT facts and has no verdict capable of flagging present prose.
+        (4) the documented near miss must stay silent -> loud-failure-excluded,
+            which keys on whether the failure is SILENT (documented AND loud AND
+            test-enforced), not on the shape of the construct -- the exact
+            inversion the control exists to catch. MB_HAZARD_CAP / MB_MAX_CHARS
+            is excluded TWICE, since being documented in the ambient chain also
+            trips already-ambient-suppressed. Redundancy on the sharpest control
+            is deliberate.
+        WHAT THIS DOES NOT ESTABLISH, and the reason to write it down. Every
+        criterion is enforcement: judgment, so a passed desk control shows the
+        criterion TEXT would direct a correct assessor to reject. It does not
+        show that a model applying the text does. The controls were also read
+        while authoring the criteria, so passing them is close to recall against
+        the deriving corpus -- which the standing rule says means nothing alone.
+        WHY IT SHIPPED ANYWAY. Precision on a corpus the criteria were NOT
+        designed against was not measured because no such corpus is available:
+        flecs-ecs is simultaneously the corpus the criteria were derived from and
+        under a standing do-not-touch. The documented rule for exactly this case
+        is SHIP and record the limitation rather than block (coverage-gap.md,
+        "Scope of the rule"). This entry is that record. The first coverage run
+        on any unfamiliar subtree is the real first measurement, and should be
+        read as such rather than as a routine result.
+      origin: |
+        Authoring the coverage criteria, 2026-08-08. Surface: the criteria item
+        required validation against the four negative controls before shipping.
+        Finding: all four are satisfied by construction, and no held-out corpus
+        exists to measure precision. Follow-up: treat the first run on an
+        unfamiliar subtree as the measurement, and revisit if it produces
+        candidates any of the four controls should have suppressed.
+      added: "2026-08-08"
 ```

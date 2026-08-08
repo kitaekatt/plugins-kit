@@ -76,6 +76,19 @@ primitives:
 
 compositions:
 
+  - id: code_subtree
+    description: A named code directory together with the ambient CLAUDE.md chain that governs it.
+    marker: 'user-named directory or a directory resolved from --diff; ambient chain resolved by discover_coverage.py'
+    contains:
+      optional:
+        - kind: '*'
+        - kind: claude_md
+          at: '<root>/CLAUDE.md'
+    ambient_chain: 'CLAUDE.md files from the nearest .git root through <root>, root-most first; may be empty'
+    nests_inside: [project, directory]
+    nests: [directory, skill]
+    discovery_priority: 40
+
   - id: directory
     description: A plain directory with no special marker. The fallback when no other composition matches.
     marker: 'any directory'
