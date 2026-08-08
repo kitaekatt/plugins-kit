@@ -319,6 +319,45 @@ and they cost seconds:
   paths and leaves the index otherwise untouched, so you never have to unstage
   another session's work to get your own in. Reserve `git reset` for an index you own.
 
+#### Anti-pattern: unstaging another session's work to scope your own commit
+
+**Never run `git reset`, `git restore --staged`, or `git rm --cached` on a file you did
+not stage.** The index is shared mutable state that you do not own, and unlike the
+working tree it holds no history -- there is no reflog for "what was staged." Undoing
+someone's staging destroys the only record of a decision they made, and you cannot
+reliably put it back, because the index does not tell you WHY a file was staged. A
+`git rm --cached` (a deliberate untrack) and an accidental `git add` of a deleted file
+look identical in `git status`. Restoring one as the other silently corrupts their
+commit.
+
+This is easy to walk into precisely BECAUSE the staging discipline above is right: you
+`git add` your own paths, run the mandatory `git diff --staged`, and find files that are
+not yours. The documented rule says the staged set must be exactly your files -- so
+unstaging the rest feels like compliance. It is not. The rule exists so your COMMIT is
+scoped; it was never a licence to edit a shared index.
+
+**Worked example (2026-08-08).** Six files were staged by explicit path for an
+orchestrate change. `git diff --staged` showed roughly twenty more, including
+`plugins/unreal-kit/skills/ue-python-api/stubs/unreal.py` staged as 588,614 deletions.
+That file was `git restore --staged`-ed to get the commit scoped. It turned out to be a
+deliberate `git rm --cached` -- another session was untracking a generated stub, paired
+with a staged `.gitignore` change in the same index. Restoring it required inferring
+that intent from the surrounding staged files and re-running `git rm --cached` by hand.
+The other session committed as `dafc06b` moments later with its work intact, but only
+because the reconstruction happened to be correct. A plain `git add` would have
+committed the stub as a 588,614-line deletion of a file they meant to keep on disk.
+
+Nothing about the situation required touching their index at all. The correct move,
+available from the start, was:
+
+```bash
+git commit -F <msg> -- <your paths>     # commits those paths; index untouched
+```
+
+If you have already unstaged something that was not yours, say so plainly rather than
+quietly reconstructing it -- the other session can restate its intent in one line, and
+you cannot read it out of the index.
+
 ### Safe-publish practices
 
 Publishing is the riskiest moment in this repo because it broadcasts to every consumer. Two failure modes have happened, both recoverable but visible (the retraction commits in `git log master` are the scars). Avoid them with these checks.
@@ -674,6 +713,28 @@ claude_md:
         hand" in the Bootstrap section above.
       origin: "User directive 2026-07-27 after nine plugins reported 'not cached' and the engine was run by hand to clear it -- the machine recovered, the root cause became unrecoverable, and no fix shipped to any other machine."
       added: "2026-07-27"
+    - id: never_unstage_another_sessions_work
+      keywords: [git reset, git restore --staged, git rm --cached, unstage, shared index, scope my commit, staged set must be exactly my files, another session, concurrent staging, git commit -- paths, index has no reflog]
+      summary: Never unstage a file you did not stage. Use `git commit -F <msg> -- <your paths>` to scope a commit without touching a shared index -- the index has no history, so undoing someone's staging destroys the only record of their decision.
+      detail: |
+        The mandatory `git diff --staged` check surfaces foreign files, and the rule that
+        the staged set must be exactly your files makes unstaging them FEEL like
+        compliance. It is not: that rule scopes your COMMIT, not the index. The index is
+        shared mutable state with no reflog, and it does not record intent -- a deliberate
+        `git rm --cached` (untracking a generated file, usually paired with a `.gitignore`
+        change staged alongside it) is indistinguishable from an accidental `git add` of a
+        deletion. Restore one as the other and you silently corrupt the other session's
+        commit.
+        `git commit -F <msg> -- <paths>` commits the working-tree state of exactly those
+        paths and leaves the index otherwise intact, which removes the only reason anyone
+        would reach for `git reset` here. Reserve `git reset` for an index you own. If you
+        have already unstaged something that was not yours, SAY SO rather than
+        reconstructing it silently -- the owning session can restate its intent in one
+        line and you cannot read it out of the index.
+        Full narrative and the worked example: "Anti-pattern: unstaging another session's
+        work to scope your own commit" in Development Workflow.
+      origin: "2026-08-08 -- a unreal-kit stub staged as 588,614 deletions was `git restore --staged`-ed to scope an orchestrate commit; it was a deliberate `git rm --cached` paired with a staged .gitignore change, and putting it back required inferring that intent by hand."
+      added: "2026-08-08"
     - id: never_create_or_switch_branches
       keywords: [branch, git checkout, git switch, feature branch, create a branch, scope a review, cherry-pick branch, shared working tree, concurrent session, stranded commits, worktree, stay on dev]
       summary: Stay on dev -- never create a branch or move the checked-out branch. The working tree is shared with concurrent agent sessions, so a branch switch silently redirects THEIR commits onto your branch.
