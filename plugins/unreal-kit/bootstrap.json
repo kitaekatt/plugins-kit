@@ -40,7 +40,7 @@
       "section": "[/Script/PythonScriptPlugin.PythonScriptPluginSettings]",
       "settings": {
         "bRemoteExecution": "True",
-        "bIsDeveloperMode": "True"
+        "bDeveloperMode": "True"
       }
     }
   ],
