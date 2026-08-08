@@ -407,6 +407,8 @@ Read every line. If anything is unrelated to the feature, `git restore --staged 
 
 **Skill-based document placement** (package cohesion): when creating a document, ask "what skill does this belong to?" and place it by the CCP/CRP/ADP framework -- `plugins/skills-kit/skills/md-domain/references/cohesion-principles.md` is the SSOT for those principles and the placement algorithm. If no existing skill fits, create a stub skill and let the document live as a progressively-disclosed reference inside it.
 
+**A published plugin ships to other developers -- keep this repo's build machinery out of it.** Everything under `plugins/<name>/` is copied into a consumer's plugin cache, so a file that only makes sense inside plugins-kit is noise at best and misleading at worst: a generated fingerprint or baseline whose header names a `scripts/` tool the consumer does not have, a design doc recording our derivation rounds and remaining work, or generator plumbing embedded in a reference a consumer reads for guidance. Before adding content to a shipped plugin, ask **who reads this on a machine that is not ours** -- if the honest answer is "nobody", it belongs in the repo (`docs/`, `scripts/`, or a task folder), not in the plugin. The trap is incremental: maintainer material rarely arrives as a new file, it accretes inside a reference that already ships, so a file can double in size without anyone deciding to publish the additions. Watch for it particularly when a build step colocates its inputs with the artifact for convenience -- that convenience is a publishing decision.
+
 **Plugin boundaries are hard boundaries for cohesion work.** Never move content between plugins — or into a new plugin — to achieve skill cohesion. Plugins are independently versioned, installed, and bootstrapped units; relocating a skill/reference across a plugin boundary to satisfy CCP/CRP/ADP breaks that independence (cross-plugin caches, dependency edges, version coupling) and is never worth the cohesion gain. Cohesion refactors operate *within* a plugin only. When you spot a genuine cohesion opportunity that spans plugins — two doer-skills in different plugins sharing a subject (e.g. git-kit `git-code-review` + p4-kit `p4-code-review`), a reference duplicated across plugins, a shared substrate two plugins both consume — **surface it as an insight** (a `claude_md:` insight or a note in the relevant skill), do **not** act on it by relocation or by spawning a unifying plugin. Sharing across plugins is done through a library both depend on (e.g. `bootstrap_lib.code_review`), not by merging the skills.
 
 **Reference file design** (within a skill): each reference serves a single audience and changes for a single reason (same cohesion framework). See `plugins/bootstrap/skills/bootstrap/` for the gold standard -- references split by audience with clean change boundaries.
@@ -713,6 +715,51 @@ claude_md:
         hand" in the Bootstrap section above.
       origin: "User directive 2026-07-27 after nine plugins reported 'not cached' and the engine was run by hand to clear it -- the machine recovered, the root cause became unrecoverable, and no fix shipped to any other machine."
       added: "2026-07-27"
+    - id: never_hand_make_a_plugins_output
+      keywords: [hand-create artifact, hand-place file, copy the file myself, plugin should generate it, refresh action, generated stub, index, report, prove the workflow, publish and run, skip the round trip, missing prerequisite, written not working, verify by running]
+      summary: Never hand-create an artifact a plugin's workflow is supposed to produce. Build or fix the producing action, publish it, install it, and run it -- a hand-placed file cannot distinguish a working workflow from a broken one.
+      detail: |
+        Sibling of never_hand_repair_a_wedge, one level up: that one is about not
+        hand-fixing a MACHINE, this one about not hand-making an OUTPUT. When a plugin
+        owns a workflow that produces something -- a generated stub, an index, a config,
+        a report -- producing it yourself proves nothing about the workflow, and the
+        workflow was the deliverable. It also looks like success in the way that stops
+        anyone looking further.
+        The temptation is honest: the real path costs an edit, a version bump, a
+        publish, a restart to pick it up, then a run. That is the cost of shipping, not
+        an obstacle. Publishes are gated on the user, so when the action is not yet
+        published, SAY SO AND WAIT rather than substituting a hand-made result.
+        If a PREREQUISITE is missing (a source file, a credential, an editor build),
+        report the prerequisite -- satisfying it by producing the final output directly
+        discards the signal that it was missing.
+        Corollary: a plugin change is not verified by re-reading the diff, nor by a
+        background agent's report of what it intended. It is verified by the published
+        plugin doing the thing on a machine that installed it. Until then its status is
+        "written", not "working".
+        Full narrative: "Anti-pattern: hand-creating an artifact a plugin is supposed to
+        produce" in the Plugin System section above.
+      origin: "User directive 2026-08-08 -- on a task that moved a generated artifact onto the durable-project-data pattern, the user directed that the artifact be created by the published refresh workflow rather than copied into place by hand."
+      added: "2026-08-08"
+    - id: no_build_machinery_in_published_plugins
+      keywords: [published plugin, ships to consumers, other developers, build artifact, fingerprint, baseline, design doc, generator plumbing, maintainer only, who reads this off our machine, plugin cache, accretion, colocation]
+      summary: Everything under plugins/<name>/ is copied to a consumer's plugin cache. Keep plugins-kit build machinery out -- ask "who reads this on a machine that is not ours", and if the answer is nobody, it belongs in docs/, scripts/, or a task folder.
+      detail: |
+        Three shapes to refuse in a shipped plugin: a GENERATED baseline or fingerprint
+        (its header typically tells the reader to regenerate it with a scripts/ tool that
+        does not exist in their install -- actively misleading); a DESIGN doc recording
+        derivation rounds, drift checks and remaining work (our development history, not
+        guidance); and BUILD PLUMBING embedded in a reference a consumer reads for
+        guidance, which is the hardest to see because the file legitimately ships.
+        The failure is incremental, not a decision: maintainer material rarely arrives as
+        a new file, it accretes inside an existing shipped reference, so the file can
+        double in size without anyone choosing to publish the additions. Be especially
+        alert when a build step colocates its inputs with the artifact for convenience --
+        that colocation IS a publishing decision, and the reason for it (e.g. a guard that
+        polices one directory) usually outlives its own justification.
+        Note md-domain will not catch this: its review claims deliberately carve out a
+        skill's references/*.md, so no audit lane reads their prose.
+      origin: "2026-08-08 -- user pointed out that awesome-kit is published and used by other developers while the orchestrate skill was shipping decision-fingerprint.txt, orchestrate-2.0-design.md, and a tier-principles.md that compile-principles step 1 had grown from 642 to 1,065 lines with generator emits blocks."
+      added: "2026-08-08"
     - id: never_unstage_another_sessions_work
       keywords: [git reset, git restore --staged, git rm --cached, unstage, shared index, scope my commit, staged set must be exactly my files, another session, concurrent staging, git commit -- paths, index has no reflog]
       summary: Never unstage a file you did not stage. Use `git commit -F <msg> -- <your paths>` to scope a commit without touching a shared index -- the index has no history, so undoing someone's staging destroys the only record of their decision.
