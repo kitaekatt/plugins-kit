@@ -331,6 +331,10 @@ domain_skill:
         path: references/cohesion-principles.md
         keywords: [placement, where does this live, ccp crp adp, load graph, per artifact role, placement algorithm, skill packaging razor, placement follows trigger shape, summarize and reference, maturation pipeline]
         summary: The placement spine -- the content_allocation framework (load graph, CCP/CRP/ADP applied to placement, the placement algorithm, per-artifact roles, the skill maturation pipeline, placement_follows_trigger_shape, the two-step skill_packaging_razor, summarize_and_reference). Every lane and every standards doc defers here for WHERE a fact lives; on divergence, this document wins.
+      - id: coverage_gap
+        path: references/coverage-gap.md
+        keywords: [what the audit does not check, coverage not assessed, clean audit missed hazards, compliant is not sufficient for review, absent content, gotcha crawler, ambient coverage, hazard sweep rejected, coverage lane design, held-out validation, documenting a bug fossilizes it]
+        summary: What md-domain does NOT check and why -- the gap between "internally coherent and locally accurate" (what COMPLIANT asserts) and fitness for code review, the six mechanisms behind it, why the obvious hazard-sweep fix was rejected on review, the opt-in coverage-lane design that would close it, and the held-out validation discipline criteria changes are held to. Read before proposing a change that makes the audit look harder, or before reading COMPLIANT as an endorsement.
       - id: audit_framework
         path: references/audit-framework.md
         keywords: [audit framework, glossary, subject, primitive, composition, audit-kind, rule, finding, severity, taxonomy, bucket, corpus, scaffolding]
