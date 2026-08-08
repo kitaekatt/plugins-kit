@@ -3,14 +3,14 @@
 **Status:** Ratified and implemented (awesome-kit 0.9.0, 2026-07-09;
 vocabulary ratified by the user: canonical term "item", accepted synonym
 "work item"). Extends `task-system-design.md` (the v1 spec, amended --
-sections 2.7 / 6 / 7.1 / 9). Where code and this document disagree, the code
+sections 2.6 / 6 / 7.1 / 9). Where code and this document disagree, the code
 is authoritative; the operating contract lives in
 `references/handoff-template.md`.
 
 **Date:** 2026-07-09
 
-**Deficiency addressed.** The system models the work-unit (folder, task.yaml,
-one current pointer) and its lifecycle, but everything below the work-unit --
+**Deficiency addressed.** The system models the work-unit (folder, task.yaml)
+and its lifecycle, but everything below the work-unit --
 the enumerable menu of next work -- exists only as loose documentary
 convention spread across CLAUDE.md, plan.md, and log.md. There is no verb, no
 contract, and no user-visible vocabulary for "enumerate this task's open
@@ -120,7 +120,7 @@ friction report found users and agents reaching for.
   use "item" / `task_items:`.
 - It is deliberately NOT "sub-task": an item has no folder, no task.yaml, no
   lifecycle verbs, cannot be referenced from outside its task, and cannot be
-  `current`. In this system there is no sub-task entity -- there are tasks
+   a task-level lifecycle state. In this system there is no sub-task entity -- there are tasks
   and there are items, and the boundary is whether the unit needs identity
   and lifecycle outside its parent's plan. An item that outgrows the block is
   promoted to a task (`init` a folder, link via `task_list` /`depends_on`,
@@ -276,7 +276,7 @@ so every new task starts under the contract.
 
 ## 8. The `items` verb
 
-The 15th verb. Script-driven, no inference -- the enumeration the friction
+The 13th verb. Script-driven, no inference -- the enumeration the friction
 report asked for:
 
 ```
@@ -299,9 +299,8 @@ task items <ref> [--state S] [--priority P] [--root PATH]
   `list` conventions.
 - Non-zero with a reason when the ref is unresolvable or the folder is not
   locally readable (archived / orphaned / remote) -- matching `show`.
-- **Ref defaults to the current task** -- the friction moment is "what next?"
-  mid-session, where naming the task is ceremony. (`show`/`status` may later
-  adopt the same default; out of scope here.)
+- **Ref is required** -- the caller names the task explicitly for an
+  unambiguous item query.
 
 `status` (the inference verb) adds the parsed items to its printed substrate,
 so the background summarizer sees the menu without re-parsing -- its summary
@@ -435,7 +434,7 @@ priority ("file the claim") disappears into a reference.
    records, singularity/duplicate-id checks. Consumed by the verb and by
    validate.
 3. `validate.py`: the section 9 checks.
-4. `task.py`: the `items` verb (ref defaulting to current); `status` substrate
+4. `task.py`: the `items` verb with an explicit ref; `status` substrate
    addition.
 5. `init.py` scaffold: empty block in plan.md template.
 6. Docs: handoff-template.md (sections 6-7 changes: template text, triage

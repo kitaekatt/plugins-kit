@@ -170,7 +170,7 @@
         <!-- init -> active -->
         <line x1="228" y1="150" x2="320" y2="278" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
         <text x="246" y="216" class="t-backend" font-size="8">yields valid</text>
-        <!-- work -> active (auto-init + set current) -->
+        <!-- work -> active (auto-init) -->
         <line x1="108" y1="150" x2="290" y2="284" class="a-dashed" stroke-width="1.3" marker-end="url(#arrowhead-dashed)"/>
         <text x="120" y="205" class="t-database" font-size="8">auto-init</text>
         <!-- update -> active (refresh) -->
@@ -201,7 +201,7 @@
         <!-- read ops -> validate -->
         <line x1="352" y1="540" x2="352" y2="508" class="a-default" stroke-width="1.3" marker-end="url(#arrowhead)"/>
         <line x1="470" y1="540" x2="412" y2="508" class="a-default" stroke-width="1.3" marker-end="url(#arrowhead)"/>
-        <text x="470" y="600" class="t-muted" font-size="8" text-anchor="middle">read current classification (script-driven)</text>
+        <text x="470" y="600" class="t-muted" font-size="8" text-anchor="middle">read task classification (script-driven)</text>
 
         <!-- ============ OPERATION NODES (small, messagebus) ============ -->
         <rect x="60" y="110" width="92" height="40" rx="6" class="c-mask"/><rect x="60" y="110" width="92" height="40" rx="6" class="c-messagebus" stroke-width="1.3"/>
@@ -284,7 +284,7 @@
         <ul>
           <li>&bull; Each operation shows the state it acts on and the state it produces.</li>
           <li>&bull; An Abstract task must go through init to become Active &mdash; the only way in.</li>
-          <li>&bull; work auto-inits then sets the current pointer; update refreshes + re-validates.</li>
+          <li>&bull; work auto-inits; update refreshes + re-validates.</li>
           <li>&bull; reopen (left of close) returns to Active only while the folder still exists.</li>
         </ul>
       </div>
@@ -301,7 +301,7 @@
         <ul>
           <li>&bull; archive applies only to an Active task: Active &rarr; archive &rarr; Archived.</li>
           <li>&bull; close keeps the folder (Closed); delete removes it (Gone) from Archived.</li>
-          <li>&bull; move (relocate + rewrite refs) and current (read the pointer) are omitted; so are Blocked / Orphaned (in the spec).</li>
+          <li>&bull; move (relocate + rewrite refs) is omitted; so are Blocked / Orphaned (in the spec).</li>
         </ul>
       </div>
     </div>

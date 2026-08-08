@@ -1,17 +1,10 @@
-"""State ops -- ``work`` / ``switch`` / ``update`` / ``close`` / ``reopen``
+"""State ops -- ``work`` / ``update`` / ``close`` / ``reopen``
 (spec section 7.1).
 
-Library functions taking explicit ``project_root`` and ``pointer_path``
-parameters; the CLI verbs in scripts/task.py are thin wrappers. Hard failures
-raise StateOpError (carrying validate findings when relevant); successful
-operations return result dataclasses the CLI renders.
-
-The ``current`` pointer stores the ABSOLUTE path of the task folder (spec
-2.6): the pointer file is user-global while canonical task ids are
-project-relative, so a relative stored path would be ambiguous across
-projects. ``derive_root_and_canonical`` recovers ``(project_root, canonical
-id)`` from a stored absolute path -- the two known locations (``tmp/<stub>``
-and ``dev/tasks/<stub>``) make the split unambiguous.
+Library functions take an explicit ``project_root``; the CLI verbs in
+scripts/task.py are thin wrappers. Hard failures raise StateOpError (carrying
+validate findings when relevant); successful operations return result
+dataclasses the CLI renders.
 
 Readings chosen in Step 4 (flagged in the implementation report):
 
@@ -25,8 +18,8 @@ Readings chosen in Step 4 (flagged in the implementation report):
   never a folder at a different path than the ref named.
 - **A blocked work after auto-init keeps the initialized folder.** Promotion
   ran a real ``init`` (a verb with its own contract); the validate gate then
-  blocks only the pointer write. E.g. ``work dev/tasks/x`` on a fresh path
-  inits the folder, then blocks on the expected uncommitted-dev/tasks warning.
+  blocks the operation. E.g. ``work dev/tasks/x`` on a fresh path inits the
+  folder, then blocks on the expected uncommitted-dev/tasks warning.
 - **update is a write op; validate reports.** Field edits persist even when
   the re-validation has findings (the CLI exit code reflects findings; the
   write is not rolled back). Bad values (e.g. an out-of-vocabulary status)
@@ -69,7 +62,6 @@ from pathlib import Path
 
 import yaml
 
-from . import pointer as pointer_mod
 from . import resolve
 from .discovery import read_task_block
 from .init import InitError, derive_stub_and_title, init_task
@@ -104,9 +96,9 @@ BASELINE_SKILLS: tuple[str, ...] = ("awesome-kit:orchestrate",)
 
 @dataclass(frozen=True)
 class WorkResult:
-    """Outcome of a successful ``work``: the pointer is written; the skill
-    layer acts on ``skills_to_invoke`` / ``agent_hint`` (the script only
-    emits them). ``skills_to_invoke`` is the MERGED list --
+    """Outcome of a successful ``work``; the skill layer acts on
+    ``skills_to_invoke`` / ``agent_hint`` (the script only emits them).
+    ``skills_to_invoke`` is the MERGED list --
     ``BASELINE_SKILLS`` followed by the task's own entries, deduped."""
 
     canonical: str
@@ -125,25 +117,6 @@ class UpdateResult:
     folder: Path  # absolute
     initialized: bool  # upsert-init happened (always False for reopen)
     validation: ValidationResult
-
-
-@dataclass(frozen=True)
-class SwitchResult:
-    previous: UpdateResult | None  # update of the previously-current task
-    work: WorkResult
-
-
-def derive_root_and_canonical(folder: Path) -> tuple[Path, str] | None:
-    """Recover ``(project_root, canonical id)`` from an absolute task-folder
-    path, or None when the path is not absolute / not a known task location
-    shape (``.../tmp/<stub>`` or ``.../dev/tasks/<stub>``)."""
-    if not folder.is_absolute():
-        return None
-    if folder.parent.name == "tmp":
-        return folder.parent.parent, f"tmp/{folder.name}"
-    if folder.parent.name == "tasks" and folder.parent.parent.name == "dev":
-        return folder.parent.parent.parent, f"dev/tasks/{folder.name}"
-    return None
 
 
 # --- shared internals --------------------------------------------------------
@@ -219,13 +192,6 @@ def _append_log_entry(folder: Path, edits: dict[str, object]) -> None:
         fh.write(f"- {stamp}: update: {detail}\n")
 
 
-def _clear_pointer_if_names(pointer_path: Path, folder: Path) -> None:
-    """Spec 7.1 "clear the pointer": blank it iff it names this task."""
-    stored = pointer_mod.read_current(pointer_path)
-    if stored is not None and Path(stored) == folder.resolve():
-        pointer_mod.clear_current(pointer_path)
-
-
 def _merge_skills(declared: Sequence[str]) -> tuple[str, ...]:
     """BASELINE_SKILLS then the task's own entries, order-preserving and
     deduped (a task that already declares a baseline skill is not emitted
@@ -244,15 +210,14 @@ def _merge_skills(declared: Sequence[str]) -> tuple[str, ...]:
 def work(
     ref: str,
     project_root: Path,
-    pointer_path: Path,
     *,
     ref_host: str | None = None,
     local_host: str | None = None,
 ) -> WorkResult:
     """``work <ref>`` (spec 7.1): auto-init when the folder is absent
     (promotion), gate on validate (ANY error or warning blocks; remote
-    errors), then write the pointer (absolute path) and surface the task's
-    ``skills_to_invoke`` / ``agent_hint``. Raises StateOpError on any block."""
+    errors), then surface the task's ``skills_to_invoke`` / ``agent_hint``.
+    Raises StateOpError on any block."""
     resolved = _resolve(ref, project_root)
     result = validate_ref(
         resolved.canonical, project_root, ref_host=ref_host, local_host=local_host
@@ -281,7 +246,6 @@ def work(
             errors=result.errors,
             warnings=result.warnings,
         )
-    pointer_mod.write_current(pointer_path, folder)
     block = read_task_block(folder) or {}
     raw_skills = block.get("skills_to_invoke")
     declared = (
@@ -301,40 +265,9 @@ def work(
     )
 
 
-def switch(
+def update(
     ref: str,
     project_root: Path,
-    pointer_path: Path,
-    *,
-    ref_host: str | None = None,
-    local_host: str | None = None,
-) -> SwitchResult:
-    """``switch <ref>`` (spec 7.1): ``update`` the current task (it becomes a
-    plain active task -- no lingering claim), then ``work <ref>``. With
-    nothing current, or a stale pointer (missing folder / non-derivable
-    content), identical to ``work`` (the stale pointer is cleared)."""
-    previous: UpdateResult | None = None
-    stored = pointer_mod.read_current(pointer_path)
-    if stored is not None:
-        prev_folder = Path(stored)
-        derived = derive_root_and_canonical(prev_folder)
-        if derived is not None and prev_folder.is_dir():
-            prev_root, prev_canonical = derived
-            previous = update(
-                prev_canonical, prev_root, pointer_path, local_host=local_host
-            )
-        else:
-            pointer_mod.clear_current(pointer_path)
-    work_result = work(
-        ref, project_root, pointer_path, ref_host=ref_host, local_host=local_host
-    )
-    return SwitchResult(previous=previous, work=work_result)
-
-
-def update(
-    ref: str | None,
-    project_root: Path,
-    pointer_path: Path,
     *,
     status: str | None = None,
     priority: str | None = None,
@@ -347,32 +280,12 @@ def update(
     ref_host: str | None = None,
     local_host: str | None = None,
 ) -> UpdateResult:
-    """``update [<ref>] [field edits]`` (spec 7.1): upsert (init when the
+    """``update <ref> [field edits]`` (spec 7.1): upsert (init when the
     folder is absent), apply task.yaml field edits (lists REPLACE), append
     the dated log.md entry, re-run validate. The write persists regardless of
     findings; the result carries classification + findings.
-
-    ``ref=None`` defaults to the current task (error when nothing is
-    current); the current task's project root derives from the pointer's
-    absolute path, superseding ``project_root``.
     """
-    if ref is None:
-        stored = pointer_mod.read_current(pointer_path)
-        prev_folder = Path(stored) if stored is not None else None
-        derived = (
-            derive_root_and_canonical(prev_folder)
-            if prev_folder is not None
-            else None
-        )
-        if derived is None or prev_folder is None or not prev_folder.is_dir():
-            raise StateOpError(
-                "no <ref> given and nothing is current -- pass a ref or run "
-                "work first"
-            )
-        project_root, canonical = derived
-        resolved = resolve.resolve_path(canonical, project_root)
-    else:
-        resolved = _resolve(ref, project_root)
+    resolved = _resolve(ref, project_root)
 
     pre = validate_ref(
         resolved.canonical, project_root, ref_host=ref_host, local_host=local_host
@@ -420,10 +333,9 @@ def update(
     )
 
 
-def close(ref: str, project_root: Path, pointer_path: Path) -> str:
+def close(ref: str, project_root: Path) -> str:
     """``close <ref>`` (spec 7.1): pre folder exists + stored status active;
-    set ``status: closed``, keep the folder, clear the pointer iff it names
-    this task. Returns the canonical id."""
+    set ``status: closed`` and keep the folder. Returns the canonical id."""
     resolved = _resolve(ref, project_root)
     folder = resolved.folder(project_root)
     if not folder.is_dir():
@@ -440,14 +352,12 @@ def close(ref: str, project_root: Path, pointer_path: Path) -> str:
         )
     data["task"]["status"] = "closed"
     _write_task_yaml(folder, data)
-    _clear_pointer_if_names(pointer_path, folder)
     return resolved.canonical
 
 
 def reopen(
     ref: str,
     project_root: Path,
-    pointer_path: Path,
     *,
     local_host: str | None = None,
 ) -> UpdateResult:

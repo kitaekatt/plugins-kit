@@ -11,11 +11,10 @@ auto-commits; accepts active or archived) plus unconditional folder
 removal, reopen's restore of a parked tmp folder,
 move's relocation + span-precise reference rewrite across the project
 document set (byte-level preservation outside the rewritten path values,
-prose mentions and other-task refs untouched), and the pointer
-clearing/updating rules for all three verbs.
+prose mentions and other-task refs untouched).
 
-All fixtures build under pytest tmp_path with an injected pointer path -- the
-real repo's tmp/, dev/, and ~/.claude are never touched.
+All fixtures build under pytest tmp_path -- the real repo's tmp/, dev/, and
+~/.claude are never touched.
 """
 
 import os
@@ -28,7 +27,6 @@ import yaml
 
 from bootstrap_guard import _REEXEC_GUARD_ENV
 from task_system import location_ops
-from task_system.pointer import read_current, write_current
 from task_system.state_ops import StateOpError
 from task_system.validate import validate_ref
 
@@ -109,12 +107,6 @@ def snapshot(folder: Path) -> dict[str, str]:
 
 
 @pytest.fixture
-def ptr(tmp_path) -> Path:
-    """An injected pointer path -- never the user-global default."""
-    return tmp_path / "pointer" / "current"
-
-
-@pytest.fixture
 def git_root(tmp_path) -> Path:
     """A temp project root that is a real git repo (same pattern as the
     validate tests)."""
@@ -174,9 +166,9 @@ def _commit_all(root: Path) -> None:
 
 
 class TestArchiveLib:
-    def test_tmp_active_marks_archived_parks_folder(self, tmp_path, ptr):
+    def test_tmp_active_marks_archived_parks_folder(self, tmp_path):
         folder = make_task(tmp_path, "tmp/a")
-        result = location_ops.archive_task("tmp/a", tmp_path, ptr)
+        result = location_ops.archive_task("tmp/a", tmp_path)
         assert result.canonical == "tmp/a"
         assert result.folder_removed is False
         assert result.archived_to == "tmp/archived-tasks/a"
@@ -186,32 +178,32 @@ class TestArchiveLib:
         for fname in SCAFFOLD_FILES:
             assert (parked / fname).is_file(), fname
 
-    def test_tmp_archived_result_validates_clean(self, tmp_path, ptr):
+    def test_tmp_archived_result_validates_clean(self, tmp_path):
         # Spec section 9 interplay: a tmp task parked at
         # tmp/archived-tasks/<stub> (archive's own output) is a PROPER
         # archive -- the ref reads as archived, not orphaned, no findings.
         make_task(tmp_path, "tmp/a")
-        location_ops.archive_task("tmp/a", tmp_path, ptr)
+        location_ops.archive_task("tmp/a", tmp_path)
         result = validate_ref("tmp/a", tmp_path)
         assert result.classification == "archived"
         assert result.clean
 
-    def test_tmp_occupied_parking_spot_refuses_untouched(self, tmp_path, ptr):
+    def test_tmp_occupied_parking_spot_refuses_untouched(self, tmp_path):
         folder = make_task(tmp_path, "tmp/a")
         parked = tmp_path / "tmp" / "archived-tasks" / "a"
         parked.mkdir(parents=True)
         before = snapshot(folder)
         with pytest.raises(StateOpError, match="parking spot"):
-            location_ops.archive_task("tmp/a", tmp_path, ptr)
+            location_ops.archive_task("tmp/a", tmp_path)
         assert snapshot(folder) == before
         assert read_block(folder)["status"] == "active"
 
     def test_nontmp_committed_commits_final_state_and_removal(
-        self, git_root, ptr
+        self, git_root
     ):
         folder = make_task(git_root, "dev/tasks/durable")
         _commit_all(git_root)
-        result = location_ops.archive_task("dev/tasks/durable", git_root, ptr)
+        result = location_ops.archive_task("dev/tasks/durable", git_root)
         assert result.canonical == "dev/tasks/durable"
         assert result.folder_removed is True
         assert result.archived_to is None
@@ -238,12 +230,12 @@ class TestArchiveLib:
         ).stdout
         assert "durable" not in status
 
-    def test_nontmp_uncommitted_is_committed_then_removed(self, git_root, ptr):
+    def test_nontmp_uncommitted_is_committed_then_removed(self, git_root):
         # The 2026-07-22 revision: archive no longer refuses uncommitted
         # durable work -- it records + submits the final state itself, then
         # removes the folder.
         folder = make_task(git_root, "dev/tasks/durable")  # never committed
-        result = location_ops.archive_task("dev/tasks/durable", git_root, ptr)
+        result = location_ops.archive_task("dev/tasks/durable", git_root)
         assert result.folder_removed is True
         assert not folder.exists()
         final_yaml = _show_file(
@@ -251,7 +243,7 @@ class TestArchiveLib:
         )
         assert "archived" in final_yaml
 
-    def test_nontmp_commit_scoped_to_folder_only(self, git_root, ptr):
+    def test_nontmp_commit_scoped_to_folder_only(self, git_root):
         # Pathspec-limited commits: pre-staged UNRELATED index content must
         # not be swept into the archive commits.
         make_task(git_root, "dev/tasks/durable")
@@ -261,7 +253,7 @@ class TestArchiveLib:
         subprocess.run(
             ["git", "-C", str(git_root), "add", str(unrelated)], check=True
         )
-        location_ops.archive_task("dev/tasks/durable", git_root, ptr)
+        location_ops.archive_task("dev/tasks/durable", git_root)
         status = subprocess.run(
             ["git", "-C", str(git_root), "status", "--porcelain"],
             check=True,
@@ -280,14 +272,14 @@ class TestArchiveLib:
             assert "unrelated.txt" not in files
 
     def test_nontmp_not_in_git_repo_records_and_keeps_folder(
-        self, tmp_path, ptr
+        self, tmp_path
     ):
         # No git repo: the task system has no dependency on git -- the
         # workspace may use another VCS (e.g. Perforce). No git command
         # runs; the final state is recorded and the folder KEPT for the
         # agent to submit with the workspace's VCS, then delete.
         folder = make_task(tmp_path, "dev/tasks/durable")
-        result = location_ops.archive_task("dev/tasks/durable", tmp_path, ptr)
+        result = location_ops.archive_task("dev/tasks/durable", tmp_path)
         assert result.folder_removed is False
         assert result.vcs_pending is True
         assert folder.is_dir()
@@ -295,131 +287,105 @@ class TestArchiveLib:
         log = (folder / "log.md").read_text(encoding="utf-8")
         assert "submit to version control" in log
 
-    def test_nontmp_vcs_pending_then_delete_finishes(self, tmp_path, ptr):
+    def test_nontmp_vcs_pending_then_delete_finishes(self, tmp_path):
         # The second half of the non-git flow: after the agent submits with
         # the workspace's VCS, delete removes the archived folder (delete
         # accepts stored status archived, and outside a git repo no git
         # guard applies).
         folder = make_task(tmp_path, "dev/tasks/durable")
-        location_ops.archive_task("dev/tasks/durable", tmp_path, ptr)
+        location_ops.archive_task("dev/tasks/durable", tmp_path)
         canonical = location_ops.delete_task(
-            "dev/tasks/durable", tmp_path, ptr
+            "dev/tasks/durable", tmp_path
         )
         assert canonical == "dev/tasks/durable"
         assert not folder.exists()
 
-    def test_closed_task_errors_reopen_first(self, tmp_path, ptr):
+    def test_closed_task_errors_reopen_first(self, tmp_path):
         folder = make_task(tmp_path, "tmp/a", status="closed")
         with pytest.raises(StateOpError, match="reopen"):
-            location_ops.archive_task("tmp/a", tmp_path, ptr)
+            location_ops.archive_task("tmp/a", tmp_path)
         assert read_block(folder)["status"] == "closed"
 
-    def test_other_non_active_status_errors(self, tmp_path, ptr):
+    def test_other_non_active_status_errors(self, tmp_path):
         make_task(tmp_path, "tmp/a", status="blocked")
         with pytest.raises(StateOpError, match="active"):
-            location_ops.archive_task("tmp/a", tmp_path, ptr)
+            location_ops.archive_task("tmp/a", tmp_path)
 
-    def test_missing_folder_errors(self, tmp_path, ptr):
+    def test_missing_folder_errors(self, tmp_path):
         with pytest.raises(StateOpError, match="no task folder"):
-            location_ops.archive_task("tmp/ghost", tmp_path, ptr)
-
-    def test_pointer_cleared_when_current_tmp(self, tmp_path, ptr):
-        folder = make_task(tmp_path, "tmp/a")
-        write_current(ptr, folder)
-        location_ops.archive_task("tmp/a", tmp_path, ptr)
-        assert read_current(ptr) is None
-
-    def test_pointer_cleared_when_current_nontmp(self, git_root, ptr):
-        folder = make_task(git_root, "dev/tasks/durable")
-        _commit_all(git_root)
-        write_current(ptr, folder)
-        location_ops.archive_task("dev/tasks/durable", git_root, ptr)
-        assert read_current(ptr) is None
-
-    def test_pointer_untouched_when_it_names_another_task(self, tmp_path, ptr):
-        folder_b = make_task(tmp_path, "tmp/b")
-        make_task(tmp_path, "tmp/a")
-        write_current(ptr, folder_b)
-        location_ops.archive_task("tmp/a", tmp_path, ptr)
-        assert read_current(ptr) == str(folder_b.resolve())
+            location_ops.archive_task("tmp/ghost", tmp_path)
 
 
 class TestDeleteLib:
-    def test_tmp_active_folder_gone(self, tmp_path, ptr):
+    def test_tmp_active_folder_gone(self, tmp_path):
         folder = make_task(tmp_path, "tmp/a")
-        canonical = location_ops.delete_task("tmp/a", tmp_path, ptr)
+        canonical = location_ops.delete_task("tmp/a", tmp_path)
         assert canonical == "tmp/a"
         assert not folder.exists()
 
-    def test_nontmp_committed_folder_gone(self, git_root, ptr):
+    def test_nontmp_committed_folder_gone(self, git_root):
         folder = make_task(git_root, "dev/tasks/durable")
         _commit_all(git_root)
-        location_ops.delete_task("dev/tasks/durable", git_root, ptr)
+        location_ops.delete_task("dev/tasks/durable", git_root)
         assert not folder.exists()
 
-    def test_closed_task_errors_reopen_first(self, tmp_path, ptr):
+    def test_closed_task_errors_reopen_first(self, tmp_path):
         # Pins the documented Step 5 reading: delete inherits archive's
         # status-active precondition (delete = archive + unconditional
         # removal, spec 7.1).
         folder = make_task(tmp_path, "tmp/a", status="closed")
         with pytest.raises(StateOpError, match="reopen"):
-            location_ops.delete_task("tmp/a", tmp_path, ptr)
+            location_ops.delete_task("tmp/a", tmp_path)
         assert folder.is_dir()
 
-    def test_nontmp_uncommitted_refuses_untouched(self, git_root, ptr):
+    def test_nontmp_uncommitted_refuses_untouched(self, git_root):
         # Pins the documented Step 5 reading: delete inherits archive's
         # uncommitted guard too -- an uncommitted dev/tasks folder refuses.
         folder = make_task(git_root, "dev/tasks/durable")
         before = snapshot(folder)
         with pytest.raises(StateOpError, match="commit first"):
-            location_ops.delete_task("dev/tasks/durable", git_root, ptr)
+            location_ops.delete_task("dev/tasks/durable", git_root)
         assert folder.is_dir()
         assert snapshot(folder) == before
 
-    def test_missing_folder_errors(self, tmp_path, ptr):
+    def test_missing_folder_errors(self, tmp_path):
         with pytest.raises(StateOpError, match="no task folder"):
-            location_ops.delete_task("tmp/ghost", tmp_path, ptr)
-
-    def test_pointer_cleared_when_current(self, tmp_path, ptr):
-        folder = make_task(tmp_path, "tmp/a")
-        write_current(ptr, folder)
-        location_ops.delete_task("tmp/a", tmp_path, ptr)
-        assert read_current(ptr) is None
+            location_ops.delete_task("tmp/ghost", tmp_path)
 
 
 class TestParkedTmpArchive:
     """The tmp/archived-tasks parking lifecycle around archive (2026-07-22)."""
 
-    def test_reopen_restores_parked_folder(self, tmp_path, ptr):
+    def test_reopen_restores_parked_folder(self, tmp_path):
         from task_system import state_ops
 
         make_task(tmp_path, "tmp/a")
-        location_ops.archive_task("tmp/a", tmp_path, ptr)
-        result = state_ops.reopen("tmp/a", tmp_path, ptr)
+        location_ops.archive_task("tmp/a", tmp_path)
+        result = state_ops.reopen("tmp/a", tmp_path)
         folder = tmp_path / "tmp" / "a"
         assert folder.is_dir()
         assert not (tmp_path / "tmp" / "archived-tasks" / "a").exists()
         assert read_block(folder)["status"] == "active"
         assert result.validation.classification == "active"
 
-    def test_reopen_still_errors_when_nothing_parked(self, tmp_path, ptr):
+    def test_reopen_still_errors_when_nothing_parked(self, tmp_path):
         from task_system import state_ops
 
         with pytest.raises(StateOpError, match="cannot be reopened"):
-            state_ops.reopen("tmp/ghost", tmp_path, ptr)
+            state_ops.reopen("tmp/ghost", tmp_path)
 
-    def test_discovery_skips_parked_folders(self, tmp_path, ptr):
+    def test_discovery_skips_parked_folders(self, tmp_path):
         from task_system.discovery import discover
 
         make_task(tmp_path, "tmp/live")
         make_task(tmp_path, "tmp/done")
-        location_ops.archive_task("tmp/done", tmp_path, ptr)
+        location_ops.archive_task("tmp/done", tmp_path)
         notes: list[str] = []
         records = discover("project", tmp_path, notes=notes)
         assert {r.id for r in records} == {"tmp/live"}
         assert notes == []  # the parked folder is skipped silently
 
-    def test_referenced_parked_task_lists_as_archived(self, tmp_path, ptr):
+    def test_referenced_parked_task_lists_as_archived(self, tmp_path):
         # A surviving task_list ref to the archived task resolves through
         # the parking directory: archived, not orphaned.
         from task_system.discovery import discover
@@ -428,14 +394,14 @@ class TestParkedTmpArchive:
         write_doc(
             tmp_path / "tmp" / "notes.md", fenced_task_list([{"path": "tmp/done"}])
         )
-        location_ops.archive_task("tmp/done", tmp_path, ptr)
+        location_ops.archive_task("tmp/done", tmp_path)
         records = discover("project", tmp_path)
         by_id = {r.id: r for r in records}
         assert by_id["tmp/done"].classification == "archived"
 
-    def test_reserved_ref_errors(self, tmp_path, ptr):
+    def test_reserved_ref_errors(self, tmp_path):
         with pytest.raises(StateOpError, match="reserved"):
-            location_ops.archive_task("tmp/archived-tasks", tmp_path, ptr)
+            location_ops.archive_task("tmp/archived-tasks", tmp_path)
 
     def test_init_reserved_stub_errors(self, tmp_path):
         from task_system.init import InitError, init_task
@@ -458,7 +424,7 @@ def write_doc(path: Path, body: str) -> Path:
 
 
 class TestMoveLib:
-    def test_promote_relocates_and_rewrites_multiple_docs(self, git_root, ptr):
+    def test_promote_relocates_and_rewrites_multiple_docs(self, git_root):
         old_folder = make_task(git_root, "tmp/spike-x")
         doc_a = write_doc(
             git_root / "notes.md", fenced_task_list([{"path": "tmp/spike-x"}])
@@ -468,9 +434,7 @@ class TestMoveLib:
             fenced_task_list([{"path": "tmp/spike-x"}, {"path": "tmp/spike-x"}]),
         )
         _commit_all(git_root)
-        result = location_ops.move_task(
-            "tmp/spike-x", "dev/tasks", git_root, ptr
-        )
+        result = location_ops.move_task("tmp/spike-x", "dev/tasks", git_root)
         assert result.old_canonical == "tmp/spike-x"
         assert result.new_canonical == "dev/tasks/spike-x"
         new_folder = git_root / "dev" / "tasks" / "spike-x"
@@ -483,7 +447,7 @@ class TestMoveLib:
         assert "tmp/spike-x" not in doc_a.read_text(encoding="utf-8")
         assert doc_b.read_text(encoding="utf-8").count("dev/tasks/spike-x") == 2
 
-    def test_byte_level_preservation_and_prose_untouched(self, tmp_path, ptr):
+    def test_byte_level_preservation_and_prose_untouched(self, tmp_path):
         # The rewrite is span-precise: only the matching task_list path
         # values change. Prose mentions of the old path, comments, flow
         # style, indentation, and refs to a DIFFERENT task are preserved
@@ -508,7 +472,7 @@ class TestMoveLib:
         )
         doc = tmp_path / "tmp" / "notes.md"
         doc.write_text(original, encoding="utf-8")
-        location_ops.move_task("tmp/spike-x", "dev/tasks", tmp_path, ptr)
+        location_ops.move_task("tmp/spike-x", "dev/tasks", tmp_path)
         expected = (
             "# Notes\n"
             "\n"
@@ -527,42 +491,24 @@ class TestMoveLib:
         )
         assert doc.read_text(encoding="utf-8") == expected
 
-    def test_doc_referencing_different_task_not_touched(self, tmp_path, ptr):
+    def test_doc_referencing_different_task_not_touched(self, tmp_path):
         make_task(tmp_path, "tmp/spike-x")
         make_task(tmp_path, "tmp/spike-y")
         doc = write_doc(
             tmp_path / "other.md", fenced_task_list([{"path": "tmp/spike-y"}])
         )
         before = doc.read_text(encoding="utf-8")
-        result = location_ops.move_task(
-            "tmp/spike-x", "dev/tasks", tmp_path, ptr
-        )
+        result = location_ops.move_task("tmp/spike-x", "dev/tasks", tmp_path)
         assert result.rewritten_docs == ()
         assert doc.read_text(encoding="utf-8") == before
 
-    def test_pointer_updated_when_it_named_the_old_path(self, tmp_path, ptr):
-        old_folder = make_task(tmp_path, "tmp/spike-x")
-        write_current(ptr, old_folder)
-        location_ops.move_task("tmp/spike-x", "dev/tasks", tmp_path, ptr)
-        new_folder = tmp_path / "dev" / "tasks" / "spike-x"
-        assert read_current(ptr) == str(new_folder.resolve())
-
-    def test_pointer_untouched_when_it_names_another_task(self, tmp_path, ptr):
-        folder_b = make_task(tmp_path, "tmp/b")
-        make_task(tmp_path, "tmp/spike-x")
-        write_current(ptr, folder_b)
-        location_ops.move_task("tmp/spike-x", "dev/tasks", tmp_path, ptr)
-        assert read_current(ptr) == str(folder_b.resolve())
-
-    def test_demote_dev_tasks_to_tmp(self, tmp_path, ptr):
+    def test_demote_dev_tasks_to_tmp(self, tmp_path):
         old_folder = make_task(tmp_path, "dev/tasks/durable")
         doc = write_doc(
             tmp_path / "tmp" / "notes.md",
             fenced_task_list([{"path": "dev/tasks/durable"}]),
         )
-        result = location_ops.move_task(
-            "dev/tasks/durable", "tmp", tmp_path, ptr
-        )
+        result = location_ops.move_task("dev/tasks/durable", "tmp", tmp_path)
         assert result.new_canonical == "tmp/durable"
         assert not old_folder.exists()
         assert (tmp_path / "tmp" / "durable" / "task.yaml").is_file()
@@ -570,7 +516,7 @@ class TestMoveLib:
         assert "tmp/durable" in text
         assert "dev/tasks/durable" not in text
 
-    def test_destination_exists_errors_nothing_changed(self, tmp_path, ptr):
+    def test_destination_exists_errors_nothing_changed(self, tmp_path):
         old_folder = make_task(tmp_path, "tmp/spike-x")
         make_task(tmp_path, "dev/tasks/spike-x")  # occupies the destination
         doc = write_doc(
@@ -578,21 +524,21 @@ class TestMoveLib:
         )
         before = doc.read_text(encoding="utf-8")
         with pytest.raises(StateOpError, match="already exists"):
-            location_ops.move_task("tmp/spike-x", "dev/tasks", tmp_path, ptr)
+            location_ops.move_task("tmp/spike-x", "dev/tasks", tmp_path)
         assert old_folder.is_dir()
         assert doc.read_text(encoding="utf-8") == before
 
-    def test_already_at_dest_errors(self, tmp_path, ptr):
+    def test_already_at_dest_errors(self, tmp_path):
         make_task(tmp_path, "tmp/spike-x")
         with pytest.raises(StateOpError, match="already in tmp"):
-            location_ops.move_task("tmp/spike-x", "tmp", tmp_path, ptr)
+            location_ops.move_task("tmp/spike-x", "tmp", tmp_path)
         assert (tmp_path / "tmp" / "spike-x").is_dir()
 
-    def test_absent_source_errors(self, tmp_path, ptr):
+    def test_absent_source_errors(self, tmp_path):
         with pytest.raises(StateOpError, match="no local task folder"):
-            location_ops.move_task("tmp/ghost", "dev/tasks", tmp_path, ptr)
+            location_ops.move_task("tmp/ghost", "dev/tasks", tmp_path)
 
-    def test_remote_source_errors(self, tmp_path, ptr):
+    def test_remote_source_errors(self, tmp_path):
         # Even with a same-named local folder, a tmp ref tagged with a
         # non-matching host is remote (spec 7.3) -- move refuses.
         folder = make_task(tmp_path, "tmp/spike-x")
@@ -601,23 +547,22 @@ class TestMoveLib:
                 "tmp/spike-x",
                 "dev/tasks",
                 tmp_path,
-                ptr,
                 ref_host=OTHER,
                 local_host=LOCAL,
             )
         assert folder.is_dir()
 
-    def test_unknown_dest_errors(self, tmp_path, ptr):
+    def test_unknown_dest_errors(self, tmp_path):
         make_task(tmp_path, "tmp/spike-x")
         with pytest.raises(StateOpError, match="unknown dest"):
-            location_ops.move_task("tmp/spike-x", "docs", tmp_path, ptr)
+            location_ops.move_task("tmp/spike-x", "docs", tmp_path)
 
 
 class TestArchiveCLI:
-    def test_tmp_archive_prints_disposition(self, tmp_path, ptr):
+    def test_tmp_archive_prints_disposition(self, tmp_path):
         folder = make_task(tmp_path, "tmp/a")
         proc = run_cli(
-            ["archive", "tmp/a", "--root", str(tmp_path), "--pointer", str(ptr)],
+            ["archive", "tmp/a", "--root", str(tmp_path)],
             tmp_path,
         )
         assert proc.returncode == 0, proc.stderr
@@ -629,7 +574,7 @@ class TestArchiveCLI:
         parked = tmp_path / "tmp" / "archived-tasks" / "a"
         assert read_block(parked)["status"] == "archived"
 
-    def test_nontmp_committed_prints_deleted_disposition(self, git_root, ptr):
+    def test_nontmp_committed_prints_deleted_disposition(self, git_root):
         folder = make_task(git_root, "dev/tasks/durable")
         _commit_all(git_root)
         proc = run_cli(
@@ -638,8 +583,6 @@ class TestArchiveCLI:
                 "dev/tasks/durable",
                 "--root",
                 str(git_root),
-                "--pointer",
-                str(ptr),
             ],
             git_root,
         )
@@ -651,7 +594,7 @@ class TestArchiveCLI:
         assert not folder.exists()
 
     def test_not_in_git_repo_prints_vcs_pending_disposition(
-        self, tmp_path, ptr
+        self, tmp_path
     ):
         folder = make_task(tmp_path, "dev/tasks/durable")
         proc = run_cli(
@@ -660,8 +603,6 @@ class TestArchiveCLI:
                 "dev/tasks/durable",
                 "--root",
                 str(tmp_path),
-                "--pointer",
-                str(ptr),
             ],
             tmp_path,
         )
@@ -672,10 +613,10 @@ class TestArchiveCLI:
         assert "then run delete" in out
         assert folder.is_dir()
 
-    def test_closed_task_exits_nonzero_with_reopen_hint(self, tmp_path, ptr):
+    def test_closed_task_exits_nonzero_with_reopen_hint(self, tmp_path):
         make_task(tmp_path, "tmp/a", status="closed")
         proc = run_cli(
-            ["archive", "tmp/a", "--root", str(tmp_path), "--pointer", str(ptr)],
+            ["archive", "tmp/a", "--root", str(tmp_path)],
             tmp_path,
         )
         assert proc.returncode != 0
@@ -683,17 +624,17 @@ class TestArchiveCLI:
 
 
 class TestDeleteCLI:
-    def test_tmp_delete_prints_deleted_id(self, tmp_path, ptr):
+    def test_tmp_delete_prints_deleted_id(self, tmp_path):
         folder = make_task(tmp_path, "tmp/a")
         proc = run_cli(
-            ["delete", "tmp/a", "--root", str(tmp_path), "--pointer", str(ptr)],
+            ["delete", "tmp/a", "--root", str(tmp_path)],
             tmp_path,
         )
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.strip() == "deleted: tmp/a"
         assert not folder.exists()
 
-    def test_uncommitted_refusal_exits_nonzero(self, git_root, ptr):
+    def test_uncommitted_refusal_exits_nonzero(self, git_root):
         folder = make_task(git_root, "dev/tasks/durable")
         proc = run_cli(
             [
@@ -701,8 +642,6 @@ class TestDeleteCLI:
                 "dev/tasks/durable",
                 "--root",
                 str(git_root),
-                "--pointer",
-                str(ptr),
             ],
             git_root,
         )
@@ -712,7 +651,7 @@ class TestDeleteCLI:
 
 
 class TestMoveCLI:
-    def test_move_prints_new_path_and_rewrite_count(self, tmp_path, ptr):
+    def test_move_prints_new_path_and_rewrite_count(self, tmp_path):
         make_task(tmp_path, "tmp/spike-x")
         write_doc(
             tmp_path / "tmp" / "notes.md", fenced_task_list([{"path": "tmp/spike-x"}])
@@ -727,8 +666,6 @@ class TestMoveCLI:
                 "dev/tasks",
                 "--root",
                 str(tmp_path),
-                "--pointer",
-                str(ptr),
             ],
             tmp_path,
         )
@@ -739,7 +676,7 @@ class TestMoveCLI:
         ]
         assert (tmp_path / "dev" / "tasks" / "spike-x").is_dir()
 
-    def test_destination_exists_exits_nonzero(self, tmp_path, ptr):
+    def test_destination_exists_exits_nonzero(self, tmp_path):
         make_task(tmp_path, "tmp/spike-x")
         make_task(tmp_path, "dev/tasks/spike-x")
         proc = run_cli(
@@ -749,8 +686,6 @@ class TestMoveCLI:
                 "dev/tasks",
                 "--root",
                 str(tmp_path),
-                "--pointer",
-                str(ptr),
             ],
             tmp_path,
         )
@@ -758,7 +693,7 @@ class TestMoveCLI:
         assert "already exists" in proc.stderr
         assert (tmp_path / "tmp" / "spike-x").is_dir()
 
-    def test_absent_source_exits_nonzero(self, tmp_path, ptr):
+    def test_absent_source_exits_nonzero(self, tmp_path):
         proc = run_cli(
             [
                 "move",
@@ -766,8 +701,6 @@ class TestMoveCLI:
                 "dev/tasks",
                 "--root",
                 str(tmp_path),
-                "--pointer",
-                str(ptr),
             ],
             tmp_path,
         )
@@ -783,23 +716,23 @@ class TestDurableOutputs:
     judgment lives at authoring time (the declaration).
     """
 
-    def test_absent_field_notes_and_archives(self, tmp_path, ptr):
+    def test_absent_field_notes_and_archives(self, tmp_path):
         # Every folder predating the rule: degrade to a note, never refuse.
         make_task(tmp_path, "tmp/legacy")
-        result = location_ops.archive_task("tmp/legacy", tmp_path, ptr)
+        result = location_ops.archive_task("tmp/legacy", tmp_path)
         assert result.durable_note is not None
         assert "declares no durable_outputs" in result.durable_note
         assert not (tmp_path / "tmp" / "legacy").exists()
         assert (tmp_path / "tmp" / "archived-tasks" / "legacy").is_dir()
 
-    def test_empty_list_is_an_explicit_nothing_durable(self, tmp_path, ptr):
+    def test_empty_list_is_an_explicit_nothing_durable(self, tmp_path):
         # Declaring nothing IS a valid result (content already absorbed
         # elsewhere); an explicit [] is not the same as an absent field.
         make_task(tmp_path, "tmp/nothing", durable_outputs=[])
-        result = location_ops.archive_task("tmp/nothing", tmp_path, ptr)
+        result = location_ops.archive_task("tmp/nothing", tmp_path)
         assert result.durable_note is None
 
-    def test_declared_path_outside_the_folder_archives(self, tmp_path, ptr):
+    def test_declared_path_outside_the_folder_archives(self, tmp_path):
         home = tmp_path / "docs" / "architecture"
         home.mkdir(parents=True)
         (home / "env-json.md").write_text("# Spec\n", encoding="utf-8")
@@ -808,11 +741,11 @@ class TestDurableOutputs:
             "tmp/shipped",
             durable_outputs=["docs/architecture/env-json.md"],
         )
-        result = location_ops.archive_task("tmp/shipped", tmp_path, ptr)
+        result = location_ops.archive_task("tmp/shipped", tmp_path)
         assert result.durable_note is None
         assert (home / "env-json.md").is_file()
 
-    def test_declared_path_inside_the_folder_refuses(self, tmp_path, ptr):
+    def test_declared_path_inside_the_folder_refuses(self, tmp_path):
         # The load-bearing case: the folder is about to be parked/deleted,
         # so a document inside it has no durable home at all.
         folder = make_task(
@@ -822,18 +755,18 @@ class TestDurableOutputs:
         )
         (folder / "analysis.md").write_text("# THE SPEC\n", encoding="utf-8")
         with pytest.raises(StateOpError, match="lives INSIDE the task folder"):
-            location_ops.archive_task("tmp/spec", tmp_path, ptr)
+            location_ops.archive_task("tmp/spec", tmp_path)
         # Refused BEFORE anything moved -- the document is still recoverable.
         assert folder.is_dir()
         assert (folder / "analysis.md").is_file()
 
-    def test_declared_path_that_does_not_exist_refuses(self, tmp_path, ptr):
+    def test_declared_path_that_does_not_exist_refuses(self, tmp_path):
         make_task(tmp_path, "tmp/ghostdoc", durable_outputs=["docs/never.md"])
         with pytest.raises(StateOpError, match="no such path"):
-            location_ops.archive_task("tmp/ghostdoc", tmp_path, ptr)
+            location_ops.archive_task("tmp/ghostdoc", tmp_path)
         assert (tmp_path / "tmp" / "ghostdoc").is_dir()
 
-    def test_every_offender_is_named(self, tmp_path, ptr):
+    def test_every_offender_is_named(self, tmp_path):
         folder = make_task(
             tmp_path,
             "tmp/multi",
@@ -841,13 +774,13 @@ class TestDurableOutputs:
         )
         (folder / "inside.md").write_text("x\n", encoding="utf-8")
         with pytest.raises(StateOpError) as exc:
-            location_ops.archive_task("tmp/multi", tmp_path, ptr)
+            location_ops.archive_task("tmp/multi", tmp_path)
         msg = str(exc.value)
         assert "docs/gone-a.md" in msg
         assert "tmp/multi/inside.md" in msg
         assert "not a non-empty path string" in msg
 
-    def test_absolute_path_refuses(self, tmp_path, ptr):
+    def test_absolute_path_refuses(self, tmp_path):
         # `project_root / entry` DISCARDS project_root for an absolute entry,
         # so without an explicit guard an out-of-repo path would pass -- and
         # a home version control does not carry is not durable.
@@ -855,23 +788,23 @@ class TestDurableOutputs:
         outside.write_text("# Spec\n", encoding="utf-8")
         make_task(tmp_path, "tmp/abs", durable_outputs=[str(outside)])
         with pytest.raises(StateOpError, match="must be RELATIVE"):
-            location_ops.archive_task("tmp/abs", tmp_path, ptr)
+            location_ops.archive_task("tmp/abs", tmp_path)
         assert (tmp_path / "tmp" / "abs").is_dir()
 
-    def test_parent_escape_refuses(self, tmp_path, ptr):
+    def test_parent_escape_refuses(self, tmp_path):
         outside = tmp_path.parent / "escaped.md"
         outside.write_text("# Spec\n", encoding="utf-8")
         make_task(tmp_path, "tmp/esc", durable_outputs=["../escaped.md"])
         with pytest.raises(StateOpError, match="resolves OUTSIDE"):
-            location_ops.archive_task("tmp/esc", tmp_path, ptr)
+            location_ops.archive_task("tmp/esc", tmp_path)
         assert (tmp_path / "tmp" / "esc").is_dir()
 
-    def test_non_list_field_refuses(self, tmp_path, ptr):
+    def test_non_list_field_refuses(self, tmp_path):
         make_task(tmp_path, "tmp/bad", durable_outputs="docs/one.md")
         with pytest.raises(StateOpError, match="must be a list"):
-            location_ops.archive_task("tmp/bad", tmp_path, ptr)
+            location_ops.archive_task("tmp/bad", tmp_path)
 
-    def test_dev_tasks_folder_survives_a_refusal(self, git_root, ptr):
+    def test_dev_tasks_folder_survives_a_refusal(self, git_root):
         # The whole point: refuse while the document can still be moved,
         # never after version control became the record.
         root = git_root
@@ -881,13 +814,13 @@ class TestDurableOutputs:
         (folder / "spec.md").write_text("# THE SPEC\n", encoding="utf-8")
         _commit_all(root)
         with pytest.raises(StateOpError, match="lives INSIDE the task folder"):
-            location_ops.archive_task("dev/tasks/spec", root, ptr)
+            location_ops.archive_task("dev/tasks/spec", root)
         assert folder.is_dir()
         assert (folder / "spec.md").is_file()
 
 
 class TestDurableOutputsCLI:
-    def test_update_flag_persists_and_replaces(self, tmp_path, ptr):
+    def test_update_flag_persists_and_replaces(self, tmp_path):
         make_task(tmp_path, "tmp/decl")
         rounds = (
             ["--durable-output", "docs/a.md"],
@@ -901,8 +834,6 @@ class TestDurableOutputsCLI:
                     *flags,
                     "--root",
                     str(tmp_path),
-                    "--pointer",
-                    str(ptr),
                 ],
                 tmp_path,
             )
@@ -913,7 +844,7 @@ class TestDurableOutputsCLI:
         # REPLACES, never appends (same convention as --skill-to-invoke).
         assert data["task"]["durable_outputs"] == ["docs/b.md", "docs/c.md"]
 
-    def test_archive_note_goes_to_stderr_exit_zero(self, tmp_path, ptr):
+    def test_archive_note_goes_to_stderr_exit_zero(self, tmp_path):
         make_task(tmp_path, "tmp/legacy2")
         proc = run_cli(
             [
@@ -921,8 +852,6 @@ class TestDurableOutputsCLI:
                 "tmp/legacy2",
                 "--root",
                 str(tmp_path),
-                "--pointer",
-                str(ptr),
             ],
             tmp_path,
         )
@@ -930,7 +859,7 @@ class TestDurableOutputsCLI:
         assert proc.stdout.startswith("archived: tmp/legacy2")
         assert "declares no durable_outputs" in proc.stderr
 
-    def test_archive_refusal_exits_nonzero(self, tmp_path, ptr):
+    def test_archive_refusal_exits_nonzero(self, tmp_path):
         folder = make_task(
             tmp_path, "tmp/ref", durable_outputs=["tmp/ref/keep.md"]
         )
@@ -941,8 +870,6 @@ class TestDurableOutputsCLI:
                 "tmp/ref",
                 "--root",
                 str(tmp_path),
-                "--pointer",
-                str(ptr),
             ],
             tmp_path,
         )

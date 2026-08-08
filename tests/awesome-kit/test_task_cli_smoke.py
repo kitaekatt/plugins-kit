@@ -3,15 +3,14 @@
 One sandboxed lifecycle driven ONLY through the CLI exactly as the task
 SKILL.md documents it (subprocess invocations of scripts/task.py):
 
-    init (tmp) -> validate -> update (field edits) -> work (pointer set,
-    Skill lines emitted) -> list / show / current / status substrate ->
+    init (tmp) -> validate -> update (field edits) -> work (Skill lines
+    emitted) -> list / show / status substrate ->
     close -> reopen -> move to dev/tasks inside a git repo fixture
     (task_list reference rewrite across a doc) -> commit -> archive
     (final state committed; folder deleted; version control is the record)
 
 plus a delete path for a second tmp task. Everything runs under pytest
-tmp_path with an injected pointer (--pointer) -- the real repo's tmp/,
-dev/, and ~/.claude are never touched.
+tmp_path -- the real repo's tmp/, dev/, and ~/.claude are never touched.
 """
 
 import os
@@ -64,12 +63,6 @@ def run_cli(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 
 @pytest.fixture
-def ptr(tmp_path) -> Path:
-    """An injected pointer path -- never the user-global default."""
-    return tmp_path / "pointer" / "current"
-
-
-@pytest.fixture
 def git_root(tmp_path) -> Path:
     """A temp project root that is a real git repo (the move/archive legs
     need git: the uncommitted guard and 'git is the record')."""
@@ -109,10 +102,9 @@ def _commit_all(root: Path) -> None:
 
 
 class TestCliLifecycle:
-    def test_full_lifecycle(self, git_root, ptr):
+    def test_full_lifecycle(self, git_root):
         root = git_root
         rootflag = ["--root", str(root)]
-        ptrflag = ["--pointer", str(ptr)]
 
         # --- init (tmp): prints the absolute folder path; scaffolds ------
         res = run_cli(["init", STUB, *rootflag], cwd=root)
@@ -141,28 +133,20 @@ class TestCliLifecycle:
                 "--agent-hint",
                 "backend-developer",
                 *rootflag,
-                *ptrflag,
             ],
             cwd=root,
         )
         assert res.returncode == 0, res.stderr
         assert res.stdout.strip() == "active"
 
-        # --- work: pointer set; one init block emitted -------------------
-        res = run_cli(["work", f"tmp/{STUB}", *rootflag, *ptrflag], cwd=root)
+        # --- work: one init block emitted -------------------------------
+        res = run_cli(["work", f"tmp/{STUB}", *rootflag], cwd=root)
         assert res.returncode == 0, res.stderr
         assert "== task init" in res.stdout
         assert 'Skill(skill: "awesome-kit:orchestrate")' in res.stdout
         assert 'Skill(skill: "home-domain")' in res.stdout
         assert "agent_hint: backend-developer" in res.stdout
         assert "do not implement inline in the main context" in res.stdout
-        assert ptr.read_text(encoding="utf-8").strip() == str(folder.resolve())
-
-        # --- current: id + classification + title ------------------------
-        res = run_cli(["current", *ptrflag], cwd=root)
-        assert res.returncode == 0, res.stderr
-        assert res.stdout.strip() == f"tmp/{STUB}  active  {TITLE}"
-
         # --- list: one parseable line, the documented projection ---------
         res = run_cli(["list", *rootflag], cwd=root)
         assert res.returncode == 0, res.stderr
@@ -184,16 +168,13 @@ class TestCliLifecycle:
         assert "documents:" in res.stdout
         assert "inference verb" in res.stdout  # the skill-layer reminder
 
-        # --- close: folder kept, pointer cleared -------------------------
-        res = run_cli(["close", f"tmp/{STUB}", *rootflag, *ptrflag], cwd=root)
+        # --- close: folder kept ------------------------------------------
+        res = run_cli(["close", f"tmp/{STUB}", *rootflag], cwd=root)
         assert res.returncode == 0, res.stderr
         assert res.stdout.strip() == f"closed: tmp/{STUB}"
         assert folder.is_dir()
-        res = run_cli(["current", *ptrflag], cwd=root)
-        assert res.stdout.strip() == "none"
-
         # --- reopen: back to active --------------------------------------
-        res = run_cli(["reopen", f"tmp/{STUB}", *rootflag, *ptrflag], cwd=root)
+        res = run_cli(["reopen", f"tmp/{STUB}", *rootflag], cwd=root)
         assert res.returncode == 0, res.stderr
         assert res.stdout.strip() == "active"
 
@@ -205,7 +186,7 @@ class TestCliLifecycle:
         doc.parent.mkdir(exist_ok=True)
         doc.write_text(DOC_WITH_REF, encoding="utf-8")
         res = run_cli(
-            ["move", f"tmp/{STUB}", "dev/tasks", *rootflag, *ptrflag], cwd=root
+            ["move", f"tmp/{STUB}", "dev/tasks", *rootflag], cwd=root
         )
         assert res.returncode == 0, res.stderr
         assert f"moved: tmp/{STUB} -> dev/tasks/{STUB}" in res.stdout
@@ -226,7 +207,7 @@ class TestCliLifecycle:
         # --- commit, then archive: folder deleted, git is the record -----
         _commit_all(root)
         res = run_cli(
-            ["archive", f"dev/tasks/{STUB}", *rootflag, *ptrflag], cwd=root
+            ["archive", f"dev/tasks/{STUB}", *rootflag], cwd=root
         )
         assert res.returncode == 0, res.stderr
         assert (
@@ -241,10 +222,9 @@ class TestCliLifecycle:
         assert res.returncode == 0, res.stderr
         assert f"dev/tasks/{STUB}  archived  -  -" in res.stdout.splitlines()
 
-    def test_delete_second_tmp_task(self, tmp_path, ptr):
+    def test_delete_second_tmp_task(self, tmp_path):
         root = tmp_path
         rootflag = ["--root", str(root)]
-        ptrflag = ["--pointer", str(ptr)]
 
         res = run_cli(["init", "scratch-spike", *rootflag], cwd=root)
         assert res.returncode == 0, res.stderr
@@ -253,7 +233,7 @@ class TestCliLifecycle:
 
         # delete: archive semantics, then the folder is removed even in tmp.
         res = run_cli(
-            ["delete", "tmp/scratch-spike", *rootflag, *ptrflag], cwd=root
+            ["delete", "tmp/scratch-spike", *rootflag], cwd=root
         )
         assert res.returncode == 0, res.stderr
         assert res.stdout.strip() == "deleted: tmp/scratch-spike"

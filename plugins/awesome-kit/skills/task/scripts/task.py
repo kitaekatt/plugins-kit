@@ -1,10 +1,9 @@
 """task.py -- the task-system CLI entry point (spec section 7).
 
-One entry point with verb subcommands. Steps 1-5 ship ``validate``, ``init``,
-the read ops ``list`` / ``show`` / ``current`` / ``status``, the state ops
-``work`` / ``switch`` / ``update`` / ``close`` / ``reopen``, and the
-destructive + location ops ``archive`` / ``delete`` / ``move``. The
-task-items design adds ``items``, the item-level read op.
+One entry point with verb subcommands. The CLI exposes 13 verbs:
+``init``, ``list``, ``show``, ``status``, ``validate``,
+``work``, ``update``, ``items``, ``close``, ``reopen``,
+``archive``, ``delete``, and ``move``.
 
 Conventions (spec 7.1): exit 0 on success, non-zero on failure/block;
 findings print to stderr. ``validate`` exits 0 iff there are no errors AND no
@@ -23,42 +22,33 @@ Read-op conventions (Step 3):
 - ``show <ref>`` prints the selected task.yaml fields; non-zero with a
   reason on stderr when the ref is unresolvable or the folder is not
   readable locally (archived / orphaned / remote).
-- ``current`` reads the global pointer. The pointer stores the ABSOLUTE
-  folder path (spec 2.6), so it is self-resolving -- ``--root`` is accepted
-  for interface stability but not needed; the project-relative id printed is
-  derived from the stored path. Stale content (missing folder, or a line
-  that is not a derivable absolute task path) is cleared and "none" is
-  reported (exit 0, spec 2.6).
 - ``status <ref>`` is the spec's one INFERENCE verb (spec 7.1): a background
   agent summarizes the task. The script side implemented here is the
   SUBSTRATE ONLY -- classification + findings + the raw material
   (task.yaml fields, document paths, the parsed task_items). The
   summarization itself is dispatched by the skill layer (Step 6), not by
   this script.
-- ``items [<ref>]`` enumerates the task's open items (the plan.md
+- ``items <ref>`` enumerates the task's open items (the plan.md
   ``task_items`` unit; design/task-items-design.md section 8): one parseable
   line per item -- ``id  state  priority  title`` (two-space separated,
   absent priority ``-``), sorted by priority then block order;
-  ``--state``/``--priority`` filter. The ref defaults to the CURRENT task.
+  ``--state``/``--priority`` filter.
   Findings about the block go to stderr as notes (validate is the gate that
   reports them as findings); exit 0 even when empty. Non-zero with a reason
-  only when the ref is unresolvable, nothing is current, or the folder is
-  not readable locally (archived / orphaned / remote) -- matching ``show``.
+  only when the ref is unresolvable or the folder is not readable locally
+  (archived / orphaned / remote) -- matching ``show``.
 
 State-op conventions (Step 4):
 - ``work <ref>`` exits non-zero when validate blocks (ANY error or warning),
-  the ref is remote, or auto-init fails -- findings to stderr, pointer
-  unwritten. On pass it writes the pointer and prints to stdout a single
+  the ref is remote, or auto-init fails -- findings to stderr. On pass it
+  prints to stdout a single
   initialization block: a ``== task init ... ==`` header, one
   ``Skill(skill: "<name>")`` line per merged skill
   (``state_ops.BASELINE_SKILLS`` then the task's own ``skills_to_invoke``,
   deduped), an ``agent_hint: <name>`` dispatch hint line when present, and
   a closing ``== then: dispatch ... ==`` directive (the skill layer acts on
   these; the script only emits them).
-- ``switch <ref>`` first runs ``update`` on the current task when one is
-  set and extant (a ``note:`` line on stderr reports it), then behaves
-  exactly like ``work <ref>``.
-- ``update [<ref>]`` defaults the ref to the current task. Prints the
+- ``update <ref>`` applies the explicit ref. Prints the
   re-validation classification to stdout and findings to stderr; exits 0 iff
   there are no findings -- but the field edits persist regardless (update is
   a write op; validate reports). List-valued flags (``--depends-on``,
@@ -96,20 +86,18 @@ Usage:
     task.py list [--scope user|project|skill|file] [--target X]
                  [--status S] [--priority P] [--root PATH]
     task.py show <ref> [--root PATH]
-    task.py items [<ref>] [--state S] [--priority P] [--root PATH] [--pointer PATH]
-    task.py current [--root PATH] [--pointer PATH]
+    task.py items <ref> [--state S] [--priority P] [--root PATH]
     task.py status <ref> [--root PATH]
-    task.py work <ref> [--root PATH] [--pointer PATH]
-    task.py switch <ref> [--root PATH] [--pointer PATH]
-    task.py update [<ref>] [--status S] [--priority P] [--description D]
+    task.py work <ref> [--root PATH]
+    task.py update <ref> [--status S] [--priority P] [--description D]
                    [--depends-on PATH ...] [--blocked-by PATH ...]
                    [--agent-hint H] [--skill-to-invoke NAME ...]
-                   [--durable-output PATH ...] [--root PATH] [--pointer PATH]
-    task.py close <ref> [--root PATH] [--pointer PATH]
-    task.py reopen <ref> [--root PATH] [--pointer PATH]
-    task.py archive <ref> [--root PATH] [--pointer PATH]
-    task.py delete <ref> [--root PATH] [--pointer PATH]
-    task.py move <ref> <dest> [--root PATH] [--pointer PATH]
+                   [--durable-output PATH ...] [--root PATH]
+    task.py close <ref> [--root PATH]
+    task.py reopen <ref> [--root PATH]
+    task.py archive <ref> [--root PATH]
+    task.py delete <ref> [--root PATH]
+    task.py move <ref> <dest> [--root PATH]
 """
 
 import argparse
@@ -130,7 +118,6 @@ reexec_under_plugin_venv("awesome-kit")
 
 try:
     from task_system import location_ops  # noqa: E402
-    from task_system import pointer as pointer_mod  # noqa: E402
     from task_system import resolve  # noqa: E402
     from task_system import state_ops  # noqa: E402
     from task_system.discovery import (  # noqa: E402
@@ -277,12 +264,6 @@ def _cmd_show(args: argparse.Namespace) -> int:
     return 0
 
 
-def _pointer_path(args: argparse.Namespace) -> Path:
-    return (
-        args.pointer if args.pointer is not None else pointer_mod.DEFAULT_POINTER_PATH
-    )
-
-
 def _items_type(folder: Path):
     """The registered type governing a folder's task_items vocabulary; falls
     back to the default type for a missing/unknown ``type`` so items still
@@ -302,40 +283,20 @@ def _format_item_line(item) -> str:
 
 def _cmd_items(args: argparse.Namespace) -> int:
     root = (args.root if args.root is not None else Path.cwd()).resolve()
-    if args.ref is None:
-        # Ref defaults to the CURRENT task (module docstring): the friction
-        # moment is "what next?" mid-session. The pointer's absolute path
-        # supersedes --root, exactly like update's default-ref derivation.
-        stored = pointer_mod.read_current(_pointer_path(args))
-        folder = Path(stored) if stored is not None else None
-        derived = (
-            state_ops.derive_root_and_canonical(folder)
-            if folder is not None
-            else None
+    try:
+        resolved = resolve.resolve_ref(args.ref, root)
+    except resolve.RefResolutionError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    canonical = resolved.canonical
+    folder = resolved.folder(root)
+    if not folder.is_dir():
+        print(
+            f"error: {canonical}: no task folder readable locally "
+            "(archived, orphaned, or remote)",
+            file=sys.stderr,
         )
-        if derived is None or folder is None or not folder.is_dir():
-            print(
-                "error: no <ref> given and nothing is current -- pass a ref "
-                "or run work first",
-                file=sys.stderr,
-            )
-            return 1
-        root, canonical = derived
-    else:
-        try:
-            resolved = resolve.resolve_ref(args.ref, root)
-        except resolve.RefResolutionError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-        canonical = resolved.canonical
-        folder = resolved.folder(root)
-        if not folder.is_dir():
-            print(
-                f"error: {canonical}: no task folder readable locally "
-                "(archived, orphaned, or remote)",
-                file=sys.stderr,
-            )
-            return 1
+        return 1
     result = read_task_items(folder, _items_type(folder))
     for msg in result.errors:
         print(f"note: {msg}", file=sys.stderr)
@@ -353,39 +314,6 @@ def _cmd_items(args: argparse.Namespace) -> int:
         items = [it for it in items if it.priority == args.priority]
     for item in items:
         print(_format_item_line(item))
-    return 0
-
-
-def _cmd_current(args: argparse.Namespace) -> int:
-    # The pointer stores the ABSOLUTE folder path (spec 2.6), so it is
-    # self-resolving: the project root and the project-relative id both
-    # derive from the stored path. --root stays accepted but unused.
-    pointer_path = _pointer_path(args)
-    current = pointer_mod.read_current(pointer_path)
-    if current is None:
-        print("none")
-        return 0
-    folder = Path(current)
-    derived = state_ops.derive_root_and_canonical(folder)
-    if derived is None or not folder.is_dir():
-        # Stale pointer (spec 2.6): missing folder, or content that is not a
-        # derivable absolute task path -- clear and report none, no error.
-        pointer_mod.clear_current(pointer_path)
-        print("none")
-        return 0
-    derived_root, canonical = derived
-    result = validate_ref(canonical, derived_root)
-    block = read_task_block(folder) or {}
-    title = block.get("title")
-    print(
-        "  ".join(
-            [
-                canonical,
-                result.classification,
-                title if isinstance(title, str) and title else "-",
-            ]
-        )
-    )
     return 0
 
 
@@ -423,28 +351,11 @@ def _emit_work(result) -> None:
 def _cmd_work(args: argparse.Namespace) -> int:
     root = (args.root if args.root is not None else Path.cwd()).resolve()
     try:
-        result = state_ops.work(args.ref, root, _pointer_path(args))
+        result = state_ops.work(args.ref, root)
     except StateOpError as exc:
         _print_state_op_error(exc)
         return 1
     _emit_work(result)
-    return 0
-
-
-def _cmd_switch(args: argparse.Namespace) -> int:
-    root = (args.root if args.root is not None else Path.cwd()).resolve()
-    try:
-        result = state_ops.switch(args.ref, root, _pointer_path(args))
-    except StateOpError as exc:
-        _print_state_op_error(exc)
-        return 1
-    if result.previous is not None:
-        print(
-            f"note: updated previous current {result.previous.canonical} "
-            f"({result.previous.validation.classification})",
-            file=sys.stderr,
-        )
-    _emit_work(result.work)
     return 0
 
 
@@ -454,7 +365,6 @@ def _cmd_update(args: argparse.Namespace) -> int:
         result = state_ops.update(
             args.ref,
             root,
-            _pointer_path(args),
             status=args.status,
             priority=args.priority,
             description=args.description,
@@ -478,7 +388,7 @@ def _cmd_update(args: argparse.Namespace) -> int:
 def _cmd_close(args: argparse.Namespace) -> int:
     root = (args.root if args.root is not None else Path.cwd()).resolve()
     try:
-        canonical = state_ops.close(args.ref, root, _pointer_path(args))
+        canonical = state_ops.close(args.ref, root)
     except StateOpError as exc:
         _print_state_op_error(exc)
         return 1
@@ -489,7 +399,7 @@ def _cmd_close(args: argparse.Namespace) -> int:
 def _cmd_reopen(args: argparse.Namespace) -> int:
     root = (args.root if args.root is not None else Path.cwd()).resolve()
     try:
-        result = state_ops.reopen(args.ref, root, _pointer_path(args))
+        result = state_ops.reopen(args.ref, root)
     except StateOpError as exc:
         _print_state_op_error(exc)
         return 1
@@ -502,7 +412,7 @@ def _cmd_reopen(args: argparse.Namespace) -> int:
 def _cmd_archive(args: argparse.Namespace) -> int:
     root = (args.root if args.root is not None else Path.cwd()).resolve()
     try:
-        result = location_ops.archive_task(args.ref, root, _pointer_path(args))
+        result = location_ops.archive_task(args.ref, root)
     except StateOpError as exc:
         _print_state_op_error(exc)
         return 1
@@ -528,7 +438,7 @@ def _cmd_archive(args: argparse.Namespace) -> int:
 def _cmd_delete(args: argparse.Namespace) -> int:
     root = (args.root if args.root is not None else Path.cwd()).resolve()
     try:
-        canonical = location_ops.delete_task(args.ref, root, _pointer_path(args))
+        canonical = location_ops.delete_task(args.ref, root)
     except StateOpError as exc:
         _print_state_op_error(exc)
         return 1
@@ -540,7 +450,7 @@ def _cmd_move(args: argparse.Namespace) -> int:
     root = (args.root if args.root is not None else Path.cwd()).resolve()
     try:
         result = location_ops.move_task(
-            args.ref, args.dest, root, _pointer_path(args)
+            args.ref, args.dest, root
         )
     except StateOpError as exc:
         _print_state_op_error(exc)
@@ -693,14 +603,11 @@ def main(argv: list[str] | None = None) -> int:
         "items",
         help="Enumerate the task's open items (the plan.md task_items unit): "
         "one line per item -- id  state  priority  title -- sorted by "
-        "priority then block order. Ref defaults to the current task.",
+        "priority then block order.",
     )
     p_items.add_argument(
         "ref",
-        nargs="?",
-        default=None,
-        help="Task path (tmp/<stub> or dev/tasks/<stub>) or bare stub "
-        "(default: the current task).",
+        help="Task path (tmp/<stub> or dev/tasks/<stub>) or bare stub.",
     )
     p_items.add_argument(
         "--state",
@@ -717,31 +624,6 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Project root the ref is relative to (default: cwd).",
     )
-    p_items.add_argument(
-        "--pointer",
-        type=Path,
-        default=None,
-        help="Pointer file location for the current-task default (default: "
-        "the user-global pointer).",
-    )
-
-    p_current = sub.add_parser(
-        "current", help="Report the single global current task (read the pointer)."
-    )
-    p_current.add_argument(
-        "--root",
-        type=Path,
-        default=None,
-        help="Accepted for interface stability; the pointer stores an "
-        "absolute path and is self-resolving (spec 2.6).",
-    )
-    p_current.add_argument(
-        "--pointer",
-        type=Path,
-        default=None,
-        help="Pointer file location (default: the user-global pointer).",
-    )
-
     p_status = sub.add_parser(
         "status",
         help="Print the script-side substrate for the status summary: "
@@ -759,49 +641,29 @@ def main(argv: list[str] | None = None) -> int:
         help="Project root the ref is relative to (default: cwd).",
     )
 
-    def add_state_op_parser(name: str, help_text: str, *, ref_optional: bool = False):
+    def add_state_op_parser(name: str, help_text: str):
         p = sub.add_parser(name, help=help_text)
-        if ref_optional:
-            p.add_argument(
-                "ref",
-                nargs="?",
-                default=None,
-                help="Task path or bare stub (default: the current task).",
-            )
-        else:
-            p.add_argument(
-                "ref",
-                help="Task path (tmp/<stub> or dev/tasks/<stub>) or bare stub.",
-            )
+        p.add_argument(
+            "ref",
+            help="Task path (tmp/<stub> or dev/tasks/<stub>) or bare stub.",
+        )
         p.add_argument(
             "--root",
             type=Path,
             default=None,
             help="Project root the ref is relative to (default: cwd).",
         )
-        p.add_argument(
-            "--pointer",
-            type=Path,
-            default=None,
-            help="Pointer file location (default: the user-global pointer).",
-        )
         return p
 
     add_state_op_parser(
         "work",
-        "Set the task as the single global current task (auto-init when the "
-        "folder is absent; gated by validate -- errors AND warnings block).",
-    )
-    add_state_op_parser(
-        "switch",
-        "Update the current task (it becomes a plain active task), then "
-        "work the given ref.",
+        "Prepare the task for work (auto-init when the folder is absent; "
+        "gated by validate -- errors AND warnings block).",
     )
     p_update = add_state_op_parser(
         "update",
         "Upsert + refresh: init when absent, apply task.yaml field edits, "
         "append the dated log.md entry, re-validate.",
-        ref_optional=True,
     )
     p_update.add_argument(
         "--status", default=None, help="Set task.status (type vocabulary)."
@@ -853,8 +715,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     add_state_op_parser(
         "close",
-        "Mark an active task closed; keep the folder; clear the pointer if "
-        "it names this task.",
+        "Mark an active task closed; keep the folder.",
     )
     add_state_op_parser(
         "reopen",
@@ -897,14 +758,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_show(args)
     if args.verb == "items":
         return _cmd_items(args)
-    if args.verb == "current":
-        return _cmd_current(args)
     if args.verb == "status":
         return _cmd_status(args)
     if args.verb == "work":
         return _cmd_work(args)
-    if args.verb == "switch":
-        return _cmd_switch(args)
     if args.verb == "update":
         return _cmd_update(args)
     if args.verb == "close":

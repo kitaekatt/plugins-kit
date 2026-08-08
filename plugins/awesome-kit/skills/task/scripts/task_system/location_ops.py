@@ -3,10 +3,10 @@
 
 The destructive + location verbs live in their own module (CCP): they change
 for closure-policy / location reasons (spec 2.5 closure_policy, 7.4
-locations), not for the status/pointer reasons state_ops changes for. They
-reuse state_ops' shared internals (resolution, task.yaml read-modify-write,
-pointer clearing) and its StateOpError -- one error type across all verbs, so
-the CLI's error rendering is uniform.
+locations), not for the status reasons state_ops changes for. They reuse
+state_ops' shared internals (resolution, task.yaml read-modify-write) and its
+StateOpError -- one error type across all verbs, so the CLI's error rendering
+is uniform.
 
 Readings chosen in Step 5 (flagged in the implementation report):
 
@@ -44,10 +44,10 @@ Readings chosen in Step 5 (flagged in the implementation report):
   parking spot (a previously-archived same-stub task) refuses -- remove the
   old copy first. validate reads a parked folder as ``archived`` (not
   orphaned) and reopen restores it to ``tmp/<stub>``.
-- **delete skips the intermediate tmp status write.** For a tmp folder,
+ - **delete skips the intermediate tmp status write.** For a tmp folder,
   archive-then-remove would write ``status: archived`` into a folder removed
   moments later -- an unobservable intermediate state. delete goes straight
-  to removal; the net post-state (folder gone, pointer cleared) is identical.
+  to removal; the net post-state is the folder being gone.
 - **move takes dest-root-only** (``tmp`` or ``dev/tasks``); the stub is
   preserved. A full ``<dest>/<stub2>`` rename-move is out of scope (spec 7.1
   names only the dest; renaming would be a second identity change).
@@ -94,11 +94,9 @@ import yaml
 
 from skills_kit_lib.document_walker import YAML_BLOCK_RE
 
-from . import pointer as pointer_mod
 from . import resolve
 from .state_ops import (
     StateOpError,
-    _clear_pointer_if_names,
     _read_task_yaml,
     _resolve,
     _write_task_yaml,
@@ -308,9 +306,7 @@ def _append_archive_log_entry(folder: Path, detail: str) -> None:
         fh.write(f"- {stamp}: archive: {detail}\n")
 
 
-def archive_task(
-    ref: str, project_root: Path, pointer_path: Path
-) -> ArchiveResult:
+def archive_task(ref: str, project_root: Path) -> ArchiveResult:
     """``archive <ref>`` (spec 7.1): pre folder exists + stored status
     active. Then per closure policy (spec 2.5, revised): tmp ->
     ``status: archived`` and park the folder at ``tmp/archived-tasks/<stub>``;
@@ -318,8 +314,7 @@ def archive_task(
     commit it, remove the folder, commit the removal (version control is the
     record; two pathspec-limited commits); non-tmp outside any git repo ->
     record the final state and KEEP the folder (``vcs_pending``: the agent
-    submits it with the workspace's VCS, then runs delete). Clear the
-    pointer iff it names this task."""
+    submits it with the workspace's VCS, then runs delete)."""
     resolved, folder, data = _archive_preflight(
         ref,
         project_root,
@@ -389,7 +384,6 @@ def archive_task(
                 "version control is the record)",
             )
             removed = True
-    _clear_pointer_if_names(pointer_path, folder_resolved)
     return ArchiveResult(
         canonical=resolved.canonical,
         folder_removed=removed,
@@ -399,13 +393,12 @@ def archive_task(
     )
 
 
-def delete_task(ref: str, project_root: Path, pointer_path: Path) -> str:
+def delete_task(ref: str, project_root: Path) -> str:
     """``delete <ref>`` (spec 7.1): accepts stored status active OR archived
     (a still-present archived folder is what delete finishes off), plus the
     commit-first guard where git can verify it (module docstring -- delete
     never auto-commits; outside a git repo the agent owns VCS state), then
-    remove the folder even when tmp (unconditional). Clear the pointer iff
-    it names this task. Returns the canonical id."""
+    remove the folder even when tmp (unconditional). Returns the canonical id."""
     resolved, folder, _ = _archive_preflight(
         ref,
         project_root,
@@ -413,9 +406,7 @@ def delete_task(ref: str, project_root: Path, pointer_path: Path) -> str:
         allowed_statuses=("active", "archived"),
         require_committed=True,
     )
-    folder_resolved = folder.resolve()
     shutil.rmtree(folder)
-    _clear_pointer_if_names(pointer_path, folder_resolved)
     return resolved.canonical
 
 
@@ -523,17 +514,15 @@ def move_task(
     ref: str,
     dest: str,
     project_root: Path,
-    pointer_path: Path,
     *,
     ref_host: str | None = None,
     local_host: str | None = None,
 ) -> MoveResult:
     """``move <ref> <dest>`` (spec 7.1/7.2): pre the folder exists LOCALLY
     (not remote, not absent) and ``<dest>/<stub>`` does not already exist.
-    Relocate the folder, rewrite every task_list reference to the old path
-    (project-relative form), and update the pointer iff it named the old
-    path. ``dest`` is a location root (``tmp`` or ``dev/tasks``); the stub
-    is preserved."""
+    Relocate the folder and rewrite every task_list reference to the old path
+    (project-relative form). ``dest`` is a location root (``tmp`` or
+    ``dev/tasks``); the stub is preserved."""
     if dest not in resolve.KNOWN_ROOTS:
         raise StateOpError(
             f"unknown dest {dest!r} (expected one of: "
@@ -566,17 +555,12 @@ def move_task(
             f"destination {new_canonical} already exists -- move refuses"
         )
 
-    old_folder_resolved = old_folder.resolve()
     new_folder.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(old_folder), str(new_folder))
 
     rewritten = _rewrite_references(
         project_root, resolved.canonical, new_canonical
     )
-
-    stored = pointer_mod.read_current(pointer_path)
-    if stored is not None and Path(stored) == old_folder_resolved:
-        pointer_mod.write_current(pointer_path, new_folder)
 
     return MoveResult(
         old_canonical=resolved.canonical,

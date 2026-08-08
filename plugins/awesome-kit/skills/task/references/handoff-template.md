@@ -538,8 +538,7 @@ CWD: <project root directory>
 Continue: /task work <CWD-relative task-folder path>
 ```
 
-The user copies the `Continue:` line into a new session; `/task work` makes
-the folder the current task and loads its working context (better than a bare
+The user copies the `Continue:` line into a new session; `/task work <CWD-relative task-folder path>` works the explicitly named folder and loads its working context (better than a bare
 `Read <folder>/CLAUDE.md`, which does neither). The `CWD:` line names the
 directory that line is relative to; the task-folder path is CWD-relative, never
 absolute, so the baton works across machines.

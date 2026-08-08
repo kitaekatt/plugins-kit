@@ -630,15 +630,12 @@ class TestCLI:
         # at write time.
         folder = make_task(tmp_path, "tmp/foo")
         (folder / "CLAUDE.md").write_text(_filler(401), encoding="utf-8")
-        pointer = tmp_path / "pointer"
         proc = run_cli(
             [
                 "update",
                 "tmp/foo",
                 "--root",
                 str(tmp_path),
-                "--pointer",
-                str(pointer),
             ],
             tmp_path,
         )

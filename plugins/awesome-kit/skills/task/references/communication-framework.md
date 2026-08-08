@@ -69,7 +69,7 @@ CWD: <project root directory>
 Continue: /task work <CWD-relative task-folder path>
 ```
 
-The user copies the `Continue:` line, opens a new session, and pastes it as the first user message; `/task work` makes the folder the current task and loads its context. The `CWD:` line names the directory the path is relative to (paths stay CWD-relative, never absolute, so the baton works across machines). Without the baton, the user has to compose the instruction themselves.
+The user copies the `Continue:` line, opens a new session, and pastes it as the first user message; `/task work <CWD-relative task-folder path>` works the explicitly named folder and loads its context. The `CWD:` line names the directory the path is relative to (paths stay CWD-relative, never absolute, so the baton works across machines). Without the baton, the user has to compose the instruction themselves.
 
 ### provenance triad
 

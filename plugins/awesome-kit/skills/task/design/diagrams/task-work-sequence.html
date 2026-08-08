@@ -443,7 +443,7 @@
         <div class="pulse-dot"></div>
         <h1>work Operation Sequence</h1>
       </div>
-      <p class="subtitle">work &lt;ref&gt;: resolve by path, auto-init if absent, validate gate, set the global current pointer, dispatch</p>
+      <p class="subtitle">work &lt;ref&gt;: resolve by path, classify ref, auto-init if safe, validate gate, emit instructions</p>
     </div>
 
     <!-- Main Diagram -->
@@ -472,21 +472,20 @@
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Time Segments -->
-        <rect x="48" y="150" width="664" height="200" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="62" y="168" class="t-dim" font-size="9" font-weight="600">Resolve + auto-init</text>
+        <rect x="48" y="150" width="664" height="240" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="62" y="168" class="t-dim" font-size="9" font-weight="600">Resolve + classify + init</text>
 
-        <rect x="48" y="358" width="664" height="142" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="62" y="376" class="t-dim" font-size="9" font-weight="600">Validate gate</text>
+        <rect x="48" y="398" width="664" height="142" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="62" y="416" class="t-dim" font-size="9" font-weight="600">Validate gate</text>
 
-        <rect x="48" y="508" width="664" height="182" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="62" y="526" class="t-dim" font-size="9" font-weight="600">Set current + dispatch</text>
+        <rect x="48" y="548" width="664" height="142" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="62" y="566" class="t-dim" font-size="9" font-weight="600">Emit instructions + agent action</text>
 
         <!-- Lifelines -->
         <path d="M 62 142 L 62 695" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
         <path d="M 170 142 L 170 695" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
         <path d="M 278 142 L 278 695" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
         <path d="M 386 142 L 386 695" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 494 142 L 494 695" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
         <path d="M 602 142 L 602 695" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
 
         <!-- Messages -->
@@ -498,37 +497,37 @@
         <rect x="181.6" y="198" width="84.8" height="16" rx="3" class="c-mask"/>
         <text x="224" y="208" class="t-backend" font-size="9" text-anchor="middle">resolve (path)</text>
 
-        <path d="M 271 256 L 177 256" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <rect x="199.8" y="236" width="48.4" height="16" rx="3" class="c-mask"/>
-        <text x="224" y="246" class="t-muted" font-size="9" text-anchor="middle">absent?</text>
+        <path d="M 177 256 L 379 256" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <rect x="252.8" y="236" width="50.4" height="16" rx="3" class="c-mask"/>
+        <text x="278" y="246" class="t-security" font-size="9" text-anchor="middle">classify ref</text>
 
-        <path d="M 177 294 L 271 294" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <rect x="176.4" y="274" width="95.2" height="16" rx="3" class="c-mask"/>
-        <text x="224" y="284" class="t-backend" font-size="9" text-anchor="middle">init (if absent)</text>
+        <path d="M 379 294 L 177 294" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <rect x="188" y="274" width="180" height="16" rx="3" class="c-mask"/>
+        <text x="278" y="284" class="t-muted" font-size="9" text-anchor="middle">remote -&gt; reject / absent -&gt; init</text>
 
-        <path d="M 271 332 L 177 332" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <rect x="205" y="312" width="38" height="16" rx="3" class="c-mask"/>
-        <text x="224" y="322" class="t-muted" font-size="9" text-anchor="middle">valid</text>
+        <path d="M 177 332 L 271 332" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <rect x="176.4" y="312" width="160" height="16" rx="3" class="c-mask"/>
+        <text x="256" y="322" class="t-backend" font-size="9" text-anchor="middle">init (if non-remote absent)</text>
 
-        <path d="M 177 370 L 379 370" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <rect x="251.2" y="350" width="53.6" height="16" rx="3" class="c-mask"/>
-        <text x="278" y="360" class="t-security" font-size="9" text-anchor="middle">validate</text>
+        <path d="M 271 370 L 177 370" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <rect x="194.4" y="350" width="70.4" height="16" rx="3" class="c-mask"/>
+        <text x="229.6" y="360" class="t-muted" font-size="9" text-anchor="middle">initialized / existing</text>
 
-        <path d="M 379 408 L 285 408" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <rect x="302.6" y="388" width="58.800000000000004" height="16" rx="3" class="c-mask"/>
-        <text x="332" y="398" class="t-backend" font-size="9" text-anchor="middle">read yaml</text>
+        <path d="M 177 408 L 379 408" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <rect x="251.2" y="388" width="53.6" height="16" rx="3" class="c-mask"/>
+        <text x="278" y="398" class="t-security" font-size="9" text-anchor="middle">validate</text>
 
-        <path d="M 285 446 L 379 446" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <rect x="305.2" y="426" width="53.6" height="16" rx="3" class="c-mask"/>
-        <text x="332" y="436" class="t-muted" font-size="9" text-anchor="middle">classify</text>
+        <path d="M 379 446 L 285 446" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <rect x="302.6" y="426" width="58.800000000000004" height="16" rx="3" class="c-mask"/>
+        <text x="332" y="436" class="t-backend" font-size="9" text-anchor="middle">read yaml</text>
 
-        <path d="M 379 484 L 177 484" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <rect x="240.8" y="464" width="74.4" height="16" rx="3" class="c-mask"/>
-        <text x="278" y="474" class="t-security" font-size="9" text-anchor="middle">pass / BLOCK</text>
+        <path d="M 285 484 L 379 484" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <rect x="305.2" y="464" width="53.6" height="16" rx="3" class="c-mask"/>
+        <text x="332" y="474" class="t-muted" font-size="9" text-anchor="middle">classify</text>
 
-        <path d="M 177 522 L 487 522" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <rect x="297.4" y="502" width="69.2" height="16" rx="3" class="c-mask"/>
-        <text x="332" y="512" class="t-backend" font-size="9" text-anchor="middle">set current</text>
+        <path d="M 379 522 L 177 522" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <rect x="240.8" y="502" width="74.4" height="16" rx="3" class="c-mask"/>
+        <text x="278" y="512" class="t-security" font-size="9" text-anchor="middle">pass / BLOCK</text>
 
         <path d="M 177 560 L 271 560" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <rect x="192" y="540" width="64" height="16" rx="3" class="c-mask"/>
@@ -540,23 +539,21 @@
 
         <path d="M 177 636 L 595 636" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <rect x="359.2" y="616" width="53.6" height="16" rx="3" class="c-mask"/>
-        <text x="386" y="626" class="t-backend" font-size="9" text-anchor="middle">dispatch</text>
+        <text x="386" y="626" class="t-backend" font-size="9" text-anchor="middle">emit directive</text>
 
         <path d="M 595 674 L 69 674" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <rect x="284.4" y="654" width="95.2" height="16" rx="3" class="c-mask"/>
-        <text x="332" y="664" class="t-muted" font-size="9" text-anchor="middle">working / result</text>
+        <text x="332" y="664" class="t-muted" font-size="9" text-anchor="middle">agent acts / result</text>
 
         <!-- Activations -->
         <rect x="165" y="200" width="10" height="460" rx="3" class="c-mask"/>
         <rect x="165" y="200" width="10" height="460" rx="3" class="c-backend" stroke-width="1"/>
-        <rect x="273" y="213" width="10" height="127" rx="3" class="c-mask"/>
-        <rect x="273" y="213" width="10" height="127" rx="3" class="c-database" stroke-width="1"/>
-        <rect x="381" y="365" width="10" height="125" rx="3" class="c-mask"/>
-        <rect x="381" y="365" width="10" height="125" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="273" y="403" width="10" height="49" rx="3" class="c-mask"/>
-        <rect x="273" y="403" width="10" height="49" rx="3" class="c-database" stroke-width="1"/>
-        <rect x="489" y="517" width="10" height="31" rx="3" class="c-mask"/>
-        <rect x="489" y="517" width="10" height="31" rx="3" class="c-cloud" stroke-width="1"/>
+        <rect x="273" y="213" width="10" height="162" rx="3" class="c-mask"/>
+        <rect x="273" y="213" width="10" height="162" rx="3" class="c-database" stroke-width="1"/>
+        <rect x="381" y="253" width="10" height="275" rx="3" class="c-mask"/>
+        <rect x="381" y="253" width="10" height="275" rx="3" class="c-security" stroke-width="1"/>
+        <rect x="273" y="441" width="10" height="49" rx="3" class="c-mask"/>
+        <rect x="273" y="441" width="10" height="49" rx="3" class="c-database" stroke-width="1"/>
         <rect x="273" y="555" width="10" height="49" rx="3" class="c-mask"/>
         <rect x="273" y="555" width="10" height="49" rx="3" class="c-database" stroke-width="1"/>
         <rect x="597" y="631" width="10" height="57" rx="3" class="c-mask"/>
@@ -583,11 +580,6 @@
         <text x="386" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">validate</text>
         <text x="386" y="111" class="t-muted" font-size="7" text-anchor="middle">the gate</text>
 
-        <rect x="451" y="72" width="86" height="54" rx="6" class="c-mask"/>
-        <rect x="451" y="72" width="86" height="54" rx="6" class="c-cloud" stroke-width="1.5"/>
-        <text x="494" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">current</text>
-        <text x="494" y="111" class="t-muted" font-size="7" text-anchor="middle">one global pointer</text>
-
         <rect x="559" y="72" width="86" height="54" rx="6" class="c-mask"/>
         <rect x="559" y="72" width="86" height="54" rx="6" class="c-frontend" stroke-width="1.5"/>
         <text x="602" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">sub-agent</text>
@@ -611,12 +603,12 @@
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>Resolve + promote</h3>
+          <h3>Resolve + classify</h3>
         </div>
         <ul>
           <li>&bull; work resolves the reference by path (the id)</li>
-          <li>&bull; If no folder exists (Abstract), work auto-inits one -- promotion</li>
-          <li>&bull; init always yields a valid task; it cannot produce an Invalid one</li>
+          <li>&bull; validate classifies the ref before local reads or initialization</li>
+          <li>&bull; A remote ref is rejected before auto-init; only a non-remote absent ref is promoted</li>
         </ul>
       </div>
 
@@ -626,7 +618,8 @@
           <h3>The gate is mandatory</h3>
         </div>
         <ul>
-          <li>&bull; validate classifies via task.yaml: Active / Invalid / Remote</li>
+          <li>&bull; validate classifies the ref first; a remote ref is rejected before local reads</li>
+          <li>&bull; After non-remote init or existing-folder resolution, validate reads task.yaml</li>
           <li>&bull; Both errors AND warnings block work -- fix forward, no recovery</li>
           <li>&bull; A Remote task (tmp + host mismatch) cannot be worked locally</li>
         </ul>
@@ -635,11 +628,11 @@
       <div class="card">
         <div class="card-header">
           <div class="card-dot amber"></div>
-          <h3>Activate + dispatch</h3>
+          <h3>Emit instructions + agent action</h3>
         </div>
         <ul>
-          <li>&bull; Only after passing does work set the single global current pointer</li>
-          <li>&bull; work loads the task&#39;s skills_to_invoke and dispatches to agent_hint</li>
+          <li>&bull; Only after passing does work emit the task&#39;s initialization instructions</li>
+          <li>&bull; The CLI emits Skill(...) lines, agent_hint, and a dispatch directive; the agent invokes and dispatches</li>
           <li>&bull; The self-documenting task carries its own context to the sub-agent</li>
         </ul>
       </div>

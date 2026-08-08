@@ -153,9 +153,6 @@
         <line x1="280" y1="460" x2="428" y2="460" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
         <text x="300" y="452" class="t-backend" font-size="8">resolves to 0..1</text>
         <text x="300" y="474" class="t-muted" font-size="7.5">(by path = id)</text>
-        <!-- current pointer -> Task Folder  (names 0..1, one global) -->
-        <line x1="555" y1="226" x2="558" y2="358" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <text x="564" y="300" class="t-security" font-size="8">names 0..1</text>
         <!-- task.yaml -> Task Type  (declares 1) -->
         <line x1="672" y1="481" x2="828" y2="462" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <text x="700" y="463" class="t-muted" font-size="8">declares 1 type</text>
@@ -187,12 +184,6 @@
         <text x="175" y="461" class="t-muted" font-size="8" text-anchor="middle">{ path, host? }</text>
         <text x="175" y="476" class="t-muted" font-size="7.5" text-anchor="middle">no metadata &mdash; just a pointer</text>
         <text x="175" y="492" class="t-messagebus" font-size="7.5" text-anchor="middle">may appear in many docs</text>
-
-        <!-- current pointer -->
-        <rect x="445" y="160" width="220" height="66" rx="7" class="c-mask"/><rect x="445" y="160" width="220" height="66" rx="7" class="c-security" stroke-width="1.5"/>
-        <text x="555" y="185" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">current pointer</text>
-        <text x="555" y="202" class="t-muted" font-size="8" text-anchor="middle">one, global</text>
-        <text x="555" y="215" class="t-muted" font-size="7.5" text-anchor="middle">set by work / switch; read by current</text>
 
         <!-- other task folders -->
         <rect x="830" y="172" width="260" height="90" rx="7" class="c-mask"/><rect x="830" y="172" width="260" height="90" rx="7" class="c-frontend" stroke-width="1.3"/>
@@ -258,7 +249,6 @@
         <ul>
           <li>&bull; Task Folder id = its path; it holds task.yaml, the single source of truth.</li>
           <li>&bull; task.yaml declares exactly 1 Task Type and lists depends_on / blocked_by as reference paths.</li>
-          <li>&bull; The one global current pointer names 0..1 folder.</li>
           <li>&bull; A folder resides in exactly one location (tmp or dev/tasks).</li>
         </ul>
       </div>

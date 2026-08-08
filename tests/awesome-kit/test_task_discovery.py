@@ -4,14 +4,13 @@ Covers the spec section 8 discovery algorithm per scope (project / user /
 skill / file), folder-vs-reference candidate union, dedupe by canonical path,
 remote opacity, the absent-folder tri-state projections (orphaned /
 archived), status/priority filters, malformed-block and unreadable-file
-skip-with-note behavior, the spec 2.6 ``current`` pointer (read / write /
-clear / stale handling), and the CLI contracts for ``list`` / ``show`` /
-``current`` / ``status``.
+skip-with-note behavior, and the CLI contracts for ``list`` / ``show`` /
+``status``.
 
 All fixtures build under pytest tmp_path -- the real repo's tmp/, dev/, and
-~/.claude are never touched (the pointer path is always injected). Host
-detection is injected (local_host=LOCAL) for direct discover() calls; CLI
-tests use a remote host name no real machine will have.
+~/.claude are never touched. Host detection is injected (local_host=LOCAL)
+for direct discover() calls; CLI tests use a remote host name no real machine
+will have.
 """
 
 import os
@@ -24,7 +23,6 @@ import yaml
 
 from bootstrap_guard import _REEXEC_GUARD_ENV
 from task_system.discovery import DiscoveryError, discover
-from task_system.pointer import clear_current, read_current, write_current
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TASK_CLI = (
@@ -455,39 +453,6 @@ class TestSkipWithNote:
             locked.chmod(0o644)
 
 
-class TestPointer:
-    def test_read_absent_is_none(self, tmp_path):
-        assert read_current(tmp_path / "current") is None
-
-    def test_write_read_roundtrip_creates_parents(self, tmp_path):
-        # The pointer stores the ABSOLUTE folder path (spec 2.6), resolved
-        # at write time -- the pointer file is user-global, so a relative
-        # path would be ambiguous across projects.
-        pointer = tmp_path / "deep" / "dir" / "current"
-        folder = tmp_path / "tmp" / "foo"
-        write_current(pointer, folder)
-        stored = str(folder.resolve())
-        assert read_current(pointer) == stored
-        assert pointer.read_text(encoding="utf-8") == stored + "\n"
-
-    def test_clear_makes_none(self, tmp_path):
-        pointer = tmp_path / "current"
-        write_current(pointer, tmp_path / "tmp" / "foo")
-        clear_current(pointer)
-        assert read_current(pointer) is None
-        assert pointer.exists()  # blanked, not removed
-
-    def test_clear_absent_is_a_noop(self, tmp_path):
-        pointer = tmp_path / "current"
-        clear_current(pointer)
-        assert not pointer.exists()
-
-    def test_blank_file_is_none(self, tmp_path):
-        pointer = tmp_path / "current"
-        pointer.write_text("   \n", encoding="utf-8")
-        assert read_current(pointer) is None
-
-
 def run_cli(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     """Run task.py in a subprocess, hermetically (same pattern as Steps 1-2).
 
@@ -656,69 +621,14 @@ class TestShowCLI:
         assert "task.yaml" in proc.stderr
 
 
-class TestCurrentCLI:
-    def test_no_pointer_reports_none(self, tmp_path):
-        pointer = tmp_path / "pointer" / "current"
-        proc = run_cli(
-            ["current", "--root", str(tmp_path), "--pointer", str(pointer)],
-            tmp_path,
-        )
-        assert proc.returncode == 0, proc.stderr
-        assert proc.stdout.strip() == "none"
+class TestRemovedVerbsCLI:
+    def test_current_is_not_a_valid_verb(self, tmp_path):
+        proc = run_cli(["current", "--root", str(tmp_path)], tmp_path)
+        assert proc.returncode != 0
 
-    def test_live_pointer_prints_path_and_summary(self, tmp_path):
-        folder = make_task(tmp_path, "tmp/foo", title="Fix the run")
-        pointer = tmp_path / "pointer" / "current"
-        write_current(pointer, folder)
-        proc = run_cli(
-            ["current", "--root", str(tmp_path), "--pointer", str(pointer)],
-            tmp_path,
-        )
-        assert proc.returncode == 0, proc.stderr
-        # The project-relative id is derived from the stored absolute path.
-        assert proc.stdout.strip() == "tmp/foo  active  Fix the run"
-        # A live pointer is left alone.
-        assert read_current(pointer) == str(folder.resolve())
-
-    def test_stale_pointer_cleared_and_reports_none(self, tmp_path):
-        pointer = tmp_path / "pointer" / "current"
-        write_current(pointer, tmp_path / "tmp" / "gone")  # absolute, missing
-        proc = run_cli(
-            ["current", "--root", str(tmp_path), "--pointer", str(pointer)],
-            tmp_path,
-        )
-        assert proc.returncode == 0, proc.stderr
-        assert proc.stdout.strip() == "none"
-        assert read_current(pointer) is None  # cleared, per spec 2.6
-
-    def test_non_absolute_pointer_content_treated_as_stale(self, tmp_path):
-        # Stored content must be an absolute task-folder path; anything else
-        # (a relative or non-task path written by hand) is stale.
-        pointer = tmp_path / "pointer" / "current"
-        pointer.parent.mkdir(parents=True)
-        pointer.write_text("elsewhere/not-a-task-path\n", encoding="utf-8")
-        proc = run_cli(
-            ["current", "--root", str(tmp_path), "--pointer", str(pointer)],
-            tmp_path,
-        )
-        assert proc.returncode == 0, proc.stderr
-        assert proc.stdout.strip() == "none"
-        assert read_current(pointer) is None
-
-    def test_absolute_non_task_pointer_content_treated_as_stale(self, tmp_path):
-        # An absolute path that exists but is not a tmp/<stub> or
-        # dev/tasks/<stub> shape cannot name a task -- stale.
-        not_a_task = tmp_path / "docs" / "thing"
-        not_a_task.mkdir(parents=True)
-        pointer = tmp_path / "pointer" / "current"
-        write_current(pointer, not_a_task)
-        proc = run_cli(
-            ["current", "--root", str(tmp_path), "--pointer", str(pointer)],
-            tmp_path,
-        )
-        assert proc.returncode == 0, proc.stderr
-        assert proc.stdout.strip() == "none"
-        assert read_current(pointer) is None
+    def test_switch_is_not_a_valid_verb(self, tmp_path):
+        proc = run_cli(["switch", "tmp/foo", "--root", str(tmp_path)], tmp_path)
+        assert proc.returncode != 0
 
 
 class TestStatusCLI:

@@ -5,13 +5,13 @@ Covers the TASK_ITEMS_SCHEMA acceptance/rejection floor, read_task_items
 checks, lenient projection), sort_items ordering, the CLAUDE.md
 stale-priority-reference heuristic, the validate.py integration (missing
 block = pre-contract warning; block findings = errors; both gate work), the
-``items`` CLI verb (line format, filters, current-task default, exit codes),
+``items`` CLI verb (line format, filters, required ref, exit codes),
 the ``status`` substrate's items section, and the init scaffold's empty
 block. The homeassistant-shaped fixture is the design doc's section 10 test
 case reduced to three items.
 
-All fixtures build under pytest tmp_path with injected pointer paths -- the
-real repo's tmp/, dev/, and ~/.claude are never touched.
+All fixtures build under pytest tmp_path -- the real repo's tmp/, dev/, and
+~/.claude are never touched.
 """
 
 import os
@@ -315,9 +315,8 @@ class TestValidateIntegration:
 
     def test_missing_block_warning_gates_work(self, tmp_path):
         make_task(tmp_path, "tmp/a", plan_md="# Plan\n")
-        ptr = tmp_path / "pointer" / "current"
         with pytest.raises(StateOpError) as exc_info:
-            state_ops.work("tmp/a", tmp_path, ptr)
+            state_ops.work("tmp/a", tmp_path)
         assert any("no task_items block" in w for w in exc_info.value.warnings)
 
 
@@ -379,19 +378,10 @@ class TestItemsCli:
         assert proc.stdout == ""
         assert "note: no task_items block" in proc.stderr
 
-    def test_ref_defaults_to_current(self, tmp_path):
-        make_task(tmp_path, "tmp/a", plan_md=f"# Plan\n\n{ITEMS_BLOCK}")
-        ptr = tmp_path / "pointer" / "current"
-        state_ops.work("tmp/a", tmp_path, ptr)
-        proc = run_cli(["items", "--pointer", str(ptr)], tmp_path)
-        assert proc.returncode == 0, proc.stderr
-        assert len(proc.stdout.splitlines()) == 3
-
-    def test_nothing_current_errors(self, tmp_path):
-        ptr = tmp_path / "pointer" / "current"
-        proc = run_cli(["items", "--pointer", str(ptr)], tmp_path)
-        assert proc.returncode == 1
-        assert "nothing is current" in proc.stderr
+    def test_no_ref_is_rejected_by_argparse(self, tmp_path):
+        proc = run_cli(["items", "--root", str(tmp_path)], tmp_path)
+        assert proc.returncode != 0
+        assert "required" in proc.stderr
 
     def test_unreadable_folder_errors(self, tmp_path):
         proc = run_cli(
