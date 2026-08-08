@@ -207,6 +207,39 @@ MD_DOMAIN_GOTCHAS = """
 
 
 # ===========================================================================
+# GENERATED ARTIFACTS (shared by BOTH skills).
+# ---------------------------------------------------------------------------
+# prepare_review detects a machine-generated file from its CONTENT (a banner in
+# the leading lines -- never size alone) and excludes it from the diff chunks
+# entirely, surfacing it under `bundle.generated_files`. Reviewing generator
+# OUTPUT is waste: nobody wrote a line of it, and the only meaningful review
+# target is the GENERATOR, which is reviewed separately as ordinary source. The
+# skill's job is to say so honestly -- an excluded file is NOT a pass.
+# ===========================================================================
+
+# Inserted into step 9's action, after the md-domain report region.
+GENERATED_REPORT = """\
+            - Generated artifacts section: if `bundle.generated_files` is non-empty, render a distinct
+              `## Generated artifacts (not reviewed)` section -- kept SEPARATE from the code-review
+              issues, the md-domain findings, and the mechanical-checks section. One line per entry:
+              its path (`identifier`), its `size_bytes`, and the `generated_signature` that matched.
+              Then state once that these files were NOT reviewed because they are machine-generated,
+              and that review of generated output belongs on the GENERATOR -- reviewed as ordinary
+              source when this change contains it, and otherwise not covered by this review. NEVER
+              call a generated file DIFF-CLEAN, never fold it into the clean count, and never let it
+              satisfy a submit gate. If the author or user asks for these files to be reviewed, re-run
+              prepare with `--review-generated` and review them normally instead of rendering this
+              section."""
+
+# Appended to both gotcha blocks (plain text -- no f-string braces).
+GENERATED_GOTCHAS = """
+        - A generated file is NEVER a pass. `bundle.generated_files` means "not reviewed", exactly like a `NOT-AUDITED` verdict or the `## Mechanical checks (audit skipped)` section: render it as its own honest line, never inside the clean count, never as DIFF-CLEAN, and never as satisfying a submit gate.
+        - Detection is CONTENT-first, decided by prepare_review, and the skill never re-judges it. Size alone excludes nothing -- a large hand-written file is chunked and fully reviewed as always. Conversely a small generated file is still excluded, because the argument is authorship, not cost.
+        - Do not review a generated artifact by reading it. If its content looks wrong, the finding belongs on the generator, or on the decision to check the artifact in -- say that, and name the generator when this change contains one.
+        - `--review-generated` is the override and it is the AUTHOR's call, never an inference. Pass it only when the user or the author explicitly asks for the generated files to be reviewed."""
+
+
+# ===========================================================================
 # DECLINED-FINDINGS LEDGER (deliverable of this phase, shared by BOTH skills).
 # ---------------------------------------------------------------------------
 # Reviews re-run against the same change re-surface findings the author already
@@ -409,6 +442,7 @@ technique_skill:
               section (confirmed and unconfirmed gates both rendered).
 @STEP9_TAIL@
 @MD_DOMAIN_REPORT@
+@GENERATED_REPORT@
 @LEDGER_STEP9@
             Group the review body by file.
 @STEP10@@LEDGER_RECORD_STEP@      checklist:
@@ -641,7 +675,7 @@ __LAUNCH_EMIT__
           tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` when md-domain is available, per the claim probe -- both flags, never just the first)"
           expected: |
-            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
+            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-generated -- generated_files (each entry carries identifier, local, generated_signature and size_bytes; such files are excluded from diff_chunks and changed_files, and `--review-generated` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
           on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
     "__CLAIM_PROBE__", CLAIM_PROBE
 ).replace(
@@ -657,7 +691,7 @@ __LAUNCH_EMIT__
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<CL>  (append `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` when md-domain is available, per the claim probe -- both flags, never just the first)"
           expected: |
-            JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
+            JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-generated -- generated_files (each entry carries identifier, local, generated_signature and size_bytes; such files are excluded from diff_chunks and changed_files, and `--review-generated` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
             Surface the stderr message to the user and stop. No retry.
             Launch note: ALWAYS invoke with an explicit `python3` interpreter (as shown in `tool:`), never as a bare path. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any python3 launcher is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
@@ -743,6 +777,7 @@ GIT_CHECKLIST = f"""\
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
         - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
+        - Generated artifacts (bundle.generated_files) reported via the `## Generated artifacts (not reviewed)` section, naming each file's matched signature, never as an audit or DIFF-CLEAN; review of generated output belongs on the generator
         - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-domain findings never collapsed
         - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merge conflicts section prepended when bundle.merge_conflicts is non-empty; separate `## md-domain (subject-lens) findings` section when the md-domain pass ran)
         - Newly declined findings recorded to the ledger via `prepare_review.py --ledger-record` (skipped when nothing was declined)"""
@@ -760,6 +795,7 @@ P4_CHECKLIST = f"""\
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
         - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
+        - Generated artifacts (bundle.generated_files) reported via the `## Generated artifacts (not reviewed)` section, naming each file's matched signature, never as an audit or DIFF-CLEAN; review of generated output belongs on the generator
         - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-domain findings never collapsed
         - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merges section prepended when bundle.unresolved is non-empty; separate `## md-domain (subject-lens) findings` section when the md-domain pass ran)
         - Auto-shelf cleanup invoked when bundle.auto_shelved is true (`prepare_review.py --cleanup <bundle_dir>`)
@@ -779,7 +815,7 @@ GIT_GOTCHAS = f"""\
         - Unconfirmed submit gates are NOT errors. Render them with {CRS} so they're visible, but do not block the review or refuse to render the rest.
         - Merge conflicts are NOT findings -- they do NOT go through reviewer subagents. They are detected deterministically by prepare_review.py (`git ls-files -u`). The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the merge-conflicts section is a separate informational warning to the user.
         - Auto-detect is convenient, not authoritative. Always restate the chosen range in the step-1 narration line; a user reviewing the wrong branch will catch it there before subagents spawn.
-        - Detached HEAD with no main/master fallback is a real failure mode; surface the error and ask for an explicit range. Do not guess at a "probably right" base.""" + MD_DOMAIN_GOTCHAS + LEDGER_GOTCHAS
+        - Detached HEAD with no main/master fallback is a real failure mode; surface the error and ask for an explicit range. Do not guess at a "probably right" base.""" + MD_DOMAIN_GOTCHAS + GENERATED_GOTCHAS + LEDGER_GOTCHAS
 
 P4_GOTCHAS = f"""\
         - Always quote the exact CLAUDE.md rule text when flagging a claude_md issue. If you cannot quote it verbatim, do not flag it.
@@ -795,7 +831,7 @@ P4_GOTCHAS = f"""\
         - Unconfirmed submit gates are NOT errors. Render them with {CRS} so they're visible, but do not block the review or refuse to render the rest.
         - Unresolved merges are NOT findings -- they do NOT go through reviewer or validator subagents. They are detected deterministically by prepare_review.py (`p4 resolve -n -c <CL>`) and rendered verbatim in a separate output section. The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the unresolved section is a separate informational warning to the user.
         - Auto-shelf cleanup (step 10) must run whenever `bundle.auto_shelved` is true, no matter what happened in steps 3-9. The cleanup script is deterministic and safe (it only deletes the shelf when the live fingerprint exactly matches what we recorded), so there is no scenario where skipping it is the right call. Skipping leaves an orphan shelf the author didn't ask for.
-        - --claim requires a PENDING CL. On a submitted CL, `#have` pre-images are POST-change once the workspace synced past the CL, so prepare_review exits with an error when --claim is passed on a submitted CL; re-run without --claim for a plain informational review.""" + MD_DOMAIN_GOTCHAS + LEDGER_GOTCHAS
+        - --claim requires a PENDING CL. On a submitted CL, `#have` pre-images are POST-change once the workspace synced past the CL, so prepare_review exits with an error when --claim is passed on a submitted CL; re-run without --claim for a plain informational review.""" + MD_DOMAIN_GOTCHAS + GENERATED_GOTCHAS + LEDGER_GOTCHAS
 
 GIT_NARRATION_TEMPLATES = f"""\
       - when: "Before step 2"
@@ -1052,6 +1088,7 @@ _SHARED = {
     "DISPATCH": DISPATCH,
     "MD_DOMAIN_LAUNCH": MD_DOMAIN_LAUNCH,
     "MD_DOMAIN_REPORT": MD_DOMAIN_REPORT,
+    "GENERATED_REPORT": GENERATED_REPORT,
     "LEDGER_STEP9": LEDGER_STEP9,
     "LEDGER_RECORD_STEP": LEDGER_RECORD_STEP,
     "LAUNCH_NARRATION": LAUNCH_NARRATION,
@@ -1063,6 +1100,7 @@ _SHARED = {
 _SKILL_TOKEN_ORDER = [
     "DISPATCH",  # multi-line, contains no other @tokens@; substitute first
     "MD_DOMAIN_LAUNCH", "MD_DOMAIN_REPORT",  # shared, no nested @tokens@
+    "GENERATED_REPORT",  # shared, no nested @tokens@
     # Ledger regions: shared bodies that DO carry nested per-VCS @tokens@
     # (@RANGE_OR_CL@, @PREPARE_TOOL@, @LEDGER_RECORD_N@, @BASELINE_DESC@) --
     # substitute the region first, then those tokens resolve below.

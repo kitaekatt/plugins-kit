@@ -63,6 +63,7 @@ The two halves are paired: `pyproject.toml` drives what `uv sync` installs; `che
 | Runtime (in `prepare_review.py`) | Repair `PATH` so `subprocess.run(["p4", ...])` sees the binary on Windows | `bootstrap_lib.path_repair.repair_path` |
 | Runtime (in `prepare_review.py`) | Partition the p4 diff into ≤1 MB chunks at directory boundaries; write per-chunk `.diff` fragments and an index entry | `bootstrap_lib.code_review.chunking.partition_sections_into_chunks` + `write_chunks` |
 | Runtime (in `prepare_review.py`) | Walk parents of each changed file collecting `CLAUDE.md`; parse `**Submit gate:**` blocks; match scope paths against the CL's files | `bootstrap_lib.code_review.claude_mds.collect_claude_mds` + `collect_submit_gates` |
+| Runtime (in `prepare_review.py`) | Detect a machine-generated file from its content and hold it out of the chunks entirely -- the review target is the GENERATOR, not its output -- surfacing it under `generated_files` | `bootstrap_lib.code_review.generated.detect_generated` |
 
 The bottom four runtime rows are the new shape from 0.10.0. Before that, the chunking and CLAUDE.md walks were inlined in `prepare_review.py`; lifting them into `bootstrap_lib` let `git-kit`'s sibling `git-code-review` skill reuse the same machinery without copying ~500 lines.
 

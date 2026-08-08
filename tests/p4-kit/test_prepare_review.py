@@ -2027,15 +2027,24 @@ class TestFetchFiletypeAndSize:
 
 class TestParseArgs:
     def test_cl_only(self):
-        assert pr._parse_args(["12345"]) == (["12345"], [])
+        assert pr._parse_args(["12345"]) == (["12345"], [], False)
 
     def test_claim_flags_collected(self):
-        pos, claims = pr._parse_args(["12345", "--claim", "**/CLAUDE.md", "--claim", "**/SKILL.md"])
+        pos, claims, _ = pr._parse_args(
+            ["12345", "--claim", "**/CLAUDE.md", "--claim", "**/SKILL.md"]
+        )
         assert pos == ["12345"]
         assert claims == ["**/CLAUDE.md", "**/SKILL.md"]
 
     def test_claim_equals_form(self):
-        assert pr._parse_args(["12345", "--claim=**/SKILL.md"]) == (["12345"], ["**/SKILL.md"])
+        assert pr._parse_args(["12345", "--claim=**/SKILL.md"]) == (
+            ["12345"],
+            ["**/SKILL.md"],
+            False,
+        )
+
+    def test_review_generated_flag(self):
+        assert pr._parse_args(["12345", "--review-generated"]) == (["12345"], [], True)
 
     def test_claim_without_value_raises(self):
         with pytest.raises(ValueError):

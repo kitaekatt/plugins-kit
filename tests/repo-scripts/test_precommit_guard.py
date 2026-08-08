@@ -41,6 +41,30 @@ def test_generated_by_banner_is_blocked():
     assert rules(violations) == {"generated artifact"}
 
 
+def test_guard_shares_the_code_review_signature_list():
+    """One signature list, two callers.
+
+    The guard and bootstrap_lib.code_review.pipeline both answer "did a tool
+    write this file?" -- from bootstrap_lib.code_review.generated. A second copy
+    here would drift and let a file be refused at commit time while still being
+    fanned out to reviewers, or the reverse. These two shapes exist only in the
+    shared list, so they fail if the guard ever grows its own.
+    """
+    at_generated = b" * @" + b"generated\n"
+    assert rules(guard.inspect_file("a.js", 14, at_generated, set(), [])) == {
+        "generated artifact"
+    }
+    shouted = b"# DO NOT " + b"EDIT -- rebuild instead\n"
+    assert rules(guard.inspect_file("b.py", 30, shouted, set(), [])) == {
+        "generated artifact"
+    }
+
+
+def test_instructional_prose_is_not_a_generated_banner():
+    content = b"# Do not edit it in place: it lives inside the plugin.\n"
+    assert guard.inspect_file("defaults.yaml", len(content), content, set(), []) == []
+
+
 def test_unreal_stub_header_is_blocked():
     content = b"from __future__ import annotations\n\n##### Glue Code #####\n"
     violations = guard.inspect_file("stub.py", len(content), content, set(), [])

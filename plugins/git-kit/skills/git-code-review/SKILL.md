@@ -80,7 +80,7 @@ technique_skill:
           tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` when md-domain is available, per the claim probe -- both flags, never just the first)"
           expected: |
-            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, and -- only when --claim was passed -- claimed_files. The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
+            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-generated -- generated_files (each entry carries identifier, local, generated_signature and size_bytes; such files are excluded from diff_chunks and changed_files, and `--review-generated` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
           on_failure: Surface the stderr message to the user and stop. No retry.
         - n: 3
           action: |
@@ -211,6 +211,17 @@ technique_skill:
               other changed files' paths -- print a one-line notice: "ruleset changed -- findings for
               <files> were judged against the working-tree version; consider a re-run." Keep it to one
               line; it is advisory, not a blocker.
+            - Generated artifacts section: if `bundle.generated_files` is non-empty, render a distinct
+              `## Generated artifacts (not reviewed)` section -- kept SEPARATE from the code-review
+              issues, the md-domain findings, and the mechanical-checks section. One line per entry:
+              its path (`identifier`), its `size_bytes`, and the `generated_signature` that matched.
+              Then state once that these files were NOT reviewed because they are machine-generated,
+              and that review of generated output belongs on the GENERATOR -- reviewed as ordinary
+              source when this change contains it, and otherwise not covered by this review. NEVER
+              call a generated file DIFF-CLEAN, never fold it into the clean count, and never let it
+              satisfy a submit gate. If the author or user asks for these files to be reviewed, re-run
+              prepare with `--review-generated` and review them normally instead of rendering this
+              section.
             - Declined-findings ledger: `bundle.ledger_hits` lists findings the author previously
               DECLINED for this same range whose baseline is still valid. Before the decision
               pass, compute each current code-review issue's and md-domain finding's ledger key
@@ -258,6 +269,7 @@ technique_skill:
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
         - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
+        - Generated artifacts (bundle.generated_files) reported via the `## Generated artifacts (not reviewed)` section, naming each file's matched signature, never as an audit or DIFF-CLEAN; review of generated output belongs on the generator
         - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-domain findings never collapsed
         - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merge conflicts section prepended when bundle.merge_conflicts is non-empty; separate `## md-domain (subject-lens) findings` section when the md-domain pass ran)
         - Newly declined findings recorded to the ledger via `prepare_review.py --ledger-record` (skipped when nothing was declined)
@@ -283,6 +295,10 @@ technique_skill:
         - When skills-kit md-domain is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-domain section -- the md files get today's thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
         - The triviality gate is pure-mechanical and decided by prepare_review (per-claimed-file `trivial` / `trivial_reasons`); the skill never re-judges it. A TRIVIAL claimed file is reported via the mechanical-checks line and is NEVER sent to a detect lane or written to the ledger. When EVERY claimed file is trivial and there are no generic diff chunks, the whole audit is skipped -- render the `## Mechanical checks (audit skipped)` section, never a DIFF-CLEAN verdict, and never present the skip as an audit. A user or author asking for the full review overrides the gate.
         - The Workflow tool is unavailable inside subagents. Launch the md-domain detect-lane Workflow from the MAIN session (the same message that fans out the reviewers), never from within a reviewer subagent.
+        - A generated file is NEVER a pass. `bundle.generated_files` means "not reviewed", exactly like a `NOT-AUDITED` verdict or the `## Mechanical checks (audit skipped)` section: render it as its own honest line, never inside the clean count, never as DIFF-CLEAN, and never as satisfying a submit gate.
+        - Detection is CONTENT-first, decided by prepare_review, and the skill never re-judges it. Size alone excludes nothing -- a large hand-written file is chunked and fully reviewed as always. Conversely a small generated file is still excluded, because the argument is authorship, not cost.
+        - Do not review a generated artifact by reading it. If its content looks wrong, the finding belongs on the generator, or on the decision to check the artifact in -- say that, and name the generator when this change contains one.
+        - `--review-generated` is the override and it is the AUTHOR's call, never an inference. Pass it only when the user or the author explicitly asks for the generated files to be reviewed.
         - The declined-findings ledger is advisory memory, not a gate. A collapsed finding is one the author already declined for THIS change at THIS baseline; when the baseline moves (the range base SHA advances -- origin/main moves, or HEAD changes for a working-tree review) the entry goes stale and the finding re-surfaces on its own. Never let a ledger hit suppress a SERIOUS md-domain finding.
         - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed.
   narration:

@@ -34,6 +34,10 @@ from bootstrap_lib.code_review.claude_mds import (
     collect_claude_mds,
     collect_submit_gates,
 )
+from bootstrap_lib.code_review.generated import (
+    detect_generated,
+    local_size,
+)
 from bootstrap_lib.code_review.triviality import (
     mechanical_checks,
     triviality_profile,
@@ -245,6 +249,7 @@ def assemble_bundle(
     max_chunk_bytes: int,
     workspace_root: Optional[Path],
     claim_globs: Optional[list[str]] = None,
+    review_generated: bool = False,
 ) -> dict:
     """Chunk the diff to disk and build the VCS-neutral bundle core.
 
@@ -275,11 +280,35 @@ def assemble_bundle(
                     submit-gate scan. When None/empty the returned dict is
                     byte-identical to the pre-claim contract (no `claimed_files`
                     key), so existing callers are unaffected.
+        review_generated: OPTIONAL override. False (default) EXCLUDES every
+                    machine-generated file from the diff chunks and the
+                    `changed_files` list and surfaces it under
+                    `generated_files` instead; True disables detection
+                    entirely and reviews those files like any other. The
+                    override exists for the author or user who explicitly asks
+                    for the full review.
 
     Returns the shared bundle fields:
         {"bundle_dir", "diff_chunks", "changed_files",
          "unique_claude_mds", "submit_gates"}
-    plus "claimed_files" when claim_globs is non-empty.
+    plus "claimed_files" when claim_globs is non-empty, plus "generated_files"
+    when any changed file was detected as machine-generated. With neither
+    present the dict is byte-identical to the pre-claim contract.
+
+    Generated-file detection is CONTENT-first (a banner in the file's leading
+    added lines, or in its leading lines on disk -- see
+    bootstrap_lib.code_review.generated), never size-alone: a large
+    hand-written file is still chunked and fully reviewed. A generated file
+    contributes NO chunks and no reviewer lanes, because the review target is
+    its GENERATOR, which is reviewed separately as ordinary source. It is never
+    a pass: the skill renders it as an honest "not reviewed". Claimed files are
+    evaluated first and are never re-routed here -- a subject-lens reviewer
+    already owns them.
+
+    Each generated_files entry is the input dict verbatim (identifier
+    retained), plus "generated_signature" (the matched signature label) and
+    "size_bytes" (the on-disk size, falling back to the diff section's byte
+    length when the file has no readable local path).
 
     Each changed_files entry is the input dict minus "identifier", plus
     "chunk_index" (int or None when absent from the diff) and
@@ -301,10 +330,30 @@ def assemble_bundle(
     # triviality profile (the section is excluded from the reviewer chunks, but
     # its hunks are still what the pure-mechanical guard inspects).
     id_to_text = {s["identifier"]: s["text"] for s in sections}
-    # Claimed files' diff sections must not reach the generic reviewers, so
-    # drop them before chunking. Their records still flow through the CLAUDE.md
-    # / submit-gate walk below.
-    review_sections = [s for s in sections if s["identifier"] not in claimed_idents]
+
+    # Machine-generated artifacts: detected from content, excluded from
+    # chunking, surfaced separately. Claimed files are skipped -- a subject-lens
+    # reviewer already owns them, and re-routing would take away the review they
+    # were claimed FOR.
+    generated_sigs: dict[str, str] = {}
+    if not review_generated:
+        for f in files:
+            ident = f["identifier"]
+            if ident in claimed_idents:
+                continue
+            label = detect_generated(id_to_text.get(ident, ""), f.get("local"))
+            if label:
+                generated_sigs[ident] = label
+
+    # Claimed and generated files' diff sections must not reach the generic
+    # reviewers, so drop them before chunking. Their records still flow through
+    # the CLAUDE.md / submit-gate walk below.
+    review_sections = [
+        s
+        for s in sections
+        if s["identifier"] not in claimed_idents
+        and s["identifier"] not in generated_sigs
+    ]
 
     chunks = partition_sections_into_chunks(
         review_sections, max_chunk_bytes, preamble=preamble
@@ -319,6 +368,7 @@ def assemble_bundle(
 
     changed_files: list[dict] = []
     claimed_files: list[dict] = []
+    generated_files: list[dict] = []
     unique: list[str] = []
     seen: set[str] = set()
     all_locals: list[str] = []
@@ -353,6 +403,22 @@ def assemble_bundle(
             annotate_triviality(entry, id_to_text.get(f["identifier"], ""))
             claimed_files.append(entry)
             continue
+        if f["identifier"] in generated_sigs:
+            # Pass the entry through verbatim (identifier retained, matching the
+            # claimed_files shape) so the skill can name the exact file it did
+            # NOT review. Size is reported because "how much review was skipped"
+            # is the question a reader asks next; it is never why the file was
+            # skipped.
+            entry = dict(f)
+            if local:
+                entry["local"] = canonical_local(local)
+            entry["generated_signature"] = generated_sigs[f["identifier"]]
+            size = local_size(local)
+            if size is None:
+                size = len(id_to_text.get(f["identifier"], "").encode("utf-8"))
+            entry["size_bytes"] = size
+            generated_files.append(entry)
+            continue
         out = {k: v for k, v in f.items() if k != "identifier"}
         if local:
             out["local"] = canonical_local(local)
@@ -371,6 +437,8 @@ def assemble_bundle(
     }
     if claim_globs:
         result["claimed_files"] = claimed_files
+    if generated_files:
+        result["generated_files"] = generated_files
     return result
 
 

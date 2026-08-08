@@ -693,6 +693,7 @@ def build_bundle(
     auto_reason: Optional[str] = None,
     claim_globs: Optional[list[str]] = None,
     ledger_path: Optional[Path] = None,
+    review_generated: bool = False,
 ) -> dict:
     """Gather context for `range_spec`, write chunks to disk, return the index bundle.
 
@@ -701,6 +702,12 @@ def build_bundle(
     assemble_bundle): their pre-image is materialized into the bundle and they
     are surfaced under a top-level `claimed_files` list instead of
     `changed_files`. When empty the bundle is byte-identical to today's.
+
+    Machine-generated files (detected from content -- see
+    bootstrap_lib.code_review.generated) are likewise held back from the
+    reviewers and surfaced under a top-level `generated_files` list, because
+    the review target is the GENERATOR, not its output. `review_generated=True`
+    disables that exclusion for an author who explicitly wants the full review.
     """
     claim_globs = claim_globs or []
     repo_root = get_repo_root()
@@ -738,6 +745,7 @@ def build_bundle(
         max_chunk_bytes=MAX_CHUNK_BYTES,
         workspace_root=repo_root,
         claim_globs=claim_globs,
+        review_generated=review_generated,
     )
     changed_files = core["changed_files"]
 
@@ -781,22 +789,30 @@ def build_bundle(
         bundle["auto_detected_reason"] = auto_reason
     if claim_globs:
         bundle["claimed_files"] = core.get("claimed_files", [])
+    if core.get("generated_files"):
+        bundle["generated_files"] = core["generated_files"]
     return bundle
 
 
-def _parse_args(args: list[str]) -> tuple[list[str], list[str]]:
-    """Split argv[1:] into (positionals, claim_globs).
+def _parse_args(args: list[str]) -> tuple[list[str], list[str], bool]:
+    """Split argv[1:] into (positionals, claim_globs, review_generated).
 
     `--claim <glob>` (repeatable) and `--claim=<glob>` collect claim patterns;
-    everything else (a range/ref, `--staged`, `--working`) is a positional.
-    Raises ValueError on a `--claim` with no value.
+    `--review-generated` turns OFF generated-artifact exclusion so those files
+    are chunked and reviewed like any other; everything else (a range/ref,
+    `--staged`, `--working`) is a positional. Raises ValueError on a `--claim`
+    with no value.
     """
     positionals: list[str] = []
     claim_globs: list[str] = []
+    review_generated = False
     i = 0
     while i < len(args):
         a = args[i]
-        if a == "--claim":
+        if a == "--review-generated":
+            review_generated = True
+            i += 1
+        elif a == "--claim":
             if i + 1 >= len(args):
                 raise ValueError("--claim requires a glob argument")
             claim_globs.append(args[i + 1])
@@ -807,7 +823,7 @@ def _parse_args(args: list[str]) -> tuple[list[str], list[str]]:
         else:
             positionals.append(a)
             i += 1
-    return positionals, claim_globs
+    return positionals, claim_globs, review_generated
 
 
 def main(argv: list[str]) -> int:
@@ -821,7 +837,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     try:
-        positionals, claim_globs = _parse_args(argv[1:])
+        positionals, claim_globs, review_generated = _parse_args(argv[1:])
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 2
@@ -838,7 +854,7 @@ def main(argv: list[str]) -> int:
     else:
         print(
             "Usage: prepare_review.py [<ref>|<a>..<b>|<a>...<b>|--staged|--working] "
-            "[--claim <glob> ...]",
+            "[--claim <glob> ...] [--review-generated]",
             file=sys.stderr,
         )
         return 2
@@ -847,7 +863,11 @@ def main(argv: list[str]) -> int:
     bundle_dir.mkdir(parents=True, exist_ok=True)
     try:
         bundle = build_bundle(
-            range_spec, bundle_dir, auto_reason=auto_reason, claim_globs=claim_globs
+            range_spec,
+            bundle_dir,
+            auto_reason=auto_reason,
+            claim_globs=claim_globs,
+            review_generated=review_generated,
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
