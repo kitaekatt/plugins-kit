@@ -37,6 +37,9 @@ A declarative configuration file covering automatable operations. The engine rea
       "commit": "abc1234567890abcdef1234567890abcdef123456"
     }
   ],
+  "git_config": [
+    {"key": "core.hooksPath", "value": ".githooks"}
+  ],
   "sync_to_data": [
     {"src": "lib", "dst": "lib"}
   ],
@@ -908,6 +911,7 @@ This table is the exact set of identity-keyed sections in
 | `ini_settings` | `file` + `section` (composite) |
 | `pypi_packages` | `package` |
 | `shared_libs` | `name` |
+| `git_config` | `key` |
 
 `path_entries` and `shared_lib_imports` are plain string lists — unioned and
 deduplicated (order preserved), not identity-keyed.

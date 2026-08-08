@@ -43,6 +43,18 @@ Python tooling uses [uv](https://docs.astral.sh/uv/). The repo is pinned to
 **Python 3.12** via a repo-root `.python-version`, so bare `uv run` / `uv venv`
 select 3.12 everywhere; you do not pass `-p 3.12`.
 
+Bootstrap configures this clone's tracked pre-commit hooks automatically. If
+bootstrap has not run yet, enable the same hooks manually from the repo root:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The public-repo guard always checks staged file structure. Optional local term
+checks read `.githooks/project-terms.txt`; that gitignored file contains one
+case-insensitive literal term per line. When it is absent, every commit clearly
+announces that the optional checks are disabled.
+
 You do not manually create venvs or `pip install` anything for the plugins
 themselves -- the bootstrap plugin provisions each plugin's venv at session
 start (see "How plugins are structured" below). `uv` at the repo root is only

@@ -1,0 +1,43 @@
+#!/bin/sh
+# Tracked pre-commit entry point. core.hooksPath is converged by bootstrap from
+# .claude/bootstrap.json; contributors can also configure it manually.
+
+set -eu
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+run_python() {
+    if [ -x "$REPO_ROOT/.venv/bin/python" ]; then
+        "$REPO_ROOT/.venv/bin/python" "$@"
+    elif [ -x "$REPO_ROOT/.venv/Scripts/python.exe" ]; then
+        "$REPO_ROOT/.venv/Scripts/python.exe" "$@"
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 "$@"
+    elif command -v python >/dev/null 2>&1; then
+        python "$@"
+    elif command -v py >/dev/null 2>&1; then
+        py -3 "$@"
+    else
+        echo "pre-commit: Python 3 is required to run the public-repo guard." >&2
+        return 1
+    fi
+}
+
+run_python "$REPO_ROOT/scripts/precommit_guard.py"
+
+# core.hooksPath REPLACES .git/hooks, so this hook must keep running the repo's
+# established version/drift chain -- pre-commit-version-check.sh documents its
+# own install as .git/hooks/pre-commit, and that install stops firing once
+# hooksPath is set. Chaining it here preserves those checks rather than
+# silently disabling them.
+#
+# Those checks need this repo's provisioned dependencies (pyyaml). An
+# unprovisioned clone does not have them, and hard-failing there would make the
+# repo un-committable for anyone who has not run bootstrap yet -- so skip them
+# in that case, and SAY SO. A skipped check must be visible, never silent. The
+# public-repo guard above is dependency-free and always runs.
+if run_python -c "import yaml" >/dev/null 2>&1; then
+    "$REPO_ROOT/scripts/pre-commit-version-check.sh"
+else
+    echo "pre-commit: repo version/drift checks SKIPPED -- this clone's Python cannot import yaml; run bootstrap to provision it. The public-repo guard above still ran." >&2
+fi

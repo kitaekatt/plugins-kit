@@ -3783,6 +3783,44 @@ def _phase_git_deps(ctx):
         ctx.action(f"git checked out: {_join_items(git_checked_out)}")
 
 
+def _phase_git_config(ctx):
+    """git_config: converge project-local Git configuration entries."""
+    from pathlib import Path
+
+    from .git_config_check import check_git_config, write_git_config
+
+    if not ctx.project_dir:
+        ctx.ok("git_config: skipped (no project directory)")
+        return
+
+    project_dir = Path(ctx.project_dir)
+    for entry in ctx.manifest.get("git_config", []):
+        key = entry.get("key") if isinstance(entry, dict) else None
+        value = entry.get("value") if isinstance(entry, dict) else None
+        if not isinstance(key, str) or not key or not isinstance(value, str) or not value:
+            ctx.fail(
+                f"git config: INVALID entry {entry!r}",
+                type="git_config",
+                message="entries need non-empty string 'key' and 'value'",
+            )
+            continue
+
+        result = check_git_config(project_dir, key, value)
+        if result.passed:
+            ctx.ok(f"git config {key}: ok")
+            continue
+        result = write_git_config(project_dir, key, value)
+        if result.passed:
+            ctx.action(f"git config {key}: set to {value}")
+        else:
+            ctx.fail(
+                f"git config {key}: FAILED - {result.message}",
+                type="git_config",
+                key=key,
+                message=result.message,
+            )
+
+
 def _phase_sync_to_data(ctx):
     """sync_to_data: copy plugin source dirs to the stable data dir.
 
@@ -4431,6 +4469,7 @@ _MANIFEST_PHASES = (
     (("path_entries",), _phase_path_entries),
     (("venv",), _phase_venv),
     (("git_deps",), _phase_git_deps),
+    (("git_config",), _phase_git_config),
     (("sync_to_data",), _phase_sync_to_data),
     (("marketplaces",), _phase_marketplaces),
     (("plugins",), _phase_plugins),

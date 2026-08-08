@@ -14,6 +14,7 @@ _IDENTITY_KEYS = {
     "ini_settings": None,  # composite key: file + section
     "pypi_packages": "package",
     "shared_libs": "name",
+    "git_config": "key",
 }
 
 # Sections that are plain string lists (unioned, deduplicated, order preserved).

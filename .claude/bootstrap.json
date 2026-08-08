@@ -3,5 +3,8 @@
   "project_venv": {
     "extras": ["dev"],
     "check_imports": ["pytest"]
-  }
+  },
+  "git_config": [
+    {"key": "core.hooksPath", "value": ".githooks"}
+  ]
 }

@@ -15,6 +15,7 @@ tmp/
 CLAUDE.local.md
 .claude/workflows/
 .workflow-kit/
+.githooks/project-terms.txt
 .DS_Store
 # Includes dev/tasks/. Task folders are DELIBERATELY untracked in this repo --
 # see "Task folders are gitignored here" in CLAUDE.md. Do not add a
