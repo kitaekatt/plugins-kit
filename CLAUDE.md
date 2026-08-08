@@ -292,6 +292,33 @@ flow. The one case that historically wanted a feature branch — gotcha 1, cherr
 past unrelated `dev` commits — is a decision to escalate to the user, not to solve by
 creating a branch yourself.
 
+### Committing and pushing to `dev` is unrestricted -- only PUBLISHES are gated
+
+**Standing policy. Commit and push to `dev` freely, without asking.** Do not hold
+finished work back for a confirmation, do not present a commit as a proposal, and do
+not ask whether to push. `dev` is a working branch: nothing on it reaches a consumer,
+because `master` is the cache source. The only gated action in this repo is a
+PUBLISH (`dev` -> `master` via `publish.py`), which broadcasts to every machine and
+needs the user's intent per the go-signal rule above.
+
+**Do not coordinate around other agent sessions.** The tree is shared and other
+sessions commit, stage, and push concurrently. That is normal and is not your problem
+to manage: do not wait for the tree to be clean, do not ask about someone else's
+uncommitted work, do not treat unrelated commits riding along on a `git push origin dev`
+as a reason to stop, and do not report another session's failing tests as if they were
+your regression. Push carries whatever else is on `dev`; that is the intended
+behaviour, not gotcha 1 (which is exclusively about `dev` -> `master`).
+
+Two habits survive this policy, because they are hygiene rather than permission-seeking
+and they cost seconds:
+
+- **Scope the commit to your own files, by explicit path.** Not to protect the other
+  session from you, but so `git log` stays readable and a revert stays surgical.
+- **When the index already holds someone else's staged work, do not fight it.**
+  `git commit -F <msg> -- <your paths>` commits the working-tree state of exactly those
+  paths and leaves the index otherwise untouched, so you never have to unstage
+  another session's work to get your own in. Reserve `git reset` for an index you own.
+
 ### Safe-publish practices
 
 Publishing is the riskiest moment in this repo because it broadcasts to every consumer. Two failure modes have happened, both recoverable but visible (the retraction commits in `git log master` are the scars). Avoid them with these checks.
@@ -368,6 +395,20 @@ Every plugin in this marketplace rides on **bootstrap** (venv, `bootstrap_lib`, 
    - It belongs in **both** `plugin.json` and the generated marketplace entry; `scripts/regen_marketplace.py` propagates it automatically. A `dependencies` edit is a manifest change: it needs a version bump to reach consumers (same rule as any `plugin.json`/`bootstrap.json` edit).
 
 2. **Runtime guard (provision-time).** A declared dependency guarantees bootstrap is *installed*, not that it has *run* — on first install bootstrap provisions each plugin's venv at the next SessionStart (and the cooldown can defer it). For that "installed-but-not-yet-provisioned" window, plugins that would otherwise crash with a raw `ModuleNotFoundError`/missing-interpreter error use the vendored **`bootstrap_guard.py`** (canonical: `plugins/bootstrap/bootstrap_lib/bootstrap_guard.py`). It is **stdlib-only** and **must never import `bootstrap_lib`** (that's the thing that may be missing); it detects absence via the per-plugin `~/.claude/plugins/data/<marketplace>/<plugin>/bootstrap.log` and exits with one actionable "install/enable plugins-kit:bootstrap" message instead of a raw traceback. It is **vendored** per plugin (copied next to the entry script and imported as a plain module), exactly like `path_repair.py`, with a drift test asserting copies match the canonical.
+
+### Anti-pattern: hand-creating an artifact a plugin is supposed to produce
+
+The sibling of [repairing a wedged machine by hand](#anti-pattern-repairing-a-wedged-machine-by-hand), one level up from bootstrap: that section is about not hand-fixing a *machine*, this one is about not hand-making an *output*. Same root error -- doing by hand the thing whose whole point was that the mechanism does it.
+
+**When a plugin owns a workflow that produces an artifact -- a generated stub, an index, a config file, a report -- do not create that artifact yourself.** Build or fix the producing action, publish it, install it, and RUN it to make the artifact.
+
+Producing it by hand proves nothing about the workflow, and the workflow was the deliverable. A hand-placed file cannot distinguish "the action works" from "the action is broken and I covered for it" -- and it looks like success in exactly the way that stops anyone looking further. The artifact existing was never the goal; the artifact existing *because the plugin made it* was.
+
+The failure is tempting for an honest reason: the real path costs an edit, a version bump, a publish, a restart to pick it up, and only then a run. That round trip is the cost of shipping, not an obstacle to route around. Publishing is gated on the user (see "Committing and pushing to `dev` is unrestricted -- only PUBLISHES are gated"), so when the workflow is not yet published, **say so and wait** rather than substituting a hand-made result to keep moving.
+
+If a *prerequisite* of the workflow is missing -- a source file it reads, a credential, an editor build -- report the missing prerequisite. Do not satisfy it by producing the final output directly; that discards the signal that the prerequisite was missing at all.
+
+Corollary for verification, and the part most often skipped: **a plugin change is not verified by re-reading the diff.** It is verified by the published plugin doing the thing on a machine that installed it. Until then the correct status is "written", not "working" -- and a background agent's report of what it intended is not evidence either.
 
 ### Hook JSON Format & Plugin Cache Layout
 
@@ -655,6 +696,9 @@ claude_md:
       origin: "2026-08-08 -- a review-bootstrap-cli branch was created off origin/master to scope a code review; a concurrent session then committed twice onto it, stranding both commits on a master-based throwaway branch that git branch --contains showed existed nowhere else."
       added: "2026-08-08"
   conventions:
+    - rule: Commit and push to dev freely without asking; only a PUBLISH (dev -> master) needs the user. Do not coordinate around other agent sessions' concurrent work.
+      keywords: [commit freely, push freely, no permission, dev branch, only publishes gated, other agents, concurrent sessions, shared tree, git commit -- paths]
+      why: Nothing on dev reaches a consumer -- master is the cache source -- so a commit or push is reversible working-branch state, while a publish broadcasts to every machine. Scope commits by path for readability, and use `git commit -F <msg> -- <paths>` when the index holds another session's staged work. See "Committing and pushing to dev is unrestricted" in Development Workflow.
     - rule: Stay on dev -- never create a branch or run git checkout/switch in this working tree; scope reviews with a commit range, and use git worktree if a separate checkout is truly needed.
       keywords: [branch, git checkout, git switch, shared working tree, concurrent session, scope a review, range, worktree]
       why: The tree is shared with other agent sessions and the checked-out branch is global to it, so a switch silently redirects their commits onto your branch. See the never_create_or_switch_branches insight and the anti-pattern section in Development Workflow.
