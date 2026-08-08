@@ -5,9 +5,9 @@ machine-written region with a marker so a later pass (or a human) can tell
 authored from generated at a glance. Revert is first-class: any marked region
 returns to its pre-generation (unmarked, cleared) state without touching the
 human-authored content around it. Drives the ``vcs`` seam for the two-phase
-changeset choreography (a placeholder changeset up front, per-item inline
-moves, a description rebuilt from the successfully-moved subset, delete-if-
-empty).
+changeset choreography (a placeholder changeset up front -- or one the caller
+already holds and passes in -- per-item inline moves, a description rebuilt
+from the successfully-moved subset, delete-if-empty).
 
 Per-item isolation is collect-and-continue by default (matching the proven
 consumer's apply/revert semantics): a single item that fails to apply OR fails
@@ -302,6 +302,7 @@ def deliver_changeset(
     apply_item: Callable[[Any], None],
     describe: Callable[[Sequence[Tuple[str, str]]], str],
     placeholder: str = "pending: content-pipeline delivery",
+    changeset: Any = None,
 ) -> ChangesetResult:
     """Run the backend-agnostic changeset choreography over ``items``.
 
@@ -309,8 +310,10 @@ def deliver_changeset(
     per backend), driving the injected ``vcs`` (a ``VcsBackend`` -- git, null,
     or p4-kit's Perforce backend):
 
-    1. **Placeholder changeset up front** -- ``vcs.make_changeset(placeholder)``
-       before any item is touched.
+    1. **Changeset up front** -- ``vcs.make_changeset(placeholder)`` before any
+       item is touched, UNLESS the caller supplied ``changeset`` (see
+       *Adopting an existing changeset* below), in which case nothing is
+       minted.
     2. **Per-item inline moves** -- for each item: ``open_for_edit(path)``,
        ``apply_item(item)`` (the caller's write), then
        ``move_into(changeset, [path])``. Collect-and-continue isolates every
@@ -326,8 +329,36 @@ def deliver_changeset(
        description-vs-contents drift bug).
     4. **Delete-if-empty** -- ``delete_if_empty(changeset)`` so a batch that
        moved nothing leaves no empty changeset behind.
+
+    Adopting an existing changeset
+    ------------------------------
+
+    ``changeset`` (optional, default ``None`` == mint one) lets a caller
+    deliver INTO a changeset it already holds, so several passes can land in
+    one reviewable unit. This is not a Perforce concept intruding on neutral
+    code: ``VcsBackend`` is already modeled on Perforce's pending changelist
+    (``GitVcs`` implements ``open_for_edit`` / ``delete_if_empty`` as no-ops and
+    ``make_changeset`` as an in-memory object creating no git object -- git is
+    the degenerate case adapted TO that model), so a long-lived adoptable
+    changeset is the model's central object and always-minting was a gap in it.
+
+    Adoption means the CALLER owns the changeset's lifecycle, so steps 3 and 4
+    are skipped when an adopted changeset received nothing this run -- it is
+    left exactly as found. Both would be destructive otherwise: the backends'
+    ``delete_if_empty`` tests THIS run's moved paths, not the changeset's real
+    contents (p4-kit would try ``p4 change -d`` on a changelist that may hold a
+    previous pass's files), and finalizing a no-op run would overwrite the
+    caller's description with the empty string. When an adopted changeset DOES
+    receive items, the choreography is identical to the minting path -- the
+    description is still rebuilt from the moved subset -- because that is what
+    the caller asked for by delivering into it.
+
+    Everything else is unchanged: with no ``changeset`` argument the behavior
+    is exactly what it was, including finalize-then-delete on an empty batch.
     """
-    changeset = vcs.make_changeset(placeholder)
+    minted = changeset is None
+    if minted:
+        changeset = vcs.make_changeset(placeholder)
     result = ChangesetResult(changeset=changeset)
 
     for item in items:
@@ -351,8 +382,9 @@ def deliver_changeset(
         result.moved.append((iid, path))
 
     result.description = describe(result.moved) if result.moved else ""
-    vcs.finalize_description(changeset, result.description)
-    vcs.delete_if_empty(changeset)
+    if minted or result.moved:
+        vcs.finalize_description(changeset, result.description)
+        vcs.delete_if_empty(changeset)
     return result
 
 

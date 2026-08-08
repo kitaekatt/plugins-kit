@@ -303,6 +303,12 @@ result = inplace.deliver_changeset(
 )
 ```
 
+Pass `changeset=` to deliver INTO a changeset you already hold instead of
+minting one, so several passes land in one reviewable unit. Adoption means you
+own its lifecycle: a pass that moves nothing leaves an adopted changeset
+exactly as found (no finalize, no delete-if-empty), rather than blanking your
+description or deleting a changelist that holds an earlier pass's files.
+
 ## 8. Write validators (Severity tiers) + optional floor guards
 
 A `validate.contract.Validator` is `(candidate, context) -> Sequence[Rejection]`

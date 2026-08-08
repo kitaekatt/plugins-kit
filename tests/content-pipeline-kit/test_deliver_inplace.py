@@ -368,6 +368,84 @@ def test_changeset_apply_and_move_failures_are_separate_buckets():
     assert result.description == "ok"
 
 
+def test_adopts_an_existing_changeset_instead_of_minting():
+    """``changeset=`` supplies a pending changeset; nothing new is minted.
+
+    The VcsBackend protocol is modeled on Perforce's pending changelist, so a
+    long-lived adoptable changeset is the central object in that model -- a
+    caller running several delivery passes into ONE reviewable CL could not
+    express that while ``deliver_changeset`` always minted its own.
+    """
+    vcs = MockVcs()
+    existing = vcs.make_changeset("my long-lived CL")
+    vcs.calls.clear()
+    written = []
+
+    result = deliver_changeset(
+        [{"id": "i1", "path": "a.txt"}, {"id": "i2", "path": "b.txt"}],
+        vcs=vcs,
+        changeset=existing,
+        item_id=lambda it: it["id"],
+        path_of=lambda it: it["path"],
+        apply_item=lambda it: written.append(it["path"]),
+        describe=lambda moved: f"delivered {len(moved)}",
+    )
+
+    assert "make" not in [c[0] for c in vcs.calls]
+    assert result.changeset is existing
+    assert written == ["a.txt", "b.txt"]
+    assert [p for _i, p in result.moved] == ["a.txt", "b.txt"]
+    assert existing["paths"] == ["a.txt", "b.txt"]
+    # Everything else about the choreography is unchanged.
+    assert result.description == "delivered 2"
+    assert existing["description"] == "delivered 2"
+
+
+def test_adopted_changeset_that_receives_nothing_is_left_untouched():
+    """An adopted changeset the caller owns is never finalized or deleted empty.
+
+    Both would be destructive on a real pending changelist: the empty check is
+    scoped to THIS run's moves (not the changeset's actual contents), and
+    finalizing with the empty description of a no-op run would blank a
+    description the caller wrote.
+    """
+    vcs = MockVcs()
+    existing = vcs.make_changeset("caller's description")
+    vcs.calls.clear()
+
+    result = deliver_changeset(
+        [],
+        vcs=vcs,
+        changeset=existing,
+        item_id=lambda it: it["id"],
+        path_of=lambda it: it["path"],
+        apply_item=lambda _it: None,
+        describe=lambda moved: "should not be called",
+    )
+
+    assert vcs.calls == []
+    assert result.moved == []
+    assert result.description == ""
+    # finalize_description never ran, so the changeset carries no description
+    # written by this pass -- the caller's own stays authoritative.
+    assert "description" not in existing
+
+
+def test_minting_path_still_finalizes_and_deletes_when_empty():
+    """The default (no ``changeset=``) path is unchanged."""
+    vcs = MockVcs()
+    result = deliver_changeset(
+        [],
+        vcs=vcs,
+        item_id=lambda it: it["id"],
+        path_of=lambda it: it["path"],
+        apply_item=lambda _it: None,
+        describe=lambda moved: "unused",
+    )
+    assert [c[0] for c in vcs.calls] == ["make", "finalize", "delete_if_empty"]
+    assert result.description == ""
+
+
 def test_changeset_works_with_null_backend():
     # NullVcs makes deliver exercisable end-to-end without a real repo.
     written = []
