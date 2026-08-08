@@ -42,9 +42,10 @@ uv run python "$REPO_ROOT/scripts/check_pyproject_sync.py"
 uv run python "$REPO_ROOT/scripts/check_bootstrap_dependency.py"
 
 # Derivation invariant: the DECISION half of the orchestrate skill's
-# orchestration.yaml is generated one-way from the principles under
-# plugins/awesome-kit/skills/orchestrate/references/tier-principles.md and
-# lexicon.md. This verifies the staged policy exactly matches what the
+# orchestration.yaml is generated one-way from
+# docs/reference/orchestrate/tier-principles.md and
+# plugins/awesome-kit/skills/orchestrate/references/lexicon.md. This
+# verifies the staged policy exactly matches what the
 # generator would produce from the staged principles (index-aware: it reads
 # staged blobs when anything is staged). A prior fingerprint-based drift
 # guard (check_orchestration_drift.py) was retired once this check existed --

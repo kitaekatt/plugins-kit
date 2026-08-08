@@ -22,9 +22,12 @@ import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PRINCIPLES_REL = (
-    "plugins/awesome-kit/skills/orchestrate/references/tier-principles.md"
-)
+# The two generator inputs live in different roots on purpose: lexicon.md
+# ships inside the published skill (consumers read it as vocabulary
+# reference), while tier-principles.md is maintainer-only derivation source
+# and lives under the repo's docs/ tree, never inside a published plugin
+# (see the plugin-opinion razor's OP-1, docs/reference/plugin-opinion-razor.md).
+PRINCIPLES_REL = "docs/reference/orchestrate/tier-principles.md"
 LEXICON_REL = "plugins/awesome-kit/skills/orchestrate/references/lexicon.md"
 POLICY_REL = "plugins/awesome-kit/skills/orchestrate/defaults/orchestration.yaml"
 
