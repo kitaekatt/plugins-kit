@@ -896,6 +896,20 @@ claude_md:
         switching the one that is checked out" in the Development Workflow section above.
       origin: "2026-08-08 -- a review-bootstrap-cli branch was created off origin/master to scope a code review; a concurrent session then committed twice onto it, stranding both commits on a master-based throwaway branch that git branch --contains showed existed nowhere else."
       added: "2026-08-08"
+    - id: orchestration_yaml_is_generated
+      keywords: [orchestration.yaml, generated decision half, tier-principles.md, generate_orchestration.py, hand-edit orchestration.yaml, one-way authorship, orchestrate skill policy]
+      summary: The decision half of awesome-kit's orchestrate skill policy (plugins/awesome-kit/skills/orchestrate/defaults/orchestration.yaml) is GENERATED from maintainer-only principles -- never hand-edit it or back-fill a principle to match a hand edit.
+      detail: |
+        Full chain, the one-way authorship rule, why the generator's two inputs
+        (tier-principles.md, lexicon.md) live in two different roots on purpose,
+        and the reversion posture: docs/reference/orchestrate/CLAUDE.md. That
+        file is the disclosure of record because the SKILL.md links that used to
+        point at this machinery were deliberately removed when the maintainer-only
+        derivation source was unshipped from the published skill (commits
+        1ba87e2, 0e08fca, 8bc3f9c, d6d7aae, 566c941) -- a consumer's plugin
+        install has no docs/ directory for those links to resolve against.
+      origin: "2026-08-08 -- disclosure gap identified after the unshipping move removed the in-plugin links that used to name this chain."
+      added: "2026-08-08"
   conventions:
     - rule: Commit and push to dev freely without asking; only a PUBLISH (dev -> master) needs the user. Do not coordinate around other agent sessions' concurrent work.
       keywords: [commit freely, push freely, no permission, dev branch, only publishes gated, other agents, concurrent sessions, shared tree, git commit -- paths]
