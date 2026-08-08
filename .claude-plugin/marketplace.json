@@ -195,7 +195,10 @@
         "name": "Christina"
       },
       "source": "./plugins/agent-glue",
-      "category": "development"
+      "category": "development",
+      "dependencies": [
+        "bootstrap"
+      ]
     },
     {
       "name": "workflow-kit",

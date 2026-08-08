@@ -1,24 +1,32 @@
 #!/usr/bin/env python3
-"""Block commits where a plugin ships a bootstrap.json but does not declare
-the bootstrap plugin as a dependency in its .claude-plugin/plugin.json.
+"""Block commits where a plugin does not declare the bootstrap plugin as a
+dependency in its .claude-plugin/plugin.json.
 
 Why this invariant matters
 --------------------------
-A bootstrap.json is a declaration that the plugin rides on the bootstrap
-plugin (venv, bootstrap_lib, uv, config). CLAUDE.md ("Plugin dependencies on
-bootstrap") makes that edge explicit via the Claude Code plugin spec:
+EVERY plugin in this marketplace depends on bootstrap. CLAUDE.md ("Plugin
+dependencies on bootstrap") makes that edge explicit via the Claude Code
+plugin spec:
 
     "dependencies": ["bootstrap"]
 
 as a BARE STRING (same-marketplace dep -- no "marketplace" field, no version
 constraint; both break installs, see CLAUDE.md). Without the edge, a user can
-install the plugin without bootstrap and its bootstrap.json is never
-processed: no venv, no tools, no auto-update -- the plugin fails at first use
-with a raw traceback instead of never getting into that state.
+install the plugin without bootstrap: any bootstrap.json it ships is never
+processed (no venv, no tools, no auto-update) and the plugin fails at first
+use with a raw traceback instead of never getting into that state.
 
-Exempt: the bootstrap plugin itself (a self-dependency is meaningless).
-Plugins with NO bootstrap.json are out of scope -- they genuinely don't
-depend on bootstrap and must NOT declare the edge (also CLAUDE.md).
+Exempt: the bootstrap plugin itself (a self-dependency is meaningless). There
+is no other exemption -- the rule is universal by design, so that anything
+built on "every plugin can rely on bootstrap being present" holds without a
+per-plugin check. A plugin that ships no bootstrap.json still declares the
+edge; the fleet-wide user posture bootstrap owns is readable from every
+plugin precisely because of that (docs/reference/first-run-experience.md).
+
+Superseded: this check previously scoped itself to plugins that ship a
+bootstrap.json, and CLAUDE.md told plugins without one NOT to declare the
+edge. That carve-out is retired -- agent-glue, its only occupant, now
+declares the dependency like everything else.
 
 Enforced at pre-commit (chained from scripts/pre-commit-version-check.sh),
 not only as a test: this repo's history shows suite-only invariants lose
@@ -61,7 +69,7 @@ def _declares_bootstrap(manifest: dict) -> bool:
 def find_outliers(plugins_dir: Path | None = None) -> list[str]:
     """Human-readable outlier lines; empty when the invariant holds.
 
-    An outlier is a plugin dir that ships a bootstrap.json but whose
+    An outlier is any plugin dir (other than bootstrap itself) whose
     plugin.json is missing, unparseable, or lacks the bootstrap dependency.
     """
     root = PLUGINS_DIR if plugins_dir is None else plugins_dir
@@ -69,13 +77,10 @@ def find_outliers(plugins_dir: Path | None = None) -> list[str]:
     for plugin_dir in sorted(root.iterdir()):
         if not plugin_dir.is_dir():
             continue
-        if not (plugin_dir / "bootstrap.json").is_file():
-            continue
         pj_path = plugin_dir / ".claude-plugin" / "plugin.json"
         if not pj_path.is_file():
             outliers.append(
-                f"{plugin_dir.name}: ships bootstrap.json but has no "
-                ".claude-plugin/plugin.json")
+                f"{plugin_dir.name}: has no .claude-plugin/plugin.json")
             continue
         try:
             manifest = json.loads(pj_path.read_text(encoding="utf-8"))
@@ -86,8 +91,8 @@ def find_outliers(plugins_dir: Path | None = None) -> list[str]:
             continue  # bootstrap itself: self-dependency is meaningless
         if not _declares_bootstrap(manifest):
             outliers.append(
-                f"{plugin_dir.name}: ships bootstrap.json but plugin.json "
-                'does not declare "bootstrap" in dependencies')
+                f"{plugin_dir.name}: plugin.json does not declare "
+                '"bootstrap" in dependencies')
     return outliers
 
 
@@ -98,8 +103,7 @@ def main(argv: list[str]) -> int:
     if not outliers:
         return 0
     print(
-        "plugins ship a bootstrap.json without declaring the bootstrap "
-        "dependency:", file=sys.stderr)
+        "plugins do not declare the bootstrap dependency:", file=sys.stderr)
     for line in outliers:
         print(f"  {line}", file=sys.stderr)
     print(

@@ -5,5 +5,6 @@
   "author": {
     "name": "Christina"
   },
-  "keywords": ["agent", "graph", "orchestration", "pipeline", "llm", "contracts", "pydantic", "ecs"]
+  "keywords": ["agent", "graph", "orchestration", "pipeline", "llm", "contracts", "pydantic", "ecs"],
+  "dependencies": ["bootstrap"]
 }

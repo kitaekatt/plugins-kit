@@ -185,8 +185,48 @@ def preflight(allow_dev_only: set[str] | None = None) -> list[str]:
             f"nothing to publish.")
 
     _refuse_dev_only_commits(allow_dev_only or set())
+    _require_bootstrap_dependency()
     bumps = _require_version_bump()
     return bumps
+
+
+def _require_bootstrap_dependency() -> None:
+    """Refuse when any plugin fails to declare the bootstrap dependency.
+
+    Also enforced at pre-commit, but re-checked here because publishing is the
+    moment the invariant reaches consumers: a plugin installable without
+    bootstrap is one whose bootstrap.json never runs (no venv, no tools) and
+    which cannot read the fleet-wide user posture bootstrap owns
+    (docs/reference/first-run-experience.md). The pre-commit hook is
+    bypassable (--no-verify, PLUGINS_KIT_SKIP_BUMP_CHECK=1), so a commit can
+    reach dev without it; this gate is not bypassable.
+
+    The rule lives in scripts/check_bootstrap_dependency.py and is loaded from
+    there rather than restated, so the publish gate and the commit gate can
+    never disagree.
+    """
+    import importlib.util
+
+    # Resolved next to THIS file, and scanning the checker's own default
+    # plugins dir, rather than via REPO_ROOT: the invariant is a property of
+    # the real plugin tree, not of the commit range, and REPO_ROOT is patched
+    # to a synthetic repo by tests/repo-scripts/test_publish.py.
+    script = Path(__file__).resolve().parent / "check_bootstrap_dependency.py"
+    spec = importlib.util.spec_from_file_location(
+        "check_bootstrap_dependency", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    outliers = module.find_outliers()
+    if outliers:
+        raise PublishError(
+            "refusing: plugin(s) do not declare the bootstrap dependency:\n  "
+            + "\n  ".join(outliers)
+            + '\n\nAdd "dependencies": ["bootstrap"] (bare string -- no '
+            "marketplace field, no version) to each plugin's "
+            ".claude-plugin/plugin.json.\nA dependencies edit is a manifest "
+            "change: bump that plugin's version too, or consumers keep the "
+            "old manifest.")
 
 
 def _refuse_dev_only_commits(allow: set[str]) -> None:
