@@ -119,3 +119,29 @@ that means something.
 
 **Open:** no TypeScript, Rust, or Go corpus has been tested. Generality across
 those families is unvalidated.
+
+### The negative controls a coverage test needs
+
+Recall-only scoring rewards a change that flags everything, so a test of any
+coverage-shaped criterion needs controls that can FAIL it. Four, each derived
+from a case that was actually settled:
+
+1. **A correctly non-ambient fact must not be relocated.** A contract that is
+   genuinely scoped to one subtree (a seed variable belonging to one sandbox's
+   tests) must not be proposed for a sibling subtree that never uses it. An
+   implementation that proposes copying it has built "copy the fact closer"
+   instead of "relocate or reference", which is the bloat failure in miniature.
+2. **Already-ambient facts must not be re-proposed.** A fact stated in a genuine
+   ancestor is already reaching the reader; proposing it again is duplication
+   the placement spine forbids.
+3. **Good prose must not be flagged as low-value.** A dense hazard section is
+   the content the value filter exists to PROTECT. A run that flags it has
+   inverted the filter.
+4. **The documented near miss must stay silent.** A fixed-cap or
+   dual-maintenance-looking construct that IS documented, DOES fail loudly, and
+   IS test-enforced must not be reported. This is the sharpest control of the
+   four: it is the shape a hazard sweep most wants to fire on, and firing means
+   the criterion keys on syntax rather than on whether the failure is silent.
+
+A held-out precision run is scored on these plus false-positive count. Recall
+against the corpus that derived the design is reported ALONGSIDE, never alone.
