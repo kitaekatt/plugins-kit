@@ -120,6 +120,35 @@ class TestClaudeCliBackend:
         # No retry on hard stops.
         assert len(runner.calls) == 1
 
+    @pytest.mark.parametrize(
+        "status,body,expected",
+        [
+            (401, "invalid credentials", halt.HALT_AUTH),
+            (429, "too many requests", halt.HALT_RATE_LIMIT),
+        ],
+    )
+    def test_hard_stop_message_classifies_when_body_carries_no_marker(
+        self, status, body, expected
+    ):
+        """The RAISED message must classify through the shared taxonomy.
+
+        Regression: the raise used to emit ``(api_error_status":{status})`` --
+        an opening paren where the taxonomy's marker requires a double quote --
+        so ``classify_claude_exception`` returned None for this backend's OWN
+        raise. ``call_llm`` then surfaced a plain RuntimeError instead of a
+        HaltError and a bulk loop kept spending against a persistent failure.
+        Both bodies here deliberately carry NO marker of their own, so the
+        status marker in the message is the ONLY thing that can classify them.
+        """
+        runner = _StubRunner([
+            (json.dumps({"result": body, "api_error_status": status}), "", 0),
+        ])
+        backend = _cli(runner)
+        with pytest.raises(RuntimeError) as excinfo:
+            backend.complete("s", "u", model="opus")
+        assert halt.classify_halt_text(str(excinfo.value)) == expected
+        assert backend.classify_halt(excinfo.value) == expected
+
     def test_is_error_envelope_raises(self):
         runner = _StubRunner([(
             json.dumps({"result": "something broke", "is_error": True}),

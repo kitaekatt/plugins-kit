@@ -336,8 +336,17 @@ class ClaudeCliBackend:
             data.get("result", "") if isinstance(data.get("result"), str) else ""
         )
         if status in (429, 401) or looks_like_hard_stop(result_body):
+            # The double quote before api_error_status is LOAD-BEARING, not
+            # decoration: halt._RATE_LIMIT_MARKERS / _AUTH_MARKERS match only
+            # the canonical `"api_error_status":NNN` or the bare
+            # `api_error_status:NNN`. Emitting an opening paren there (the
+            # original typo) produced a message this backend's OWN
+            # classify_halt could not classify whenever the body carried no
+            # marker of its own -- so call_llm raised a plain RuntimeError
+            # instead of HaltError and a bulk loop kept spending against a
+            # persistent failure. Keep the quote; keep the raise classifiable.
             raise RuntimeError(
-                f'claude -p hard-stop error (api_error_status":{status}): '
+                f'claude -p hard-stop error ("api_error_status":{status}): '
                 f'{result_body or "unknown"}'
             )
         if data.get("is_error"):
