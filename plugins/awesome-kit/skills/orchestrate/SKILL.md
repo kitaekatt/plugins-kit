@@ -116,23 +116,32 @@ technique_skill:
             it. Honour UNAVAILABLE/LIMITED markings.
         - n: 5
           action: Launch background units -- each prompt a standalone brief (goal, paths, constraints, return shape).
-          detail: >-
+          detail: |
             Use the launch mechanics the rendered policy gives for the chosen backend; they
             differ materially between backends (a CLI backend has no built-in isolation or
             completion report). Launch independent units in one message so they run
-            concurrently.
+            concurrently. The return shape must require disclosure of any critical
+            infrastructure the unit created, moved, retired, or changed -- generated
+            artifacts and their generators, build/commit-time gates, load-bearing paths other
+            code or docs resolve against, or the only remaining link/reference to something
+            the unit just removed.
         - n: 6
           action: While units run, do orchestrator-level work only (plan synthesis, inline units, or wait).
         - n: 7
           action: Synthesize completed results; cross-check units that disagree before accepting either.
-          detail: >-
+          detail: |
             Synthesize from the reports; pull raw output into this context only for the items
             you must verify or that units disagreed on. A report describes what the unit
             intended, not necessarily what it did -- verify file-writing units against the
-            actual diff before treating the work as done.
+            actual diff before treating the work as done. A disclosed critical-infrastructure
+            change gets recorded in the appropriate CLAUDE.md as part of this synthesis --
+            it must not be left sitting only in the agent's report, which the user never sees.
+            Reverting a recorded change later is the responsibility of whichever agent
+            decides to reverse it; the record is a signal of intent, not a prohibition.
         - n: 8
           action: Relay the substance -- findings, decisions, verified-vs-reported -- in your final message.
       gotchas:
         - Delegating then redoing the work inline pays both costs; once dispatched, wait for the result.
         - Parallel units editing the same files clobber each other -- use isolation appropriate to the backend, or sequence them.
+        - A unit that correctly removes or relocates something can silently destroy the only signpost pointing at it -- a green result and a clean diff will not surface that; only the unit's own disclosure does.
 ```
