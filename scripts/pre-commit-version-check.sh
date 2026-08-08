@@ -48,3 +48,12 @@ uv run python "$REPO_ROOT/scripts/check_bootstrap_dependency.py"
 # Rationale, and an honest statement of what it does NOT guarantee, in the
 # script header.
 uv run python "$REPO_ROOT/scripts/check_orchestration_drift.py"
+
+# Complete derivation check: the drift guard above is one-directional, while
+# this verifies that the staged policy exactly matches its staged principles.
+if ! uv run python "$REPO_ROOT/scripts/generate_orchestration.py" --check; then
+    echo ""
+    echo "The generated orchestration policy is stale."
+    echo "Run \`uv run python scripts/generate_orchestration.py --write\` and stage the result."
+    exit 1
+fi

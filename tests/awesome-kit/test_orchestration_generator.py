@@ -88,6 +88,57 @@ def test_emits_parser_keeps_list_append_and_addressed_targets() -> None:
     assert structure["intra_block_order_scope"] == "slot"
 
 
+def test_principles_parser_rejects_duplicate_yaml_keys_at_source_line() -> None:
+    text = """\
+# heading
+
+```yaml
+emits:
+  resolution: first
+  resolution: last
+```
+
+```yaml
+generator: {}
+```
+"""
+
+    with pytest.raises(generator.GenerationError) as exc_info:
+        generator.parse_principles(text)
+
+    message = str(exc_info.value)
+    assert "duplicate mapping key 'resolution'" in message
+    assert "tier-principles.md:6" in message
+
+
+def test_principles_parser_rejects_recognized_block_with_sibling_key() -> None:
+    text = """\
+# heading
+
+```yaml
+emits:
+  resolution: ignored
+stray: true
+```
+
+```yaml
+emits:
+  resolution: retained
+```
+
+```yaml
+generator: {}
+```
+"""
+
+    with pytest.raises(generator.GenerationError) as exc_info:
+        generator.parse_principles(text)
+
+    message = str(exc_info.value)
+    assert "stray" in message
+    assert "tier-principles.md:6" in message
+
+
 def test_order_sequences_every_generated_collection_and_never_leaks() -> None:
     emits, _structure = generator.parse_principles(_EMITS_DOCUMENT)
     merged = generator.merge_emits(emits)
@@ -100,6 +151,31 @@ def test_order_sequences_every_generated_collection_and_never_leaks() -> None:
     assert merged["effort"]["raise_when"] == ["sooner", "later"]
     assert not _has_order(merged)
     assert "order:" not in yaml.safe_dump(merged, sort_keys=False)
+
+
+def test_nonterminal_addressed_selector_assigns_and_validates_member_id() -> None:
+    merged = generator.merge_emits(
+        [
+            {
+                "ladders.codex.rungs[codex-top].order": 10,
+                "ladders.codex.rungs[codex-top].effort": "high",
+            }
+        ]
+    )
+
+    assert merged["ladders"]["codex"]["rungs"] == [
+        {"id": "codex-top", "effort": "high"}
+    ]
+
+    with pytest.raises(generator.GenerationError, match="addresses id 'codex-top'"):
+        generator.merge_emits(
+            [
+                {
+                    "ladders.codex.rungs[codex-top].order": 10,
+                    "ladders.codex.rungs[codex-top].id": "different",
+                }
+            ]
+        )
 
 
 def test_lexicon_parser_preserves_order_and_omits_concept_render_fields() -> None:
@@ -181,6 +257,30 @@ def test_write_preserves_header_and_machine_half_byte_for_byte(
     assert newline == "\r\n"
 
 
+def test_split_policy_ignores_machine_marker_text_inside_a_value() -> None:
+    marker_in_value = (
+        b'note: "prefix # MACHINE HALF -- not derived from the principles. suffix"\n'
+    )
+    policy = (
+        b"# header\n"
+        b"schema_version: 2\n"
+        + marker_in_value
+        + b"# "
+        + (b"=" * 75)
+        + b"\n"
+        + b"# MACHINE HALF -- not derived from the principles. Machine data.\n"
+        + b"# "
+        + (b"=" * 75)
+        + b"\n"
+        + b"backends: []\n"
+    )
+
+    _header, decision, machine, _newline = generator.split_policy_bytes(policy)
+
+    assert marker_in_value in decision
+    assert machine.startswith(b"# " + (b"=" * 75))
+
+
 def test_check_exits_zero_fresh_and_one_after_mutation(
     policy_paths: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -210,6 +310,142 @@ def test_write_is_idempotent(policy_paths: tuple[Path, Path, Path]) -> None:
 
     assert not generator.write_policy(policy, principles, lexicon)
     assert policy.read_bytes() == first
+
+
+def test_check_reads_staged_inputs_and_keeps_consistent_tree_control(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    policy = repo / generator.POLICY_REL
+    principles = repo / generator.PRINCIPLES_REL
+    lexicon = repo / generator.LEXICON_REL
+    for path in (policy, principles, lexicon):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    (repo / ".git").mkdir()
+
+    old_principles = _minimal_principles("old-backend")
+    new_principles = _minimal_principles("new-backend")
+    lexicon_text = """\
+### `known` `[concept]`
+**Test:** can the work be specified?
+"""
+    template = (
+        b"# header\n\n"
+        b"schema_version: 1\n"
+        b"default_backend: stale\n\n"
+        b"# "
+        + (b"=" * 75)
+        + b"\n"
+        + b"# MACHINE HALF -- not derived from the principles. Machine data.\n"
+        + b"# "
+        + (b"=" * 75)
+        + b"\n\n"
+        + b"backends: []\n"
+    )
+    old_policy = generator.generate_policy_bytes(
+        template, old_principles, lexicon_text
+    )
+    new_policy = generator.generate_policy_bytes(
+        old_policy, new_principles, lexicon_text
+    )
+    policy.write_bytes(new_policy)
+    principles.write_text(new_principles, encoding="utf-8")
+    lexicon.write_text(lexicon_text, encoding="utf-8")
+
+    monkeypatch.setattr(generator, "REPO_ROOT", repo)
+    monkeypatch.setattr(
+        generator, "staged_paths", lambda _repo: None, raising=False
+    )
+    monkeypatch.setattr(
+        generator, "is_git_repo", lambda _repo: True, raising=False
+    )
+
+    control_output = io.StringIO()
+    assert (
+        generator.check_policy(
+            policy, principles, lexicon, output=control_output
+        )
+        == 0
+    )
+    assert control_output.getvalue() == ""
+
+    index_text = {
+        generator.POLICY_REL: old_policy.decode("utf-8"),
+        generator.PRINCIPLES_REL: new_principles,
+        generator.LEXICON_REL: lexicon_text,
+    }
+    monkeypatch.setattr(
+        generator,
+        "staged_paths",
+        lambda _repo: [generator.PRINCIPLES_REL],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        generator,
+        "index_blob",
+        lambda _repo, rel_path: index_text.get(rel_path),
+        raising=False,
+    )
+
+    bypass_output = io.StringIO()
+    assert (
+        generator.check_policy(
+            policy,
+            principles,
+            lexicon,
+            output=bypass_output,
+        )
+        == 1
+    )
+    assert "old-backend" in bypass_output.getvalue()
+    assert "new-backend" in bypass_output.getvalue()
+
+    seam_output = io.StringIO()
+    assert (
+        generator.check_policy(
+            policy,
+            principles,
+            lexicon,
+            output=seam_output,
+            staged=[generator.PRINCIPLES_REL],
+        )
+        == 1
+    )
+
+
+def _minimal_principles(default_backend: str) -> str:
+    return f"""\
+```yaml
+emits:
+  default_backend: {default_backend}
+  resolution: first-match
+  shape:
+    note: stable
+```
+
+```yaml
+generator:
+  blocks:
+    - order: 1
+      path: shape
+      label: Shape
+  intra_block_order: principle-number
+  intra_block_order_scope: slot
+```
+"""
+
+
+def test_pre_commit_hook_chains_generator_check_and_remediation() -> None:
+    hook = (_REPO_ROOT / "scripts" / "pre-commit-version-check.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        'uv run python "$REPO_ROOT/scripts/generate_orchestration.py" --check'
+        in hook
+    )
+    assert "uv run python scripts/generate_orchestration.py --write" in hook
+    assert "stage the result" in hook
 
 
 def test_checked_in_policy_matches_the_generator() -> None:

@@ -13,6 +13,7 @@ import argparse
 import copy
 import difflib
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence, TextIO
@@ -51,8 +52,120 @@ _LEXICON_FIELD_RE = re.compile(r"^\*\*(Test|Gloss):\*\*\s*(.*)$")
 _EMPHASIS_RE = re.compile(r"(?<!\*)\*([^*\r\n]+)\*(?!\*)")
 
 
+def is_git_repo(repo_root: Path) -> bool:
+    """True when repo_root is or is inside a Git working tree."""
+
+    return (repo_root / ".git").exists()
+
+
+def staged_paths(repo_root: Path) -> list[str] | None:
+    """Repo-relative staged paths, or None when Git does not answer."""
+
+    if not is_git_repo(repo_root):
+        return []
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--cached", "--name-only"],
+            cwd=str(repo_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    text = proc.stdout.decode("utf-8", "replace")
+    return [
+        line.strip().replace("\\", "/")
+        for line in text.splitlines()
+        if line.strip()
+    ]
+
+
+def index_blob(repo_root: Path, rel_path: str) -> str | None:
+    """Return a staged blob as text, or None when Git cannot provide it."""
+
+    try:
+        proc = subprocess.run(
+            ["git", "show", f":{rel_path}"],
+            cwd=str(repo_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.decode("utf-8", "replace")
+
+
 class GenerationError(ValueError):
     """The declarative inputs cannot be generated without guessing."""
+
+
+class _DuplicateKeyError(yaml.constructor.ConstructorError):
+    """A fenced YAML mapping repeats a key before construction."""
+
+    def __init__(self, key: Any, mark: Any) -> None:
+        self.key = key
+        super().__init__(
+            None,
+            None,
+            f"duplicate mapping key {key!r}",
+            mark,
+        )
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate keys at every mapping depth."""
+
+    def construct_mapping(
+        self, node: yaml.nodes.MappingNode, deep: bool = False
+    ) -> dict[Any, Any]:
+        self.flatten_mapping(node)
+        mapping: dict[Any, Any] = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                hash(key)
+            except TypeError as exc:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found unhashable key",
+                    key_node.start_mark,
+                ) from exc
+            if key in mapping:
+                raise _DuplicateKeyError(key, key_node.start_mark)
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
+
+
+def _load_fenced_yaml(body: str) -> tuple[Any, dict[str, int]]:
+    """Load one fence and retain zero-based source lines for root keys."""
+
+    loader = _UniqueKeyLoader(body)
+    try:
+        node = loader.get_single_node()
+        if node is None:
+            return None, {}
+        root_key_lines: dict[str, int] = {}
+        if isinstance(node, yaml.nodes.MappingNode):
+            for key_node, _value_node in node.value:
+                if isinstance(key_node, yaml.nodes.ScalarNode):
+                    root_key_lines[key_node.value] = key_node.start_mark.line
+        return loader.construct_document(node), root_key_lines
+    finally:
+        loader.dispose()
+
+
+def _fence_source_line(
+    text: str, match: re.Match[str], relative_line: int = 0
+) -> int:
+    """Translate a zero-based line in a fence body to its document line."""
+
+    body_line = text.count("\n", 0, match.start("body")) + 1
+    return body_line + relative_line
 
 
 class _AddressedList:
@@ -103,7 +216,7 @@ def parse_principles(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Return all ``emits`` mappings and the single ``generator`` mapping.
 
-    Every YAML fence is parsed. Fences whose sole root key is neither
+    Every YAML fence is parsed. Fences whose root keys contain neither
     ``emits`` nor ``generator`` are intentionally ignored.
     """
 
@@ -113,16 +226,41 @@ def parse_principles(
     for match in _YAML_FENCE_RE.finditer(text):
         body = match.group("body")
         try:
-            parsed = yaml.safe_load(body)
+            parsed, root_key_lines = _load_fenced_yaml(body)
+        except _DuplicateKeyError as exc:
+            relative_line = (
+                exc.problem_mark.line if exc.problem_mark is not None else 0
+            )
+            line = _fence_source_line(text, match, relative_line)
+            raise GenerationError(
+                f"tier-principles.md:{line}: "
+                f"duplicate mapping key {exc.key!r}"
+            ) from exc
         except yaml.YAMLError as exc:
-            line = text.count("\n", 0, match.start()) + 1
+            relative_line = (
+                exc.problem_mark.line if exc.problem_mark is not None else 0
+            )
+            line = _fence_source_line(text, match, relative_line)
             raise GenerationError(
                 f"tier-principles.md:{line}: invalid fenced YAML: {exc}"
             ) from exc
 
-        if not isinstance(parsed, dict) or len(parsed) != 1:
+        if not isinstance(parsed, dict):
             continue
-        root_key = next(iter(parsed))
+        recognized_keys = [
+            key for key in parsed if key in {"emits", "generator"}
+        ]
+        if not recognized_keys:
+            continue
+        root_key = recognized_keys[0]
+        if len(parsed) != 1:
+            sibling = next(key for key in parsed if key != root_key)
+            relative_line = root_key_lines.get(str(sibling), 0)
+            line = _fence_source_line(text, match, relative_line)
+            raise GenerationError(
+                f"tier-principles.md:{line}: {root_key!r} block has "
+                f"sibling root key {sibling!r}"
+            )
         value = parsed[root_key]
         if root_key == "emits":
             if not isinstance(value, dict):
@@ -171,6 +309,20 @@ def _merge_values(left: Any, right: Any, path: str) -> Any:
     raise GenerationError(f"conflicting emits values at {path}")
 
 
+def _ensure_addressed_id(
+    member: dict[str, Any], member_id: str, path: str
+) -> None:
+    """Assign an addressed member id, rejecting a conflicting emitted id."""
+
+    emitted_id = member.get("id")
+    if emitted_id is None:
+        member["id"] = member_id
+    elif emitted_id != member_id:
+        raise GenerationError(
+            f"{path!r} addresses id {member_id!r} but emits {emitted_id!r}"
+        )
+
+
 def _insert_emit(root: dict[str, Any], path: str, value: Any) -> None:
     parts = _parse_path(path)
     current: dict[str, Any] = root
@@ -195,16 +347,28 @@ def _insert_emit(root: dict[str, Any], path: str, value: Any) -> None:
                     raise GenerationError(
                         f"addressed target {path!r} must emit a mapping"
                     )
-                merged = _merge_values(member, copy.deepcopy(value), path)
-                emitted_id = merged.get("id")
-                if emitted_id is None:
-                    merged["id"] = member_id
-                elif emitted_id != member_id:
+                emitted_id = value.get("id")
+                if emitted_id is not None and emitted_id != member_id:
                     raise GenerationError(
-                        f"{path!r} addresses id {member_id!r} but emits {emitted_id!r}"
+                        f"{path!r} addresses id {member_id!r} "
+                        f"but emits {emitted_id!r}"
                     )
+                merged = _merge_values(member, copy.deepcopy(value), path)
+                _ensure_addressed_id(merged, member_id, path)
                 collection.members[member_id] = merged
                 return
+
+            _ensure_addressed_id(member, member_id, path)
+            next_key, next_member_id = parts[index + 1]
+            if (
+                index + 1 == len(parts) - 1
+                and next_key == "id"
+                and next_member_id is None
+                and value != member_id
+            ):
+                raise GenerationError(
+                    f"{path!r} addresses id {member_id!r} but emits {value!r}"
+                )
             current = member
             continue
 
@@ -543,7 +707,8 @@ def split_policy_bytes(data: bytes) -> tuple[bytes, bytes, bytes, str]:
     decision_start = schema_matches[0].start()
 
     marker_indexes = [
-        match.start() for match in re.finditer(re.escape(_MACHINE_MARKER), data)
+        match.start()
+        for match in re.finditer(rb"(?m)^" + re.escape(_MACHINE_MARKER), data)
     ]
     if len(marker_indexes) != 1:
         raise GenerationError("policy must contain exactly one MACHINE HALF marker")
@@ -608,20 +773,86 @@ def write_policy(
     return True
 
 
+def _check_paths_are_repo_inputs(
+    policy_path: Path, principles_path: Path, lexicon_path: Path
+) -> bool:
+    """Whether custom paths still name the three canonical repo inputs."""
+
+    expected_paths = (
+        REPO_ROOT / POLICY_REL,
+        REPO_ROOT / PRINCIPLES_REL,
+        REPO_ROOT / LEXICON_REL,
+    )
+    return all(
+        path.resolve() == expected.resolve()
+        for path, expected in zip(
+            (policy_path, principles_path, lexicon_path),
+            expected_paths,
+            strict=True,
+        )
+    )
+
+
+def _working_check_inputs(
+    policy_path: Path, principles_path: Path, lexicon_path: Path
+) -> tuple[bytes, str, str]:
+    """Read all check inputs from the working tree."""
+
+    return (
+        policy_path.read_bytes(),
+        principles_path.read_text(encoding="utf-8"),
+        lexicon_path.read_text(encoding="utf-8"),
+    )
+
+
+def _check_inputs(
+    policy_path: Path,
+    principles_path: Path,
+    lexicon_path: Path,
+    staged: Sequence[str] | None,
+) -> tuple[bytes, str, str]:
+    """Read a coherent index snapshot when available, else the working tree."""
+
+    staged_set = staged_paths(REPO_ROOT) if staged is None else list(staged)
+    from_index = (
+        bool(staged_set)
+        and is_git_repo(REPO_ROOT)
+        and _check_paths_are_repo_inputs(
+            policy_path, principles_path, lexicon_path
+        )
+    )
+    if from_index:
+        policy_text = index_blob(REPO_ROOT, POLICY_REL)
+        principles_text = index_blob(REPO_ROOT, PRINCIPLES_REL)
+        lexicon_text = index_blob(REPO_ROOT, LEXICON_REL)
+        if (
+            policy_text is not None
+            and principles_text is not None
+            and lexicon_text is not None
+        ):
+            return policy_text.encode("utf-8"), principles_text, lexicon_text
+
+    return _working_check_inputs(policy_path, principles_path, lexicon_path)
+
+
 def check_policy(
     policy_path: Path = POLICY_PATH,
     principles_path: Path = PRINCIPLES_PATH,
     lexicon_path: Path = LEXICON_PATH,
     output: TextIO = sys.stdout,
+    staged: Sequence[str] | None = None,
 ) -> int:
-    """Return zero on exact agreement, or print a unified diff and return one."""
+    """Return zero on exact agreement, or print a unified diff and return one.
 
-    current = policy_path.read_bytes()
-    expected = generate_policy_bytes(
-        current,
-        principles_path.read_text(encoding="utf-8"),
-        lexicon_path.read_text(encoding="utf-8"),
+    ``staged`` is the test injection seam. When omitted, a check with anything
+    staged compares the three index blobs; unavailable Git data falls back to
+    the working tree.
+    """
+
+    current, principles_text, lexicon_text = _check_inputs(
+        policy_path, principles_path, lexicon_path, staged
     )
+    expected = generate_policy_bytes(current, principles_text, lexicon_text)
     if current == expected:
         return 0
 
