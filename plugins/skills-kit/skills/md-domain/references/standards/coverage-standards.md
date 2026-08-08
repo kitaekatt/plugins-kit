@@ -191,6 +191,16 @@ happens. One prompt removes both.
 The prompt names the two levels by their calibration, not by their mechanics:
 what a power user should expect, versus the full experience.
 
+**The prompt is a fallback, not the mechanism.** It is correct only while no
+durable experience posture has been captured for the user. Once one exists, it
+answers this question and coverage runs at the corresponding depth silently --
+a user who chose power-user defaults has already said which level they want,
+and asking again reads as not having listened. The precedence is: explicit flag,
+then captured posture, then this prompt. See
+`docs/reference/first-run-experience.md` in the plugins-kit repo for the
+pattern; that posture is bootstrap-managed and does not exist yet, so today the
+prompt always applies.
+
 **Where asking is impossible, disclose.** In a non-interactive dispatch the gate
 cannot prompt, so it takes `basic` and discloses it in keyword form on one line,
 listing only the keys that fell to a default:
