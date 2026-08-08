@@ -134,6 +134,10 @@ def walk_subtree(root: Path) -> tuple[list[Path], list[dict], int]:
     skipped: list[dict] = []
     noise_pruned = 0
     root = root.resolve()
+    # Real directories already descended into, keyed by resolved path. Two
+    # aliases of one directory (a symlink, or a Windows junction) would
+    # otherwise be walked twice, emitting every file under them twice.
+    visited: set[Path] = {root}
 
     def descend(directory: Path, depth: int) -> None:
         nonlocal noise_pruned
@@ -147,18 +151,6 @@ def walk_subtree(root: Path) -> tuple[list[Path], list[dict], int]:
 
         for entry in entries:
             name = entry.name
-            if entry.is_symlink():
-                # A symlink is followed only when it stays inside the subtree;
-                # otherwise the subject would silently acquire foreign code.
-                try:
-                    target = entry.resolve()
-                except OSError:
-                    skipped.append({"path": str(entry), "reason": SKIP_SYMLINK_OUT})
-                    continue
-                if not _is_within(target, root):
-                    skipped.append({"path": str(entry), "reason": SKIP_SYMLINK_OUT})
-                    continue
-
             if entry.is_dir():
                 if name in NOISE_DIR_NAMES:
                     noise_pruned += 1
@@ -176,6 +168,31 @@ def walk_subtree(root: Path) -> tuple[list[Path], list[dict], int]:
                 if name.startswith(".") and name != ".claude":
                     noise_pruned += 1
                     continue
+
+                # Containment is tested on the RESOLVED path for every directory,
+                # not only ones is_symlink() admits to. A Windows directory
+                # junction carries IO_REPARSE_TAG_MOUNT_POINT, which islink()
+                # does not report, so an is_symlink()-gated check lets a junction
+                # pointing outside the subtree pull in foreign code.
+                #
+                # RuntimeError is not redundant with OSError here: Path.resolve()
+                # deliberately re-raises an ELOOP OSError as
+                # RuntimeError("Symlink loop from ...") (pathlib's check_eloop),
+                # so catching OSError alone lets a circular link crash the walk
+                # instead of being recorded and skipped.
+                try:
+                    target = entry.resolve()
+                except (OSError, RuntimeError):
+                    skipped.append({"path": str(entry), "reason": SKIP_SYMLINK_OUT})
+                    continue
+                if not _is_within(target, root):
+                    skipped.append({"path": str(entry), "reason": SKIP_SYMLINK_OUT})
+                    continue
+                if target in visited:
+                    # An alias of a directory already walked. Not an exclusion
+                    # worth reporting -- its files are already in the subject.
+                    continue
+                visited.add(target)
                 descend(entry, depth + 1)
             elif entry.is_file() and is_code_file(entry):
                 code_files.append(entry)
@@ -193,6 +210,21 @@ def _is_within(candidate: Path, root: Path) -> bool:
         return False
 
 
+def root_exclusion(root: Path) -> str | None:
+    """Return the exclusion reason the ROOT itself matches, or None.
+
+    walk_subtree tests the directories it descends into, never the root it was
+    handed -- so a root that is itself vendored, generated, or a nested
+    repository would be scanned in full with no exclusion recorded. Naming such
+    a directory explicitly is honoured (the user asked for it), but it is always
+    REPORTED; a root derived from a diff is filtered before it gets here.
+    """
+    reason = _skip_reason(root.name)
+    if reason is not None:
+        return reason
+    return None
+
+
 def build_subject(root: Path) -> dict:
     """Assemble one coverage subject for a code subtree."""
     root = root.resolve()
@@ -200,6 +232,7 @@ def build_subject(root: Path) -> dict:
     chain = ambient_chain(root)
     return {
         "root": str(root),
+        "rootExclusion": root_exclusion(root),
         "codeFiles": [str(p) for p in code_files],
         "ambientClaudeMdPaths": [str(p) for p in chain],
         "skipped": skipped,
@@ -213,7 +246,21 @@ def diff_roots(repo: Path, git_range: str | None) -> tuple[list[Path], list[str]
     Read-only: runs `git diff --name-only` and nothing else. One subject per
     distinct directory holding a changed code file.
     """
-    cmd = ["git", "-C", str(repo), "diff", "--name-only"]
+    # `git diff --name-only` prints paths relative to the WORKTREE ROOT, not to
+    # -C's directory, so names must be joined to the toplevel. Joining them to a
+    # subdirectory silently yields nonexistent paths and an empty subject set.
+    toplevel = _git_toplevel(repo)
+    if toplevel is None:
+        return [], ["not a git worktree; --diff needs one"]
+
+    # -c core.quotePath=false: git C-quotes non-ASCII names by default
+    # ("caf\303\251.c"), which would not resolve on disk and would be dropped.
+    # --end-of-options: a range is user input and must never be read as a flag;
+    # without it a value like --output=<path> makes this read-only probe write.
+    cmd = [
+        "git", "-c", "core.quotePath=false", "-C", str(toplevel),
+        "diff", "--name-only", "--end-of-options",
+    ]
     if git_range:
         cmd.append(git_range)
     try:
@@ -226,17 +273,43 @@ def diff_roots(repo: Path, git_range: str | None) -> tuple[list[Path], list[str]
         return [], [f"git diff failed: {completed.stderr.strip()}"]
 
     dirs: dict[Path, None] = {}
+    notes: list[str] = []
+    excluded = 0
     for line in completed.stdout.splitlines():
         rel = line.strip()
         if not rel:
             continue
-        path = (repo / rel)
+        path = toplevel / rel
         if not is_code_file(path):
             continue
         parent = path.parent
-        if parent.is_dir():
-            dirs.setdefault(parent.resolve(), None)
-    return list(dirs), []
+        if not parent.is_dir():
+            continue
+        # A diff-derived root gets the structural exclusions applied to it. An
+        # explicitly named root is honoured-and-reported instead; nobody asked
+        # for this one by name.
+        if any(_skip_reason(part) for part in parent.relative_to(toplevel).parts):
+            excluded += 1
+            continue
+        dirs.setdefault(parent.resolve(), None)
+    if excluded:
+        notes.append(f"{excluded} changed file(s) skipped: vendored or generated path")
+    return list(dirs), notes
+
+
+def _git_toplevel(start: Path) -> Path | None:
+    """Return the worktree root for `start`, or None when it is not in one."""
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=False, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    out = completed.stdout.strip()
+    return Path(out) if out else None
 
 
 def main() -> int:
@@ -291,6 +364,11 @@ def main() -> int:
         root = subject["root"]
         chain = subject["ambientClaudeMdPaths"]
         print(f"subject: {root}")
+        if subject["rootExclusion"]:
+            print(
+                f"  NOTE: this root is itself {subject['rootExclusion']}; "
+                f"assessing it because you named it explicitly"
+            )
         print(f"  code files: {len(subject['codeFiles'])}")
         if chain:
             print(f"  ambient CLAUDE.md chain ({len(chain)}, root-most first):")

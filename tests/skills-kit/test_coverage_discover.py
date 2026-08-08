@@ -213,6 +213,24 @@ class TestSymlinks:
         assert {p.name for p in code_files} == {"main.c"}
         assert cov.SKIP_SYMLINK_OUT in _reasons({"skipped": skipped})
 
+    def test_circular_symlink_is_skipped_not_fatal(self, tmp_path):
+        """Path.resolve() raises RuntimeError, not OSError, on a symlink loop.
+
+        pathlib's check_eloop deliberately converts the ELOOP OSError into
+        RuntimeError("Symlink loop from ..."), so catching OSError alone lets a
+        circular symlink crash the whole walk instead of being recorded and
+        skipped -- in the very branch that exists to keep the walk robust.
+        """
+        root = tmp_path / "src"
+        _write(root / "main.c")
+        (root / "loop_a").symlink_to(root / "loop_b", target_is_directory=True)
+        (root / "loop_b").symlink_to(root / "loop_a", target_is_directory=True)
+
+        code_files, skipped, _ = cov.walk_subtree(root)
+
+        assert "main.c" in {p.name for p in code_files}
+        assert cov.SKIP_SYMLINK_OUT in _reasons({"skipped": skipped})
+
     def test_symlink_staying_inside_the_subtree_is_followed(self, tmp_path):
         root = tmp_path / "src"
         _write(root / "real" / "kept.c")
@@ -222,6 +240,37 @@ class TestSymlinks:
 
         assert "kept.c" in {p.name for p in code_files}
         assert cov.SKIP_SYMLINK_OUT not in _reasons({"skipped": skipped})
+
+    def test_alias_of_an_already_walked_directory_yields_no_duplicates(self, tmp_path):
+        """Two names for one real directory must not emit its files twice."""
+        root = tmp_path / "src"
+        _write(root / "real" / "kept.c")
+        (root / "alias").symlink_to(root / "real", target_is_directory=True)
+
+        code_files, _, _ = cov.walk_subtree(root)
+
+        resolved = [p.resolve() for p in code_files]
+        assert len(resolved) == len(set(resolved))
+        assert [p.name for p in code_files].count("kept.c") == 1
+
+
+class TestRootExclusion:
+    def test_named_vendored_root_is_reported_not_silently_scanned(self, tmp_path):
+        """walk_subtree tests what it descends into, never the root it was handed."""
+        repo = _mkrepo(tmp_path / "repo")
+        _write(repo / "vendor" / "lib.c")
+
+        subject = cov.build_subject(repo / "vendor")
+
+        assert subject["rootExclusion"] == cov.SKIP_VENDORED
+        # Honoured, because the user named it explicitly -- but reported.
+        assert subject["codeFiles"]
+
+    def test_ordinary_root_has_no_exclusion(self, tmp_path):
+        repo = _mkrepo(tmp_path / "repo")
+        _write(repo / "engine" / "main.c")
+
+        assert cov.build_subject(repo / "engine")["rootExclusion"] is None
 
 
 class TestBuildSubject:
@@ -233,7 +282,8 @@ class TestBuildSubject:
         subject = cov.build_subject(repo / "engine")
 
         assert set(subject) == {
-            "root", "codeFiles", "ambientClaudeMdPaths", "skipped", "noisePruned",
+            "root", "rootExclusion", "codeFiles", "ambientClaudeMdPaths",
+            "skipped", "noisePruned",
         }
         assert subject["codeFiles"] and subject["codeFiles"][0].endswith("main.c")
         assert len(subject["ambientClaudeMdPaths"]) == 1
@@ -246,6 +296,86 @@ class TestBuildSubject:
 
         assert subject["codeFiles"]
         assert subject["ambientClaudeMdPaths"] == []
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True, text=True, check=True,
+    )
+
+
+@pytest.fixture
+def git_repo(tmp_path):
+    """A real git worktree with one committed baseline."""
+    repo = tmp_path / "wt"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True,
+                   capture_output=True, text=True)
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    _write(repo / "engine" / "main.c", "int a;\n")
+    _write(repo / "tools" / "run.py", "a = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "baseline")
+    return repo
+
+
+class TestDiffRoots:
+    """diff_roots had no tests in its first revision and carried three bugs.
+
+    `git diff --name-only` prints WORKTREE-ROOT-relative paths, C-quotes
+    non-ASCII names by default, and will happily read a leading-dash range as a
+    flag. All three are silent: they produce an empty or short subject list
+    rather than an error.
+    """
+
+    def test_names_resolve_when_invoked_from_a_subdirectory(self, git_repo):
+        """The bug: names joined to -C's dir instead of the worktree root."""
+        (git_repo / "engine" / "main.c").write_text("int a; int b;\n", encoding="utf-8")
+
+        roots, notes = cov.diff_roots(git_repo / "tools", None)
+
+        assert notes == []
+        assert [p.name for p in roots] == ["engine"]
+
+    def test_non_ascii_filename_is_not_dropped(self, git_repo):
+        _write(git_repo / "engine" / "café.c", "int a;\n")
+        _git(git_repo, "add", "-A")
+        _git(git_repo, "commit", "-qm", "add unicode")
+        (git_repo / "engine" / "café.c").write_text("int a; int b;\n", encoding="utf-8")
+
+        roots, _ = cov.diff_roots(git_repo, None)
+
+        assert [p.name for p in roots] == ["engine"]
+
+    def test_option_shaped_range_does_not_write(self, git_repo, tmp_path):
+        """A range is user input; it must never be read as a git flag."""
+        target = tmp_path / "should-not-exist.txt"
+
+        roots, notes = cov.diff_roots(git_repo, f"--output={target}")
+
+        assert not target.exists()
+        assert roots == []
+        assert notes and "git diff failed" in notes[0]
+
+    def test_vendored_diff_roots_are_excluded_and_counted(self, git_repo):
+        _write(git_repo / "vendor" / "dep.c", "int a;\n")
+        _git(git_repo, "add", "-A")
+        _git(git_repo, "commit", "-qm", "add vendor")
+        (git_repo / "vendor" / "dep.c").write_text("int a; int b;\n", encoding="utf-8")
+        (git_repo / "engine" / "main.c").write_text("int a; int b;\n", encoding="utf-8")
+
+        roots, notes = cov.diff_roots(git_repo, None)
+
+        assert [p.name for p in roots] == ["engine"]
+        assert notes and "vendored or generated" in notes[0]
+
+    def test_outside_a_worktree_reports_rather_than_guessing(self, tmp_path):
+        roots, notes = cov.diff_roots(tmp_path, None)
+
+        assert roots == []
+        assert notes and "git worktree" in notes[0]
 
 
 class TestCli:
