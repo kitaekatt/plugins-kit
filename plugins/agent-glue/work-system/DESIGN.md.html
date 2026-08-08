@@ -189,7 +189,7 @@ The function returns its typed result AND populates `SideEffects` describing wha
 ```python
 def gather_loc_strings(input: GatherIn) -> tuple[GatherOut, SideEffects]:
     result = subprocess.run(
-        ["UnrealEditor-Cmd.exe", "SpiritCrossing.uproject", "-run=GatherText", f"-config={input.config}"],
+        ["UnrealEditor-Cmd.exe", "MyGame.uproject", "-run=GatherText", f"-config={input.config}"],
         capture_output=True, check=True,
     )
     return (

@@ -92,15 +92,15 @@ Adding a `prompt` component later (e.g. to use an LLM as a fallback when the rul
 ## Worked example: a Fixture entity instance
 
 ```yaml
-# graphs/character_animation/cohorts/default/inputs/amano_001.yaml
+# graphs/character_animation/cohorts/default/inputs/riley_001.yaml
 type: Fixture
 components:
   fixture_id:
-    id: amano_001
+    id: riley_001
   start_input:
-    conversation_path: dialog/Amano_FirstMeeting.csv
+    conversation_path: dialog/Riley_FirstMeeting.csv
   init_state:
-    conversation_id: amano_001
+    conversation_id: riley_001
     target_cl: 12345
   source_run_id:
     run_id: 2026-05-24T15-22-01_abc123    # optional: which live run produced this fixture

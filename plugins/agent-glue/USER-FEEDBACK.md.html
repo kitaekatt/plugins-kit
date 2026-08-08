@@ -4,8 +4,8 @@ Anonymized findings from users of related systems who reviewed the agent-glue de
 
 ## Users represented
 
-- **Loc system user** -- maintainer of a localization pipeline (translation, glossary, QA workbook, audit substrate; ~32k LOC).
-- **Dialog system user** -- maintainer of a first-pass dialog generation pipeline (brief generation, per-line direction, animation assignment with validate-retry loops, canonical brief artifacts; ~12k LOC).
+- **Loc system user** -- maintainer of a localization pipeline (translation, glossary, QA workbook, audit substrate).
+- **Content system user** -- maintainer of a batch content-generation pipeline (per-item briefs, LLM-authored assignments behind validate-retry loops, canonical per-group artifacts that humans also hand-edit).
 
 Both reviewed the four-subsystem post-restructure design with the question "if you adopted this when v1 ships, what would change?"
 
@@ -32,18 +32,18 @@ A follow-up round asked both users to mark each of the 27 features (21 v1 + 6 po
 | | Use | Would-not-use | Unsure |
 |---|---|---|---|
 | Loc system user | 19 | 4 | 1 |
-| Dialog system user | 17 | 6 | 4 |
+| Content system user | 17 | 6 | 4 |
 
 **Universal use (both reviewers, no qualifiers, no questions):** features 1, 6, 7, 8, 10, 11, 12, 14, 15, 16, 17, 20 (v1) and 24, 25, 26, 27 (post-v1 candidates).
 
 **Split votes:**
 
-- claude-work-queue (features 2-5): dialog uses, loc skips. **Deferred to post-v1** by user decision after this round (see *Where the consumer reviews land* below). The claude workers (feature 10), which both reviewers marked use, are deferred to the same post-v1 wave because they dispatch through the queue's consumer API. The openrouter worker covers v1's LLM-call need; the Claude-backed worker path adds substrate value (tool / MCP use, in-process Claude inference) but does not unblock a v1 consumer use case.
-- openrouter worker (9): loc uses, dialog skips. Kept in v1 (one strong-use consumer is enough; build cost is low).
-- Cohort recording (13): loc unsure (has its own corpus), dialog uses (regression-harness gap). Kept in v1.
-- Parameterized graphs (23, post-v1): loc requires for multi-language matrix, dialog passes (one pipeline shape).
+- claude-work-queue (features 2-5): content uses, loc skips. **Deferred to post-v1** by user decision after this round (see *Where the consumer reviews land* below). The claude workers (feature 10), which both reviewers marked use, are deferred to the same post-v1 wave because they dispatch through the queue's consumer API. The openrouter worker covers v1's LLM-call need; the Claude-backed worker path adds substrate value (tool / MCP use, in-process Claude inference) but does not unblock a v1 consumer use case.
+- openrouter worker (9): loc uses, content skips. Kept in v1 (one strong-use consumer is enough; build cost is low).
+- Cohort recording (13): loc unsure (has its own corpus), content uses (regression-harness gap). Kept in v1.
+- Parameterized graphs (23, post-v1): loc requires for multi-language matrix, content passes (one pipeline shape).
 
-**Two conditional unsures that drove the post-v1 reorder:** dialog's verdict on v1 features 18 (fan-out) and 19 (canonical outputs) is "would-not-use without post-v1 features 27 and 25 respectively." Both 27 and 25 are also two-reviewer-strong-use post-v1 candidates -- so they sort to the top of the post-v1 list (see ordering below).
+**Two conditional unsures that drove the post-v1 reorder:** the content user's verdict on v1 features 18 (fan-out) and 19 (canonical outputs) is "would-not-use without post-v1 features 27 and 25 respectively." Both 27 and 25 are also two-reviewer-strong-use post-v1 candidates -- so they sort to the top of the post-v1 list (see ordering below).
 
 Raw second-round responses are session-private working notes outside the plugin tree.
 
@@ -51,12 +51,12 @@ Raw second-round responses are session-private working notes outside the plugin 
 
 Constraint: post-v1 candidates may not leapfrog any v1 increment. Within that bound, ordering by use-signal strength and v1-feature-unblocking effect:
 
-1. **Hand-edit-preserving YAML round-trip (was item 25).** Two-reviewer use; unblocks v1 feature 19 (canonical outputs) for the dialog user's most important artifact.
-2. **GroupedSequentialFanOut (was item 27).** Two-reviewer use; unblocks v1 feature 18 (fan-out) for the dialog user's primary production path.
+1. **Hand-edit-preserving YAML round-trip (was item 25).** Two-reviewer use; unblocks v1 feature 19 (canonical outputs) for the content user's most important artifact.
+2. **GroupedSequentialFanOut (was item 27).** Two-reviewer use; unblocks v1 feature 18 (fan-out) for the content user's primary production path.
 3. **Multi-source freshness keys (was item 26).** Two-reviewer use; replaces hand-rolled freshness logic for both consumers.
 4. **WorkRecord aggregator API (was item 24).** Two-reviewer use; enables corpus-wide views both reviewers explicitly want.
-5. **Domain-shaped output validation hook (was item 22).** Loc strong-use; dialog conditional on where the hook runs.
-6. **Parameterized graphs (was item 23).** Loc strong-use; dialog passes.
+5. **Domain-shaped output validation hook (was item 22).** Loc strong-use; content conditional on where the hook runs.
+6. **Parameterized graphs (was item 23).** Loc strong-use; content passes.
 
 The per-reviewer descriptions below capture the original rationale for each candidate. The numbering in those descriptions is from the per-reviewer perspective and predates the combined ordering above.
 
@@ -72,13 +72,13 @@ None of the items below are v1 blockers. They are framed by the reviewers as "th
 
 3. **WorkRecord aggregator API across many records.** Loc has corpus-wide audit aggregators that walk every recorded LLM call and rank by token / rejection kind. With agent-glue those records would live in `.agent-glue-cache/` -- and the kit has no documented surface for "iterate all WorkRecords matching a metadata filter and stream them to an aggregator." Loc would walk the cache dir by hand, defeating the abstraction. Suggested resolution: `work.records.iter(filter=...)` library function streaming records matching a filter expressed against the Attribution component.
 
-### From the dialog system user
+### From the content system user
 
-1. **Hand-edit-preserving YAML round-trip for canonical artifacts.** The first-pass system's per-conversation briefs have multiple concurrent writers (designer-typed prose fields, LLM-written assignment fields, refresh-written derived state) and the file must round-trip without trashing the hand-edited prose. agent-glue's canonical-outputs design has a `format: managed` escape hatch (node owns the write) -- but that puts the consumer back to bespoke writer code, and gives up the kit's "declare an artifact, get it written" property at exactly the place it matters most. Suggested resolution: a `format: yaml_round_trip` mode backed by ruamel.yaml round-trip semantics plus a declared `preserve_paths:` allow-list for hand-edited fields.
+1. **Hand-edit-preserving YAML round-trip for canonical artifacts.** That consumer's canonical artifacts have multiple concurrent writers (human-typed prose fields, LLM-written fields, refresh-written derived state) and the file must round-trip without trashing the hand-edited prose. agent-glue's canonical-outputs design has a `format: managed` escape hatch (node owns the write) -- but that puts the consumer back to bespoke writer code, and gives up the kit's "declare an artifact, get it written" property at exactly the place it matters most. Suggested resolution: a `format: yaml_round_trip` mode backed by ruamel.yaml round-trip semantics plus a declared `preserve_paths:` allow-list for hand-edited fields.
 
-2. **Multi-source freshness keys (composed sub-hash across N inputs from M sources).** The first-pass system's per-line freshness combines six heterogeneous sources (line text from CSV, per-line direction from brief, animation pool snapshot from speaker yaml + tags, prompt version from prompts file, disables version from disables yaml, predecessor identity from graph walk). `compute_subhashes` handles one list with one key function; this is N source files where any one drifting invalidates a different shape of subset. Suggested resolution: an `InputsFingerprint` component that names multiple source-tracked inputs by path + version; the kit computes the composed hash and surfaces per-source invalidation reasons in the WorkRecord (so cache-miss debugging is grounded in "input X changed at time Y" rather than "hash mismatch").
+2. **Multi-source freshness keys (composed sub-hash across N inputs from M sources).** That consumer's per-item freshness combines several heterogeneous inputs, each living in a different file and each with its own update cadence: the item's own source row, a per-item directive from a sibling artifact, a snapshot of the candidate pool the LLM may choose from, the prompt version, an opt-out list version, and predecessor identity derived from a graph walk. `compute_subhashes` handles one list with one key function; this is N source files where any one drifting invalidates a different shape of subset. Suggested resolution: an `InputsFingerprint` component that names multiple source-tracked inputs by path + version; the kit computes the composed hash and surfaces per-source invalidation reasons in the WorkRecord (so cache-miss debugging is grounded in "input X changed at time Y" rather than "hash mismatch").
 
-3. **GroupedSequentialFanOut for prompt-cache discipline.** The first-pass bulk runner groups by primary speaker in a two-phase sweep specifically to keep the per-speaker animation pool warm in the LLM's prompt cache. graph-system's design explicitly defers this ("Pipelines that need ordered iteration for cache discipline ... stay as Python driver loops that call `runtime.run` per item"). For the dialog system user that means the most-important production execution path bypasses the graph runtime entirely and loses cohort replay coverage. Suggested resolution: a `GroupedSequentialFanOut` edge variant taking a `group_by` key -- runs same-group items sequentially in the same process, parallel across groups. The cache-discipline use case is recurring whenever an LLM call has a stable system-prompt prefix and a per-item suffix.
+3. **GroupedSequentialFanOut for prompt-cache discipline.** That consumer's bulk runner groups items by a shared key in a two-phase sweep specifically so the large per-group prefix stays warm in the LLM's prompt cache. graph-system's design explicitly defers this ("Pipelines that need ordered iteration for cache discipline ... stay as Python driver loops that call `runtime.run` per item"). For that reviewer it means the most-important production execution path bypasses the graph runtime entirely and loses cohort replay coverage. Suggested resolution: a `GroupedSequentialFanOut` edge variant taking a `group_by` key -- runs same-group items sequentially in the same process, parallel across groups. The cache-discipline use case is recurring whenever an LLM call has a stable system-prompt prefix and a per-item suffix.
 
 ## Suggested features (not yet in the plan)
 
@@ -94,7 +94,7 @@ Beyond the six post-v1 candidates above, the second feedback round surfaced addi
 
 - **Schema-evolution migration hook for cache entries.** When a consumer-side schema changes (e.g. their glossary format gains a field), the consumer needs a declared migration step that re-keys old cache entries instead of invalidating wholesale (a wholesale invalidation costs the loc consumer a multi-day re-translation). **Priority assessment: low.** Conflicts with the kit's "no backwards compatibility in development" stance; the kit's posture is "rename atomically per CL," which works for kit-internal schema but not for consumer-side schema that drives cache keys. The right answer here may be guidance ("migrate cache entries in a CL-aligned way") rather than a kit feature.
 
-### From the dialog system user
+### From the content system user
 
 - **Tracked-file edit precondition primitive.** Nodes that write to VCS-tracked files often need an explicit "edit-open" step against the version control system before the write, or the write silently no-ops. A declarative `requires_edit_open: [<path>...]` (or more generally, a pre-execution precondition hook on Node) would let canonical-output writes and python_script writes participate without each node reinventing the gate. **Priority assessment: medium.** The specific VCS varies by consumer (git vs Perforce vs other); the kit-level abstraction is "node-level pre-execution precondition," which is more broadly useful (env-var presence checks, path-exists checks, capability checks). Worth promoting if a second consumer surfaces a similar pre-execution-gate need.
 
