@@ -23,7 +23,7 @@ capability_skill:
       - asset inspection, reference graph traversal, property reading and writing
       - scripts that work with the Editor open or closed (commandlet)
       - host-side venv management and UE-side dependency setup via unreal-pip
-      - searching the bundled stubs/unreal.py API surface
+      - searching the best available enriched or stock unreal.py API surface
     excludes:
       - blueprint edits requiring graph manipulation (use a blueprint-details skill)
       - non-Python Editor UI work
@@ -64,9 +64,9 @@ capability_skill:
         - ue_runner.py re-execs itself under the plugin venv (~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/) so upyrc/pyyaml resolve from any invoking Python -- but only if bootstrap has provisioned that venv (see the Precondition section).
     - id: search_stubs
       keywords: [search stubs, find class, find method, API lookup, autocomplete equivalent]
-      user_objective: Look up class names, method signatures, or property names in the bundled unreal.py stub file before authoring a script.
-      operation: grep -i "<pattern>" ${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/stubs/unreal.py
-      tool: grep
+      user_objective: Look up class names, method signatures, or property names in the best available Unreal API stub before authoring a script.
+      operation: python ${CLAUDE_PLUGIN_ROOT}/scripts/search_unreal_stub.py "<pattern>" --project-root <project-root>
+      tool: scripts/search_unreal_stub.py
       scope_axes: [classes, methods]
       reference_section: architecture.md (stubs)
   gotchas:
@@ -133,7 +133,10 @@ capability_skill:
 - **ue_runner.py** -- The host-side runner shipped at `scripts/ue_runner.py`. Auto-detects Editor presence; falls back to commandlet when the Editor is closed.
 - **commandlet mode** -- Headless UE process that loads the project and runs the script without opening the Editor UI. Asset loading, registry queries, property R/W, reference graph walks, and saves all work in commandlet mode.
 - **remote mode** -- Sends the script over UDP multicast to a running Editor's upyrc listener.
-- **stubs** -- Searchable API stubs at `stubs/unreal.py` for grep/IDE introspection.
+- **stubs** -- Searchable API metadata. The search action prefers the durable
+  enriched stub at `<project>/.plugin-data/plugins-kit/unreal-kit/unreal.py`,
+  then the machine-local stock stub at
+  `~/.claude/plugins/data/plugins-kit/unreal-kit/stubs/unreal.py`.
 - **unreal-pip** -- UE-side package manager. Bridges PyPI packages into UE's Python via the bootstrap pattern (sys.path injection + ensure_dependencies()).
 - **upyrc** -- Host-side library used by ue_runner.py to send scripts over UDP multicast to a running Editor.
 
@@ -152,6 +155,12 @@ capability_skill:
 ## Precondition - bootstrap must have provisioned unreal-kit
 
 Before invoking the plugin venv interpreter (`~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/Scripts/python.exe`) to run `ue_runner.py`, confirm `~/.claude/plugins/data/plugins-kit/unreal-kit/bootstrap.log` exists. If it does not, the venv interpreter path won't exist either and the command fails opaquely (no Python starts, so the in-script guard can't fire). Tell the user "the bootstrap plugin hasn't provisioned unreal-kit -- install/enable plugins-kit:bootstrap and start a new session" and stop.
+
+For API search, run `scripts/search_unreal_stub.py`. It preflights the enriched
+and stock locations in that order. If neither exists, it states that API search
+is unavailable and reads the `unreal_enriched_stub` prepared statement from
+`~/.claude/plugins/data/plugins-kit/unreal-kit/deferred_requirements.json` when
+available. Stub absence never blocks script execution.
 
 ## Core Patterns
 

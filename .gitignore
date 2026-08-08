@@ -17,6 +17,7 @@ CLAUDE.local.md
 .workflow-kit/
 .githooks/project-terms.txt
 .DS_Store
+plugins/unreal-kit/skills/ue-python-api/stubs/unreal.py
 # Includes dev/tasks/. Task folders are DELIBERATELY untracked in this repo --
 # see "Task folders are gitignored here" in CLAUDE.md. Do not add a
 # !dev/tasks/ exception; awesome-kit:task's "dev/tasks is version-controlled"

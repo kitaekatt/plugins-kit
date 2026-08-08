@@ -15,7 +15,7 @@ Game development plugin with the most complex bootstrap — system tools, venv, 
 | Tool | `git` not installed | `command -v git` | Platform-specific install command |
 | Tool | `curl` not installed (Windows/Ubuntu) | `command -v curl` | `winget install cURL.cURL` / `sudo apt install -y curl` |
 | Library/Data | Python venv missing or broken | Check dir → binary → `import upyrc; import yaml` | `uv sync` from `pyproject.toml` |
-| Library/Data | PyPI package missing (UE stubs) | Check `stubs/unreal.py` exists | Download `unreal-stub` from PyPI, extract from wheel |
+| Library/Data | Stock UE stub missing | Check `${data_dir}/stubs/unreal.py` exists | Download `unreal-stub` from PyPI, extract from wheel into machine-local data |
 
 ### Manual
 
@@ -23,7 +23,7 @@ Game development plugin with the most complex bootstrap — system tools, venv, 
 |-----------|-------------|-------------|
 | UE project path unknown (auto-detect failed) | Config check + auto-detect from CWD both fail | Ask user for `.uproject` path, write to config |
 | UE Editor settings written but not active | Settings just written to `UserEngine.ini` | User restarts UE Editor, types `fixed` |
-| Project-specific stubs unavailable | `<project>/Intermediate/PythonStub/unreal.py` doesn't exist | User enables Developer Mode, restarts editor, types `fixed` |
+| Durable enriched stub absent or stale | Compare `<project>/.plugin-data/plugins-kit/unreal-kit/unreal.py` with the generated source, read-only | Record a deferred requirement; user explicitly runs the refresh action if enriched search is needed |
 
 ## Manifest (`bootstrap.json`)
 
@@ -50,7 +50,7 @@ Standard operations are declared in the manifest — the engine handles these wi
   "pypi_packages": [
     {
       "package": "unreal-stub",
-      "extract_to": "${plugin_root}/skills/ue-python-api/stubs/unreal.py",
+      "extract_to": "${data_dir}/stubs/unreal.py",
       "extract_pattern": "*.py"
     }
   ]
@@ -67,10 +67,10 @@ The script handles only UE-specific custom logic — everything standard is in t
 def bootstrap(ctx):
     """unreal-kit bootstrap script — custom logic only.
 
-    Standard operations (tools, PATH, venv, ini settings, PyPI stubs)
+    Standard operations (tools, PATH, venv, ini settings, stock PyPI stub)
     are handled by the manifest. This script handles:
     - UE project discovery (domain-specific heuristic)
-    - Project-specific stub copy (conditional on project state)
+    - Read-only durable enriched-stub presence/freshness check
     """
 
     # --- UE project discovery (custom) ---
@@ -96,13 +96,27 @@ def bootstrap(ctx):
             )
             return  # can't proceed without project path
 
-    # --- Project-specific stubs (optional upgrade) ---
-    project_stubs = Path(uproject).parent / "Intermediate" / "PythonStub" / "unreal.py"
-    stubs_path = ctx.plugin_path / "skills" / "ue-python-api" / "stubs" / "unreal.py"
-    if project_stubs.exists():
-        import shutil
-        shutil.copy2(project_stubs, stubs_path)
-        ctx.add_info("Copied project-specific UE stubs (richer than PyPI stubs)")
+    # --- Durable enriched stub (optional, read-only check) ---
+    generated_stub = Path(uproject).parent / "Intermediate" / "PythonStub" / "unreal.py"
+    durable_stub = resolve_plugin_data_dir(
+        ctx.project_dir,
+        marketplace="plugins-kit",
+        plugin="unreal-kit",
+        config=ctx.config,
+    ) / "unreal.py"
+    if not durable_stub.exists() or (
+        generated_stub.exists()
+        and not filecmp.cmp(generated_stub, durable_stub, shallow=False)
+    ):
+        defer = getattr(ctx, "add_deferred_requirement", None)
+        if defer:
+            defer(
+                "unreal_enriched_stub",
+                user_msg="The durable enriched stub is absent or stale.",
+                agent_msg="Run unreal-kit's explicit refresh action if enriched search is needed.",
+                satisfied_by="python ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_unreal_stub.py --project-root <project-root>",
+            )
+        ctx.log_ok("Enriched UE stub refresh deferred to explicit action")
 ```
 
 ## Library Usage
@@ -116,16 +130,17 @@ def bootstrap(ctx):
 | Manifest | Download and extract `unreal-stub` wheel | `ensure_pypi_package()` |
 | Script | Discover `.uproject` from CWD | Custom (`discover_uproject()`) |
 | Script | Discover engine directory | Custom (`discover_engine()`) |
-| Script | Copy project-specific stubs | Custom (`shutil.copy2`) |
+| Script | Check durable enriched stub without writing | Custom (`filecmp.cmp`, `add_deferred_requirement`, `log_ok`) |
+| Explicit action | Announce and refresh durable enriched stub | `scripts/refresh_unreal_stub.py` |
 
 ## Observations
 
 - Most complex bootstrap of the three — but the manifest handles the bulk of operations, leaving the script focused on domain-specific discovery
 - The hybrid split is clean: manifest for "ensure X exists," script for "figure out where X is"
-- Custom logic is limited to UE-specific discovery (2 functions) and a conditional file copy
+- Custom bootstrap logic is limited to UE-specific discovery and a read-only enriched-stub check
 - Three distinct fix-all/fixed scenarios:
   1. **fix-all**: Missing tools → install commands (manifest-driven)
   2. **fix-all**: Unknown project path → ask user (script-driven)
   3. **fixed**: Editor settings written → user restarts editor (manifest-driven, with fixed directive)
 - The `ini_settings` manifest entry depends on `${uproject_dir}` — the engine gracefully skips entries with unresolved variables, so the manifest and script cooperate: first run discovers the project (script), subsequent runs apply ini settings (manifest)
-- Stubs have two tiers: PyPI (manifest, automatic) and project-specific (script, conditional). The bootstrap handles both, preferring project-specific when available
+- Stubs have two tiers: stock PyPI data is machine-local and automatic; the enriched stub is durable consuming-project data and only an explicit human-invoked refresh may write it. API search prefers enriched, then stock, and reports an actionable unavailable message when neither exists.

@@ -65,7 +65,7 @@ A declarative configuration file covering automatable operations. The engine rea
   "pypi_packages": [
     {
       "package": "unreal-stub",
-      "extract_to": "${plugin_root}/skills/ue-python-api/stubs/unreal.py",
+      "extract_to": "${data_dir}/stubs/unreal.py",
       "extract_pattern": "*.py"
     }
   ],

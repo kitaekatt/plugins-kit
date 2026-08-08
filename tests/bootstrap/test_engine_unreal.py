@@ -44,7 +44,7 @@ class TestUnrealKitManifestStructure:
         assert len(manifest["pypi_packages"]) >= 1
         pkg = manifest["pypi_packages"][0]
         assert pkg["package"] == "unreal-stub"
-        assert "${plugin_root}" in pkg["extract_to"]
+        assert pkg["extract_to"] == "${data_dir}/stubs/unreal.py"
 
     def test_has_script(self, manifest):
         assert manifest["script"]["path"] == "custom_bootstrap.py"
@@ -70,8 +70,8 @@ class TestUnrealKitVariableResolution:
 
     def test_pypi_extract_resolves(self):
         variables = build_variables("/opt/unreal-kit", "/data/unreal-kit")
-        result = resolve_vars("${plugin_root}/skills/ue-python-api/stubs/unreal.py", variables)
-        assert result == "/opt/unreal-kit/skills/ue-python-api/stubs/unreal.py"
+        result = resolve_vars("${data_dir}/stubs/unreal.py", variables)
+        assert result == "/data/unreal-kit/stubs/unreal.py"
 
 
 class TestUnrealKitIniSettings:
@@ -135,3 +135,99 @@ class TestCustomBootstrapScript:
         result = module.autodetect()
         # May be None or dict depending on CWD, but should not raise
         assert result is None or isinstance(result, dict)
+
+    def test_missing_durable_stub_is_deferred_without_writing(self, tmp_path):
+        module = self._load_module()
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        uproject = project_dir / "Game.uproject"
+        uproject.write_text("{}", encoding="ascii")
+        generated = project_dir / "Intermediate" / "PythonStub" / "unreal.py"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("generated", encoding="ascii")
+        ctx = _StubContext(project_dir, uproject)
+
+        module.bootstrap(ctx)
+
+        assert [item[0] for item in ctx.deferred] == ["unreal_enriched_stub"]
+        durable = project_dir / ".plugin-data" / "plugins-kit" / "unreal-kit" / "unreal.py"
+        assert not durable.exists()
+        assert ctx.action_logs == []
+        assert ctx.ok_logs == [
+            "stubs: durable enriched stub refresh deferred to explicit action"
+        ]
+
+    def test_matching_durable_stub_is_current(self, tmp_path):
+        module = self._load_module()
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        uproject = project_dir / "Game.uproject"
+        uproject.write_text("{}", encoding="ascii")
+        generated = project_dir / "Intermediate" / "PythonStub" / "unreal.py"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("same", encoding="ascii")
+        durable = project_dir / ".plugin-data" / "plugins-kit" / "unreal-kit" / "unreal.py"
+        durable.parent.mkdir(parents=True)
+        durable.write_text("same", encoding="ascii")
+        ctx = _StubContext(project_dir, uproject)
+
+        module.bootstrap(ctx)
+
+        assert ctx.deferred == []
+        assert ctx.ok_logs == ["stubs: durable enriched stub is current"]
+
+    def test_stale_durable_stub_is_deferred(self, tmp_path):
+        module = self._load_module()
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        uproject = project_dir / "Game.uproject"
+        uproject.write_text("{}", encoding="ascii")
+        generated = project_dir / "Intermediate" / "PythonStub" / "unreal.py"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("new", encoding="ascii")
+        durable = project_dir / ".plugin-data" / "plugins-kit" / "unreal-kit" / "unreal.py"
+        durable.parent.mkdir(parents=True)
+        durable.write_text("old", encoding="ascii")
+        ctx = _StubContext(project_dir, uproject)
+
+        module.bootstrap(ctx)
+
+        assert [item[0] for item in ctx.deferred] == ["unreal_enriched_stub"]
+        assert durable.read_text(encoding="ascii") == "old"
+
+    @staticmethod
+    def _load_module():
+        import importlib.util
+
+        script_path = os.path.normpath(
+            os.path.join(
+                os.path.dirname(__file__),
+                os.pardir,
+                os.pardir,
+                "plugins",
+                "unreal-kit",
+                "custom_bootstrap.py",
+            )
+        )
+        spec = importlib.util.spec_from_file_location("_cb_stub_tests", script_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+
+class _StubContext:
+    def __init__(self, project_dir: Path, uproject: Path):
+        self.config = {"uproject": str(uproject)}
+        self.project_dir = str(project_dir)
+        self.deferred = []
+        self.action_logs = []
+        self.ok_logs = []
+
+    def add_deferred_requirement(self, name, **kwargs):
+        self.deferred.append((name, kwargs))
+
+    def log(self, message):
+        self.action_logs.append(message)
+
+    def log_ok(self, message):
+        self.ok_logs.append(message)

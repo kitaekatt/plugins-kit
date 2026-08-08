@@ -95,7 +95,7 @@ def bootstrap(ctx):
     }
 
 
-def test_repo_unreal_manifest_maps_plugin_root_to_repo_path():
+def test_repo_unreal_manifest_has_no_repo_write_target():
     manifest_path = "plugins/unreal-kit/bootstrap.json"
     source = (ROOT / manifest_path).read_bytes()
 
@@ -103,7 +103,7 @@ def test_repo_unreal_manifest_maps_plugin_root_to_repo_path():
         return (ROOT / repo_path).read_bytes()
 
     targets = guard.manifest_write_targets({manifest_path: source}, load_script)
-    assert "plugins/unreal-kit/skills/ue-python-api/stubs/unreal.py" in targets
+    assert targets == set()
 
 
 def test_refusal_message_states_principle_doc_and_override():

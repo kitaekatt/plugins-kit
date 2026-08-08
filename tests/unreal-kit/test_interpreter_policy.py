@@ -32,6 +32,8 @@ if str(_LIB_DIR) not in sys.path:
 _HOST_SCRIPTS = (
     "skills/ue-python-api/scripts/ue_runner.py",
     "scripts/ue_env_cli.py",
+    "scripts/refresh_unreal_stub.py",
+    "scripts/search_unreal_stub.py",
     "skills/fix-up-redirectors/scripts/classify_safety.py",
     "skills/fix-up-redirectors/scripts/filter_safe_by_code_refs.py",
     "skills/fix-up-redirectors/scripts/scan_code_references.py",

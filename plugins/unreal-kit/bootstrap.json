@@ -1,5 +1,5 @@
 {
-  "requires_bootstrap": "0.28.0",
+  "requires_bootstrap": "0.75.0",
   "tools": [
     {
       "name": "p4",
@@ -57,7 +57,7 @@
   "pypi_packages": [
     {
       "package": "unreal-stub",
-      "extract_to": "${plugin_root}/skills/ue-python-api/stubs/unreal.py"
+      "extract_to": "${data_dir}/stubs/unreal.py"
     }
   ],
   "plugins": [

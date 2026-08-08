@@ -2,9 +2,10 @@
 
 Two entry points:
 - autodetect(): Discovers .uproject and engine_dir from CWD (no-arg, returns dict | None)
-- bootstrap(ctx): Copies project-specific stubs if available (upgrade from PyPI stubs)
+- bootstrap(ctx): Checks whether the durable enriched stub is present and fresh
 """
 
+import filecmp
 import os
 import sys
 from pathlib import Path
@@ -23,7 +24,7 @@ def autodetect() -> Optional[Dict[str, str]]:
 
     from ue_discovery import find_uproject_files, find_engine_dir
 
-    # Search CWD only (no walk-up) — autodetect runs from the project root,
+    # Search CWD only (no walk-up) -- autodetect runs from the project root,
     # so walking up would find unrelated .uproject files in parent dirs.
     found = find_uproject_files(Path.cwd().resolve(), max_depth=2)
     uproject = found[0] if found else None
@@ -38,30 +39,64 @@ def autodetect() -> Optional[Dict[str, str]]:
 
 
 def bootstrap(ctx: Any) -> None:
-    """Post-manifest bootstrap: copy project-specific stubs if available.
-
-    If the UE project has Developer Mode enabled and has generated stubs
-    (Intermediate/PythonStub/unreal.py), copy those over the PyPI generic
-    stubs since they include project-specific types.
-    """
+    """Check the optional durable enriched stub without writing project data."""
     uproject = ctx.config.get("uproject")
-    if not uproject:
+    project_root = getattr(ctx, "project_dir", None)
+    if not uproject or not project_root:
         return
 
-    project_dir = Path(uproject).parent
-    project_stub = project_dir / "Intermediate" / "PythonStub" / "unreal.py"
+    from bootstrap_lib.config_resolve import resolve_plugin_data_dir
 
-    if not project_stub.is_file():
+    generated_stub = (
+        Path(uproject).parent / "Intermediate" / "PythonStub" / "unreal.py"
+    )
+    durable_stub = (
+        resolve_plugin_data_dir(
+            project_root,
+            marketplace="plugins-kit",
+            plugin="unreal-kit",
+            config=ctx.config,
+        )
+        / "unreal.py"
+    )
+
+    durable_present = durable_stub.is_file() and durable_stub.stat().st_size > 0
+    stale = (
+        durable_present
+        and generated_stub.is_file()
+        and not filecmp.cmp(generated_stub, durable_stub, shallow=False)
+    )
+    if durable_present and not stale:
+        if generated_stub.is_file():
+            ctx.log_ok("stubs: durable enriched stub is current")
+        else:
+            ctx.log_ok(
+                "stubs: durable enriched stub is present; generated source is "
+                "unavailable for comparison"
+            )
         return
 
-    # Target is where PyPI stubs get extracted
-    target = Path(ctx.plugin_root) / "skills" / "ue-python-api" / "stubs" / "unreal.py"
-
-    # Only upgrade if project stub is larger (more complete)
-    if target.is_file() and project_stub.stat().st_size <= target.stat().st_size:
+    defer = getattr(ctx, "add_deferred_requirement", None)
+    if defer is None:
         return
-
-    import shutil
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(project_stub, target)
-    ctx.log(f"stubs: upgraded to project-specific stubs ({project_stub.stat().st_size / 1024:.0f} KB)")
+    defer(
+        "unreal_enriched_stub",
+        user_msg=(
+            "The consuming project's enriched Unreal API stub is absent or stale. "
+            "Stock API search remains available when its machine-local stub exists."
+        ),
+        agent_msg=(
+            "Unreal API search prefers the consuming project's enriched stub, "
+            "which is absent or stale. If the machine-local stock stub is also "
+            "missing, start a new Claude Code session so bootstrap can download "
+            "it. If project-specific API search is needed, enable Developer Mode, "
+            "complete a full compile so Intermediate/PythonStub/unreal.py exists, "
+            "then run `python ${CLAUDE_PLUGIN_ROOT}/scripts/"
+            "refresh_unreal_stub.py --project-root <project-root>`."
+        ),
+        satisfied_by=(
+            "python ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_unreal_stub.py "
+            "--project-root <project-root>"
+        ),
+    )
+    ctx.log_ok("stubs: durable enriched stub refresh deferred to explicit action")

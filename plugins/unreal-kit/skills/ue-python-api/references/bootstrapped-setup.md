@@ -10,7 +10,8 @@ The bootstrap plugin automatically handles all setup on session start. This docu
 | Remote execution | `bRemoteExecution=True` | `<Project>/Config/UserEngine.ini` |
 | Developer mode | `bIsDeveloperMode=True` | `<Project>/Config/UserEngine.ini` |
 | Host Python deps | `upyrc`, `pyyaml` | Plugin venv (managed by bootstrap) |
-| API stubs | `unreal.py` stub file | `stubs/unreal.py` (from PyPI; project-specific stubs copied when available) |
+| Stock API stub | Generic `unreal.py` from PyPI | `~/.claude/plugins/data/plugins-kit/unreal-kit/stubs/unreal.py` (machine-local) |
+| Enriched API stub check | Read-only presence/freshness check | `<project>/.plugin-data/plugins-kit/unreal-kit/unreal.py` (durable project data) |
 
 ## Troubleshooting
 
@@ -33,7 +34,9 @@ If remote execution fails with "Editor not responding":
 
 ### Stubs missing
 
-If `stubs/unreal.py` doesn't exist:
-- Bootstrap downloads from PyPI automatically. Check for network/firewall issues.
-- Stubs are optional — scripts still run without them, but API search won't work.
-- Project-specific stubs (richer) are copied from `<Project>/Intermediate/PythonStub/unreal.py` when available (requires Developer Mode enabled and Editor restarted at least once).
+Run `python ${CLAUDE_PLUGIN_ROOT}/scripts/search_unreal_stub.py "<pattern>" --project-root <project-root>`. It prefers the durable enriched stub, then the machine-local stock stub.
+
+If neither exists:
+- API search says plainly that it is unavailable; scripts still run.
+- Start a new Claude Code session to let bootstrap retry the stock PyPI download. Check network/firewall issues if it remains missing.
+- For the enriched stub, enable Developer Mode, complete a full compile, then run `python ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_unreal_stub.py --project-root <project-root>`. This explicit action announces and writes the durable destination; bootstrap never writes it.

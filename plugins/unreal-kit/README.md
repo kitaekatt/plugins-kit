@@ -23,7 +23,7 @@ effective-use layer on top of them -- the settings bootstrap writes to turn
 the API on (`bRemoteExecution`, Developer Mode), the `ue_runner`
 orchestration (auto-detecting a running Editor for the ~2s UDP path vs a
 headless commandlet when it is closed, re-execing under the plugin venv, and
-returning results as YAML), and the encoded expertise (bundled API stubs and
+returning results as YAML), and the encoded expertise (searchable API stubs and
 the gotcha corpus below). It claims exactly that, not the Python bridge
 itself.
 
@@ -69,9 +69,13 @@ deps (upyrc, pyyaml), API stubs, and per-project config. Silent when healthy.
   into `<Project>/Config/UserEngine.ini` -- per-user, not checked in. The
   Editor must be restarted once after these land. Without them, everything
   still works via the slower commandlet mode.
-- **Developer Mode** (optional) -- with it enabled, UE generates
-  project-specific Python stubs that bootstrap copies over the generic PyPI
-  stubs, giving the agent richer API search including your project's types.
+- **Developer Mode** (optional) -- with it enabled and after a full compile, UE
+  generates an enriched project-specific Python stub. Bootstrap only checks
+  whether the durable copy is absent or stale; refresh it explicitly from the
+  consuming project root with
+  `python ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_unreal_stub.py --project-root .`.
+  The command announces the destination before writing under
+  `.plugin-data/plugins-kit/unreal-kit/`.
 - **Platform:** developed and used on Windows. Bootstrap's venv layer is
   cross-platform, but parts of the UE-side tooling (unreal-pip's subprocess
   handling) are currently Windows-specific -- treat non-Windows as untested.
