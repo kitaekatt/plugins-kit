@@ -250,6 +250,48 @@ claudx        # claude + --plugin-dir for every plugins-kit plugin (see ~/.bashr
 
 **Bypassable at your discretion.** This is a default, not a hard gate. Trivial changes — a version-only bump, a doc/CLAUDE.md edit, a single-file mechanical fix — don't need a smoke session; skip it and say so. An unambiguous publish go-signal does not silently waive validation, but you may explicitly bypass when the change can't plausibly break a runtime surface.
 
+### Anti-pattern: creating a branch, or switching the one that is checked out
+
+**Stay on `dev`. Do not create branches, and never run `git checkout` / `git switch`
+to move the working tree onto another branch.** Work here happens in ONE shared
+working tree that more than one agent session may be using at the same time, and the
+checked-out branch is global to that tree. Moving it is not a local decision — it
+silently reaches into every other session running in this directory.
+
+The failure is not that a branch is untidy; it is that **another session's commits
+land on your branch instead of `dev`**, and it happens with no error and no warning.
+The other session keeps working, runs `git commit`, and git faithfully commits to
+whatever branch the tree is on. If your branch was cut from `master` (the natural
+choice for a review or a cherry-pick), those commits are now parented on `master` and
+have silently lost every `dev` commit beneath them.
+
+**Worked example (2026-08-08).** A `review-bootstrap-cli` branch was created off
+`origin/master` to scope a code review to two commits, avoiding the 15 unrelated
+commits sitting in `origin/master..origin/dev`. The intent was good and the review
+itself was scoped correctly. But `git checkout review-bootstrap-cli` moved the shared
+tree, and a concurrent session then committed twice — `agent-glue: state the consumer
+feedback as requirements` and `repo: drop incidental references to a private consuming
+project`. Both landed on the throwaway master-based branch. `git branch --contains`
+confirmed they existed on that branch and nowhere else: two commits of another
+session's work, stranded, one `git branch -D` away from being unreachable.
+
+Recovery took a commit of in-flight work, three cherry-picks, a content-identity check
+per commit, and a force-delete. Nothing was lost, but only because the branch was still
+there to find. That is the good outcome, not the expected one.
+
+**Scope a review or a diff with a range, never with a branch.** `git log`, `git diff`,
+and `prepare_review.py` all take `<a>..<b>` / `<a>...<b>` and read history without
+touching the tree. Path scoping (`-- plugins/foo/`) narrows further. If commits are
+non-contiguous, review each one individually (`<sha>^..<sha>`) — several small reviews
+beat one branch switch. When isolation genuinely requires a separate checkout, use
+`git worktree add` (a second directory, the shared tree untouched), never a branch
+switch in this one.
+
+**Publishing does not need a branch either.** `publish.py` owns the `dev` -> `master`
+flow. The one case that historically wanted a feature branch — gotcha 1, cherry-picking
+past unrelated `dev` commits — is a decision to escalate to the user, not to solve by
+creating a branch yourself.
+
 ### Safe-publish practices
 
 Publishing is the riskiest moment in this repo because it broadcasts to every consumer. Two failure modes have happened, both recoverable but visible (the retraction commits in `git log master` are the scars). Avoid them with these checks.
@@ -591,7 +633,31 @@ claude_md:
         hand" in the Bootstrap section above.
       origin: "User directive 2026-07-27 after nine plugins reported 'not cached' and the engine was run by hand to clear it -- the machine recovered, the root cause became unrecoverable, and no fix shipped to any other machine."
       added: "2026-07-27"
+    - id: never_create_or_switch_branches
+      keywords: [branch, git checkout, git switch, feature branch, create a branch, scope a review, cherry-pick branch, shared working tree, concurrent session, stranded commits, worktree, stay on dev]
+      summary: Stay on dev -- never create a branch or move the checked-out branch. The working tree is shared with concurrent agent sessions, so a branch switch silently redirects THEIR commits onto your branch.
+      detail: |
+        The checked-out branch is a property of the one shared working tree, not of your
+        session. Switching it reaches into every other session running in this directory:
+        the other session commits normally, git writes to whatever branch the tree is on,
+        and no error is raised. When the branch was cut from master -- the natural base for
+        a review or cherry-pick -- those commits are parented on master and have silently
+        lost every dev commit beneath them.
+        Scope reviews and diffs with a RANGE (`<a>..<b>`, `<sha>^..<sha>`) plus path
+        filters; git log / git diff / prepare_review.py all read history without touching
+        the tree. Non-contiguous commits: review each individually rather than assembling a
+        branch. If a separate checkout is genuinely required, `git worktree add` gives one
+        without moving this tree. Publishing needs no branch -- publish.py owns dev -> master,
+        and gotcha 1 (unrelated dev commits) is a decision to escalate to the user, not to
+        solve by creating a branch.
+        Full narrative and the worked example: "Anti-pattern: creating a branch, or
+        switching the one that is checked out" in the Development Workflow section above.
+      origin: "2026-08-08 -- a review-bootstrap-cli branch was created off origin/master to scope a code review; a concurrent session then committed twice onto it, stranding both commits on a master-based throwaway branch that git branch --contains showed existed nowhere else."
+      added: "2026-08-08"
   conventions:
+    - rule: Stay on dev -- never create a branch or run git checkout/switch in this working tree; scope reviews with a commit range, and use git worktree if a separate checkout is truly needed.
+      keywords: [branch, git checkout, git switch, shared working tree, concurrent session, scope a review, range, worktree]
+      why: The tree is shared with other agent sessions and the checked-out branch is global to it, so a switch silently redirects their commits onto your branch. See the never_create_or_switch_branches insight and the anti-pattern section in Development Workflow.
     - rule: When a machine is wedged, snapshot its state before any repair, and ship the repair in bootstrap or bootstrap-stuck-fix rather than fixing the machine by hand.
       keywords: [wedged machine, snapshot first, hand repair, manual fix, anti-pattern, ship the repair]
       why: A hand-repair reaches one machine and destroys the evidence every other machine's fix depends on. See the never_hand_repair_a_wedge insight and the anti-pattern section in Bootstrap.
