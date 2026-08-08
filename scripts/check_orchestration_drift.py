@@ -6,23 +6,24 @@ The invariant
 -------------
 `plugins/awesome-kit/skills/orchestrate/defaults/orchestration.yaml` has two
 halves. The DECISION half (keys listed in DECISION_KEYS) is DERIVED from the
-design documents under `docs/planning/orchestrate-2.0/` -- tier-principles.md
-and lexicon.md. Authorship is ONE-WAY: change a principle, THEN re-derive the
-data. Never edit the derived tree and back-fill a principle to match it.
+design documents under `plugins/awesome-kit/skills/orchestrate/references/` --
+tier-principles.md and lexicon.md. Authorship is ONE-WAY: change a principle,
+THEN re-derive the data. Never edit the derived tree and back-fill a principle
+to match it.
 
 Nothing enforced that rule; it was a comment in the YAML header. This script
 makes a violation visible at commit time, in two steps:
 
 1. DRIFT. A fingerprint of the decision half is committed at
-   docs/planning/orchestrate-2.0/decision-fingerprint.txt. If the YAML's
-   decision half no longer matches it, the commit is blocked until the
-   fingerprint is regenerated -- which is the moment the author is forced to
-   notice they are changing derived data.
+   plugins/awesome-kit/skills/orchestrate/references/decision-fingerprint.txt.
+   If the YAML's decision half no longer matches it, the commit is blocked
+   until the fingerprint is regenerated -- which is the moment the author is
+   forced to notice they are changing derived data.
 
 2. ONE-WAY AUTHORSHIP. Regenerating the fingerprint alone would make step 1
    a rubber stamp, so a staged diff that MOVES the baseline must also stage a
-   change under docs/planning/orchestrate-2.0/ other than the fingerprint file
-   itself. The gate keys on the fingerprint rather than on orchestration.yaml,
+   change under plugins/awesome-kit/skills/orchestrate/references/ other than
+   the fingerprint file itself. The gate keys on the fingerprint rather than on orchestration.yaml,
    so an edit to the machine half of that file -- which is derived from nothing
    -- never trips it.
 
@@ -74,8 +75,17 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Repo-relative, so every message and every stored path stays portable.
 POLICY_REL = "plugins/awesome-kit/skills/orchestrate/defaults/orchestration.yaml"
-PRINCIPLES_DIR_REL = "docs/planning/orchestrate-2.0"
+PRINCIPLES_DIR_REL = "plugins/awesome-kit/skills/orchestrate/references"
 FINGERPRINT_REL = f"{PRINCIPLES_DIR_REL}/decision-fingerprint.txt"
+
+# The principles dir doubles as the orchestrate skill's general references/
+# directory (codex-dispatch.md, configuration.md, why-delegate.md live there
+# too, alongside the design docs the decision half is derived from). The
+# one-way-authorship gate must key on the actual source documents, not on
+# "anything under this directory" -- otherwise an edit to an unrelated
+# reference would count as a principles change and silently weaken the gate.
+PRINCIPLE_FILENAMES = ("tier-principles.md", "lexicon.md")
+PRINCIPLE_FILES_REL = tuple(f"{PRINCIPLES_DIR_REL}/{name}" for name in PRINCIPLE_FILENAMES)
 
 UPDATE_COMMAND = "uv run python scripts/check_orchestration_drift.py --update"
 
@@ -218,16 +228,18 @@ def baseline_changed(paths: Iterable[str]) -> bool:
 
 
 def touches_principles(paths: Iterable[str]) -> bool:
-    """A change under the principles dir, EXCLUDING the fingerprint file.
+    """A change to one of the actual principle documents (PRINCIPLE_FILES_REL).
 
-    The exclusion is what keeps the check non-vacuous: the baseline lives
-    beside the principles it guards, so counting it as a principles change
-    would let regenerating it satisfy its own gate.
+    Keyed on the specific source files rather than "anything under
+    PRINCIPLES_DIR_REL": that directory is also the orchestrate skill's
+    general references/ dir, so a directory-wide check would treat an edit to
+    an unrelated reference (codex-dispatch.md, configuration.md,
+    why-delegate.md) as a principles change and let it satisfy the gate. The
+    fingerprint file is naturally excluded since it is not in this tuple --
+    regenerating it must never count as a principles change on its own.
     """
-    prefix = PRINCIPLES_DIR_REL + "/"
-    return any(
-        p.startswith(prefix) and p != FINGERPRINT_REL for p in paths
-    )
+    principle_paths = set(PRINCIPLE_FILES_REL)
+    return any(p in principle_paths for p in paths)
 
 
 # --------------------------------------------------------------------------

@@ -18,7 +18,9 @@ capacity is left all vary by user and by machine. Step 3 runs a script that prin
 resolved policy. Do not answer those questions from this file or from memory -- this file has
 no tier table, deliberately. Users tune the policy by overriding
 [defaults/orchestration.yaml](defaults/orchestration.yaml); see
-[references/configuration.md](references/configuration.md) for the schema and layering.
+[references/configuration.md](references/configuration.md) for the schema and layering,
+or [references/orchestrate-2.0-design.md](references/orchestrate-2.0-design.md) for the
+design rationale behind the decision tree (`tier-principles.md`, `lexicon.md`).
 
 ```yaml
 technique_skill:

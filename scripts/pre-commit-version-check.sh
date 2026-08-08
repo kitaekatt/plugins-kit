@@ -43,7 +43,8 @@ uv run python "$REPO_ROOT/scripts/check_bootstrap_dependency.py"
 
 # Derivation invariant: the DECISION half of the orchestrate skill's
 # orchestration.yaml is derived one-way from the principles under
-# docs/planning/orchestrate-2.0/. Blocks a derived-data edit that carries no
-# corresponding principles change. Same escape hatch. Rationale, and an honest
-# statement of what it does NOT guarantee, in the script header.
+# plugins/awesome-kit/skills/orchestrate/references/. Blocks a derived-data
+# edit that carries no corresponding principles change. Same escape hatch.
+# Rationale, and an honest statement of what it does NOT guarantee, in the
+# script header.
 uv run python "$REPO_ROOT/scripts/check_orchestration_drift.py"

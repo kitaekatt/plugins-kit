@@ -1,14 +1,19 @@
 # orchestrate 2.0 -- design, not yet implemented
 
 Design artifacts for replacing the `orchestrate` skill's prose policy with a derived
-decision tree. **Nothing here drives the live skill.** The rendered policy still comes
-from `plugins/awesome-kit/skills/orchestrate/defaults/orchestration.yaml` via
-`orchestration_guidance.py`.
+decision tree. **Nothing here drives the live skill's rendered output.** The rendered
+policy still comes from `plugins/awesome-kit/skills/orchestrate/defaults/orchestration.yaml`
+via `orchestration_guidance.py` -- a renderer that derives the tree from these documents
+at build time is still future work (see Remaining work below).
 
-They live under `docs/planning/` rather than in the skill's `references/` precisely so
-they cannot be mistaken for the source of truth while the renderer still reads the
-YAML. Moving them into the skill is part of implementing this, not part of designing
-it.
+These documents live in this `references/` directory because
+`scripts/check_orchestration_drift.py` polices it directly: a commit that changes the
+DECISION half of `orchestration.yaml` is blocked unless the staged diff also touches
+`tier-principles.md` or `lexicon.md` here (see "The drift check" below). They were
+originally parked under `docs/planning/` specifically because nothing read them yet,
+and colocating them with the skill would have implied they were the source of truth
+while the renderer still read only the YAML. That reason expired once the drift check
+started reading this directory, so they moved here with it.
 
 ## The two documents
 
@@ -81,9 +86,10 @@ something that cannot see the old tree, it cannot drift.
 2. Rewrite the render half of `orchestration_guidance.py`. It cannot express this
    today: every section is a flat record with named leaf fields, and `fold()` collapses
    multi-line scalars to one line.
-3. Move these two documents into the skill's `references/` once the renderer reads
-   them. (The drift check that was the other half of this item is built -- see
-   below.)
+
+(A third item used to be listed here: move these two documents into the skill's
+`references/`. That is done -- this file's location -- once the drift check below
+started reading this directory instead of `docs/planning/`.)
 
 ## The drift check
 
