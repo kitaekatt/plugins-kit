@@ -42,15 +42,14 @@ uv run python "$REPO_ROOT/scripts/check_pyproject_sync.py"
 uv run python "$REPO_ROOT/scripts/check_bootstrap_dependency.py"
 
 # Derivation invariant: the DECISION half of the orchestrate skill's
-# orchestration.yaml is derived one-way from the principles under
-# plugins/awesome-kit/skills/orchestrate/references/. Blocks a derived-data
-# edit that carries no corresponding principles change. Same escape hatch.
-# Rationale, and an honest statement of what it does NOT guarantee, in the
-# script header.
-uv run python "$REPO_ROOT/scripts/check_orchestration_drift.py"
-
-# Complete derivation check: the drift guard above is one-directional, while
-# this verifies that the staged policy exactly matches its staged principles.
+# orchestration.yaml is generated one-way from the principles under
+# plugins/awesome-kit/skills/orchestrate/references/tier-principles.md and
+# lexicon.md. This verifies the staged policy exactly matches what the
+# generator would produce from the staged principles (index-aware: it reads
+# staged blobs when anything is staged). A prior fingerprint-based drift
+# guard (check_orchestration_drift.py) was retired once this check existed --
+# a fingerprint cannot disagree with principles compiled from those same
+# principles.
 if ! uv run python "$REPO_ROOT/scripts/generate_orchestration.py" --check; then
     echo ""
     echo "The generated orchestration policy is stale."
