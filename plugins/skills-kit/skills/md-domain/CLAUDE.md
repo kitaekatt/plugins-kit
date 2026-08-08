@@ -181,4 +181,41 @@ claude_md:
         the criteria seam (coverage-detect.js refuses without refs.criteria) and
         the registration/go-live pairing above.
       added: "2026-08-08"
+    - id: coverage_depth_asks_rather_than_defaults
+      keywords: [basic advanced, analysis depth, intent gate, AskUserQuestion, extreme experience, default disclosure, verdict carries the mode, one dial not two]
+      summary: Coverage depth is one dial with two operating points (basic / advanced). When the invocation expresses no depth the intent gate ASKS via AskUserQuestion rather than defaulting -- the rare case where prompting beats a sensible default, because both directions of a silent wrong choice are expensive and invisible.
+      detail: |
+        The dial moves READ DEPTH and PASS COUNT together: basic is a bounded
+        sampled read with a single assessment pass; advanced reads every source
+        file completely and adds an invariant-discovery pass before assessment
+        and a verification pass after it. Depth and passes are genuinely two
+        axes and were deliberately collapsed into one flag -- a caller wanting
+        only recall or only precision still gets both, which is worse
+        conceptually and better ergonomically.
+        Calibration, not quality, names the levels: basic is what a Claude Code
+        power user should expect from a routine invocation; advanced is "give me
+        the full experience", the shape the generation method itself ran.
+        WHY IT ASKS. Defaulting silently is wrong in both directions and the user
+        cannot see either error as it happens: choosing advanced opts them into
+        an extreme, expensive run they never requested, and choosing basic hands
+        someone who wanted exhaustive treatment a bounded sample whose
+        COVERAGE-ASSESSED they may read as "verified absent". A prompt costs real
+        UX and is justified here by that asymmetry, not by a general preference
+        for asking. An explicit flag still runs silently, and a non-interactive
+        dispatch takes basic and DISCLOSES it in keyword form (defaults:
+        depth=basic) -- disclosure being the fallback for the interactive case,
+        since a disclosed default is correctable only after the expensive run.
+        CONSEQUENCE FOR THE VERDICT. COVERAGE-ASSESSED means "not found within
+        budget" under basic and "verified absent" under advanced, so the report
+        must carry the mode; a verdict printed without it is ambiguous.
+      origin: |
+        Surface: authoring the criteria required settling evidence depth, which
+        md-domain-coverage-gaps.md left as a blocking open question with unknown
+        relative recall between the alternatives. Finding: the owner reframed
+        depth as a parameter rather than a fixed criterion, then ruled that the
+        gate should ask rather than default because the default risked opting a
+        user into an extreme experience. Follow-up: an earlier "flag only,
+        default basic" ruling is SUPERSEDED by this record -- the flag still
+        wins, but silence now prompts instead of defaulting.
+      added: "2026-08-08"
 ```
