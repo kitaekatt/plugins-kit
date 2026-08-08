@@ -91,6 +91,40 @@ class TestPhasesStandDownWhenCliMissing:
         assert "skipped 1 entry" in ctx.actions[0]
 
 
+class TestStandDownPreservesPinIntent:
+    """The gate must not drop CLI-independent state on its way out.
+
+    Because the resolver is un-memoized, the CLI can appear mid-pass (the
+    tools phase installs it). A manifest that stood down here can therefore be
+    followed by one that runs the loop -- and if this stand-down forgot the
+    pin, that later manifest's unpinned entry would take the
+    load_pin_markers() branch and silently release a pin the user declared.
+    """
+
+    def test_declared_pins_are_recorded_despite_standing_down(self, cli_missing):
+        pinned = engine._pinned_marketplaces_this_run
+        before = set(pinned)
+        try:
+            pinned.clear()
+            ctx = _RecordingContext({
+                "marketplaces": [
+                    {"name": "pinned-mkt", "source": "https://example.invalid/a.git",
+                     "pin": "abc123"},
+                    {"name": "unpinned-mkt", "source": "https://example.invalid/b.git"},
+                ]
+            })
+            engine._phase_marketplaces(ctx)
+
+            assert "pinned-mkt" in pinned, (
+                "a declared pin must survive the stand-down or a later manifest "
+                "can silently unpin it"
+            )
+            assert "unpinned-mkt" not in pinned, "only declared pins are recorded"
+        finally:
+            pinned.clear()
+            pinned.update(before)
+
+
 class TestResolverIsNotMemoized:
     def test_install_mid_pass_is_observed(self, monkeypatch):
         """A miss must not be cached: the tools phase can install claude
@@ -134,12 +168,21 @@ class TestGateIsInertWhenCliPresent:
         assert not any("skipped" in a for a in ctx.actions)
 
     def test_marketplaces_phase_proceeds_past_the_gate(self, cli_present, monkeypatch):
+        """Stub load_pin_markers, NOT check_marketplace_exists.
+
+        For an unpinned entry the loop consults load_pin_markers() BEFORE
+        check_marketplace_exists, and a marker hit runs release_marketplace_pin
+        + update_marketplace -- a real `git checkout` in the developer's live
+        marketplace clone -- then `continue`s. Stubbing only the later call
+        therefore lets the first entry mutate real state while the test still
+        passes on the second. Gate on the earliest real-state call instead.
+        """
         from bootstrap_lib import marketplace_lifecycle
 
-        def reached(name):
-            raise _ReachedTheLoop(name)
+        def reached():
+            raise _ReachedTheLoop("load_pin_markers")
 
-        monkeypatch.setattr(marketplace_lifecycle, "check_marketplace_exists", reached)
+        monkeypatch.setattr(marketplace_lifecycle, "load_pin_markers", reached)
 
         ctx = _RecordingContext(MANIFEST)
         with pytest.raises(_ReachedTheLoop):

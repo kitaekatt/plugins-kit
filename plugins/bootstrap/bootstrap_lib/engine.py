@@ -3833,7 +3833,21 @@ def _phase_marketplaces(ctx):
     # problem, so adding per-entry failures here would only pad the fix-all
     # list with items that cannot succeed.
     if not resolve_claude_cli():
-        skipped = len(ctx.manifest.get("marketplaces", []))
+        entries = ctx.manifest.get("marketplaces", [])
+        # Pin intent is CLI-INDEPENDENT state and must survive the stand-down.
+        # resolve_claude_cli() is un-memoized precisely because the answer can
+        # flip mid-pass (the tools phase installs the CLI and PATH-links it in
+        # process), so a LATER manifest's phase can run the loop this one
+        # skipped. If this stand-down dropped the pin record, that later
+        # manifest's unpinned entry would take the load_pin_markers() branch
+        # and silently release a pin the user declared here -- the exact
+        # cross-manifest failure _pinned_marketplaces_this_run exists to
+        # prevent. Record it before returning, mirroring the unconditional
+        # "record pin intent even if applying fails below" in the loop.
+        for mkt_def in entries:
+            if mkt_def.get("pin") and mkt_def.get("name"):
+                _pinned_marketplaces_this_run.add(mkt_def["name"])
+        skipped = len(entries)
         ctx.action(
             f"{ctx.prefix}marketplaces: skipped {skipped} "
             f"{'entry' if skipped == 1 else 'entries'} - claude CLI unavailable "
