@@ -56,10 +56,12 @@
     },
     {
       "name": "claude",
+      "$comment": "Bootstrap drives marketplace and plugin lifecycle through the `claude` CLI, so the standalone CLI is a hard dependency -- not merely 'nice to have because the user is obviously running Claude'. The VS Code extension bundles a PRIVATE copy for its chat panel and deliberately does not put `claude` on PATH (https://code.claude.com/docs/en/vs-code), so an extension-only machine reaches this entry with no resolvable CLI and every marketplace/plugin step fails. Use the native installer rather than winget/brew: only native installs auto-update in the background (https://code.claude.com/docs/en/setup), so a package-manager copy would go stale forever and we would own that. The native installer lands the binary in ~/.local/bin, which installPath resolves directly -- that is also what lets the engine link the directory onto PATH after the install (see _link_tool_dir_to_path), instead of waiting for a PATH change to propagate into the already-running session.",
+      "installPath": "~/.local/bin",
       "install": {
-        "macos": "manual",
-        "windows": "manual",
-        "ubuntu": "manual"
+        "macos": "curl -fsSL https://claude.ai/install.sh | bash",
+        "windows": "powershell -NoProfile -Command \"irm https://claude.ai/install.ps1 | iex\"",
+        "ubuntu": "curl -fsSL https://claude.ai/install.sh | bash"
       }
     }
   ],

@@ -2575,9 +2575,16 @@ def _strategy_install_command(ctx):
             detail=install_detail,
         )
     elif install_state == "manual_install":
+        # Say what we OBSERVED (could not resolve it), never what we inferred
+        # (that it is absent). A private copy the resolver cannot see is not an
+        # absent tool: the Claude Code VS Code extension ships a bundled `claude`
+        # and deliberately keeps it off PATH, so asserting "not installed" told a
+        # user staring at a running Claude to go install Claude -- advice that was
+        # both false and useless. The distinction costs one word and is the
+        # difference between a report and a fabrication.
         _append_detail(
             ctx.action_entries,
-            f"{ctx.prefix}{result.subject}: not installed — manual install required "
+            f"{ctx.prefix}{result.subject}: could not be resolved — manual install required "
             f"(no unattended installer for this OS); install it and ensure it's on PATH",
             display=f"{result.subject}: manual install needed",
         )

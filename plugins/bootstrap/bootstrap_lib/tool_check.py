@@ -131,12 +131,23 @@ def check_tool(
     return _tool_result(name, False, "not found in PATH", install_cmd=install_cmd)
 
 
-def run_install(install_cmd: str) -> tuple[bool, str]:
+# Installers legitimately take minutes: the Claude Code native installer alone
+# downloads a ~280MB binary, which needs ~19 Mbit/s sustained to fit inside two
+# minutes. The timeout exists to bound a HUNG installer, not to cap a slow link
+# -- killing a working download reports "install failed" for a machine that was
+# merely on hotel wifi, which is exactly the misleading-failure class this
+# module otherwise tries to avoid. Ten minutes still bounds a hang.
+INSTALL_TIMEOUT_SECONDS = 600
+
+
+def run_install(install_cmd: str, timeout: int = INSTALL_TIMEOUT_SECONDS) -> tuple[bool, str]:
     """Run a platform-specific install command.
 
     On Windows, explicitly uses bash (from Git for Windows) so that install
     commands can use Unix syntax ($HOME, &&, curl pipes, etc.) regardless of
-    whether Claude Code was launched from PowerShell or cmd.
+    whether Claude Code was launched from PowerShell or cmd. A command that
+    needs PowerShell syntax must therefore invoke it explicitly
+    (`powershell -NoProfile -Command "..."`), as the `claude` entry does.
 
     Returns:
         (success, output) — success=True if returncode==0
@@ -154,7 +165,7 @@ def run_install(install_cmd: str) -> tuple[bool, str]:
                     [bash, "-c", install_cmd],
                     capture_output=True,
                     text=True,
-                    timeout=120,
+                    timeout=timeout,
                 )
             else:
                 result = subprocess.run(
@@ -162,7 +173,7 @@ def run_install(install_cmd: str) -> tuple[bool, str]:
                     shell=True,
                     capture_output=True,
                     text=True,
-                    timeout=120,
+                    timeout=timeout,
                 )
         else:
             result = subprocess.run(
@@ -170,11 +181,11 @@ def run_install(install_cmd: str) -> tuple[bool, str]:
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=timeout,
             )
         output = (result.stdout + result.stderr).strip()
         return result.returncode == 0, output
     except subprocess.TimeoutExpired:
-        return False, "install timed out after 120s"
+        return False, f"install timed out after {timeout}s"
     except Exception as e:
         return False, str(e)
