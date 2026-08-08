@@ -29,6 +29,17 @@ feed it in -- `-` means "read the prompt from stdin":
 Launch each unit as its own Bash tool call with run_in_background: true.
 
 Flags that matter:
+  -m, --model <MODEL>
+        The rung. Model ids are FULLY QUALIFIED -- `gpt-5.6-sol`, not
+        `sol`. The bare codenames are not dispatchable and fail at
+        launch.
+  -c model_reasoning_effort=<low|medium|high|max>
+        The effort dial, and it is a `-c` CONFIG KEY, not a flag --
+        `codex exec --help` does not list it, so looking there and
+        finding nothing is the expected outcome, not a sign it does not
+        exist. Verify a spelling with `--strict-config`, which rejects
+        an unknown key at launch (`unknown configuration field ... in
+        -c/--config override`) instead of silently ignoring it.
   -s, --sandbox <read-only|workspace-write|danger-full-access>
         The ONLY safety control in exec mode. `--ask-for-approval` does
         NOT exist here: exec is non-interactive, so there is nobody to

@@ -483,8 +483,9 @@ backends:
         None built in -- give each parallel writer a worktree (`-C <dir>`) or
         sequence them; read-only units may share a tree.
       effort: >-
-        Model via `-m`; effort via Codex's own config key (see `codex exec
-        --help` for exact spelling).
+        Model via `-m`, fully qualified. Effort via `-c
+        model_reasoning_effort=<low|medium|high|max>` -- a config key, not a
+        flag, so `--help` does not list it.
       network: >-
         Yes, via the network_access override below; otherwise `-s
         workspace-write` blocks egress at a loopback proxy.

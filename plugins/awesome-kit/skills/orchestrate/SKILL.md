@@ -127,8 +127,10 @@ technique_skill:
         - n: 7
           action: Synthesize completed results; cross-check units that disagree before accepting either.
           detail: >-
-            A report describes what the unit intended, not necessarily what it did -- verify
-            file-writing units against the actual diff before treating the work as done.
+            Synthesize from the reports; pull raw output into this context only for the items
+            you must verify or that units disagreed on. A report describes what the unit
+            intended, not necessarily what it did -- verify file-writing units against the
+            actual diff before treating the work as done.
         - n: 8
           action: Relay the substance -- findings, decisions, verified-vs-reported -- in your final message.
       gotchas:
