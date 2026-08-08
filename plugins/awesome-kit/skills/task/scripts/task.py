@@ -427,6 +427,12 @@ def _cmd_archive(args: argparse.Namespace) -> int:
             "submit it with your version control (e.g. p4 submit), then run "
             "delete"
         )
+    elif result.vcs_ignored:
+        disposition = (
+            "final state recorded; folder kept -- it is git-ignored, so "
+            "version control holds no copy of it and never will; run delete "
+            "to remove it PERMANENTLY, or keep it as local scratch"
+        )
     else:
         disposition = f"moved to {result.archived_to}, status: archived"
     print(f"archived: {result.canonical} ({disposition})")

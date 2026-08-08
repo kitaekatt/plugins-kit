@@ -26,6 +26,23 @@ Readings chosen in Step 5 (flagged in the implementation report):
   final state and KEEPS the folder (``vcs_pending``), leaving submission to
   the agent/user who knows the workspace's VCS (e.g. ``p4 submit``) --
   finish with ``delete`` once submitted.
+- **A git-IGNORED folder is neither of those cases** (added 2026-08-08). Git
+  is present and can see the folder, but is configured never to carry it, so
+  the commits cannot succeed -- ``git add`` refuses an ignored path -- and no
+  later commit can either. "Version control is the record, therefore the
+  folder may go" simply does not hold, so archive records the final state and
+  KEEPS the folder (``vcs_ignored``), reporting that ``delete`` is
+  unrecoverable there. This is a supported configuration, not a
+  misconfiguration: a project may deliberately gitignore its task root to
+  keep task folders local scratch. Previously this crashed mid-write, after
+  the final-state writes and before the commit that justified them.
+- **archive's pre-commit writes are rolled back when the commit fails.** The
+  final state has to exist ON DISK to be committed, so the writes precede the
+  git phase; a failure there would otherwise leave a log line asserting the
+  folder was committed and removed, in a folder that is still present and
+  still unrecorded. After the final-state commit succeeds there is nothing to
+  undo -- the record is in history and a later failure leaves a recoverable
+  folder.
 - **delete keeps the commit-first guard where git can verify it**
   (``validate.git_vcs_state``, shared predicate): delete is the no-ceremony
   removal verb -- in a git repo it refuses a dirty dev/tasks folder rather
@@ -101,7 +118,7 @@ from .state_ops import (
     _resolve,
     _write_task_yaml,
 )
-from .validate import git_vcs_state
+from .validate import git_ignores_path, git_vcs_state
 
 
 @dataclass(frozen=True)
@@ -113,6 +130,11 @@ class ArchiveResult:
     # submission to the workspace's VCS (and the finishing delete) is the
     # agent/user's to do.
     vcs_pending: bool = False
+    # Non-tmp, inside a git repo that IGNORES the folder: no commit is
+    # possible and none ever will be, so the final state is recorded and the
+    # folder KEPT. Distinct from vcs_pending -- there is nothing to submit,
+    # and `delete` destroys the folder with no version-control copy.
+    vcs_ignored: bool = False
     # Absent `durable_outputs` (every task predating the field): the rule
     # degrades to this note rather than refusing -- manifests here stay
     # backwards-READABLE.
@@ -266,12 +288,22 @@ def _git_toplevel(folder: Path) -> Path | None:
     return Path(top) if top else None
 
 
-def _git_commit_folder(repo_root: Path, folder: Path, message: str) -> None:
+def _git_commit_folder(
+    repo_root: Path, folder: Path, message: str, *, tracked_only: bool = False
+) -> None:
     """Stage and commit exactly the task folder's changes (adds, edits, AND
     deletions). Pathspec-limited commit: pre-staged unrelated index content
-    is never swept in. Raises StateOpError on any git failure."""
+    is never swept in. Raises StateOpError on any git failure.
+
+    ``tracked_only`` swaps ``add -A`` for ``add -u`` -- required when the
+    folder is git-IGNORED but holds force-added tracked files: ``-A`` refuses
+    an ignored pathspec outright, while ``-u`` stages exactly the changes to
+    what git already tracks. That is also the right semantic, not just the
+    working one: an ignored folder's NEW files were deliberately excluded,
+    and archive must not quietly start tracking them."""
+    add = ["add", "-u"] if tracked_only else ["add", "-A"]
     for cmd in (
-        ["git", "-C", str(repo_root), "add", "-A", "--", str(folder)],
+        ["git", "-C", str(repo_root), *add, "--", str(folder)],
         [
             "git",
             "-C",
@@ -306,6 +338,40 @@ def _append_archive_log_entry(folder: Path, detail: str) -> None:
         fh.write(f"- {stamp}: archive: {detail}\n")
 
 
+#: The documents archive writes BEFORE it can commit them. The final state
+#: has to exist on disk to be committed, so these writes necessarily precede
+#: the git phase -- which makes them the thing to undo when git then fails.
+_ARCHIVE_WRITTEN_DOCS = ("task.yaml", "log.md")
+
+
+def _snapshot_docs(folder: Path) -> dict[str, bytes | None]:
+    """Byte snapshot of the documents archive is about to rewrite (None for
+    one that does not exist yet)."""
+    snap: dict[str, bytes | None] = {}
+    for name in _ARCHIVE_WRITTEN_DOCS:
+        path = folder / name
+        try:
+            snap[name] = path.read_bytes()
+        except OSError:
+            snap[name] = None
+    return snap
+
+
+def _restore_docs(folder: Path, snap: dict[str, bytes | None]) -> None:
+    """Put the snapshotted documents back. Best-effort: a restore that
+    itself fails must not replace the original error, which is the one that
+    explains what went wrong."""
+    for name, original in snap.items():
+        path = folder / name
+        try:
+            if original is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(original)
+        except OSError:
+            continue
+
+
 def archive_task(ref: str, project_root: Path) -> ArchiveResult:
     """``archive <ref>`` (spec 7.1): pre folder exists + stored status
     active. Then per closure policy (spec 2.5, revised): tmp ->
@@ -314,7 +380,10 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
     commit it, remove the folder, commit the removal (version control is the
     record; two pathspec-limited commits); non-tmp outside any git repo ->
     record the final state and KEEP the folder (``vcs_pending``: the agent
-    submits it with the workspace's VCS, then runs delete)."""
+    submits it with the workspace's VCS, then runs delete); non-tmp inside a
+    git repo that IGNORES the folder -> record the final state and KEEP the
+    folder (``vcs_ignored``: no commit is possible, so removal would be
+    unrecoverable -- ``delete`` is the user's explicit call)."""
     resolved, folder, data = _archive_preflight(
         ref,
         project_root,
@@ -331,6 +400,7 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
     folder_resolved = folder.resolve()
     archived_to: str | None = None
     vcs_pending = False
+    vcs_ignored = False
     if resolved.location == resolve.LOCATION_TMP:
         parking = resolve.archived_tmp_folder(project_root, resolved.stub)
         if parking.exists():
@@ -351,9 +421,32 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
         )
     else:
         repo_root = _git_toplevel(folder)
+        if repo_root is not None and git_vcs_state(folder) == "ignored":
+            # Inside a repo, but git is configured never to carry this
+            # folder. The commits below cannot succeed (`git add` refuses an
+            # ignored path), and no later commit can either -- so "version
+            # control is the record, therefore the folder may go" does not
+            # hold, and removing the folder would destroy content that exists
+            # nowhere else. Record the final state, keep the folder, and say
+            # plainly that `delete` is unrecoverable here.
+            # NB: `repo_root` is deliberately left set. It records a fact that
+            # is true (we ARE in a repo); routing is `vcs_ignored`'s job.
+            # Clearing it here would read as vcs_pending -- "submit it with
+            # your VCS" -- which is precisely the wrong advice for a folder
+            # no VCS will ever accept.
+            vcs_ignored = True
         data["task"]["status"] = "archived"
+        pre_write = _snapshot_docs(folder)
         _write_task_yaml(folder, data)
-        if repo_root is None:
+        if vcs_ignored:
+            _append_archive_log_entry(
+                folder,
+                "final state recorded; folder KEPT -- it is git-ignored, so "
+                "version control holds no copy (delete removes it "
+                "permanently)",
+            )
+            removed = False
+        elif repo_root is None:
             # Not a git workspace: no git command runs. The final state is
             # recorded on disk; submitting it with the workspace's VCS (e.g.
             # p4 submit) and then removing the folder (delete) is the
@@ -366,22 +459,42 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
             removed = False
             vcs_pending = True
         else:
+            # The final state must be ON DISK to be committed, so these
+            # writes necessarily precede the commit that validates them. If
+            # the commit then fails, the writes are a LIE the failure leaves
+            # behind -- a log line asserting the folder was committed and
+            # removed, in a folder that is still there and still unrecorded.
+            # Undo them, so a failed archive is a no-op rather than a folder
+            # whose own history denies its existence.
             _append_archive_log_entry(
                 folder,
                 "final state committed; folder removed (version control "
                 "is the record)",
             )
-            _git_commit_folder(
-                repo_root,
-                folder_resolved,
-                f"task archive: {resolved.canonical} (final state)",
-            )
+            # Ignored-but-tracked (force-added): git IS the record for what
+            # it already carries, so the normal path runs -- with `-u`, the
+            # only staging mode git permits on an ignored pathspec.
+            tracked_only = git_ignores_path(folder)
+            try:
+                _git_commit_folder(
+                    repo_root,
+                    folder_resolved,
+                    f"task archive: {resolved.canonical} (final state)",
+                    tracked_only=tracked_only,
+                )
+            except StateOpError:
+                _restore_docs(folder, pre_write)
+                raise
+            # Past this point the final state IS in git history, so the
+            # writes are no longer unbacked and there is nothing to undo:
+            # a failure of the removal commit leaves a recoverable folder.
             shutil.rmtree(folder)
             _git_commit_folder(
                 repo_root,
                 folder_resolved,
                 f"task archive: {resolved.canonical} (remove folder; "
                 "version control is the record)",
+                tracked_only=tracked_only,
             )
             removed = True
     return ArchiveResult(
@@ -389,6 +502,7 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
         folder_removed=removed,
         archived_to=archived_to,
         vcs_pending=vcs_pending,
+        vcs_ignored=vcs_ignored,
         durable_note=durable_note,
     )
 

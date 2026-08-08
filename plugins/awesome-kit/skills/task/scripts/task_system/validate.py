@@ -128,19 +128,80 @@ def _git_status_porcelain(folder: Path) -> str | None:
     return proc.stdout
 
 
+def git_ignores_path(folder: Path) -> bool:
+    """True when git's ignore RULES cover the path, whether or not anything
+    inside it is tracked. Public: location_ops needs it to pick a staging
+    mode -- ``git add -A`` REFUSES an ignored pathspec outright, even when
+    files inside it are tracked.
+
+    ``--no-index`` is load-bearing. Plain ``check-ignore`` consults the index
+    first and reports a TRACKED path as not-ignored (exclude rules do not
+    apply to tracked files), which is the opposite of the question here: the
+    rules still cover the path, and ``git add -A`` still refuses it."""
+    try:
+        proc = subprocess.run(
+            ["git", "check-ignore", "--no-index", "-q", "--", str(folder)],
+            cwd=folder,
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
+
+
+def _git_tracks_nothing_in(folder: Path) -> bool:
+    """True when git has no tracked file anywhere under the folder."""
+    try:
+        proc = subprocess.run(
+            ["git", "ls-files", "--", str(folder)],
+            cwd=folder,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0 and proc.stdout.strip() == ""
+
+
+def _git_ignores_folder(folder: Path) -> bool:
+    """True when git is configured to ignore the folder AND carries no
+    tracked file inside it -- i.e. version control will never hold this
+    content, now or later.
+
+    Both halves are required. ``check-ignore`` alone is not enough: a
+    force-added (``git add -f``) file inside an ignored directory IS tracked,
+    and git is the record for it."""
+    return git_ignores_path(folder) and _git_tracks_nothing_in(folder)
+
+
 def git_vcs_state(folder: Path) -> str:
-    """The folder's git state: ``"clean"`` / ``"dirty"`` / ``"no-repo"``.
+    """The folder's git state: ``"clean"`` / ``"dirty"`` / ``"ignored"`` /
+    ``"no-repo"``.
 
     The task system has NO dependency on git -- version control is the
     record, and git is merely the VCS this script can detect and automate.
     ``"no-repo"`` therefore means "cannot verify here", NOT "unrecorded":
     the workspace may use Perforce or another VCS the agent understands.
+
+    ``"ignored"`` is the opposite claim, and the reason it cannot be folded
+    into ``"clean"``: git is present, can see the folder, and will never
+    carry it. ``git status --porcelain`` is SILENT about an ignored path, so
+    an ignored folder reads as clean on the porcelain alone -- a false clean
+    that told archive its commits would succeed (they cannot) and told
+    validate the durable work was saved (it is not, and will not be).
+
     Public: location_ops.archive/delete share this exact predicate, so the
     validate finding and the verbs' behavior can never diverge."""
     out = _git_status_porcelain(folder)
     if out is None:
         return "no-repo"
-    return "dirty" if out.strip() != "" else "clean"
+    if out.strip() != "":
+        return "dirty"
+    if _git_ignores_folder(folder):
+        return "ignored"
+    return "clean"
 
 
 def _doc_sections(lines: list[str]) -> list[tuple[str, int]]:
@@ -400,6 +461,20 @@ def validate_ref(
                 "durable work -- commit it (version control is the record; "
                 "archive commits the final state itself, delete refuses until "
                 "committed)"
+            )
+        elif vcs == "ignored":
+            # A NOTE, never a warning: warnings gate ``work``, and a project
+            # that deliberately gitignores its task root (a documented,
+            # supported choice -- task folders as local scratch) would have
+            # every one of its tasks blocked. The folder is not misconfigured;
+            # it is opted out of durability, and the agent should know that
+            # rather than be stopped by it.
+            result.notes.append(
+                f"version control will not carry {resolved.canonical}: the "
+                "folder is git-ignored, so nothing here is recoverable once "
+                "removed -- treat it as scratch, and keep anything that must "
+                "outlive the task in the repo it describes (declare it with "
+                "update --durable-output)"
             )
         elif vcs == "no-repo":
             result.notes.append(

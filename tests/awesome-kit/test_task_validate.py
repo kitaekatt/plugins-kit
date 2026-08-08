@@ -301,6 +301,35 @@ class TestWarnings:
             "version-control state unverified" in n for n in result.notes
         )
 
+    def test_git_ignored_dev_tasks_folder_notes_not_warns(self, git_root):
+        # `git status --porcelain` is SILENT about an ignored path, so an
+        # ignored folder used to read as CLEAN -- validate reported the
+        # durable work as saved when git will never carry it. It must be
+        # reported, but as a NOTE: warnings gate `work`, and a project that
+        # deliberately gitignores its task root would have every task blocked.
+        (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
+        _commit_all(git_root)
+        make_task(git_root, "dev/tasks/scratch")
+        result = v("dev/tasks/scratch", git_root)
+        assert result.classification == "active"
+        assert result.warnings == []
+        assert result.clean
+        assert any(
+            "version control will not carry" in n for n in result.notes
+        )
+
+    def test_git_ignored_is_not_reported_as_unverified(self, git_root):
+        # The two notes make OPPOSITE claims and must not be confused:
+        # no-repo means "cannot check here"; ignored means "checked, and git
+        # will never hold it".
+        (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
+        _commit_all(git_root)
+        make_task(git_root, "dev/tasks/scratch")
+        result = v("dev/tasks/scratch", git_root)
+        assert not any(
+            "version-control state unverified" in n for n in result.notes
+        )
+
     def test_tmp_task_never_gets_git_warnings(self, tmp_path):
         make_task(tmp_path, "tmp/foo")
         assert v("tmp/foo", tmp_path).clean

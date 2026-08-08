@@ -306,6 +306,80 @@ class TestArchiveLib:
             location_ops.archive_task("tmp/a", tmp_path)
         assert read_block(folder)["status"] == "closed"
 
+    def test_git_ignored_folder_records_and_keeps_folder(self, git_root):
+        # A project may deliberately gitignore its task root, keeping task
+        # folders as local scratch. Git is present and CAN see the folder,
+        # but will never carry it -- so the commits cannot succeed and the
+        # "version control is the record, therefore the folder may go"
+        # justification does not hold. Before the fix this crashed at
+        # `git add -A` AFTER the final-state writes had landed.
+        (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
+        _commit_all(git_root)
+        folder = make_task(git_root, "dev/tasks/scratch")
+        result = location_ops.archive_task("dev/tasks/scratch", git_root)
+        assert result.vcs_ignored is True
+        assert result.vcs_pending is False
+        assert result.folder_removed is False
+        assert folder.is_dir()
+        assert read_block(folder)["status"] == "archived"
+        log = (folder / "log.md").read_text(encoding="utf-8")
+        assert "git-ignored" in log
+        # The log must NOT claim a commit or a removal that did not happen.
+        assert "final state committed" not in log
+        # No archive commit was invented for an unreachable folder.
+        assert not any("task archive" in s for s in _log_subjects(git_root))
+
+    def test_git_ignored_delete_finishes(self, git_root):
+        # The second half: delete removes an ignored archived folder. Its
+        # commit-first guard cannot apply (git will never hold this content),
+        # so it must not block -- the CLI disposition is what warns that the
+        # removal is permanent.
+        (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
+        _commit_all(git_root)
+        folder = make_task(git_root, "dev/tasks/scratch")
+        location_ops.archive_task("dev/tasks/scratch", git_root)
+        location_ops.delete_task("dev/tasks/scratch", git_root)
+        assert not folder.exists()
+
+    def test_force_added_file_is_tracked_not_ignored(self, git_root):
+        # `check-ignore` alone would call this ignored, but a force-added
+        # file inside an ignored directory IS tracked and git IS the record
+        # for it -- so the normal commit-and-remove path must still run.
+        (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
+        folder = make_task(git_root, "dev/tasks/durable")
+        subprocess.run(
+            ["git", "-C", str(git_root), "add", "-f", "--", str(folder)],
+            check=True,
+            capture_output=True,
+        )
+        _commit_all(git_root)
+        result = location_ops.archive_task("dev/tasks/durable", git_root)
+        assert result.vcs_ignored is False
+        assert result.folder_removed is True
+        assert not folder.exists()
+
+    def test_failed_commit_rolls_back_the_final_state_writes(
+        self, git_root, monkeypatch
+    ):
+        # The final state must be ON DISK to be committed, so the writes
+        # precede the commit. When the commit then fails, those writes are a
+        # lie the failure leaves behind -- a log line asserting the folder was
+        # committed and removed, in a folder that is still present. A failed
+        # archive must be a no-op.
+        folder = make_task(git_root, "dev/tasks/durable")
+        _commit_all(git_root)
+        before = snapshot(folder)
+
+        def boom(*args, **kwargs):
+            raise StateOpError("git failed during archive (simulated)")
+
+        monkeypatch.setattr(location_ops, "_git_commit_folder", boom)
+        with pytest.raises(StateOpError, match="simulated"):
+            location_ops.archive_task("dev/tasks/durable", git_root)
+        assert folder.is_dir()
+        assert snapshot(folder) == before
+        assert read_block(folder)["status"] == "active"
+
     def test_other_non_active_status_errors(self, tmp_path):
         make_task(tmp_path, "tmp/a", status="blocked")
         with pytest.raises(StateOpError, match="active"):
@@ -611,6 +685,23 @@ class TestArchiveCLI:
         assert out.startswith("archived: dev/tasks/durable (")
         assert "final state recorded; folder kept" in out
         assert "then run delete" in out
+        assert folder.is_dir()
+
+    def test_git_ignored_prints_permanent_delete_warning(self, git_root):
+        (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
+        _commit_all(git_root)
+        folder = make_task(git_root, "dev/tasks/scratch")
+        proc = run_cli(
+            ["archive", "dev/tasks/scratch", "--root", str(git_root)],
+            git_root,
+        )
+        assert proc.returncode == 0, proc.stderr
+        out = proc.stdout.strip()
+        assert "git-ignored" in out
+        # The recovery path must be stated, and stated as destructive -- the
+        # old behavior was a bare git error naming no next step at all.
+        assert "delete" in out
+        assert "PERMANENTLY" in out
         assert folder.is_dir()
 
     def test_closed_task_exits_nonzero_with_reopen_hint(self, tmp_path):
