@@ -209,12 +209,16 @@ MD_DOMAIN_GOTCHAS = """
 # ===========================================================================
 # GENERATED ARTIFACTS (shared by BOTH skills).
 # ---------------------------------------------------------------------------
-# prepare_review detects a machine-generated file from its CONTENT (a banner in
-# the leading lines -- never size alone) and excludes it from the diff chunks
-# entirely, surfacing it under `bundle.generated_files`. Reviewing generator
-# OUTPUT is waste: nobody wrote a line of it, and the only meaningful review
-# target is the GENERATOR, which is reviewed separately as ordinary source. The
-# skill's job is to say so honestly -- an excluded file is NOT a pass.
+# prepare_review detects a machine-generated file on either of two INDEPENDENT
+# axes -- a CONTENT banner in its leading lines, or a DECLARED PATH a plugin
+# writes (a project's durable plugin-data directory, a manifest write target) --
+# and excludes it from the diff chunks entirely, surfacing it under
+# `bundle.generated_files` with the axis that matched. Neither axis subsumes the
+# other: a generator may emit no banner at all, and then only its location says a
+# tool wrote it. Size is never a criterion. Reviewing generator OUTPUT is waste:
+# nobody wrote a line of it, and the only meaningful review target is the
+# GENERATOR, which is reviewed separately as ordinary source. The skill's job is
+# to say so honestly -- an excluded file is NOT a pass.
 # ===========================================================================
 
 # Inserted into step 9's action, after the md-domain report region.
@@ -222,7 +226,10 @@ GENERATED_REPORT = """\
             - Generated artifacts section: if `bundle.generated_files` is non-empty, render a distinct
               `## Generated artifacts (not reviewed)` section -- kept SEPARATE from the code-review
               issues, the md-domain findings, and the mechanical-checks section. One line per entry:
-              its path (`identifier`), its `size_bytes`, and the `generated_signature` that matched.
+              its path (`identifier`), its `size_bytes`, and WHY it was excluded -- `generated_axis`
+              (`content` = a generated-artifact banner matched; `declared_path` = it lives under a
+              path a plugin declares that it writes) together with the `generated_signature` naming
+              the exact banner or path rule.
               Then state once that these files were NOT reviewed because they are machine-generated,
               and that review of generated output belongs on the GENERATOR -- reviewed as ordinary
               source when this change contains it, and otherwise not covered by this review. NEVER
@@ -234,7 +241,8 @@ GENERATED_REPORT = """\
 # Appended to both gotcha blocks (plain text -- no f-string braces).
 GENERATED_GOTCHAS = """
         - A generated file is NEVER a pass. `bundle.generated_files` means "not reviewed", exactly like a `NOT-AUDITED` verdict or the `## Mechanical checks (audit skipped)` section: render it as its own honest line, never inside the clean count, never as DIFF-CLEAN, and never as satisfying a submit gate.
-        - Detection is CONTENT-first, decided by prepare_review, and the skill never re-judges it. Size alone excludes nothing -- a large hand-written file is chunked and fully reviewed as always. Conversely a small generated file is still excluded, because the argument is authorship, not cost.
+        - Detection is a UNION of two axes, decided by prepare_review, and the skill never re-judges it: `content` (a generated-artifact banner) OR `declared_path` (the file lives under a path a plugin declares that it writes, such as a project's durable plugin-data directory). Either one is sufficient, and the second is what catches a generator that emits no banner at all -- nothing in such a file's bytes says a tool wrote it, but its location does, by construction.
+        - Size is NEVER a criterion on either axis. A large hand-written file is chunked and fully reviewed as always; a small generated file is still excluded. The argument is authorship, not cost.
         - Do not review a generated artifact by reading it. If its content looks wrong, the finding belongs on the generator, or on the decision to check the artifact in -- say that, and name the generator when this change contains one.
         - `--review-generated` is the override and it is the AUTHOR's call, never an inference. Pass it only when the user or the author explicitly asks for the generated files to be reviewed."""
 
@@ -675,7 +683,7 @@ __LAUNCH_EMIT__
           tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` when md-domain is available, per the claim probe -- both flags, never just the first)"
           expected: |
-            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-generated -- generated_files (each entry carries identifier, local, generated_signature and size_bytes; such files are excluded from diff_chunks and changed_files, and `--review-generated` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
+            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-generated -- generated_files (each entry carries identifier, local, size_bytes, and the axis that matched -- generated_axis `content` or `declared_path` plus the naming generated_signature; such files are excluded from diff_chunks and changed_files, and `--review-generated` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
           on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
     "__CLAIM_PROBE__", CLAIM_PROBE
 ).replace(
@@ -691,7 +699,7 @@ __LAUNCH_EMIT__
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<CL>  (append `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` when md-domain is available, per the claim probe -- both flags, never just the first)"
           expected: |
-            JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-generated -- generated_files (each entry carries identifier, local, generated_signature and size_bytes; such files are excluded from diff_chunks and changed_files, and `--review-generated` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
+            JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-generated -- generated_files (each entry carries identifier, local, size_bytes, and the axis that matched -- generated_axis `content` or `declared_path` plus the naming generated_signature; such files are excluded from diff_chunks and changed_files, and `--review-generated` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
             Surface the stderr message to the user and stop. No retry.
             Launch note: ALWAYS invoke with an explicit `python3` interpreter (as shown in `tool:`), never as a bare path. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any python3 launcher is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
@@ -777,7 +785,7 @@ GIT_CHECKLIST = f"""\
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
         - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
-        - Generated artifacts (bundle.generated_files) reported via the `## Generated artifacts (not reviewed)` section, naming each file's matched signature, never as an audit or DIFF-CLEAN; review of generated output belongs on the generator
+        - Generated artifacts (bundle.generated_files) reported via the `## Generated artifacts (not reviewed)` section, naming each file's exclusion axis (content banner or declared plugin-write path) and the rule that matched, never as an audit or DIFF-CLEAN; review of generated output belongs on the generator
         - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-domain findings never collapsed
         - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merge conflicts section prepended when bundle.merge_conflicts is non-empty; separate `## md-domain (subject-lens) findings` section when the md-domain pass ran)
         - Newly declined findings recorded to the ledger via `prepare_review.py --ledger-record` (skipped when nothing was declined)"""
@@ -795,7 +803,7 @@ P4_CHECKLIST = f"""\
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
         - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
-        - Generated artifacts (bundle.generated_files) reported via the `## Generated artifacts (not reviewed)` section, naming each file's matched signature, never as an audit or DIFF-CLEAN; review of generated output belongs on the generator
+        - Generated artifacts (bundle.generated_files) reported via the `## Generated artifacts (not reviewed)` section, naming each file's exclusion axis (content banner or declared plugin-write path) and the rule that matched, never as an audit or DIFF-CLEAN; review of generated output belongs on the generator
         - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-domain findings never collapsed
         - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merges section prepended when bundle.unresolved is non-empty; separate `## md-domain (subject-lens) findings` section when the md-domain pass ran)
         - Auto-shelf cleanup invoked when bundle.auto_shelved is true (`prepare_review.py --cleanup <bundle_dir>`)

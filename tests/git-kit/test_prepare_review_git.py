@@ -1019,11 +1019,38 @@ class TestBuildBundleGenerated:
         assert [f["path"] for f in bundle["changed_files"]] == ["src/app.py"]
         entry = bundle["generated_files"][0]
         assert entry["path"] == "stub.py"
+        assert entry["generated_axis"] == "content"
         assert entry["generated_signature"] == "generated-by banner"
         assert entry["size_bytes"] == (git_repo.path / "stub.py").stat().st_size
         diff = _concat_diff_from_chunks(bundle)
         assert "app.py" in diff
         assert "stub.py" not in diff
+
+    def test_unbannered_file_at_a_declared_plugin_path_is_held_back(
+        self, git_repo, tmp_path
+    ):
+        """The motivating case: a generated stub carrying no banner at all.
+
+        Content detection is blind to it; the durable plugin-data path it lives
+        under is what says a plugin wrote it.
+        """
+        git_repo.commit_file("seed.txt", "x\n", "seed")
+        (git_repo.path / ".plugin-data" / "a-marketplace" / "a-plugin").mkdir(
+            parents=True
+        )
+        git_repo.commit_file(
+            ".plugin-data/a-marketplace/a-plugin/api.py",
+            "from __future__ import annotations\nimport sys as _sys\n",
+            "stub",
+        )
+
+        bundle = pr.build_bundle("HEAD~1..HEAD", tmp_path / "bundle")
+
+        assert bundle["changed_files"] == []
+        entry = bundle["generated_files"][0]
+        assert entry["path"] == ".plugin-data/a-marketplace/a-plugin/api.py"
+        assert entry["generated_axis"] == "declared_path"
+        assert entry["generated_signature"] == "declared plugin-data path (durable)"
 
     def test_hand_written_file_keeps_its_full_review(self, git_repo, tmp_path):
         git_repo.commit_file("seed.txt", "x\n", "seed")

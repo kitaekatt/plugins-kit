@@ -703,8 +703,9 @@ def build_bundle(
     are surfaced under a top-level `claimed_files` list instead of
     `changed_files`. When empty the bundle is byte-identical to today's.
 
-    Machine-generated files (detected from content -- see
-    bootstrap_lib.code_review.generated) are likewise held back from the
+    Machine-generated files -- detected from a content signature OR from living
+    under a path a plugin declares that it writes (bootstrap_lib.code_review
+    .generated and .generated_paths) -- are likewise held back from the
     reviewers and surfaced under a top-level `generated_files` list, because
     the review target is the GENERATOR, not its output. `review_generated=True`
     disables that exclusion for an author who explicitly wants the full review.

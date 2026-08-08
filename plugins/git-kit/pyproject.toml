@@ -1,9 +1,12 @@
 [project]
 name = "git-kit"
-version = "0.11.0"
+version = "0.12.0"
 description = "Host-side dependencies for git-kit plugin"
 requires-python = ">=3.12,!=3.14.*"
 
 # bootstrap_lib is provided via the bootstrap shared-libs .pth (this plugin declares
 # "shared_lib_imports": ["bootstrap_lib"] in bootstrap.json), not as a pip dependency.
-dependencies = []
+# PyYAML is needed because the review pipeline resolves a project's declared
+# plugin-write paths through bootstrap_lib.config_resolve, which reads the
+# project's config layer to honour a plugin_data_dir relocation.
+dependencies = ["pyyaml"]

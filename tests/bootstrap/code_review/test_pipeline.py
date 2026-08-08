@@ -817,6 +817,94 @@ class TestAssembleBundleGenerated:
         assert "generated_files" not in core
         assert core["claimed_files"][0]["identifier"] == "a/CLAUDE.md"
 
+    def test_unbannered_stub_at_a_declared_path_is_excluded(self, tmp_path):
+        """Regression guard for the case that motivated the declared-path axis.
+
+        A real multi-megabyte generated API stub carries NO banner -- it begins
+        directly at its imports -- so the content axis returns nothing and the
+        whole fan-out would happen anyway. Its location under the project's
+        durable plugin-data path is the evidence, by construction.
+        """
+        ws = tmp_path / "ws"
+        stub = ws / ".plugin-data" / "a-marketplace" / "a-plugin" / "api.py"
+        stub.parent.mkdir(parents=True)
+        stub.write_text(
+            "from __future__ import annotations\nimport sys as _sys\n",
+            encoding="utf-8",
+        )
+        (ws / "src").mkdir()
+        (ws / "src" / "app.py").write_text("print(1)\n", encoding="utf-8")
+
+        core = assemble_bundle(
+            preamble="",
+            sections=[
+                _added_section("gen-stub", ["import sys as _sys", "def a(): ..."]),
+                _added_section("app", ["print(1)"]),
+            ],
+            files=[
+                {"identifier": "gen-stub", "local": str(stub)},
+                {"identifier": "app", "local": str(ws / "src" / "app.py")},
+            ],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=ws,
+        )
+
+        entry = core["generated_files"][0]
+        assert entry["identifier"] == "gen-stub"
+        assert entry["generated_axis"] == "declared_path"
+        assert entry["generated_signature"] == "declared plugin-data path (durable)"
+        assert len(core["changed_files"]) == 1
+        all_text = "".join(
+            (tmp_path / "b" / c["path"]).read_text(encoding="utf-8")
+            for c in core["diff_chunks"]
+        )
+        assert "gen-stub" not in all_text
+
+    def test_content_axis_reports_its_own_provenance(self, tmp_path):
+        core = assemble_bundle(
+            preamble="",
+            sections=[_added_section("gen/stub.py", [BANNER, "def a(): ..."])],
+            files=[{"identifier": "gen/stub.py", "local": None}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+        )
+        assert core["generated_files"][0]["generated_axis"] == "content"
+
+    def test_declared_path_axis_respects_the_override(self, tmp_path):
+        ws = tmp_path / "ws"
+        stub = ws / ".plugin-data" / "a-marketplace" / "a-plugin" / "api.py"
+        stub.parent.mkdir(parents=True)
+        stub.write_text("import sys\n", encoding="utf-8")
+        core = assemble_bundle(
+            preamble="",
+            sections=[_added_section("gen-stub", ["import sys"])],
+            files=[{"identifier": "gen-stub", "local": str(stub)}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=ws,
+            review_generated=True,
+        )
+        assert "generated_files" not in core
+        assert len(core["changed_files"]) == 1
+
+    def test_ordinary_source_in_a_real_workspace_is_untouched(self, tmp_path):
+        ws = tmp_path / "ws"
+        (ws / "src").mkdir(parents=True)
+        app = ws / "src" / "app.py"
+        app.write_text("print(1)\n", encoding="utf-8")
+        core = assemble_bundle(
+            preamble="",
+            sections=[_added_section("app", ["print(1)"])],
+            files=[{"identifier": "app", "local": str(app)}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=ws,
+        )
+        assert "generated_files" not in core
+        assert len(core["changed_files"]) == 1
+
     def test_generated_file_still_contributes_submit_gates(self, tmp_path):
         ws = tmp_path / "ws"
         (ws / "gen").mkdir(parents=True)

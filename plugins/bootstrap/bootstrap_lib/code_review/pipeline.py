@@ -38,6 +38,10 @@ from bootstrap_lib.code_review.generated import (
     detect_generated,
     local_size,
 )
+from bootstrap_lib.code_review.generated_paths import (
+    declared_generated_rules,
+    match_declared_path,
+)
 from bootstrap_lib.code_review.triviality import (
     mechanical_checks,
     triviality_profile,
@@ -295,18 +299,27 @@ def assemble_bundle(
     when any changed file was detected as machine-generated. With neither
     present the dict is byte-identical to the pre-claim contract.
 
-    Generated-file detection is CONTENT-first (a banner in the file's leading
-    added lines, or in its leading lines on disk -- see
-    bootstrap_lib.code_review.generated), never size-alone: a large
-    hand-written file is still chunked and fully reviewed. A generated file
-    contributes NO chunks and no reviewer lanes, because the review target is
-    its GENERATOR, which is reviewed separately as ordinary source. It is never
-    a pass: the skill renders it as an honest "not reviewed". Claimed files are
-    evaluated first and are never re-routed here -- a subject-lens reviewer
-    already owns them.
+    Generated-file detection is a UNION of two independent axes, and never
+    size-alone -- a large hand-written file is still chunked and fully reviewed:
+
+      1. CONTENT -- a generated-artifact banner in the file's leading added
+         lines, or in its leading lines on disk
+         (bootstrap_lib.code_review.generated).
+      2. DECLARED PATH -- the file lives under a path a plugin declares that it
+         writes, e.g. a project's durable plugin-data directory
+         (bootstrap_lib.code_review.generated_paths). This axis is what catches
+         a generator that emits NO banner: nothing in such a file's bytes says
+         a tool wrote it, but its location does, by construction.
+
+    A generated file contributes NO chunks and no reviewer lanes, because the
+    review target is its GENERATOR, which is reviewed separately as ordinary
+    source. It is never a pass: the skill renders it as an honest "not
+    reviewed". Claimed files are evaluated first and are never re-routed here --
+    a subject-lens reviewer already owns them.
 
     Each generated_files entry is the input dict verbatim (identifier
-    retained), plus "generated_signature" (the matched signature label) and
+    retained), plus "generated_axis" ("content" or "declared_path"),
+    "generated_signature" (the matched signature or path-rule label) and
     "size_bytes" (the on-disk size, falling back to the diff section's byte
     length when the file has no readable local path).
 
@@ -331,19 +344,28 @@ def assemble_bundle(
     # its hunks are still what the pure-mechanical guard inspects).
     id_to_text = {s["identifier"]: s["text"] for s in sections}
 
-    # Machine-generated artifacts: detected from content, excluded from
-    # chunking, surfaced separately. Claimed files are skipped -- a subject-lens
-    # reviewer already owns them, and re-routing would take away the review they
-    # were claimed FOR.
-    generated_sigs: dict[str, str] = {}
+    # Machine-generated artifacts: excluded from chunking, surfaced separately.
+    # Detection is a UNION of two independent axes -- a content signature, OR a
+    # path a plugin declares that it writes. Neither subsumes the other: a
+    # generator may emit no banner at all (nothing in such a file's bytes says a
+    # tool wrote it), while a hand-written file never lands under a declared
+    # plugin-data path. Claimed files are skipped -- a subject-lens reviewer
+    # already owns them, and re-routing would take away the review they were
+    # claimed FOR.
+    generated_sigs: dict[str, tuple[str, str]] = {}
     if not review_generated:
+        path_rules = declared_generated_rules(workspace_root)
         for f in files:
             ident = f["identifier"]
             if ident in claimed_idents:
                 continue
             label = detect_generated(id_to_text.get(ident, ""), f.get("local"))
             if label:
-                generated_sigs[ident] = label
+                generated_sigs[ident] = ("content", label)
+                continue
+            label = match_declared_path(f.get("local"), path_rules)
+            if label:
+                generated_sigs[ident] = ("declared_path", label)
 
     # Claimed and generated files' diff sections must not reach the generic
     # reviewers, so drop them before chunking. Their records still flow through
@@ -412,7 +434,9 @@ def assemble_bundle(
             entry = dict(f)
             if local:
                 entry["local"] = canonical_local(local)
-            entry["generated_signature"] = generated_sigs[f["identifier"]]
+            axis, label = generated_sigs[f["identifier"]]
+            entry["generated_axis"] = axis
+            entry["generated_signature"] = label
             size = local_size(local)
             if size is None:
                 size = len(id_to_text.get(f["identifier"], "").encode("utf-8"))
