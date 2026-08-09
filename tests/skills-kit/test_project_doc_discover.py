@@ -266,7 +266,7 @@ class TestPluginCacheCiterScanning:
 
         config_dir = tmp_path / "cfg"
         self._make_cache_skill(
-            config_dir, "spryfox-plugins", "prototype-ui", "0.3.0",
+            config_dir, "private-plugins", "prototype-ui", "0.3.0",
             "---\nname: prototype-ui\n---\nSee .claude/docs/cozy-ui-architecture.md for the layout.\n",
         )
 
@@ -312,9 +312,9 @@ class TestPluginCacheCiterScanning:
         project = tmp_path / "p"
         (project / ".claude").mkdir(parents=True)
         (project / ".claude" / "settings.json").write_text(
-            '{"enabledPlugins": {"prototype-ui@spryfox-plugins": true}}', encoding="utf-8")
+            '{"enabledPlugins": {"prototype-ui@private-plugins": true}}', encoding="utf-8")
         config_dir = tmp_path / "cfg"
-        self._make_cache_skill(config_dir, "spryfox-plugins", "prototype-ui", "1.0.0", "a\n")
+        self._make_cache_skill(config_dir, "private-plugins", "prototype-ui", "1.0.0", "a\n")
         self._make_cache_skill(config_dir, "other-mkt", "unrelated", "1.0.0", "b\n")
         files = list(pd.plugin_cache_citer_files(config_dir, project_root=project))
         assert any("prototype-ui" in str(f) for f in files)

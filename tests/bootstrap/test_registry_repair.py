@@ -86,17 +86,17 @@ class TestPlanOrphanProject:
     """Rule 2: scope=="project" with no projectPath."""
 
     def test_drops_orphans_alongside_well_formed_project_records(self):
-        """The live 2026-07-27 engineer@spryfox-plugins shape: 4 records, 2 orphans."""
+        """The live 2026-07-27 engineer@private-plugins shape: 4 records, 2 orphans."""
         records = [ORPHAN, PROJECT_A, ORPHAN, PROJECT_B]
-        plan = plan_repair({"plugins": {"engineer@spryfox-plugins": records}})
-        keep, dropped = plan["engineer@spryfox-plugins"]
+        plan = plan_repair({"plugins": {"engineer@private-plugins": records}})
+        keep, dropped = plan["engineer@private-plugins"]
         assert dropped == [ORPHAN, ORPHAN]
         assert keep == [PROJECT_A, PROJECT_B]
 
     def test_drops_orphan_at_index_zero(self):
-        """The live prototyping@spryfox-plugins shape: orphan is entries[0]."""
-        plan = plan_repair({"plugins": {"prototyping@spryfox-plugins": [ORPHAN, PROJECT_A, PROJECT_B]}})
-        keep, dropped = plan["prototyping@spryfox-plugins"]
+        """The live prototyping@private-plugins shape: orphan is entries[0]."""
+        plan = plan_repair({"plugins": {"prototyping@private-plugins": [ORPHAN, PROJECT_A, PROJECT_B]}})
+        keep, dropped = plan["prototyping@private-plugins"]
         assert dropped == [ORPHAN]
         assert keep[0] == PROJECT_A
 
@@ -153,15 +153,15 @@ class TestFindUnrepairable:
 class TestApplyOrphanProject:
     def test_live_shape_is_repaired_on_disk(self, tmp_path):
         path = _write_registry(tmp_path, {
-            "engineer@spryfox-plugins": [ORPHAN, PROJECT_A, ORPHAN, PROJECT_B],
-            "prototyping@spryfox-plugins": [ORPHAN, PROJECT_A, PROJECT_B],
+            "engineer@private-plugins": [ORPHAN, PROJECT_A, ORPHAN, PROJECT_B],
+            "prototyping@private-plugins": [ORPHAN, PROJECT_A, PROJECT_B],
             "bootstrap@plugins-kit": [PROJECT_B],
         })
         dropped = apply_repair(str(path))
 
-        assert sorted(dropped) == ["engineer@spryfox-plugins", "prototyping@spryfox-plugins"]
-        assert _records(path, "engineer@spryfox-plugins") == [PROJECT_A, PROJECT_B]
-        assert _records(path, "prototyping@spryfox-plugins") == [PROJECT_A, PROJECT_B]
+        assert sorted(dropped) == ["engineer@private-plugins", "prototyping@private-plugins"]
+        assert _records(path, "engineer@private-plugins") == [PROJECT_A, PROJECT_B]
+        assert _records(path, "prototyping@private-plugins") == [PROJECT_A, PROJECT_B]
         assert _records(path, "bootstrap@plugins-kit") == [PROJECT_B]
 
     def test_idempotent_second_run_writes_nothing(self, tmp_path):

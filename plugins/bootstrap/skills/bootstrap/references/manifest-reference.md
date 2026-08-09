@@ -796,17 +796,17 @@ Use `"manual"` for plugins that should be available in the marketplace but opt-i
 
 When not installed:
 ```
-plugin spryfox-plugins:claude-admin: not installed (install: manual; run `claude plugin install claude-admin@spryfox-plugins` to enable)
+plugin private-plugins:claude-admin: not installed (install: manual; run `claude plugin install claude-admin@private-plugins` to enable)
 ```
 
 When installed and up to date:
 ```
-plugin spryfox-plugins:claude-admin: up to date (install: manual)
+plugin private-plugins:claude-admin: up to date (install: manual)
 ```
 
 When installed and a new version is available:
 ```
-plugin spryfox-plugins:claude-admin: updated 0.1.0 -> 0.2.0 (install: manual)
+plugin private-plugins:claude-admin: updated 0.1.0 -> 0.2.0 (install: manual)
 ```
 
 **Interactions:**

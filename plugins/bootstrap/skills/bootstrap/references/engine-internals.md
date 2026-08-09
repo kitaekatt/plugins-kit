@@ -72,8 +72,8 @@ belongs to, so a project record without a project names no install:
 > least one record that is not itself such a record -> drop the
 > `projectPath`-less project record(s)
 
-Observed live 2026-07-27: `engineer@spryfox-plugins` held 4 records with 2
-orphans (one at index 0) and `prototyping@spryfox-plugins` held 3 with 1 orphan
+Observed live 2026-07-27: `engineer@private-plugins` held 4 records with 2
+orphans (one at index 0) and `prototyping@private-plugins` held 3 with 1 orphan
 at index 0. Both appeared under "Needs attention" in `/plugin` with a "not
 cached" error, while every ref holding a single clean record was healthy. Treat
 that as a strong correlation, **not** a proven cause: the orphans' installPaths
@@ -175,8 +175,8 @@ original behavior). Two guards, one per malformed shape above:
   oscillates -- a registry write and a full bootstrap pass every session, with
   an orphan transiently at index 0.
 
-  The live shape this protects: `engineer@spryfox-plugins` and
-  `prototyping@spryfox-plugins` are declared `scope: "project"` in one project's
+  The live shape this protects: `engineer@private-plugins` and
+  `prototyping@private-plugins` are declared `scope: "project"` in one project's
   `bootstrap.json` while enabled at **user** scope in `~/.claude/settings.json`.
   If Claude Code ships the claude-code#81706 fix and begins writing the missing
   user-scope record itself, an unguarded rewrite would convert it straight back

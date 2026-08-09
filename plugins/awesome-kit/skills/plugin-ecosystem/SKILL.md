@@ -39,7 +39,7 @@ When the user invokes the skill with an argument, map the keyword to the right C
 |--------------|---------------|
 | `default`, `defaults`, "project defaults", "as a new user would see it", "ignore my settings" | `--defaults` |
 | `no-open`, "don't open" | `--no-open` |
-| `<name> marketplace`, "just the X marketplace", "only spryfox-plugins", "filter to plugins-kit", "for marketplace X" | `--marketplace <name>` (repeat or comma-separate for multiple) |
+| `<name> marketplace`, "just the X marketplace", "only private-plugins", "filter to plugins-kit", "for marketplace X" | `--marketplace <name>` (repeat or comma-separate for multiple) |
 
 `--defaults` sources the on/off badge straight from project `bootstrap.json` declarations and ignores the operator's live `settings.json` toggles. Use it to depict "how this project ships" regardless of who's running the skill.
 
@@ -117,8 +117,8 @@ For each plugin, the badge is computed in this order (first match wins):
 title: "Acme Claude Plugin Ecosystem"
 tagline: "Use /plugin to change your claude-code plugins, you decide what's active!"
 states:
-  spryfox-plugins:designer: on
-  spryfox-plugins:claude-admin: opt-in
+  private-plugins:designer: on
+  private-plugins:claude-admin: opt-in
 ```
 
 All keys optional. Defaults: title = "Claude Plugin Ecosystem", tagline = "" (no text), states = {} (use live values).

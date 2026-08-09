@@ -37,8 +37,8 @@ A record can carry ``scope: "project"`` with NO ``projectPath``:
 
 That shape is malformed by definition: a project-scope install is *defined* by
 the project it belongs to, so a project record without a project names no
-install. Observed live 2026-07-27 (``engineer@spryfox-plugins``: 4 records, 2
-orphans, one of them at index 0; ``prototyping@spryfox-plugins``: 3 records, 1
+install. Observed live 2026-07-27 (``engineer@private-plugins``: 4 records, 2
+orphans, one of them at index 0; ``prototyping@private-plugins``: 3 records, 1
 orphan at index 0). Both refs appeared under "Needs attention" in ``/plugin``
 with a "not cached" error while every ref holding a single clean record was
 healthy -- a strong correlation, not a proven cause: the orphans' installPaths

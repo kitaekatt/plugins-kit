@@ -1168,8 +1168,8 @@ class TestEnsureRegistryScopeNeverCreatesOrphan:
     two passes, and -- when another manifest declares the same ref at user
     scope -- re-added by the add remediation, oscillating forever.
 
-    Live shape this protects: engineer@spryfox-plugins and
-    prototyping@spryfox-plugins are declared scope "project" in one project's
+    Live shape this protects: engineer@private-plugins and
+    prototyping@private-plugins are declared scope "project" in one project's
     bootstrap.json while enabled at USER scope in ~/.claude/settings.json. If
     Claude Code ships the claude-code#81706 fix and starts writing the missing
     user-scope record itself, an unguarded rewrite would convert it straight
@@ -1186,17 +1186,17 @@ class TestEnsureRegistryScopeNeverCreatesOrphan:
 
     def test_pathless_user_record_not_flipped_to_project(self, tmp_path, monkeypatch):
         ip = self._write_registry(tmp_path, monkeypatch, {
-            "engineer@spryfox-plugins": [
+            "engineer@private-plugins": [
                 {"scope": "user", "installPath": str(tmp_path), "version": "0.3.0"},
             ]
         })
         before = ip.read_text()
 
-        result = ensure_registry_scope("spryfox-plugins:engineer", "project")
+        result = ensure_registry_scope("private-plugins:engineer", "project")
 
         assert result.passed is True
         assert result.added is False
-        entries = json.loads(ip.read_text())["plugins"]["engineer@spryfox-plugins"]
+        entries = json.loads(ip.read_text())["plugins"]["engineer@private-plugins"]
         assert entries[0]["scope"] == "user", (
             "flipping a pathless record to project manufactures the orphan "
             "shape registry_repair deletes"
@@ -1207,30 +1207,30 @@ class TestEnsureRegistryScopeNeverCreatesOrphan:
         """Two passes at project scope over a pathless user record are both
         no-ops -- the flip/delete/re-add cycle never starts."""
         ip = self._write_registry(tmp_path, monkeypatch, {
-            "engineer@spryfox-plugins": [
+            "engineer@private-plugins": [
                 {"scope": "user", "installPath": str(tmp_path), "version": "0.3.0"},
             ]
         })
         os.utime(ip, (1_000_000_000, 1_000_000_000))
         mtime_before = ip.stat().st_mtime_ns
 
-        ensure_registry_scope("spryfox-plugins:engineer", "project")
-        ensure_registry_scope("spryfox-plugins:engineer", "project")
+        ensure_registry_scope("private-plugins:engineer", "project")
+        ensure_registry_scope("private-plugins:engineer", "project")
 
         assert ip.stat().st_mtime_ns == mtime_before
 
     def test_projectpath_record_still_rewritten_to_user(self, tmp_path, monkeypatch):
         """The guard is scope-directional: rewriting TO user is untouched."""
         ip = self._write_registry(tmp_path, monkeypatch, {
-            "engineer@spryfox-plugins": [
+            "engineer@private-plugins": [
                 {"scope": "local", "installPath": str(tmp_path), "version": "0.3.0"},
             ]
         })
 
-        result = ensure_registry_scope("spryfox-plugins:engineer", "user")
+        result = ensure_registry_scope("private-plugins:engineer", "user")
 
         assert result.passed is True
-        entries = json.loads(ip.read_text())["plugins"]["engineer@spryfox-plugins"]
+        entries = json.loads(ip.read_text())["plugins"]["engineer@private-plugins"]
         assert entries[0]["scope"] == "user"
 
 

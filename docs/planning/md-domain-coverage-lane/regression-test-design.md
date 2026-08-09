@@ -77,7 +77,7 @@ Targeted, not a full re-run. Restrict to the directories the answer key touches:
 Both reviews made held-out precision in a non-C/Python language family a
 PRECONDITION for publishing the criteria changes. A scan of `D:/dev` found no
 qualifying repo: the only candidates with enough CLAUDE.md files
-(`christina-norman` 25, `spryfox-plugins` 9) are Python-primary, and
+(`christina-norman` 25, `private-plugins` 9) are Python-primary, and
 `woodworking-sim` has just one CLAUDE.md.
 
 **Partial substitute, used deliberately:** `D:/dev/spiritcrossing` -- 130
