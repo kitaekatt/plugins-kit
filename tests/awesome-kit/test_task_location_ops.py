@@ -28,7 +28,7 @@ import yaml
 from bootstrap_guard import _REEXEC_GUARD_ENV
 from task_system import location_ops
 from task_system.state_ops import StateOpError
-from task_system.validate import validate_ref
+from task_system.validate import git_vcs_state, validate_ref
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TASK_CLI = (
@@ -323,7 +323,8 @@ class TestArchiveLib:
         assert folder.is_dir()
         assert read_block(folder)["status"] == "archived"
         log = (folder / "log.md").read_text(encoding="utf-8")
-        assert "git-ignored" in log
+        assert "folder KEPT" in log
+        assert "configured to ignore" in log
         # The log must NOT claim a commit or a removal that did not happen.
         assert "final state committed" not in log
         # No archive commit was invented for an unreachable folder.
@@ -357,6 +358,71 @@ class TestArchiveLib:
         assert result.vcs_ignored is False
         assert result.folder_removed is True
         assert not folder.exists()
+
+    def test_partially_force_added_ignored_folder_is_never_removed(
+        self, git_root
+    ):
+        # THE DANGEROUS SHAPE. dev/ is ignored but SOME files were force-added,
+        # so git_vcs_state reads "clean" (porcelain quiet, ls-files non-empty)
+        # and `git add -u` SUCCEEDS. A check keyed only on the fully-ignored
+        # case sails past and rmtree's the untracked remainder -- destroying
+        # files that exist in no commit and are recoverable from nowhere.
+        (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
+        folder = make_task(git_root, "dev/tasks/partial")
+        subprocess.run(
+            ["git", "-C", str(git_root), "add", "-f", "--",
+             str(folder / "task.yaml"), str(folder / "log.md")],
+            check=True,
+            capture_output=True,
+        )
+        _commit_all(git_root)
+        # Precondition: this really is the "reads clean" state.
+        assert git_vcs_state(folder) == "clean"
+
+        result = location_ops.archive_task("dev/tasks/partial", git_root)
+
+        assert result.vcs_ignored is True
+        assert result.folder_removed is False
+        # The files git never held must still be on disk.
+        assert (folder / "plan.md").is_file()
+        assert (folder / "CLAUDE.md").is_file()
+        log = (folder / "log.md").read_text(encoding="utf-8")
+        assert "folder KEPT" in log
+        assert "final state committed" not in log
+
+    def test_failed_commit_restores_the_index_not_just_the_tree(
+        self, git_root
+    ):
+        # `git add` succeeds independently of `git commit`. A rollback that
+        # reverts only the working tree leaves the archived task.yaml and the
+        # false "final state committed" log line STAGED, and the next
+        # unrelated commit ships them. Uses a REAL failing commit (rejecting
+        # pre-commit hook) rather than monkeypatching _git_commit_folder,
+        # because a wholesale patch means `git add` never runs and the bug is
+        # invisible.
+        folder = make_task(git_root, "dev/tasks/durable")
+        _commit_all(git_root)
+        hooks = git_root / ".git" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        hook = hooks / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        hook.chmod(0o755)
+        before = snapshot(folder)
+
+        with pytest.raises(StateOpError):
+            location_ops.archive_task("dev/tasks/durable", git_root)
+
+        assert folder.is_dir()
+        assert snapshot(folder) == before
+        assert read_block(folder)["status"] == "active"
+        # The index must be clean too -- nothing staged for this folder.
+        staged = subprocess.run(
+            ["git", "-C", str(git_root), "diff", "--staged", "--name-only"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert staged.strip() == "", f"archive left staged residue: {staged!r}"
 
     def test_failed_commit_rolls_back_the_final_state_writes(
         self, git_root, monkeypatch

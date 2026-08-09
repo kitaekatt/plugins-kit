@@ -589,19 +589,17 @@ This is a deliberate deviation from `awesome-kit:task`'s model, which treats
 record") and `tmp/<stub>` as the ephemeral half. That contract does not apply
 to this repo. Consequences to know rather than rediscover:
 
-- The task CLI HANDLES this configuration as of awesome-kit 0.26.0 -- it is
-  supported, not tolerated. `validate` emits a NOTE (never a warning, so it
-  does not gate `work`) saying version control will not carry the folder;
-  `archive` records the final state, KEEPS the folder, and tells you `delete`
-  removes it permanently. Do not read a git-ignored task folder as
-  "uncommitted work" -- it is scratch by design. Before 0.26.0 `archive` here
-  crashed mid-write at `git add`, so if you see that, the installed plugin
-  predates the fix.
+- A git-ignored task root is a SUPPORTED configuration as of awesome-kit
+  0.26.0, not a misconfiguration. Do not read such a folder as "uncommitted
+  work" -- it is scratch by design. Mechanics: `Skill(awesome-kit:task)`, the
+  GIT-IGNORED task root disposition. Before 0.26.0 `archive` here crashed
+  mid-write at `git add`; if you see that, the installed plugin predates the
+  fix.
 - **The corollary is sharper here than anywhere else: the folder is the only
-  copy.** `delete` on a git-ignored folder is unrecoverable -- no commit, no
-  reflog, nothing to restore from. Relocate anything that must outlive the
-  task to the repo it describes and declare it with `update --durable-output`
-  BEFORE archiving, which is what the `durable_outputs` rule already requires.
+  copy.** Removing it is unrecoverable -- no commit, no reflog, nothing to
+  restore from. Relocate anything that must outlive the task to the repo it
+  describes and declare it with `update --durable-output` BEFORE archiving,
+  which is what the `durable_outputs` rule already requires.
 - **Do not add a `!dev/tasks/` negation to `.gitignore` to "fix" this.** It has
   been done once and reverted. (Note also that a negation under a bare `dev/`
   rule is inert: git cannot re-include a path inside an excluded directory, so
@@ -871,9 +869,8 @@ claude_md:
         nobody, and left every consumer the same friction with no instructions. Grep for
         "treat .* as noise", "does not apply to this repo", "deliberate deviation".
         RESOLVED in awesome-kit 0.26.0, and the resolution sharpens the razor: the fix was
-        NOT a config key. The plugin now DETECTS what git actually does (a git-ignored
-        task root is a supported configuration -- validate notes it, archive records the
-        final state and keeps the folder) instead of assuming the consumer's answer. Prefer
+        NOT a config key. The plugin now DETECTS what git actually does instead of
+        assuming the consumer's answer. Prefer
         that shape whenever the environment can be asked: a seam makes the user restate
         something the tool could have observed, and it is a second source of truth that can
         disagree with reality. Reach for a config key when the choice is a genuine

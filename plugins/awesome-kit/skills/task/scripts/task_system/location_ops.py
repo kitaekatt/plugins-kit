@@ -357,6 +357,92 @@ def _snapshot_docs(folder: Path) -> dict[str, bytes | None]:
     return snap
 
 
+def _unheld_files_in(repo_root: Path, folder: Path) -> list[str]:
+    """Files inside the folder that git's ignore rules EXCLUDE -- i.e. the
+    ones ``git add`` refuses, so no commit will ever carry them.
+
+    This is the safety predicate for removing the folder. ``git add -A``
+    stages every non-ignored file, so after the final-state commit the only
+    content still outside version control is exactly this set. If it is
+    non-empty, removing the folder destroys files that exist in no commit
+    and are recoverable from nowhere.
+
+    It deliberately generalizes the fully-ignored case: a folder where only
+    SOME files were force-added reports ``clean`` from git_vcs_state (the
+    porcelain is quiet and something IS tracked), yet its remaining files are
+    just as unrecoverable."""
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--",
+                str(folder),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        # Cannot prove the folder is fully held -> assume it is not. Failing
+        # closed keeps a folder; failing open destroys one.
+        return ["<git could not enumerate ignored files>"]
+    if proc.returncode != 0:
+        return ["<git could not enumerate ignored files>"]
+    return [line for line in proc.stdout.splitlines() if line.strip()]
+
+
+def _snapshot_index(repo_root: Path, folder: Path) -> str | None:
+    """The folder's staged index entries (``git ls-files --stage`` format),
+    or None when git cannot report them.
+
+    Restoring the working tree is not enough to undo a failed archive:
+    ``git add`` succeeds independently of ``git commit``, so a commit that
+    fails (pre-commit hook, unset identity, signing) leaves the archived
+    content STAGED while the tree is reverted -- and the next unrelated
+    commit ships it."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "--stage", "--", str(folder)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _restore_index(repo_root: Path, folder: Path, snapshot: str | None) -> None:
+    """Put the folder's index entries back exactly as ``_snapshot_index``
+    found them. Pathspec-limited, so another session's staged work outside
+    this folder is never touched. Best-effort: a restore that itself fails
+    must not replace the original error."""
+    if snapshot is None:
+        return
+    try:
+        subprocess.run(
+            ["git", "-C", str(repo_root), "reset", "-q", "--", str(folder)],
+            capture_output=True,
+            timeout=30,
+        )
+        if snapshot.strip():
+            subprocess.run(
+                ["git", "-C", str(repo_root), "update-index", "--index-info"],
+                input=snapshot,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+
+
 def _restore_docs(folder: Path, snap: dict[str, bytes | None]) -> None:
     """Put the snapshotted documents back. Best-effort: a restore that
     itself fails must not replace the original error, which is the one that
@@ -421,14 +507,19 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
         )
     else:
         repo_root = _git_toplevel(folder)
-        if repo_root is not None and git_vcs_state(folder) == "ignored":
-            # Inside a repo, but git is configured never to carry this
-            # folder. The commits below cannot succeed (`git add` refuses an
-            # ignored path), and no later commit can either -- so "version
+        unheld = _unheld_files_in(repo_root, folder) if repo_root else []
+        if repo_root is not None and unheld:
+            # Inside a repo, but git's ignore rules exclude some or all of
+            # this folder, so no commit will ever carry those files. "Version
             # control is the record, therefore the folder may go" does not
-            # hold, and removing the folder would destroy content that exists
-            # nowhere else. Record the final state, keep the folder, and say
-            # plainly that `delete` is unrecoverable here.
+            # hold: removing it would destroy content that exists nowhere
+            # else. Record the final state, keep the folder, and say plainly
+            # that `delete` is unrecoverable here.
+            # This covers BOTH shapes, and the partial one is the dangerous
+            # one: when only SOME files were force-added, git_vcs_state reads
+            # `clean` (the porcelain is quiet and something IS tracked) and
+            # `add -u` SUCCEEDS -- so a check keyed on the fully-ignored case
+            # would sail past here and rmtree the untracked remainder.
             # NB: `repo_root` is deliberately left set. It records a fact that
             # is true (we ARE in a repo); routing is `vcs_ignored`'s job.
             # Clearing it here would read as vcs_pending -- "submit it with
@@ -439,10 +530,14 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
         pre_write = _snapshot_docs(folder)
         _write_task_yaml(folder, data)
         if vcs_ignored:
+            shown = ", ".join(unheld[:3]) + (
+                f" (+{len(unheld) - 3} more)" if len(unheld) > 3 else ""
+            )
             _append_archive_log_entry(
                 folder,
-                "final state recorded; folder KEPT -- it is git-ignored, so "
-                "version control holds no copy (delete removes it "
+                "final state recorded; folder KEPT -- git is configured to "
+                f"ignore {len(unheld)} file(s) here ({shown}), so version "
+                "control holds no copy of them (delete removes them "
                 "permanently)",
             )
             removed = False
@@ -475,6 +570,11 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
             # it already carries, so the normal path runs -- with `-u`, the
             # only staging mode git permits on an ignored pathspec.
             tracked_only = git_ignores_path(folder)
+            # `git add` succeeds independently of `git commit`, so the index
+            # is part of what a failed archive must undo -- restoring only
+            # the working tree leaves the archived content STAGED, and the
+            # next unrelated commit ships it.
+            pre_index = _snapshot_index(repo_root, folder_resolved)
             try:
                 _git_commit_folder(
                     repo_root,
@@ -484,6 +584,7 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
                 )
             except StateOpError:
                 _restore_docs(folder, pre_write)
+                _restore_index(repo_root, folder_resolved, pre_index)
                 raise
             # Past this point the final state IS in git history, so the
             # writes are no longer unbacked and there is nothing to undo:
