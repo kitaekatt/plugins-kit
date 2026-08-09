@@ -45,6 +45,11 @@ GENERALIZED = {
     "claude-md": ("claude-md", "artifact_shape_not_claude_md"),
 }
 
+# The skill lane accepts TWO `kind` tokens because the `skill` artifact has two
+# subject shapes (SKILL.md + a skill reference document). Its branch-1 guard is
+# therefore a two-token compare, not a one-token one.
+SECOND_KIND = {"skill": "skill_reference"}
+
 
 def _read(p: Path) -> str:
     return p.read_text(encoding="utf-8")
@@ -157,7 +162,13 @@ class TestGeneralizedDeclineContract:
         """Absence of a classification is not a classification (branch 3)."""
         src = detect_src(lane)
         token, _criterion = GENERALIZED[lane]
-        assert f"const routingClause = f.kind && f.kind !== '{token}'" in src, (
+        second = SECOND_KIND.get(lane)
+        guard = (
+            f"const routingClause = f.kind && f.kind !== '{token}' && f.kind !== '{second}'"
+            if second
+            else f"const routingClause = f.kind && f.kind !== '{token}'"
+        )
+        assert guard in src, (
             f"{lane}: branch 1 missing -- an explicit foreign `kind` must decline"
         )
         assert f": f.kind === '{token}'" in src, (

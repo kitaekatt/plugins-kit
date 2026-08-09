@@ -372,9 +372,18 @@ class TestClaimExclusions:
     Motivating defect (2026-07-28): git-kit claimed every changed `.md`, which
     pulled a skill's `references/*.md` away from the generic reviewers and handed
     it to md-domain's audit_project_doc lane -- an auditor whose criteria exclude
-    anything inside a skills tree. No md-domain audit lane reads that file's prose, so
-    claiming it removed its only real review. Without negation the claim could not
-    express "every `.md` EXCEPT skill references".
+    anything inside a skills tree. At that time no md-domain audit lane read that
+    file's prose, so claiming it removed its only real review. Without negation the
+    claim could not express "every `.md` EXCEPT skill references".
+
+    That specific carve-out is RETIRED: the audit_skill lane gained real
+    skill-reference-prose criteria (skill-standards.md section 10) and the kits
+    claim a bare `**/*.md` again. The glob below is therefore a FIXTURE for the
+    negation SEMANTICS, not a live claim -- exclusion beats every positive, applies
+    at any depth including the root, is order-independent, and works on depot
+    paths. Those semantics stay in the shared library for the next caller that
+    needs them; see tests/bootstrap/code_review/test_skill_drift.py for the guard
+    that the kits do not reintroduce this particular exclusion.
     """
 
     SKILL_REFS = ["**/*.md", "!**/skills/*/references/*.md"]

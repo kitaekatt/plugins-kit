@@ -70,7 +70,11 @@ orchestrate.
 
 Resolve the target set from the arguments. Empty -> the cwd artifact if present,
 else stop and surface the cwd; do not improvise a target. `list` -> emit a
-numbered list via the lane's discover script and stop. Integers -> map to paths
+numbered list via the lane's discover script and stop. On `audit_skill`, pass
+`--references` to `discover_skill.py` when the user's request is about
+reference documents rather than the skill roster -- the flag adds each skill's
+`references/*.md` (the lane's second subject shape) to the listing, attributed
+to its owning skill. Integers -> map to paths
 from the last list output. Path -> use directly.
 
 Strip the flags first:
@@ -158,6 +162,11 @@ mechanical rows, overlay thresholds). If the validator is unavailable, mark the
 Schema group JUDGMENT ("validator unavailable") and continue with judgment
 criteria only -- never fail a file for that.
 
+**Not on a skill reference subject.** The validator's subject is a SKILL.md or
+a CLAUDE.md. When `audit_skill` runs on a `references/*.md`, the validator is
+not invoked at all and no "validator unavailable" finding is emitted -- there
+is no contract to validate. See skill-standards.md section 10.1.
+
 User-authored standards (all lanes, when `standardsPaths` is non-empty): read
 each standards file, apply ONLY criteria whose statement is quotable VERBATIM,
 SKIP any criterion whose `enforcement` is `mechanical` (the validator owns those
@@ -202,12 +211,17 @@ a code-review caller, a bare path from a user) must not be treated as an implici
 
 Per-lane shape tests:
 
-- `audit_skill` -- the file is named `SKILL.md`. A `references/*.md` under a
-  skill, a `CLAUDE.md`, or a standalone doc is not a SKILL.md.
+- `audit_skill` -- the file is named `SKILL.md`, OR it sits inside a
+  `*/skills/*/references/` folder (a skill reference document). Those are the
+  `skill` artifact's TWO subject shapes, and the lane applies a different
+  criteria set to each (skill-standards.md sections 1-9 vs section 10). A
+  `CLAUDE.md` or a standalone project doc is neither, and is declined.
+  Accepted `kind` values: `skill` and `skill_reference`.
 - `audit_claude_md` -- the file is named `CLAUDE.md` or `CLAUDE.local.md`.
 - `audit_project_doc` -- the file is a project-level document: NOT inside a
-  `*/skills/*/references/` folder (that is a `skill_reference`) and NOT a
-  `CLAUDE.md` / `SKILL.md` (those are `other_claude_artifact`).
+  `*/skills/*/references/` folder (that is a `skill_reference`, and it routes
+  to `audit_skill`) and NOT a `CLAUDE.md` / `SKILL.md` (those are
+  `other_claude_artifact`).
 - `audit_references` -- no decline branch: the scanner's subject is the corpus,
   not a nominated file.
 
@@ -215,7 +229,8 @@ The routing finding:
 
 - Bucket **IMPROVE**, severity INFO. It is a routing conclusion, not a finding
   against the file, and there is **no edit**.
-- It names the correct lane (`/md-domain audit skill`, `/md-domain audit claude-md`,
+- It names the correct lane (`/md-domain audit skill` -- which owns SKILL.md
+  AND skill reference documents, `/md-domain audit claude-md`,
   `/md-domain audit project-doc`).
 - It is **never suppressed**, in either mode. In review mode it skips the
   attributability filter entirely -- it is the record that nothing was read.

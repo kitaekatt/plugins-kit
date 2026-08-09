@@ -50,7 +50,8 @@ run I state the analysis by the same name and the exact file scope.
 AUDIT -- judges documents that already exist. Reads markdown, and opens source
 only to verify a claim a document already makes.
 
-  Skill audit            one SKILL.md against its type contract + cohesion
+  Skill audit            one SKILL.md against its type contract + cohesion,
+                         or one skill references/*.md against its prose criteria
                          (/md-domain audit skill <path>)
   CLAUDE.md audit        one CLAUDE.md: cohesion, hygiene, schema
                          (/md-domain audit claude-md <path>)
@@ -145,15 +146,18 @@ lanes:
     workflow_remediate: workflow/skill-remediate.js
     verdicts: [COMPLIANT, NON-COMPLIANT, DIFF-CLEAN, NOT-AUDITED]
     review_mode: true
+    subject_shapes: [skill_md, skill_reference]
     invocation_phrasings:
       - "audit this SKILL.md"
       - "check my skill against its type contract"
       - "does this skill satisfy the framework"
       - "review my skill changes before I submit"
+      - "audit this skill reference document"
       - "inventory the skills / skill roster / skill hierarchy"
     change_driver: >-
       Changes when the SKILL.md type contract changes -- skill-standards.md,
-      schema_registry.py, or a new per-type rule id.
+      schema_registry.py, or a new per-type rule id -- or when the
+      skill-reference prose criteria (skill-standards.md section 10) change.
   - id: audit_claude_md
     verb: audit
     artifact: claude-md
@@ -338,7 +342,7 @@ filter, pre-image materialization, the two documented limits) live in
 ```yaml
 domain_skill:
   _schema_version: "1"
-  identity: The single front door for three verbs over project markdown -- auditing and authoring SKILL.md, CLAUDE.md, project documents, and skill cross-references, plus report-only coverage analysis over a code subtree and its ambient CLAUDE.md chain.
+  identity: The single front door for three verbs over project markdown -- auditing and authoring SKILL.md (and its reference documents), CLAUDE.md, project documents, and skill cross-references, plus report-only coverage analysis over a code subtree and its ambient CLAUDE.md chain.
   companions:
     siblings: []
     note: |
@@ -384,8 +388,8 @@ domain_skill:
     references:
       - id: skill_standards
         path: references/standards/skill-standards.md
-        keywords: [skill.md standards, type contract, required conditional prohibited, description requirements, frontmatter, mixed-type, schemas are floors, content allocation]
-        summary: What a good SKILL.md looks like -- per-type contract tables, description requirements, content-form choice, L1/L2/L3 allocation, hygiene thresholds. Read by both the audit_skill and author_skill lanes. Paired with skills_kit_lib/schema_registry.py, which wins on divergence.
+        keywords: [skill.md standards, type contract, required conditional prohibited, description requirements, frontmatter, mixed-type, schemas are floors, content allocation, skill reference document, references/*.md prose, SR-1 SR-2 SR-3 SR-4, inbound anchor integrity, internal contradiction, claim calibration, reader fit, maintainer-only material]
+        summary: What a good SKILL.md looks like -- per-type contract tables, description requirements, content-form choice, L1/L2/L3 allocation, hygiene thresholds -- plus section 10, the prose criteria for the artifact's second subject shape, a skill reference document. Read by both the audit_skill and author_skill lanes. Paired with skills_kit_lib/schema_registry.py, which wins on divergence.
       - id: claude_md_standards
         path: references/standards/claude-md-standards.md
         keywords: [claude.md standards, claude_md block, C-1 R-1 A-1 H-1, ccp crp adp rules, code-directory review notes, CD-1, density DD-1, insight record shape, scope covers excludes]

@@ -187,4 +187,84 @@ claude_md:
         unfamiliar subtree as the measurement, and revisit if it produces
         candidates any of the four controls should have suppressed.
       added: "2026-08-08"
+    - id: sr_criteria_skill_reference_subject
+      keywords: [SR-1, SR-2, SR-3, SR-4, skill reference, section 10, second subject shape, claim carve-out retired, held-out precision, scope guard, O_broken_inbound_anchor, P_internal_contradiction, Q_overstated_claim, R_maintainer_only_material]
+      summary: "skill-standards.md gained section 10 (2026-08-09): the audit_skill lane's SECOND subject shape, a skill's references/*.md, with four prose criteria. Shipped in the same change that dropped the code-review kits' `!**/skills/*/references/*.md` claim exclusion."
+      detail: |
+        Surface: no md-domain lane read a skill reference document's prose.
+        audit_skill audited the owning SKILL.md's contract and load graph;
+        audit_project_doc's PD-1 declined anything inside a skills tree and
+        returned NOT-AUDITED. Both code-review kits therefore carved the shape
+        out of their claim globs so it fell back to the generic reviewers -- a
+        placeholder, with the condition written into the kits' reference doc:
+        drop the exclusion in the SAME change that ships real criteria.
+        Finding: an opus generic reviewer on one changed reference document
+        (2026-07-28) found five defects no lane could reach -- a renamed heading
+        that broke six citing files, a self-contradicting paragraph, an
+        overstated claim, temporal deixis, non-ASCII lines. Only the first three
+        needed new criteria: temporal deixis and non-ASCII are already covered
+        by the H-11 ancestor-convention check and the classifier's built-in
+        universal-convention FIX, which run on any subject the lane audits, so
+        section 10.2 NAMES them rather than restating them (summarize-and-
+        reference). SR-4 (reader fit) was added beyond the five: it is the one
+        criterion that reaches the root CLAUDE.md's OP-1 concern about
+        maintainer-only material on a published plugin surface, which that
+        insight had recorded as unreachable precisely BECAUSE of the carve-out.
+        WHAT THE CRITERIA DO NOT COVER, deliberately: the SKILL.md contract rows
+        (no frontmatter, no type, no schema on a reference), CCP/CRP placement
+        (the L2->L3 split belongs to the owning SKILL.md's audit, which sees both
+        sides), reachability (owned by the SKILL.md subject), and hygiene
+        thresholds (a reference being long is the point of L3). Enumerated in
+        10.1 so the next reader does not add them back.
+        HELD-OUT MEASUREMENT, and it changed the rules twice. Two precision runs
+        on seven reference documents from four plugins the criteria were NOT
+        derived against (unreal-kit, hue-kit, content-pipeline-kit,
+        awesome-kit), each run by a fresh assessor reading only section 10.
+        Run 1: 9 findings, 7 false positives (~22% precision), with three
+        distinct causes -- SR-1 fired on informal prose pointers that resolved
+        unambiguously (4 of its 6 findings); SR-3 fired on a principles
+        document's core structural device, where the Principle / Why /
+        Embodied-by genre is neither a claim nor an instruction and so fell
+        through a binary guard; SR-4's Rule sentence read wider than its Test,
+        so an assessor anchoring on the Rule would flag guidance about the
+        DESCRIBED SYSTEM as maintainer-only. All three were fixed in the
+        criterion text: SR-1 now grades only anchor links and verbatim heading
+        quotes as FAIL and names the unambiguous prose pointer as explicitly not
+        a violation; SR-3 has a three-genre guard admitting only claims; SR-4's
+        Rule is bounded to the document's own production pipeline.
+        Run 2 (post-fix, four documents, one of them new): SR-1 zero findings,
+        SR-4 zero findings, SR-3's principles document went from a systematic
+        misfire surface to zero, and SR-2 produced the run's one TRUE POSITIVE
+        -- a real self-contradiction four lines apart in
+        unreal-kit script-execution.md about whether every .py in
+        Content/Python/ auto-runs or only init_unreal.py. Residual: 3 SR-3
+        findings the assessor itself judged as ones a maintainer would not act
+        on, which produced the CONSEQUENCE BAR (raise only when a reader
+        believing the claim as stated could act wrongly). That third fix is
+        NOT itself measured -- iteration stopped at two rounds.
+        LIMITATIONS, recorded rather than left as pending actions.
+        (a) SR-1 tests RESOLVABILITY, not APTNESS: run 2 found a citation
+        pointing at a section that exists but is the wrong one for the capability
+        citing it, and SR-1 is blind to it by construction. Judging aptness is a
+        different and much noisier criterion; not attempted.
+        (b) Every criterion is enforcement: judgment. A passed desk control shows
+        the criterion TEXT directs a correct assessor; it does not show the
+        production lane, at its own model and effort pin, applies it the same way.
+        (c) The corpus is this repo. It is held out from the DERIVATION (a
+        different plugin, a different author, documents chosen after the criteria
+        were written) but it is not an unfamiliar codebase, and all seven
+        documents share this repo's conventions.
+        (d) SR-2's "quote both passages" bar is the only mechanically checkable
+        guard in the set, and it is the one that demonstrably worked in both runs
+        -- it suppressed four one-sided suspicions and admitted the one true
+        positive. Prefer that shape when adding a fifth criterion.
+      origin: |
+        2026-08-09, task item `skill-references-lane`. Surface: the 2026-07-28
+        routing gap left direction 2 (real criteria) unbuilt while directions 1
+        (the carve-out) and 3 (the NOT-AUDITED verdict) shipped, so the claim
+        exclusion was a standing placeholder. Finding: the two held-out precision
+        runs above, which rewrote three of the four criteria before they shipped.
+        Follow-up: SR-1's aptness blindness and the unmeasured consequence bar are
+        limitations (a) and above, not action items.
+      added: "2026-08-09"
 ```

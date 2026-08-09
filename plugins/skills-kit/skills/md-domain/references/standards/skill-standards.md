@@ -1,10 +1,22 @@
 # Skill standards -- what a good SKILL.md looks like
 
-The artifact-keyed single source of truth for the `skill` artifact
-(`SKILL.md`). Both md-domain lanes read this file: the audit lane applies
-it as detection criteria, the authoring lane applies it as production
-targets. There is one statement of each standard here; neither lane
-restates it.
+The artifact-keyed single source of truth for the `skill` artifact. Both
+md-domain lanes read this file: the audit lane applies it as detection
+criteria, the authoring lane applies it as production targets. There is one
+statement of each standard here; neither lane restates it.
+
+The `skill` artifact has **two subject shapes**, and the `audit_skill` lane
+audits both:
+
+- the **SKILL.md** itself -- the contract root. Sections 1-9 below.
+- a **skill reference document** (`*/skills/<name>/references/*.md`) -- an L3
+  member of that skill. Section 10 below. The SKILL.md contract (frontmatter,
+  the typed YAML block, the mechanical validator) does NOT apply to it; its
+  own criteria do.
+
+Everything in sections 1-9 is written about the SKILL.md subject unless it
+says otherwise. Section 10 is self-contained and names the criteria it
+inherits rather than restating them.
 
 Vocabulary is not redefined here. Terms (Audience-Claude, CCP / CRP / ADP
 / SSOT, the skill types, the patterns, the attributes) live in
@@ -24,7 +36,8 @@ from "the fact belongs in a skill" and says what the skill must look like.
   frontmatter keys and a typed YAML contract block in the body).
 - **Members:** `references/*.md`, `scripts/`, `workflow/`, `tests/`, and a
   co-located `CLAUDE.md`. The SKILL.md is the load-graph root; members are
-  reachable from it, never the reverse.
+  reachable from it, never the reverse. The `references/*.md` members are
+  themselves audited subjects of this lane -- see section 10.
 - **Load level:** L2. The skill loads when its description trigger fires;
   its references are L3 and load by name afterwards.
 
@@ -652,6 +665,10 @@ contract surface: they are stable identifiers referenced by the workflow
 lanes, the rule catalog, the golden corpus, and any user-authored
 `standards_set` overlay. **Do not rename them.**
 
+Section 7 covers the SKILL.md subject only. The reference-document subject
+has its own criteria and taxonomy in section 10; the two sets never run on
+the same file.
+
 ### 7.1 Criteria (severity is the verdict weight)
 
 | Criterion id | Standard | Severity | Detection |
@@ -771,3 +788,200 @@ validates every block there against its schema on each run, so the fixtures
 cannot drift from the contracts stated above. The fixtures exist for that
 mechanical check, not for reading the standards -- nothing in sections 1-8
 depends on them.
+
+## 10. Skill reference documents (`references/*.md`)
+
+The second subject shape of the `skill` artifact. A **skill reference
+document** is a markdown file under a skill directory's `references/`
+folder (`*/skills/<name>/references/*.md`, at any nesting depth inside it).
+
+- **Audience:** Claude, same as the SKILL.md.
+- **Load level:** L3. It loads by name after its owning SKILL.md has already
+  fired, for ONE specific situation (section 3).
+- **Contract:** none. A reference document carries no frontmatter, no typed
+  YAML block, and no schema. It is judged on its PROSE.
+
+**Boundary.** These criteria judge the document. They do NOT judge the code,
+tool, or system the document describes -- reading source is admissible only
+to verify a claim the document already makes (SR-2, SR-3). A defect found in
+the described system is a code-review finding and belongs to the code
+reviewer, not to this lane.
+
+### 10.1 What the lane does NOT apply to a reference document
+
+Stated explicitly, because half of section 7 looks applicable and is not:
+
+| Not applied | Why |
+|---|---|
+| `required_frontmatter`, `description_quality`, `yaml_contract_block`, `mixed_type_signal`, `hygiene_thresholds` | All are SKILL.md contract rows. A reference has no frontmatter and no type, and a reference being long is the point of L3. |
+| The mechanical validator (`skills_kit_lib.audit`) | Its subject is a SKILL.md or a CLAUDE.md. Do not run it on a reference; do not emit a "validator unavailable" finding for one either. |
+| `ccp_placement`, `crp_placement` | The L2 -> L3 split decision belongs to the owning SKILL.md's audit, which sees both sides of it. A reference-document audit does not re-litigate whether the reference should exist. |
+| `references_reachable_from_skill_md` | The reachability edge is owned by the SKILL.md subject (5.4); auditing the reference alone cannot see the index. |
+| `decision_provenance` | That row is about provenance leaking into a SKILL.md. Provenance inside a reference is SR-4. |
+
+### 10.2 Criteria that already cover this shape -- referenced, not restated
+
+These run on any subject the lane audits, reference documents included. They
+are named here so section 10 does not grow a second copy of them:
+
+- **Non-ASCII look-alikes, hardcoded absolute / foreign-machine paths, drifted
+  line numbers** -- the built-in universal-convention FIX in the detect lane's
+  disposition classifier.
+- **A convention an ancestor CLAUDE.md declares verbatim** (ASCII-only
+  mandates, temporal-deixis bans, path rules) -- criterion H-11, taxonomy
+  `M_ancestor_convention_violation`, with the same verbatim-quote posture and
+  the same scoped-exception carve-out.
+- **A user-authored `standards_set` criterion** governing this artifact --
+  taxonomy `N_user_standard_violation`.
+- **A back-reference to the owning SKILL.md's sections** -- criterion
+  `adp_back_reference` (5.4), taxonomy `H_adp_back_reference`, applied with
+  the reference as subject rather than reached through the SKILL.md.
+- **Broken OUTBOUND links and dead cross-references across the corpus** --
+  the `audit_references` lane. Do not re-derive its scan here.
+
+### 10.3 Criteria
+
+Four, all about prose. Each is required; there is no recommended tier (2.4).
+
+#### SR-1. Inbound anchor integrity
+
+**Rule:** an inbound citation that would BREAK must not break. Two citation
+forms break: an **anchor link** into this document (`<path>#<anchor>`), and a
+citation that quotes one of this document's headings **verbatim**. Both must
+resolve to a heading present under that exact name.
+
+**Not a violation, and this is the load-bearing half:** an informal prose
+pointer that names a section approximately -- different case, a prefix, a
+paraphrase, a bolded inline label rather than a heading -- and resolves
+unambiguously to exactly one place in the document. Nothing is broken and no
+reader is misled, so grading it is noise. A pointer that is genuinely
+AMBIGUOUS (it could mean two sections, or none) IS a violation, at severity
+JUDGMENT.
+
+**Test:** collect the document's headings. Search the owning skill directory,
+then the wider repo where the search is cheap, for citations naming this
+document. Classify each citation by form before judging it. In review mode the
+pre-image makes the FAIL case direct: a heading present in the pre-image and
+absent now, with at least one inbound anchor link or verbatim quote naming it,
+is an attributable violation. Anchor the finding on the CITING file and line,
+and name the current heading as the correct target -- a violation is not
+raisable without both halves.
+
+**Severity:** FAIL for a broken anchor link or a broken verbatim heading
+quote; JUDGMENT for an ambiguous prose pointer. **Taxonomy:**
+`O_broken_inbound_anchor`, bucket FIX (the correct target is identified, so
+the citer update is mechanical). Bucket IMPROVE when the heading was deleted
+outright and no successor can be named.
+
+#### SR-2. Internal consistency
+
+**Rule:** the document does not contradict itself. Two passages must not
+assert mutually exclusive things about the same fact, and an example must not
+violate a rule the same document states.
+
+**Test:** for each load-bearing claim -- an imperative, a guarantee, a bound,
+a count, a name -- check whether another passage asserts its negation, a
+different value, or an instance that breaks it. The finding MUST quote both
+passages with line numbers; a one-sided suspicion is not an SR-2 finding.
+
+**Severity:** FAIL. **Taxonomy:** `P_internal_contradiction`, bucket IMPROVE
+-- the auditor usually cannot decide which side is true, and picking wrong
+writes a confident falsehood over a visible conflict. It is FIX when one side
+is FALSIFIED by a verified reading (the classifier's standing rule for
+falsified content), and SERIOUS when the contradiction is about a protective
+mechanism, since one of the two readings leaves an invariant unguarded.
+
+#### SR-3. Claim calibration
+
+**Rule:** a claim about behavior is stated at the strength its basis
+supports. An unhedged universal or guarantee -- "always", "never", "every",
+"cannot", "guaranteed", "impossible", "silently handles" -- about how a
+system, tool, or command behaves requires a basis the reader can reach: a
+named source (a path, a test, a command to run), or the mechanism that makes
+it true, stated in the document. Otherwise the claim carries the
+qualification its actual basis supports.
+
+**Test:** locate universal or guarantee phrasing about runtime behavior. For
+each, ask what in the document establishes it. No basis and no hedge is a
+violation, anchored on the claim.
+
+**Scope guard, load-bearing -- THREE genres, only the first is in scope:**
+
+1. A **claim** reports what the system DOES. "This file can never drift." In
+   scope.
+2. An **instruction** tells the reader what to do. "Never hand-edit this
+   file." Out of scope -- the document is entitled to state a rule
+   absolutely.
+3. A **normative design principle or declared invariant** states what the
+   system MUST hold, as a rule it holds itself to rather than a report of
+   observed behavior. "A pipeline never wildcard-adds"; "every stochastic
+   decision is seeded deterministically". Out of scope. A document whose
+   declared genre is principles (a Principle / Why / Embodied-by structure,
+   an "invariants" section) is made of these, so treating them as claims
+   makes the whole document a finding.
+
+Genres 2 and 3 are the criterion's two measured false-positive modes. When a
+declared invariant is contradicted by the document's own text, that is SR-2,
+not SR-3.
+
+**Consequence bar.** Even inside genre 1, raise it only when a reader who
+believed the claim AS STATED could act wrongly -- rely on a guarantee that
+does not hold, or skip a check the claim says is unnecessary. A rhetorical
+universal inside an argument, where the argument survives the qualification,
+is not a finding: the remediation would be cosmetic and the reader was never
+going to be misled. This bar is what separates the two measured survivors of
+the genre guard from a real overstatement.
+
+**Severity:** JUDGMENT. **Taxonomy:** `Q_overstated_claim`, bucket IMPROVE.
+
+#### SR-4. Reader fit -- L3 guidance, not a maintainer record
+
+**Rule:** the document's content is what its READER needs when the situation
+that loads it fires. Material whose only reader is someone maintaining the
+document's own PRODUCTION PIPELINE belongs elsewhere: decision provenance and
+derivation history (5.5 -- the co-located CLAUDE.md), regeneration
+instructions naming a tool the reader's install does not contain, and
+generator plumbing colocated with the artifact for build convenience.
+
+**Scope guard:** guidance addressed to someone maintaining the SYSTEM the
+document describes is content the reader needs, not maintainer-only material.
+Only the document's own production pipeline is in scope. Reading the Rule
+sentence more broadly than the Test is this criterion's measured
+false-positive mode.
+
+**Test:** per section, name the reader and the situation that loads it. A
+section whose only reader is someone editing the document's own production
+pipeline is a violation. The sharpest signal is an instruction the reader
+cannot execute -- a header telling them to re-run a script that does not
+exist on their machine.
+
+**Severity:** JUDGMENT. **Taxonomy:** `R_maintainer_only_material`, bucket
+IMPROVE (a relocation, never a silent deletion -- the content has a correct
+home).
+
+### 10.4 Taxonomy
+
+| Taxonomy id | Name | Bucket | Detection signal |
+|---|---|---|---|
+| `O_broken_inbound_anchor` | A cited heading no longer exists under the cited name | FIX | SR-1: an inbound ANCHOR LINK or VERBATIM heading quote names a section absent from the current document (FAIL), or a prose pointer is ambiguous (JUDGMENT). FIX when a successor heading is identifiable, IMPROVE when none is. An unambiguous informal pointer is not a finding. |
+| `P_internal_contradiction` | Two passages of the document contradict each other | IMPROVE | SR-2: two quotable passages assert mutually exclusive things about one fact. FIX when one side is falsified by a verified reading; SERIOUS when the contradiction concerns a protective mechanism. |
+| `Q_overstated_claim` | A behavioral claim is stated beyond its basis | IMPROVE | SR-3: an unhedged universal or guarantee about behavior with no reachable basis. Never fires on an instruction to the reader. |
+| `R_maintainer_only_material` | Maintainer-only material on a reader-facing surface | IMPROVE | SR-4: a section whose only reader is someone editing the document's production pipeline -- derivation logs, regeneration headers naming absent tools, generator plumbing. |
+
+The lettered ids continue the section 7.2 sequence and are scoped to this
+lane, exactly like `A_*`..`N_*`. The shared ids that also fire on this shape
+(`H_adp_back_reference`, `M_ancestor_convention_violation`,
+`N_user_standard_violation`, `K_unclassified`, `none`) keep their section 7.2
+meanings.
+
+### 10.5 Verdict
+
+Identical vocabulary and identical rules to 7.3, over the criteria above:
+any FAIL -> `NON-COMPLIANT`; only PASS / INFO / JUDGMENT -> `COMPLIANT`;
+review mode -> any attributable FAIL -> `NON-COMPLIANT`, else `DIFF-CLEAN`.
+
+A file that is neither a `SKILL.md` nor a `*/skills/*/references/*.md` ->
+`NOT-AUDITED` plus the routing finding, per the decline contract in
+[`../lanes/audit-lane.md`](../lanes/audit-lane.md) step 2a. The shape test
+now admits both subject shapes; a `CLAUDE.md` and a standalone project
+document are still declined.

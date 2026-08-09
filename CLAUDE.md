@@ -879,9 +879,12 @@ claude_md:
         mid-write, and the "noise" framing is why that read as expected friction for weeks.
         Criteria OP-1..OP-7, detection methods, examples both ways, the table of known
         unremediated findings, and the audit procedure:
-        docs/reference/plugin-opinion-razor.md. Note OP-1 (no maintainer-only material on
-        the published surface) is NOT caught by md-domain -- its claims carve out a
-        skill's references/*.md, so no lane reads their prose.
+        docs/reference/plugin-opinion-razor.md. OP-1 (no maintainer-only material on the
+        published surface) is PARTLY reachable by md-domain: skill-standards.md SR-4
+        (reader fit) flags maintainer-only material inside a skill's references/*.md,
+        which those claims used to carve out. It is one judgment criterion over one
+        markdown document, not the razor -- OP-1 also covers non-markdown artifacts
+        and surfaces outside a skills tree, which no lane reads.
       origin: "2026-08-08 -- user direction after the orchestrate skill was found shipping plugins-kit build machinery; generalized from that instance into a razor with a register, on the expectation that the repo will be audited against it."
       added: "2026-08-08"
     - id: no_build_machinery_in_published_plugins
@@ -900,8 +903,13 @@ claude_md:
         alert when a build step colocates its inputs with the artifact for convenience --
         that colocation IS a publishing decision, and the reason for it (e.g. a guard that
         polices one directory) usually outlives its own justification.
-        Note md-domain will not catch this: its review claims deliberately carve out a
-        skill's references/*.md, so no audit lane reads their prose.
+        md-domain reaches PART of this: a skill's references/*.md is claimed and audited
+        by the audit_skill lane, whose SR-4 (reader fit) criterion flags maintainer-only
+        material (skill-standards.md section 10). It is one judgment criterion over one
+        MARKDOWN document. It cannot see a non-markdown artifact at all -- the
+        decision-fingerprint.txt that motivated this insight is invisible to every lane --
+        and it reads nothing outside a skills tree. Do not treat a clean audit as
+        discharging this.
       origin: "2026-08-08 -- user pointed out that awesome-kit is published and used by other developers while the orchestrate skill was shipping decision-fingerprint.txt, orchestrate-2.0-design.md, and a tier-principles.md that compile-principles step 1 had grown from 642 to 1,065 lines with generator emits blocks."
       added: "2026-08-08"
     - id: never_unstage_another_sessions_work

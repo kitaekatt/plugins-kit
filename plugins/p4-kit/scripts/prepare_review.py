@@ -125,7 +125,7 @@ the bundle is byte-identical to today's (no `claimed_files` key).
 
 A glob prefixed with `!` is an EXCLUSION and beats every positive pattern, so a
 caller can claim a broad shape while carving out a subset that no specialist
-actually reviews -- e.g. `--claim '**/*.md' --claim '!**/skills/*/references/*.md'`.
+actually reviews -- e.g. `--claim '**/*.md' --claim '!vendor/**/*.md'`.
 Exclusions match depot paths the same way positives do.
 
 Modes:

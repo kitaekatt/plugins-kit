@@ -108,18 +108,19 @@ CLAIM_PROBE = """\
             Claim probe -- decide the `--claim` flags BEFORE invoking prepare, and invoke prepare
             only ONCE. Check whether skills-kit's md-domain skill is available in this session (it
             appears in the available-skills list as `skills-kit:md-domain`). If it IS available, add
-            BOTH `--claim '**/*.md'` and `--claim '!**/skills/*/references/*.md'` to the prepare
+            `--claim '**/*.md'` to the prepare
             invocation below so EVERY changed Markdown file (any `.md` at any depth, root included --
-            CLAUDE.md, SKILL.md, and generic docs alike) is held back from the generic reviewers and
+            CLAUDE.md, SKILL.md, a skill's `references/*.md`, and generic docs alike) is held back
+            from the generic reviewers and
             returned under `bundle.claimed_files` (each with a materialized `pre_image`) for the
-            subject-lens md-domain pass in step 6 -- EXCEPT a skill's `references/*.md`, which is
-            carved out and stays with the generic reviewers. That carve-out is load-bearing, not a
-            tuning preference: no md-domain audit lane reads a skill reference's PROSE (the
-            `audit_skill` lane audits the owning SKILL.md's contract and load graph; the
-            `audit_project_doc` lane's criteria exclude anything inside a skills tree and it returns
-            NOT-AUDITED), so claiming those files would remove the only review they get. Never
-            "simplify" this back to the single glob -- the reproduced evidence for the carve-out (and
-            the NOT-AUDITED verdict it prevents) is in references/md-domain-review.md. The single
+            subject-lens md-domain pass in step 6. A skill's `references/*.md` IS claimed: the
+            `audit_skill` lane owns both of the `skill` artifact's subject shapes and reads a
+            reference document's prose under skill-standards.md section 10. THE RULE: never claim a
+            shape no lane can audit, because a declined file returns NOT-AUDITED and a caller can
+            misread it as a pass. A second `!**/skills/*/references/*.md` glob is NOT part of the
+            default claim; it survives only as the step-6 skill-reference-skew compatibility shim,
+            and references/md-domain-review.md carries both that tier and why the shape was once
+            excluded. The single
             `**/*.md` glob supersedes the older two-glob form; `.md.html`
             (Markdeep) is NOT `.md`, so it is deliberately left to the generic reviewers. If
             md-domain is NOT available, invoke
@@ -144,22 +145,30 @@ MD_DOMAIN_LAUNCH = """\
             the triviality gate above); skip this entire paragraph otherwise. In the SAME message that
             launches the reviewer subagents (or the reviewer Workflow, per the dispatch rule above), ALSO
             invoke the Workflow tool with md-domain's headless detect lanes for the NON-TRIVIAL claimed
-            files, routed THREE ways by basename -- at
+            files, routed THREE ways by basename (plus one path-shape rule) -- at
             most THREE Workflow calls total: (a) every claimed file named `CLAUDE.md` -> the
             `audit_claude_md` lane's `skills/md-domain/workflow/claude-md-detect.js`; (b) every claimed
-            file named `SKILL.md` -> the `audit_skill` lane's `skills/md-domain/workflow/skill-detect.js`
-            (only if any); (c) every OTHER claimed `.md` file (generic docs) -> the `audit_project_doc`
+            file named `SKILL.md` OR sitting inside a `*/skills/<name>/references/` folder -> the
+            `audit_skill` lane's `skills/md-domain/workflow/skill-detect.js`
+            (only if any; that lane owns BOTH subject shapes and picks the criteria set per file from
+            the path); (c) every OTHER claimed `.md` file (generic docs) -> the `audit_project_doc`
             lane's `skills/md-domain/workflow/project-doc-detect.js` (only if any). Pass `review: true`
             and, per claimed
             file, `preImagePath` = its `pre_image` from the bundle (null for an add), with the per-lane
-            `files[]` fields (CLAUDE.md: role / dimension / parentPath / ancestorClaudeMdPaths; SKILL.md:
-            ancestorClaudeMdPaths; project-doc: ancestorClaudeMdPaths) resolved from each claimed file's
+            `files[]` fields (CLAUDE.md: role / dimension / parentPath / ancestorClaudeMdPaths; SKILL.md
+            and skill reference: ancestorClaudeMdPaths; project-doc: ancestorClaudeMdPaths) resolved from each claimed file's
             `claude_mds` per references/md-domain-review.md. Resolve the skills-kit plugin root and
             venvPython defensively per that reference. On a skills-kit version skew (a detect lane
-            entry point or documented args contract missing), do NOT guess -- re-run prepare_review.py
-            per the TWO-TIER fallback in references/md-domain-review.md (broad skew re-runs with no
-            `--claim`; project-doc-only skew keeps CLAUDE.md/SKILL.md claims); those are the only
-            sanctioned second prepare invocations.
+            entry point or documented args contract missing, OR an installed `audit_skill` lane that
+            predates the skill-REFERENCE subject), do NOT guess -- re-run prepare_review.py
+            per the THREE-TIER fallback in references/md-domain-review.md (broad skew re-runs with no
+            `--claim`; project-doc-only skew keeps the CLAUDE.md / SKILL.md / skill-reference
+            claims; skill-reference skew re-adds the `!**/skills/*/references/*.md` exclusion as a
+            compatibility shim). The third
+            tier is detected by CAPABILITY -- `## 10. Skill reference documents` present in the
+            installed `references/standards/skill-standards.md` -- because an older lane ships the
+            same entry point and args contract and would otherwise decline the file silently. Those
+            are the only sanctioned second prepare invocations.
             Then proceed with the normal fan-out. When the pass runs, the md-domain Workflow(s) execute in
             PARALLEL with the reviewer fan-out; keep each `{perFile, totals, review}` for step 9's labeled
             section."""
@@ -198,8 +207,8 @@ MD_DOMAIN_REPORT = """\
 # Appended to both gotcha blocks (plain text -- no f-string braces).
 MD_DOMAIN_GOTCHAS = """
         - md-domain findings are a SEPARATE, labeled section -- never interleave them with the code-review issue list. They come from md-domain's detect lanes (a subject-lens reviewer), not from the generic reviewer/validator subagents, so they are not filtered by the validators.
-        - The claim decision happens ONCE, at the step-2 probe: md-domain available -> `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` (one glob for CLAUDE.md, SKILL.md and generic docs, one `!` carve-out returning skill references to the generic reviewers because no audit lane reads their prose); md-domain absent -> no `--claim`. Do not run prepare a second time just to add claims -- the only re-runs are the two version-skew FALLBACKS (broad skew re-runs WITHOUT `--claim`; project-doc-only skew re-runs with only `--claim '**/CLAUDE.md' --claim '**/SKILL.md'`).
-        - Claimed `.md` files route THREE ways by basename in step 6 -- `CLAUDE.md` -> the `audit_claude_md` lane, `SKILL.md` -> the `audit_skill` lane, every other `.md` -> the `audit_project_doc` lane (full routing table and exclusions in references/md-domain-review.md; `.md.html` and a skill's `references/*.md` are never claimed). Basename routing has no destination that reads skill-reference prose, which is exactly why that shape must never be claimed.
+        - The claim decision happens ONCE, at the step-2 probe: md-domain available -> `--claim '**/*.md'` (one glob covering CLAUDE.md, SKILL.md, a skill's `references/*.md`, and generic docs); md-domain absent -> no `--claim`. Claiming a skill's `references/*.md` assumes the INSTALLED audit_skill lane owns that subject shape; these kits declare no version constraint on skills-kit, so step 6 probes for it by capability and the skill-reference skew tier re-adds the exclusion when it is missing. Do not run prepare a second time just to add claims -- the only re-runs are the version-skew FALLBACKS (broad skew re-runs WITHOUT `--claim`; project-doc-only skew re-runs with `--claim '**/CLAUDE.md' --claim '**/SKILL.md' --claim '**/skills/*/references/*.md'`; skill-reference skew re-adds the `!**/skills/*/references/*.md` exclusion as a compatibility shim).
+        - Claimed `.md` files route THREE ways in step 6 -- `CLAUDE.md` -> the `audit_claude_md` lane; `SKILL.md` OR a file inside a `*/skills/<name>/references/` folder -> the `audit_skill` lane (its two subject shapes); every other `.md` -> the `audit_project_doc` lane (full routing table in references/md-domain-review.md; `.md.html` is never claimed). Never claim a shape no lane can audit: a declined file comes back NOT-AUDITED, which a caller can misread as a pass.
         - A `NOT-AUDITED` verdict from a lane is NOT a pass. It means the lane declined the file as outside its criteria and read nothing. Render it as its own line, never fold it into the clean count, and never let it satisfy a submit gate -- treat it like the `## Mechanical checks (audit skipped)` section: an honest "not reviewed", not a result. Seeing one on a claimed file means the claim routing sent a file somewhere that cannot audit it; report that rather than accepting the verdict.
         - When skills-kit md-domain is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-domain section -- the md files get today's thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
         - The triviality gate is pure-mechanical and decided by prepare_review (per-claimed-file `trivial` / `trivial_reasons`); the skill never re-judges it. A TRIVIAL claimed file is reported via the mechanical-checks line and is NEVER sent to a detect lane or written to the ledger. When EVERY claimed file is trivial and there are no generic diff chunks, the whole audit is skipped -- render the `## Mechanical checks (audit skipped)` section, never a DIFF-CLEAN verdict, and never present the skip as an audit. A user or author asking for the full review overrides the gate.
@@ -681,7 +690,7 @@ __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff, partition it into chunked .diff fragments on disk, enumerate changed files via `git diff --name-status`, map ancestor CLAUDE.md files for each, detect untracked-or-unstaged files in the directories the diff touches, detect unresolved merge conflicts, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this range.
 __LAUNCH_EMIT__
           tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
-          input: "<range or argument from step 1>  (append `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` when md-domain is available, per the claim probe -- both flags, never just the first)"
+          input: "<range or argument from step 1>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
             JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-generated -- generated_files (each entry carries identifier, local, size_bytes, and the axis that matched -- generated_axis `content` or `declared_path` plus the naming generated_signature; such files are excluded from diff_chunks and changed_files, and `--review-generated` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
           on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
@@ -697,7 +706,7 @@ __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
 __LAUNCH_EMIT__
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
-          input: "<CL>  (append `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` when md-domain is available, per the claim probe -- both flags, never just the first)"
+          input: "<CL>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
             JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-generated -- generated_files (each entry carries identifier, local, size_bytes, and the axis that matched -- generated_axis `content` or `declared_path` plus the naming generated_signature; such files are excluded from diff_chunks and changed_files, and `--review-generated` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
@@ -1211,33 +1220,35 @@ MD_DOMAIN_REVIEW_TEMPLATE = """\
 
 When skills-kit's md-domain skill is available in the session, `@SKILL_NAME@` treats it
 as the SUBJECT-lens reviewer for EVERY changed Markdown file -- `**/*.md`, which is CLAUDE.md,
-SKILL.md, and generic project docs alike (`.md.html` Markdeep files are NOT `.md` and stay with
-the generic reviewers) -- with ONE carve-out: a skill's `references/*.md` is deliberately NOT
-claimed. Those files are CLAIMED out of the generic reviewer fan-out
-(prepare_review.py's `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` flags) and audited
+SKILL.md, a skill's `references/*.md`, and generic project docs alike (`.md.html` Markdeep files
+are NOT `.md` and stay with the generic reviewers). Those files are CLAIMED out of the generic
+reviewer fan-out (prepare_review.py's `--claim '**/*.md'` flag) and audited
 by md-domain's headless per-artifact detect lanes (`workflow/*-detect.js`)
 instead; their findings render as a separate labeled section. When md-domain is ABSENT the
 mechanism degrades silently -- no `--claim`, no claimed files, the md files get the ordinary thin
 data_only coverage. This doc is the operational detail behind step 6 (launch) and step 9 (render);
 the SKILL body carries the decision flow.
 
-## Why skill references are carved out
+## Why skill references route to the skill lane
 
 Reproduced 2026-07-28. A changed `plugins/bootstrap/skills/bootstrap/references/engine-internals.md`
 was claimed and routed by basename to the project-doc audit lane ("every other `.md`"), whose
 criteria explicitly exclude anything inside a skills tree. It declined the file and returned a
-passing verdict. Taking its advice and dispatching the skill audit lane on the owning SKILL.md does
-not help either: that lane audits the SKILL.md's contract, schema and load graph, never the
-reference's prose.
+passing verdict -- a fake gate. At the time no audit lane read a skill reference's prose, so the
+shape was carved out of the claim entirely and returned to the generic reviewers.
 
-So **no audit lane reads a skill reference's content** -- and claiming the file removed
-the reviewers that would have. An opus generic reviewer given the same diff found five real defects
-(a renamed heading that broke six citing files, a self-contradicting paragraph, an overstated claim,
-temporal deixis, non-ASCII lines), none reachable by either audit lane.
+That carve-out was a placeholder for the real fix, and the real fix has shipped: the `audit_skill`
+lane now owns BOTH of the `skill` artifact's subject shapes -- the SKILL.md contract root AND the
+skill's `references/*.md` documents, the latter under skill-standards.md section 10 (inbound anchor
+integrity, internal consistency, claim calibration, reader fit, plus the shared ancestor-convention
+and back-reference checks). The claim is therefore a single `**/*.md` glob again, and the routing in
+"The Workflow calls" below sends a claimed `references/*.md` to `skill-detect.js`, not to the
+project-doc lane.
 
-The `!**/skills/*/references/*.md` exclusion returns that shape to the generic reviewers. Do not
-remove it to "simplify the claim" -- doing so restores the fake gate. If a lane ever gains real
-skill-reference-prose criteria, drop the exclusion in the SAME change that ships those criteria.
+The rule the carve-out encoded still stands in its general form: **never claim a shape no lane can
+audit.** A claimed file whose lane declines it returns `NOT-AUDITED`, which is not a pass -- see
+"Consuming the result". If a future shape gets claimed ahead of its criteria, that is the same
+defect returning, and the fix is the criteria, not a wider claim.
 
 ## When it runs
 
@@ -1275,14 +1286,16 @@ session) invokes them via the Workflow tool. Locate the INSTALLED skills-kit plu
 - Detect-lane entry points, all under the one md-domain skill:
   `<root>/skills/md-domain/workflow/claude-md-detect.js` (the `audit_claude_md` lane, for CLAUDE.md
   subjects), `<root>/skills/md-domain/workflow/skill-detect.js` (the `audit_skill` lane, for
-  SKILL.md subjects), and `<root>/skills/md-domain/workflow/project-doc-detect.js` (the
+  SKILL.md subjects AND for a skill's own `references/*.md` documents), and
+  `<root>/skills/md-domain/workflow/project-doc-detect.js` (the
   `audit_project_doc` lane, for every OTHER `.md` subject).
 - venvPython: skills-kit's provisioned venv, which lives in the version-independent DATA dir --
   `~/.claude/plugins/data/plugins-kit/skills-kit/.venv/Scripts/python.exe` on Windows,
   `~/.claude/plugins/data/plugins-kit/skills-kit/.venv/bin/python` on macOS/Linux.
 
-**Version-coupling safety valve (two-tier fallback).** Do NOT guess when an entry point is
-missing or a documented args contract is not what this doc describes:
+**Version-coupling safety valve (three-tier fallback).** Do NOT guess when an entry point is
+missing, a documented args contract is not what this doc describes, or the installed lane predates
+a subject shape this skill claims. Check the tiers in order and take the FIRST that matches:
 
 - **Broad skew** -- `<root>` cannot be located, OR the `claude-md-detect.js` / `skill-detect.js`
   entry point or args contract is missing: emit a one-line warning and RE-RUN prepare_review.py
@@ -1290,20 +1303,45 @@ missing or a documented args contract is not what this doc describes:
   and the whole md-domain section is skipped for this run.
 - **project-doc-only skew** -- `claude-md-detect.js` and `skill-detect.js` are present but ONLY
   `project-doc-detect.js` is missing (a skills-kit that predates
-  project-doc review): emit a one-line warning and RE-RUN prepare_review.py with only
-  `--claim '**/CLAUDE.md' --claim '**/SKILL.md'`. CLAUDE.md and SKILL.md keep their specialist
-  coverage; only the generic `.md` docs rejoin the generic review.
+  project-doc review): emit a one-line warning and RE-RUN prepare_review.py with
+  `--claim '**/CLAUDE.md' --claim '**/SKILL.md' --claim '**/skills/*/references/*.md'`. CLAUDE.md,
+  SKILL.md and skill references all keep their specialist coverage -- `skill-detect.js` is intact
+  in this skew, so both of its subject shapes stay claimed; only the generic `.md` docs rejoin the
+  generic review. (Do NOT write the references glob as
+  `**/skills/*/references/**/*.md`: `matches_claim` treats a multi-segment tail as an fnmatch over
+  the whole path, and that form misses the flat `references/<file>.md` case while the single-`*`
+  form matches flat AND nested, repo-relative AND depot paths.)
+- **skill-reference skew** -- all three entry points are present, but the installed
+  `audit_skill` lane predates the skill-REFERENCE subject shape. Detect it by CAPABILITY, not by
+  version number: read `<root>/skills/md-domain/references/standards/skill-standards.md` and look
+  for the heading `## 10. Skill reference documents`. If it is ABSENT, that lane declines a
+  `references/*.md` and returns NOT-AUDITED. Emit a one-line warning and RE-RUN prepare_review.py
+  with `--claim '**/*.md' --claim '!**/skills/*/references/*.md'` -- the retired exclusion, used
+  here as a COMPATIBILITY shim -- so skill references rejoin the generic reviewers for this run.
+  Everything else keeps its specialist coverage.
+
+  This tier exists because the other two cannot see the skew: an older skills-kit ships
+  `skill-detect.js` at the same path with the same args contract, so presence-checking passes while
+  the lane still declines the file. These kits declare no version constraint on skills-kit (the
+  marketplace uses no version tags), so a capability probe is the only detection available. Without
+  it, claiming the shape against an older lane recreates exactly the coverage loss the exclusion was
+  introduced for -- the file is taken from the generic reviewers and handed to a lane that reads
+  nothing.
 
 These are the only sanctioned second prepare invocations.
 
-## The Workflow calls (three-way by basename)
+## The Workflow calls (three-way by basename, then by path)
 
-At most three, in the SAME message that launches the reviewer fan-out (or the reviewer Workflow):
+At most three, in the SAME message that launches the reviewer fan-out (or the reviewer Workflow).
+Route by basename first; the ONE path-shape rule is the skill-reference case in (b):
 
 1. **`audit_claude_md` lane** -- one call for every claimed file whose basename is `CLAUDE.md`.
    `scriptPath = <root>/skills/md-domain/workflow/claude-md-detect.js`, `args` =
    `{ files: [...], review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
-2. **`audit_skill` lane** -- one call for every claimed file whose basename is `SKILL.md` (only if any).
+2. **`audit_skill` lane** -- one call for every claimed file that is EITHER (a) named `SKILL.md`
+   OR (b) inside a `*/skills/<name>/references/` folder (only if any). Those are the `skill`
+   artifact's two subject shapes and they share one lane and one Workflow call; the lane picks the
+   criteria set per file from the path.
    `scriptPath = <root>/skills/md-domain/workflow/skill-detect.js`, `args` =
    `{ files: [...], review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
 3. **`audit_project_doc` lane** -- one call for every OTHER claimed `.md` file (generic docs; only if any).
@@ -1351,6 +1389,12 @@ For a **SKILL.md** file (`audit_skill` lane `files[]`):
 - `ancestorClaudeMdPaths`, `preImagePath` as above. (No `role` / `dimension` / `parentPath` /
   `density` in the `audit_skill` contract.)
 
+For a **skill reference document** (same `audit_skill` lane, same `files[]` array):
+- `path` = `local`.
+- `ancestorClaudeMdPaths`, `preImagePath` as above. Do NOT pass `skillType` -- a reference declares
+  none. You may pass `kind: "skill_reference"`, but the lane derives the same answer from the path,
+  so omitting it is fine and is the normal case for a review-mode call.
+
 For a **generic project doc** (any other claimed `.md`; `audit_project_doc` lane `files[]`):
 - `path` = `local`.
 - `ancestorClaudeMdPaths`, `preImagePath` as above. (No `role` / `dimension` / `parentPath` /
@@ -1373,8 +1417,8 @@ after decisions. See the step-9 action for the ruleset self-reference notice.
 A `NOT-AUDITED` file gets its own rendered line saying it was NOT reviewed, naming the auditor its
 routing finding points at. Never present it as a result, never count it clean, and never let it
 satisfy a submit gate -- the same rule the `## Mechanical checks (audit skipped)` section follows.
-On a correctly-configured run it should not appear at all: the claim carve-out above keeps the one
-shape that provoked it out of the claim, so a NOT-AUDITED verdict means the routing sent a file to a
+On a correctly-configured run it should not appear at all: every claimed shape has a lane that
+audits it, so a NOT-AUDITED verdict means the routing sent a file to a
 lane that cannot audit it. Report that, rather than accepting the verdict.
 
 Scope: this integration is hardcoded to skills-kit's md-domain skill (its `audit_claude_md`,

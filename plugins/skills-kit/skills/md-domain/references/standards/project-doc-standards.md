@@ -22,7 +22,7 @@ A *project document* is a standalone reference doc that is:
 - **NOT** a `SKILL.md` (audited by the skill lane),
 - **NOT** a `CLAUDE.md` / `CLAUDE.local.md` (audited by the claude-md lane),
 - **NOT** inside a `*/skills/*/references/` folder (those are skill references,
-  audited transitively via their owning SKILL.md).
+  audited by the skill lane under `skill-standards.md` section 10).
 
 It lives at a project-level path -- `Docs/*.md`, `Docs/**/*.md.html` (Markdeep),
 `.claude/docs/*.md`, `<subsystem>/docs/*.md` -- or is a README / design note /
@@ -55,7 +55,8 @@ route it by trigger shape.
 
 **Rule:** the target is classified `project_doc` by discover.py. A file inside a
 `*/skills/*/references/` folder is a skill reference, audited via
-`/md-domain audit skill`; a `CLAUDE.md` / `SKILL.md` is audited by its own lane.
+`/md-domain audit skill` (skill-standards.md section 10, which reads the
+reference's own prose); a `CLAUDE.md` / `SKILL.md` is audited by its own lane.
 
 **Test:** read discover.py `kind`. If `skill_reference` or
 `other_claude_artifact`, emit one routing finding (taxonomy

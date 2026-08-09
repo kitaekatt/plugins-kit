@@ -110,9 +110,14 @@ both were dropped rather than repointed, since a consumer install has no `docs/`
 alongside the rendered tree, not build plumbing -- and stays in the skill's
 `references/`.
 
-**Audit note:** md-domain will not catch this. Its review claims deliberately carve out a
-skill's `references/*.md`, so no audit lane reads their prose. OP-1 must be checked by
-hand or by a dedicated sweep.
+**Audit note:** md-domain catches PART of this. A skill's `references/*.md` is claimed
+and audited by the `audit_skill` lane, whose SR-4 (reader fit) criterion flags
+maintainer-only material on that surface (`skill-standards.md` section 10 -- the criterion
+statement lives there, not here). That is one judgment criterion over one MARKDOWN
+document. It cannot see a non-markdown artifact at all -- `decision-fingerprint.txt`, the
+worked example above, is invisible to every lane -- and it reads nothing outside a skills
+tree. The rest of OP-1 must still be checked by hand or by a dedicated sweep, and a clean
+md-domain audit does not discharge it.
 
 ### OP-2 -- Every workflow opinion has been run through the scenario test
 

@@ -18,7 +18,7 @@ byte-identical to today's (no `claimed_files` key).
 
 A glob prefixed with `!` is an EXCLUSION and beats every positive pattern, so a
 caller can claim a broad shape while carving out a subset that no specialist
-actually reviews -- e.g. `--claim '**/*.md' --claim '!**/skills/*/references/*.md'`.
+actually reviews -- e.g. `--claim '**/*.md' --claim '!vendor/**/*.md'`.
 Claiming a file removes it from the generic reviewers on the promise that a
 specialist reads it instead; where no specialist does, the exclusion is what keeps
 the file reviewed at all.

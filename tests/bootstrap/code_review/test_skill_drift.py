@@ -78,14 +78,15 @@ class TestMdDomainContributorPresent:
             assert "skills-kit:md-domain" in body
             assert "--claim '**/*.md'" in body
             assert ".md.html" in body            # Markdeep is NOT claimed
-            # step-6 launch: three-way routing + two-tier version-skew fallback
+            # step-6 launch: three-way routing + three-tier version-skew fallback
             assert "Subject-lens md-domain pass" in body
             assert "routed THREE ways by basename" in body
             assert "`audit_project_doc`" in body
             # (assertions repaired at the md-domain cutover: they had gone stale
-            # against the shipped prose, which says "version skew ... per the
-            # TWO-TIER fallback" and states the broad-skew re-run in short form)
-            assert "TWO-TIER fallback" in body
+            # against the shipped prose, which states the broad-skew re-run in
+            # short form; the fallback became THREE-TIER when skill references
+            # entered the claim)
+            assert "THREE-TIER fallback" in body
             assert "version skew" in body
             # broad skew re-runs without --claim; project-doc-only skew keeps the two globs
             assert "broad skew re-runs with no\n            `--claim`" in body
@@ -94,6 +95,56 @@ class TestMdDomainContributorPresent:
             assert "WITHOUT any `--claim` flags" in ref
             assert "--claim '**/CLAUDE.md' --claim '**/SKILL.md'" in ref
             assert "--claim '**/CLAUDE.md' --claim '**/SKILL.md'" in body
+
+    def test_skill_references_are_claimed_and_routed_to_the_skill_lane(self):
+        """The 2026-07-28 carve-out is RETIRED, and both halves must move together.
+
+        The `!**/skills/*/references/*.md` exclusion existed only because no
+        md-domain lane read a skill reference's prose. The `audit_skill` lane now
+        owns that shape (skill-standards.md section 10), so the exclusion is gone
+        and the routing sends the shape to `skill-detect.js`. This pins BOTH: an
+        exclusion that comes back without criteria is the fake gate returning, and
+        a dropped exclusion without the routing sends the file to a lane that
+        declines it.
+        """
+        exclusion = "--claim '!**/skills/*/references/*.md'"
+
+        # The DEFAULT claim -- the step-2 decision -- must not carry it.
+        assert exclusion not in gen.CLAIM_PROBE, (
+            "the step-2 claim probe reinstated the skill-reference exclusion as "
+            "the default. It is retired -- the audit_skill lane audits that shape "
+            "now. Do not reintroduce it without also removing the section-10 criteria."
+        )
+
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            ref = gen.render_md_domain_review(vcs)
+
+            # the routing rule that gives the claimed shape a destination
+            assert "*/skills/<name>/references/" in body, (
+                f"{vcs} SKILL.md: step 6 no longer routes a claimed skill reference "
+                "to the audit_skill lane -- claimed with no destination is a decline"
+            )
+            assert "skill reference document" in ref
+
+            # Tier 3 keeps the exclusion available as a COMPATIBILITY SHIM for an
+            # installed audit_skill lane that predates the subject shape. That skew
+            # is invisible to the other two tiers -- an older skills-kit ships the
+            # same entry point with the same args contract -- so the probe is a
+            # capability marker in the installed standards doc, not a version.
+            assert "skill-reference skew" in ref
+            assert "## 10. Skill reference documents" in ref
+            assert "COMPATIBILITY shim" in ref
+            assert "skill-reference skew" in body
+
+            # ...and the shim is the ONLY place the exclusion survives.
+            tier3 = ref.split("**skill-reference skew**")[1]
+            assert exclusion in tier3
+            assert ref.count(exclusion) == 1, (
+                f"{vcs} md-domain-review.md: the exclusion appears outside the "
+                "skill-reference skew tier -- it is a compatibility shim, not a "
+                "default claim"
+            )
 
     def test_both_skills_carry_labeled_section_and_notice(self):
         for vcs in ("git", "p4"):
@@ -112,7 +163,7 @@ class TestMdDomainContributorPresent:
             assert "skills/md-domain/workflow/project-doc-detect.js" in ref  # third lane
             assert "venvPython" in ref
             assert "ancestorClaudeMdPaths" in ref
-            # three-way routing + two-tier fallback documented
+            # three-way routing + three-tier fallback documented
             assert "three-way by basename" in ref
             assert "project-doc-only skew" in ref
             assert "**/*.md" in ref
