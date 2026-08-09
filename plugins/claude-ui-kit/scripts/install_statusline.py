@@ -5,16 +5,33 @@ Behavior:
   the user-global `~/.claude/settings.json`. The statusLine is a user-level
   preference, not a project-level one — installing per-project meant every
   ephemeral cwd Claude was launched in (eval tmp dirs, etc.) got a stray
-  `.claude/settings.local.json` written into it.
+  `.claude/settings.local.json` written into it. This happens even if a
+  declined record exists from an earlier, now-gone foreign statusLine -- see
+  the edge-case comment in install() for why a decline does not carry forward
+  into an empty slot.
 - If the existing statusLine is already claude-ui-kit's (matches our path
   prefix), refresh it to point at the current installed location. This handles
   plugin upgrades and reinstalls transparently — wherever it was found.
-- If the existing statusLine is something else, leave it alone and surface a
-  fix-all message asking the user to type "replace my status line" if they
-  want to switch.
+- If the existing statusLine is something else (foreign), the script never
+  overwrites it without consent, but it also does not nag forever:
+    - No declined record yet -> surface a fix-all failure whose agent_msg
+      instructs the agent to ask the user ONCE, via AskUserQuestion, to keep
+      their own statusLine or switch to claude-ui-kit's. KEEP -> the agent
+      writes a declined record (see DECLINED_RECORD_RELPATH below) and this
+      conflict is never surfaced again. SWITCH -> the agent updates
+      statusLine.command directly, same as always.
+    - A declined record already exists -> stay silent (log_ok only). The
+      record is per-user, lives in the plugin's own data dir (never
+      settings.json or bootstrap.json), and captures what was declined in
+      favor of, plus a schema version and date, so it is auditable and
+      migratable rather than a bare boolean.
+    - The declined record suppresses the PROMPT, never the capability: a user
+      who later says "replace my status line" (or clearly equivalent) can
+      still switch at any time -- nothing here gates that natural-language
+      path.
 
 The script is idempotent: re-running on every SessionStart is a no-op once
-installed.
+installed or once declined.
 
 The command must be machine-INDEPENDENT
 ---------------------------------------
@@ -63,6 +80,7 @@ dirty.
 
 import json
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -70,6 +88,16 @@ from typing import Optional, Tuple
 PLUGIN_NAME = "claude-ui-kit"
 INSTALLED_SCRIPT_RELPATH = "scripts/statusline.sh"
 CUSTOMIZED_FLAG = "customized.flag"
+
+# Per-user record of a declined statusLine takeover, written by the AGENT (not
+# this script -- the script runs unattended inside a bootstrap hook and cannot
+# prompt) into the plugin's own data dir. Never settings.json or
+# bootstrap.json: this is install-flow state, not a user preference or a
+# dependency declaration. A schema version + what was declined in favor of +
+# a date makes the record auditable and migratable, unlike a bare boolean --
+# see _read_declined_record for why content, not just presence, matters.
+DECLINED_RECORD_RELPATH = "statusline_declined.json"
+DECLINED_RECORD_SCHEMA_VERSION = 1
 
 # Interpreter token for the emitted command. A bare name resolved from PATH,
 # never an absolute path -- see the module docstring on machine independence.
@@ -125,10 +153,25 @@ def install(ctx) -> None:
     existing = _find_existing_statusline(candidate_paths)
 
     if existing is None:
+        # Edge case, decided explicitly: no statusLine exists at all, but a
+        # declined record may be sitting in the data dir from an earlier
+        # session where the user chose to KEEP a different foreign statusLine.
+        # We install ours here anyway, rather than treating the old decline as
+        # a standing "never install yours". Justification: the decline was
+        # scoped to "keep MY statusline", not "never offer claude-ui-kit" --
+        # the user never expressed an opinion about the no-statusline case,
+        # because it didn't exist yet when they answered. Silently staying
+        # blank forever would be a worse default than installing, and the
+        # capability to switch was never meant to expire (see the module
+        # docstring's "declined record suppresses the PROMPT, never the
+        # capability" note -- this is that same principle applied to the
+        # empty-slot case). A stale record is cleared below since it no
+        # longer describes anything real.
         target = Path.home() / ".claude" / "settings.json"
         if _refuse_unparseable(ctx, target):
             return
         _write_statusline(target, expected_command)
+        _clear_declined_record(ctx.data_dir)
         ctx.log(f"statusline: installed to {_posix(target)}")
         return
 
@@ -158,7 +201,22 @@ def install(ctx) -> None:
             ctx.log(f"statusline: refreshed path in {_posix(settings_path)}")
         return
 
-    # User has a custom statusLine. Don't touch it without explicit consent.
+    # User has a foreign statusLine. Don't touch it without explicit consent.
+    # But don't ask forever either: a declined record from an earlier session
+    # means the user already answered, so stay silent (verbose-only ok entry,
+    # never a failure/action entry) rather than re-surfacing the same conflict
+    # on every bootstrap pass. See DECLINED_RECORD_RELPATH above for why the
+    # record lives in the plugin's own data dir with a real schema.
+    declined = _read_declined_record(ctx.data_dir)
+    if declined is not None:
+        ctx.log_ok(
+            f"statusline: foreign statusLine in {_posix(settings_path)} "
+            f"previously declined (on {declined.get('declined_date', 'unknown date')}), "
+            f"not re-asking"
+        )
+        return
+
+    declined_record_path = _posix(Path(ctx.data_dir) / DECLINED_RECORD_RELPATH)
     ctx.add_failure(
         "statusline_conflict",
         settings_path=_posix(settings_path),
@@ -166,21 +224,67 @@ def install(ctx) -> None:
         new_command=expected_command,
         user_msg=(
             f"claude-ui-kit found an existing statusLine in "
-            f"{_posix(settings_path)} and will not overwrite it. To switch "
-            f"to claude-ui-kit's default, type 'replace my status line'."
+            f"{_posix(settings_path)} and will not overwrite it without your "
+            f"say-so."
         ),
         agent_msg=(
-            f"The user has a custom statusLine configured in "
-            f"{_posix(settings_path)} with command: {current_command}\n"
-            f"DO NOT modify it. If and only if the user explicitly says "
-            f"'replace my status line' (or clearly equivalent intent), "
-            f"update {_posix(settings_path)} so that "
-            f"statusLine.command = {expected_command} (keep "
-            f"statusLine.type = 'command'). Otherwise, leave it alone and "
-            f"explain that claude-ui-kit is installed but not active because "
-            f"a custom statusLine takes precedence."
+            f"The user has a foreign (non-claude-ui-kit) statusLine configured "
+            f"in {_posix(settings_path)} with command: {current_command}\n"
+            f"This has never been asked about before (no declined record at "
+            f"{declined_record_path}). Ask the user ONCE, using the "
+            f"AskUserQuestion tool, whether to keep their existing statusLine "
+            f"or switch to claude-ui-kit's default. Offer exactly two options:\n"
+            f"  1. Keep my existing statusLine\n"
+            f"  2. Switch to claude-ui-kit's statusLine\n"
+            f"If they choose to KEEP: write "
+            f"{declined_record_path} (creating parent directories as needed) "
+            f"with this exact JSON shape, so the conflict is never surfaced "
+            f"again:\n"
+            f'  {{"schema_version": {DECLINED_RECORD_SCHEMA_VERSION}, '
+            f'"declined_command": {json.dumps(current_command)}, '
+            f'"declined_date": "{date.today().isoformat()}"}}\n'
+            f"Do NOT modify {_posix(settings_path)} in this case.\n"
+            f"If they choose to SWITCH: update {_posix(settings_path)} so "
+            f"that statusLine.command = {expected_command} (keep "
+            f"statusLine.type = 'command'); do not write a declined record.\n"
+            f"This declined record only suppresses future automatic prompts -- "
+            f"it never blocks the switch. If the user later says 'replace my "
+            f"status line' (or clearly equivalent intent) in ANY future "
+            f"session, honor it immediately by updating "
+            f"{_posix(settings_path)} the same way, regardless of any "
+            f"declined record on disk."
         ),
     )
+
+
+def _read_declined_record(data_dir: str) -> Optional[dict]:
+    """Return the declined-record dict if one exists and parses, else None.
+
+    Presence alone (not content validity) is what suppresses the prompt --
+    a malformed record still means an agent deliberately wrote *something*
+    there in response to a KEEP answer, and re-asking would contradict that.
+    Parsed content is used only for the log message when available.
+    """
+    path = Path(data_dir) / DECLINED_RECORD_RELPATH
+    if not path.is_file():
+        return None
+    data = _load_json(path)
+    return data if isinstance(data, dict) else {}
+
+
+def _clear_declined_record(data_dir: str) -> None:
+    """Remove a stale declined record once it no longer describes anything.
+
+    Called when install() lands a fresh install into a now-empty statusLine
+    slot (see the edge-case comment at that call site) -- the record's
+    ``declined_command`` describes a statusLine that is gone, so leaving it
+    around would be a harmless but misleading audit trail.
+    """
+    path = Path(data_dir) / DECLINED_RECORD_RELPATH
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _resolve_installed_script(data_dir: str) -> Optional[Path]:
