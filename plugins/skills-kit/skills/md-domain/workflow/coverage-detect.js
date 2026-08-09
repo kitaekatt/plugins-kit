@@ -84,7 +84,12 @@ const SUBJECT_FINDINGS_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['fact', 'destination', 'why'],
+        // `tier` and `anchors` are REQUIRED for the same reason `notes` is: a
+        // criterion the schema cannot carry is a criterion the run can satisfy
+        // on paper and omit in fact. CV-4 requires the tier to be REPORTED, and
+        // with additionalProperties:false there was nowhere to report it; CV-7
+        // is fail-severity and its anchor was optional.
+        required: ['fact', 'destination', 'why', 'tier', 'anchors'],
         properties: {
           // The fact as it would read in a CLAUDE.md -- not a description of a
           // defect, and not a code location on its own.
@@ -93,10 +98,17 @@ const SUBJECT_FINDINGS_SCHEMA = {
           // it describes, never wherever is convenient.
           destination: { type: 'string' },
           why: { type: 'string' },
+          // CV-4. FINDING-CONVERTIBLE means a reviewer could catch a violation:
+          // quotable imperative + unambiguous test + locatable at file and line.
+          // CONTEXT-ONLY is admissible and common -- it just must not be
+          // reported as though it were convertible.
+          tier: { type: 'string', enum: ['FINDING-CONVERTIBLE', 'CONTEXT-ONLY'] },
           // Set only for the severe-deficiency carve-out, so a reader can tell a
           // documentation gap from the rare case where the code is defective.
           severeDeficiency: { type: 'boolean' },
-          anchors: { type: 'array', items: { type: 'string' } },
+          // CV-7's evidence floor. minItems:1 because an empty array satisfies a
+          // bare `required` while citing nothing.
+          anchors: { type: 'array', minItems: 1, items: { type: 'string' } },
         },
       },
     },
@@ -194,6 +206,22 @@ ${input.refs.placement || 'references/cohesion-principles.md'} selects -- ambien
 describes. Ambient budget is PER FILE: putting a fact in a file that already
 loads somewhere else does not make it reach this code. Do not default to the
 nearest CLAUDE.md.
+
+TIER (CV-4). Classify every surviving candidate as FINDING-CONVERTIBLE or
+CONTEXT-ONLY. FINDING-CONVERTIBLE requires ALL THREE: an imperative a reviewer
+can quote verbatim, a violation test that is unambiguous rather than
+discretionary, and a violation locatable at a file and line. CONTEXT-ONLY is a
+real and admissible outcome -- orientation and architecture facts earn ambient
+space without being convertible. What is forbidden is reporting a CONTEXT-ONLY
+fact as though it were convertible; when the three do not all hold, say
+CONTEXT-ONLY.
+
+EVIDENCE (CV-7). Every candidate cites at least one file and line you OBSERVED
+in source, in anchors. A convention needs two or more observed instances or one
+authoritative source. Code outranks comments, guides, and rationale. Names,
+layout, and repeated patterns start an investigation; they are not evidence on
+their own. A fact you cannot anchor to observed source is DROPPED, not hedged
+and not reported with a guess at a location.
 
 CEILING. Report at most ${ceiling} candidates FOR THIS SUBTREE. If you would have exceeded it, set
 ceilingReached: true and say in notes how many you set aside. Never truncate

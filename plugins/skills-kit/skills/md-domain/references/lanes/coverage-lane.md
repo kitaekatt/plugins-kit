@@ -166,8 +166,9 @@ Analysis depth: basic | advanced
 <only for a non-interactive implicit basic selection: defaults: depth=basic>
 
 ### Candidates
-- <fact>  ->  destination: <CLAUDE.md the placement algorithm selects>
+- [<FINDING-CONVERTIBLE | CONTEXT-ONLY>] <fact>  ->  destination: <CLAUDE.md the placement algorithm selects>
   <why it belongs there, and why it is not ambient today>
+  evidence: <file:line>[, <file:line> ...]
 
 ### Coverage verdict
 GAPS-FOUND | COVERAGE-ASSESSED
@@ -177,6 +178,13 @@ Meaning: <basic: not found within budget | advanced: verified absent>
 Each candidate carries the destination the placement algorithm selects --
 ambient for the code it describes, per `references/cohesion-principles.md`, not
 wherever is convenient. Reporting a candidate is not a commitment to write it.
+
+The tier prefix and the evidence line are not decoration: CV-4 requires the
+classification to be REPORTED, and CV-7 is fail-severity on the file-and-line
+citation. Rendering a candidate without them satisfies the criteria in the
+assessment and drops them at the only point a reader sees. A CONTEXT-ONLY
+candidate is a normal result -- the tier exists so a reader can tell the facts a
+reviewer could act on from the ones that only orient, not to rank them.
 
 Then STOP. No Q&A, no edits, no follow-up pass.
 
