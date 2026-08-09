@@ -102,3 +102,34 @@ Document the expected size, refresh trigger, and churn when declaring an
 artifact durable. If those costs are not acceptable for the consuming
 project's VCS, keep the artifact ephemeral even when sharing it would be
 convenient.
+
+## A refresh action must handle checkout semantics
+
+Durable data lives under the *project's* version control, not the plugin's.
+Once it has been committed once, some VCSes lock the on-disk file until it is
+explicitly checked out -- Perforce marks a synced/submitted file read-only,
+for example. Git has no equivalent, which is easy to miss if the pattern was
+only ever exercised in a git checkout: the first refresh (destination absent)
+succeeds regardless of VCS, and the defect only shows up on the SECOND refresh
+against a VCS with checkout semantics, when the destination already exists and
+is locked.
+
+A refresh action therefore cannot assume the destination is writable just
+because it resolved a path for it. Before writing:
+
+- If the destination does not exist, write it -- nothing to check.
+- If the destination exists and its content already matches the new value,
+  there is nothing to write; report "already up to date" and stop rather than
+  touching a file that may be locked for no reason.
+- If the destination exists, differs, and is read-only, do not attempt the
+  write -- it fails as a raw `PermissionError` (or platform equivalent) deep
+  inside a copy call, not as a message the user can act on. Fail cleanly
+  instead, naming the actual path and the concrete next step (e.g. `p4 edit
+  <path>` when a Perforce workspace is confidently detected; a generic
+  "check it out of version control, or clear the read-only flag" otherwise).
+
+Do not auto-checkout or clear the read-only bit on the user's behalf. A
+refresh action may detect and instruct; only the user decides to mutate their
+own VCS state. See `plugins/unreal-kit/lib/unreal_stub.py`
+(`refresh_durable_stub`, `DestinationNotWritableError`) for a worked
+implementation of this check.

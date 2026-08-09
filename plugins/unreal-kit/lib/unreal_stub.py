@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import stat
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -16,6 +17,63 @@ from bootstrap_lib.config_resolve import (
 
 MARKETPLACE = "plugins-kit"
 PLUGIN = "unreal-kit"
+
+# Files that mark a Perforce workspace. Their presence at or above a path is a
+# local, zero-cost signal that the tree is Perforce-managed -- checked before
+# telling the user to run a p4 command, and before spawning p4 at all.
+_P4_MARKERS = (".p4config.txt", ".p4config", ".p4ignore.txt", ".p4ignore")
+
+
+class DestinationNotWritableError(Exception):
+    """Raised when the durable stub destination exists and is read-only.
+
+    A VCS with checkout semantics (Perforce, and similar) marks a submitted
+    file read-only on disk until it is explicitly checked out; a plain
+    ``shutil.copy2`` over such a file raises a raw ``PermissionError``. This
+    exception carries an actionable message instead -- see
+    :func:`refresh_durable_stub`. The fix is never applied automatically: only
+    the user may check the file out of version control (or clear the
+    read-only flag).
+    """
+
+
+def _is_read_only(path: Path) -> bool:
+    try:
+        return not (path.stat().st_mode & stat.S_IWRITE)
+    except OSError:
+        return False
+
+
+def _in_p4_workspace(path: Path) -> bool:
+    """True if a Perforce workspace marker sits at or above ``path``."""
+    directory = path.parent
+    while True:
+        if any((directory / marker).exists() for marker in _P4_MARKERS):
+            return True
+        parent = directory.parent
+        if parent == directory:
+            return False
+        directory = parent
+
+
+def _not_writable_message(destination: Path) -> str:
+    """Return the actionable message for a read-only durable-stub destination.
+
+    VCS-aware when that is cheap and reliable to detect (a ``p4`` executable
+    plus a Perforce workspace marker above ``destination``); a generic
+    check-it-out-of-version-control message otherwise. Never guesses a VCS it
+    has not confirmed.
+    """
+    if shutil.which("p4") is not None and _in_p4_workspace(destination):
+        return (
+            f"{destination} is read-only, most likely because it is checked "
+            f"into Perforce. Run `p4 edit {destination}` to check it out, "
+            "then re-run this refresh."
+        )
+    return (
+        f"{destination} is read-only. Check it out of version control (or "
+        "clear the read-only flag), then re-run this refresh."
+    )
 
 
 def load_effective_config(project_root: Path) -> dict:
@@ -102,6 +160,14 @@ def refresh_durable_stub(
         raise FileNotFoundError(source)
 
     destination = durable_stub_path(project_root, config)
+
+    if destination.is_file() and source.read_bytes() == destination.read_bytes():
+        announce(f"Unreal API stub already up to date at {destination}")
+        return destination
+
+    if destination.exists() and _is_read_only(destination):
+        raise DestinationNotWritableError(_not_writable_message(destination))
+
     announce(f"Writing enriched Unreal API stub: {source} -> {destination}")
 
     # This must remain durable consuming-project data. Bootstrap may check this

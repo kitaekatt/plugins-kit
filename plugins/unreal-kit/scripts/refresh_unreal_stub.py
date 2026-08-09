@@ -17,7 +17,11 @@ reexec_under_plugin_venv("unreal-kit")
 require_bootstrap("unreal-kit", feature="Unreal API stub refresh")
 
 try:
-    from unreal_stub import load_effective_config, refresh_durable_stub  # noqa: E402
+    from unreal_stub import (  # noqa: E402
+        DestinationNotWritableError,
+        load_effective_config,
+        refresh_durable_stub,
+    )
 except ImportError:
     require_bootstrap(
         "unreal-kit",
@@ -45,9 +49,15 @@ def main(argv: list[str] | None = None) -> int:
     """Resolve the durable destination, announce it, and copy the stub."""
     args = parse_args(argv)
     project_root = args.project_root.resolve()
+    announcements: list[str] = []
+
+    def announce(message: str) -> None:
+        print(message)
+        announcements.append(message)
+
     try:
         config = load_effective_config(project_root)
-        destination = refresh_durable_stub(project_root, config, print)
+        destination = refresh_durable_stub(project_root, config, announce)
     except ValueError as exc:
         print(f"Cannot refresh enriched Unreal API stub: {exc}.", file=sys.stderr)
         return 2
@@ -59,7 +69,15 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    print(f"Refreshed enriched Unreal API stub at {destination}")
+    except DestinationNotWritableError as exc:
+        print(f"Cannot refresh enriched Unreal API stub: {exc}", file=sys.stderr)
+        return 2
+    already_up_to_date = any(
+        message.startswith("Unreal API stub already up to date")
+        for message in announcements
+    )
+    if not already_up_to_date:
+        print(f"Refreshed enriched Unreal API stub at {destination}")
     return 0
 
 

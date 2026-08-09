@@ -9,7 +9,7 @@
     {
       "name": "unreal-kit",
       "description": "Unreal Engine automation: Python API for asset inspection and data extraction; MCP server for live Editor authoring (actors, Blueprints, materials, PIE)",
-      "version": "0.11.5",
+      "version": "0.11.6",
       "author": {
         "name": "Christina"
       },
@@ -35,7 +35,7 @@
     {
       "name": "bootstrap",
       "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
-      "version": "0.77.1",
+      "version": "0.77.2",
       "author": {
         "name": "Christina"
       },
@@ -84,7 +84,7 @@
     {
       "name": "claude-ui-kit",
       "description": "Claude Code status line with context-window and rate-limit threshold colors, plus the /statusline skill to inspect and customize it.",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "author": {
         "name": "Christina"
       },

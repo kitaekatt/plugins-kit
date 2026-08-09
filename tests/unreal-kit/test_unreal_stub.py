@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import stat
 import sys
 from pathlib import Path
+
+import pytest
 
 _PLUGIN_DIR = Path(__file__).resolve().parents[2] / "plugins" / "unreal-kit"
 _LIB_DIR = _PLUGIN_DIR / "lib"
@@ -102,3 +106,78 @@ def test_reads_deferred_requirement_prepared_statement(
     )
 
     assert unreal_stub.deferred_requirement_message("unreal_enriched_stub") == "prepared"
+
+
+def _make_read_only(path: Path) -> None:
+    path.chmod(stat.S_IREAD)
+
+
+def _make_writable(path: Path) -> None:
+    path.chmod(stat.S_IWRITE | stat.S_IREAD)
+
+
+def _configured_project(tmp_path: Path, source_content: str) -> tuple[Path, dict]:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    uproject = project_root / "Game.uproject"
+    uproject.write_text("{}", encoding="ascii")
+    source = project_root / "Intermediate" / "PythonStub" / "unreal.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(source_content, encoding="ascii")
+    return project_root, {"uproject": str(uproject)}
+
+
+def test_refresh_raises_actionable_error_for_read_only_destination(
+    tmp_path: Path,
+) -> None:
+    project_root, config = _configured_project(tmp_path, "enriched-v2")
+    destination = unreal_stub.durable_stub_path(project_root, config)
+    destination.parent.mkdir(parents=True)
+    destination.write_text("enriched-v1", encoding="ascii")
+    _make_read_only(destination)
+
+    try:
+        with pytest.raises(unreal_stub.DestinationNotWritableError) as excinfo:
+            unreal_stub.refresh_durable_stub(project_root, config, lambda _: None)
+        # Actionable: names the real path, no raw traceback surfaces to the caller.
+        assert str(destination) in str(excinfo.value)
+        # No partial write: the read-only destination is untouched.
+        assert destination.read_text(encoding="ascii") == "enriched-v1"
+    finally:
+        _make_writable(destination)
+
+
+def test_refresh_overwrites_writable_existing_destination(tmp_path: Path) -> None:
+    project_root, config = _configured_project(tmp_path, "enriched-v2")
+    destination = unreal_stub.durable_stub_path(project_root, config)
+    destination.parent.mkdir(parents=True)
+    destination.write_text("enriched-v1", encoding="ascii")
+
+    result = unreal_stub.refresh_durable_stub(project_root, config, lambda _: None)
+
+    assert result == destination
+    assert destination.read_text(encoding="ascii") == "enriched-v2"
+
+
+def test_refresh_short_circuits_when_destination_already_matches(
+    tmp_path: Path,
+) -> None:
+    project_root, config = _configured_project(tmp_path, "enriched")
+    destination = unreal_stub.durable_stub_path(project_root, config)
+    destination.parent.mkdir(parents=True)
+    destination.write_text("enriched", encoding="ascii")
+    # Read-only AND identical: must short-circuit on content equality before
+    # ever reaching the writability check, so this must NOT raise.
+    _make_read_only(destination)
+    announcements: list[str] = []
+
+    try:
+        result = unreal_stub.refresh_durable_stub(
+            project_root, config, announcements.append
+        )
+        assert result == destination
+        assert announcements == [
+            f"Unreal API stub already up to date at {destination}"
+        ]
+    finally:
+        _make_writable(destination)
