@@ -2043,8 +2043,8 @@ class TestParseArgs:
             False,
         )
 
-    def test_review_generated_flag(self):
-        assert pr._parse_args(["12345", "--review-generated"]) == (["12345"], [], True)
+    def test_review_machine_emitted_flag(self):
+        assert pr._parse_args(["12345", "--review-machine-emitted"]) == (["12345"], [], True)
 
     def test_claim_without_value_raises(self):
         with pytest.raises(ValueError):

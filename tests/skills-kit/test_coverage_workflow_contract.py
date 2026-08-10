@@ -1,6 +1,7 @@
 """Contract pins for the coverage verb's detect lane and procedure.
 
-The coverage verb is a REPORT-ONLY third verb, not an audit lane. Several of its
+Coverage is the discovery phase of generation -- still REPORT-ONLY, still not an
+audit lane. Several of its
 properties are load-bearing in a way that is invisible at a glance, and each has
 a specific way of silently regressing:
 
@@ -11,9 +12,9 @@ a specific way of silently regressing:
     and the audit lane's single-subject shortcut runs inline at whatever model
     the session happens to be on -- so an unpinned lane silently drops tier in
     the common case rather than the rare one.
-  * It must have NO remediate lane. Report-only is what keeps a third verb cheap;
-    a remediate lane would drag in the sonnet+low pin and the generator, which
-    assumes per-file edits and applied/skipped/failed results.
+  * It must have NO remediate lane. Report-only is what keeps the discovery phase
+    cheap; a remediate lane would drag in the sonnet+low pin and the generator,
+    which assumes per-file edits and applied/skipped/failed results.
   * It must REFUSE to run when the authored criteria path is missing rather than
     improvising. An invented predicate reproduces the hazard sweep two
     adversarial reviews rejected -- and it would look like it was working.

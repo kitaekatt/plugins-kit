@@ -13,7 +13,7 @@
 // remediations are structural MOVES (graduate-to-skill B, fold-into-CLAUDE.md C,
 // move-into-skill D) — the lane applies the move it is instructed to make;
 // authoring a brand-new skill beyond a simple move is handed to the md-domain
-// author_skill lane by the main loop, not performed blind in a lane.
+// generate_skill lane by the main loop, not performed blind in a lane.
 //
 // Invoked by the md-domain SKILL.md (audit_project_doc lane) only when there is remediation work
 // spanning 2+ files (the multi-file threshold that equalizes Workflow-tool
@@ -90,7 +90,7 @@ Rules:
 - decision "apply"  -> make the edit exactly as the instruction describes.
 - decision "skip"   -> do nothing for that item; record status "skipped".
 - any other decision text -> treat it as a refined instruction and apply THAT instead of the original.
-- Some remediations are structural moves: fold-into-CLAUDE.md (C) appends the content to the named CLAUDE.md and deletes the standalone doc; move-into-skill (D) moves the file into the named skill's references/ folder; collapse-duplication (I) replaces duplicated prose with a pointer to the owning skill. The instruction names the exact destination. Graduate-to-skill (B) beyond a simple file move is NOT done here -- if the instruction asks for new-skill authoring, record status "skipped" with a note that it is routed to the md-domain author_skill lane.
+- Some remediations are structural moves: fold-into-CLAUDE.md (C) appends the content to the named CLAUDE.md and deletes the standalone doc; move-into-skill (D) moves the file into the named skill's references/ folder; collapse-duplication (I) replaces duplicated prose with a pointer to the owning skill. The instruction names the exact destination. Graduate-to-skill (B) beyond a simple file move is NOT done here -- if the instruction asks for new-skill authoring, record status "skipped" with a note that it is routed to the md-domain generate_skill lane.
 - Use the Read tool to load the file (and any destination file) first, then Edit to make precise changes. Preserve surrounding formatting.
 - If an edit cannot be applied safely (anchor not found, ambiguous, destination missing), record status "failed" with a short note rather than guessing.
 

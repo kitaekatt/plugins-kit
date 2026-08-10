@@ -23,7 +23,7 @@
 // coverage-remediate.js, the sonnet+low remediation pin does not apply, and
 // scripts/gen_workflow_js.py is not involved. Report-only is what keeps a
 // separate procedure cheap, and it is a property of this entry point rather than
-// of the verb being listed apart from audit and author.
+// of the verb being listed apart from audit and generate.
 //
 // args = {
 //   subjects: [ { root: string,
@@ -200,7 +200,7 @@ it -- a missed deficiency is recoverable by a code review, a fossilized one is n
 CRITERIA. Apply the criteria in ${input.refs.criteria} verbatim. That document,
 not your judgment about what seems important, decides what earns ambient cost.
 The observation kinds it builds on are in ${input.refs.observationKinds || 'the claude-md standards doc'}
-(the AUTHORING direction's list of what is worth writing up).
+(the GENERATION direction's list of what is worth writing up).
 
 DESTINATION. Every candidate names the CLAUDE.md the placement algorithm in
 ${input.refs.placement || 'references/cohesion-principles.md'} selects -- ambient for the code it

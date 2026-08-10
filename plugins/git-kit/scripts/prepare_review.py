@@ -693,7 +693,7 @@ def build_bundle(
     auto_reason: Optional[str] = None,
     claim_globs: Optional[list[str]] = None,
     ledger_path: Optional[Path] = None,
-    review_generated: bool = False,
+    review_machine_emitted: bool = False,
 ) -> dict:
     """Gather context for `range_spec`, write chunks to disk, return the index bundle.
 
@@ -703,12 +703,13 @@ def build_bundle(
     are surfaced under a top-level `claimed_files` list instead of
     `changed_files`. When empty the bundle is byte-identical to today's.
 
-    Machine-generated files -- detected from a content signature OR from living
+    Machine-emitted files -- detected from a content signature OR from living
     under a path a plugin declares that it writes (bootstrap_lib.code_review
-    .generated and .generated_paths) -- are likewise held back from the
-    reviewers and surfaced under a top-level `generated_files` list, because
-    the review target is the GENERATOR, not its output. `review_generated=True`
-    disables that exclusion for an author who explicitly wants the full review.
+    .machine_emitted and .machine_emitted_paths) -- are likewise held back from
+    the reviewers and surfaced under a top-level `machine_emitted_files` list,
+    because the review target is the GENERATOR, not its output.
+    `review_machine_emitted=True` disables that exclusion for an author who
+    explicitly wants the full review.
     """
     claim_globs = claim_globs or []
     repo_root = get_repo_root()
@@ -746,7 +747,14 @@ def build_bundle(
         max_chunk_bytes=MAX_CHUNK_BYTES,
         workspace_root=repo_root,
         claim_globs=claim_globs,
-        review_generated=review_generated,
+        # Deliberately the OLD kwarg spelling. git-kit and bootstrap are
+        # versioned and cached independently, so a new git-kit routinely runs
+        # against a published bootstrap that predates the machine_emitted
+        # rename and accepts only `review_generated` -- passing the new name
+        # there raises TypeError on every review. The post-rename
+        # assemble_bundle still accepts this spelling as a deprecated alias,
+        # so the old name works against both. Retire per rename-spec H.2.
+        review_generated=review_machine_emitted,
     )
     changed_files = core["changed_files"]
 
@@ -790,28 +798,34 @@ def build_bundle(
         bundle["auto_detected_reason"] = auto_reason
     if claim_globs:
         bundle["claimed_files"] = core.get("claimed_files", [])
-    if core.get("generated_files"):
-        bundle["generated_files"] = core["generated_files"]
+    # Read NEW-key-or-OLD-key: a bootstrap predating the machine_emitted rename
+    # still writes `generated_files`. Tolerating both spellings keeps this kit
+    # order-free against the bootstrap half of the rename -- reading only the new
+    # key against an older bootstrap would silently drop the "not reviewed"
+    # section for files that are ALREADY excluded from the diff chunks.
+    emitted = core.get("machine_emitted_files") or core.get("generated_files")
+    if emitted:
+        bundle["machine_emitted_files"] = emitted
     return bundle
 
 
 def _parse_args(args: list[str]) -> tuple[list[str], list[str], bool]:
-    """Split argv[1:] into (positionals, claim_globs, review_generated).
+    """Split argv[1:] into (positionals, claim_globs, review_machine_emitted).
 
     `--claim <glob>` (repeatable) and `--claim=<glob>` collect claim patterns;
-    `--review-generated` turns OFF generated-artifact exclusion so those files
-    are chunked and reviewed like any other; everything else (a range/ref,
-    `--staged`, `--working`) is a positional. Raises ValueError on a `--claim`
-    with no value.
+    `--review-machine-emitted` turns OFF machine-emitted-artifact exclusion so
+    those files are chunked and reviewed like any other; everything else (a
+    range/ref, `--staged`, `--working`) is a positional. Raises ValueError on a
+    `--claim` with no value.
     """
     positionals: list[str] = []
     claim_globs: list[str] = []
-    review_generated = False
+    review_machine_emitted = False
     i = 0
     while i < len(args):
         a = args[i]
-        if a == "--review-generated":
-            review_generated = True
+        if a == "--review-machine-emitted":
+            review_machine_emitted = True
             i += 1
         elif a == "--claim":
             if i + 1 >= len(args):
@@ -824,7 +838,7 @@ def _parse_args(args: list[str]) -> tuple[list[str], list[str], bool]:
         else:
             positionals.append(a)
             i += 1
-    return positionals, claim_globs, review_generated
+    return positionals, claim_globs, review_machine_emitted
 
 
 def main(argv: list[str]) -> int:
@@ -838,7 +852,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     try:
-        positionals, claim_globs, review_generated = _parse_args(argv[1:])
+        positionals, claim_globs, review_machine_emitted = _parse_args(argv[1:])
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 2
@@ -855,7 +869,7 @@ def main(argv: list[str]) -> int:
     else:
         print(
             "Usage: prepare_review.py [<ref>|<a>..<b>|<a>...<b>|--staged|--working] "
-            "[--claim <glob> ...] [--review-generated]",
+            "[--claim <glob> ...] [--review-machine-emitted]",
             file=sys.stderr,
         )
         return 2
@@ -868,7 +882,7 @@ def main(argv: list[str]) -> int:
             bundle_dir,
             auto_reason=auto_reason,
             claim_globs=claim_globs,
-            review_generated=review_generated,
+            review_machine_emitted=review_machine_emitted,
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)

@@ -1,9 +1,9 @@
-"""The second generated-artifact axis: paths a plugin DECLARES it writes.
+"""The second machine-emitted-artifact axis: paths a plugin DECLARES it writes.
 
-The content axis (``generated.py``) reads banners. It is necessary and it is not
-sufficient: a generator is free to emit no banner at all, and a large real stub
-that begins directly at its imports carries no marker of any kind. Nothing in
-its bytes says "a tool wrote this", so no signature list can ever catch it.
+The content axis (``machine_emitted.py``) reads banners. It is necessary and it
+is not sufficient: a generator is free to emit no banner at all, and a large real
+stub that begins directly at its imports carries no marker of any kind. Nothing
+in its bytes says "a tool wrote this", so no signature list can ever catch it.
 
 What DOES say so is where the file lives. A file under a project's durable
 plugin-data path is plugin-written BY CONSTRUCTION -- that is the definition of
@@ -11,8 +11,8 @@ the durable-project-data pattern (see the bootstrap skill's
 ``references/durable-project-data.md``), not an inference about its content. The
 same holds for a path a manifest declares as a write target.
 
-So detection is a UNION: content signature OR declared-generated path. Either
-axis alone marks the file generated; neither weakens the other.
+So detection is a UNION: content signature OR declared machine-emitted path.
+Either axis alone marks the file machine-emitted; neither weakens the other.
 
 Everything here is DERIVED, never hardcoded:
 

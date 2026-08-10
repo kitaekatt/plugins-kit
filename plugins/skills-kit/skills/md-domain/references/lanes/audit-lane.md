@@ -532,4 +532,4 @@ broken ref nearby that was previously masked).
   `../audit-framework.md` and `../audit-framework.yaml`.
 - Configuring which rules run and their thresholds -- `../configuring-standards.md`.
 - Authoring an additive standards file -- `../authoring-standards.md`.
-- Producing a compliant artifact instead of judging one -- `authoring-lane.md`.
+- Producing a compliant artifact instead of judging one -- `generation-lane.md`.

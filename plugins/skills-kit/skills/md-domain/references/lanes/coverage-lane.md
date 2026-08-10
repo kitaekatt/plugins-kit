@@ -1,6 +1,6 @@
 # The coverage lane
 
-The coverage procedure. Unlike `audit` and `author`, this one is NOT
+The coverage procedure. Unlike `audit` and `generate`, this one is NOT
 parameterized by artifact -- it has exactly one subject shape, and its subject is
 CODE.
 
@@ -83,7 +83,7 @@ There is no Q&A gate and no remediation phase. Nothing is ever applied.
 Code analysis costs materially more than a document audit, so an off-by-default
 flag is not sufficient protection.
 
-1. This verb NEVER runs as part of an `audit` or `author` invocation, and never
+1. This verb NEVER runs as part of an `audit` or `generate` invocation, and never
    as a side effect of any other lane.
 2. It runs only on **expressed user intent** to analyze code for CLAUDE.md
    content.

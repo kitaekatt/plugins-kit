@@ -1,6 +1,6 @@
 # CLAUDE.md standards
 
-The artifact-keyed standards doc for **CLAUDE.md / CLAUDE.local.md**: what a good one looks like. It is the single source both md-domain lanes read -- the **audit lane** applies it in the detect direction (find violations, classify findings), the **authoring lane** applies it in the produce direction (write a file that satisfies it). One standard, two directions.
+The artifact-keyed standards doc for **CLAUDE.md / CLAUDE.local.md**: what a good one looks like. It is the single source both md-domain lanes read -- the **audit lane** applies it in the detect direction (find violations, classify findings), the **generation lane** applies it in the produce direction (write a file that satisfies it). One standard, two directions.
 
 The placement principles these standards derive from live in `../cohesion-principles.md`. When the two diverge, cohesion-principles wins; this file gets updated to match.
 
@@ -10,10 +10,10 @@ Lanes load THIS doc, not cohesion-principles: the standards below are self-conta
 
 1. [Artifact identity](#1-artifact-identity) -- what the artifact is, its roles and dimensions
 2. [Classic standards](#2-classic-standards) -- C-1..C-7, R-1..R-4, A-1..A-5, H-1..H-11
-3. [Code-directory dimension](#3-code-directory-dimension) -- CD-1..CD-6 plus the authoring shapes
+3. [Code-directory dimension](#3-code-directory-dimension) -- CD-1..CD-6 plus the generation shapes
 4. [Density lens](#4-density-lens-opt-in-advisory-only) -- DD-1..DD-4, opt-in and advisory only
 5. [Audit-direction mapping](#5-audit-direction-mapping) -- criteria ids and the finding taxonomy
-6. [Authoring-direction notes](#6-authoring-direction-notes) -- the `claude_md:` block shape
+6. [Generation-direction notes](#6-generation-direction-notes) -- the `claude_md:` block shape
 
 ---
 
@@ -370,7 +370,7 @@ against H-1/H-2/H-3 even when its dimension is code-directory. Shape B's
 review-notes file with no project identity (what this is, what it is built
 with) still FAILs H-1. (Audit-parity rule: the pre-fold claude-md audit
 applied H-1 to root-role code-directory files, and the golden corpus locks
-that behavior; the authoring shapes folded in from the authoring direction
+that behavior; the generation shapes folded in from the generation direction
 describe how to write the body, not which hygiene rules apply.)
 
 ### 3.1 The four shapes (mixing is allowed)
@@ -384,7 +384,7 @@ A file may legitimately **mix** shapes (an architecture preamble + a gotcha list
 
 ### 3.2 High-value observation kinds, per shape
 
-The authoring direction asks which of these are present **and silent** in this directory, writes those, and skips the rest. The audit direction uses the same list to recognize value -- do not go hunting for missing kinds.
+The generation direction asks which of these are present **and silent** in this directory, writes those, and skips the rest. The audit direction uses the same list to recognize value -- do not go hunting for missing kinds.
 
 - **Shape A:** god-object/don't-add-here - deliberate hack/workaround (and *don't simplify*) - diff-invisible perf trap (O(N), per-tick) - lifetime/ownership hazard (raw `this` capture, must-outlive) - type-safety bypass (*don't copy*) - dead/misleading code - build-flag-dependent behavior - lifecycle-method contract (what goes in which method) - "use the helper, not inline".
 - **Shape B:** cross-config referential integrity, naming the **silent-failure mode** (*"mismatches are silent at build time"* -- highest value) - rename/removal blast radius (*"search for usages first"*) - "not just config review" escalation - secrets hygiene - asset/external-path validity - **append-only data-ledger** (order-immutable, sentinel value, "removing an entry corrupts save data").
@@ -426,11 +426,11 @@ An insight earns its place only if a code-review agent that read it would catch 
 - **Operational cheatsheets that scope a safety rail** (the allowed kubectl/deploy commands next to a FORBIDDEN list) -- part of the rail.
 - **Topology / ownership tables** (cluster->namespace->deployments, `KNOWN_ACCOUNTS`, account-id duality) -- blast-radius coupling maps, not inventories.
 
-**Named anti-patterns (authoring negative space):** no bare directory inventories - no empty CLAUDE.md (a heading with no claim) - no schema restatement as substance - no line-only anchors lacking a symbol - no tree-absolute-without-leading-slash sibling paths - no language defaults or linter-enforced style - no do-instead-less prohibition (except the external-contract / negative-existence idioms).
+**Named anti-patterns (generation negative space):** no bare directory inventories - no empty CLAUDE.md (a heading with no claim) - no schema restatement as substance - no line-only anchors lacking a symbol - no tree-absolute-without-leading-slash sibling paths - no language defaults or linter-enforced style - no do-instead-less prohibition (except the external-contract / negative-existence idioms).
 
 ### 3.6 Audit direction: the CD criteria
 
-The dimension is a **validator over existing claims, not a gotcha crawler** -- it does not scan the directory for *new* gotchas to add (that is the authoring direction; doing it here would be non-idempotent and expensive).
+The dimension is a **validator over existing claims, not a gotcha crawler** -- it does not scan the directory for *new* gotchas to add (that is the generation direction; doing it here would be non-idempotent and expensive).
 
 **Two-level recognition model.** Level 1 (the discover script) decided *whether* this dimension runs (the file is flagged `code-directory`). Level 2 (below) decides *how hard* to scrutinize each claim -- via the anchor-modality classifier. Only one anchor modality is ever eligible for FAIL. This is the safety valve: because Level 1 triggers generously, Level 2 must be strict about what can FAIL, so accurate negative-existence / external / templated / generated claims are never punished.
 
@@ -619,9 +619,9 @@ FAIL findings (CCP cross-file duplication, ADP forward dependency, schema valida
 
 ---
 
-## 6. Authoring-direction notes
+## 6. Generation-direction notes
 
-The standards facts the authoring lane produces against. The lane's *procedure* (which file to touch, when to invoke cohesion-principles, how to validate) lives in `../lanes/authoring-lane.md`; what follows is the artifact contract it satisfies.
+The standards facts the generation lane produces against. The lane's *procedure* (which file to touch, when to invoke cohesion-principles, how to validate) lives in `../lanes/generation-lane.md`; what follows is the artifact contract it satisfies.
 
 ### 6.1 The `claude_md:` block
 
@@ -632,7 +632,7 @@ A classic CLAUDE.md carries a `claude_md:` YAML block. It is the load-bearing st
 - **`insights`** -- records, each carrying `id`, `keywords` (**at least 3** entries; the floor exists for chat-term routing), `summary`, `detail`, `origin`, `added`.
 - **`conventions`** / **`glossary`** -- optional; add only if the shape calls for it.
 
-**Root-role files SHOULD carry the block.** When authoring touches a root CLAUDE.md that lacks one, add it. (The audit direction treats absence on a pre-existing root file as INFO, never FAIL -- adding the block is the authoring path's job.)
+**Root-role files SHOULD carry the block.** When generation touches a root CLAUDE.md that lacks one, add it. (The audit direction treats absence on a pre-existing root file as INFO, never FAIL -- adding the block is the generation path's job.)
 
 **Schemas are floors, not ceilings:** the schema names the required minimum; an author may add load-bearing structured keys beyond it.
 
@@ -643,8 +643,8 @@ A classic CLAUDE.md carries a `claude_md:` YAML block. It is the load-bearing st
 - **Where a fact lives** across the load graph is not re-derived here: it is the placement question, answered by `../cohesion-principles.md` (CCP change-cadence -> CRP reader-set -> ADP load-order). A placement that arrives already resolved (an audit remediation naming the destination, an orchestrator directive) is followed, not re-derived.
 - **What shape a fact takes** (structured YAML record vs prose vs frontmatter) is answered by the authoring-pattern references (`../authoring-patterns/`): structured records over prose, because structure asserts completeness. Match the surrounding CLAUDE.md's existing format and SSOT -- extend an existing record rather than duplicating.
 
-### 6.3 The authoring anti-pattern
+### 6.3 The generation anti-pattern
 
 **Same fact in two CLAUDE.mds.** Putting the fact in both the root and the subsystem CLAUDE.md feels like it guarantees the reader sees it. It does not: two copies drift independently and CCP/SSOT is broken (this is exactly what C-1 / C-2 / `B_ccp_cross_file_duplication` detect from the other direction). The placement algorithm yields exactly one home; if sibling scopes also need the fact, bubble it up to the common parent -- still one copy.
 
-The other recurring authoring defects, stated as standards rather than procedure: a root CLAUDE.md with no `claude_md:` block; a missing `scope.excludes`; an insight record with fewer than 3 keywords; line-only anchors in a code-directory file (prefer a symbol anchor; drop the number unless the gotcha is sub-function -- section 3.4).
+The other recurring generation defects, stated as standards rather than procedure: a root CLAUDE.md with no `claude_md:` block; a missing `scope.excludes`; an insight record with fewer than 3 keywords; line-only anchors in a code-directory file (prefer a symbol anchor; drop the number unless the gotcha is sub-function -- section 3.4).

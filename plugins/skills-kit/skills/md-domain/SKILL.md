@@ -3,29 +3,29 @@ _schema_version: 1
 name: md-domain
 author: christina
 skill-type: domain-skill
-description: Use when auditing or authoring project markdown -- SKILL.md, CLAUDE.md, project docs, cross-refs -- or analyzing code for missing ambient CLAUDE.md coverage. Do NOT use for knowledge-encoding or update-documentation.
+description: Use when auditing or generating project markdown -- SKILL.md, CLAUDE.md, project docs, cross-refs -- or analyzing code for missing ambient CLAUDE.md coverage. Do NOT use for knowledge-encoding or update-documentation.
 disable-model-invocation: false
 user-invocable: true
-argument-hint: "[audit|author|coverage] [skill|claude-md|project-doc|references|<directory>] [<path>|--diff] [--review] [--density] [--json] [--advanced] [fast]"
+argument-hint: "[audit|generate|coverage] [skill|claude-md|project-doc|references|<directory>] [<path>|--diff] [--review] [--density] [--json] [--advanced] [fast]"
 ---
 
 # md-domain
 
 The single front door for three dispatch verbs over project markdown. **Audit**
-and **author** cross four artifacts (`skill`, `claude-md`, `project-doc`,
+and **generate** cross four artifacts (`skill`, `claude-md`, `project-doc`,
 `references`); **coverage** assesses one `code_subtree` for facts missing from
 its ambient CLAUDE.md chain. Coverage is report-only and is not
 artifact-parameterized. This replaces the former `md-audit` / `md-authoring`
 routers and the member skills they dispatched into.
 
 The three are dispatch entries, not three things of the same kind. Auditing is
-making sure something is accurate and compliant. Authoring is generation --
-creating a document that does not exist -- and regeneration where the document
-already exists. Coverage is the DISCOVERY step that feeds generation and
+making sure something is accurate and compliant. Generation is creating a
+document that does not exist -- and regeneration where the document already
+exists. Coverage is the DISCOVERY step that feeds generation and
 regeneration: it reads code, discovers facts, and names where each belongs, and
 it writes nothing.
 
-One skill, one dispatch table, three procedures. Audit and author share
+One skill, one dispatch table, three procedures. Audit and generate share
 per-artifact standards; coverage has its own criteria and procedure. The "what
 good looks like" documents live in `references/standards/`, the "how to run it"
 procedures live in `references/lanes/`, and the placement spine all three defer
@@ -35,7 +35,7 @@ to lives in `references/cohesion-principles.md`.
 
 - **Bare** -- `/md-domain` greets with the menu below; pick a verb + artifact.
 - **Argument-dispatched** -- `/md-domain audit skill <path>`,
-  `/md-domain author claude-md`, `/md-domain audit references [flags]`, and
+  `/md-domain generate claude-md`, `/md-domain audit references [flags]`, and
   `/md-domain coverage <directory> [--advanced]` jump straight into that lane.
 - **Natural language** -- routed by the verb and subject named. Each lane
   record below declares the `invocation_phrasings` that should reach it.
@@ -66,7 +66,7 @@ Just tell me what you want, in your own words. Widest first:
 Before starting I name the analysis and its exact scope, because what a run
 READS is what makes it cheap or expensive.
 
-Authoring is not a separate mode -- ask me to write a skill, a CLAUDE.md, or a
+Generation is not a separate mode -- ask me to write a skill, a CLAUDE.md, or a
 doc and I apply these same standards in the producing direction.
 
 Or can I help you with something else?
@@ -81,9 +81,9 @@ scope.
 `--advanced` -- are real and documented under "Argument grammar"; a user who
 names one file is served normally.
 
-**The author lanes** still exist in the dispatch table; the greeting frames
-authoring as a direction the standards are read in rather than a verb to pick,
-because nobody arrives wanting to "run author" -- they arrive wanting a
+**The generation lanes** still exist in the dispatch table; the greeting frames
+generation as a direction the standards are read in rather than a verb to pick,
+because nobody arrives wanting to "run generate" -- they arrive wanting a
 document written.
 
 **Review mode and the skill roster are NOT offered.** Both capabilities remain
@@ -119,7 +119,7 @@ not menu decoration:
 
 ## Dispatch table
 
-For audit and author, route by verb AND artifact. Coverage has one non-artifact
+For audit and generate, route by verb AND artifact. Coverage has one non-artifact
 subject, `code_subtree`. In every case load the selected procedure plus its
 standards doc -- exactly those two, never the whole tree.
 
@@ -129,18 +129,18 @@ standards doc -- exactly those two, never the whole tree.
 | audit x claude-md | `audit_claude_md` | `references/lanes/audit-lane.md` | `references/standards/claude-md-standards.md` |
 | audit x project-doc | `audit_project_doc` | `references/lanes/audit-lane.md` | `references/standards/project-doc-standards.md` |
 | audit x references | `audit_references` | `references/lanes/audit-lane.md` (references special case) | `references/standards/references-standards.md` |
-| author x skill | `author_skill` | `references/lanes/authoring-lane.md` | `references/standards/skill-standards.md` |
-| author x claude-md | `author_claude_md` | `references/lanes/authoring-lane.md` | `references/standards/claude-md-standards.md` |
-| author x project-doc | `author_project_doc` | `references/lanes/authoring-lane.md` | `references/standards/project-doc-standards.md` |
-| author x references | -- (no lane) | -- | -- |
+| generate x skill | `generate_skill` | `references/lanes/generation-lane.md` | `references/standards/skill-standards.md` |
+| generate x claude-md | `generate_claude_md` | `references/lanes/generation-lane.md` | `references/standards/claude-md-standards.md` |
+| generate x project-doc | `generate_project_doc` | `references/lanes/generation-lane.md` | `references/standards/project-doc-standards.md` |
+| generate x references | -- (no lane) | -- | -- |
 | coverage (code subtree) | `coverage_code_subtree` | `references/lanes/coverage-lane.md` | `references/standards/coverage-standards.md` |
 
-**`author x references` has no lane, deliberately.** Cross-references are not an
-authored artifact -- they are an emergent property of the other three. There is
-nothing to author; a request to "fix my broken references" is a REMEDIATION of
-the `audit_references` lane, and a request to "add a reference" is authoring
-whichever artifact carries it (`author_skill` / `author_claude_md` /
-`author_project_doc`). Say so and route there rather than improvising a lane.
+**`generate x references` has no lane, deliberately.** Cross-references are not a
+generated artifact -- they are an emergent property of the other three. There is
+nothing to generate; a request to "fix my broken references" is a REMEDIATION of
+the `audit_references` lane, and a request to "add a reference" is generating
+whichever artifact carries it (`generate_skill` / `generate_claude_md` /
+`generate_project_doc`). Say so and route there rather than improvising a lane.
 
 ### Lane records
 
@@ -229,44 +229,44 @@ lanes:
     change_driver: >-
       Changes when the scanner's detection surface changes -- a new
       reference syntax, a new escape convention, or a new false-positive class.
-  - id: author_skill
-    verb: author
+  - id: generate_skill
+    verb: generate
     artifact: skill
     standards: references/standards/skill-standards.md
-    procedure: references/lanes/authoring-lane.md
+    procedure: references/lanes/generation-lane.md
     verdicts: [COMPLIANT, NON-COMPLIANT]
     invocation_phrasings:
-      - "author a new skill"
+      - "generate a new skill"
       - "refine this SKILL.md"
       - "what type should this skill be"
       - "write the contract block for this skill"
     change_driver: >-
       Changes when the SKILL.md type contract changes (same driver as
       audit_skill -- one standards doc read in the producing direction).
-  - id: author_claude_md
-    verb: author
+  - id: generate_claude_md
+    verb: generate
     artifact: claude-md
     standards: references/standards/claude-md-standards.md
-    procedure: references/lanes/authoring-lane.md
+    procedure: references/lanes/generation-lane.md
     verdicts: [COMPLIANT, NON-COMPLIANT]
     invocation_phrasings:
       - "write a claude_md block"
-      - "author a CLAUDE.md for this directory"
+      - "generate a CLAUDE.md for this directory"
       - "add an insight record to CLAUDE.md"
       - "write review notes for this code directory"
     change_driver: >-
       Changes when the CLAUDE.md standards change (same driver as
       audit_claude_md, producing direction).
-  - id: author_project_doc
-    verb: author
+  - id: generate_project_doc
+    verb: generate
     artifact: project-doc
     standards: references/standards/project-doc-standards.md
-    procedure: references/lanes/authoring-lane.md
+    procedure: references/lanes/generation-lane.md
     verdicts: [COMPLIANT, NON-COMPLIANT]
     invocation_phrasings:
       - "write a project document / design doc"
       - "where should this doc live"
-      - "author a README for this project"
+      - "generate a README for this project"
       - "turn these notes into a reference doc"
     change_driver: >-
       Changes when the project-doc standards change (same driver as
@@ -290,14 +290,14 @@ lanes:
 
 ## Argument grammar
 
-Audit/author positional form: `<verb> <artifact> [selector] [flags]`.
+Audit/generate positional form: `<verb> <artifact> [selector] [flags]`.
 Coverage form: `coverage (<directory> | --diff) [--json] [--advanced]`.
 Verb and subject may be inferred from natural language; when a required part is
 ambiguous, ask rather than guessing.
 
-- **Verb** -- `audit` | `author` | `coverage`. Absent and unrecoverable from
+- **Verb** -- `audit` | `generate` | `coverage`. Absent and unrecoverable from
   phrasing -> show the menu.
-- **Artifact** (audit / author only) -- `skill` | `claude-md` | `project-doc`
+- **Artifact** (audit / generate only) -- `skill` | `claude-md` | `project-doc`
   | `references`.
 - **Selector** (audit lanes) -- `(none)` audits the cwd artifact if present;
   `list` emits a numbered list from the lane's discover script and stops;
@@ -357,7 +357,7 @@ filter, pre-image materialization, the two documented limits) live in
 ```yaml
 domain_skill:
   _schema_version: "1"
-  identity: The single front door for three dispatch verbs over project markdown -- auditing and authoring SKILL.md (and its reference documents), CLAUDE.md, project documents, and skill cross-references, plus report-only coverage analysis over a code subtree and its ambient CLAUDE.md chain.
+  identity: The single front door for three dispatch verbs over project markdown -- auditing and generating SKILL.md (and its reference documents), CLAUDE.md, project documents, and skill cross-references, plus report-only coverage analysis over a code subtree and its ambient CLAUDE.md chain.
   companions:
     siblings: []
     note: |
@@ -370,28 +370,28 @@ domain_skill:
       end-of-session-review triggers.
   scope:
     covers:
-      - dispatching audit, authoring, or coverage intent to exactly one lane
+      - dispatching audit, generation, or coverage intent to exactly one lane
       - owning the four per-artifact standards docs (what good looks like for skill / claude-md / project-doc / references)
       - owning coverage-standards.md for the code_subtree composition
-      - owning three procedures (shared audit, shared authoring -- generation and regeneration -- and report-only coverage discovery)
+      - owning three procedures (shared audit, shared generation -- new documents and regeneration of existing ones -- and report-only coverage discovery)
       - owning the placement spine (cohesion-principles) and the shared audit framework, configuration, and content-shape references
     excludes:
       - encoding a newly discovered insight into a persistent location (use knowledge-encoding)
       - end-of-session review of what the work implies for the docs (use update-documentation)
       - designing a materialized-insight tool (use materialized-output)
-      - invoking the skills being audited or authored
+      - invoking the skills being audited or generated
   orientation:
     summary: |
-      One skill, one dispatch table, three procedures. Audit and author select an artifact,
+      One skill, one dispatch table, three procedures. Audit and generate select an artifact,
       then load its standards plus the verb procedure. Coverage selects code_subtree
       and loads coverage-lane.md plus coverage-standards.md. Audit uses DETECT -> Q&A
-      gate -> REMEDIATE, author uses confirm -> place -> apply -> shape -> validate,
+      gate -> REMEDIATE, generate uses confirm -> place -> apply -> shape -> validate,
       and coverage uses discover -> assess -> report and STOP. Coverage never
       remediates code or markdown. Placement -- which file a fact belongs in -- defers to
       references/cohesion-principles.md; it is never re-derived in a lane or standards doc.
     behavioral_guardrails:
       - Announce every run by its canonical analysis name plus the concrete file scope BEFORE starting (see "Naming and scope announcement"). Echo the menu's name verbatim rather than paraphrasing it, name every analysis a dispatch runs rather than only the headline one, and give scope as a count plus roots -- never as "the corpus". The names are the user's only handle on which analysis they authorized.
-      - Route by verb AND subject. Audit and author require an artifact; coverage accepts only code_subtree and is not artifact-parameterized. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the authoring lane's producing direction when the user asked for a verdict.
+      - Route by verb AND subject. Audit and generate require an artifact; coverage accepts only code_subtree and is not artifact-parameterized. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the generation lane's producing direction when the user asked for a verdict.
       - One lane at a time. On a bare invocation show the menu and wait; do not co-load standards docs or verb procedures. A typical invocation loads this SKILL.md plus one lane plus one standards doc.
       - Detection and remediation are separate phases for audit. The audit pass produces a verdict; it does not silently mutate the subject. Remediation is dispatched after the Q&A gate, as its own work. Coverage has no remediation phase and must stop after reporting.
       - Audit findings carry a four-disposition classification (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL), assigned instance-level by the lane's detect classifier -- the taxonomy `bucket` is only the default. Report contract, in this order and with no hedging - SERIOUS summarized at the TOP (never auto-fixed), FIX as an applied count landing in a reviewable CL (review mode - PROPOSED, never applied), IMPROVE as a count plus one-line pitches (opt-in discussion), SILENT omitted entirely. The references lane retains the legacy AUTO / DISCUSS / SPECIAL lanes. Coverage uses only GAPS-FOUND / COVERAGE-ASSESSED and never remediates.
@@ -404,11 +404,11 @@ domain_skill:
       - id: skill_standards
         path: references/standards/skill-standards.md
         keywords: [skill.md standards, type contract, required conditional prohibited, description requirements, frontmatter, mixed-type, schemas are floors, content allocation, skill reference document, references/*.md prose, SR-1 SR-2 SR-3 SR-4, inbound anchor integrity, internal contradiction, claim calibration, reader fit, maintainer-only material]
-        summary: What a good SKILL.md looks like -- per-type contract tables, description requirements, content-form choice, L1/L2/L3 allocation, hygiene thresholds -- plus section 10, the prose criteria for the artifact's second subject shape, a skill reference document. Read by both the audit_skill and author_skill lanes. Paired with skills_kit_lib/schema_registry.py, which wins on divergence.
+        summary: What a good SKILL.md looks like -- per-type contract tables, description requirements, content-form choice, L1/L2/L3 allocation, hygiene thresholds -- plus section 10, the prose criteria for the artifact's second subject shape, a skill reference document. Read by both the audit_skill and generate_skill lanes. Paired with skills_kit_lib/schema_registry.py, which wins on divergence.
       - id: claude_md_standards
         path: references/standards/claude-md-standards.md
         keywords: [claude.md standards, claude_md block, C-1 R-1 A-1 H-1, ccp crp adp rules, code-directory review notes, CD-1, density DD-1, insight record shape, scope covers excludes]
-        summary: What a good CLAUDE.md looks like -- the classic C/R/A/H rule set, the CD code-directory review-notes dimension (shapes, observation kinds, anchoring discipline), and the opt-in DD density lens. Read by both the audit_claude_md and author_claude_md lanes.
+        summary: What a good CLAUDE.md looks like -- the classic C/R/A/H rule set, the CD code-directory review-notes dimension (shapes, observation kinds, anchoring discipline), and the opt-in DD density lens. Read by both the audit_claude_md and generate_claude_md lanes.
       - id: coverage_standards
         path: references/standards/coverage-standards.md
         keywords: [coverage standards, code subtree, ambient claude.md, absent facts, CV criteria, basic advanced, analysis depth, candidate admission]
@@ -416,7 +416,7 @@ domain_skill:
       - id: project_doc_standards
         path: references/standards/project-doc-standards.md
         keywords: [project document standards, PD-1, maturation, graduate to skill, orphan, discoverability, one hop, readme role, generated artifact, ancestor convention]
-        summary: What a good project document looks like -- PD-1..PD-11 (placement, maturation, CRP unitary reading task, ADP discoverability and one-hop, CCP no-skill-duplication, named roles, hygiene). Read by both the audit_project_doc and author_project_doc lanes.
+        summary: What a good project document looks like -- PD-1..PD-11 (placement, maturation, CRP unitary reading task, ADP discoverability and one-hop, CCP no-skill-duplication, named roles, hygiene). Read by both the audit_project_doc and generate_project_doc lanes.
       - id: references_standards
         path: references/standards/references-standards.md
         keywords: [cross-reference standards, hard dep, soft ref, name mismatch, shadowing, documentation convention, example prefix, proposed prefix, allow-stale, code fence masking]
@@ -453,10 +453,10 @@ domain_skill:
         path: references/references-finding-taxonomy.md
         keywords: [references finding taxonomy, A-K categories, hard dep missing, soft ref missing, name mismatch, shadowing, detection signals, disposition defaults, background-agent brief]
         summary: The references lane's A-K classification taxonomy -- detection signals, default remediations, the scanner-rule disposition table, and the background-agent brief template for cross-reference findings.
-      - id: authoring_lane
-        path: references/lanes/authoring-lane.md
-        keywords: [authoring procedure, confirm artifact, placement, apply standards, shape content, validate, single invocation, produce compliant]
-        summary: The ONE authoring procedure, parameterized by artifact -- confirm the artifact, resolve placement via cohesion-principles, apply the artifact's standards doc in the PRODUCING direction, shape per the authoring-patterns cluster, validate. Single-invocation; no fan-out machinery.
+      - id: generation_lane
+        path: references/lanes/generation-lane.md
+        keywords: [generation procedure, confirm artifact, placement, apply standards, shape content, validate, single invocation, produce compliant]
+        summary: The ONE generation procedure, parameterized by artifact -- confirm the artifact, resolve placement via cohesion-principles, apply the artifact's standards doc in the PRODUCING direction, shape per the authoring-patterns cluster, validate. Single-invocation; no fan-out machinery.
       - id: coverage_lane
         path: references/lanes/coverage-lane.md
         keywords: [coverage procedure, code subtree, ambient chain, report only, gaps found, coverage assessed, refs.criteria, analysis depth, no remediation]
@@ -476,7 +476,7 @@ domain_skill:
   capabilities:
     - id: audit
       keywords: [audit, contract check, validate skill, run audit, schema validation]
-      description: Run deterministic contract checks against a SKILL.md or CLAUDE.md (authoring-time and audit-time validation).
+      description: Run deterministic contract checks against a SKILL.md or CLAUDE.md (generation-time and audit-time validation).
       operation: python -m skills_kit_lib.audit <path>
       tool: skills_kit_lib/audit.py
       scope_axes: [single-skill]
@@ -511,7 +511,7 @@ domain_skill:
 
 - **Where a fact lives (the placement spine)** -- `references/cohesion-principles.md`.
 - **How to run an audit** -- `references/lanes/audit-lane.md`.
-- **How to author** -- `references/lanes/authoring-lane.md`.
+- **How to generate** -- `references/lanes/generation-lane.md`.
 - **How to run coverage analysis** -- `references/lanes/coverage-lane.md`.
 - **What earns a coverage candidate** -- `references/standards/coverage-standards.md`.
 - **Encoding a newly discovered insight into a persistent home** -- `knowledge-encoding` (in skills-kit).

@@ -7,7 +7,7 @@ ADP / CCP) plus named roles and universal hygiene. Each criterion has a testable
 rule and a severity (FAIL / JUDGMENT / INFO / PASS).
 
 Both md-domain lanes read this doc: the **audit lane** applies the criteria to
-detect violations, and the **authoring lane** applies them in the opposite
+detect violations, and the **generation lane** applies them in the opposite
 direction to produce a compliant doc.
 
 The placement principles these criteria derive from live in
@@ -253,7 +253,7 @@ fact (or its SSOT) is reachable from a CLAUDE.md or skill surface.
 **Severity:** FAIL (taxonomy L_readme_stranded_fact) on stranded agent-relevant
 facts; INFO on overlap past the identity-sentence grain.
 
-### PD-10. Generated artifacts: provenance only (generated_artifact role)
+### PD-10. Machine-emitted artifacts: provenance only (machine_emitted_artifact role)
 
 **Rule:** a committed generated output (`generated == true` -- identified by a
 generation-record sidecar like `<name>.params.json`, or an in-file generation
@@ -371,7 +371,7 @@ goldens all key on them, so they are carried verbatim.
 | `adp_no_claude_md_back_reference` | FAIL | PD-6 |
 | `ccp_no_skill_content_duplication` | FAIL | PD-8 |
 | `readme_role` | FAIL | PD-9 |
-| `generated_artifact_provenance` | FAIL | PD-10 |
+| `machine_emitted_artifact_provenance` | FAIL | PD-10 |
 | `hygiene_thresholds` | FAIL | PD-7, PD-H1 |
 | `mechanical_convention_hygiene` | INFO | taxonomy N-R |
 | `ancestor_convention_conformance` | FAIL | PD-11 |
@@ -407,11 +407,11 @@ the cross-cutting user-standards category whose letter is shared verbatim across
 the former md-audit members' taxonomies. The suffix disambiguates. Unifying the letter space is a
 flagged follow-up, not a change to make here.
 
-## Authoring direction
+## Generation direction
 
 There was never a project-doc authoring member: project documents are authored
 directly against these standards plus the `project_reference_md` role in
-[cohesion-principles](../cohesion-principles.md). The authoring lane fills that
+[cohesion-principles](../cohesion-principles.md). The generation lane fills that
 gap by reading this doc in the produce-compliant direction -- pick the home by
 trigger shape before writing (PD-2), keep the doc to one reading task (PD-3),
 give it an inbound citation from the owning CLAUDE.md or skill (PD-4), point at

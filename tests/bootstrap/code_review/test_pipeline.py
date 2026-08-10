@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Optional
 from unittest.mock import patch
 
+import pytest
+
 from bootstrap_lib.code_review.pipeline import (
     assemble_bundle,
     canonical_local,
@@ -699,7 +701,7 @@ class TestEmitBundle:
 
 
 # ---------------------------------------------------------------------------
-# assemble_bundle -- generated-artifact exclusion / generated_files
+# assemble_bundle -- machine-emitted-artifact exclusion / machine_emitted_files
 # ---------------------------------------------------------------------------
 
 # Assembled rather than written literally: a banner at the start of a line in a
@@ -713,8 +715,8 @@ def _added_section(ident: str, lines: list[str]) -> dict:
     return {"identifier": ident, "text": f"<<{ident}>>\n{body}"}
 
 
-class TestAssembleBundleGenerated:
-    def test_generated_file_excluded_from_chunks_and_surfaced(self, tmp_path):
+class TestAssembleBundleMachineEmitted:
+    def test_machine_emitted_file_excluded_from_chunks_and_surfaced(self, tmp_path):
         core = assemble_bundle(
             preamble="",
             sections=[
@@ -729,12 +731,12 @@ class TestAssembleBundleGenerated:
             max_chunk_bytes=1024 * 1024,
             workspace_root=None,
         )
-        # The generated file is out of the generic fan-out entirely.
+        # The machine-emitted file is out of the generic fan-out entirely.
         assert len(core["changed_files"]) == 1
         assert core["changed_files"][0]["chunk_index"] == 0
-        entry = core["generated_files"][0]
+        entry = core["machine_emitted_files"][0]
         assert entry["identifier"] == "gen/stub.py"
-        assert entry["generated_signature"] == "generated-by banner"
+        assert entry["machine_emitted_signature"] == "generated-by banner"
         assert entry["size_bytes"] > 0
         all_text = "".join(
             (tmp_path / "b" / c["path"]).read_text(encoding="utf-8")
@@ -754,11 +756,11 @@ class TestAssembleBundleGenerated:
             max_chunk_bytes=1024 * 1024,
             workspace_root=None,
         )
-        assert "generated_files" not in core
+        assert "machine_emitted_files" not in core
         assert len(core["changed_files"]) == 1
         assert core["changed_files"][0]["chunk_index"] == 0
 
-    def test_no_generated_files_keeps_the_old_contract(self, tmp_path):
+    def test_no_machine_emitted_files_keeps_the_old_contract(self, tmp_path):
         core = assemble_bundle(
             preamble="",
             sections=_sections_for("src/a.py", "src/b.py"),
@@ -778,7 +780,7 @@ class TestAssembleBundleGenerated:
             "submit_gates",
         }
 
-    def test_review_generated_override_reviews_them_normally(self, tmp_path):
+    def test_review_machine_emitted_override_reviews_them_normally(self, tmp_path):
         core = assemble_bundle(
             preamble="",
             sections=[_added_section("gen/stub.py", [BANNER, "def a(): ..."])],
@@ -786,9 +788,9 @@ class TestAssembleBundleGenerated:
             bundle_dir=tmp_path / "b",
             max_chunk_bytes=1024 * 1024,
             workspace_root=None,
-            review_generated=True,
+            review_machine_emitted=True,
         )
-        assert "generated_files" not in core
+        assert "machine_emitted_files" not in core
         assert len(core["changed_files"]) == 1
         assert core["changed_files"][0]["chunk_index"] == 0
         chunk_text = (tmp_path / "b" / core["diff_chunks"][0]["path"]).read_text(
@@ -796,7 +798,7 @@ class TestAssembleBundleGenerated:
         )
         assert "gen/stub.py" in chunk_text
 
-    def test_modified_generated_file_detected_from_disk(self, tmp_path):
+    def test_modified_machine_emitted_file_detected_from_disk(self, tmp_path):
         """A banner thousands of lines above the hunk is invisible to the diff."""
         local = tmp_path / "stub.py"
         local.write_text(BANNER + "\ndef a(): ...\n", encoding="utf-8")
@@ -808,11 +810,11 @@ class TestAssembleBundleGenerated:
             max_chunk_bytes=1024 * 1024,
             workspace_root=None,
         )
-        assert core["generated_files"][0]["identifier"] == "gen/stub.py"
-        assert core["generated_files"][0]["size_bytes"] == local.stat().st_size
+        assert core["machine_emitted_files"][0]["identifier"] == "gen/stub.py"
+        assert core["machine_emitted_files"][0]["size_bytes"] == local.stat().st_size
         assert core["changed_files"] == []
 
-    def test_claimed_file_is_never_rerouted_as_generated(self, tmp_path):
+    def test_claimed_file_is_never_rerouted_as_machine_emitted(self, tmp_path):
         """A claim promises a specialist reviewer; generation must not steal it."""
         core = assemble_bundle(
             preamble="",
@@ -823,7 +825,7 @@ class TestAssembleBundleGenerated:
             workspace_root=None,
             claim_globs=["**/CLAUDE.md"],
         )
-        assert "generated_files" not in core
+        assert "machine_emitted_files" not in core
         assert core["claimed_files"][0]["identifier"] == "a/CLAUDE.md"
 
     def test_unbannered_stub_at_a_declared_path_is_excluded(self, tmp_path):
@@ -859,10 +861,12 @@ class TestAssembleBundleGenerated:
             workspace_root=ws,
         )
 
-        entry = core["generated_files"][0]
+        entry = core["machine_emitted_files"][0]
         assert entry["identifier"] == "gen-stub"
-        assert entry["generated_axis"] == "declared_path"
-        assert entry["generated_signature"] == "declared plugin-data path (durable)"
+        assert entry["machine_emitted_axis"] == "declared_path"
+        assert (
+            entry["machine_emitted_signature"] == "declared plugin-data path (durable)"
+        )
         assert len(core["changed_files"]) == 1
         all_text = "".join(
             (tmp_path / "b" / c["path"]).read_text(encoding="utf-8")
@@ -879,7 +883,7 @@ class TestAssembleBundleGenerated:
             max_chunk_bytes=1024 * 1024,
             workspace_root=None,
         )
-        assert core["generated_files"][0]["generated_axis"] == "content"
+        assert core["machine_emitted_files"][0]["machine_emitted_axis"] == "content"
 
     def test_declared_path_axis_respects_the_override(self, tmp_path):
         ws = tmp_path / "ws"
@@ -893,9 +897,9 @@ class TestAssembleBundleGenerated:
             bundle_dir=tmp_path / "b",
             max_chunk_bytes=1024 * 1024,
             workspace_root=ws,
-            review_generated=True,
+            review_machine_emitted=True,
         )
-        assert "generated_files" not in core
+        assert "machine_emitted_files" not in core
         assert len(core["changed_files"]) == 1
 
     def test_ordinary_source_in_a_real_workspace_is_untouched(self, tmp_path):
@@ -911,10 +915,10 @@ class TestAssembleBundleGenerated:
             max_chunk_bytes=1024 * 1024,
             workspace_root=ws,
         )
-        assert "generated_files" not in core
+        assert "machine_emitted_files" not in core
         assert len(core["changed_files"]) == 1
 
-    def test_generated_file_still_contributes_submit_gates(self, tmp_path):
+    def test_machine_emitted_file_still_contributes_submit_gates(self, tmp_path):
         ws = tmp_path / "ws"
         (ws / "gen").mkdir(parents=True)
         (ws / "CLAUDE.md").write_text(
@@ -940,6 +944,66 @@ class TestAssembleBundleGenerated:
             max_chunk_bytes=1024 * 1024,
             workspace_root=ws,
         )
-        assert core["generated_files"][0]["identifier"] == "gen/stub.py"
+        assert core["machine_emitted_files"][0]["identifier"] == "gen/stub.py"
         assert core["unique_claude_mds"] == [str((ws / "CLAUDE.md").resolve())]
         assert core["submit_gates"]
+
+
+# ---------------------------------------------------------------------------
+# assemble_bundle -- the cross-plugin dual-emit compatibility shim
+# ---------------------------------------------------------------------------
+#
+# bootstrap, git-kit and p4-kit are versioned and cached independently, so a
+# machine routinely runs a NEW bootstrap against an OLD prepare_review.py. If
+# the pipeline emitted only the renamed keys, that consumer would read a missing
+# key, drop its "not reviewed" section, and silently lose files that are ALREADY
+# excluded from the diff chunks -- a passing review that reviewed less than it
+# claimed. These tests exist so the aliases cannot be dropped by accident;
+# retiring them is spec section H.2, a separate change.
+
+
+class TestMachineEmittedCompatAliases:
+    def _core(self, tmp_path, **kwargs):
+        return assemble_bundle(
+            preamble="",
+            sections=[_added_section("gen/stub.py", [BANNER, "def a(): ..."])],
+            files=[{"identifier": "gen/stub.py", "local": None}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+            **kwargs,
+        )
+
+    def test_bundle_key_alias_is_present_and_equal(self, tmp_path):
+        core = self._core(tmp_path)
+        assert core["generated_files"] == core["machine_emitted_files"]
+
+    def test_entry_axis_alias_is_present_and_equal(self, tmp_path):
+        entry = self._core(tmp_path)["machine_emitted_files"][0]
+        assert entry["generated_axis"] == entry["machine_emitted_axis"] == "content"
+
+    def test_entry_signature_alias_is_present_and_equal(self, tmp_path):
+        entry = self._core(tmp_path)["machine_emitted_files"][0]
+        assert entry["generated_signature"] == entry["machine_emitted_signature"]
+        assert entry["generated_signature"] == "generated-by banner"
+
+    def test_deprecated_kwarg_still_disables_detection(self, tmp_path):
+        """An old caller passing review_generated=True keeps its override."""
+        core = self._core(tmp_path, review_generated=True)
+        assert "machine_emitted_files" not in core
+        assert "generated_files" not in core
+        assert len(core["changed_files"]) == 1
+
+    def test_deprecated_kwarg_false_still_detects(self, tmp_path):
+        core = self._core(tmp_path, review_generated=False)
+        assert core["machine_emitted_files"][0]["identifier"] == "gen/stub.py"
+
+    def test_agreeing_spellings_are_accepted(self, tmp_path):
+        core = self._core(tmp_path, review_machine_emitted=True, review_generated=True)
+        assert "machine_emitted_files" not in core
+
+    def test_conflicting_spellings_raise_rather_than_guess(self, tmp_path):
+        with pytest.raises(TypeError):
+            self._core(tmp_path, review_machine_emitted=True, review_generated=False)
+        with pytest.raises(TypeError):
+            self._core(tmp_path, review_machine_emitted=False, review_generated=True)

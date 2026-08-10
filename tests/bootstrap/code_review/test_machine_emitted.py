@@ -1,13 +1,13 @@
-"""Tests for bootstrap_lib.code_review.generated -- the shared signature list.
+"""Tests for bootstrap_lib.code_review.machine_emitted -- the shared signature list.
 
 Banner literals are ASSEMBLED from fragments rather than written at the start of
 a source line: this repo's pre-commit guard refuses a staged file carrying a
-generated-artifact banner, and it reads the SAME list under test here.
+machine-emitted-artifact banner, and it reads the SAME list under test here.
 """
 
-from bootstrap_lib.code_review.generated import (
+from bootstrap_lib.code_review.machine_emitted import (
     added_head,
-    detect_generated,
+    detect_machine_emitted,
     detect_signature,
     detect_signature_bytes,
     local_head,
@@ -85,17 +85,17 @@ class TestLocalHead:
         assert local_size(None) is None
 
 
-class TestDetectGenerated:
+class TestDetectMachineEmitted:
     def test_banner_in_added_content(self):
         section = "<<x>>\n+# " + GEN + " by tool\n+def f(): ...\n"
-        assert detect_generated(section) == "generated-by banner"
+        assert detect_machine_emitted(section) == "generated-by banner"
 
     def test_banner_on_disk_when_the_hunk_is_far_below(self, tmp_path):
         p = tmp_path / "stub.py"
         p.write_text("# " + GEN + " by tool\ndef f(): ...\n", encoding="utf-8")
-        assert detect_generated("<<x>>\n+def zzz(): ...\n", str(p)) is not None
+        assert detect_machine_emitted("<<x>>\n+def zzz(): ...\n", str(p)) is not None
 
-    def test_hand_written_file_is_not_generated(self, tmp_path):
+    def test_hand_written_file_is_not_machine_emitted(self, tmp_path):
         p = tmp_path / "src.py"
         p.write_text("def f():\n    return 1\n", encoding="utf-8")
-        assert detect_generated("<<x>>\n+def f(): ...\n", str(p)) is None
+        assert detect_machine_emitted("<<x>>\n+def f(): ...\n", str(p)) is None

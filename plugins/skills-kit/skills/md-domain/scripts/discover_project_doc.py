@@ -24,7 +24,7 @@ For each candidate it emits mechanical signals the audit lanes consume:
     kind              project_doc | skill_reference | other_claude_artifact
     role_hint         readme | null -- docs judged under a special per-artifact
                       role (README = human-facing derived brief)
-    generated         true when a generated_artifact provenance signal exists
+    generated         true when a machine_emitted_artifact provenance signal exists
     generation_record sidecar:<name> | marker:<line> | null -- the signal
                       (generated docs are audited for provenance ONLY)
     lines             effective line count
@@ -85,7 +85,7 @@ _CITER_EXT = {".md", ".mdx", ".rst", ".txt", ".yaml", ".yml", ".json"}
 
 _SKILL_REF_RE = re.compile(r"[/\\]skills[/\\][^/\\]+[/\\]references[/\\]")
 
-# --- generated_artifact role signals (cohesion-principles generated_artifact) ---
+# --- machine_emitted_artifact role signals (cohesion-principles machine_emitted_artifact) ---
 # A committed generated output is identified by a machine-readable generation-
 # record sidecar next to it (e.g. top50.params.json for top50.md) or an in-file
 # marker in the first ~20 lines. The audit then checks ONLY provenance.
@@ -106,7 +106,7 @@ def _doc_stem(name: str) -> str:
 
 
 def generation_record(path: Path) -> str | None:
-    """Provenance signal for the generated_artifact role, or None.
+    """Provenance signal for the machine_emitted_artifact role, or None.
 
     Returns "sidecar:<name>" when a generation-record sidecar sits next to the
     artifact, "marker:<line>" when an in-file generation marker appears in the

@@ -40,11 +40,11 @@ claude_md:
         change cadence, so they fold into one domain rather than staying separate.
         What survives is the matrix as DATA: one dispatch table (verb x artifact
         -> lane record), one audit procedure parameterized by artifact, one
-        authoring procedure parameterized by artifact, four standards docs each
+        generation procedure parameterized by artifact, four standards docs each
         read in both directions.
 
         Deliberate omissions: no /md-audit or /md-authoring aliases (clean break
-        pending a separate alias decision), and no author x references lane
+        pending a separate alias decision), and no generate x references lane
         (cross-references are emergent, not authored).
       origin: |
         Settled decision 2 of the skills-kit improvement discussion (2026-07-28),

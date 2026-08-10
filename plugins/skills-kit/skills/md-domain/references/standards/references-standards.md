@@ -13,7 +13,7 @@ principle-derived judgment layer to state, and nothing here should be padded
 into one.
 
 Both md-domain lanes read this doc: the **audit lane** applies it to detect
-broken references, and the **authoring lane** applies it when writing any doc
+broken references, and the **generation lane** applies it when writing any doc
 that names a skill.
 
 ## What good looks like

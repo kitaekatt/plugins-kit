@@ -1,4 +1,4 @@
-"""Tests for the declared-path axis of generated-artifact detection.
+"""Tests for the declared-path axis of machine-emitted-artifact detection.
 
 The motivating case for this axis is a real multi-megabyte generated API stub
 that carries NO banner of any kind -- it begins directly at its imports. The
@@ -6,7 +6,7 @@ content axis cannot see it, and no signature list ever could. Its LOCATION is
 what says a tool wrote it.
 """
 
-from bootstrap_lib.code_review.generated_paths import (
+from bootstrap_lib.code_review.machine_emitted_paths import (
     LABEL_DURABLE,
     LABEL_EPHEMERAL,
     LABEL_MANIFEST,
@@ -112,7 +112,7 @@ class TestMatchDeclaredPath:
         content detection returns nothing, and the declared path is the only
         evidence there is.
         """
-        from bootstrap_lib.code_review.generated import detect_signature
+        from bootstrap_lib.code_review.machine_emitted import detect_signature
 
         stub = tmp_path / ".plugin-data" / "a-marketplace" / "a-plugin" / "api.py"
         stub.parent.mkdir(parents=True)

@@ -1,6 +1,6 @@
 # skills-kit plugin orientation
 
-Plugin-level orientation for `plugins-kit:skills-kit`. The plugin's artifact is **markdown generally** -- every md file a project accumulates: SKILL.md, CLAUDE.md, project docs, READMEs, and skill references (see "Total ownership" below). It is organized around a **verb x artifact matrix** over that `md` artifact -- two verbs (**audit**, **author**) crossed with four artifacts (`skill` = SKILL.md, `claude-md` = CLAUDE.md, `project-doc`, `references`) -- and since 2026-07-29 that matrix is expressed as DATA inside a single skill rather than as topology. `skill` and `claude-md` are the *typed* specializations (the ones with a formal schema contract), not the whole surface: the domain also audits project docs and cross-references, and the framework claims ownership of every md role.
+Plugin-level orientation for `plugins-kit:skills-kit`. The plugin's artifact is **markdown generally** -- every md file a project accumulates: SKILL.md, CLAUDE.md, project docs, READMEs, and skill references (see "Total ownership" below). It is organized around a **verb x artifact matrix** over that `md` artifact -- two verbs (**audit**, **generate**) crossed with four artifacts (`skill` = SKILL.md, `claude-md` = CLAUDE.md, `project-doc`, `references`) -- and since 2026-07-29 that matrix is expressed as DATA inside a single skill rather than as topology. `skill` and `claude-md` are the *typed* specializations (the ones with a formal schema contract), not the whole surface: the domain also audits project docs and cross-references, and the framework claims ownership of every md role.
 
 The plugin ships **four skills**:
 
@@ -63,7 +63,7 @@ claude_md:
           lane record); read for routing, the lane roster, and argument grammar.
         - skills/md-domain/CLAUDE.md -- shape decisions about the skill itself.
         - references/standards/ -- the per-artifact "what good looks like", each
-          read in BOTH directions (detecting for audit, producing for authoring).
+          read in BOTH directions (detecting for audit, producing for generation).
         - references/lanes/ -- the two shared verb procedures.
         - references/cohesion-principles.md -- the placement spine; read for WHERE
           a fact lives. Every lane and standards doc defers here.
@@ -137,7 +137,7 @@ claude_md:
         - "What does a good SKILL.md / CLAUDE.md / project doc / cross-reference
           look like?" -> md-domain/references/standards/<artifact>-standards.md.
           Same doc for both verbs -- read detecting for an audit, producing for
-          authoring.
+          generation.
         - "Where should this fact live?" -> md-domain/references/cohesion-principles.md.
           Never re-derive the placement algorithm from memory.
         - "Does this skill satisfy its type contract?" -> run audit.py against the
@@ -206,7 +206,7 @@ claude_md:
         - bootstrap-installed venv python
       origin: Phase 4.6 P5 plugin-level orientation surface (2026-04-30); re-pointed at md-domain (2026-07-29).
       added: "2026-04-30"
-      summary: md-domain loads on its trigger (audit or authoring intent over project markdown) or via /md-domain; there is no /md-audit or /md-authoring alias. Scripts run via the plugin venv's Python.
+      summary: md-domain loads on its trigger (audit or generation intent over project markdown) or via /md-domain; there is no /md-audit or /md-authoring alias. Scripts run via the plugin venv's Python.
       detail: |
         - Skill: /md-domain bare shows the verb x artifact menu; argument dispatch
           is `/md-domain <verb> <artifact> [selector] [flags]`. Natural language

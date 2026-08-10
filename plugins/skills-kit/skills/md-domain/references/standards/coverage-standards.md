@@ -230,6 +230,10 @@ happened, which is precisely what the prompt exists to prevent.
   subjects and structural exclusions and is deliberately criteria-free.
 - **What to do about a candidate.** Coverage is report-only. It proposes a
   destination; it never writes one, and there is no remediation phase.
+  Coverage is the discovery phase OF generation, and being re-homed under
+  generation grants it no licence to write. It proposes a destination; it
+  never creates or edits one. The generation lane is the only surface that
+  writes.
 - **Code review.** Coverage never enumerates defects. A severe deficiency
   noticed in passing is reported under CV-5's carve-out as CLAUDE.md content,
   not as a defect list.

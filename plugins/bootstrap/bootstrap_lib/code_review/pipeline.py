@@ -34,11 +34,11 @@ from bootstrap_lib.code_review.claude_mds import (
     collect_claude_mds,
     collect_submit_gates,
 )
-from bootstrap_lib.code_review.generated import (
-    detect_generated,
+from bootstrap_lib.code_review.machine_emitted import (
+    detect_machine_emitted,
     local_size,
 )
-from bootstrap_lib.code_review.generated_paths import (
+from bootstrap_lib.code_review.machine_emitted_paths import (
     declared_generated_rules,
     match_declared_path,
 )
@@ -253,7 +253,8 @@ def assemble_bundle(
     max_chunk_bytes: int,
     workspace_root: Optional[Path],
     claim_globs: Optional[list[str]] = None,
-    review_generated: bool = False,
+    review_machine_emitted: Optional[bool] = None,
+    review_generated: Optional[bool] = None,
 ) -> dict:
     """Chunk the diff to disk and build the VCS-neutral bundle core.
 
@@ -284,44 +285,51 @@ def assemble_bundle(
                     submit-gate scan. When None/empty the returned dict is
                     byte-identical to the pre-claim contract (no `claimed_files`
                     key), so existing callers are unaffected.
-        review_generated: OPTIONAL override. False (default) EXCLUDES every
-                    machine-generated file from the diff chunks and the
+        review_machine_emitted: OPTIONAL override. False (default) EXCLUDES
+                    every machine-emitted file from the diff chunks and the
                     `changed_files` list and surfaces it under
-                    `generated_files` instead; True disables detection
+                    `machine_emitted_files` instead; True disables detection
                     entirely and reviews those files like any other. The
                     override exists for the author or user who explicitly asks
                     for the full review.
+        review_generated: DEPRECATED spelling of `review_machine_emitted`,
+                    accepted so a consumer predating the rename keeps working.
+                    Passing both with DIFFERENT values raises TypeError rather
+                    than guessing which one the caller meant.
 
     Returns the shared bundle fields:
         {"bundle_dir", "diff_chunks", "changed_files",
          "unique_claude_mds", "submit_gates"}
-    plus "claimed_files" when claim_globs is non-empty, plus "generated_files"
-    when any changed file was detected as machine-generated. With neither
-    present the dict is byte-identical to the pre-claim contract.
+    plus "claimed_files" when claim_globs is non-empty, plus
+    "machine_emitted_files" (and its `generated_files` compat alias) when any
+    changed file was detected as machine-emitted. With neither present the dict
+    is byte-identical to the pre-claim contract.
 
-    Generated-file detection is a UNION of two independent axes, and never
+    Machine-emitted-file detection is a UNION of two independent axes, and never
     size-alone -- a large hand-written file is still chunked and fully reviewed:
 
-      1. CONTENT -- a generated-artifact banner in the file's leading added
-         lines, or in its leading lines on disk
-         (bootstrap_lib.code_review.generated).
+      1. CONTENT -- a machine-emitted-artifact banner in the file's leading
+         added lines, or in its leading lines on disk
+         (bootstrap_lib.code_review.machine_emitted).
       2. DECLARED PATH -- the file lives under a path a plugin declares that it
          writes, e.g. a project's durable plugin-data directory
-         (bootstrap_lib.code_review.generated_paths). This axis is what catches
-         a generator that emits NO banner: nothing in such a file's bytes says
-         a tool wrote it, but its location does, by construction.
+         (bootstrap_lib.code_review.machine_emitted_paths). This axis is what
+         catches a generator that emits NO banner: nothing in such a file's
+         bytes says a tool wrote it, but its location does, by construction.
 
-    A generated file contributes NO chunks and no reviewer lanes, because the
-    review target is its GENERATOR, which is reviewed separately as ordinary
+    A machine-emitted file contributes NO chunks and no reviewer lanes, because
+    the review target is its GENERATOR, which is reviewed separately as ordinary
     source. It is never a pass: the skill renders it as an honest "not
     reviewed". Claimed files are evaluated first and are never re-routed here --
     a subject-lens reviewer already owns them.
 
-    Each generated_files entry is the input dict verbatim (identifier
-    retained), plus "generated_axis" ("content" or "declared_path"),
-    "generated_signature" (the matched signature or path-rule label) and
+    Each machine_emitted_files entry is the input dict verbatim (identifier
+    retained), plus "machine_emitted_axis" ("content" or "declared_path"),
+    "machine_emitted_signature" (the matched signature or path-rule label) and
     "size_bytes" (the on-disk size, falling back to the diff section's byte
-    length when the file has no readable local path).
+    length when the file has no readable local path). Each entry ALSO carries
+    the pre-rename "generated_axis" / "generated_signature" spellings with
+    identical values (see the compat aliases below).
 
     Each changed_files entry is the input dict minus "identifier", plus
     "chunk_index" (int or None when absent from the diff) and
@@ -333,6 +341,24 @@ def assemble_bundle(
     trivial -- "trivial_checks" ({"ascii_clean", "no_abs_paths"} over the
     changed lines). See bootstrap_lib.code_review.triviality.
     """
+    if review_generated is not None:
+        # Deprecated spelling. Honour it, but never silently pick a winner when
+        # the caller passed both and they disagree -- the wrong guess either
+        # fans a multi-megabyte artifact out to every reviewer, or drops files
+        # the caller explicitly asked to have reviewed.
+        if (
+            review_machine_emitted is not None
+            and bool(review_machine_emitted) != bool(review_generated)
+        ):
+            raise TypeError(
+                "assemble_bundle() got conflicting review_machine_emitted="
+                f"{review_machine_emitted!r} and deprecated review_generated="
+                f"{review_generated!r}; pass review_machine_emitted only"
+            )
+        if review_machine_emitted is None:
+            review_machine_emitted = review_generated
+    review_machine_emitted = bool(review_machine_emitted)
+
     claim_globs = claim_globs or []
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
@@ -344,7 +370,7 @@ def assemble_bundle(
     # its hunks are still what the pure-mechanical guard inspects).
     id_to_text = {s["identifier"]: s["text"] for s in sections}
 
-    # Machine-generated artifacts: excluded from chunking, surfaced separately.
+    # Machine-emitted artifacts: excluded from chunking, surfaced separately.
     # Detection is a UNION of two independent axes -- a content signature, OR a
     # path a plugin declares that it writes. Neither subsumes the other: a
     # generator may emit no banner at all (nothing in such a file's bytes says a
@@ -352,29 +378,29 @@ def assemble_bundle(
     # plugin-data path. Claimed files are skipped -- a subject-lens reviewer
     # already owns them, and re-routing would take away the review they were
     # claimed FOR.
-    generated_sigs: dict[str, tuple[str, str]] = {}
-    if not review_generated:
+    machine_emitted_sigs: dict[str, tuple[str, str]] = {}
+    if not review_machine_emitted:
         path_rules = declared_generated_rules(workspace_root)
         for f in files:
             ident = f["identifier"]
             if ident in claimed_idents:
                 continue
-            label = detect_generated(id_to_text.get(ident, ""), f.get("local"))
+            label = detect_machine_emitted(id_to_text.get(ident, ""), f.get("local"))
             if label:
-                generated_sigs[ident] = ("content", label)
+                machine_emitted_sigs[ident] = ("content", label)
                 continue
             label = match_declared_path(f.get("local"), path_rules)
             if label:
-                generated_sigs[ident] = ("declared_path", label)
+                machine_emitted_sigs[ident] = ("declared_path", label)
 
-    # Claimed and generated files' diff sections must not reach the generic
+    # Claimed and machine-emitted files' diff sections must not reach the generic
     # reviewers, so drop them before chunking. Their records still flow through
     # the CLAUDE.md / submit-gate walk below.
     review_sections = [
         s
         for s in sections
         if s["identifier"] not in claimed_idents
-        and s["identifier"] not in generated_sigs
+        and s["identifier"] not in machine_emitted_sigs
     ]
 
     chunks = partition_sections_into_chunks(
@@ -390,7 +416,7 @@ def assemble_bundle(
 
     changed_files: list[dict] = []
     claimed_files: list[dict] = []
-    generated_files: list[dict] = []
+    machine_emitted_files: list[dict] = []
     unique: list[str] = []
     seen: set[str] = set()
     all_locals: list[str] = []
@@ -425,7 +451,7 @@ def assemble_bundle(
             annotate_triviality(entry, id_to_text.get(f["identifier"], ""))
             claimed_files.append(entry)
             continue
-        if f["identifier"] in generated_sigs:
+        if f["identifier"] in machine_emitted_sigs:
             # Pass the entry through verbatim (identifier retained, matching the
             # claimed_files shape) so the skill can name the exact file it did
             # NOT review. Size is reported because "how much review was skipped"
@@ -434,14 +460,17 @@ def assemble_bundle(
             entry = dict(f)
             if local:
                 entry["local"] = canonical_local(local)
-            axis, label = generated_sigs[f["identifier"]]
+            axis, label = machine_emitted_sigs[f["identifier"]]
+            entry["machine_emitted_axis"] = axis
+            entry["machine_emitted_signature"] = label
+            # Compat aliases for git-kit/p4-kit versions predating the rename.
             entry["generated_axis"] = axis
             entry["generated_signature"] = label
             size = local_size(local)
             if size is None:
                 size = len(id_to_text.get(f["identifier"], "").encode("utf-8"))
             entry["size_bytes"] = size
-            generated_files.append(entry)
+            machine_emitted_files.append(entry)
             continue
         out = {k: v for k, v in f.items() if k != "identifier"}
         if local:
@@ -461,8 +490,14 @@ def assemble_bundle(
     }
     if claim_globs:
         result["claimed_files"] = claimed_files
-    if generated_files:
-        result["generated_files"] = generated_files
+    if machine_emitted_files:
+        result["machine_emitted_files"] = machine_emitted_files
+        # Compat alias for git-kit/p4-kit versions predating the rename. The two
+        # kits are versioned independently of bootstrap, so a consumer running an
+        # older prepare_review.py would otherwise read a missing key, drop the
+        # "not reviewed" section, and silently lose files that are ALREADY
+        # excluded from the diff chunks. Remove only per section H.2.
+        result["generated_files"] = machine_emitted_files
     return result
 
 

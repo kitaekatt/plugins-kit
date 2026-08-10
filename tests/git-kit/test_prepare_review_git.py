@@ -916,8 +916,8 @@ class TestParseArgs:
             ["--staged"], ["**/CLAUDE.md"], False
         )
 
-    def test_review_generated_flag(self):
-        assert pr._parse_args(["main..HEAD", "--review-generated"]) == (
+    def test_review_machine_emitted_flag(self):
+        assert pr._parse_args(["main..HEAD", "--review-machine-emitted"]) == (
             ["main..HEAD"], [], True
         )
 
@@ -1017,10 +1017,10 @@ class TestBuildBundleGenerated:
         bundle = pr.build_bundle("HEAD~2..HEAD", tmp_path / "bundle")
 
         assert [f["path"] for f in bundle["changed_files"]] == ["src/app.py"]
-        entry = bundle["generated_files"][0]
+        entry = bundle["machine_emitted_files"][0]
         assert entry["path"] == "stub.py"
-        assert entry["generated_axis"] == "content"
-        assert entry["generated_signature"] == "generated-by banner"
+        assert entry["machine_emitted_axis"] == "content"
+        assert entry["machine_emitted_signature"] == "generated-by banner"
         assert entry["size_bytes"] == (git_repo.path / "stub.py").stat().st_size
         diff = _concat_diff_from_chunks(bundle)
         assert "app.py" in diff
@@ -1047,10 +1047,10 @@ class TestBuildBundleGenerated:
         bundle = pr.build_bundle("HEAD~1..HEAD", tmp_path / "bundle")
 
         assert bundle["changed_files"] == []
-        entry = bundle["generated_files"][0]
+        entry = bundle["machine_emitted_files"][0]
         assert entry["path"] == ".plugin-data/a-marketplace/a-plugin/api.py"
-        assert entry["generated_axis"] == "declared_path"
-        assert entry["generated_signature"] == "declared plugin-data path (durable)"
+        assert entry["machine_emitted_axis"] == "declared_path"
+        assert entry["machine_emitted_signature"] == "declared plugin-data path (durable)"
 
     def test_hand_written_file_keeps_its_full_review(self, git_repo, tmp_path):
         git_repo.commit_file("seed.txt", "x\n", "seed")
@@ -1059,17 +1059,17 @@ class TestBuildBundleGenerated:
 
         bundle = pr.build_bundle("HEAD~1..HEAD", tmp_path / "bundle")
 
-        assert "generated_files" not in bundle
+        assert "machine_emitted_files" not in bundle
         assert [f["path"] for f in bundle["changed_files"]] == ["big.py"]
 
-    def test_review_generated_override(self, git_repo, tmp_path, monkeypatch, capsys):
+    def test_review_machine_emitted_override(self, git_repo, tmp_path, monkeypatch, capsys):
         git_repo.commit_file("seed.txt", "x\n", "seed")
         git_repo.commit_file("stub.py", self.BANNER + "\ndef a(): ...\n", "stub")
         monkeypatch.setattr(pr, "DEFAULT_BUNDLE_ROOT", tmp_path / "bundles")
 
-        rc = pr.main(["prepare_review.py", "HEAD~1..HEAD", "--review-generated"])
+        rc = pr.main(["prepare_review.py", "HEAD~1..HEAD", "--review-machine-emitted"])
 
         assert rc == 0
         bundle = json.loads(capsys.readouterr().out)
-        assert "generated_files" not in bundle
+        assert "machine_emitted_files" not in bundle
         assert [f["path"] for f in bundle["changed_files"]] == ["stub.py"]

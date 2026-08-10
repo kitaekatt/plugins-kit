@@ -175,7 +175,7 @@ class TestProjectRootCiterScope:
 
 
 class TestGeneratedArtifactSignals:
-    """generated_artifact role detection (stress-test gap 6): a sidecar
+    """machine_emitted_artifact role detection (stress-test gap 6): a sidecar
     generation record or an in-file marker identifies a committed generated
     output, which the audit then checks for provenance ONLY."""
 

@@ -330,6 +330,18 @@ Files and edits:
   field (refusal R4). Record this no-op explicitly in the commit message, per the
   `contracts_preserved_verbatim_through_the_fold` discipline -- do not skip it silently.
 
+- **A-21 (ADDED 2026-08-10 during execution -- the spec's own file list missed it).**
+  `plugins/skills-kit/skills/update-documentation/SKILL.md` carries two LIVE,
+  copy-pasteable T14/T15 command strings (`/md-domain author skill`,
+  `/md-domain author claude-md`). Packet A's file list enumerated only `md-domain/**`
+  plus the plugin's README and the two CLAUDE.md files, so a SIBLING skill in the same
+  plugin naming md-domain's commands fell outside every row. Root cause worth carrying
+  forward: the packet was scoped by DIRECTORY, while the token's blast radius is the set
+  of files that NAME the verb -- which crosses skill boundaries inside a plugin. The
+  `rg -n "/md-domain author"` sweep in E.5 is what caught it, which is precisely why that
+  sweep is repo-wide rather than packet-scoped. Check `knowledge-encoding/SKILL.md` and
+  `materialized-output/SKILL.md` the same way before declaring the packet done.
+
 Packet A verification:
 
 ```
@@ -640,7 +652,19 @@ rg -n "code_review\.generated" plugins/ tests/ scripts/ docs/
   its tests, and the `core.get("generated_files")` fallback in both
   `prepare_review.py`. Nowhere else.
 - `review_generated` survives only as the deprecated keyword alias in
-  `assemble_bundle`'s signature.
+  `assemble_bundle`'s signature, and as the kwarg both kits PASS at their
+  `assemble_bundle` call site (the C-2 call-site half -- see H.2's ordering constraint).
+
+**A third survivor class, found while executing (2026-08-10): the provenance records.**
+`references/provenance/skill-authoring-decisions.md` and
+`references/provenance/cohesion-principles-decisions.md` quote the OLD tokens on purpose --
+A-13 explicitly requires the `dec_20` record to say what the names USED to be. A provenance
+log that silently adopted the new spelling would destroy the very supersession it exists to
+record. Expected survivors there: `generated_artifact` (as a `keywords:` search-routing entry
+and inside "now `machine_emitted_artifact`" parentheticals), `generated_files` /
+`generated_axis` / `generated_signature` / `--review-generated` in the same historical list,
+and `(formerly \`authoring-lane.md\`)`. Do NOT convert these; the sweep's "must return
+NOTHING" applies to LIVE declarations, never to a historical quotation in a provenance log.
 
 Then a manual pass over `rg -n "\bauthor" plugins/skills-kit/` checking every hit
 against the over-match list in A.3.
@@ -735,6 +759,17 @@ enough time has passed that no consumer is plausibly on an older kit. Remove the
 `review_generated` deprecated kwarg, and the `or core.get("generated_files")`
 fallbacks; delete the alias tests. This is a separate change with its own version
 bumps. It is NOT part of this sweep and has no deadline.
+
+**ORDERING CONSTRAINT ADDED 2026-08-10 (C-2's second half).** Both kits' CALL INTO
+`assemble_bundle` deliberately passes the OLD kwarg -- `review_generated=review_machine_emitted`
+-- because a new kit routinely runs against a published bootstrap predating the rename,
+which accepts only that spelling and raises `TypeError` on every review otherwise. So the
+deprecated kwarg cannot be removed in one step: retiring it while the kits still pass it
+turns the shim's removal into the very crash it exists to prevent. H.2 must be executed as
+TWO published changes, in this order: (1) flip both kits' call sites to
+`review_machine_emitted=` and publish them; only then (2) remove the deprecated kwarg from
+`assemble_bundle`. The `core.get("generated_files")` read fallbacks and the per-entry alias
+keys are independent of this ordering and may go in either step.
 
 ---
 

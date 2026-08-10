@@ -1,12 +1,13 @@
-"""Generated-artifact detection: the ONE signature list this repo recognizes.
+"""Machine-emitted-artifact detection: the ONE signature list this repo recognizes.
 
 Two callers, one source of truth:
 
-- ``pipeline.assemble_bundle`` -- a machine-generated file is excluded from the
-  reviewer chunks entirely and surfaced under ``generated_files``. Reviewing it
-  is waste: nobody wrote a line of it, and the only meaningful review target is
-  the GENERATOR, which is reviewed separately as ordinary source. A single
-  multi-megabyte artifact otherwise becomes dozens of chunks times R reviewers.
+- ``pipeline.assemble_bundle`` -- a machine-emitted file is excluded from the
+  reviewer chunks entirely and surfaced under ``machine_emitted_files``.
+  Reviewing it is waste: nobody wrote a line of it, and the only meaningful
+  review target is the GENERATOR, which is reviewed separately as ordinary
+  source. A single multi-megabyte artifact otherwise becomes dozens of chunks
+  times R reviewers.
 - the repo's pre-commit guard (``scripts/precommit_guard.py``), which refuses to
   commit such a file into a public repo.
 
@@ -29,7 +30,7 @@ from typing import Optional
 # of the file (or of a diff section's added content).
 DEFAULT_HEAD_LINES = 40
 
-# Cap on how much of an on-disk file is read for the head scan. A generated
+# Cap on how much of an on-disk file is read for the head scan. A machine-emitted
 # artifact can be tens of megabytes; only its opening matters.
 LOCAL_HEAD_BYTES = 64 * 1024
 
@@ -109,9 +110,9 @@ def local_head(
 ) -> str:
     """The first `max_lines` lines of the file at `local`, or '' if unreadable.
 
-    Needed because a MODIFIED generated file's diff can start thousands of lines
-    below its banner -- the added-content scan alone would miss it and fan the
-    artifact out to the reviewers anyway.
+    Needed because a MODIFIED machine-emitted file's diff can start thousands of
+    lines below its banner -- the added-content scan alone would miss it and fan
+    the artifact out to the reviewers anyway.
     """
     if not local:
         return ""
@@ -134,12 +135,12 @@ def local_size(local: Optional[str]) -> Optional[int]:
         return None
 
 
-def detect_generated(
+def detect_machine_emitted(
     section_text: str,
     local: Optional[str] = None,
     max_lines: int = DEFAULT_HEAD_LINES,
 ) -> Optional[str]:
-    """Signature label if this changed file is machine-generated, else None.
+    """Signature label if this changed file is machine-emitted, else None.
 
     Scans the leading ADDED lines of the diff section first (which covers an
     added file, and a deleted or workspace-less one where nothing is on disk),

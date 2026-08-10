@@ -2,7 +2,7 @@
 
 The artifact-keyed single source of truth for the `skill` artifact. Both
 md-domain lanes read this file: the audit lane applies it as detection
-criteria, the authoring lane applies it as production targets. There is one
+criteria, the generation lane applies it as production targets. There is one
 statement of each standard here; neither lane restates it.
 
 The `skill` artifact has **two subject shapes**, and the `audit_skill` lane
@@ -734,15 +734,15 @@ disposition from fixed predicates.
 - **Re-ranking findings between runs.** Criteria, taxonomy, and bucket
   assignments are fixed: the same input produces the same verdict.
 
-## 8. Authoring direction
+## 8. Generation direction
 
-The authoring lane
-([`../lanes/authoring-lane.md`](../lanes/authoring-lane.md)) applies these
+The generation lane
+([`../lanes/generation-lane.md`](../lanes/generation-lane.md)) applies these
 same standards forward -- producing a compliant SKILL.md rather than
 detecting an incompliant one. The standards are not restated for the
-authoring direction; only the order of application differs.
+generation direction; only the order of application differs.
 
-Order of application when authoring or refining a SKILL.md:
+Order of application when generating or refining a SKILL.md:
 
 1. **Placement first.** Confirm the content belongs in a skill at all --
    [`../cohesion-principles.md`](../cohesion-principles.md) decides WHICH
@@ -770,8 +770,8 @@ Order of application when authoring or refining a SKILL.md:
    floor (2.2), so a clean run is the starting bar, not the finish line; the
    judgment criteria in 7.1 (`ccp_placement`, `crp_placement`) still apply.
 
-Two authoring norms that fall out of the standards: **schemas are floors
-when authoring too** -- add load-bearing structured keys freely (2.2)
+Two generation norms that fall out of the standards: **schemas are floors
+when generating too** -- add load-bearing structured keys freely (2.2)
 rather than dropping to prose because the schema does not enumerate the key
 you need; and **verify every verbatim command** -- a command written into a
 SKILL.md is executed by an agent as written, so run it before shipping (see

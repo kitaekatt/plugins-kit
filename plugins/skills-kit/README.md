@@ -4,19 +4,19 @@ Your CLAUDE.md is a codebase. Audit it like one.
 
 ## What it does
 
-skills-kit is authoring and auditing tooling for the markdown a project
+skills-kit is generation and auditing tooling for the markdown a project
 accumulates -- the SKILL.md and CLAUDE.md files Claude Code loads, and the
 project docs and READMEs it does not. It treats every md file in a repo as
 one owned surface with a place each fact belongs, rather than a pile of
 files that drift apart independently.
 
 There is one front door, `/md-domain`, and it works on a **verb x artifact**
-grammar: pick a verb (`audit` or `author`) and an artifact (`skill`,
+grammar: pick a verb (`audit` or `generate`) and an artifact (`skill`,
 `claude-md`, `project-doc`, or `references`).
 
 ```
 /md-domain audit claude-md ./CLAUDE.md
-/md-domain author skill
+/md-domain generate skill
 /md-domain audit references
 ```
 
@@ -25,14 +25,14 @@ grammar: pick a verb (`audit` or `author`) and an artifact (`skill`,
   (dangling skill references, broken load-graph edges). It produces a
   reviewable set of findings -- FIX / SERIOUS / IMPROVE -- for you to accept
   or decline. It does not auto-rewrite your files.
-- **author** guides writing them: the per-type contract for the artifact you
+- **generate** guides writing them: the per-type contract for the artifact you
   are producing, where the content belongs, and what shape it takes.
 
 Both verbs read the same four standards documents -- one per artifact,
 covering SKILL.md, CLAUDE.md, project documents, and cross-references. That
 single-source-of-truth arrangement is the point: "what good looks like" is
 written down once and read in two directions, so an audit can never enforce
-a rule the authoring guidance does not teach.
+a rule the generation guidance does not teach.
 
 The underlying methodology is package-design cohesion applied to docs:
 CCP (things that change together live together), CRP (if you load a file
@@ -51,10 +51,10 @@ reviewers you already run (including Claude Code's own /code-review) read
 CLAUDE.md to decide what "correct" means; an unaudited CLAUDE.md silently
 sets a wrong standard for every review.
 
-This is skills-kit's place in an authoring -> auditing -> review path: it
-authors and audits the standards, and the `git-kit` and `p4-kit` reviewers
+This is skills-kit's place in a generation -> auditing -> review path: it
+generates and audits the standards, and the `git-kit` and `p4-kit` reviewers
 (in this same marketplace) enforce those same CLAUDE.md standards on every
-change. Authoring and auditing set the standard; review keeps each change
+change. Generation and auditing set the standard; review keeps each change
 compliant with it.
 
 ## Also included
@@ -101,7 +101,7 @@ and installs automatically.
 /md-domain
 ```
 
-Bare invocation shows the menu: audit or author a SKILL.md, a CLAUDE.md, a
+Bare invocation shows the menu: audit or generate a SKILL.md, a CLAUDE.md, a
 project doc, or (audit only) cross-references. Point it at your root
 CLAUDE.md.
 

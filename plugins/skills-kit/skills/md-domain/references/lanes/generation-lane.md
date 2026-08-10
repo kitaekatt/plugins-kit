@@ -1,6 +1,6 @@
-# The authoring lane
+# The generation lane
 
-The ONE authoring procedure, parameterized by artifact. It generalizes the folded
+The ONE generation procedure, parameterized by artifact. It generalizes the folded
 claude-md-authoring technique to all four artifacts and reads the SAME standards
 docs the audit lane reads -- in the PRODUCING direction (make it compliant)
 rather than the DETECTING direction (find the violation).
@@ -13,9 +13,9 @@ no label to choose per run. The preservation half of regeneration is already
 carried by the summarize-and-reference rule and its loss-free-deletion guard in
 Step 4, which is what keeps a regeneration from spending existing value.
 
-**Single-invocation.** The authoring verb has no fan-out machinery and gains
+**Single-invocation.** The generation verb has no fan-out machinery and gains
 none: no Workflow lanes, no pre-images, no detect/remediate split, no review
-mode. Authoring N files is N runs of this procedure. New authoring machinery
+mode. Generating N files is N runs of this procedure. New generation machinery
 would be new scope.
 
 Load this together with exactly one standards doc, selected by the dispatch
@@ -23,15 +23,15 @@ table:
 
 | Lane id | Standards doc | Validation |
 |---|---|---|
-| `author_skill` | `../standards/skill-standards.md` | `python -m skills_kit_lib.audit <path>` |
-| `author_claude_md` | `../standards/claude-md-standards.md` | `python -m skills_kit_lib.audit <path>` |
-| `author_project_doc` | `../standards/project-doc-standards.md` | no mechanical validator -- self-check against the standards doc |
-| `author_references` | -- | no lane; see below |
+| `generate_skill` | `../standards/skill-standards.md` | `python -m skills_kit_lib.audit <path>` |
+| `generate_claude_md` | `../standards/claude-md-standards.md` | `python -m skills_kit_lib.audit <path>` |
+| `generate_project_doc` | `../standards/project-doc-standards.md` | no mechanical validator -- self-check against the standards doc |
+| `generate_references` | -- | no lane; see below |
 
-**There is no `author_references` lane.** Cross-references are an emergent
-property of the other three artifacts, not an authored artifact. A request to
+**There is no `generate_references` lane.** Cross-references are an emergent
+property of the other three artifacts, not a generated artifact. A request to
 "fix my broken references" is remediation on the `audit_references` lane; a
-request to "add a reference" is authoring whichever artifact carries it. Route
+request to "add a reference" is generating whichever artifact carries it. Route
 there rather than improvising.
 
 ## Procedure: author or refine an md artifact (generate, or regenerate when it exists)
@@ -63,9 +63,9 @@ The four boundaries:
 - **project-doc** -- a standalone project document outside the skill tree and
   outside the CLAUDE.md hierarchy (a design record, a reference doc under
   `docs/` or `.claude/docs/`, a README).
-- **references** -- not authored; see above.
+- **references** -- not generated; see above.
 
-Before authoring a NEW skill, apply the two-step **skill_packaging_razor** from
+Before generating a NEW skill, apply the two-step **skill_packaging_razor** from
 `../cohesion-principles.md`: step 1, does the content EXECUTE a process or pull
 dynamic information, or is it static reference text (static text is never a
 skill)? Step 2, fold into an existing domain if BOTH the vocabulary-reachability
@@ -107,7 +107,7 @@ pre-resolved).
 ### Step 3 -- Apply the artifact's standards doc in the producing direction
 
 Read the bound standards doc and write to it. Each rule is stated as
-Rule / Why / Test / Severity; the authoring direction is "satisfy the Rule",
+Rule / Why / Test / Severity; the generation direction is "satisfy the Rule",
 the audit direction is "run the Test". Same document, one SSOT, no second
 hand-maintained copy.
 
@@ -183,8 +183,8 @@ Expected: records in the file's native shape, no duplication.
   serve one reading task.
 - **All artifacts** -- when the work was substantial, the honest verification is
   the audit lane on the same artifact (`/md-domain audit <artifact> <path>`).
-  Authoring and auditing read the same standards doc, so a clean audit is the
-  proof the authoring landed.
+  Generation and auditing read the same standards doc, so a clean audit is the
+  proof the generation landed.
 
 Expected: 0 FAILs on the target, or a stated reason a JUDGMENT row is accepted.
 
@@ -199,15 +199,15 @@ Expected: 0 FAILs on the target, or a stated reason a JUDGMENT row is accepted.
 - Keyword clusters under 3 entries on a record. The schema floor is >= 3, for
   chat-term routing.
 - A root CLAUDE.md without a `claude_md:` block. Root files SHOULD carry one; add
-  it when authoring touches a root file that lacks it. (The audit side treats
+  it when generation touches a root file that lacks it. (The audit side treats
   absence on a pre-existing root file as INFO -- adding the block is the
-  authoring path's job.)
+  generation path's job.)
 - Treating a code-directory review-notes file like a schema-block CLAUDE.md, or
   vice-versa. Review-notes files carry gotchas / review checks / boundary claims,
   not a `claude_md:` block, and the schema validator is never run on them.
 - Line-only anchors in a code-directory file. Line numbers rot fast; prefer a
   symbol anchor and drop the number unless the gotcha is sub-function.
-- Authoring a project doc with no inbound citation. A doc nothing points at never
+- Generating a project doc with no inbound citation. A doc nothing points at never
   loads. Add the pointer from the owning CLAUDE.md or SKILL.md in the same pass.
 - Restating skill-owned content in a project doc. When a skill exists for the
   topic, its `references/` is SSOT and the doc collapses to a pointer.
@@ -227,7 +227,7 @@ Expected: 0 FAILs on the target, or a stated reason a JUDGMENT row is accepted.
 - **Creating a skill for static reference text.** Step 1 of the packaging razor
   rules it out: if the content does not execute a process or fetch dynamic
   information, it is a reference doc inside an existing home, not a skill.
-- **Authoring against remembered standards.** The standards doc is the SSOT and
+- **Generating against remembered standards.** The standards doc is the SSOT and
   it is one read away. Writing from memory reintroduces the hand-maintained
   second copy the fold removed.
 

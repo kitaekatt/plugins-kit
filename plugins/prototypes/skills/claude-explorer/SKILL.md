@@ -116,7 +116,7 @@ technique_skill:
       - "deep-rendering md to HTML, json to key-value table, scripts inside <pre>"
     excludes:
       - "auditing skills or references (use /md-domain audit skill or /md-domain audit references)"
-      - "skill authoring (use /md-domain author skill)"
+      - "skill generation (use /md-domain generate skill)"
       - "the plugin-ecosystem poster (use awesome-kit:plugin-ecosystem -- different reading task at marketplace-corpus scope)"
       - "invocation of actions from the browser (planned for v2; see references/interactivity.md)"
   techniques:

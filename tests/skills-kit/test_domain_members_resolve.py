@@ -10,7 +10,7 @@ enforcement" section names:
 
 (a) the skills-kit skill roster on disk is exactly the four surviving skills;
 (b) md-domain's dispatch table holds exactly the eight lanes, and
-    `author x references` is deliberately absent;
+    `generate x references` is deliberately absent;
 (c) every lane record carries the two REQUIRED fields (settled decision 3) --
     invocation_phrasings (>= 3) and change_driver;
 (d) every path a lane record binds resolves on disk;
@@ -59,9 +59,9 @@ EXPECTED_LANES = {
     "audit_claude_md": {"verb": "audit", "artifact": "claude-md"},
     "audit_project_doc": {"verb": "audit", "artifact": "project-doc"},
     "audit_references": {"verb": "audit", "artifact": "references"},
-    "author_skill": {"verb": "author", "artifact": "skill"},
-    "author_claude_md": {"verb": "author", "artifact": "claude-md"},
-    "author_project_doc": {"verb": "author", "artifact": "project-doc"},
+    "generate_skill": {"verb": "generate", "artifact": "skill"},
+    "generate_claude_md": {"verb": "generate", "artifact": "claude-md"},
+    "generate_project_doc": {"verb": "generate", "artifact": "project-doc"},
     "coverage_code_subtree": {"verb": "coverage", "subject": "code_subtree"},
 }
 
@@ -131,7 +131,7 @@ class TestSkillsKitRoster:
 
 
 class TestDispatchTable:
-    """(b) -- exactly eight lanes, and author x references is deliberately absent."""
+    """(b) -- exactly eight lanes, and generate x references is deliberately absent."""
 
     def test_lane_roster_is_exact(self):
         assert sorted(LANE_IDS) == sorted(EXPECTED_LANES), (
@@ -153,11 +153,11 @@ class TestDispatchTable:
             assert record.get("subject") == expected["subject"]
             assert "artifact" not in record
 
-    def test_author_references_lane_is_absent(self):
+    def test_generate_references_lane_is_absent(self):
         assert not any(
-            r.get("verb") == "author" and r.get("artifact") == "references"
+            r.get("verb") == "generate" and r.get("artifact") == "references"
             for r in LANE_RECORDS
-        ), "author x references must have no lane -- cross-references are emergent"
+        ), "generate x references must have no lane -- cross-references are emergent"
 
     def test_markdown_table_matches_the_lane_records(self):
         """The human-readable table and the machine-readable records must agree."""
@@ -182,9 +182,9 @@ class TestDispatchTable:
             assert rows[key] == f"`{lane_id}`", (
                 f"dispatch table row `{key}` points at {rows[key]}, not `{lane_id}`"
             )
-        assert "author x references" in rows
-        assert "no lane" in rows["author x references"], (
-            "the author x references row gained a lane id"
+        assert "generate x references" in rows
+        assert "no lane" in rows["generate x references"], (
+            "the generate x references row gained a lane id"
         )
 
 
@@ -255,11 +255,11 @@ class TestBoundPathsResolve:
         assert "workflow_remediate" not in record
         assert record["verdicts"] == ["GAPS-FOUND", "COVERAGE-ASSESSED"]
 
-    def test_authoring_lanes_bind_standards_and_procedure(self):
+    def test_generation_lanes_bind_standards_and_procedure(self):
         for record in LANE_RECORDS:
-            if record["verb"] != "author":
+            if record["verb"] != "generate":
                 continue
-            assert record["procedure"] == "references/lanes/authoring-lane.md"
+            assert record["procedure"] == "references/lanes/generation-lane.md"
             assert record["standards"].startswith("references/standards/")
 
 

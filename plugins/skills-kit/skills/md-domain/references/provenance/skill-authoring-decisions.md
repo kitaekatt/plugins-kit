@@ -854,27 +854,38 @@ claude_md:
         reviews already rejected; see coverage-lane.md and CV-8 in
         coverage-standards.md.
 
-        KNOWN UNRESOLVED COLLISION -- "generated" is already occupied, in the
-        OPPOSITE sense. cohesion-principles.md defines the per-artifact role
-        `generated_artifact` as machine-emitted and NOT hand-maintained: the
-        authored-doc placement and audit rules do not apply to it, and review of it
-        belongs on its generator. The code-review kits carry the same sense in the
-        bundle fields `generated_files` / `generated_axis` / `generated_signature`
-        and the `--review-generated` flag. A CLAUDE.md this framework calls
-        "generated" is the exact opposite: hand-maintained, load-bearing, and
-        reviewed.
+        KNOWN COLLISION (RESOLVED) -- "generated" was already occupied, in the
+        OPPOSITE sense. cohesion-principles.md defined the per-artifact role
+        `generated_artifact` (now `machine_emitted_artifact`) as machine-emitted and
+        NOT hand-maintained: the authored-doc placement and audit rules do not apply
+        to it, and review of it belongs on its generator. The code-review kits
+        carried the same sense in the bundle fields `generated_files` /
+        `generated_axis` / `generated_signature` (now `machine_emitted_files` /
+        `machine_emitted_axis` / `machine_emitted_signature`) and the
+        `--review-generated` flag (now `--review-machine-emitted`). A CLAUDE.md this
+        framework calls "generated" is the exact opposite: hand-maintained,
+        load-bearing, and reviewed. The chosen qualifier for the machine-emitted
+        sense is `machine_emitted` (snake_case) / `machine-emitted` (kebab and
+        prose).
 
         Resolution DIRECTION (ratified): the verb wins. "Generation" is the primary
         verb of the framework, so the narrower term is the one that should yield --
         the machine-emitted sense is what gets a qualifier, not the verb.
 
-        The RENAME ITSELF IS UNDECIDED and out of scope. Nothing has been renamed on
-        the strength of this record: the verb token stays `author`, the lane ids stay
-        `author_*`, the artifact role stays `generated_artifact`, and the bundle
-        fields and CLI flag are untouched. Those are contract surface across three
-        plugins and each needs its own decision plus its own golden-corpus
-        re-record, per contracts_preserved_verbatim_through_the_fold. Until then,
-        read this record as the definition of the WORDS, not as a pending rename.
+        THE RENAME WAS RATIFIED on 2026-08-10 and executed. The verb token and lane
+        ids became `generate` / `generate_*` (formerly `author` / `author_*`), the
+        bound procedure became `generation-lane.md` (formerly `authoring-lane.md`),
+        and the machine-emitted sense took the `machine_emitted*` qualifier across
+        `cohesion-principles.md` and the code-review bundle (formerly
+        `generated_artifact`, `generated_files`, `generated_axis`,
+        `generated_signature`, `--review-generated`). Two things deliberately did NOT
+        move: `"kind": "md_audit"` (persisted consumer ledger state -- a
+        backward-compatible migration is specified separately as optional and not
+        part of this sweep) and `references/audit-framework.{md,yaml}` (a
+        cross-plugin path API consumed by literal path from awesome-kit and
+        prototypes). Read this record as the definition of the WORDS and the record
+        of the rename that executed them, per
+        contracts_preserved_verbatim_through_the_fold.
       origin: |
         Surface: a terminology audit of md-domain, git-code-review and p4-code-review
         against the owner's framework (2026-08-09) found the vocabulary stated

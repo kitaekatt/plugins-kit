@@ -147,7 +147,7 @@ technique_skill:
 ## Integration Points
 
 - **knowledge-encoding** (in plugins-kit:skills-kit) - For deeper analysis of where insights should live in the project structure
-- **md-domain** (in plugins-kit:skills-kit) - If recommendations include authoring a new skill (`/md-domain author skill`) or a CLAUDE.md (`/md-domain author claude-md`)
+- **md-domain** (in plugins-kit:skills-kit) - If recommendations include generating a new skill (`/md-domain generate skill`) or a CLAUDE.md (`/md-domain generate claude-md`)
 - **content-authoring** (an md-domain reference, `plugins/skills-kit/skills/md-domain/references/authoring-patterns/content-authoring.md`) - For how a recommended doc update should be shaped
 - **md-domain standards** (`plugins/skills-kit/skills/md-domain/references/standards/`) - SSOT for the per-artifact size and hygiene thresholds referenced by steps 3-4
 
