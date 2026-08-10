@@ -29,6 +29,18 @@ staged=$(git diff --cached --name-only)
 names=$(printf '%s\n' "$staged" | sed -n 's|^plugins/\([^/][^/]*\)/.*|\1|p' | sort -u)
 [ -n "$names" ] || exit 0
 
+# Version stated by a staged (index) file. Reads the index, not the worktree,
+# because the index is what the commit will actually contain.
+staged_pyproject_version() {
+    git show ":plugins/$1/pyproject.toml" 2>/dev/null \
+        | sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+}
+
+staged_plugin_json_version() {
+    git show ":plugins/$1/.claude-plugin/plugin.json" 2>/dev/null \
+        | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+}
+
 missing=""
 for name in $names; do
     pj="plugins/$name/.claude-plugin/plugin.json"
@@ -37,6 +49,35 @@ for name in $names; do
     if git diff --cached -U0 -- "$pj" | grep -Eq '^[+-].*"version"[[:space:]]*:'; then
         continue
     fi
+
+    # Pure pyproject version sync: nothing to bump, so requiring a bump here is
+    # a false positive -- and a deadlock. check_pyproject_sync.py (same
+    # pre-commit chain) blocks any commit whose pyproject.toml states a version
+    # disagreeing with the authoritative plugin.json, and instructs you to "set
+    # each pyproject.toml version equal to it and stage the result". Staging
+    # exactly that result is a change under plugins/<name>/ with no version
+    # CHANGE in plugin.json, which this gate then rejected -- so the sanctioned
+    # fix for one gate was unlandable through the other. The historical cost was
+    # real: a8ad064 needed the escape hatch, and c4a7c1b burned unreal-kit
+    # 0.11.7 + bootstrap 0.77.3 on a no-op re-bump to satisfy a check that had
+    # nothing to catch.
+    #
+    # Deliberately narrow, so this cannot mask a real code change: the ONLY
+    # staged path under plugins/<name>/ must be its pyproject.toml, and the
+    # version it now states must already equal the authoritative plugin.json.
+    # Anything else -- a code file alongside it, or a pyproject stating a
+    # version plugin.json does not -- still requires a bump. If either version
+    # fails to parse the result is empty and we fall through to blocking, so the
+    # failure direction stays conservative.
+    staged_here=$(printf '%s\n' "$staged" | grep -E "^plugins/$name/" || true)
+    if [ "$staged_here" = "plugins/$name/pyproject.toml" ]; then
+        py_version=$(staged_pyproject_version "$name")
+        pj_version=$(staged_plugin_json_version "$name")
+        if [ -n "$py_version" ] && [ "$py_version" = "$pj_version" ]; then
+            continue
+        fi
+    fi
+
     missing="$missing $name"
 done
 
