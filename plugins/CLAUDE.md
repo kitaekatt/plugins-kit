@@ -27,6 +27,29 @@ shared lib is therefore importable ONLY under the provisioned venv -- a
 uv-managed venv (`uv run`) or a bare `python` builds a different environment
 that has no such `.pth`, so the import fails there.
 
+### Why shared libs rather than published packages
+
+Sharing SOURCE at a stable path and linking it with a `.pth` is deliberate, not
+a workaround for lacking an index. Every consumer is in-fleet, so one publish of
+the OWNING plugin updates the source every consumer resolves -- no version bump,
+no dependency constraint, no reinstall anywhere. The cost is the other side of
+that same coin: consumers cannot pin, so a breaking change to a shared lib
+reaches all of them at once.
+
+The venv-scoping above is the ordinary consequence of a per-venv install rather
+than fragility -- a `.pth` written into one environment no more appears in
+another than a `pip install` does. The re-exec rule below is how a script
+satisfies that precondition itself instead of pushing it onto its caller.
+
+**The source is shared; third-party dependencies are not.** A plugin that
+imports a shared lib declares that lib's third-party requirements in its OWN
+`pyproject.toml` -- a consumer driving `llm_scripting_kit`'s OpenRouter path
+declares `openai` itself. One shared lib is linked into several independently
+provisioned venvs, so shipping its pins with it would impose a single resolution
+on every consumer, and a consumer using only the paths that need no SDK would
+install one anyway. `tests/bootstrap/test_dependency_completeness.py` catches an
+omission.
+
 ### Shared-lib scripts must re-exec under the plugin venv
 
 **Rule:** a standalone script that hard-imports a bootstrap shared lib (e.g.
