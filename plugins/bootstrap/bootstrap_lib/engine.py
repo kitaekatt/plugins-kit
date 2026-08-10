@@ -763,12 +763,25 @@ def _main():
         bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in pv_ok)
         all_failures.extend(pv_failures)
 
+    # Step 3d2: Process project_npm from layered manifest (needs --project-dir).
+    # After project_venv for the same reason project_venv sits where it does:
+    # tools/path have already run, so npm (installed by the tools phase on a
+    # fresh machine) resolves here even when this session's PATH was inherited
+    # without it.
+    project_npm_def = layered_manifest.get("project_npm") if layered_manifest else None
+    if project_npm_def and args.project_dir:
+        pn_action, pn_ok, pn_failures = _process_project_npm(
+            project_npm_def, args.project_dir)
+        bootstrap_action_entries.extend(_reprefix(e, "config: ") for e in pn_action)
+        bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in pn_ok)
+        all_failures.extend(pn_failures)
+
     # Step 3e: Process the layered env.json manifest (identity-bearing
     # personalization; bootstrap-env-refactor spec 4.4). Placement is
     # load-bearing: immediately AFTER the layered bootstrap.json manifest
-    # (env_vars -> tools -> fonts -> path -> project_venv have all run, so
-    # every variable and binary a personalization entry references already
-    # exists) and BEFORE plugin manifests (Step 4). Gated by the
+    # (env_vars -> tools -> fonts -> path -> project_venv -> project_npm have
+    # all run, so every variable and binary a personalization entry references
+    # already exists) and BEFORE plugin manifests (Step 4). Gated by the
     # env_state.json stamp -- see _process_env_pass. env.json failures never
     # affect the bootstrap.json phases above: software still provisions;
     # personalization refuses to guess.
@@ -3058,6 +3071,77 @@ def _process_project_venv(venv_def, project_dir):
         plugin_name="config", failure_type="project_venv", failure_plugin="config",
         extras=venv_def.get("extras", []), export_env_var=False,
     )
+
+    return action_entries, ok_entries, failures
+
+
+def _process_project_npm(npm_def, project_dir):
+    """Process project_npm: ensure the project's own node_modules is ready.
+
+    The Node sibling of _process_project_venv. By default the target is the
+    project root (<project_dir>/package.json -> <project_dir>/node_modules); an
+    optional 'subdir' names a project-relative subdirectory that becomes the
+    npm working directory instead, for repos whose Node package is not at the
+    root. Subdir validation is identical to project_venv's: absolute, or
+    resolving outside project_dir, is a descriptive failure (fail fast; no
+    fallback to the root).
+
+    Guards inside npm_check SKIP rather than fail (no package.json, another
+    package manager owns the tree, npm not installed) -- those are logged as
+    ok, since a project that does not use npm is not a broken project.
+
+    Args:
+        npm_def: Dict with optional 'subdir' (str) and 'ignore_scripts' (bool).
+        project_dir: Absolute path to the project root.
+
+    Returns:
+        (action_entries, ok_entries, failures) tuple.
+    """
+    from .npm_check import ensure_node_modules
+
+    action_entries = []
+    ok_entries = []
+    failures = []
+
+    target_dir = project_dir
+    subdir = npm_def.get("subdir")
+    if subdir:
+        root = os.path.abspath(project_dir)
+        resolved = os.path.abspath(os.path.join(root, subdir))
+        if os.path.isabs(subdir) or not (
+            resolved == root or resolved.startswith(root + os.sep)
+        ):
+            msg = (
+                f"subdir {subdir!r} must be a relative path inside the project "
+                f"(it resolves to {resolved}, outside {root})"
+            )
+            action_entries.append(f"project_npm: FAILED - {msg}")
+            failures.append({
+                "type": "project_npm",
+                "message": msg,
+                # No remediation_cmd: a malformed manifest is not something a
+                # command can fix, so this routes to ASK rather than AUTO
+                # (see _auto_fixable_now).
+                "remediation_cmd": None,
+                "plugin": "config",
+            })
+            return action_entries, ok_entries, failures
+        target_dir = resolved
+
+    result, npm_entries = ensure_node_modules(
+        target_dir, ignore_scripts=bool(npm_def.get("ignore_scripts", False)),
+    )
+    action_entries.extend(f"project_npm: {e}" for e in npm_entries)
+    if result.passed:
+        ok_entries.append(f"project_npm: ok - {result.message}")
+    else:
+        action_entries.append(f"project_npm: FAILED - {result.message}")
+        failures.append({
+            "type": "project_npm",
+            "message": result.message,
+            "remediation_cmd": result.remediation_cmd,
+            "plugin": "config",
+        })
 
     return action_entries, ok_entries, failures
 

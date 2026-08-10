@@ -491,6 +491,156 @@ class TestLayeredManifests:
         with open(os.path.join(data_dir, "bootstrap.log")) as f:
             assert "project_venv: ok" in f.read()
 
+    # --- project_npm (the Node sibling of project_venv) -------------------
+    # No test here may run a real npm install: these run on Windows CI too.
+    # Either the phase is driven into a guard/skip, or node_modules is faked
+    # into a fresh state so nothing spawns.
+
+    @staticmethod
+    def _fake_npm_project(project_dir, deps=True, installed=True, lockfile=True):
+        """A project dir whose node_modules already looks freshly installed."""
+        os.makedirs(project_dir, exist_ok=True)
+        pkg = {"name": "proj", "version": "1.0.0"}
+        if deps:
+            pkg["dependencies"] = {"leftpad": "0.0.1"}
+        with open(os.path.join(project_dir, "package.json"), "w") as f:
+            json.dump(pkg, f)
+        if lockfile:
+            lock = os.path.join(project_dir, "package-lock.json")
+            with open(lock, "w") as f:
+                f.write("{}")
+            os.utime(lock, (1000, 1000))
+        if installed:
+            hidden_dir = os.path.join(project_dir, "node_modules")
+            os.makedirs(hidden_dir, exist_ok=True)
+            hidden = os.path.join(hidden_dir, ".package-lock.json")
+            with open(hidden, "w") as f:
+                f.write("{}")
+            os.utime(hidden, (2000, 2000))
+        return project_dir
+
+    def test_project_npm_subdir_escape_rejected(self, tmp_path, monkeypatch):
+        """A subdir resolving outside the project is a descriptive failure --
+        no npm work runs (fail fast, no fallback to the root)."""
+        import bootstrap_lib.engine as engine
+        import bootstrap_lib.npm_check as npm_check
+        monkeypatch.setattr(npm_check, "ensure_node_modules",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("npm work must not run for an escaping subdir")))
+        project_dir = str(tmp_path / "project")
+        os.makedirs(project_dir)
+
+        actions, oks, failures = engine._process_project_npm(
+            {"subdir": "../outside"}, project_dir)
+        assert len(failures) == 1
+        assert failures[0]["type"] == "project_npm"
+        assert failures[0]["remediation_cmd"] is None  # routes to ASK, not AUTO
+        assert "subdir" in failures[0]["message"]
+        assert "../outside" in failures[0]["message"]
+        assert any("FAILED" in a for a in actions)
+        assert oks == []
+
+    def test_project_npm_subdir_absolute_rejected(self, tmp_path, monkeypatch):
+        """An absolute subdir is a descriptive failure -- subdir must be
+        project-relative."""
+        import bootstrap_lib.engine as engine
+        import bootstrap_lib.npm_check as npm_check
+        monkeypatch.setattr(npm_check, "ensure_node_modules",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("npm work must not run for an absolute subdir")))
+        project_dir = str(tmp_path / "project")
+        os.makedirs(project_dir)
+        abs_subdir = str(tmp_path / "elsewhere")
+
+        actions, oks, failures = engine._process_project_npm(
+            {"subdir": abs_subdir}, project_dir)
+        assert len(failures) == 1
+        assert failures[0]["type"] == "project_npm"
+        assert "subdir" in failures[0]["message"]
+        assert any("FAILED" in a for a in actions)
+
+    def test_project_npm_skips_without_package_json(self, tmp_path):
+        """A project with no package.json is skipped, not failed."""
+        import bootstrap_lib.engine as engine
+        project_dir = str(tmp_path / "project")
+        os.makedirs(project_dir)
+
+        actions, oks, failures = engine._process_project_npm({}, project_dir)
+        assert failures == []
+        assert any("no package.json" in o for o in oks)
+
+    def test_project_npm_skips_when_another_manager_owns_the_tree(self, tmp_path):
+        """yarn/pnpm/bun trees are skipped: npm reads yarn.lock and would
+        write a competing package-lock.json."""
+        import bootstrap_lib.engine as engine
+        project_dir = self._fake_npm_project(
+            str(tmp_path / "project"), installed=False, lockfile=False)
+        with open(os.path.join(project_dir, "yarn.lock"), "w") as f:
+            f.write("")
+
+        actions, oks, failures = engine._process_project_npm({}, project_dir)
+        assert failures == []
+        assert any("yarn" in o for o in oks)
+        assert not os.path.exists(os.path.join(project_dir, "package-lock.json"))
+
+    def test_project_npm_subdir_targets_subdir(self, tmp_path):
+        """subdir moves the npm working directory; the root is untouched."""
+        import bootstrap_lib.engine as engine
+        project_dir = str(tmp_path / "project")
+        self._fake_npm_project(os.path.join(project_dir, "web"))
+
+        actions, oks, failures = engine._process_project_npm(
+            {"subdir": "web"}, project_dir)
+        assert failures == []
+        assert any("up to date" in o for o in oks)
+
+    def test_project_npm_fresh_reports_ok(self, data_dir, tmp_path):
+        """End to end: an already-current node_modules reports ok and spawns
+        no npm (a stale tree would, which is why the fixture is fresh)."""
+        fake_root = make_minimal_root(tmp_path)
+        fake_home = str(tmp_path / "fakehome")
+        claude_dir = os.path.join(fake_home, ".claude")
+        os.makedirs(claude_dir)
+
+        project_dir = self._fake_npm_project(str(tmp_path / "project"))
+
+        with open(os.path.join(claude_dir, "bootstrap.json"), "w") as f:
+            json.dump({"project_npm": {"subdir": "."}}, f)
+
+        config_path = os.path.join(data_dir, "config.json")
+        with open(config_path, "w") as f:
+            json.dump({"schema_version": 5, "log_success_checks": True}, f)
+
+        result = run_engine(
+            data_dir, plugin_root=fake_root, project_dir=project_dir,
+            env_override={"HOME": fake_home},
+        )
+        assert result.returncode == 0
+        with open(os.path.join(data_dir, "bootstrap.log")) as f:
+            assert "project_npm: ok" in f.read()
+
+    def test_project_npm_skipped_without_project_dir(self, data_dir, tmp_path):
+        """project_npm is silently skipped when --project-dir is not provided."""
+        fake_root = make_minimal_root(tmp_path)
+        fake_home = str(tmp_path / "fakehome")
+        claude_dir = os.path.join(fake_home, ".claude")
+        os.makedirs(claude_dir)
+
+        with open(os.path.join(claude_dir, "bootstrap.json"), "w") as f:
+            json.dump({"project_npm": {}}, f)
+
+        config_path = os.path.join(data_dir, "config.json")
+        with open(config_path, "w") as f:
+            json.dump({"schema_version": 5, "log_success_checks": True}, f)
+
+        # No --project-dir
+        result = run_engine(data_dir, plugin_root=fake_root, env_override={"HOME": fake_home})
+        assert result.returncode == 0
+        if result.stdout.strip():
+            response = json.loads(result.stdout)
+            msg = response.get("systemMessage", "")
+            assert "project_npm" not in msg
+
     def test_priority_project_local_wins(self, data_dir, tmp_path):
         """Project-local bootstrap.local.json has highest priority for field overrides."""
         fake_root = make_minimal_root(tmp_path)

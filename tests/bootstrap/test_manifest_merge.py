@@ -218,6 +218,40 @@ class TestProjectVenvMerge:
         assert result["tools"] == [{"name": "git"}]
 
 
+class TestProjectNpmMerge:
+    def test_project_npm_deep_merge(self):
+        """project_npm from two layers is deep-merged (override wins for conflicts)."""
+        base = {"project_npm": {"subdir": "web", "ignore_scripts": False}}
+        override = {"project_npm": {"subdir": "app", "ignore_scripts": True}}
+        result = merge_manifests(base, override)
+        assert result["project_npm"]["subdir"] == "app"
+        assert result["project_npm"]["ignore_scripts"] is True
+
+    def test_project_npm_additive_keys(self):
+        """project_npm keys from base are preserved when override adds new keys."""
+        base = {"project_npm": {"subdir": "web"}}
+        override = {"project_npm": {"ignore_scripts": True}}
+        result = merge_manifests(base, override)
+        assert result["project_npm"]["subdir"] == "web"
+        assert result["project_npm"]["ignore_scripts"] is True
+
+    def test_project_npm_only_in_one_layer(self):
+        """project_npm in only one layer is passed through."""
+        base = {"tools": [{"name": "git"}]}
+        override = {"project_npm": {"subdir": "."}}
+        result = merge_manifests(base, override)
+        assert result["project_npm"] == {"subdir": "."}
+        assert result["tools"] == [{"name": "git"}]
+
+    def test_project_npm_and_project_venv_coexist(self):
+        """The two project-scoped phases are independent keys, not rivals."""
+        base = {"project_venv": {"extras": ["dev"]}}
+        override = {"project_npm": {"subdir": "web"}}
+        result = merge_manifests(base, override)
+        assert result["project_venv"] == {"extras": ["dev"]}
+        assert result["project_npm"] == {"subdir": "web"}
+
+
 class TestMultiLayerMerge:
     def test_three_layer_merge(self):
         """Simulates user → user.local → project merge."""
