@@ -27,6 +27,8 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
 from typing import List, Optional, Tuple
 
 from .result import Result
@@ -103,23 +105,49 @@ def find_npm_lockfile(project_dir: str) -> Optional[str]:
     return None
 
 
-def detect_other_manager(project_dir: str) -> Optional[str]:
+def detect_other_manager(project_dir: str,
+                         root: Optional[str] = None) -> Optional[str]:
     """Name the non-npm package manager that owns this tree, if any.
 
     Reads both the competing lockfiles and package.json's ``packageManager``
     field (corepack's declaration).
-    """
-    for name, manager in _COMPETING_LOCKFILES:
-        if os.path.isfile(os.path.join(project_dir, name)):
-            return manager
 
-    declared = _read_package_json(project_dir).get("packageManager")
-    if isinstance(declared, str) and declared.strip():
-        # "pnpm@8.6.0" / "yarn@4.1.0+sha224...."
-        manager = declared.strip().split("@", 1)[0].strip()
-        if manager and manager != "npm":
-            return manager
-    return None
+    The search WALKS UP from ``project_dir`` to ``root`` (the project root,
+    inclusive) rather than stopping at the first directory. That is required,
+    not defensive: in a pnpm or yarn workspace the lockfile exists ONLY at the
+    repo root and a workspace package's own package.json carries no
+    ``packageManager`` field, so a ``subdir`` pointed at a workspace package
+    would see neither signal, and npm would then write the competing
+    package-lock.json this guard exists to prevent. Walking up is also how npm
+    itself resolves a workspace, so the two agree about which tree is in play.
+
+    ``root`` defaults to ``project_dir`` (no walk), which keeps the single-
+    directory behaviour for callers that have no separate project root.
+    """
+    root = os.path.abspath(root or project_dir)
+    current = os.path.abspath(project_dir)
+
+    while True:
+        for name, manager in _COMPETING_LOCKFILES:
+            if os.path.isfile(os.path.join(current, name)):
+                return manager
+
+        declared = _read_package_json(current).get("packageManager")
+        if isinstance(declared, str) and declared.strip():
+            # "pnpm@8.6.0" / "yarn@4.1.0+sha224...."
+            manager = declared.strip().split("@", 1)[0].strip()
+            if manager and manager != "npm":
+                return manager
+
+        if current == root:
+            return None
+        parent = os.path.dirname(current)
+        if parent == current:
+            # Filesystem root reached without meeting `root` -- only possible
+            # if project_dir is not under root, which the caller's containment
+            # guard already rejects. Stop rather than loop.
+            return None
+        current = parent
 
 
 def _read_package_json(project_dir: str) -> dict:
@@ -197,6 +225,46 @@ def check_node_modules(project_dir: str) -> Result:
     )
 
 
+def _kill_process_tree(proc: "subprocess.Popen") -> None:
+    """Best-effort termination of the npm process AND its descendants.
+
+    ``Popen.kill`` ends only the direct child -- on Windows that is the
+    ``npm.cmd`` shim, whose ``node`` and lifecycle-script grandchildren survive
+    it. They are not merely leaked: a survivor that inherited the output handle
+    keeps it open, which is what makes an unbounded drain hang. Killing the
+    tree is therefore part of honouring the timeout, not tidiness.
+
+    Every failure here is swallowed: this runs on the timeout path, where the
+    caller already has a real error to report and a secondary one would only
+    mask it.
+    """
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+            )
+        except (subprocess.SubprocessError, OSError):
+            pass
+    else:
+        try:
+            os.killpg(os.getpgid(proc.pid), 9)
+        except (OSError, PermissionError):
+            pass
+
+    try:
+        proc.kill()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=30)
+    except (subprocess.SubprocessError, OSError):
+        pass
+
+
 def _npm_warnings(output: str) -> List[str]:
     """Advisory npm lines worth surfacing even on a successful install.
 
@@ -227,7 +295,8 @@ def _is_ci_out_of_sync(output: str) -> bool:
 
 
 def ensure_node_modules(project_dir: str,
-                        ignore_scripts: bool = False) -> Tuple[Result, List[str]]:
+                        ignore_scripts: bool = False,
+                        root: Optional[str] = None) -> Tuple[Result, List[str]]:
     """Check node_modules and remediate via npm: check -> npm -> re-check.
 
     Guards (each SKIPS the phase rather than failing it -- a project that does
@@ -244,6 +313,11 @@ def ensure_node_modules(project_dir: str,
             SILENTLY (exit 0, subtly broken tree), which is worse than an
             honest failure. The manifest opt-in exists for users who
             specifically want it.
+        root: Project root, the boundary for the competing-package-manager
+            walk-up. Defaults to ``project_dir``. Pass the real project root
+            whenever ``project_dir`` is a subdir, or a pnpm/yarn workspace
+            package will not be recognised as one -- its lockfile lives at the
+            root, not beside it.
 
     Returns:
         (result, entries): the final Result, plus UNPREFIXED action messages.
@@ -262,8 +336,9 @@ def ensure_node_modules(project_dir: str,
             node_modules=node_modules,
         ), entries
 
-    # Guard 2: another package manager owns this tree.
-    other = detect_other_manager(project_dir)
+    # Guard 2: another package manager owns this tree (checked up to the
+    # project root, so a workspace package sees its root's lockfile).
+    other = detect_other_manager(project_dir, root=root)
     if other:
         return _npm_result(
             passed=True,
@@ -294,31 +369,55 @@ def ensure_node_modules(project_dir: str,
     entries.append(f"not ready, running `npm {sub}` in {project_dir}")
 
     env = dict(os.environ, CI="1", NO_COLOR="1", npm_config_yes="true")
+
+    # Output goes to a temp FILE, never a PIPE, and that is load-bearing on the
+    # timeout path. With a pipe, CPython's own timeout handling deadlocks here:
+    # subprocess.run kills the direct child and then, on Windows, calls
+    # communicate() with NO timeout (Lib/subprocess.py, the `if _mswindows`
+    # branch of run's TimeoutExpired handler). kill() ends only the npm.cmd
+    # shim, so a surviving node/postinstall grandchild still holds the pipe's
+    # write handle, the reader never sees EOF, and that unbounded communicate()
+    # hangs the SessionStart hook forever instead of reporting the timeout. A
+    # file has no such reader, so the wait is genuinely bounded.
     try:
-        proc = subprocess.run(
-            argv,
-            cwd=project_dir,
-            shell=False,
-            # DEVNULL, not just "npm does not prompt": a postinstall lifecycle
-            # script is arbitrary third-party code, and this runs from a
-            # SessionStart hook where a blocked read would hang the session.
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-            timeout=NPM_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        entries.append(f"npm {sub} timed out after {NPM_TIMEOUT}s in {project_dir}")
-        return _npm_result(
-            passed=False,
-            message=f"npm {sub} timed out after {NPM_TIMEOUT}s",
-            node_modules=node_modules,
-            remediation_cmd=npm_cmd,
-        ), entries
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8",
+                                    errors="replace") as out:
+            popen_kwargs = {}
+            if sys.platform != "win32":
+                # Own process group, so the whole tree can be signalled.
+                popen_kwargs["start_new_session"] = True
+            proc = subprocess.Popen(
+                argv,
+                cwd=project_dir,
+                shell=False,
+                # DEVNULL, not just "npm does not prompt": a postinstall
+                # lifecycle script is arbitrary third-party code, and this runs
+                # from a SessionStart hook where a blocked read would hang the
+                # session.
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                env=env,
+                **popen_kwargs,
+            )
+            try:
+                returncode = proc.wait(timeout=NPM_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                _kill_process_tree(proc)
+                out.seek(0)
+                partial = out.read().strip()
+                entries.append(
+                    f"npm {sub} timed out after {NPM_TIMEOUT}s in "
+                    f"{project_dir}: {partial}"
+                )
+                return _npm_result(
+                    passed=False,
+                    message=f"npm {sub} timed out after {NPM_TIMEOUT}s",
+                    node_modules=node_modules,
+                    remediation_cmd=npm_cmd,
+                ), entries
+            out.seek(0)
+            output = out.read().strip()
     except (subprocess.SubprocessError, OSError) as exc:
         entries.append(f"npm {sub} error: {exc}")
         return _npm_result(
@@ -328,15 +427,13 @@ def ensure_node_modules(project_dir: str,
             remediation_cmd=npm_cmd,
         ), entries
 
-    output = (proc.stdout or "").strip()
-
     # Advisory lines are surfaced even on success -- see _npm_warnings.
     for warning in _npm_warnings(output):
         entries.append(f"npm {sub}: {warning}")
 
     # Exit codes are NOT reliably 1: npm has been observed returning raw libuv
     # errnos (-4058 for ENOENT). Branch on zero vs non-zero only.
-    if proc.returncode != 0:
+    if returncode != 0:
         if sub == "ci" and _is_ci_out_of_sync(output):
             # Deliberately NO fallback to `npm install`. Falling back would let
             # a background SessionStart hook rewrite the user's tracked
@@ -354,7 +451,7 @@ def ensure_node_modules(project_dir: str,
 
         code = _npm_error_code(output)
         code_part = f" [{code}]" if code else ""
-        msg = f"npm {sub} failed (exit {proc.returncode}){code_part} in {project_dir}"
+        msg = f"npm {sub} failed (exit {returncode}){code_part} in {project_dir}"
         # The FULL captured output, as with uv sync: the line that explains the
         # failure is routinely well past any fixed cut, and the entry is the
         # only copy. Shortening is the display layer's job.

@@ -3130,6 +3130,11 @@ def _process_project_npm(npm_def, project_dir):
 
     result, npm_entries = ensure_node_modules(
         target_dir, ignore_scripts=bool(npm_def.get("ignore_scripts", False)),
+        # The walk-up boundary for the competing-package-manager guard. Without
+        # it a `subdir` pointed at a workspace package in a pnpm/yarn monorepo
+        # would never see the root lockfile, and npm would write a competing
+        # package-lock.json into a tree pnpm/yarn owns.
+        root=project_dir,
     )
     action_entries.extend(f"project_npm: {e}" for e in npm_entries)
     if result.passed:
