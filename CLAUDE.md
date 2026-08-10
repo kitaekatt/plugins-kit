@@ -1063,6 +1063,31 @@ claude_md:
         temp output file around the call rather than parsing stdout.
       origin: "2026-08-10 -- rename performed while adding CodexCliBackend alongside ClaudeCliBackend."
       added: "2026-08-10"
+    - id: stale_editable_self_install
+      keywords: [editable install, __editable__ pth, venv runs old code, stale pth, plugin version change, silently old release, site-packages, venv_check, own package not shared lib]
+      summary: A plugin venv's editable self-install .pth is never re-pointed when the plugin version changes, so a plugin's OWN venv can silently execute code from a previous release. Unfixed.
+      detail: |
+        Every plugin with a pyproject.toml gets an `__editable__.<name>-<ver>.pth`
+        in its provisioned venv. That file hard-codes the plugin CACHE directory
+        present when the venv was first created; nothing re-points it on a version
+        change, and the old cache dir still exists, so the import succeeds and
+        silently resolves old code. Observed simultaneously on one machine:
+        content-pipeline-kit pinned 0.6.0 while running 0.6.6, llm-scripting-kit
+        0.6.1 while running 0.7.0, skills-kit 0.35.0 while running 0.44.1.
+        Two .pth shapes exist and may not be equally affected -- a direct path
+        (content-pipeline-kit, llm-scripting-kit, p4-kit) versus a finder import
+        (bootstrap, skills-kit) -- so establish which before designing a fix.
+        SHARED LIBS ARE NOT AFFECTED, which is why this hid for so long: a
+        shared-lib .pth does `sys.path.insert(0, ...)` and outranks the editable,
+        which merely appends. A plugin's OWN package has no shared-lib entry in
+        its own venv, so nothing outranks the stale editable there. The tell is a
+        post-publish smoke test that only passes when you shadow the installed
+        copy with the dev tree -- that is the defect, not a test-rig quirk.
+        Do NOT clear a stale .pth by hand: it fixes one box, converges nobody, and
+        destroys the evidence (never_hand_repair_a_wedge). The fix belongs in
+        bootstrap's venv provisioning.
+      origin: "2026-08-10 -- found while verifying that a published bootstrap_lib.codex resolved from the INSTALLED copy; llm-scripting-kit's own venv was resolving a 0.6.1 tree in a different repo clone."
+      added: "2026-08-10"
   conventions:
     - rule: Commit and push to dev freely without asking; only a PUBLISH (dev -> master) needs the user. Do not coordinate around other agent sessions' concurrent work.
       keywords: [commit freely, push freely, no permission, dev branch, only publishes gated, other agents, concurrent sessions, shared tree, git commit -- paths]
