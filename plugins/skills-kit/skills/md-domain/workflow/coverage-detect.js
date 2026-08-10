@@ -30,7 +30,8 @@
 //                 codeFiles: string[],
 //                 ambientClaudeMdPaths: string[],   // root-most first; MAY be empty
 //                 rootExclusion: string|null,
-//                 skipped: [ { path: string, reason: string } ] } ],
+//                 skipped: [ { path: string, reason: string } ],
+//                 unknownExtensions: { [ext: string]: number } } ],
 //     (all produced by scripts/discover_coverage.py, which is side-effect free and
 //     reads no file contents. Do NOT recompute the ambient chain here: the chain
 //     INCLUDES a CLAUDE.md at the subtree root, and its upward walk stops at the
@@ -239,21 +240,52 @@ COMPLIANT while its subtree is GAPS-FOUND at the same moment.
 Return the structured object.`
 }
 
+// Structural refusal (never let a discovery failure read as a clean pass).
+// `codeFiles` empty AND `unknownExtensions` non-empty means the subtree was
+// never READ -- nothing in it matched a known code, doc, or asset type -- not
+// that it was verified clean. Letting that reach the agent risks a
+// COVERAGE-ASSESSED verdict ("verified absent") over a subtree nobody looked
+// at, so this subject never gets an agent dispatch at all: it is decided here,
+// mechanically, before any tokens are spent.
+const hasUnknownExtensions = (s) =>
+  s.unknownExtensions && Object.keys(s.unknownExtensions).length > 0
+const hasNoCodeFiles = (s) => !Array.isArray(s.codeFiles) || s.codeFiles.length === 0
+
+const discoveryFailure = (s) => {
+  const entries = Object.entries(s.unknownExtensions)
+    .map(([ext, count]) => `${ext || '(no extension)'}: ${count}`)
+    .join(', ')
+  return {
+    root: s.root,
+    candidates: [],
+    verdict: 'DISCOVERY-FAILED',
+    ceilingReached: false,
+    notes: [
+      `discovery failure: 0 recognized code files but unrecognized extensions ` +
+      `present (${entries}) -- CODE_DATA_EXT does not cover them, so this ` +
+      `subtree was never read. This is NOT COVERAGE-ASSESSED.`,
+    ],
+  }
+}
+
 phase('Coverage')
-const perSubject = await parallel(subjects.map((s) => () =>
+const perSubject = await parallel(subjects.map((s) => () => {
+  if (hasNoCodeFiles(s) && hasUnknownExtensions(s)) {
+    return Promise.resolve(discoveryFailure(s))
+  }
   // Detection is this verb's judgment core, so the tier is pinned rather than
   // inherited. This matters more here than in the document lanes: a coverage run
   // normally has exactly ONE subject, and the audit lane's single-subject
   // shortcut runs inline at whatever model the session happens to be on. Going
   // through the workflow regardless of count is what keeps the common case on-pin.
-  agent(lanePrompt(s), {
+  return agent(lanePrompt(s), {
     label: `coverage:${String(s.root).split(/[\\/]/).pop()}`,
     phase: 'Coverage',
     model: 'opus',
     effort: 'high',
     schema: SUBJECT_FINDINGS_SCHEMA,
   }).then((r) => ({ ...r, root: s.root }))
-))
+}))
 
 // The verdict is DERIVED, never taken on trust. The schema can constrain the
 // verdict to two values but cannot express "GAPS-FOUND iff candidates is
@@ -262,6 +294,13 @@ const perSubject = await parallel(subjects.map((s) => () =>
 // states. Recomputing it here makes the rule true by construction.
 const results = perSubject.filter(Boolean).map((r) => {
   const candidates = r.candidates || []
+  // A DISCOVERY-FAILED subject never reached the agent, so there is nothing to
+  // derive or re-derive: it is passed through unchanged, and it must NOT fall
+  // into the candidates.length ? GAPS-FOUND : COVERAGE-ASSESSED derivation
+  // below -- that would turn "never read" into "verified absent" right here.
+  if (r.verdict === 'DISCOVERY-FAILED') {
+    return { ...r, candidates, depth }
+  }
   const derived = candidates.length ? 'GAPS-FOUND' : 'COVERAGE-ASSESSED'
   const notes = Array.isArray(r.notes) ? [...r.notes] : []
   if (r.verdict && r.verdict !== derived) {
@@ -302,6 +341,11 @@ const totals = results.reduce((acc, r) => {
   acc.unanchored += (r.candidates || []).filter((c) => !(c.anchors || []).length).length
   if (r.verdict === 'GAPS-FOUND') acc.gapsFound++
   if (r.verdict === 'COVERAGE-ASSESSED') acc.assessed++
+  // Counted apart from both verdicts, deliberately: DISCOVERY-FAILED is
+  // neither "gaps found" nor "assessed clean" -- it means the subtree could
+  // not be classified at all, and folding it into assessed would be exactly
+  // the fake pass this refusal exists to prevent.
+  if (r.verdict === 'DISCOVERY-FAILED') acc.discoveryFailed++
   if (r.ceilingReached) acc.ceilingReached++
   // Counted apart from the verdicts: a subtree nothing covers is the finding
   // this verb exists for, and folding it into gapsFound would hide it.
@@ -315,6 +359,7 @@ const totals = results.reduce((acc, r) => {
   unanchored: 0,
   gapsFound: 0,
   assessed: 0,
+  discoveryFailed: 0,
   ceilingReached: 0,
   uncovered: 0,
 })
@@ -335,10 +380,14 @@ const tierNote = totals.candidates
 const evidenceNote = totals.unanchored
   ? `, ${totals.unanchored} candidate(s) arrived with NO anchor -- CV-7 evidence floor breached`
   : ''
+const discoveryFailedNote = totals.discoveryFailed
+  ? `, ${totals.discoveryFailed} subtree(s) DISCOVERY-FAILED -- unrecognized ` +
+    `extensions with zero recognized code files, never read, not COVERAGE-ASSESSED`
+  : ''
 const uncoveredNote = totals.uncovered
   ? `, ${totals.uncovered} subtree(s) with NO ambient CLAUDE.md at all`
   : ''
 
-log(`Coverage (depth=${depth}): assessed ${results.length}/${subjects.length} subtree(s): ${totals.gapsFound} GAPS-FOUND, ${totals.assessed} COVERAGE-ASSESSED, ${totals.candidates} candidate(s)${tierNote}${severeNote}${evidenceNote}${uncoveredNote}${ceilingNote}. Advisory and non-idempotent: re-runs may differ, and nothing is applied.`)
+log(`Coverage (depth=${depth}): assessed ${results.length}/${subjects.length} subtree(s): ${totals.gapsFound} GAPS-FOUND, ${totals.assessed} COVERAGE-ASSESSED, ${totals.candidates} candidate(s)${tierNote}${severeNote}${evidenceNote}${uncoveredNote}${discoveryFailedNote}${ceilingNote}. Advisory and non-idempotent: re-runs may differ, and nothing is applied.`)
 
 return { perSubject: results, totals, ceiling, depth }

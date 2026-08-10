@@ -131,7 +131,7 @@ class TestWalkSubtree:
         _write(root / "util.py")
         _write(root / "README.md")
 
-        code_files, skipped, _ = cov.walk_subtree(root)
+        code_files, skipped, _, _ = cov.walk_subtree(root)
 
         assert {p.name for p in code_files} == {"main.c", "util.py"}
         assert skipped == []
@@ -142,7 +142,7 @@ class TestWalkSubtree:
         _write(root / "node_modules" / "dep.js")
         _write(root / "vendor" / "lib.c")
 
-        code_files, skipped, _ = cov.walk_subtree(root)
+        code_files, skipped, _, _ = cov.walk_subtree(root)
 
         assert {p.name for p in code_files} == {"main.c"}
         assert _reasons({"skipped": skipped}) == {cov.SKIP_VENDORED}
@@ -153,7 +153,7 @@ class TestWalkSubtree:
         _write(root / "main.c")
         _write(root / "generated" / "schema_pb2.py")
 
-        code_files, skipped, _ = cov.walk_subtree(root)
+        code_files, skipped, _, _ = cov.walk_subtree(root)
 
         assert {p.name for p in code_files} == {"main.c"}
         assert _reasons({"skipped": skipped}) == {cov.SKIP_GENERATED}
@@ -164,7 +164,7 @@ class TestWalkSubtree:
         _mkrepo(root / "submodule")
         _write(root / "submodule" / "inner.c")
 
-        code_files, skipped, _ = cov.walk_subtree(root)
+        code_files, skipped, _, _ = cov.walk_subtree(root)
 
         assert {p.name for p in code_files} == {"main.c"}
         assert _reasons({"skipped": skipped}) == {cov.SKIP_NESTED_REPO}
@@ -175,7 +175,7 @@ class TestWalkSubtree:
         _write(root / "__pycache__" / "main.cpython-312.pyc")
         _write(root / ".venv" / "lib.py")
 
-        code_files, skipped, noise = cov.walk_subtree(root)
+        code_files, skipped, noise, _ = cov.walk_subtree(root)
 
         assert {p.name for p in code_files} == {"main.c"}
         assert skipped == []
@@ -192,7 +192,7 @@ class TestWalkSubtree:
         monkeypatch.setattr(Path, "read_text", _explode)
         monkeypatch.setattr(Path, "read_bytes", _explode)
 
-        code_files, _, _ = cov.walk_subtree(root)
+        code_files, _, _, _ = cov.walk_subtree(root)
 
         assert {p.name for p in code_files} == {"main.c"}
 
@@ -208,7 +208,7 @@ class TestSymlinks:
         _write(root / "main.c")
         (root / "linked").symlink_to(outside, target_is_directory=True)
 
-        code_files, skipped, _ = cov.walk_subtree(root)
+        code_files, skipped, _, _ = cov.walk_subtree(root)
 
         assert {p.name for p in code_files} == {"main.c"}
         assert cov.SKIP_SYMLINK_OUT in _reasons({"skipped": skipped})
@@ -226,7 +226,7 @@ class TestSymlinks:
         (root / "loop_a").symlink_to(root / "loop_b", target_is_directory=True)
         (root / "loop_b").symlink_to(root / "loop_a", target_is_directory=True)
 
-        code_files, skipped, _ = cov.walk_subtree(root)
+        code_files, skipped, _, _ = cov.walk_subtree(root)
 
         assert "main.c" in {p.name for p in code_files}
         assert cov.SKIP_SYMLINK_OUT in _reasons({"skipped": skipped})
@@ -236,7 +236,7 @@ class TestSymlinks:
         _write(root / "real" / "kept.c")
         (root / "alias").symlink_to(root / "real", target_is_directory=True)
 
-        code_files, skipped, _ = cov.walk_subtree(root)
+        code_files, skipped, _, _ = cov.walk_subtree(root)
 
         assert "kept.c" in {p.name for p in code_files}
         assert cov.SKIP_SYMLINK_OUT not in _reasons({"skipped": skipped})
@@ -247,11 +247,137 @@ class TestSymlinks:
         _write(root / "real" / "kept.c")
         (root / "alias").symlink_to(root / "real", target_is_directory=True)
 
-        code_files, _, _ = cov.walk_subtree(root)
+        code_files, _, _, _ = cov.walk_subtree(root)
 
         resolved = [p.resolve() for p in code_files]
         assert len(resolved) == len(set(resolved))
         assert [p.name for p in code_files].count("kept.c") == 1
+
+
+class TestExtensionCoverage:
+    """CODE_DATA_EXT additions (.mjs/.cjs/.gd/.tscn) and the unknownExtensions
+    signal that catches the NEXT missing extension instead of dropping it with
+    no trace. This is the defect the whole change exists to fix: a well-formed
+    subtree of an unrecognized language used to read as codeFiles: [] with
+    nothing to say why.
+    """
+
+    def test_gdscript_only_subtree_yields_non_empty_code_files(self, tmp_path):
+        root = tmp_path / "godot_project"
+        _write(root / "player.gd")
+        _write(root / "player.gd.uid")  # unrelated unknown ext, not code
+
+        code_files, _, _, unknown = cov.walk_subtree(root)
+
+        assert {p.name for p in code_files} == {"player.gd"}
+        assert unknown.get(".uid") == 1
+
+    def test_dotfiles_and_convention_files_do_not_read_as_unknown(self, tmp_path):
+        """A code-free directory holding only repo convention files is an EMPTY
+        subject, not a discovery failure. Path(".gitignore").suffix and
+        Path("LICENSE").suffix are both "", so without the name-based exemption
+        every such directory would trip the lane's refusal rule and report a
+        failure where the honest answer is "no code here".
+        """
+        root = tmp_path / "docs_only"
+        _write(root / ".gitignore")
+        _write(root / ".editorconfig")
+        _write(root / "LICENSE")
+        _write(root / "CHANGELOG")
+        _write(root / "README.md")
+
+        code_files, _, _, unknown = cov.walk_subtree(root)
+
+        assert code_files == []
+        assert unknown == {}
+
+    def test_extensionless_non_convention_file_is_still_reported(self, tmp_path):
+        """Makefile/Dockerfile plausibly ARE code, so they stay counted -- the
+        exemption above is a narrow name list, not a blanket pass for every
+        extensionless file.
+        """
+        root = tmp_path / "buildable"
+        _write(root / "Makefile")
+        _write(root / "Dockerfile")
+
+        code_files, _, _, unknown = cov.walk_subtree(root)
+
+        assert code_files == []
+        assert unknown == {"": 2}
+
+    def test_godot_scene_extension_is_recognized_as_code(self, tmp_path):
+        root = tmp_path / "godot_project"
+        _write(root / "main.tscn")
+
+        code_files, _, _, _ = cov.walk_subtree(root)
+
+        assert {p.name for p in code_files} == {"main.tscn"}
+
+    def test_mjs_and_cjs_are_recognized_as_code(self, tmp_path):
+        root = tmp_path / "node_pkg"
+        _write(root / "build.mjs")
+        _write(root / "loader.cjs")
+
+        code_files, _, _, _ = cov.walk_subtree(root)
+
+        assert {p.name for p in code_files} == {"build.mjs", "loader.cjs"}
+
+    def test_unrecognized_extension_is_counted_with_the_right_tally(self, tmp_path):
+        root = tmp_path / "src"
+        _write(root / "main.c")
+        _write(root / "one.xyz")
+        _write(root / "two.xyz")
+        _write(root / "three.xyz")
+
+        _, _, _, unknown = cov.walk_subtree(root)
+
+        assert unknown == {".xyz": 3}
+
+    def test_unknown_extensions_are_aggregated_not_itemized(self, tmp_path):
+        """105 files of one unrecognized extension must not become 105 entries."""
+        root = tmp_path / "assets_weird"
+        for i in range(105):
+            _write(root / f"item{i}.qux")
+
+        _, _, _, unknown = cov.walk_subtree(root)
+
+        assert unknown == {".qux": 105}
+
+    def test_asset_and_binary_extensions_do_not_count_as_unknown(self, tmp_path):
+        root = tmp_path / "mixed"
+        _write(root / "main.c")
+        _write(root / "sprite.png")
+        _write(root / "theme.ttf")
+        _write(root / "clip.mp4")
+        _write(root / "bundle.zip")
+        _write(root / "lib.dll")
+        _write(root / "yarn.lock")
+
+        _, _, _, unknown = cov.walk_subtree(root)
+
+        assert unknown == {}
+
+    def test_md_like_extensions_do_not_count_as_unknown(self, tmp_path):
+        root = tmp_path / "docs_mixed"
+        _write(root / "main.c")
+        _write(root / "NOTES.md")
+        _write(root / "notes.mdx")
+        _write(root / "notes.rst")
+        _write(root / "notes.txt")
+
+        _, _, _, unknown = cov.walk_subtree(root)
+
+        assert unknown == {}
+
+    def test_ordinary_all_recognized_subtree_has_no_unknown_extensions(self, tmp_path):
+        repo = _mkrepo(tmp_path / "repo")
+        _write(repo / "CLAUDE.md", "# root\n")
+        _write(repo / "engine" / "main.c")
+        _write(repo / "engine" / "README.md")
+
+        subject = cov.build_subject(repo / "engine")
+
+        assert subject["unknownExtensions"] == {}
 
 
 class TestRootExclusion:
@@ -283,7 +409,7 @@ class TestBuildSubject:
 
         assert set(subject) == {
             "root", "rootExclusion", "codeFiles", "ambientClaudeMdPaths",
-            "skipped", "noisePruned",
+            "skipped", "noisePruned", "unknownExtensions",
         }
         assert subject["codeFiles"] and subject["codeFiles"][0].endswith("main.c")
         assert len(subject["ambientClaudeMdPaths"]) == 1

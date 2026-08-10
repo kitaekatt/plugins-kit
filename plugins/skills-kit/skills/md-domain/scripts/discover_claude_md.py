@@ -52,8 +52,9 @@ DESCEND_MAX_DEPTH = 6
 CODE_DATA_EXT = {
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh", ".cs", ".py", ".go",
     ".rs", ".java", ".kt", ".swift", ".m", ".mm", ".ts", ".tsx", ".js", ".jsx",
-    ".lua", ".rb", ".php", ".scala", ".sql", ".yaml", ".yml", ".csv", ".json",
-    ".toml", ".proto", ".fbs", ".gradle", ".cmake", ".tf", ".sh", ".ps1",
+    ".mjs", ".cjs", ".lua", ".rb", ".php", ".scala", ".sql", ".yaml", ".yml",
+    ".csv", ".json", ".toml", ".proto", ".fbs", ".gradle", ".cmake", ".tf",
+    ".sh", ".ps1", ".gd", ".tscn",
 }
 # .md files that are docs, not review-notes; CLAUDE.md/local are the audited file.
 _MD_LIKE = {".md", ".mdx", ".rst", ".txt"}

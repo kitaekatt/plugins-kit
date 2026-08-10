@@ -33,6 +33,12 @@ assessment step, not here.
 
 Every exclusion is RECORDED and reported, never silently applied.
 
+A file whose extension is recognized as neither code, doc, nor a common asset
+type is also RECORDED, never dropped with no trace: it is counted (aggregated
+by extension) into `unknownExtensions`. Silently dropping such a file made a
+whole subtree of an unrecognized language read as an EMPTY, well-formed
+subject -- the strongest verdict, over a subtree that was never read at all.
+
 Stdlib-only.
 """
 
@@ -48,7 +54,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from discover_claude_md import CODE_DATA_EXT, find_project_root  # noqa: E402
+from discover_claude_md import CODE_DATA_EXT, _MD_LIKE, find_project_root  # noqa: E402
 
 # Directory basenames that are vendored / third-party or build output. Matched
 # against a single path component. `build`/`Build` and `target` are ambiguous
@@ -70,6 +76,42 @@ NOISE_DIR_NAMES = {
     ".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache",
     ".ruff_cache", ".tox", "Intermediate", "Saved", "Binaries",
     "DerivedDataCache", ".idea", ".vs",
+}
+
+# Extensions that are never code: images, fonts, audio, video, archives, and
+# compiled binaries/lockfiles. Excluded from `unknownExtensions` so that signal
+# stays readable -- a 105-PNG directory should not drown out the one `.gd` file
+# CODE_DATA_EXT is missing. A MISSING entry here only causes NOISE (an ordinary
+# asset extension shows up in unknownExtensions), never a MISSED SUBJECT (a real
+# code extension is never added here) -- that is the safe direction to err in.
+ASSET_BINARY_EXT = {
+    # images
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp",
+    ".tiff", ".tga", ".psd", ".heic", ".avif",
+    # fonts
+    ".ttf", ".otf", ".woff", ".woff2", ".eot",
+    # audio
+    ".wav", ".mp3", ".ogg", ".flac", ".aac", ".m4a",
+    # video
+    ".mp4", ".mov", ".avi", ".webm", ".mkv",
+    # archives
+    ".zip", ".tar", ".gz", ".7z", ".rar", ".bz2", ".xz",
+    # compiled binaries / build byproducts / lockfiles
+    ".exe", ".dll", ".so", ".dylib", ".pdb", ".pyc", ".pyd", ".class",
+    ".o", ".obj", ".a", ".lib", ".lock",
+}
+
+# Extensionless files that are never code, matched on NAME. `Path(".gitignore")`
+# and `Path("LICENSE")` both have an empty suffix, so without this every repo
+# convention file would land in `unknownExtensions` under "" -- and a
+# genuinely code-free directory holding only a LICENSE and a .gitignore would
+# be reported as a discovery FAILURE rather than as the empty subject it is.
+# Extensionless files NOT listed here (Makefile, Dockerfile, an extensionless
+# shell script) stay counted: those plausibly are code, and the safe direction
+# is to surface them.
+EXTENSIONLESS_NON_CODE = {
+    "license", "licence", "notice", "copying", "authors", "contributors",
+    "changelog", "codeowners", "version", "readme", "patents", "owners",
 }
 
 MAX_DEPTH = 12
@@ -121,18 +163,26 @@ def _skip_reason(dir_name: str) -> str | None:
     return None
 
 
-def walk_subtree(root: Path) -> tuple[list[Path], list[dict], int]:
+def walk_subtree(root: Path) -> tuple[list[Path], list[dict], int, dict[str, int]]:
     """Collect code files under `root`, recording every structural exclusion.
 
-    Returns (code_files, skipped, noise_pruned). `skipped` entries are
-    {"path": <str>, "reason": <str>} for the exclusions a user should see;
-    `noise_pruned` counts the ones deliberately not itemized.
+    Returns (code_files, skipped, noise_pruned, unknown_extensions).
+    `skipped` entries are {"path": <str>, "reason": <str>} for the exclusions a
+    user should see; `noise_pruned` counts the ones deliberately not itemized.
+    `unknown_extensions` is {<ext>: <count>} for every file whose extension is
+    in neither CODE_DATA_EXT, `_MD_LIKE` (already accounted for as docs), nor
+    ASSET_BINARY_EXT (never code) -- aggregated by extension, never itemized
+    per file, so a directory of 105 PNGs does not become 105 report lines. A
+    file counted here was NOT read as code and NOT recognized as a doc or
+    asset: the subtree was not fully accounted for, and that must never be
+    mistaken for "nothing else is here" (see the coverage lane's refusal rule).
 
     Side-effect free: it stats and lists directories, and reads nothing.
     """
     code_files: list[Path] = []
     skipped: list[dict] = []
     noise_pruned = 0
+    unknown_extensions: dict[str, int] = {}
     root = root.resolve()
     # Real directories already descended into, keyed by resolved path. Two
     # aliases of one directory (a symlink, or a Windows junction) would
@@ -140,7 +190,7 @@ def walk_subtree(root: Path) -> tuple[list[Path], list[dict], int]:
     visited: set[Path] = {root}
 
     def descend(directory: Path, depth: int) -> None:
-        nonlocal noise_pruned
+        nonlocal noise_pruned, unknown_extensions
         if depth > MAX_DEPTH:
             skipped.append({"path": str(directory), "reason": "depth-limit"})
             return
@@ -196,10 +246,22 @@ def walk_subtree(root: Path) -> tuple[list[Path], list[dict], int]:
                 descend(entry, depth + 1)
             elif entry.is_file() and is_code_file(entry):
                 code_files.append(entry)
+            elif entry.is_file():
+                ext = entry.suffix.lower()
+                if ext in _MD_LIKE or ext in ASSET_BINARY_EXT:
+                    continue
+                # A dotfile (.gitignore, .editorconfig) has an empty suffix and
+                # is configuration, not an unrecognized language. So does a
+                # convention file like LICENSE. Neither means the subtree went
+                # unread, so neither may trip the lane's discovery-failure rule.
+                if not ext:
+                    if name.startswith(".") or name.lower() in EXTENSIONLESS_NON_CODE:
+                        continue
+                unknown_extensions[ext] = unknown_extensions.get(ext, 0) + 1
 
     descend(root, 0)
     code_files.sort(key=str)
-    return code_files, skipped, noise_pruned
+    return code_files, skipped, noise_pruned, unknown_extensions
 
 
 def _is_within(candidate: Path, root: Path) -> bool:
@@ -228,7 +290,7 @@ def root_exclusion(root: Path) -> str | None:
 def build_subject(root: Path) -> dict:
     """Assemble one coverage subject for a code subtree."""
     root = root.resolve()
-    code_files, skipped, noise_pruned = walk_subtree(root)
+    code_files, skipped, noise_pruned, unknown_extensions = walk_subtree(root)
     chain = ambient_chain(root)
     return {
         "root": str(root),
@@ -237,6 +299,7 @@ def build_subject(root: Path) -> dict:
         "ambientClaudeMdPaths": [str(p) for p in chain],
         "skipped": skipped,
         "noisePruned": noise_pruned,
+        "unknownExtensions": unknown_extensions,
     }
 
 
@@ -380,6 +443,14 @@ def main() -> int:
             print(f"  skipped ({len(subject['skipped'])}):")
             for entry in subject["skipped"]:
                 print(f"    - [{entry['reason']}] {entry['path']}")
+        if subject["unknownExtensions"]:
+            total_unknown = sum(subject["unknownExtensions"].values())
+            print(
+                f"  unknown extensions ({total_unknown} file(s), not code, "
+                f"not docs, not a recognized asset type):"
+            )
+            for ext, count in sorted(subject["unknownExtensions"].items()):
+                print(f"    - {ext or '(no extension)'}: {count}")
         if subject["noisePruned"]:
             print(f"  noise directories pruned: {subject['noisePruned']}")
         print()

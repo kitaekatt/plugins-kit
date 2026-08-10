@@ -112,7 +112,13 @@ Run `scripts/discover_coverage.py <directory>` (or `--diff`) and consume its
 `subjects[]`. It is side-effect free and reads no file contents.
 
 Per subject it returns `root`, `rootExclusion`, `codeFiles`,
-`ambientClaudeMdPaths`, `skipped`, and `noisePruned`.
+`ambientClaudeMdPaths`, `skipped`, `noisePruned`, and `unknownExtensions`.
+
+`unknownExtensions` (a `{<ext>: <count>}` map) has the same standing as the
+structural exclusions above: surface it in the report, never drop it silently.
+It names every file the discovery script could not place as code, doc, or a
+recognized asset type -- the set the whole capability exists to protect
+against silently losing.
 
 Two properties of the ambient chain are load-bearing and are the script's job,
 not the model's -- do not recompute them by eye:
@@ -170,6 +176,7 @@ Ambient chain (<N>, root-most first):
 
 Code files assessed: <N>
 Skipped: <N>  (<reason> <path>, ...)
+Unknown extensions: <N>  (<ext>: <count>, ...)  (or: NONE)
 Candidate ceiling (per subtree): <not reached | REACHED -- N not shown>
 Analysis depth: basic | advanced
 <only for a non-interactive implicit basic selection: defaults: depth=basic>
@@ -236,6 +243,17 @@ is the caller's and is made per candidate, not per report.
 
 - `GAPS-FOUND` -- at least one candidate survived assessment.
 - `COVERAGE-ASSESSED` -- the subtree was assessed and no candidate survived.
+
+**Never emit `COVERAGE-ASSESSED` when `codeFiles` is empty and
+`unknownExtensions` is non-empty.** An empty `codeFiles` normally means "no code
+here to assess" -- but when the discovery script also reports unrecognized
+extensions, it means the subtree was never READ, because nothing in it matched
+a known code, doc, or asset type. That is a discovery failure, not a clean
+result, and reporting it as `COVERAGE-ASSESSED` -- the verdict that means
+"verified absent" -- claims the opposite of what happened. In this state,
+report the unrecognized extensions and stop: name each extension and its
+count, state that discovery could not classify the subtree, and do not assess
+or emit either verdict.
 
 **Neither verdict is ever `COMPLIANT` or `NON-COMPLIANT`, and neither alters a
 document verdict.** A CLAUDE.md can be COMPLIANT while its subtree is

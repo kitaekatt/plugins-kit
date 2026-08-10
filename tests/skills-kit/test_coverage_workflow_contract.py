@@ -345,6 +345,54 @@ class TestConversionContractCarriage:
         assert "cites a file and line observed in source" in text
 
 
+class TestDiscoveryFailureRefusal:
+    """Structural enforcement: an unrecognized-extension subtree with zero
+    recognized code files must never be dispatched to assessment as though it
+    were a clean COVERAGE-ASSESSED pass -- it was never read. See
+    discover_coverage.py's unknownExtensions and coverage-lane.md's decision
+    rule ("Never emit COVERAGE-ASSESSED when codeFiles is empty and
+    unknownExtensions is non-empty").
+    """
+
+    def test_detect_never_dispatches_a_discovery_failure_to_the_agent(self):
+        src = _detect()
+        assert "hasNoCodeFiles(s) && hasUnknownExtensions(s)" in src
+        # The refusal branch must precede the agent() call inside the same
+        # per-subject thunk, so a discovery failure never reaches assessment.
+        thunk = src[src.index("subjects.map((s) => () => {"):src.index("}))")]
+        assert thunk.index("discoveryFailure(s)") < thunk.index("agent(lanePrompt")
+
+    def test_discovery_failure_verdict_is_not_one_of_the_two_coverage_verdicts(self):
+        src = _detect()
+        assert "'DISCOVERY-FAILED'" in src
+
+    def test_discovery_failed_subject_is_passed_through_not_rederived(self):
+        """It must skip the candidates.length ? GAPS-FOUND : COVERAGE-ASSESSED
+        derivation entirely -- deriving over it would read as COVERAGE-ASSESSED."""
+        src = _detect()
+        guard = src.index("if (r.verdict === 'DISCOVERY-FAILED') {")
+        derive = src.index("candidates.length ? 'GAPS-FOUND' : 'COVERAGE-ASSESSED'")
+        assert guard < derive
+
+    def test_discovery_failed_is_tallied_apart_from_both_verdicts(self):
+        src = _detect()
+        assert "acc.discoveryFailed" in src
+
+    def test_lane_states_the_refusal_rule(self):
+        text = _lane().lower()
+        assert "never emit `coverage-assessed`" in text
+        assert "discovery failure" in text
+
+    def test_lane_step_two_surfaces_unknown_extensions_alongside_exclusions(self):
+        text = _lane()
+        assert "unknownExtensions" in text
+        assert "same standing as the" in text.lower()
+
+    def test_report_template_includes_unknown_extensions(self):
+        text = _lane()
+        assert "Unknown extensions:" in text
+
+
 class TestCoverageRegisteredWithCriteria:
     """Registration and its criteria binding are one atomic go-live contract."""
 
