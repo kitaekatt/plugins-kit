@@ -86,8 +86,8 @@ Later work builds on the conclusion.
 
 ### `unverifiable` `[skill]` `render: glossed`
 You could not spot a wrong answer by reading the summary.
-**Test:** is there a cheap check -- a diff, a test run, a file you would read anyway?
-**Gloss:** "no cheap check exists -- no diff, test, or file you would read anyway"
+**Test:** is there a cheap check -- a diff, a test run, a file you would read anyway -- that would catch the error that MATTERS here? A check catching only shallow errors does not verify.
+**Gloss:** "no cheap check would catch the error that matters -- a check catching only shallow errors does not verify"
 
 ### `default` `[skill]` `render: bare`
 No escalation test matched; the unit reached the ladder's terminal rung by

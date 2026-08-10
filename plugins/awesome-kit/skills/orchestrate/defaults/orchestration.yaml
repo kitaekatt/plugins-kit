@@ -95,8 +95,12 @@ lexicon:
 - id: unverifiable
   kind: skill
   render: glossed
-  test: Is there a cheap check -- a diff, a test run, a file you would read anyway?
-  gloss: no cheap check exists -- no diff, test, or file you would read anyway
+  test: >-
+    Is there a cheap check -- a diff, a test run, a file you would read anyway -- that would
+    catch the error that MATTERS here? A check catching only shallow errors does not verify.
+  gloss: >-
+    no cheap check would catch the error that matters -- a check catching only shallow errors
+    does not verify
 - id: default
   kind: skill
   render: bare
@@ -227,7 +231,9 @@ ladders:
     model: fable
     shape: open
     criteria:
-    - [novel, load-bearing, unverifiable]
+    - [novel, load-bearing]
+    - [novel, unverifiable]
+    - [load-bearing, unverifiable]
     terminal: false
     gate: >-
       write "qualifies on <criterion>; opus would plausibly get it wrong because <reason>."
@@ -239,8 +245,8 @@ ladders:
         on this ladder, and a pool does not degrade gracefully when spent, it stops.
     guards:
     - >-
-      Never this rung: hard-but-patterned work; anything with a cheap check; anything recoverable
-      in one more pass.
+      Never this rung: hard-but-patterned work; anything whose operative failure a cheap check
+      would catch; anything recoverable in one more pass.
   - id: high-reasoning
     model: opus
     criteria:

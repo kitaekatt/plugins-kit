@@ -18,8 +18,10 @@ capacity is left all vary by user and by machine. Step 3 runs a script that prin
 resolved policy. Do not answer those questions from this file or from memory -- this file has
 no tier table, deliberately. Users tune the policy by overriding
 [defaults/orchestration.yaml](defaults/orchestration.yaml); see
-[references/configuration.md](references/configuration.md) for the schema and layering.
-The decision tree itself is compiled from a controlled vocabulary,
+[references/configuration.md](references/configuration.md) for the schema and layering,
+and [references/tuning-selection.md](references/tuning-selection.md) when a rung is
+firing more or less often than you want -- which keys move selection frequency, which
+way, and how far. The decision tree itself is compiled from a controlled vocabulary,
 [references/lexicon.md](references/lexicon.md), against a maintainer-only criteria
 source that is not part of this install.
 

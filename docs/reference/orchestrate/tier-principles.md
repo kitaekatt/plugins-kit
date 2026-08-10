@@ -366,11 +366,35 @@ emits:
       value: There is no haiku rung.
 ```
 
-### P2.2 -- fable: `novel` + `load-bearing` + `unverifiable`
+### P2.2 -- fable: any TWO of `novel`, `load-bearing`, `unverifiable`
 
-All three must hold. **`open` only** -- and the long-standing rule that fable is not
-an implementation tier now DERIVES from that rather than being asserted:
-implementation is `known` work, and this rung takes only `open` work.
+Two of the three must hold, in any combination. **`open` only** -- and the
+long-standing rule that fable is not an implementation tier now DERIVES from that
+rather than being asserted: implementation is `known` work, and this rung takes only
+`open` work.
+
+*Why two rather than all three, and why this is a deliberate over-correction:* the
+three conjuncts guard distinct axes -- `novel` that the work is LIKELY to be got
+wrong, `load-bearing` that being wrong is CONSEQUENTIAL, `unverifiable` that being
+wrong is INVISIBLE. Requiring all three is multiplicative, and it rejected work that
+scored high on two axes and merely moderate on the third. Two-of-three keeps the
+discipline that a unit must be dangerous in more than one way, while admitting the
+population the conjunction was over-filtering.
+
+Note what this deliberately does NOT do: dropping one specific conjunct was
+considered and rejected, because each single drop is wasteful in a nameable way --
+without `novel`, patterned work opus handles fine; without `load-bearing`, the scarce
+pool goes to work whose errors do not matter; without `unverifiable`, work that a
+test run would have caught anyway. Two-of-three admits none of those, since all three
+fail two axes at once.
+
+*Standing as a tuning position, not a derived truth:* this is an intentional
+over-correction, chosen on the judgement that the rung was firing too rarely, against
+no selection telemetry (section 7). The direction is deliberate; the magnitude is a
+guess. **Revisit when P4.5 announcements provide a rung tally** -- if the top rung
+then wins work that a single opus pass plus its ordinary check would have handled,
+the correct response is to restore the three-way conjunction rather than to patch
+around it with guards.
 
 The gate is procedural, not predicative: write *"qualifies on &lt;criterion&gt;; opus
 would plausibly get it wrong because &lt;reason&gt;."* If that sentence is hard to
@@ -391,8 +415,17 @@ spent, it stops.
 pool fact. A reader seeing only the conjunction and the ritual infers the guard is
 overwrought, which is the exact misreading this file exists to prevent.
 
-*Never this rung:* hard-but-patterned work; anything with a cheap check; anything
-recoverable in one more pass. `render: required` -- this list is debiasing.
+*Never this rung:* hard-but-patterned work; anything whose operative failure a cheap
+check would catch; anything recoverable in one more pass. `render: required` -- this
+list is debiasing.
+
+*Why "operative failure" and not "a cheap check exists":* the earlier wording
+disqualified on the mere EXISTENCE of a check, and almost all substantive work has
+some shallow check available. That silently rejected most of the population the other
+two conjuncts admit -- the conjunct was mis-stated, not merely strict. A smoke test
+proving a design runs is not a check on whether the design is right. Tracks the
+`unverifiable` test in lexicon.md; the two must be re-worded together or this guard
+re-imports the old bar one line below the fix.
 
 *Canonical shape:* critical review of a plan or architecture -- all three fire at
 once. This is why fable reviews the plan and opus builds against it.
@@ -405,7 +438,9 @@ emits:
     model: fable
     shape: open
     criteria:
-      - [novel, load-bearing, unverifiable]
+      - [novel, load-bearing]
+      - [novel, unverifiable]
+      - [load-bearing, unverifiable]
     terminal: false
     gate: >-
       write "qualifies on <criterion>; opus would plausibly get it wrong
@@ -419,8 +454,9 @@ emits:
           degrade gracefully when spent, it stops.
     guards:
       - >-
-        Never this rung: hard-but-patterned work; anything with a cheap
-        check; anything recoverable in one more pass.
+        Never this rung: hard-but-patterned work; anything whose operative
+        failure a cheap check would catch; anything recoverable in one more
+        pass.
 ```
 
 ### P2.3 -- opus: depth in either shape
@@ -764,10 +800,17 @@ four of them could not be applied. Six inert numbers read as a control surface t
 does not exist.
 
 *fable is the one Claude-side case worth naming:* its gate requires `unverifiable`,
-so every unit reaching it is one where deliberation is the only quality control left.
-Where effort IS settable there, set it to `max`. An earlier revision defaulted it to
-`high` and separately licensed `max` "when unverifiable" -- which is always -- giving
-two answers with no tie-break.
+so on every unit reaching it, deliberation is the only control over the error that
+MATTERS -- a shallow check may well exist and will not catch that error. Where effort
+IS settable there, set it to `max`. An earlier revision defaulted it to `high` and
+separately licensed `max` "when unverifiable" -- which is always -- giving two answers
+with no tie-break.
+
+*This premise is coupled to `unverifiable`'s wording and survived its re-statement
+deliberately.* When that conjunct disqualified on the mere existence of a cheap check,
+"deliberation is the ONLY control left" was literally true. It no longer is, so the
+claim is narrowed to the operative error rather than dropped: the reason for `max` was
+never that no check exists, but that no check reaches the failure worth escalating for.
 
 ```yaml
 emits:
