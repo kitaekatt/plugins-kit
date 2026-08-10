@@ -29,10 +29,15 @@ registry from this plugin, so keys are set up once and consumed everywhere.
   generic `GET /models` probe or skip validation (`account_check: none`).
 - **Resolution with source attribution.** A key resolves in order:
   `<endpoint key_env>` env var > project `.env`
-  (`<project>/.local-data/llm-scripting-kit/.env`) > user `.env`
+  (`<project>/.local-data/plugins-kit/llm-scripting-kit/.env`) > user `.env`
   (`~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env`). Keys for multiple
   endpoints coexist in the same `.env`. `llm-scripting-kit which` tells you which
-  source won.
+  source won. The marketplace-less project path
+  (`<project>/.local-data/llm-scripting-kit/.env`) predates the alignment with
+  the project `config.yaml` layer, which has always been namespaced
+  `<marketplace>/<plugin>`. It is still read, at lower precedence, and a key
+  resolved from it is flagged (`KeyLookupResult.legacy_location`, plus a
+  one-time stderr notice) rather than silently accepted.
 - **Shared model registry.** A layered `config.yaml` maps aliases (plus
   `default` / `defaultCheap` selectors) to concrete slugs, per endpoint. One
   project override changes the model for every consumer at once.

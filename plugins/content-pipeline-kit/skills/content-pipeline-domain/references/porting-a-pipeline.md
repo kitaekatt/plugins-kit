@@ -12,14 +12,13 @@ port one subsystem, prove equivalence with the tool's OWN tests, then move to
 the next." Porting in dependency order with a pinned equivalence baseline at
 each step keeps risk at a minimum and makes every collapse auditable.
 
-## 0. Inventory the monolith against the 13 subpackages
+## 0. Inventory the monolith against the 12 subpackages
 
 Before porting anything, map the existing tool's modules onto the library's
 subpackages. For each existing module, name the subpackage it collapses onto:
 
 | Concern in the monolith | Subpackage it collapses onto |
 | --- | --- |
-| Content-root discovery, config load/cache | `config` |
 | Staleness hashing, "needs regen" checks, ensure-on-diff | `freshness` |
 | The canonical record, human/machine attribution, regen-preserving merge | `store` |
 | Rule checks (in-loop and post-hoc), advisory diagnostics | `validate` |
@@ -37,6 +36,12 @@ collapse (the genuinely project-specific residue -- field schemas, prompt
 content, domain rules). A module that maps to nothing in the library is a
 signal either that it is pure project residue (keep it) or that it is a
 capability the library does not cover (flag it).
+
+Config loading itself -- content-root discovery, reading and caching a config
+file -- is the standing example of the first case. The library deliberately
+covers no config subpackage: every consumer so far wanted a different root
+marker, file layout, and merge order, so config loading stays project-side and
+its outputs are passed in through the injection points named below.
 
 ## 1. Port freshness first
 
@@ -140,7 +145,8 @@ stayed, and what was intentionally dropped -- not a pile of hedged stubs.
 
 Once ported, a project imports `content_pipeline` as an ambient package. The
 bootstrap `shared_libs` mechanism publishes the library's source to a stable,
-version-independent path (`.../plugins/data/_shared_libs/content_pipeline/`)
+version-independent path
+(`~/.claude/plugins/data/plugins-kit/_shared_libs/content_pipeline/`)
 and registers a `.pth` on the shared standalone interpreter, so a process
 running under that interpreter can `import content_pipeline` with no path
 work. A consuming plugin that declares `shared_lib_imports:
@@ -157,7 +163,7 @@ try:
 except ImportError:
     import os, sys
     shared = os.path.expanduser(
-        "~/.claude/plugins/data/_shared_libs/content_pipeline"
+        "~/.claude/plugins/data/plugins-kit/_shared_libs/content_pipeline"
     )
     if os.path.isdir(shared):
         sys.path.insert(0, shared)

@@ -6,7 +6,16 @@ a concrete provider slug, reading a layered ``config.yaml``:
 
     shipped baseline (DEFAULT_MODEL_CONFIG, below)
       -> user    (~/.claude/plugins/data/plugins-kit/llm-scripting-kit/config.yaml)
-        -> project (<project_root>/.local-data/plugins-kit/llm-scripting-kit/config.yaml)
+        -> project, superseded location
+           (<project_root>/.local-data/llm-scripting-kit/config.yaml)
+          -> project, canonical
+             (<project_root>/.local-data/plugins-kit/llm-scripting-kit/config.yaml)
+
+The canonical project layer carries the ``plugins-kit`` marketplace segment,
+matching both the user layer and the canonical project API-key path
+(``constants.project_env_file``). The marketplace-less location is read at
+lower precedence so a file placed there -- the shape the pre-0.6.6 key path
+invited -- is not silently ignored.
 
 The file layering + deep-merge is bootstrap's job (bootstrap_lib.config_resolve);
 this module owns the schema: the model registry, the default/defaultCheap
@@ -29,6 +38,7 @@ from __future__ import annotations
 
 import copy
 import sys
+from pathlib import Path
 from typing import Optional
 
 # The name of the endpoint used when a caller does not name one.
@@ -106,6 +116,14 @@ def load_model_config(*, project_root: Optional[str] = None) -> dict:
         marketplace=CONFIG_MARKETPLACE,
         project_root=project_root,
     )
+    if project_root is not None:
+        # Symmetry with the API key's superseded project location: a config.yaml
+        # placed at <project>/.local-data/llm-scripting-kit/ (no marketplace
+        # segment, by analogy with the pre-0.6.6 key path) is read too, at LOWER
+        # precedence than the canonical marketplace-namespaced layer. Inserted
+        # BEFORE the canonical project layer, which standard_config_layers put
+        # last.
+        layers.insert(-1, Path(project_root) / ".local-data" / CONFIG_PLUGIN / CONFIG_FILE)
     try:
         file_cfg = resolve_config(layers)
     except ConfigError as e:

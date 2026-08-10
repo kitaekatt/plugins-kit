@@ -15,8 +15,6 @@ import pytest
 
 _SUBPACKAGES = [
     "content_pipeline",
-    "content_pipeline.config",
-    "content_pipeline.config.loader",
     "content_pipeline.store",
     "content_pipeline.store.attributed",
     "content_pipeline.store.intermediary",

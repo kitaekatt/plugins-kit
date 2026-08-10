@@ -123,7 +123,7 @@ Bootstrap will NOT have prompted for this at session start -- an OpenRouter key 
 
 **Account out of credit (HTTP 402)** -- the key is valid but the account has no balance. Top up at <https://openrouter.ai/credits>. The next bootstrap session-start automatically clears the cached `last_validated.sha256` once a successful `/auth/key` call happens, so no manual cache reset is needed.
 
-**Key loaded from the wrong place** -- run `which` to see which file Wins the precedence resolution (env var > project `.env` > user `.env`). If the user wants the user-scoped file to win but a project file is shadowing it, delete `<project>/.local-data/llm-scripting-kit/.env`.
+**Key loaded from the wrong place** -- run `which` to see which file Wins the precedence resolution (env var > project `.env` > user `.env`). If the user wants the user-scoped file to win but a project file is shadowing it, delete `<project>/.local-data/plugins-kit/llm-scripting-kit/.env` (and `<project>/.local-data/llm-scripting-kit/.env`, the superseded location, if it exists -- `which` names whichever one actually won).
 
 **Bootstrap plugin not installed** -- llm-scripting-kit declares a dependency on `plugins-kit:bootstrap`. If bootstrap isn't installed/enabled, the session-start credential check never runs, so `deferred_requirements.json` is absent and the preflight has no recorded statement to present. Nothing breaks: the CLI still works (it self-heals to system Python), so run `llm-scripting-kit status` and fall back to the two options above. Installing/enabling bootstrap restores the recorded diagnosis on the next session.
 
@@ -132,7 +132,8 @@ Bootstrap will NOT have prompted for this at session start -- an OpenRouter key 
 | Path | Purpose |
 |------|---------|
 | `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env` | Canonical user-scoped credential file. 0600 perms on Unix. |
-| `<project>/.local-data/llm-scripting-kit/.env` | Optional per-project override. Wins over the user file when present. |
+| `<project>/.local-data/plugins-kit/llm-scripting-kit/.env` | Canonical per-project override. Wins over the user file when present. Same `<marketplace>/<plugin>` namespace as the project `config.yaml`. |
+| `<project>/.local-data/llm-scripting-kit/.env` | Superseded per-project location (no marketplace segment). Still read, below the canonical project path, so existing files keep working; a key resolved from it prints a one-time "move the file" notice. |
 | `OPENROUTER_API_KEY` env var | Highest priority. Useful for CI / one-shot overrides. |
 | `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/deferred_requirements.json` | Bootstrap's recorded diagnosis when the key is missing/rejected, including the verbatim ask the preflight presents. Written each session-start pass and removed once the key validates. |
 | `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/last_validated.sha256` | Cache marker. Contains the SHA-256 of the last key that successfully validated, so subsequent sessions skip the network call when nothing changed. Safe to delete -- the next bootstrap re-validates. |

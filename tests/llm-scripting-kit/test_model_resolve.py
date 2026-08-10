@@ -111,6 +111,55 @@ class TestLoadModelConfig:
         # the module constant must be unchanged by the merge
         assert "custom" not in DEFAULT_MODEL_CONFIG["models"]
 
+    def test_marketplace_less_project_layer_is_read(self, tmp_path, monkeypatch):
+        """A config.yaml at the API key's superseded project path still applies.
+
+        The pre-0.6.6 project key path omitted the ``plugins-kit`` segment, so a
+        config.yaml placed at the same shape by analogy was silently ignored.
+        It is now read, below the canonical project layer.
+        """
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        proj = tmp_path / "proj"
+        _write(
+            proj / ".local-data" / "llm-scripting-kit" / "config.yaml",
+            "models: {custom: {slug: foo/bar}}\ndefaultCheap: custom\n",
+        )
+        cfg = load_model_config(project_root=str(proj))
+        assert cfg["models"]["custom"]["slug"] == "foo/bar"
+        assert cfg["defaultCheap"] == "custom"
+
+    def test_canonical_project_layer_wins_over_marketplace_less(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        proj = tmp_path / "proj"
+        _write(
+            proj / ".local-data" / "llm-scripting-kit" / "config.yaml",
+            "default: qwen\n",
+        )
+        _write(
+            proj / ".local-data" / "plugins-kit" / "llm-scripting-kit" / "config.yaml",
+            "default: gemini-lite\n",
+        )
+        cfg = load_model_config(project_root=str(proj))
+        assert cfg["default"] == "gemini-lite"
+
+    def test_marketplace_less_project_layer_wins_over_user(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        proj = tmp_path / "proj"
+        _write(
+            tmp_path / ".claude" / "plugins" / "data"
+            / "plugins-kit" / "llm-scripting-kit" / "config.yaml",
+            "default: qwen\n",
+        )
+        _write(
+            proj / ".local-data" / "llm-scripting-kit" / "config.yaml",
+            "default: gemini-lite\n",
+        )
+        cfg = load_model_config(project_root=str(proj))
+        assert cfg["default"] == "gemini-lite"
+
     def test_bootstrap_lib_fallback_warns_on_stderr(self, monkeypatch, capsys):
         """When bootstrap_lib is unavailable the baseline fallback must not be
         silent -- the silence is what made the missing shared_lib_imports
