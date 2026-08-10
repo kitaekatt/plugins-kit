@@ -110,6 +110,19 @@ both were dropped rather than repointed, since a consumer install has no `docs/`
 alongside the rendered tree, not build plumbing -- and stays in the skill's
 `references/`.
 
+A later pass (2026-08-10) found `lexicon.md` was not clean, though: alongside its
+generator-facing term records it also carried authoring rules (why a term is
+`[skill]` vs `[concept]`, bare vs glossed) and per-term derivation annotations citing
+`tier-principles.md` criteria by number (P2.1, P0.5) or recording design history (a
+demotion, a correction, a retired taxonomy) -- maintainer-only material that had
+accreted into a file that does ship, the same failure this criterion names. That
+prose was pruned in place into `docs/reference/orchestrate/lexicon-derivation.md`;
+`lexicon.md` itself stayed put (`SKILL.md` links it, and a consumer install has no
+`docs/` tree to move it into). `generate_orchestration.py --check` before and after
+the prune produced a byte-identical `orchestration.yaml`, confirming the removed
+prose was never a generator input -- `parse_lexicon` reads only the `###` heading,
+the one-line definition, and the `**Test:**` / `**Gloss:**` lines.
+
 **Audit note:** md-domain catches PART of this. A skill's `references/*.md` is claimed
 and audited by the `audit_skill` lane, whose SR-4 (reader fit) criterion flags
 maintainer-only material on that surface (`skill-standards.md` section 10 -- the criterion

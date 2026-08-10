@@ -1,40 +1,19 @@
 # Orchestration lexicon
 
-The controlled vocabulary for orchestration decisions. Three artifacts share it:
+The controlled vocabulary for orchestration decisions. `[skill]` terms select a
+branch in the rendered decision tree and are the only terms permitted in
+dispatch announcements. `[concept]` terms justify or describe a choice already
+made and never render.
 
-- **The criteria source** (maintainer-side) states every criterion in these terms.
-- **The rendered decision tree** carries only `[skill]` terms, as branch questions.
-- **Dispatch announcements** carry only `[skill]` terms, as labels.
-
-**A term earns its place by having a test answerable at dispatch time.** A
-definition that describes rather than tests is a liability: it reads as precision
-while admitting any interpretation.
-
-**`[skill]` vs `[concept]`.** A `[skill]` term SELECTS A BRANCH. A term that
-justifies or describes a choice already made is `[concept]`: it stays in this file
-and never renders. The test is mechanical -- remove the term; does any decision
-become undecidable? If not, it is `[concept]`.
-
-**`render: bare` vs `render: glossed`.** The lexicon is never loaded into an
-orchestration context, and every orchestration is a fresh read -- there is no
-accumulated vocabulary. So a bare term works only when its NATURAL reading already
-matches its test. A term that names a thing renders bare; a term that compresses a
-judgment renders glossed, because the natural reading diverges from the test and
-there is no surrounding prose left to correct it.
-
-**Gloss placement (derivation rule).** Gloss at FIRST occurrence in document order,
-bare thereafter -- this says it once and costs less than a glossary block, which
-would pay for the term name twice. A gloss must live in a block that BOTH variants
-render; a term used in both variants may not have its only gloss inside a
-Codex-only block.
+`render: bare` terms appear as-is; `render: glossed` terms carry the
+`**Gloss:**` line below as a short parenthetical at first occurrence, bare
+thereafter.
 
 ---
 
 ## Brief shape -- `known` / `open`
 
-Two orthogonal axes govern briefs. This is one; `sufficient` is the other. They were
-conflated in an earlier revision, which produced a taxonomy whose categories were
-not mutually exclusive.
+Two orthogonal axes govern briefs. This is one; `sufficient` is the other.
 
 ### `known` `[skill]` `render: glossed`
 The work can be described completely before it starts.
@@ -62,11 +41,6 @@ The negative pole of `sufficient`: a brief must be authored before dispatch.
 *Why it exists:* announcements are terms-only, so a unit routed by the ABSENCE of
 sufficiency needs a label. Without it that branch cannot be announced.
 
-*Independence:* `sufficient` is about the STATEMENT, `known`/`open` about the WORK.
-All four combinations occur. "What changed in the repo this week" is `open` and
-`sufficient` -- discovery-shaped, and needing no further briefing. Treating
-sufficiency as a third shape category is a category error and was a live defect.
-
 ---
 
 ## Execution demand
@@ -77,13 +51,6 @@ undefined pair `shallow` / `real reasoning`.
 ### `mechanical` `[concept]`
 Execution is checkable by inspection alone.
 **Test:** can you verify the result without reading surrounding context?
-*Demoted from `[skill]` 2026-08-07:* it selected the haiku rung, and P2.1 removed
-that rung. With nothing to select it fails the mechanical test for `[skill]` status --
-remove it and no decision becomes undecidable, because `known` + `mechanical` work now
-reaches sonnet by fall-through like everything else unescalated.
-*Retained because* it is the vocabulary for the population that would justify
-re-adding the rung (see P2.1's re-add condition), and because P0.5's collapse test is
-still stated in terms of a "mechanical fan-out".
 
 ### `condensation` `[skill]` `render: glossed`
 The answer is present in the source; the work is retrieving and compressing it.
@@ -111,14 +78,11 @@ Why this rung and not the one below.
 No established pattern applies.
 **Test:** can you name the pattern it follows? If yes, it is not novel.
 **Gloss:** "you cannot name a pattern it follows"
-*Why glossed:* reads naturally as "new" or "hard", neither of which is the test.
 
 ### `load-bearing` `[skill]` `render: glossed`
 Later work builds on the conclusion.
 **Test:** would a wrong answer propagate, or would the next step catch it?
 **Gloss:** "a wrong answer would propagate rather than be caught"
-*Why glossed:* the natural reading is "important" -- a listed anti-term, and the
-single most over-firing misreading in the vocabulary.
 
 ### `unverifiable` `[skill]` `render: glossed`
 You could not spot a wrong answer by reading the summary.
@@ -136,32 +100,17 @@ largest hole in the usage record at the largest population.
 ### `stretch` `[concept]`
 The rung below would plausibly get this wrong.
 **Test:** can you say what it would get wrong?
-*Why concept:* it selects no branch. Each rung's own criteria determine the rung;
-this is a sanity check on a choice already made. Retained because it is the honest
-generalisation of the top rung's justification demand, and because naming it stops
-`difficult` being smuggled in as a criterion.
 
 ---
 
 ## Dispatch shape
 
-Selects the backend -- with one exception.
-
-**`fan-out` is NOT a Codex-block term.** It is decided during shaping (both variants
-render that block) and merely *consumed* as a pull. Its gloss therefore belongs in
-the shape block, per the first-occurrence rule. The other five are Codex-block terms
-that recur nowhere else, so their glosses live there safely.
-
-*This correction matters:* an earlier revision grouped all six here and asserted they
-were Codex-only, which collided with the shaping placement and made the lexicon's own
-gloss rule unsatisfiable for `fan-out`.
+Selects the backend.
 
 ### `conversational` `[skill]` `render: glossed`
 You expect to interrogate or refine the unit mid-flight.
 **Test:** is the output a deliverable you act on, or a thread you continue?
 **Gloss:** "a thread you continue, not a deliverable you act on"
-*Why glossed:* phrased as "will you ask follow-ups" this catches almost anything
-and silently disarms `cross-check` -- a second opinion is a DELIVERABLE.
 
 ### `abortable` `[skill]` `render: bare`
 You may need to stop it mid-run.
@@ -171,15 +120,11 @@ You may need to stop it mid-run.
 N similar units you would otherwise brief individually.
 **Test:** does it survive collapsing into one shell command? If not, it is one unit.
 **Gloss:** "N similar units that resist collapsing into one command"
-*Why glossed:* without the collapse test, any repetitive work reads as fan-out.
 
 ### `bulk-output` `[skill]` `render: glossed`
 The unit emits substantially more than you need to keep.
 **Test:** would you skim and discard most of the output?
 **Gloss:** "emits much more than you need to keep"
-*Why this replaces `long`:* duration was never the argument and is not evaluable at
-dispatch time. The real asymmetry is that an Agent-tool report is DELIVERED into
-context whole, while a CLI backend's output lands in a file you can skim and discard.
 
 ### `cross-check` `[skill]` `render: glossed`
 An independent second opinion on a conclusion Claude already reached.
@@ -211,34 +156,6 @@ Words that feel like criteria and are not. Each has been reached for in practice
 
 ---
 
-## Inventory
-
-`[skill]` (16) -- render into the tree; permitted in announcements:
-
-| term | render |
-|---|---|
-| `known` | glossed |
-| `open` | glossed |
-| `sufficient` | glossed |
-| `underspecified` | bare |
-| `default` | bare |
-| `condensation` | glossed |
-| `inference` | glossed |
-| `novel` | glossed |
-| `load-bearing` | glossed |
-| `unverifiable` | glossed |
-| `conversational` | glossed |
-| `abortable` | bare |
-| `fan-out` | glossed |
-| `bulk-output` | glossed |
-| `cross-check` | glossed |
-| `schema` | bare |
-
-`[concept]` (7) -- this file only: `stretch`, `mechanical`, `difficult`, `important`, `complex`,
-`long`, `simple`.
-
----
-
 ## Announcement form
 
 One line per dispatch, terms only, no free prose:
@@ -250,8 +167,7 @@ delegating <what> to <model> (<terms that fired>)
 The parenthetical carries the terms from the tree node that ACTUALLY fired -- not
 the strongest available justification, not a complete characterisation. Only
 `[skill]` terms are permitted, which is what makes the lines aggregate: the
-transcript becomes the usage record for which rungs get chosen and why, which is
-the telemetry the principles file's evidence gaps currently lack.
+transcript becomes the usage record for which rungs get chosen and why.
 
 ```
 delegating rename across 30 files to sonnet (known, default)

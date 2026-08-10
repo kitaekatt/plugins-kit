@@ -67,16 +67,21 @@ claude_md:
       keywords:
         - tier-principles.md
         - lexicon.md
+        - lexicon-derivation.md
         - two roots
+        - three files
         - maintainer-only vs published
         - do not colocate
         - OP-1
       summary: >-
-        The generator reads from two inputs in two different repo roots ON
+        The generator reads its two inputs from two different repo roots ON
         PURPOSE: tier-principles.md here (maintainer-only, never ships) and
         lexicon.md inside the published skill (ships, because the rendered
-        orchestration.yaml tree carries its terms). Do not "tidy" them back
-        into one location.
+        orchestration.yaml tree carries its terms). lexicon.md itself is
+        split further: the generator-facing term records stay in the
+        published file, while the file's authoring rules and per-term
+        derivation history live in the sibling lexicon-derivation.md here.
+        Do not "tidy" any of this back into one location.
       detail: |
         tier-principles.md carries the criteria plus per-principle `emits:`
         blocks -- the derivation logic itself, which a consumer's plugin cache
@@ -85,15 +90,33 @@ claude_md:
         needs it to read their own rendered policy, so it stays inside
         plugins/awesome-kit/skills/orchestrate/references/ where it ships.
 
-        This split is the OP-1 remediation (no maintainer-only material on a
-        published surface) applied to this chain -- see
-        ../plugin-opinion-razor.md. Someone "simplifying" the two roots into
-        one location would either re-ship a maintainer-only file (regressing
-        OP-1) or strand the shipped vocabulary outside the skill consumers
-        install. Neither is a cleanup.
+        lexicon.md is not purely generator input, though: it also carried
+        authoring rules (why a term is `[skill]` vs `[concept]`, why a term
+        renders bare vs glossed, gloss-placement mechanics) and per-term
+        derivation annotations that cite tier-principles.md criteria by
+        number (P2.1, P0.5) or record design history (a demotion, a
+        correction, a retired category). Neither kind is a generator input --
+        `generate_orchestration.py`'s `parse_lexicon` reads only the `###`
+        heading, the one-line definition, and the `**Test:**` / `**Gloss:**`
+        lines; lines starting with `*`, `-`, or `#` are never consulted. Both
+        kinds were pruned out of the published file into
+        lexicon-derivation.md (this directory), which cites tier-principles.md
+        by number freely because it never ships. `--check` before and after
+        that prune produced a byte-identical orchestration.yaml, which is the
+        proof the pruned prose was never load-bearing input.
+
+        This three-file shape is the OP-1 remediation (no maintainer-only
+        material on a published surface) applied to this chain -- see
+        ../plugin-opinion-razor.md. Someone "simplifying" the files back into
+        fewer locations would either re-ship maintainer-only material
+        (regressing OP-1) or strand the shipped vocabulary outside the skill
+        consumers install. Neither is a cleanup.
       origin: >-
         Recorded 2026-08-08 alongside orchestration_yaml_generation_chain, at
-        the same disclosure gap left by the unshipping commits.
+        the same disclosure gap left by the unshipping commits. Updated
+        2026-08-10 when lexicon.md's own derivation prose was pruned into
+        lexicon-derivation.md, sharpening this insight from "two roots" to
+        the actual three-file arrangement.
       added: "2026-08-08"
     - id: reversion_posture
       keywords:
@@ -150,6 +173,9 @@ model id can reach consumers if nobody runs it. The offline suite's
   directory).
 - Published vocabulary the generator also reads:
   `../../../plugins/awesome-kit/skills/orchestrate/references/lexicon.md`.
+- Authoring rules and per-term derivation history for that vocabulary
+  (maintainer-only, not a generator input): `lexicon-derivation.md` (this
+  directory).
 - Generator: `../../../scripts/generate_orchestration.py`.
 - OP-1 rationale for the maintainer/published split:
   `../plugin-opinion-razor.md`.
