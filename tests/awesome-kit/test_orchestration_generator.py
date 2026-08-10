@@ -574,6 +574,86 @@ class TestStagedScoping:
         assert "old-backend" in captured.out
         assert "new-backend" in captured.out
 
+    def test_staged_check_judges_the_index_not_the_worktree(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Mutation guard for main()'s SCOPE_INDEX branch: it must pass the
+        already-computed staged list into check_policy rather than letting
+        it recompute (and thereby risk falling back to the working tree).
+        """
+        lexicon_text = "### `known` `[concept]`\n**Test:** can it be specified?\n"
+
+        # generator.staged_paths backs check_policy's OWN recompute when its
+        # `staged` argument is omitted. It is a different function object
+        # from the real `_gitindex.staged_paths` that classify_scope calls
+        # internally, so breaking it here cannot affect classify_scope's
+        # verdict -- only whether check_policy trusts the list main() already
+        # computed (correct) or recomputes its own broken answer (mutated).
+        monkeypatch.setattr(generator, "staged_paths", lambda _repo: [], raising=False)
+
+        # Case 1: index holds a CONSISTENT triad, the working tree does not.
+        # Correct code (staged=staged passed through) reads the index -> 0.
+        # Mutated code (staged dropped) recomputes via the broken stub above,
+        # sees "nothing staged", falls back to the inconsistent worktree -> 1.
+        repo1 = self._repo(tmp_path / "consistent-index")
+        policy1, principles1, lexicon1 = self._write_inputs(
+            repo1,
+            _minimal_principles("old-backend"),
+            _minimal_principles("old-backend"),
+            lexicon_text,
+        )
+        self._commit_all(repo1)
+        policy1, principles1, lexicon1 = self._write_inputs(
+            repo1,
+            _minimal_principles("new-backend"),
+            _minimal_principles("new-backend"),
+            lexicon_text,
+        )
+        self._add(
+            repo1, generator.POLICY_REL, generator.PRINCIPLES_REL, generator.LEXICON_REL
+        )
+        # Dirty the working tree only, after staging -- the index is untouched.
+        principles1.write_text(
+            _minimal_principles("worktree-drifted"), encoding="utf-8"
+        )
+        self._point_at(monkeypatch, repo1, policy1, principles1, lexicon1)
+
+        assert generator.main(["--check", "--staged"]) == 0
+
+        # Case 2 (converse, pins the direction): index holds an INCONSISTENT
+        # triad, the working tree is consistent. Correct code still judges
+        # the index -> 1. Mutated code falls back to the clean worktree -> 0.
+        repo2 = self._repo(tmp_path / "inconsistent-index")
+        policy2, principles2, lexicon2 = self._write_inputs(
+            repo2,
+            _minimal_principles("old-backend"),
+            _minimal_principles("old-backend"),
+            lexicon_text,
+        )
+        self._commit_all(repo2)
+        policy2, principles2, lexicon2 = self._write_inputs(
+            repo2,
+            _minimal_principles("old-backend"),  # policy generated from old-backend
+            _minimal_principles("new-backend"),  # principles.md disagrees
+            lexicon_text,
+        )
+        self._add(
+            repo2, generator.POLICY_REL, generator.PRINCIPLES_REL, generator.LEXICON_REL
+        )
+        # Restore the working tree to a self-consistent triad after staging.
+        consistent_principles = _minimal_principles("old-backend")
+        policy2.write_bytes(
+            generator.generate_policy_bytes(
+                policy2.read_bytes(), consistent_principles, lexicon_text
+            )
+        )
+        principles2.write_text(consistent_principles, encoding="utf-8")
+        self._point_at(monkeypatch, repo2, policy2, principles2, lexicon2)
+
+        assert generator.main(["--check", "--staged"]) == 1
+
 
 def test_pre_commit_hook_chains_generator_check_and_remediation() -> None:
     hook = (_REPO_ROOT / "scripts" / "pre-commit-version-check.sh").read_text(
