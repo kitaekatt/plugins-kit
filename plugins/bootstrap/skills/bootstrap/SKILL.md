@@ -126,14 +126,15 @@ reference_skill:
         - Autodetect runs before required-field validation. A plugin's autodetect script can fill required fields silently; if autodetect partially succeeds, the remaining fields surface as fix-all items.
         - fix-all re-runs the engine after remediation. If issues persist after fix-all, the cause is likely outside the engine's known remediation paths.
     - id: condition_categories
-      summary: Ten categories of remediable condition the engine knows how to address.
-      keywords: [tool, PATH, venv, git dependency, JSON config, INI settings, PyPI package, marketplace, plugin, user config, condition categories, remediation]
+      summary: Eleven categories of remediable condition the engine knows how to address.
+      keywords: [tool, PATH, venv, npm, node, node_modules, package.json, git dependency, JSON config, INI settings, PyPI package, marketplace, plugin, user config, condition categories, remediation]
       detail: |
         | Category       | Examples                              | Remediation                              |
         |----------------|---------------------------------------|------------------------------------------|
         | Tool           | uv, git, gh CLI not installed         | Platform-specific install + re-check     |
         | PATH           | ~/.local/bin not in PATH              | Modify persistent PATH config            |
         | Venv           | Python venv missing or broken         | uv sync from pyproject.toml              |
+        | Node modules   | Project node_modules missing or stale | npm ci (or npm install) from package.json; no fallback on npm ci out-of-sync refusal |
         | Git dependency | Repo not cloned, wrong branch/commit  | clone once; pinned commits re-checkout; no steady-state pull |
         | JSON config    | File lacks expected entries           | Merge missing entries into target JSON   |
         | INI settings   | Application config setting not set    | Write setting to config/ini file         |

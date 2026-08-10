@@ -82,6 +82,9 @@ A declarative configuration file covering automatable operations. The engine rea
     "extras": ["dev"],
     "check_imports": ["pytest"]
   },
+  "project_npm": {
+    "ignore_scripts": false
+  },
   "project_config": {
     "file": ".local-data/p4-kit/config.yaml",
     "legacy_file": ".claude/p4-kit.yaml",
@@ -196,6 +199,35 @@ Example — env-config, whose Python package lives under `python/`:
     "subdir": "python",
     "extras": ["dev"],
     "check_imports": ["yaml"]
+  }
+}
+```
+
+## `project_npm` — Project's Own Node Modules
+
+A **layered** manifest declares `project_npm` to have bootstrap provision the *project's* `node_modules` — the Node sibling of `project_venv`. Same layering rules, same `--project-dir` requirement (silently skipped without it), same `subdir` validation (project-relative; absolute or resolving outside the project is a descriptive `project_npm` failure, no fallback to the root). It cannot be declared by a shipped plugin — only a layered manifest (`~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`) — because it is deliberately not one of the `_MANIFEST_PHASES` any plugin bootstrap.json dispatches through.
+
+Fields (all optional):
+
+- `subdir` — a project-relative subdirectory that becomes the npm working directory: `<project>/<subdir>/package.json` → `<project>/<subdir>/node_modules`. Absent = the project root.
+- `ignore_scripts` — pass `--ignore-scripts` to npm. **Defaults to `false`**, i.e. lifecycle scripts run by default, matching what `npm ci` does at a terminal. This is a deliberate opt-in, not an oversight: `--ignore-scripts` breaks esbuild/sharp/node-gyp/Prisma **silently** — the install still exits 0, leaving a subtly broken tree instead of an honest failure.
+
+The freshness check runs no subprocess: it compares `node_modules/.package-lock.json` (npm's own hidden lockfile, written last by reify) against the visible lockfile's mtime — three `stat` calls. A project that declares no dependencies at all passes with no `node_modules` present.
+
+Three conditions **skip** the phase rather than fail it — a project that does not use npm is not a broken project:
+
+- no `package.json` in the resolved directory;
+- another package manager owns the tree (pnpm/yarn/bun, detected by lockfile or a `packageManager` field in `package.json`, searched from the resolved directory **up to the project root** so a workspace package is recognized even though its lockfile lives at the repo root);
+- npm is not on PATH (bootstrap does not install Node itself).
+
+When remediation runs, it is `npm ci` if a lockfile exists, else `npm install`, with a 600s timeout (longer than `project_venv`'s uv timeout — npm is slower). If `npm ci` refuses because `package.json` and the lockfile are out of sync, bootstrap does **not** fall back to `npm install` — a session-start hook must never rewrite a tracked lockfile — and instead reports the mismatch and tells the user to run `npm install` themselves.
+
+Example:
+
+```json
+{
+  "project_npm": {
+    "subdir": "frontend"
   }
 }
 ```
@@ -889,7 +921,7 @@ The engine supports a 4-layer `bootstrap.json` model — following the same patt
 ### Merge Semantics
 
 - **Arrays** (plugins, marketplaces, tools, etc.): Unioned by identity key (`ref` for plugins, `name` for marketplaces/tools). When the same identity appears in multiple layers, higher-priority layer's fields win.
-- **Objects** (venv, config, project_venv, etc.): Deep-merged, higher priority wins for conflicting keys.
+- **Objects** (venv, config, project_venv, project_npm, etc.): Deep-merged, higher priority wins for conflicting keys.
 - **path_entries**: Simple string list union (deduplicated, order preserved).
 - **Scalars**: Higher priority wins.
 - **Explicit `null` is treated as absent**, not as a value — a higher-priority layer cannot null-out a key declared by a lower layer; it can only override it with a non-null value.
@@ -966,8 +998,9 @@ The legacy `user-bootstrap.json` in the data dir is still processed (lowest prio
 
 `env.json` is a **separate manifest file** processed by the same engine, in the
 same SessionStart pass, immediately **after** the layered `bootstrap.json`
-manifest (so `env_vars` → tools → fonts → path → project_venv have all run — every
-variable and binary a personalization references already exists) and **before**
+manifest (so `env_vars` → tools → fonts → path → project_venv → project_npm have
+all run — every variable and binary a personalization references already
+exists) and **before**
 the per-plugin manifests. It is `bootstrap.json`'s *identity-bearing* sibling:
 where `bootstrap.json` stays deliberately identity-free (any unseen client can
 read it), `env.json` requires a `machines` registry and refuses to run on a

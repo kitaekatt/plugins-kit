@@ -56,6 +56,7 @@ Every issue bootstrap surfaces resolves to **exactly one of two outcomes** — t
 |-----------|-------------|-------------|
 | Python venv missing or broken | Check dir -> binary -> interpreter runs -> packages importable | `uv sync` from `pyproject.toml` |
 | Project venv missing or broken | Same checks against `<project_dir>/.venv` | `uv sync --project <project_dir> [--extra ...]` |
+| Project node_modules missing or stale | Compare `node_modules/.package-lock.json` mtime against the visible lockfile (no subprocess) | `npm ci` if a lockfile exists, else `npm install`; `npm ci` out-of-sync refusal reports and asks the user to run `npm install` themselves (no fallback) |
 | PyPI package missing | Check extracted file exists locally | Download from PyPI and extract |
 | Git dependency not cloned / wrong branch / wrong pinned commit | Check dir exists + is a git repo + `rev-parse` matches the declared branch (or pinned `commit`) | Clone once; pinned commits are fetched + re-checked-out. No steady-state pull — an existing clone on the right branch is never updated against its remote |
 
