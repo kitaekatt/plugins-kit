@@ -36,6 +36,43 @@ except ImportError:  # non-Windows
     _real_winreg = None
 
 
+# The three guards below snapshot MACHINE-GLOBAL state (the real settings.json,
+# the real shell rc files, HKCU\Environment) -- state that is not redirected by
+# the HOME isolation everything else in this suite relies on, and that is
+# therefore shared by every pytest-xdist worker process simultaneously.
+#
+# Running them in N workers at once is wrong in both directions: a genuine leak
+# in worker A is seen by all N guards, so N-1 innocent tests fail alongside the
+# real culprit; and N processes racing to restore the same file can write back
+# bytes another worker has already superseded. Under xdist they therefore run in
+# exactly ONE worker.
+#
+# What that costs, stated plainly rather than glossed: under `-n`, a leak
+# originating in gw1..gwN is NOT detected. Leak detection is only complete in a
+# serial run. Run the suite serially when the question is "is anything leaking";
+# use `-n` for the routine TDD loop, where the guards' job is to catch a leak
+# you just introduced in the file you are working on -- which lands in whichever
+# worker happens to hold it, so treat `-n` as reduced, not absent, coverage.
+#
+# These guards cost 0.137ms per test (measured, 2026-08-09), i.e. ~0.6s across
+# the full ~4,400-test suite. They are NOT a performance problem and must not be
+# weakened for speed -- this gate exists purely for parallel correctness.
+_XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER")
+_GUARDS_ACTIVE = _XDIST_WORKER in (None, "gw0")
+
+
+@pytest.fixture(autouse=True)
+def _skip_registry_writes(monkeypatch):
+    """Default-deny the Windows registry writer for every test, in every worker.
+
+    Deliberately split out of _guard_real_user_path: that fixture's snapshot is
+    gated to a single worker (see above), but this default-deny must stay active
+    everywhere, because it is what stops the leak in the first place rather than
+    merely detecting it.
+    """
+    monkeypatch.setenv("BOOTSTRAP_SKIP_REGISTRY", "1")
+
+
 @pytest.fixture(autouse=True)
 def _guard_real_user_settings():
     """Regression guard: no test may mutate the real ~/.claude/settings.json.
@@ -48,6 +85,9 @@ def _guard_real_user_settings():
     fixture restores the original bytes and fails, so the leak is caught at its
     source instead of silently corrupting the user's live config.
     """
+    if not _GUARDS_ACTIVE:
+        yield
+        return
     try:
         before = open(_REAL_USER_SETTINGS, "rb").read()
     except OSError:
@@ -86,6 +126,9 @@ def _guard_real_shell_rc():
     _guard_real_user_settings and _guard_real_user_path: snapshot, restore on
     change, fail at the source.
     """
+    if not _GUARDS_ACTIVE:
+        yield
+        return
     before = {}
     for path in _REAL_RC_FILES:
         try:
@@ -127,7 +170,7 @@ def _read_windows_user_path():
 
 
 @pytest.fixture(autouse=True)
-def _guard_real_user_path(monkeypatch):
+def _guard_real_user_path():
     """Regression guard: no test may mutate the real Windows User PATH.
 
     The registry is GLOBAL state -- it ignores the HOME/USERPROFILE redirection
@@ -141,14 +184,17 @@ def _guard_real_user_path(monkeypatch):
     Two layers, because the first one is only as good as the person who
     remembers it:
 
-      * BOOTSTRAP_SKIP_REGISTRY is set for EVERY test (default-deny). The
-        writers honor it; the handful of tests that exercise the write path
+      * BOOTSTRAP_SKIP_REGISTRY is set for EVERY test (default-deny), by the
+        _skip_registry_writes fixture above -- deliberately a separate fixture so
+        it stays active in every xdist worker while the snapshot below does not.
+        The writers honor it; the handful of tests that exercise the write path
         delenv it themselves and mock winreg, which still works.
       * The snapshot below is the backstop that makes THIS bug structurally
         unable to recur: it catches a writer that ignores the env var, or a test
         that opts out and forgets to mock winreg. On a leak it restores the
         original value and fails at the source, rather than letting the damage
-        silently outlive the run.
+        silently outlive the run. Under `-n` it runs in one worker only; see the
+        _GUARDS_ACTIVE comment above for what that costs.
 
     Scope, stated plainly so nobody infers more than it delivers: the snapshot
     watches HKCU\\Environment "Path" and nothing else. font_check writes
@@ -160,7 +206,9 @@ def _guard_real_user_path(monkeypatch):
     Mirrors _guard_real_user_settings; see its docstring for the same shape
     applied to ~/.claude/settings.json.
     """
-    monkeypatch.setenv("BOOTSTRAP_SKIP_REGISTRY", "1")
+    if not _GUARDS_ACTIVE:
+        yield
+        return
     before = _read_windows_user_path()
     yield
     after = _read_windows_user_path()

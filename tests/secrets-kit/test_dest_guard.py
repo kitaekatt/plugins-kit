@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from sk_testlib import copy_git_tree
+
 from secrets_kit import repo as repo_mod
 from secrets_kit.converge import FAILURE_DEST, converge
 from secrets_kit.manifest import Manifest
@@ -55,11 +57,28 @@ def _git(cwd: Path, *args: str) -> None:
     )
 
 
-def _init_repo(path: Path) -> Path:
-    path.mkdir(parents=True, exist_ok=True)
+def _build_plain_repo(path: Path) -> None:
     _git(path, "init", "--quiet")
     _git(path, "config", "user.email", "t@example.com")
     _git(path, "config", "user.name", "t")
+
+
+# Populated once per process by the autouse `_templates` fixture below, so the
+# ~30 `_init_repo` call sites stay unchanged. Read-only after that: every
+# caller gets an independent `copy_git_tree` copy.
+_TEMPLATES = {}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _templates(git_template):
+    _TEMPLATES["plain"] = git_template("dest-guard-plain", _build_plain_repo)
+    _TEMPLATES["adding"] = git_template("dest-guard-adding", _build_adding_tree)
+
+
+def _init_repo(path: Path) -> Path:
+    """A committable git repo -- a copy of the template, not a fresh init."""
+    path.mkdir(parents=True, exist_ok=True)
+    copy_git_tree(_TEMPLATES["plain"], path)
     return path
 
 
@@ -380,21 +399,20 @@ def _armored(recipient: bytes, plaintext: bytes) -> bytes:
     )
 
 
-@pytest.fixture
-def adding(tmp_path, monkeypatch):
-    """A seeded secrets repo with a real remote, plus dest trees to aim at.
+def _build_adding_tree(root: Path) -> None:
+    """The expensive half of `adding`: a bare remote, a seeded+pushed clone,
+    and a consumer working tree. Ten git processes, built once per process.
 
-    Neither `fleet` nor the `repo` fixture in test_guard.py fits: this needs a
-    pushable secrets repo AND a real git working tree standing in for the
-    consumer. `no_network` deliberately stubs git out, so it cannot be reused.
+    Nothing machine- or test-specific is baked in; the only absolute paths are
+    the clone's origin URL, which `copy_git_tree` repoints.
     """
-    remote = tmp_path / "remote.git"
-    _git(tmp_path, "init", "--quiet", "--bare", "--initial-branch=main", str(remote))
+    remote = root / "remote.git"
+    _git(root, "init", "--quiet", "--bare", "--initial-branch=main", str(remote))
 
-    data_dir = tmp_path / "data"
+    data_dir = root / "data"
     clone = data_dir / "repo"
     data_dir.mkdir()
-    _git(tmp_path, "clone", "--quiet", str(remote), str(clone))
+    _git(root, "clone", "--quiet", str(remote), str(clone))
     _git(clone, "config", "user.email", "t@example.com")
     _git(clone, "config", "user.name", "t")
     (clone / "manifest.json").write_text(
@@ -414,16 +432,33 @@ def adding(tmp_path, monkeypatch):
     _git(clone, "commit", "--quiet", "-m", "seed")
     _git(clone, "push", "--quiet", "origin", "main")
 
-    consumer = _init_repo(tmp_path / "consumer")
+    consumer = _init_repo(root / "consumer")
     (consumer / "config").mkdir()
     # A second in-tree directory, so a --dest CHANGE can be exercised against a
     # path convergence could actually write to.
     (consumer / "other").mkdir()
-    plain = tmp_path / "plain"
-    plain.mkdir()
+    (root / "plain").mkdir()
+    (root / "source.txt").write_bytes(_PLAINTEXT)
 
-    source = tmp_path / "source.txt"
-    source.write_bytes(_PLAINTEXT)
+
+@pytest.fixture
+def adding(tmp_path, monkeypatch):
+    """A seeded secrets repo with a real remote, plus dest trees to aim at.
+
+    Neither `fleet` nor the `repo` fixture in test_guard.py fits: this needs a
+    pushable secrets repo AND a real git working tree standing in for the
+    consumer. `no_network` deliberately stubs git out, so it cannot be reused.
+
+    The tree itself is a private copy of a per-process template (see
+    `sk_testlib`); the copy is a real git repo and the test owns it outright.
+    """
+    tree = copy_git_tree(_TEMPLATES["adding"], tmp_path / "adding")
+    remote = tree / "remote.git"
+    data_dir = tree / "data"
+    clone = data_dir / "repo"
+    consumer = tree / "consumer"
+    plain = tree / "plain"
+    source = tree / "source.txt"
 
     config_path = tmp_path / "secrets.json"
     config_path.write_text(

@@ -25,6 +25,29 @@ if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
 
 
+@pytest.fixture(scope="session")
+def git_template(tmp_path_factory):
+    """Build an expensive git tree once per process; return its path.
+
+    Usage: ``template = git_template("name", build_fn)`` where ``build_fn``
+    receives an empty directory. Callers must treat the result as READ-ONLY and
+    hand tests a `sk_testlib.copy_git_tree` copy of it -- see that module for
+    why this exists and why it is safe under pytest-xdist.
+    """
+    root = tmp_path_factory.mktemp("git-templates")
+    built = {}
+
+    def get(key, build):
+        if key not in built:
+            target = root / key
+            target.mkdir(parents=True)
+            build(target)
+            built[key] = target
+        return built[key]
+
+    return get
+
+
 # A blob is just the plaintext with a marker prefix, so "decryption" is
 # reversible and a wrong-identity case can be simulated by changing the
 # marker. Enough structure to catch a real bug, no more.

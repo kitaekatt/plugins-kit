@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from sk_testlib import copy_git_tree
 
 _CLI_PATH = (
     Path(__file__).resolve().parents[2]
@@ -47,14 +48,17 @@ def _git(cwd: Path, *args: str) -> None:
     )
 
 
-@pytest.fixture
-def seeding(tmp_path, monkeypatch):
-    """A configured machine whose clone is one commit behind a bare remote."""
-    remote = tmp_path / "remote.git"
-    _git(tmp_path, "init", "--quiet", "--bare", "--initial-branch=main", str(remote))
+def _build_seeding_tree(root: Path) -> None:
+    """Eleven git processes' worth of setup, built once per process.
 
-    origin = tmp_path / "origin"
-    _git(tmp_path, "clone", "--quiet", str(remote), str(origin))
+    The only absolute paths baked in are the two clones' origin URLs, which
+    `copy_git_tree` repoints when it hands out a copy.
+    """
+    remote = root / "remote.git"
+    _git(root, "init", "--quiet", "--bare", "--initial-branch=main", str(remote))
+
+    origin = root / "origin"
+    _git(root, "clone", "--quiet", str(remote), str(origin))
     _git(origin, "config", "user.email", "t@example.com")
     _git(origin, "config", "user.name", "t")
     (origin / "README.md").write_text("readme", encoding="utf-8")
@@ -62,12 +66,31 @@ def seeding(tmp_path, monkeypatch):
     _git(origin, "commit", "--quiet", "-m", "init")
     _git(origin, "push", "--quiet", "origin", "main")
 
-    data_dir = tmp_path / "data"
+    data_dir = root / "data"
     clone = data_dir / "repo"
     data_dir.mkdir()
-    _git(tmp_path, "clone", "--quiet", str(remote), str(clone))
+    _git(root, "clone", "--quiet", str(remote), str(clone))
     _git(clone, "config", "user.email", "t@example.com")
     _git(clone, "config", "user.name", "t")
+
+
+@pytest.fixture(scope="session")
+def _seeding_template(git_template):
+    return git_template("init-seeding", _build_seeding_tree)
+
+
+@pytest.fixture
+def seeding(tmp_path, monkeypatch, _seeding_template):
+    """A configured machine whose clone is one commit behind a bare remote.
+
+    The tree is a private copy of a per-process template (see `sk_testlib`):
+    real git repos this test owns outright and can push into freely.
+    """
+    tree = copy_git_tree(_seeding_template, tmp_path / "seeding")
+    remote = tree / "remote.git"
+    origin = tree / "origin"
+    data_dir = tree / "data"
+    clone = data_dir / "repo"
 
     config_path = tmp_path / "secrets.json"
     config_path.write_text(

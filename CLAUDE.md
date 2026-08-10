@@ -161,7 +161,38 @@ uv run --extra dev pytest tests/bootstrap/test_marketplace_lifecycle.py -v
 uv run --extra dev pytest tests/bootstrap/test_marketplace_lifecycle.py::TestCheckPluginScope -v
 ```
 
-Only run the full suite (`uv run --extra dev pytest -v`) when explicitly asked or before a release.
+Only run the full suite when explicitly asked or before a release -- and when you do,
+**parallelise it**, because the full suite is the only run where that pays:
+
+```bash
+uv run --extra dev pytest -n 12 -q      # full suite, ~3 min
+```
+
+`pytest-xdist` is in the `dev` extra. `-n` is deliberately NOT in `addopts`, and adding
+it there would be a regression rather than a convenience: worker startup is a fixed
+~1.6-2.9s toll, which is free on a 13-minute run and ruinous on the targeted runs above.
+Measured on a 24-core box, `tests/bootstrap/test_cache.py` alone costs **0.40s serial,
+2.03s at `-n 12`, 3.33s at `-n auto`** -- so a config-level `-n` makes the tight TDD loop
+5-8x SLOWER while making the full run faster. Pass `-n` explicitly, per run.
+
+Pick the worker count deliberately too; more is not better. This suite is process-spawn
+bound (real `git`, `uv`, and Git Bash subprocesses), so past a point extra workers just
+contend for the same spawns. Full-suite wall time on that 24-core box: `-n 8` 4:00,
+**`-n 12` 2:54**, `-n 16` 3:10, `-n auto` (=24) 3:21. Roughly half the core count is the
+sweet spot; `-n auto` is portable but not optimal on a many-core machine.
+
+Two consequences of parallelism worth knowing before you blame your change for a failure:
+
+- **Timing-sensitive tests can fail under load and pass serially.** The SessionStart
+  display hook spawns ~10 Git Bash processes and its foreground takes 11-22s on a
+  saturated machine, against ~1s idle. `tests/bootstrap/test_sessionstart_rescue.py` is
+  hardened for this (generous *polling* for positive assertions; a causal observable
+  instead of a fixed sleep for negative ones). If you add a test that waits on a
+  subprocess, follow that pattern -- never a bare `time.sleep` sized for an idle machine.
+- **The three root-conftest leak guards run in ONE worker under `-n`** (see the comment in
+  `tests/conftest.py`), because they snapshot machine-global state that xdist cannot
+  isolate. Leak detection is therefore complete only in a SERIAL run. Run serially when
+  the question is "is something leaking into my real `~/.claude`".
 
 **Interpreter: the repo is pinned to Python 3.12** via a repo-root `.python-version`, so bare `uv run` / `uv venv` select 3.12 everywhere — no `-p 3.12` needed. Nothing needs 3.14 (four plugins exclude it: `requires-python ">=3.12,!=3.14.*"`); it used to leak in only as uv's global default when no pin was present.
 

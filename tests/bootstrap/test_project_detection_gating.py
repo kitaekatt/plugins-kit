@@ -122,7 +122,7 @@ class TestProcessConfigProjectGating:
 
 
 class TestProcessProjectConfigDetection:
-    def test_stale_config_with_missing_fields_and_autodetect_none_returns_false(self, tmp_path):
+    def test_stale_config_with_missing_fields_and_autodetect_none_returns_false(self, tmp_path, monkeypatch):
         """Stale .claude/unreal-kit.yaml exists (missing engine_dir) but autodetect
         returns None (no .uproject in CWD) -> should return False, not True."""
         plugin_root = str(tmp_path / "plugin")
@@ -145,21 +145,17 @@ class TestProcessProjectConfigDetection:
         action_entries = []
         ok_entries = []
 
-        orig_dir = os.getcwd()
-        os.chdir(str(tmp_path))
-        try:
-            with patch("bootstrap_lib.config_check.run_project_autodetect", return_value=None) as mock_ad:
-                result = _process_project_config(
-                    section, plugin_data_dir, plugin_root,
-                    action_entries, ok_entries=ok_entries, plugin_name="test",
-                )
-        finally:
-            os.chdir(orig_dir)
+        monkeypatch.chdir(tmp_path)
+        with patch("bootstrap_lib.config_check.run_project_autodetect", return_value=None) as mock_ad:
+            result = _process_project_config(
+                section, plugin_data_dir, plugin_root,
+                action_entries, ok_entries=ok_entries, plugin_name="test",
+            )
 
         assert result is False, "Should return False when autodetect finds no project in CWD"
         assert any("no project detected" in e for e in ok_entries)
 
-    def test_stale_config_all_fields_present_returns_true(self, tmp_path):
+    def test_stale_config_all_fields_present_returns_true(self, tmp_path, monkeypatch):
         """Stale config with ALL required fields set -> return True (config phase will validate)."""
         plugin_root = str(tmp_path / "plugin")
         os.makedirs(plugin_root)
@@ -183,15 +179,11 @@ class TestProcessProjectConfigDetection:
         action_entries = []
         ok_entries = []
 
-        orig_dir = os.getcwd()
-        os.chdir(str(tmp_path))
-        try:
-            result = _process_project_config(
-                section, plugin_data_dir, plugin_root,
-                action_entries, ok_entries=ok_entries, plugin_name="test",
-            )
-        finally:
-            os.chdir(orig_dir)
+        monkeypatch.chdir(tmp_path)
+        result = _process_project_config(
+            section, plugin_data_dir, plugin_root,
+            action_entries, ok_entries=ok_entries, plugin_name="test",
+        )
 
         assert result is True
 

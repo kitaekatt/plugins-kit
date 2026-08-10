@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from sk_testlib import copy_git_tree
 
 from secrets_kit import SecretsError, guard
 
@@ -37,11 +38,7 @@ def _git(repo, *args, check=True):
     return proc
 
 
-@pytest.fixture
-def repo(tmp_path):
-    """A guarded, committable git repo standing in for fleet-secrets."""
-    path = tmp_path / "fleet-secrets"
-    path.mkdir()
+def _build_guarded_repo(path: Path) -> None:
     _git(path, "init", "--quiet")
     _git(path, "config", "user.email", "t@example.com")
     _git(path, "config", "user.name", "T")
@@ -49,7 +46,21 @@ def repo(tmp_path):
     _git(path, "config", "--unset-all", "core.hooksPath", check=False)
     (path / "blobs").mkdir()
     guard.install(path)
-    return path
+
+
+@pytest.fixture(scope="session")
+def _guarded_repo_template(git_template):
+    return git_template("guard-repo", _build_guarded_repo)
+
+
+@pytest.fixture
+def repo(tmp_path, _guarded_repo_template):
+    """A guarded, committable git repo standing in for fleet-secrets.
+
+    A private copy of a per-process template (see `sk_testlib`) -- a real git
+    repo with the real hook installed, which this test alone commits into.
+    """
+    return copy_git_tree(_guarded_repo_template, tmp_path / "fleet-secrets")
 
 
 def _commit(repo, *paths, message="t"):

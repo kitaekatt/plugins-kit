@@ -102,7 +102,13 @@ class TestCrossMarketplacePluginRefs:
         with open(os.path.join(data_dir, "config.json"), "w") as f:
             json.dump(config, f)
 
-        result = run_engine(data_dir, plugin_root=fake_root)
+        # Isolated HOME: without it the engine resolves the DEVELOPER's real
+        # ~/.claude registry and runs a full live convergence pass over every
+        # installed plugin (~50s, and incidental to a local-registry lookup).
+        isolated_home = tmp_path / "home"
+        (isolated_home / ".claude" / "plugins").mkdir(parents=True)
+        result = run_engine(data_dir, plugin_root=fake_root,
+                            env=_env_with_home(isolated_home))
         assert result.returncode == 0
 
         # Should find the plugin in local registry and enable it

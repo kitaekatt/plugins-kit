@@ -68,7 +68,14 @@ _SECRET_TEXT_RES = (
     # boundary before "API" in "ANTHROPIC_API_KEY". A \b-anchored pattern
     # therefore masks the toy form (api_key=x) and misses every form bootstrap
     # actually handles.
-    re.compile(r"(?i)([\w.-]*(?:api[_-]?key|access[_-]?token|token|secret"
+    # The (?<![\w.-]) anchor is a PERFORMANCE guard, not a semantic one: without
+    # it the engine retries the greedy [\w.-]* prefix from every offset inside a
+    # long word-character run, which is quadratic (a 64KB subprocess blob -- well
+    # within MAX_DETAIL_CHARS -- cost ~60s to redact). Anchoring the prefix to a
+    # token boundary matches exactly the same strings, because the prefix class
+    # IS the boundary class: any start the anchor rejects lies inside a token
+    # whose own start already absorbs those characters into [\w.-]*.
+    re.compile(r"(?i)(?<![\w.-])([\w.-]*(?:api[_-]?key|access[_-]?token|token|secret"
                r"|password|passwd|credential)[\w.-]*\s*[=:]\s*)(\S+)"),
     re.compile(r"(?i)(--(?:password|token|api-key)[= ])(\S+)"),
 )

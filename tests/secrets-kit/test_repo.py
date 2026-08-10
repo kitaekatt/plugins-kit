@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from sk_testlib import copy_git_tree
 
 from secrets_kit import SecretsError
 from secrets_kit import repo as repo_mod
@@ -34,39 +35,55 @@ def _commit(clone: Path, name: str, text: str = "x") -> None:
     _git(clone, "commit", "--quiet", "-m", f"add {name}")
 
 
-@pytest.fixture
-def fleet_git(tmp_path):
-    """A bare 'remote' with one commit, plus two clones of it.
+def _build_fleet_git(root: Path) -> None:
+    """Thirteen git processes' worth of setup, built once per process.
 
-    Two clones is the point: `author` stands in for the machine doing the
-    writing, `other` for a machine that seeded the repo earlier and whose work
-    `author` has not fetched.
+    Kept identical to what every test used to do for itself; the only absolute
+    paths baked in are the clones' origin URLs, which `copy_git_tree`
+    repoints when it hands out a copy.
     """
-    remote = tmp_path / "remote.git"
-    _git(tmp_path, "init", "--quiet", "--bare", "--initial-branch=main", str(remote))
+    remote = root / "remote.git"
+    _git(root, "init", "--quiet", "--bare", "--initial-branch=main", str(remote))
 
-    seed = tmp_path / "seed"
-    _git(tmp_path, "clone", "--quiet", str(remote), str(seed))
+    seed = root / "seed"
+    _git(root, "clone", "--quiet", str(remote), str(seed))
     _git(seed, "config", "user.email", "t@example.com")
     _git(seed, "config", "user.name", "t")
     _commit(seed, "README.md")
     _git(seed, "push", "--quiet", "origin", "main")
 
-    clones = {}
     for name in ("author", "other"):
-        path = tmp_path / name
-        _git(tmp_path, "clone", "--quiet", str(remote), str(path))
+        path = root / name
+        _git(root, "clone", "--quiet", str(remote), str(path))
         _git(path, "config", "user.email", "t@example.com")
         _git(path, "config", "user.name", "t")
-        clones[name] = path
+
+
+@pytest.fixture(scope="session")
+def _fleet_git_template(git_template):
+    return git_template("repo-fleet-git", _build_fleet_git)
+
+
+@pytest.fixture
+def fleet_git(tmp_path, _fleet_git_template):
+    """A bare 'remote' with one commit, plus two clones of it.
+
+    Two clones is the point: `author` stands in for the machine doing the
+    writing, `other` for a machine that seeded the repo earlier and whose work
+    `author` has not fetched.
+
+    The trio is a private copy of a per-process template (see `sk_testlib`):
+    real git repos the test owns outright, sharing nothing with any other test.
+    """
+    root = copy_git_tree(_fleet_git_template, tmp_path / "fleet")
 
     class Fleet:
         pass
 
     f = Fleet()
-    f.remote = remote
-    f.author = clones["author"]
-    f.other = clones["other"]
+    f.remote = root / "remote.git"
+    f.author = root / "author"
+    f.other = root / "other"
     return f
 
 

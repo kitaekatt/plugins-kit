@@ -60,19 +60,30 @@ rather than `uv run python`) is documented in the root CLAUDE.md insight
 `host_python_via_plugin_venv`. With the script-side re-exec in place, the
 SKILL.md guidance is a nicety, not a load-bearing requirement.
 
-**Test gotcha: this same re-exec silently short-circuits pytest.** Running
-`pytest tests/p4-kit` (or `tests/git-kit`) without `_BOOTSTRAP_GUARD_VENV_REEXEC=1`
-set stops at collection with exit 0 -- a false green. Importing
-`prepare_review.py` triggers `reexec_under_plugin_venv`, which on a machine
-with the plugin's venv provisioned calls `os.execv` and abandons the pytest
-process itself, not just the import. Setting the guard env var makes the
-re-exec a no-op (see `_REEXEC_GUARD_ENV` in `bootstrap_guard.py`), matching how
-the real script is invoked when the guard has already fired once. Canonical
-invocation:
+**Test gotcha: this same re-exec silently short-circuits pytest.** Importing
+`prepare_review.py` triggers `reexec_under_plugin_venv`, which on a machine with
+the plugin's venv provisioned calls `os.execv` and abandons the pytest process
+ITSELF, not just the import -- so the run stops at collection with **exit 0 and
+no output at all: a false green**. Setting `_BOOTSTRAP_GUARD_VENV_REEXEC=1`
+makes the re-exec a no-op (see `_REEXEC_GUARD_ENV` in `bootstrap_guard.py`),
+matching how the real script is invoked once the guard has already fired.
 
-```bash
-_BOOTSTRAP_GUARD_VENV_REEXEC=1 uv run pytest tests/p4-kit -q
+**Set it in the test package's `conftest.py`, not at the invocation.** Every
+affected test dir does this at import time, so a bare `pytest tests/<dir>` is
+safe with nothing to remember:
+
+```python
+os.environ.setdefault("_BOOTSTRAP_GUARD_VENV_REEXEC", "1")
 ```
+
+Current setters: `tests/awesome-kit`, `tests/git-kit`, `tests/p4-kit`,
+`tests/unreal-kit`. A dir whose tests import a re-execing script and which does
+NOT set this is a latent false green, and the failure hides itself: in a
+full-suite run an earlier conftest (alphabetically, `tests/awesome-kit`) sets
+the var first, so the dir looks healthy and only breaks when run ALONE -- i.e.
+in exactly the targeted TDD loop, never in CI. `tests/p4-kit` sat in that state
+and silently ran 0 of its 188 tests (fixed 2026-08-09). When adding a
+module-level `reexec_under_plugin_venv` to a script, check its test dir.
 
 ## bootstrap_guard.py is vendored byte-for-byte
 

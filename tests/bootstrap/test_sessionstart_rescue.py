@@ -140,10 +140,15 @@ class TestRescueBehavior:
 
         record = tmp_path / "sb_invoked_stdin"
         stub = ss_dir / "session-bootstrap.sh"
+        # Write-then-rename: a plain `> record` truncates the file into existence
+        # before printf fills it, so a poller can observe an empty record and read
+        # back "" for the session-id assertion. The rename makes the record appear
+        # complete or not at all.
         stub.write_text(
             "#!/usr/bin/env bash\n"
             'IN="$(cat)"\n'
-            f'printf \'%s\' "$IN" > "{record.as_posix()}"\n',
+            f'printf \'%s\' "$IN" > "{record.as_posix()}.part"\n'
+            f'mv -f "{record.as_posix()}.part" "{record.as_posix()}"\n',
             encoding="utf-8",
         )
 
@@ -151,6 +156,7 @@ class TestRescueBehavior:
         home.mkdir()
         data_dir = home / ".claude" / "plugins" / "data" / "mkt" / "bootstrap"
         return {
+            "plugin_root": plugin_root,
             "display": display,
             "record": record,
             "home": home,
@@ -158,23 +164,75 @@ class TestRescueBehavior:
             "sessions": data_dir / "sessions",
             "marker": data_dir / "sessions" / SID,
             "lock": data_dir / "sessions" / f"rescue_launched.{SID}",
+            "harvest_record": tmp_path / "harvest_invoked",
         }
 
-    def _run(self, s: dict, stdin: str = HOOK_JSON, delay: str = "0") -> subprocess.CompletedProcess:
+    def _install_harvest_stub(self, s: dict) -> None:
+        """Make the hook's `_run_harvest` observable.
+
+        This is the causal spine of every must-NOT-happen assertion in this class,
+        because the hook runs the harvest on exactly the paths that did NOT launch
+        a rescue:
+
+        * FOREGROUND (`_RESCUE_LAUNCHED` empty): a harvest record present when the
+          hook exits proves the rescue never armed, hence no detached subshell
+          exists to race the `not record` assertion. Merely waiting for the hook
+          to exit does NOT prove that -- a regressed gate forks a subshell that
+          records itself well after exit (verified by mutation).
+        * DETACHED STAND-DOWN: both stand-down branches run the harvest and exit
+          silently, so the record is the only signal the subshell reached its
+          decision point without having to wait out a guessed window.
+
+        The hook resolves its interpreter as `$HOME/.local/...` (per-OS) before
+        falling back to PATH, so planting an executable shebang script at both
+        canonical paths captures the invocation on every platform.
+        """
+        rec = s["harvest_record"].as_posix()
+        (s["plugin_root"] / "bootstrap_lib").mkdir(parents=True, exist_ok=True)
+        (s["plugin_root"] / "bootstrap_lib" / "harvest.py").write_text("", encoding="utf-8")
+        body = (
+            "#!/usr/bin/env bash\n"
+            f'printf \'%s\' "$*" > "{rec}.part.$$"\n'
+            f'mv -f "{rec}.part.$$" "{rec}"\n'
+        )
+        for rel in (".local/share/python-standalone/python/python.exe", ".local/bin/python3"):
+            p = s["home"] / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body, encoding="utf-8")
+            p.chmod(0o755)
+
+    def _no_rescue_armed(self, s: dict) -> bool:
+        """True iff the completed foreground ran the harvest, i.e. it took the
+        no-rescue branch and forked no detached subshell. Requires the harvest
+        stub; call only after the hook process has exited."""
+        return s["harvest_record"].exists()
+
+    def _env(self, s: dict, delay: str) -> dict:
         env = os.environ.copy()
         env["HOME"] = s["home"].as_posix()
         env["BOOTSTRAP_RESCUE_DELAY"] = delay
+        return env
+
+    def _run(self, s: dict, stdin: str = HOOK_JSON, delay: str = "0") -> subprocess.CompletedProcess:
         return subprocess.run(
             [BASH, str(s["display"])],
-            input=stdin, capture_output=True, text=True, env=env, timeout=30,
+            input=stdin, capture_output=True, text=True, env=self._env(s, delay), timeout=120,
         )
 
-    def _wait_for(self, path: Path, timeout: float = 5.0) -> bool:
+    def _wait_for(self, path: Path, timeout: float = 60.0) -> bool:
+        """Poll for a file that SHOULD appear.
+
+        Returns the instant it does, so a generous timeout costs nothing on an
+        idle machine and is the difference between green and red under a fully
+        saturated CPU (a Git Bash spawn measured 11-22s under 96-way load).
+        Never use this for a must-NOT-appear assertion -- pair those with a
+        positive observable proving the decision point has passed.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if path.exists():
                 return True
-            time.sleep(0.1)
+            time.sleep(0.05)
         return False
 
     def test_launches_when_no_session_marker(self, tmp_path: Path) -> None:
@@ -198,12 +256,18 @@ class TestRescueBehavior:
     def test_skips_when_own_marker_exists(self, tmp_path: Path) -> None:
         # SessionStart ran (or gate-skipped) normally this session -> no rescue.
         s = self._scaffold(tmp_path)
+        self._install_harvest_stub(s)
         s["sessions"].mkdir(parents=True)
         s["marker"].write_text("", encoding="utf-8")
         result = self._run(s)
         assert result.returncode == 0, result.stderr
-        time.sleep(1.0)
+        # Causal, not timed: the foreground harvest only runs when the rescue did
+        # NOT arm, so its record proves no detached subshell exists to race the
+        # assertion below. (A plain "the hook exited" would not -- a regressed
+        # marker gate forks a subshell that records itself long after exit.)
+        assert self._no_rescue_armed(s), "own session marker must suppress the rescue"
         assert not s["record"].exists(), "own session marker must suppress the rescue"
+        assert not s["lock"].exists(), "a suppressed rescue must not take the launch lock"
 
     def test_other_sessions_markers_do_not_suppress(self, tmp_path: Path) -> None:
         # Pins the multi-session fix: a CONCURRENT session's marker (or the old
@@ -216,24 +280,34 @@ class TestRescueBehavior:
 
     def test_rescue_lock_caps_launches_at_one(self, tmp_path: Path) -> None:
         s = self._scaffold(tmp_path)
+        self._install_harvest_stub(s)
         s["sessions"].mkdir(parents=True)
         s["lock"].write_text("", encoding="utf-8")
         result = self._run(s)
         assert result.returncode == 0, result.stderr
-        time.sleep(1.0)
+        assert self._no_rescue_armed(s), "an existing rescue lock must block a second launch"
         assert not s["record"].exists(), "an existing rescue lock must block a second launch"
 
     def test_fresh_cooldown_stamp_stands_down(self, tmp_path: Path) -> None:
         # A cooldown stamped moments ago means a pass is running or just ran
         # (possibly a no-stdin SessionStart that wrote no marker): don't race it.
         s = self._scaffold(tmp_path)
+        self._install_harvest_stub(s)
         cooldowns = s["data_dir"] / "cooldowns"
         cooldowns.mkdir(parents=True)
         (cooldowns / "last_run_epoch.abc").write_text(str(int(time.time())), encoding="utf-8")
         result = self._run(s)
         assert result.returncode == 0, result.stderr
-        time.sleep(1.0)
+        # The rescue DID arm here (marker absent), so a subshell is detached and
+        # racing us. Rather than sleeping a guessed window, wait on the positive
+        # observable that proves it reached its decision: the stand-down path runs
+        # the harvest before exiting, and the armed foreground path skips it, so
+        # this record can only come from the subshell standing down.
+        assert self._wait_for(s["harvest_record"]), (
+            "stand-down must run the harvest the armed prompt skipped"
+        )
         assert not s["record"].exists(), "a fresh cooldown stamp must stand the rescue down"
+        assert not s["lock"].exists(), "a stood-down rescue must not take the launch lock"
 
     def test_stale_cooldown_stamp_does_not_stand_down(self, tmp_path: Path) -> None:
         s = self._scaffold(tmp_path)
@@ -248,32 +322,64 @@ class TestRescueBehavior:
 
     def test_no_stdin_no_rescue(self, tmp_path: Path) -> None:
         s = self._scaffold(tmp_path)
+        self._install_harvest_stub(s)
         result = self._run(s, stdin="")
         assert result.returncode == 0, result.stderr
-        time.sleep(1.0)
+        assert self._no_rescue_armed(s), "empty hook input must not arm the rescue"
         assert not s["record"].exists()
+        assert not s["lock"].exists()
 
     def test_no_session_id_no_rescue(self, tmp_path: Path) -> None:
         s = self._scaffold(tmp_path)
+        self._install_harvest_stub(s)
         result = self._run(s, stdin='{"hook_event_name": "UserPromptSubmit"}')
         assert result.returncode == 0, result.stderr
-        time.sleep(1.0)
+        assert self._no_rescue_armed(s), "hook input without a session_id must not arm the rescue"
         assert not s["record"].exists()
+        assert not s["lock"].exists()
 
     def test_inflight_sessionstart_wins_the_race(self, tmp_path: Path) -> None:
         # Fast-start (claude -p) race: SessionStart fired but hadn't written the
         # marker yet when the prompt arrived. It writes it during the rescue's
         # re-check delay, so the detached rescue stands down instead of
-        # double-running the pass. Generous 5s delay: the marker lands well
-        # inside the window even on a slow bash spawn (the write happens right
-        # after subprocess.run returns, typically <1s in).
+        # double-running the pass.
+        #
+        # The marker must land AFTER the foreground arms the rescue (else the
+        # fork never happens and the test proves nothing) but BEFORE the detached
+        # re-check. Waiting for the hook to EXIT is not a usable "after" signal:
+        # the foreground is ~10 Git Bash process spawns and was measured at
+        # 11-22s under a saturated CPU, so no re-check delay can outlast it.
+        #
+        # Instead, order it causally on the display relay, which the hook performs
+        # strictly AFTER forking the subshell: plant a .pending sentinel and read
+        # it off the hook's stdout while it is still running. Its arrival proves
+        # the subshell exists and is sleeping, and the delay clock only has to
+        # cover the one `cat` spawn plus a pipe read.
         s = self._scaffold(tmp_path)
-        result = self._run(s, delay="5")
-        assert result.returncode == 0, result.stderr
-        s["sessions"].mkdir(parents=True, exist_ok=True)
+        self._install_harvest_stub(s)
+        s["sessions"].mkdir(parents=True, exist_ok=True)  # so the marker write is one op
+        sentinel = '{"systemMessage": "relay-sentinel"}'
+        (s["data_dir"] / "bootstrap_display.pending").write_text(sentinel + "\n", encoding="utf-8")
+
+        proc = subprocess.Popen(
+            [BASH, str(s["display"])],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, env=self._env(s, delay="5"),
+        )
+        proc.stdin.write(HOOK_JSON)
+        proc.stdin.close()
+        assert sentinel in proc.stdout.readline(), "display relay sentinel not seen"
+        # The armed foreground path SKIPS the harvest and the relay comes after it,
+        # so a harvest record existing now would mean the rescue never armed.
+        assert not s["harvest_record"].exists(), "rescue did not arm -- test would be vacuous"
         s["marker"].write_text("", encoding="utf-8")
-        time.sleep(8.0)
+        assert proc.wait(timeout=120) == 0
+
+        # Stand-down proof, not a guessed window: the marker branch runs the
+        # harvest and exits, so the record appears the moment the re-check ran.
+        assert self._wait_for(s["harvest_record"]), "detached re-check never completed"
         assert not s["record"].exists(), "rescue must stand down when the marker catches up"
+        assert not s["lock"].exists(), "a stood-down rescue must not take the launch lock"
 
     def test_display_relay_unaffected(self, tmp_path: Path) -> None:
         # The original job of the hook -- relay bootstrap_display.pending once --
