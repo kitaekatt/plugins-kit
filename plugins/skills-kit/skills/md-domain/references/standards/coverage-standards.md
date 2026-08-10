@@ -49,7 +49,13 @@ standards_set:
         ADMIT a two-place registration requirement that a compiler never
         enforces. REJECT a restatement of what a function's name already says,
         and REJECT a file inventory, which the reader can regenerate by listing
-        the directory.
+        the directory. Apply 'cheaply recoverable' to the FACT, never to the
+        area it sits in: a docstring that states an invariant for the cases it
+        handles does not make the case it omits recoverable. When source
+        commentary covers part of a topic, name the specific proposition being
+        suppressed and check that the commentary states THAT proposition -- a
+        suppression whose justification is 'this area is documented' is
+        mis-scoped.
 
     - id: already-ambient-suppressed
       statement: >-

@@ -2,7 +2,7 @@
 
 Reviews re-run against the same change (the same CL, the same git range) re-
 surface findings the author already looked at and declined -- both generic
-code-review issues and md-audit subject-lens findings. This module is the
+code-review issues and md-domain audit subject-lens findings. This module is the
 VCS-neutral memory that lets a re-run render those previously-declined findings
 COLLAPSED instead of re-litigating them.
 
@@ -18,7 +18,7 @@ identically, exactly like the rest of the pipeline (chunking, CLAUDE.md walk).
 Key. Deliberately aligned with skills-kit's own attribution matching: a finding
 is keyed by criterion/reason + taxonomy + a NORMALIZED anchor, never by line
 numbers or exact wording (both churn on trivial edits). Concretely:
-    md-audit finding: (file, criterion, taxonomy, normalized-message-anchor)
+    md-domain audit finding: (file, criterion, taxonomy, normalized-message-anchor)
     code-review issue: (file, reason, normalized-description-anchor)
 The normalized anchor is the lowercased first N significant (alphanumeric)
 tokens of the message/description -- see `normalize_anchor`.
@@ -41,10 +41,10 @@ moved underneath it, so the finding re-surfaces rather than staying collapsed.
 When the baseline changes the entry is invalidated; `record_declined` prunes
 stale entries so the file does not grow without bound.
 
-SERIOUS never collapses. Mirrors skills-kit's reducer rule that a SERIOUS md-audit
-finding always survives: SERIOUS md-audit findings are NEVER written to the ledger
-(so they can never produce a hit and are always re-asked). The skill's rendering
-also treats a SERIOUS finding as non-collapsible belt-and-braces.
+SERIOUS never collapses. Mirrors skills-kit's reducer rule that a SERIOUS
+md-domain audit finding always survives: such findings are NEVER written to the
+ledger (so they can never produce a hit and are always re-asked). The skill's
+rendering also treats a SERIOUS finding as non-collapsible belt-and-braces.
 
 Storage. A single JSON file in the plugin's version-independent data dir, a
 sibling of the per-change `reviews/<id>/` bundle dirs (e.g.
@@ -146,7 +146,7 @@ def label_for(finding: dict) -> str:
 
 
 def is_serious(finding: dict) -> bool:
-    """True for a SERIOUS-severity md-audit finding (never laddered into memory)."""
+    """True for a SERIOUS md-domain audit finding (never laddered into memory)."""
     return finding.get("kind") == "md_audit" and _low(finding.get("severity")) == "serious"
 
 
@@ -232,7 +232,7 @@ def record_declined(
 ) -> int:
     """Persist newly-declined findings for `change_id`; return the count stored.
 
-    - SERIOUS md-audit findings are dropped (never collapsed on a later run).
+    - SERIOUS md-domain audit findings are dropped (never collapsed on a later run).
     - Stale entries for this change (baseline != current) are pruned so the file
       does not accumulate dead keys across an evolving change.
     - New entries are deduplicated against surviving ones by key.

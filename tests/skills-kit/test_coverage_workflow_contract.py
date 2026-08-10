@@ -260,6 +260,91 @@ class TestSubjectContract:
         assert "not an error and not a skip" in src
 
 
+class TestConversionContractCarriage:
+    """CV-4 and CV-7 must be carried by the SCHEMA, not merely asked for.
+
+    Both criteria were once satisfiable at assessment time and dropped before a
+    reader saw them: the candidate schema sets additionalProperties:false and
+    declared no classification field, so CV-4's "and the classification is
+    reported" had nowhere to land; and CV-7 is fail-severity on the evidence
+    floor while `anchors` was merely optional. A criterion the schema cannot
+    carry is a criterion a run can satisfy on paper and omit in fact.
+    """
+
+    def _candidate_schema_block(self) -> str:
+        src = _detect()
+        start = src.index("candidates: {")
+        return src[start:src.index("notes: { type: 'array'", start)]
+
+    def test_candidate_schema_declares_the_tier_field(self):
+        """additionalProperties:false means it must be DECLARED, not smuggled."""
+        block = self._candidate_schema_block()
+        assert "additionalProperties: false" in block
+        assert re.search(r"\btier:\s*\{", block), "no tier property on the candidate schema"
+
+    def test_tier_is_an_enum_of_exactly_the_two_conversion_values(self):
+        block = self._candidate_schema_block()
+        assert (
+            "tier: { type: 'string', enum: ['FINDING-CONVERTIBLE', 'CONTEXT-ONLY'] }"
+            in block
+        )
+
+    def test_tier_and_anchors_are_required_on_every_candidate(self):
+        block = self._candidate_schema_block()
+        required = re.search(r"required: \[([^\]]*)\]", block)
+        assert required, "candidate schema declares no required list"
+        names = {n.strip().strip("'") for n in required.group(1).split(",")}
+        assert {"fact", "destination", "why", "tier", "anchors"} <= names
+
+    def test_anchors_requires_at_least_one_citation(self):
+        """An empty array satisfies a bare `required` while citing nothing."""
+        block = self._candidate_schema_block()
+        anchors = re.search(r"anchors: \{[^}]*\}", block)
+        assert anchors, "no anchors property on the candidate schema"
+        assert "minItems: 1" in anchors.group(0)
+
+    def test_prompt_asks_for_both_in_the_criteria_own_words(self):
+        prompt = _lane_prompt_body()
+        assert "TIER (CV-4)" in prompt
+        assert "FINDING-CONVERTIBLE" in prompt and "CONTEXT-ONLY" in prompt
+        assert "EVIDENCE (CV-7)" in prompt
+        assert "anchors" in prompt
+
+    def test_reducer_preserves_the_candidate_objects(self):
+        """The reducer must not rebuild candidates and drop the new fields."""
+        src = _detect()
+        assert "const candidates = r.candidates || []" in src
+        assert "return { ...r, candidates, verdict: derived, depth, notes }" in src
+
+    def test_totals_report_the_tier_split(self):
+        """CV-4 requires the classification to be REPORTED, not just recorded."""
+        src = _detect()
+        assert "c.tier === 'FINDING-CONVERTIBLE'" in src
+        assert "c.tier === 'CONTEXT-ONLY'" in src
+        assert "findingConvertible: 0" in src and "contextOnly: 0" in src
+
+    def test_summary_line_surfaces_the_tier_split_and_the_evidence_floor(self):
+        src = _detect()
+        assert "${tierNote}" in src
+        assert "${evidenceNote}" in src
+        assert "FINDING-CONVERTIBLE, ${totals.contextOnly} CONTEXT-ONLY" in src
+        assert "CV-7 evidence floor breached" in src
+
+    def test_report_template_renders_tier_and_evidence_per_candidate(self):
+        """The only point a human reads a candidate."""
+        text = _lane()
+        assert "[<FINDING-CONVERTIBLE | CONTEXT-ONLY>]" in text
+        assert "evidence: <file:line>" in text
+
+    def test_standards_still_require_both(self):
+        """If the criteria stop requiring them, the schema pins above are stale."""
+        text = STANDARDS.read_text(encoding="utf-8")
+        assert "id: candidate-tier-classified" in text
+        assert "classified finding-convertible or" in text
+        assert "id: evidence-floor" in text
+        assert "cites a file and line observed in source" in text
+
+
 class TestCoverageRegisteredWithCriteria:
     """Registration and its criteria binding are one atomic go-live contract."""
 

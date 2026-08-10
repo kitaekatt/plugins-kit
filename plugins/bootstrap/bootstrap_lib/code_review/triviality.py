@@ -1,7 +1,7 @@
 """Pure-mechanical triviality guard for the code-review pipeline (shared back-half).
 
 A one-character typo fix in a Markdown file should not spin up a full opus
-md-audit lane (whole-file detection). This module computes, from a claimed
+md-domain audit lane (whole-file detection). This module computes, from a claimed
 file's diff hunks plus its pre-image, a per-file "triviality profile" using
 ZERO inference -- only deterministic string/structure checks. A file is trivial
 ONLY when EVERY one of these holds:

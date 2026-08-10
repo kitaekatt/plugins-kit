@@ -286,6 +286,20 @@ const chainSizeByRoot = new Map(
 const totals = results.reduce((acc, r) => {
   acc.candidates += (r.candidates || []).length
   acc.severe += (r.candidates || []).filter((c) => c.severeDeficiency).length
+  // CV-4 requires the classification to be REPORTED. The per-candidate `tier`
+  // reaches the rendered report through the lane's candidate template; this
+  // tally makes it reach the RUN SUMMARY too, so a reader who never opens the
+  // candidate list still sees the split. Counted by exact enum value rather
+  // than by "not FINDING-CONVERTIBLE", so a future third tier shows up as a
+  // discrepancy against acc.candidates instead of being silently folded into
+  // CONTEXT-ONLY.
+  acc.findingConvertible += (r.candidates || []).filter((c) => c.tier === 'FINDING-CONVERTIBLE').length
+  acc.contextOnly += (r.candidates || []).filter((c) => c.tier === 'CONTEXT-ONLY').length
+  // CV-7's evidence floor is schema-enforced (anchors required, minItems 1), so
+  // this is a carriage check rather than an adjudication: it counts candidates
+  // that arrived with no citable anchor, which should be structurally
+  // impossible and is worth seeing loudly if it ever is not.
+  acc.unanchored += (r.candidates || []).filter((c) => !(c.anchors || []).length).length
   if (r.verdict === 'GAPS-FOUND') acc.gapsFound++
   if (r.verdict === 'COVERAGE-ASSESSED') acc.assessed++
   if (r.ceilingReached) acc.ceilingReached++
@@ -293,7 +307,17 @@ const totals = results.reduce((acc, r) => {
   // this verb exists for, and folding it into gapsFound would hide it.
   if (!chainSizeByRoot.get(String(r.root))) acc.uncovered++
   return acc
-}, { candidates: 0, severe: 0, gapsFound: 0, assessed: 0, ceilingReached: 0, uncovered: 0 })
+}, {
+  candidates: 0,
+  severe: 0,
+  findingConvertible: 0,
+  contextOnly: 0,
+  unanchored: 0,
+  gapsFound: 0,
+  assessed: 0,
+  ceilingReached: 0,
+  uncovered: 0,
+})
 
 // The ceiling is per subtree, so a wide run's aggregate is subjects x ceiling.
 // Stating the aggregate keeps a capped multi-subtree run from reading as
@@ -302,10 +326,19 @@ const ceilingNote = totals.ceilingReached
   ? `, ${totals.ceilingReached}/${results.length} subtree(s) hit the per-subtree ceiling of ${ceiling} (those results are capped, not complete)`
   : ''
 const severeNote = totals.severe ? `, ${totals.severe} severe-deficiency` : ''
+// CV-4: the tier split rides on the summary line so the classification is
+// reported even when only the log is read. CV-7: an unanchored candidate cannot
+// pass the schema, so the clause is silent unless one somehow does.
+const tierNote = totals.candidates
+  ? ` (${totals.findingConvertible} FINDING-CONVERTIBLE, ${totals.contextOnly} CONTEXT-ONLY)`
+  : ''
+const evidenceNote = totals.unanchored
+  ? `, ${totals.unanchored} candidate(s) arrived with NO anchor -- CV-7 evidence floor breached`
+  : ''
 const uncoveredNote = totals.uncovered
   ? `, ${totals.uncovered} subtree(s) with NO ambient CLAUDE.md at all`
   : ''
 
-log(`Coverage (depth=${depth}): assessed ${results.length}/${subjects.length} subtree(s): ${totals.gapsFound} GAPS-FOUND, ${totals.assessed} COVERAGE-ASSESSED, ${totals.candidates} candidate(s)${severeNote}${uncoveredNote}${ceilingNote}. Advisory and non-idempotent: re-runs may differ, and nothing is applied.`)
+log(`Coverage (depth=${depth}): assessed ${results.length}/${subjects.length} subtree(s): ${totals.gapsFound} GAPS-FOUND, ${totals.assessed} COVERAGE-ASSESSED, ${totals.candidates} candidate(s)${tierNote}${severeNote}${evidenceNote}${uncoveredNote}${ceilingNote}. Advisory and non-idempotent: re-runs may differ, and nothing is applied.`)
 
 return { perSubject: results, totals, ceiling, depth }

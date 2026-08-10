@@ -164,6 +164,38 @@ language family that produces false positives here is a bug report against
 those gates, not a surprise -- and the fix is to widen the unverifiable
 category, never to guess a number.
 
+### The CV-1 fact-granularity fix, and the limitation it ships with
+
+CV-1's `example` was extended (2026-08-10) to state that 'cheaply recoverable'
+applies to the FACT, never to the area it sits in. The statement was always
+sound; the EXAMPLE taught area granularity, because both illustrations were
+whole-artifact rejections and nothing told the reader the unit of suppression is
+the fact.
+
+It was measured, and the measurement is the reason for the change rather than a
+justification added after it. A scored coverage run found one mechanism behind
+BOTH of its real misses: a suppression justified as "this area is documented",
+where the specific proposition being suppressed was not in fact stated anywhere.
+The new text can only ever NARROW a suppression, never admit an unanchored
+candidate, because CV-7 still gates.
+
+**Ship-with limitation, stated per the discipline above:** this criterion text
+was derived from the very corpus that exposed the miss, so its recall benefit
+there is ~1 by construction and means nothing. It has NOT been validated against
+a corpus it was not designed against. That is a limitation, not a pending action
+-- the same posture as the language-family limitation above.
+
+**Two things this fix deliberately does NOT do, and neither should be added
+later as an obvious completion.** It does not ask the assessor to compare an
+invariant against the implementation's branch coverage; that crosses the CV-8
+boundary into code review, and it is the hazard sweep two independent
+adversarial reviews already rejected. And the measurement it came from does NOT
+show that coverage prevents defects -- for all three of that run's answer-key
+facts the correct remedy was a CODE FIX, not ambient prose, so a perfect score
+would have proposed the wrong remedy three times. What the run established is
+precision and an intact CV-8 boundary. Any future claim that coverage prevents
+defects has to reckon with that.
+
 ### The negative controls a coverage test needs
 
 Recall-only scoring rewards a change that flags everything, so a test of any

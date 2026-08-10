@@ -9,8 +9,8 @@
           "criterion": "placement_not_in_skill_dir",
           "group": "Placement",
           "line": 1,
-          "message": "THIS FILE WAS NOT AUDITED. discover.py classified it as `other_claude_artifact` (a CLAUDE.md), not a project document, so the project-doc-audit criteria (PD-2 maturation, PD-3/CRP, PD-4/PD-5/PD-6 ADP, PD-8 CCP, PD-H1 hygiene) were never applied to it. The correct auditor for an other_claude_artifact is the /md-audit skill -- specifically `/md-audit claude-md` for a CLAUDE.md target (or `/md-audit skill` for a skill artifact). The NOT-AUDITED verdict is not a passing verdict: no lane has read this file's content against any criteria.",
-          "remediation": "Re-run this file under the /md-audit skill (`/md-audit claude-md`), which owns CLAUDE.md artifacts; project-doc-audit declines it at PD-1 routing.",
+          "message": "THIS FILE WAS NOT AUDITED. discover.py classified it as `other_claude_artifact` (a CLAUDE.md), not a project document, so the project-doc-audit criteria (PD-2 maturation, PD-3/CRP, PD-4/PD-5/PD-6 ADP, PD-8 CCP, PD-H1 hygiene) were never applied to it. The correct auditor for an other_claude_artifact is the /md-domain skill -- specifically `/md-domain audit claude-md` for a CLAUDE.md target (or `/md-domain audit skill` for a skill artifact). The NOT-AUDITED verdict is not a passing verdict: no lane has read this file's content against any criteria.",
+          "remediation": "Re-run this file under the /md-domain skill (`/md-domain audit claude-md`), which owns CLAUDE.md artifacts; project-doc-audit declines it at PD-1 routing.",
           "severity": "INFO",
           "taxonomy": "A_misclassified_skill_ref"
         }

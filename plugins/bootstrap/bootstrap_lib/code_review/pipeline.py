@@ -52,8 +52,8 @@ from bootstrap_lib.code_review.triviality import (
 # Claim matching (subject-lens review contributor support).
 # ---------------------------------------------------------------------------
 #
-# A "claimed" changed file is one a subject-lens reviewer (skills-kit md-audit)
-# owns: it is pulled OUT of the generic reviewer fan-out (its diff excluded from
+# A "claimed" changed file is one a subject-lens reviewer (skills-kit md-domain
+# audit) owns: it is pulled OUT of the generic reviewer fan-out (its diff excluded from
 # the chunks, its record moved to `claimed_files`) but REMAINS in the CLAUDE.md
 # ruleset collection and submit-gate machinery. Matching is by claim glob, and
 # lives here (shared) so a kit front-half and the back-half agree on exactly
@@ -129,7 +129,7 @@ def canonical_local(local: Optional[str]) -> Optional[str]:
     drive/component casing. A front-half's raw `local` may NOT: p4's
     `p4 where` emits a lowercase drive letter (`d:/dev/...`) while the resolved
     chain carries `D:/dev/...`, so a consumer comparing a claimed file's `local`
-    against its own `claude_mds` self-entry (md-audit's
+    against its own `claude_mds` self-entry (md-domain audit's
     "ancestorClaudeMdPaths = claude_mds minus the subject's own local") fails to
     remove the subject and treats every CLAUDE.md as its own parent.
 
@@ -438,7 +438,7 @@ def assemble_bundle(
             # `claude_mds` is the nearest-ancestor-first CLAUDE.md chain and,
             # for a CLAUDE.md subject, INCLUDES the subject itself as its first
             # entry -- the skill drops the subject's own local to derive
-            # md-audit's ancestorClaudeMdPaths / parentPath. Canonicalize the
+            # md-domain audit's ancestorClaudeMdPaths / parentPath. Canonicalize the
             # emitted local so that self-removal compares equal (see
             # canonical_local) regardless of the front-half's path casing.
             entry = dict(f)
