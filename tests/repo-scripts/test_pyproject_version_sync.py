@@ -18,6 +18,7 @@ the hook is the enforcement. See the script's header.
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "check_pyproject_sync.py"
@@ -85,9 +86,93 @@ class TestTheRuleItself:
         (d / "plugin.json").write_text(json.dumps({"name": "nopy", "version": "1"}))
         assert _checker.find_drift(tmp_path) == []
 
+    def test_nothing_staged_reads_the_working_tree(self, tmp_path):
+        """No staged paths -> no index snapshot to prefer; judge the worktree."""
+        self._plugin(tmp_path, "ok", "1.2.3", "1.2.3")
+        assert _checker.find_drift(tmp_path, staged=[]) == []
+
     def test_every_drifting_plugin_is_reported_not_just_the_first(self, tmp_path):
         """A publish can bump several plugins; naming one and stopping would
         turn one fix-and-retry cycle into several."""
         self._plugin(tmp_path, "a", "1.0.0", "2.0.0")
         self._plugin(tmp_path, "b", "3.0.0", "4.0.0")
         assert len(_checker.find_drift(tmp_path)) == 2
+
+
+class TestJudgesTheIndex:
+    """The commit gate must judge what the COMMIT will contain, not what the
+    working tree happens to look like while the hook runs.
+
+    Reading the working tree left the sanctioned fix unenforced: edit
+    pyproject, never `git add` it, and the gate passed while the commit still
+    carried the old version into HEAD. Each of bootstrap's five "fixed"
+    releases could pass this check and ship the drift anyway.
+    """
+
+    def _repo(self, tmp_path, py_version, pj_version):
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            subprocess.run(
+                ["git", "-C", str(tmp_path), "config", k, v], check=True)
+        d = tmp_path / "plugins" / "foo"
+        (d / ".claude-plugin").mkdir(parents=True)
+        self._write(tmp_path, py_version, pj_version)
+        subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-qm", "init"], check=True)
+        return tmp_path
+
+    def _write(self, root, py_version, pj_version):
+        d = root / "plugins" / "foo"
+        (d / "pyproject.toml").write_text(
+            f'[project]\nname = "foo"\nversion = "{py_version}"\n')
+        (d / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "foo", "version": pj_version}))
+
+    def _drift(self, root):
+        return _checker.find_drift(root / "plugins", repo_root=root)
+
+    def test_fix_left_unstaged_is_still_drift(self, tmp_path):
+        # THE regression: stage only the plugin.json bump, then fix pyproject
+        # in the working tree without staging it. The index -- and so the
+        # commit -- still holds the old pyproject version.
+        repo = self._repo(tmp_path, "1.0.0", "1.0.0")
+        self._write(repo, "1.0.0", "1.1.0")
+        subprocess.run(
+            ["git", "-C", str(repo), "add",
+             "plugins/foo/.claude-plugin/plugin.json"], check=True)
+        (repo / "plugins" / "foo" / "pyproject.toml").write_text(
+            '[project]\nname = "foo"\nversion = "1.1.0"\n')  # fixed, NOT staged
+        assert self._drift(repo) == [
+            "foo: pyproject.toml=1.0.0 plugin.json=1.1.0"]
+
+    def test_fix_that_is_staged_is_clean(self, tmp_path):
+        # The healthy everyday path: bump both, stage both.
+        repo = self._repo(tmp_path, "1.0.0", "1.0.0")
+        self._write(repo, "1.1.0", "1.1.0")
+        subprocess.run(
+            ["git", "-C", str(repo), "add",
+             "plugins/foo/pyproject.toml",
+             "plugins/foo/.claude-plugin/plugin.json"], check=True)
+        assert self._drift(repo) == []
+
+    def test_clean_repo_with_nothing_staged_passes(self, tmp_path):
+        repo = self._repo(tmp_path, "1.0.0", "1.0.0")
+        assert self._drift(repo) == []
+
+    def test_untracked_plugin_falls_back_to_the_working_tree(self, tmp_path):
+        # Git cannot supply an index blob for a file it does not track, so the
+        # per-file fallback reads the working tree rather than crashing or
+        # silently exempting the plugin.
+        repo = self._repo(tmp_path, "1.0.0", "1.0.0")
+        (repo / "plugins" / "foo" / "code.py").write_text("x = 1\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "plugins/foo/code.py"], check=True)
+        new = repo / "plugins" / "bar"
+        (new / ".claude-plugin").mkdir(parents=True)
+        (new / "pyproject.toml").write_text(
+            '[project]\nname = "bar"\nversion = "0.1.0"\n')
+        (new / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "bar", "version": "9.9.9"}))
+        assert self._drift(repo) == [
+            "bar: pyproject.toml=0.1.0 plugin.json=9.9.9"]
