@@ -868,7 +868,15 @@ class TestCodexAbsentVariant:
 
 class TestNoBareCodenames:
     """The bare codenames are not dispatchable, and a policy that names them
-    is a policy that fails every time it is followed."""
+    is a policy that fails every time it is followed.
+
+    SHAPE ONLY. These assertions prove an id is well-FORMED, never that it is
+    dispatchable -- a renamed or retired model passes every one of them. The
+    live check is `scripts/check_model_dispatch.py`, which dispatches a trivial
+    prompt to every rung's model and validates the `-c` config keys with
+    `--strict-config`. It cannot live here: it needs network, a login, and real
+    usage. Run it by hand when the ladders or the dispatch flags change.
+    """
 
     CODENAMES = ("luna", "terra", "sol")
 

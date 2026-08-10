@@ -123,6 +123,25 @@ claude_md:
       added: "2026-08-08"
 ```
 
+## Model identifiers are validated by dispatch, not by inspection
+
+The machine half of `orchestration.yaml` names model ids and a Codex `-c`
+config key that agents hand straight to a CLI. Neither is checkable by reading:
+a bare codename (`sol`) has the same shape as a fully qualified id, and
+`model_reasoning_effort` is a config key `codex exec --help` does not list.
+
+`scripts/check_model_dispatch.py` validates them for real -- one trivial prompt
+per rung model, plus a zero-token `--strict-config` launch per config key. Run
+it whenever a ladder rung, a model id, or a dispatch flag changes:
+
+    uv run python scripts/check_model_dispatch.py
+    uv run python scripts/check_model_dispatch.py --list      # dispatches nothing
+
+Nothing runs it automatically: it is out of the pytest suite (network, cost),
+out of the pre-commit chain, and out of `publish.py`'s preflight, so a retired
+model id can reach consumers if nobody runs it. The offline suite's
+`TestNoBareCodenames` checks shape only and points here.
+
 ## Cross-references
 
 - Design/derivation record for this chain: `orchestrate-2.0-design.md` (this
