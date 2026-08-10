@@ -23,6 +23,25 @@ FETCH_TIMEOUT = 15
 # small only ever trips on a wedged filesystem.
 QUERY_TIMEOUT = 10
 
+# Local WRITES on the authoring path (add / commit / rebase). Deliberately far
+# larger than FETCH_TIMEOUT, and the reason is the opposite of the network one:
+# these do not wait on a remote, they run our own pre-commit hook, which shells
+# out to `git show` twice plus a `grep` PER STAGED PATH. That is O(paths)
+# process spawns, and process spawn is precisely what degrades on a loaded
+# machine -- so the budget has to cover a slow box doing real work, not a
+# typical one doing a little.
+#
+# Sizing this off FETCH_TIMEOUT was a latent bug, not a shortcut: a 15s network
+# budget is generous for a fetch and tight for a hook, so the two only looked
+# interchangeable while machines were idle. Observed failing: `git commit ...
+# timed out after 15s` under parallel test load (2026-08-09).
+#
+# Safe to be generous HERE specifically because commit_and_push runs on the
+# explicit authoring verbs (seed / add / rotate), never in the SessionStart
+# pass. refresh() keeps the short budget on purpose -- that is the path the
+# module's "never block a session on connectivity" rule is about.
+LOCAL_WRITE_TIMEOUT = 120
+
 # How often to talk to the remote at all. A rotated secret converges on the
 # next pass after this window -- fine, because rotation is rare and the local
 # copy stays valid until then. Set low enough that "I rotated it this morning"
@@ -619,11 +638,11 @@ def commit_and_push(clone_dir: Path, message: str, paths: List[str]) -> None:
     pulls. Push failures raise, because an unpushed secret is invisible to the
     fleet and silently pretending otherwise is how drift starts.
     """
-    code, output = _git(["add", "--"] + paths, cwd=clone_dir, timeout=FETCH_TIMEOUT)
+    code, output = _git(["add", "--"] + paths, cwd=clone_dir, timeout=LOCAL_WRITE_TIMEOUT)
     if code != 0:
         raise SecretsError(f"git add failed: {output}")
 
-    code, output = _git(["commit", "-m", message], cwd=clone_dir, timeout=FETCH_TIMEOUT)
+    code, output = _git(["commit", "-m", message], cwd=clone_dir, timeout=LOCAL_WRITE_TIMEOUT)
     if code != 0 and "nothing to commit" not in output:
         raise SecretsError(f"git commit failed: {output}")
 
@@ -638,14 +657,14 @@ def commit_and_push(clone_dir: Path, message: str, paths: List[str]) -> None:
     # because a merged manifest is not something to guess at.
     _git(["fetch", "--quiet", "--prune"], cwd=clone_dir, timeout=FETCH_TIMEOUT)
     code, rebase_output = _git(
-        ["rebase", "--quiet", "@{u}"], cwd=clone_dir, timeout=FETCH_TIMEOUT
+        ["rebase", "--quiet", "@{u}"], cwd=clone_dir, timeout=LOCAL_WRITE_TIMEOUT
     )
     if code == 0:
         code, output = _git(["push", "--quiet"], cwd=clone_dir, timeout=CLONE_TIMEOUT)
         if code == 0:
             return
     else:
-        _git(["rebase", "--abort"], cwd=clone_dir, timeout=FETCH_TIMEOUT)
+        _git(["rebase", "--abort"], cwd=clone_dir, timeout=LOCAL_WRITE_TIMEOUT)
         output = f"{output}\nrebase onto the remote also failed: {rebase_output}"
 
     raise SecretsError(
