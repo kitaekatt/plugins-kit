@@ -221,9 +221,8 @@ class TestStagedScoping:
         repo = self._repo(tmp_path)
         self._plugin(repo, "alpha", "1.0.0", "1.0.0")
         self._commit_all(repo)
-        # Another session drifts beta in the shared tree and stages it.
+        # Another session drifts beta in the shared tree; dirty but NOT staged.
         self._plugin(repo, "beta", "1.0.0", "2.0.0")
-        self._add(repo, "plugins/beta")
         # My commit touches only README.md.
         (repo / "README.md").write_text("changed\n")
         self._add(repo, "README.md")
@@ -264,3 +263,14 @@ class TestStagedScoping:
         self._add(repo, "plugins/alpha/.claude-plugin/plugin.json")
         assert self._main(repo, monkeypatch, ["--staged"]) == 1
         assert "(staged inputs)" in capsys.readouterr().err
+
+    def test_falls_back_to_worktree_when_git_cannot_answer(
+            self, tmp_path, monkeypatch, capsys):
+        """A check whose input is unavailable must not silently pass."""
+        repo = self._repo(tmp_path)
+        self._plugin(repo, "alpha", "1.0.0", "1.0.0")
+        self._commit_all(repo)
+        self._plugin(repo, "alpha", "1.0.0", "1.1.0")   # worktree drift
+        monkeypatch.setattr(_checker._gitindex, "staged_paths", lambda root: None)
+        assert self._main(repo, monkeypatch, ["--staged"]) == 1
+        assert "could not read the index" in capsys.readouterr().err

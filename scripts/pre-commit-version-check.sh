@@ -97,14 +97,14 @@ fi
 # nothing pulled pyproject.toml along with it -- which is how bootstrap's stated
 # version drifted across five releases while a test that would have caught it
 # sat un-run. Same escape hatch.
-if ! "$PLAIN_PYTHON" "$REPO_ROOT/scripts/check_pyproject_sync.py"; then
+if ! "$PLAIN_PYTHON" "$REPO_ROOT/scripts/check_pyproject_sync.py" --staged; then
     failed=1
 fi
 
 # --- a plugin shipping bootstrap.json must depend on bootstrap ------------
 # Otherwise a user can install it without bootstrap and its manifest is never
 # processed (CLAUDE.md, "Plugin dependencies on bootstrap"). Same escape hatch.
-if ! "$PLAIN_PYTHON" "$REPO_ROOT/scripts/check_bootstrap_dependency.py"; then
+if ! "$PLAIN_PYTHON" "$REPO_ROOT/scripts/check_bootstrap_dependency.py" --staged; then
     failed=1
 fi
 

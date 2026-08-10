@@ -129,6 +129,57 @@ class TestClassifyScope:
         assert (verdict, staged) == (gi.SCOPE_INDEX, ["x.txt"])
 
 
+class TestGitUnavailable:
+    """The binary itself missing (or misbehaving) is a distinct case from "not
+    a repo" -- is_git_repo() short-circuits the latter before subprocess is
+    ever invoked, so it exercises none of git_output's except clause. These
+    force the actual subprocess call to fail and check the same "None, never
+    []" contract holds.
+    """
+
+    def test_git_output_none_when_binary_is_missing(self, repo, monkeypatch):
+        def raise_missing(*args, **kwargs):
+            raise FileNotFoundError("git not found")
+
+        monkeypatch.setattr(gi.subprocess, "run", raise_missing)
+        assert gi.git_output(repo, ["status"]) is None
+
+    def test_git_output_none_on_timeout(self, repo, monkeypatch):
+        def raise_timeout(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=gi.GIT_TIMEOUT)
+
+        monkeypatch.setattr(gi.subprocess, "run", raise_timeout)
+        assert gi.git_output(repo, ["status"]) is None
+
+    def test_staged_paths_none_when_binary_is_missing(self, repo, monkeypatch):
+        def raise_missing(*args, **kwargs):
+            raise FileNotFoundError("git not found")
+
+        monkeypatch.setattr(gi.subprocess, "run", raise_missing)
+        assert gi.staged_paths(repo) is None
+
+    def test_index_files_and_index_blob_none_when_binary_is_missing(
+            self, repo, monkeypatch):
+        def raise_missing(*args, **kwargs):
+            raise FileNotFoundError("git not found")
+
+        monkeypatch.setattr(gi.subprocess, "run", raise_missing)
+        assert gi.index_files(repo, "*") is None
+        assert gi.index_blob(repo, "a.txt") is None
+
+    def test_classify_scope_falls_back_to_worktree_when_binary_is_missing(
+            self, repo, monkeypatch):
+        """The whole point of SCOPE_WORKTREE: an unanswerable question must
+        not be read as "nothing staged" (SCOPE_SKIP)."""
+        def raise_missing(*args, **kwargs):
+            raise FileNotFoundError("git not found")
+
+        monkeypatch.setattr(gi.subprocess, "run", raise_missing)
+        verdict, staged = gi.classify_scope(repo, lambda p: True)
+        assert verdict == gi.SCOPE_WORKTREE
+        assert staged == []
+
+
 def test_every_git_call_is_bounded(repo, monkeypatch):
     """Two of the replaced copies had no timeout, so a wedged git hung the
     commit with no output at all."""
