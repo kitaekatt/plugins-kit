@@ -111,15 +111,17 @@ fi
 # --- the generated orchestration policy must match its source -------------
 # The DECISION half of the orchestrate skill's orchestration.yaml is generated
 # one-way from docs/reference/orchestrate/tier-principles.md and
-# plugins/awesome-kit/skills/orchestrate/references/lexicon.md. Index-aware: it
-# reads staged blobs when anything is staged. A prior fingerprint-based guard
-# was retired once this existed -- a fingerprint cannot disagree with principles
-# compiled from those same principles.
+# plugins/awesome-kit/skills/orchestrate/references/lexicon.md. --staged scopes
+# this to the commit: index-aware, and a pass when the commit stages none of
+# the three generator inputs (classify_scope), matching every other check in
+# this file. A prior fingerprint-based guard was retired once this existed --
+# a fingerprint cannot disagree with principles compiled from those same
+# principles.
 #
 # The one check needing a provisioned dependency. A skipped check must be
 # VISIBLE, never silent.
 if "${UV_PY[@]}" -c "import yaml" >/dev/null 2>&1; then
-    if ! "${UV_PY[@]}" "$REPO_ROOT/scripts/generate_orchestration.py" --check; then
+    if ! "${UV_PY[@]}" "$REPO_ROOT/scripts/generate_orchestration.py" --check --staged; then
         note ""
         note "The generated orchestration policy is stale."
         note "Run \`uv run python scripts/generate_orchestration.py --write\` and stage the result."

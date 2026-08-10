@@ -13,12 +13,14 @@ import argparse
 import copy
 import difflib
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence, TextIO
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _gitindex  # noqa: E402  (shared Git-index helpers; stdlib-only)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -55,51 +57,36 @@ _LEXICON_FIELD_RE = re.compile(r"^\*\*(Test|Gloss):\*\*\s*(.*)$")
 _EMPHASIS_RE = re.compile(r"(?<!\*)\*([^*\r\n]+)\*(?!\*)")
 
 
-def is_git_repo(repo_root: Path) -> bool:
-    """True when repo_root is or is inside a Git working tree."""
+# Index-awareness comes from scripts/_gitindex.py, the single implementation
+# shared by every commit gate in this repo (see its module docstring for why
+# the per-script copies it replaced were dropped). These thin wrappers keep
+# this module's own names importable and patchable, matching the pattern in
+# check_pyproject_sync.py / check_bootstrap_dependency.py.
 
-    return (repo_root / ".git").exists()
+is_git_repo = _gitindex.is_git_repo
 
 
 def staged_paths(repo_root: Path) -> list[str] | None:
     """Repo-relative staged paths, or None when Git does not answer."""
 
-    if not is_git_repo(repo_root):
-        return []
-    try:
-        proc = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
-            cwd=str(repo_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    text = proc.stdout.decode("utf-8", "replace")
-    return [
-        line.strip().replace("\\", "/")
-        for line in text.splitlines()
-        if line.strip()
-    ]
+    return _gitindex.staged_paths(repo_root)
 
 
 def index_blob(repo_root: Path, rel_path: str) -> str | None:
     """Return a staged blob as text, or None when Git cannot provide it."""
 
-    try:
-        proc = subprocess.run(
-            ["git", "show", f":{rel_path}"],
-            cwd=str(repo_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    return proc.stdout.decode("utf-8", "replace")
+    return _gitindex.index_text(repo_root, rel_path)
+
+
+def is_derivation_input(path: str) -> bool:
+    """Does this repo-relative path participate in generating the policy?
+
+    Exactly the three canonical inputs -- unlike the prefix-based rules in
+    the sibling checks, generate_orchestration.py has a fixed, small input
+    set, so exact membership is the precise (and simplest) test.
+    """
+
+    return path in {POLICY_REL, PRINCIPLES_REL, LEXICON_REL}
 
 
 class GenerationError(ValueError):
@@ -891,6 +878,15 @@ def _parser() -> argparse.ArgumentParser:
         help="rewrite orchestration.yaml in place",
     )
     parser.set_defaults(mode="check")
+    parser.add_argument(
+        "--staged",
+        action="store_true",
+        help=(
+            "the pre-commit gate: judge the COMMIT (git index), not the "
+            "working tree, and exit 0 when the commit stages none of the "
+            "three generator inputs (only meaningful with --check)"
+        ),
+    )
     return parser
 
 
@@ -902,6 +898,38 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.mode == "write":
             write_policy(POLICY_PATH, PRINCIPLES_PATH, LEXICON_PATH)
             return 0
+
+        if args.staged:
+            # SCOPED, not just index-aware: gating on "is ANYTHING staged"
+            # (as check_policy's own staged=None path still does, preserved
+            # below for callers that don't pass --staged) blocks an unrelated
+            # commit whenever anything else happens to be staged in this
+            # shared tree. classify_scope narrows to "are MY three inputs
+            # staged" -- a commit that stages none of them cannot have broken
+            # this invariant.
+            verdict, staged = _gitindex.classify_scope(
+                REPO_ROOT, is_derivation_input
+            )
+            if verdict == _gitindex.SCOPE_SKIP:
+                return 0
+            if verdict == _gitindex.SCOPE_WORKTREE:
+                # Unavailable input must not read as a pass.
+                print(
+                    "generate_orchestration: could not read the index; "
+                    "checking the working tree instead.",
+                    file=sys.stderr,
+                )
+                return check_policy(
+                    POLICY_PATH, PRINCIPLES_PATH, LEXICON_PATH, output=sys.stdout
+                )
+            return check_policy(
+                POLICY_PATH,
+                PRINCIPLES_PATH,
+                LEXICON_PATH,
+                output=sys.stdout,
+                staged=staged,
+            )
+
         return check_policy(
             POLICY_PATH, PRINCIPLES_PATH, LEXICON_PATH, output=sys.stdout
         )

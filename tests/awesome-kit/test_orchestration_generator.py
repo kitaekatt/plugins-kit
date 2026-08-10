@@ -2,6 +2,7 @@
 
 import importlib.util
 import io
+import subprocess
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -435,13 +436,153 @@ generator:
 """
 
 
+class TestStagedScoping:
+    """``--staged`` judges the COMMIT: index-aware AND scoped to the three
+    generator inputs, mirroring TestStagedScoping in
+    tests/repo-scripts/test_bootstrap_dependency.py.
+
+    Without ``--staged``, ``check_policy`` still reads from the index
+    whenever ANYTHING is staged (preserved -- that is today's behavior for
+    every caller that does not pass the flag). That gate is "is ANYTHING
+    staged", not "are MY three inputs staged" -- so a pre-existing,
+    already-committed inconsistency between the three inputs blocks a commit
+    that touches neither of them, merely because something else is staged.
+    ``--staged`` fixes that by scoping to the three canonical paths via
+    ``_gitindex.classify_scope``.
+    """
+
+    def _repo(self, tmp_path: Path) -> Path:
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            subprocess.run(
+                ["git", "-C", str(tmp_path), "config", k, v], check=True
+            )
+        return tmp_path
+
+    def _commit_all(self, root: Path) -> None:
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "-qm", "init"], check=True
+        )
+
+    def _add(self, root: Path, *paths: str) -> None:
+        subprocess.run(["git", "-C", str(root), "add", *paths], check=True)
+
+    def _write_inputs(
+        self,
+        root: Path,
+        policy_principles_text: str,
+        principles_text: str,
+        lexicon_text: str,
+    ) -> tuple[Path, Path, Path]:
+        """Write the three canonical files. The policy is generated from
+        ``policy_principles_text``, which may differ from ``principles_text``
+        left on disk -- that mismatch IS the inconsistency under test.
+        """
+        policy = root / generator.POLICY_REL
+        principles = root / generator.PRINCIPLES_REL
+        lexicon = root / generator.LEXICON_REL
+        for path in (policy, principles, lexicon):
+            path.parent.mkdir(parents=True, exist_ok=True)
+        template = (
+            b"# header\n\n"
+            b"schema_version: 1\n"
+            b"default_backend: stale\n\n"
+            b"# " + (b"=" * 75) + b"\n"
+            b"# MACHINE HALF -- not derived from the principles. Machine data.\n"
+            b"# " + (b"=" * 75) + b"\n\n"
+            b"backends: []\n"
+        )
+        policy.write_bytes(
+            generator.generate_policy_bytes(
+                template, policy_principles_text, lexicon_text
+            )
+        )
+        principles.write_text(principles_text, encoding="utf-8")
+        lexicon.write_text(lexicon_text, encoding="utf-8")
+        return policy, principles, lexicon
+
+    def _point_at(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        root: Path,
+        policy: Path,
+        principles: Path,
+        lexicon: Path,
+    ) -> None:
+        monkeypatch.setattr(generator, "REPO_ROOT", root)
+        monkeypatch.setattr(generator, "POLICY_PATH", policy)
+        monkeypatch.setattr(generator, "PRINCIPLES_PATH", principles)
+        monkeypatch.setattr(generator, "LEXICON_PATH", lexicon)
+
+    def test_unrelated_staged_commit_is_not_blocked_by_a_preexisting_drift(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo = self._repo(tmp_path)
+        lexicon_text = "### `known` `[concept]`\n**Test:** can it be specified?\n"
+        # A genuinely inconsistent triple, already committed: the policy was
+        # generated from old-backend, but principles.md now says new-backend.
+        policy, principles, lexicon = self._write_inputs(
+            repo,
+            _minimal_principles("old-backend"),
+            _minimal_principles("new-backend"),
+            lexicon_text,
+        )
+        (repo / "README.md").write_text("hi\n")
+        self._commit_all(repo)
+        self._point_at(monkeypatch, repo, policy, principles, lexicon)
+
+        # My commit stages only an unrelated file.
+        (repo / "README.md").write_text("changed\n")
+        self._add(repo, "README.md")
+
+        # Preserved default behavior (no --staged): "is ANYTHING staged"
+        # still reads the index and is still blocked by the pre-existing
+        # drift -- proving the scenario is real, not a no-op.
+        assert generator.main(["--check"]) == 1
+        capsys.readouterr()
+
+        # --staged scopes to the three inputs, none of which this commit
+        # stages -> SCOPE_SKIP -> pass.
+        assert generator.main(["--check", "--staged"]) == 0
+        assert capsys.readouterr().out == ""
+
+    def test_worktree_fallback_is_loud_and_still_catches_drift(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # Deliberately not a Git repo: classify_scope cannot ask the index,
+        # so it must fall back to the working tree LOUDLY, never silently.
+        repo = tmp_path
+        lexicon_text = "### `known` `[concept]`\n**Test:** can it be specified?\n"
+        policy, principles, lexicon = self._write_inputs(
+            repo,
+            _minimal_principles("old-backend"),
+            _minimal_principles("new-backend"),
+            lexicon_text,
+        )
+        self._point_at(monkeypatch, repo, policy, principles, lexicon)
+
+        assert generator.main(["--check", "--staged"]) == 1
+        captured = capsys.readouterr()
+        assert "could not read the index" in captured.err
+        assert "old-backend" in captured.out
+        assert "new-backend" in captured.out
+
+
 def test_pre_commit_hook_chains_generator_check_and_remediation() -> None:
     hook = (_REPO_ROOT / "scripts" / "pre-commit-version-check.sh").read_text(
         encoding="utf-8"
     )
 
     assert (
-        'uv run python "$REPO_ROOT/scripts/generate_orchestration.py" --check'
+        '"${UV_PY[@]}" "$REPO_ROOT/scripts/generate_orchestration.py" '
+        "--check --staged"
         in hook
     )
     assert "uv run python scripts/generate_orchestration.py --write" in hook
