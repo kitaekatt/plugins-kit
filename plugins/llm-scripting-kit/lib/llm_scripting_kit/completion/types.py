@@ -23,6 +23,19 @@ class LLMResponse:
     - ``input_tokens`` / ``output_tokens`` -- usage reported by the provider.
     - ``cache_hit_tokens`` -- prompt-cache hit tokens the provider surfaced
       (0 when unsupported).
+    - ``total_tokens`` -- a TOTAL-ONLY usage figure a provider surfaces with no
+      input/output split (the codex-cli transport; 0 for every other backend).
+      Deliberately a SEPARATE field rather than folded into ``output_tokens``:
+      the input/output fields feed per-directional cost formulas elsewhere
+      (e.g. content-pipeline-kit's cost estimator multiplies ``output_tokens``
+      by an output-token price), and stuffing an undifferentiated total into
+      ``output_tokens`` would silently misprice a call. A consumer that sums
+      ``input_tokens + output_tokens`` across backends is unaffected -- this
+      field simply stays 0 there -- but summing it in blindly alongside those
+      two would double-count on any backend that also reports a split, so a
+      caller that wants "however many tokens this call used, however the
+      backend reports it" must read whichever of ``total_tokens`` or
+      ``input_tokens + output_tokens`` is nonzero, not both.
     - ``wall_ms`` -- wall-clock duration of the live call in milliseconds. On a
       cache hit this is the ORIGINAL live call's duration.
     - ``attempts`` -- number of completion attempts made (1 on first-try
@@ -35,6 +48,7 @@ class LLMResponse:
     input_tokens: int = 0
     output_tokens: int = 0
     cache_hit_tokens: int = 0
+    total_tokens: int = 0
     wall_ms: int = 0
     attempts: int = 1
     from_cache: bool = False

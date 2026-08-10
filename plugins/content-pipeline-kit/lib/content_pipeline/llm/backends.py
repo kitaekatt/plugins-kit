@@ -1,17 +1,20 @@
 """Completion backends behind one protocol, selected by process-level routing.
 
-Three transports implement :class:`~content_pipeline.llm.platform.LLMBackend`:
+Four backends implement :class:`~content_pipeline.llm.platform.LLMBackend`:
 
 - :class:`OpenRouterBackend` -- an OpenAI-compatible HTTP completion.
 - :class:`ClaudeCliBackend` -- the local ``claude -p`` CLI (subscription-billed,
   no per-call metering).
+- :class:`CodexCliBackend` -- the local ``codex exec`` CLI (subscription-billed,
+  no per-call metering).
 - :class:`MockBackend` -- deterministic, scriptable responses. The always-wins
   test seam: no network, no subprocess, no shared lib.
 
-The two live transports are THIN ADAPTERS over ``llm_scripting_kit.completion``
+The three live transports are THIN ADAPTERS over ``llm_scripting_kit.completion``
 (from llm-scripting-kit): that shared lib owns the actual completion
-transport -- the ``claude -p`` subprocess runner, retry, timeout, hard-stop
-detection, and the OpenAI-compatible client + prompt-cache message shaping.
+transport -- the ``claude -p`` and ``codex exec`` subprocess runners, retry,
+timeout, hard-stop detection, and the OpenAI-compatible client + prompt-cache
+message shaping.
 This module keeps only the content-pipeline-specific glue; it does NOT
 reimplement the transport. ``llm_scripting_kit`` is a LAZY / optional import: it is
 reached for only when a live backend's ``complete`` / ``classify_halt`` actually
@@ -41,8 +44,8 @@ from content_pipeline.llm import platform
 from content_pipeline.llm.platform import BackendOptions, LLMResponse
 
 # The message a live backend raises when the shared lib is missing. The
-# claude-cli / openrouter transports genuinely require llm_scripting_kit; only the
-# MockBackend path is hermetic.
+# claude-cli / codex-cli / openrouter transports genuinely require
+# llm_scripting_kit; only the MockBackend path is hermetic.
 _MISSING_LIB_MSG = (
     "needs the 'llm_scripting_kit' shared lib (from llm-scripting-kit). Declare it "
     "via the plugin's shared_lib_imports, or use MockBackend for tests."
@@ -50,9 +53,9 @@ _MISSING_LIB_MSG = (
 
 
 def _lazy_build_note() -> None:
-    """Why both live adapters guard their lazy delegate build with a lock.
+    """Why live adapters guard their lazy delegate build with a lock.
 
-    Not called -- a documentation anchor the two adapters reference, kept in
+    Not called -- a documentation anchor the adapters reference, kept in
     one place so the reasoning cannot drift between them.
 
     ``if self._delegate is None: ... self._delegate = ...`` is an unsynchronized
@@ -74,7 +77,7 @@ def _lazy_build_note() -> None:
        ``call_llm``'s response-cache lookup, so building there would pay the
        cost -- and take the descriptor -- on every call, including the ones the
        cache is about to serve.
-    2. **``classify_halt`` builds nothing new.** The platform calls it unguarded
+    2. **``classify_halt`` builds nothing additional.** The platform calls it unguarded
        from inside an ``except``; the lock-free fast path means a warm backend
        never contends there.
     3. **The gate opens on DELEGATE EXISTS, not REQUEST SUCCEEDED.** The slot is
@@ -112,7 +115,15 @@ def _to_completion_options(opts: BackendOptions) -> Any:
 
 
 def _from_completion_response(resp: Any) -> LLMResponse:
-    """Adapt an ``llm_scripting_kit.completion.LLMResponse`` into ours."""
+    """Adapt an ``llm_scripting_kit.completion.LLMResponse`` into ours.
+
+    Field-for-field, and deliberately explicit in BOTH directions: the option
+    conversion above exists so a field drift surfaces rather than mis-binding,
+    and this one earns its keep the same way. ``total_tokens`` is read with
+    ``getattr`` because a consumer may be running against an older shared lib
+    that predates the field -- the shared lib reaches every consumer at once
+    with no version pin, so the two can legitimately be out of step here.
+    """
     return LLMResponse(
         text=resp.text,
         model=resp.model,
@@ -122,6 +133,7 @@ def _from_completion_response(resp: Any) -> LLMResponse:
         wall_ms=resp.wall_ms,
         attempts=resp.attempts,
         from_cache=resp.from_cache,
+        total_tokens=getattr(resp, "total_tokens", 0),
     )
 
 
@@ -249,6 +261,72 @@ class ClaudeCliBackend:
                 if self.runner is not None:
                     kwargs["runner"] = self.runner
                 self._delegate = _CompletionClaudeCli(**kwargs)
+        return self._delegate
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        model: str,
+        options: Optional[BackendOptions] = None,
+    ) -> LLMResponse:
+        opts = options or BackendOptions()
+        resp = self._backend().complete(
+            system, user, model=model, options=_to_completion_options(opts)
+        )
+        return _from_completion_response(resp)
+
+    def classify_halt(self, exc: BaseException) -> Optional[str]:
+        return self._backend().classify_halt(exc)
+
+
+# ---------------------------------------------------------------------------
+# Codex CLI backend -- delegates to llm_scripting_kit
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CodexCliBackend:
+    """Local ``codex exec`` completion, delegated to ``llm_scripting_kit``.
+
+    ``default_timeout_s`` / ``argv_prefix`` / ``runner`` are forwarded to
+    ``llm_scripting_kit.completion.CodexCliBackend``. The delegate is built
+    lazily so constructing this adapter never requires the shared lib.
+
+    THREAD SAFETY: one instance may be shared across worker threads; the lazy
+    delegate build is guarded by double-checked locking (see
+    :func:`_lazy_build_note`).
+    """
+
+    default_timeout_s: float = 900.0
+    argv_prefix: Optional[tuple] = None
+    runner: Optional[Callable[..., "tuple[str, str, int]"]] = None
+    name: str = field(default="codex-cli", init=False)
+    _delegate: Any = field(default=None, init=False, repr=False, compare=False)
+    _build_lock: "threading.Lock" = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
+
+    def _backend(self) -> Any:
+        """Return the shared delegate, building it at most once (see notes)."""
+        if self._delegate is not None:
+            return self._delegate
+        with self._build_lock:
+            if self._delegate is None:
+                try:
+                    from llm_scripting_kit.completion import (  # noqa: PLC0415
+                        CodexCliBackend as _CompletionCodexCli,
+                    )
+                except ImportError as exc:  # pragma: no cover - env-dependent
+                    raise ImportError(f"CodexCliBackend {_MISSING_LIB_MSG}") from exc
+                kwargs: Dict[str, Any] = {
+                    "default_timeout_s": self.default_timeout_s,
+                    "argv_prefix": self.argv_prefix,
+                }
+                if self.runner is not None:
+                    kwargs["runner"] = self.runner
+                self._delegate = _CompletionCodexCli(**kwargs)
         return self._delegate
 
     def complete(
@@ -404,6 +482,7 @@ def route(
     *,
     openrouter: Optional[Any] = None,
     claude_cli: Optional[Any] = None,
+    codex_cli: Optional[Any] = None,
     mock: Optional[Any] = None,
 ) -> Any:
     """Return the process-active backend instance.
@@ -417,6 +496,8 @@ def route(
         return mock if mock is not None else MockBackend()
     if name == "claude-cli":
         return claude_cli if claude_cli is not None else ClaudeCliBackend()
+    if name == "codex-cli":
+        return codex_cli if codex_cli is not None else CodexCliBackend()
     return openrouter if openrouter is not None else OpenRouterBackend()
 
 
@@ -424,11 +505,16 @@ def routed_model(requested_model: str, *, backend_name: Optional[str] = None) ->
     """Resolve the model a routed call should run, with truthful substitution.
 
     An OpenRouter-style slug means nothing to the claude-cli transport, so a
-    routed non-openrouter call substitutes :data:`MODEL_ENV` when the requested
-    id does not already name that backend's family. The substituted id is what
-    lands on ``LLMResponse.model`` and therefore on audit records.
+    claude-cli call substitutes :data:`MODEL_ENV` when the requested id does
+    not already name that backend's family. Codex model ids are passed through
+    unchanged: they are fully qualified ids such as ``gpt-5.6-luna`` or
+    ``gpt-5.6-sol`` and bare codenames are not dispatchable. The substituted or
+    preserved id is what lands on ``LLMResponse.model`` and therefore on audit
+    records.
     """
     name = backend_name or active_backend_name()
+    if name == "codex-cli":
+        return requested_model
     if name == "claude-cli" and not requested_model.startswith("claude"):
         return os.environ.get(MODEL_ENV, "").strip() or requested_model
     return requested_model
@@ -437,6 +523,7 @@ def routed_model(requested_model: str, *, backend_name: Optional[str] = None) ->
 __all__ = [
     "OpenRouterBackend",
     "ClaudeCliBackend",
+    "CodexCliBackend",
     "MockBackend",
     "BACKEND_ENV",
     "MODEL_ENV",

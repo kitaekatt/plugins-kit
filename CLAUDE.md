@@ -1086,7 +1086,7 @@ claude_md:
         Do NOT clear a stale .pth by hand: it fixes one box, converges nobody, and
         destroys the evidence (never_hand_repair_a_wedge). The fix belongs in
         bootstrap's venv provisioning.
-      origin: "2026-08-10 -- found while verifying that a published bootstrap_lib.codex resolved from the INSTALLED copy; llm-scripting-kit's own venv was resolving a 0.6.1 tree in a different repo clone."
+      origin: "2026-08-10 -- found while verifying that a published bootstrap_lib.codex resolved from the INSTALLED copy; llm-scripting-kit's own venv was resolving its superseded 0.6.1 cache dir. (A first reading blamed a second repo clone, because the recorded path spelled ~/.claude as D:\\Dev\\claude-settings; that is the same directory through the symlink, so compare paths with realpath before concluding the root moved.)"
       added: "2026-08-10"
   conventions:
     - rule: Commit and push to dev freely without asking; only a PUBLISH (dev -> master) needs the user. Do not coordinate around other agent sessions' concurrent work.

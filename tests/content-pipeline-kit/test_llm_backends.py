@@ -1,7 +1,8 @@
 """Behavioral tests for content_pipeline.llm.backends.
 
 Covers the hermetic surface: the MockBackend seam and process-level routing.
-The two live transports (OpenRouterBackend, ClaudeCliBackend) are thin adapters
+The three live transports (OpenRouterBackend, ClaudeCliBackend,
+CodexCliBackend) are thin adapters
 that delegate to ``llm_scripting_kit.completion`` -- the ported transport itself is
 covered in tests/llm-scripting-kit (fake-runner subprocess seam, envelope parse,
 retry, hard-stop, timeout, halt classification, OpenRouter fake client). Here we
@@ -14,6 +15,7 @@ import pytest
 from content_pipeline.llm import backends
 from content_pipeline.llm.backends import (
     ClaudeCliBackend,
+    CodexCliBackend,
     MockBackend,
     OpenRouterBackend,
     active_backend_name,
@@ -250,6 +252,8 @@ def test_routing_set_and_clear():
 def test_routing_returns_active_backend():
     set_active_backend("claude-cli")
     assert isinstance(route(), ClaudeCliBackend)
+    set_active_backend("codex-cli")
+    assert isinstance(route(), CodexCliBackend)
     set_active_backend("mock")
     assert isinstance(route(), MockBackend)
 
@@ -271,6 +275,13 @@ def test_routed_model_substitutes_for_claude(monkeypatch):
 
 def test_routed_model_no_substitution_for_openrouter():
     assert routed_model("deepseek/deepseek-v4") == "deepseek/deepseek-v4"
+
+
+def test_routed_model_preserves_codex_model_id(monkeypatch):
+    set_active_backend("codex-cli")
+    monkeypatch.setenv(backends.MODEL_ENV, "gpt-5.6-sol")
+    assert routed_model("gpt-5.6-luna") == "gpt-5.6-luna"
+    assert routed_model("luna") == "luna"
 
 
 def test_mock_backend_exhaustion_race_raises_documented_error():
@@ -343,3 +354,46 @@ def test_mock_backend_exhaustion_race_raises_documented_error():
             assert exhausted == n_threads - 1
     finally:
         sys.setswitchinterval(old_interval)
+
+
+def test_response_adapter_carries_total_tokens():
+    """The response seam must not silently drop a field.
+
+    Its sibling `_to_completion_options` exists so a field drift SURFACES
+    rather than mis-binding. The response direction had no such guard, and a
+    codex-only `total_tokens` was in fact dropped here -- a codex call routed
+    through this layer reported no usage at all.
+    """
+
+    class _Resp:
+        text = "x"
+        model = "gpt-5.6-luna"
+        input_tokens = 0
+        output_tokens = 0
+        cache_hit_tokens = 0
+        wall_ms = 5
+        attempts = 1
+        from_cache = False
+        total_tokens = 14214
+
+    adapted = backends._from_completion_response(_Resp())
+    assert adapted.total_tokens == 14214
+    # An undifferentiated total must NOT masquerade as metered output, which
+    # the cost estimator prices per output token.
+    assert adapted.output_tokens == 0
+
+
+def test_response_adapter_tolerates_older_shared_lib():
+    """A shared lib reaches every consumer at once with no version pin."""
+
+    class _OldResp:
+        text = "x"
+        model = "m"
+        input_tokens = 1
+        output_tokens = 2
+        cache_hit_tokens = 0
+        wall_ms = 5
+        attempts = 1
+        from_cache = False
+
+    assert backends._from_completion_response(_OldResp()).total_tokens == 0

@@ -23,6 +23,7 @@ from llm_scripting_kit.completion.codex_backend import (
     CodexCliBackend,
     CodexRunError,
     compose_prompt,
+    parse_codex_token_total,
 )
 from llm_scripting_kit.completion.types import BackendOptions, LLMBackend
 
@@ -199,9 +200,27 @@ class TestPromptAndResponse:
         assert resp.attempts == 1
         assert resp.from_cache is False
         assert resp.wall_ms >= 0
+        # No "tokens used" line in this stub's stderr -- honest zero, not a
+        # fabricated split.
+        assert resp.total_tokens == 0
 
         cmd = runner.calls[0]["cmd"]
         assert not Path(cmd[cmd.index("-o") + 1]).exists()
+
+    def test_total_tokens_surfaced_on_response(self, tmp_path: Path):
+        """End-to-end: the parsed total lands on LLMResponse.total_tokens."""
+        runner = _StubRunner(
+            output_text="the answer", result=("", "tokens used\n14,214\n", 0),
+        )
+        resp = _backend(runner).complete(
+            "s", "u", model="gpt-5.4-codex",
+            options=BackendOptions(cwd=_root(tmp_path)),
+        )
+        assert resp.total_tokens == 14214
+        # The per-direction fields stay honest zeros -- codex never splits.
+        assert (resp.input_tokens, resp.output_tokens, resp.cache_hit_tokens) == (
+            0, 0, 0,
+        )
 
     def test_missing_output_file_raises(self, tmp_path: Path):
         """The DELETING stub is the point.
@@ -281,6 +300,54 @@ class TestPromptAndResponse:
 
 
 # ---------------------------------------------------------------------------
+# parse_codex_token_total
+# ---------------------------------------------------------------------------
+
+
+class TestParseCodexTokenTotal:
+    def test_two_line_form(self):
+        """The observed live shape: label on its own line, number on the next."""
+        assert parse_codex_token_total("tokens used\n14,214") == 14214
+
+    def test_same_line_form(self):
+        assert parse_codex_token_total("tokens used: 14,214") == 14214
+
+    def test_thousands_separator_multiple_commas(self):
+        assert parse_codex_token_total("tokens used\n1,234,567") == 1234567
+
+    def test_no_thousands_separator(self):
+        assert parse_codex_token_total("tokens used\n42") == 42
+
+    def test_surrounding_log_noise_tolerated(self):
+        noisy = "2026-08-10T00:00:00Z [worker-3] tokens used (session end)\n   14,214   \n"
+        assert parse_codex_token_total(noisy) == 14214
+
+    def test_blank_lines_between_label_and_number_are_skipped(self):
+        assert parse_codex_token_total("tokens used\n\n\n14,214") == 14214
+
+    def test_label_absent_returns_none(self):
+        assert parse_codex_token_total("codex exec finished cleanly") is None
+
+    def test_empty_string_returns_none(self):
+        assert parse_codex_token_total("") is None
+
+    def test_label_with_no_reachable_digits_returns_none(self):
+        assert parse_codex_token_total("tokens used\nno number here") is None
+
+    def test_label_at_end_of_text_with_nothing_after_returns_none(self):
+        assert parse_codex_token_total("tokens used") is None
+
+    def test_never_raises_on_arbitrary_garbage(self):
+        garbage = "\x00\x01 not even close to tokens \n\n---===---\n"
+        assert parse_codex_token_total(garbage) is None
+
+    def test_falls_through_to_a_later_occurrence_of_the_label(self):
+        """A first, unparseable 'tokens used' does not shadow a later good one."""
+        text = "tokens used\nfoo\ntokens used\n99"
+        assert parse_codex_token_total(text) == 99
+
+
+# ---------------------------------------------------------------------------
 # protocol / timeout / halt
 # ---------------------------------------------------------------------------
 
@@ -329,11 +396,24 @@ class TestProtocolAndHalt:
     @pytest.mark.parametrize(
         "message,expected",
         [
-            ("codex exec failed: you have hit your usage limit", halt.HALT_RATE_LIMIT),
-            ("rate limit reached for this account", halt.HALT_RATE_LIMIT),
-            ("429 too many requests", halt.HALT_RATE_LIMIT),
-            ("not logged in; run codex login", halt.HALT_AUTH),
-            ("unauthorized", halt.HALT_AUTH),
+            # Structural CLI output -- what codex actually emits.
+            (
+                "ERROR: unexpected status 401 Unauthorized: Missing bearer or "
+                "basic authentication in header",
+                halt.HALT_AUTH,
+            ),
+            ("failed to connect to websocket: HTTP error: 401 Unauthorized", halt.HALT_AUTH),
+            ("ERROR: unexpected status 429 Too Many Requests", halt.HALT_RATE_LIMIT),
+            # Prose a MODEL could write must NOT classify. Codex writes its
+            # transcript to both channels, so a loose marker here would let a
+            # healthy run forge a halt and abort a bulk run. These five used to
+            # be the marker set and were inferred, never observed; only
+            # "unauthorized" ever appeared in a real failure, and then only as
+            # part of the structural "401 Unauthorized" above.
+            ("codex exec failed: you have hit your usage limit", None),
+            ("rate limit reached for this account", None),
+            ("not logged in; run codex login", None),
+            ("the api key was invalid", None),
             ("something ordinary went wrong", None),
         ],
     )

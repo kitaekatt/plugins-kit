@@ -83,6 +83,13 @@ class LLMResponse:
     - ``attempts`` -- number of completion attempts made (1 on first-try
       success; 1 on a cache hit).
     - ``from_cache`` -- True when served from :class:`ResponseCache`.
+    - ``total_tokens`` -- an UNDIFFERENTIATED total, reported by a transport
+      that surfaces no input/output split (codex-cli). 0 everywhere else. It is
+      a separate field rather than a value folded into ``output_tokens``
+      because the cost estimator multiplies that field by a per-output-token
+      price -- a total placed there would compute a fabricated dollar figure.
+      For the same reason do NOT add it to ``input_tokens + output_tokens``;
+      it is an alternative to them, not a component.
     """
 
     text: str
@@ -93,6 +100,7 @@ class LLMResponse:
     wall_ms: int = 0
     attempts: int = 1
     from_cache: bool = False
+    total_tokens: int = 0
 
 
 @dataclass(frozen=True)

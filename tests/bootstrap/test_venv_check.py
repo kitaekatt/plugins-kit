@@ -13,8 +13,40 @@ from bootstrap_lib.venv_check import (
     ensure_venv,
     export_venv_env_var,
     find_uv,
+    scan_editable_installs,
+    site_packages_dirs,
     venv_env_var_name,
 )
+
+
+def _site_packages(venv_dir):
+    """Create and return the Windows-layout site-packages dir of a fake venv."""
+    site = venv_dir / "Lib" / "site-packages"
+    site.mkdir(parents=True, exist_ok=True)
+    return site
+
+
+def _write_direct_pth(site, dist, version, source_dir):
+    """Write the bare-path editable shape (setuptools' simple strategy)."""
+    pth = site / f"__editable__.{dist}-{version}.pth"
+    pth.write_text(f"{source_dir}\n", encoding="utf-8")
+    return pth
+
+
+def _write_finder_pth(site, dist, version, package, source_dir):
+    """Write the finder-module editable shape (setuptools' import strategy)."""
+    token = f"{dist}_{version.replace('.', '_')}"
+    finder = f"__editable___{token}_finder"
+    pth = site / f"__editable__.{dist}-{version}.pth"
+    pth.write_text(f"import {finder}; {finder}.install()\n", encoding="utf-8")
+    (site / f"{finder}.py").write_text(
+        "from __future__ import annotations\n"
+        f"MAPPING: dict[str, str] = {{{package!r}: {str(source_dir)!r}}}\n"
+        "NAMESPACES: dict[str, list[str]] = {}\n"
+        "def install():\n    pass\n",
+        encoding="utf-8",
+    )
+    return pth
 
 
 def _sourced_value(env_file, var):
@@ -132,6 +164,247 @@ class TestCheckVenv:
 
         assert not result.passed
         assert plugin_root in result.remediation_cmd
+
+
+class TestScanEditableInstalls:
+    """A plugin venv outlives the version-keyed cache dir it was built against.
+
+    The superseded directory stays on disk, so the stale editable imports
+    cleanly and no behavioral check can see it.
+    """
+
+    def test_direct_shape_current_is_clean(self, tmp_path):
+        cache = tmp_path / "cache" / "0.2.0"
+        (cache / "lib").mkdir(parents=True)
+        site = _site_packages(tmp_path / ".venv")
+        _write_direct_pth(site, "demo_kit", "0.2.0", cache / "lib")
+
+        stale, unreadable = scan_editable_installs(str(tmp_path / ".venv"), str(cache))
+
+        assert stale == []
+        assert unreadable == []
+
+    def test_direct_shape_stale_version(self, tmp_path):
+        old = tmp_path / "cache" / "0.1.0"
+        new = tmp_path / "cache" / "0.2.0"
+        (old / "lib").mkdir(parents=True)
+        (new / "lib").mkdir(parents=True)
+        site = _site_packages(tmp_path / ".venv")
+        _write_direct_pth(site, "demo_kit", "0.1.0", old / "lib")
+
+        stale, unreadable = scan_editable_installs(str(tmp_path / ".venv"), str(new))
+
+        assert unreadable == []
+        assert len(stale) == 1
+        name, detail = stale[0]
+        assert name == "__editable__.demo_kit-0.1.0.pth"
+        assert "0.1.0" in detail and str(new) in detail
+
+    def test_finder_shape_current_is_clean(self, tmp_path):
+        cache = tmp_path / "cache" / "0.2.0"
+        (cache / "demo_lib").mkdir(parents=True)
+        site = _site_packages(tmp_path / ".venv")
+        _write_finder_pth(site, "demo", "0.2.0", "demo_lib", cache / "demo_lib")
+
+        stale, unreadable = scan_editable_installs(str(tmp_path / ".venv"), str(cache))
+
+        assert stale == []
+        assert unreadable == []
+
+    def test_finder_shape_stale_version(self, tmp_path):
+        old = tmp_path / "cache" / "0.1.0"
+        new = tmp_path / "cache" / "0.2.0"
+        (old / "demo_lib").mkdir(parents=True)
+        (new / "demo_lib").mkdir(parents=True)
+        site = _site_packages(tmp_path / ".venv")
+        _write_finder_pth(site, "demo", "0.1.0", "demo_lib", old / "demo_lib")
+
+        stale, unreadable = scan_editable_installs(str(tmp_path / ".venv"), str(new))
+
+        assert unreadable == []
+        assert [n for n, _ in stale] == ["__editable__.demo-0.1.0.pth"]
+
+    def test_posix_layout_is_scanned(self, tmp_path):
+        old = tmp_path / "cache" / "0.1.0"
+        new = tmp_path / "cache" / "0.2.0"
+        (old / "lib").mkdir(parents=True)
+        new.mkdir(parents=True)
+        site = tmp_path / ".venv" / "lib" / "python3.12" / "site-packages"
+        site.mkdir(parents=True)
+        _write_direct_pth(site, "demo_kit", "0.1.0", old / "lib")
+
+        stale, _unreadable = scan_editable_installs(str(tmp_path / ".venv"), str(new))
+
+        assert len(stale) == 1
+
+    def test_equivalent_spelling_is_not_stale(self, tmp_path):
+        """Case and separator differences must not read as a moved directory.
+
+        The real-world driver is a linked ``~/.claude``: the same cache dir is
+        recorded under several spellings, and a string compare would report
+        every plugin on such a machine as stale.
+        """
+        cache = tmp_path / "cache" / "0.2.0"
+        (cache / "lib").mkdir(parents=True)
+        site = _site_packages(tmp_path / ".venv")
+        recorded = os.path.join(str(cache), ".", "lib")
+        _write_direct_pth(site, "demo_kit", "0.2.0", recorded)
+
+        stale, unreadable = scan_editable_installs(str(tmp_path / ".venv"), str(cache))
+
+        assert stale == []
+        assert unreadable == []
+
+    def test_unparseable_pth_is_left_alone(self, tmp_path):
+        """Fail closed: an unfamiliar shape is a note, never a staleness verdict."""
+        cache = tmp_path / "cache" / "0.2.0"
+        cache.mkdir(parents=True)
+        site = _site_packages(tmp_path / ".venv")
+        (site / "__editable__.demo-0.1.0.pth").write_text(
+            "import some_unknown_hook; some_unknown_hook.go()\n", encoding="utf-8"
+        )
+
+        stale, unreadable = scan_editable_installs(str(tmp_path / ".venv"), str(cache))
+
+        assert stale == []
+        assert [n for n, _ in unreadable] == ["__editable__.demo-0.1.0.pth"]
+
+    def test_missing_finder_module_is_unreadable(self, tmp_path):
+        cache = tmp_path / "cache" / "0.2.0"
+        cache.mkdir(parents=True)
+        site = _site_packages(tmp_path / ".venv")
+        (site / "__editable__.demo-0.1.0.pth").write_text(
+            "import __editable___demo_0_1_0_finder; __editable___demo_0_1_0_finder.install()\n",
+            encoding="utf-8",
+        )
+
+        stale, unreadable = scan_editable_installs(str(tmp_path / ".venv"), str(cache))
+
+        assert stale == []
+        assert "finder module" in unreadable[0][1]
+
+    def test_finder_without_mapping_is_unreadable(self, tmp_path):
+        cache = tmp_path / "cache" / "0.2.0"
+        cache.mkdir(parents=True)
+        site = _site_packages(tmp_path / ".venv")
+        (site / "__editable__.demo-0.1.0.pth").write_text(
+            "import __editable___demo_0_1_0_finder; __editable___demo_0_1_0_finder.install()\n",
+            encoding="utf-8",
+        )
+        (site / "__editable___demo_0_1_0_finder.py").write_text(
+            "def install():\n    pass\n", encoding="utf-8"
+        )
+
+        stale, unreadable = scan_editable_installs(str(tmp_path / ".venv"), str(cache))
+
+        assert stale == []
+        assert "MAPPING" in unreadable[0][1]
+
+    def test_empty_pth_is_unreadable_not_stale(self, tmp_path):
+        cache = tmp_path / "cache" / "0.2.0"
+        cache.mkdir(parents=True)
+        site = _site_packages(tmp_path / ".venv")
+        (site / "__editable__.demo-0.1.0.pth").write_text("\n# comment\n", encoding="utf-8")
+
+        stale, unreadable = scan_editable_installs(str(tmp_path / ".venv"), str(cache))
+
+        assert stale == []
+        assert unreadable[0][1] == "no paths recorded"
+
+    def test_shared_lib_pth_is_ignored(self, tmp_path):
+        """Only ``__editable__*`` files are in scope; shared-lib links are not."""
+        cache = tmp_path / "cache" / "0.2.0"
+        cache.mkdir(parents=True)
+        site = _site_packages(tmp_path / ".venv")
+        (site / "bootstrap_lib.pth").write_text(
+            'import sys; sys.path.insert(0, r"D:/elsewhere/bootstrap_lib")\n', encoding="utf-8"
+        )
+
+        assert scan_editable_installs(str(tmp_path / ".venv"), str(cache)) == ([], [])
+
+    def test_no_venv_yields_nothing(self, tmp_path):
+        assert site_packages_dirs(str(tmp_path / "absent")) == []
+        assert scan_editable_installs(str(tmp_path / "absent"), str(tmp_path)) == ([], [])
+
+
+class TestCheckVenvEditableStaleness:
+    """check_venv is where the stale editable turns into a remediable failure."""
+
+    def _fake_venv(self, tmp_path):
+        venv_dir = tmp_path / "data" / ".venv"
+        subprocess.run(["uv", "venv", str(venv_dir)], check=True, capture_output=True)
+        return venv_dir
+
+    def test_stale_editable_fails_the_check(self, tmp_path):
+        venv_dir = self._fake_venv(tmp_path)
+        old = tmp_path / "cache" / "0.1.0"
+        new = tmp_path / "cache" / "0.2.0"
+        (old / "lib").mkdir(parents=True)
+        new.mkdir(parents=True)
+        _write_direct_pth(_site_packages(venv_dir), "demo_kit", "0.1.0", old / "lib")
+
+        result = check_venv(str(tmp_path / "data"), str(new), [])
+
+        assert not result.passed
+        assert "stale editable install" in result.message
+        assert "uv sync" in result.remediation_cmd
+
+    def test_current_editable_passes(self, tmp_path):
+        venv_dir = self._fake_venv(tmp_path)
+        cache = tmp_path / "cache" / "0.2.0"
+        (cache / "lib").mkdir(parents=True)
+        _write_direct_pth(_site_packages(venv_dir), "demo_kit", "0.2.0", cache / "lib")
+
+        result = check_venv(str(tmp_path / "data"), str(cache), [])
+
+        assert result.passed
+        assert "0 imports verified" in result.message
+
+    def test_unreadable_editable_passes_with_a_note(self, tmp_path):
+        """The note rides the passing message, so it is logged verbose-only."""
+        venv_dir = self._fake_venv(tmp_path)
+        cache = tmp_path / "cache" / "0.2.0"
+        cache.mkdir(parents=True)
+        (_site_packages(venv_dir) / "__editable__.demo-0.1.0.pth").write_text(
+            "import some_unknown_hook; some_unknown_hook.go()\n", encoding="utf-8"
+        )
+
+        result = check_venv(str(tmp_path / "data"), str(cache), [])
+
+        assert result.passed
+        assert "editable install left alone" in result.message
+
+
+class TestEnsureVenvEditableRemediation:
+    """A stale editable must produce a visible action entry, not a silent rewrite."""
+
+    def test_stale_editable_syncs_and_logs_an_action(self, tmp_path, monkeypatch):
+        from bootstrap_lib.result import Result
+
+        venv_path = str(tmp_path / ".venv")
+        os.makedirs(venv_path)
+        states = [
+            Result(passed=False, subject=venv_path,
+                   message="stale editable install: __editable__.demo-0.1.0.pth points at old",
+                   remediation_cmd="uv sync --project p"),
+            Result(passed=True, subject=venv_path, message="venv ok (0 imports verified)"),
+        ]
+        monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
+                            lambda d, r, i: states.pop(0))
+        monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
+
+        class _Proc:
+            returncode = 0
+            stderr = b""
+
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run",
+                            lambda cmd, **k: _Proc())
+
+        result, entries = ensure_venv(str(tmp_path / "proj"), venv_path)
+
+        assert result.passed
+        assert any("stale editable install" in e for e in entries)
+        assert any(e == "re-synced" for e in entries)
 
 
 class TestVenvEnvVarName:
@@ -333,7 +606,7 @@ class TestEnsureVenv:
 
         result, entries = ensure_venv(str(tmp_path / "proj"), venv_path, extras=["dev"])
         assert result.passed
-        assert any("not ready, running" in e for e in entries)
+        assert any("not ready, running" in e and "venv not found" in e for e in entries)
         assert any(e == "created" for e in entries)
         cmd, kwargs = calls[0]
         assert cmd[:2] == ["/fake/uv", "sync"]

@@ -32,6 +32,7 @@ flag is hand-assembled here; a new codex knob is added there and forwarded from
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -83,6 +84,67 @@ CODEX_EXTRA_KEYS = (
 )
 
 
+#: Matches codex's "tokens used" label, wherever it sits in a noisy line.
+_TOKENS_USED_RE = re.compile(r"tokens\s+used", re.IGNORECASE)
+
+#: The first digit run after the label -- ``,`` tolerated as a thousands
+#: separator, everything else (units, punctuation) left for the caller.
+_NUMBER_RE = re.compile(r"\d[\d,]*")
+
+
+def parse_codex_token_total(text: str) -> Optional[int]:
+    """Extract codex's total-token figure from a stderr transcript.
+
+    Codex's default (non-``--json``) path prints exactly one usage number --
+    a running TOTAL, with no input/output split and no cache figure -- on its
+    own pair of stderr lines::
+
+        tokens used
+        14,214
+
+    Observed live: the label and the number can also land on ONE line (a
+    log-prefix echo or a differently-buffered CLI collapses the pair), so both
+    shapes are handled:
+
+    - same line: the first digit run anywhere after the label on that line.
+    - two lines: the first digit run on the next NON-BLANK line, when the
+      label's own line has nothing after it.
+
+    A thousands separator (``14,214``) is stripped before parsing. Surrounding
+    noise -- a timestamp, a log-prefix tag, extra whitespace -- is tolerated
+    because the label is matched with a bare substring search, not an anchored
+    pattern.
+
+    Returns ``None``, never raises, when the label is absent, or present with
+    no digits reachable on its own line or the very next non-blank one. A
+    "not found" and a "malformed" input are deliberately indistinguishable to
+    the caller: both mean "no total to report", and returning 0 in either case
+    would read as codex having reported a literal zero-token call.
+    """
+    if not text:
+        return None
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        label = _TOKENS_USED_RE.search(line)
+        if label is None:
+            continue
+        number = _NUMBER_RE.search(line[label.end():])
+        if number is None:
+            for candidate in lines[i + 1 :]:
+                stripped = candidate.strip()
+                if not stripped:
+                    continue
+                number = _NUMBER_RE.search(stripped)
+                break
+        if number is None:
+            continue
+        try:
+            return int(number.group(0).replace(",", ""))
+        except ValueError:
+            continue
+    return None
+
+
 def compose_prompt(system: str, user: str) -> str:
     """Fold a system and a user prompt into codex's single stdin channel.
 
@@ -132,10 +194,13 @@ class CodexCliBackend:
       ``user_cache_prefix`` -- codex exposes no such knobs. Accepted for
       protocol compatibility and ignored, exactly as ClaudeCliBackend does.
 
-    Usage/cost: codex emits no usage envelope on the default (non-``--json``)
-    path, so ``input_tokens`` / ``output_tokens`` / ``cache_hit_tokens`` are 0.
-    They are NOT estimated -- a fabricated count is worse than an honest zero
-    in an audit record.
+    Usage/cost: codex emits no PER-DIRECTION usage envelope on the default
+    (non-``--json``) path, so ``input_tokens`` / ``output_tokens`` /
+    ``cache_hit_tokens`` are always 0 -- they are NOT estimated, since a
+    fabricated split is worse than an honest zero in an audit record. Codex
+    does print a running TOTAL on stderr ("tokens used" / a number), which
+    :func:`parse_codex_token_total` extracts into ``LLMResponse.total_tokens``
+    when present, 0 when the line is absent or unparseable.
     """
 
     default_timeout_s: float = 900.0
@@ -217,12 +282,15 @@ class CodexCliBackend:
             except OSError:
                 pass
 
+        total_tokens = parse_codex_token_total(stderr)
+
         return LLMResponse(
             text=text,
             model=model,
             input_tokens=0,
             output_tokens=0,
             cache_hit_tokens=0,
+            total_tokens=total_tokens or 0,
             wall_ms=wall_ms,
             attempts=1,
             from_cache=False,
@@ -305,4 +373,5 @@ __all__ = [
     "CodexCliBackend",
     "CodexRunError",
     "compose_prompt",
+    "parse_codex_token_total",
 ]

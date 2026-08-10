@@ -69,20 +69,36 @@ _AUTH_MARKERS = (
 # Markers are therefore deliberately short and generic so a wording variant
 # still matches; when a real codex failure is captured, replace them with the
 # observed strings rather than adding to the guesses.
+# Codex markers are STRUCTURAL, not prose, and that is the whole design.
+#
+# Codex writes its transcript to both stdout and stderr, so any marker a model
+# could plausibly TYPE ("rate limit", "unauthorized") turns a healthy run that
+# merely discusses the topic into a forged halt that aborts a bulk run. These
+# strings are emitted by the CLI's own error path and are not English a model
+# writes in passing, so they can be matched against a raw transcript safely.
+#
+# VERIFIED against a real failure (codex-cli 0.146.0, provoked by pointing
+# CODEX_HOME at an empty dir):
+#     ERROR: unexpected status 401 Unauthorized: Missing bearer or basic
+#     authentication in header, url: https://api.openai.com/v1/responses
+#     failed to connect to websocket: HTTP error: 401 Unauthorized
+# The 429 forms mirror the 401 shapes and are UNVERIFIED -- no rate limit was
+# provoked. Replace them with observed text when one is seen; do not add loose
+# prose markers back.
 _CODEX_RATE_LIMIT_MARKERS = (
-    "usage limit",
-    "rate limit",
-    "rate_limit",
-    "too many requests",
-    "quota exceeded",
+    "unexpected status 429",
+    "http error: 429",
 )
 _CODEX_AUTH_MARKERS = (
-    "not logged in",
-    "codex login",
-    "unauthorized",
-    "invalid api key",
-    "authentication failed",
+    "unexpected status 401",
+    "http error: 401",
+    "missing bearer or basic authentication",
 )
+
+#: Attributes a transport exception may carry its raw channels on. Scanned
+#: because the MESSAGE deliberately holds no transcript -- see
+#: :func:`classify_codex_exception`.
+_CODEX_CHANNEL_ATTRS = ("stderr", "stdout")
 
 
 def classify_halt_text(text: str) -> Optional[str]:
@@ -190,13 +206,18 @@ def classify_codex_exception(exc: BaseException) -> Optional[str]:
     usually is and both transports must halt-and-resume the same way. The
     substring checks are the fallback for an exception that carries only text.
 
-    INVARIANT this depends on: the caller must keep MODEL-AUTHORED text out of
-    the exception message. Codex writes its transcript to both stdout and
-    stderr, so interpolating either into a message makes a healthy run that
-    merely discusses "rate limit" classify as a persistent halt and abort the
-    whole run. ``codex_backend.CodexRunError`` upholds this by carrying the
-    transcript on attributes instead; do not "improve" an error message there
-    by inlining a channel.
+    The message alone is NOT enough, and assuming it was is a real defect this
+    guards against. ``codex_backend.CodexRunError`` deliberately keeps the
+    transcript OFF its message (model-authored text there would let a healthy
+    run forge a halt), which also means the evidence of a genuine 401 or 429 is
+    not in the message either. Classifying on ``str(exc)`` alone therefore
+    misses every true halt: a permanent auth failure reads as transient and a
+    bulk run retries against a wall forever.
+
+    So the carried channels are scanned too, via :data:`_CODEX_CHANNEL_ATTRS`.
+    That is safe ONLY because the codex markers are structural CLI output
+    rather than prose -- see their definition. Keep both halves of that
+    bargain: transcripts stay off the message, and markers stay unforgeable.
     """
     if isinstance(exc, AgentTimeoutError):
         return HALT_RATE_LIMIT  # CLI-layer backoff is functionally a rate limit
@@ -204,6 +225,13 @@ def classify_codex_exception(exc: BaseException) -> Optional[str]:
     reason = classify_codex_text(msg)
     if reason is not None:
         return reason
+    for attr in _CODEX_CHANNEL_ATTRS:
+        channel = getattr(exc, attr, None)
+        if not isinstance(channel, str):
+            continue
+        reason = classify_codex_text(channel.lower())
+        if reason is not None:
+            return reason
     if "exceeded" in msg and "timeout" in msg:
         return HALT_RATE_LIMIT
     return None
