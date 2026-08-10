@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import os
 import subprocess
@@ -12,15 +13,31 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-# The generated-artifact signature list is SHARED with the code-review pipeline
-# (bootstrap_lib.code_review.pipeline excludes such files from reviewer fan-out).
-# Both answer "did a tool write this file?", so they answer it from one list --
-# a second copy here would drift and let a file be refused at commit time but
-# fanned out to reviewers, or the reverse. bootstrap_lib is stdlib-only, which
-# this hook requires: it must run on an unprovisioned clone.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugins" / "bootstrap"))
-
-from bootstrap_lib.code_review.generated import detect_signature_bytes  # noqa: E402
+# The machine-emitted-artifact signature list is SHARED with the code-review
+# pipeline (bootstrap_lib.code_review.pipeline excludes such files from reviewer
+# fan-out). Both answer "did a tool write this file?", so they answer it from one
+# list -- a second copy here would drift and let a file be refused at commit time
+# but fanned out to reviewers, or the reverse. bootstrap_lib is stdlib-only,
+# which this hook requires: it must run on an unprovisioned clone.
+#
+# It is loaded from the GIT INDEX (falling back to HEAD), never sys.path-imported
+# from the worktree. The guard judges what is BEING COMMITTED, so it must be
+# judged by the code the commit itself contains: a commit that legitimately
+# changes the signature list is then tested against its own staged version (which
+# a HEAD-only load would miss), while an unstaged, half-applied edit sitting in
+# this shared worktree -- another session mid-rename, a file deleted on disk --
+# cannot break anybody's commit. A worktree import made every session's pre-commit
+# depend on every other session's transient state; on 2026-08-09 that made the
+# repo uncommittable for everyone with a bare ModuleNotFoundError traceback.
+#
+# Both names are tried, index-first across ALL candidates before HEAD, so the
+# guard keeps working through a rename in either direction (and prefers a staged
+# rename over the stale HEAD copy of the old name).
+DETECTOR_CANDIDATES = (
+    "plugins/bootstrap/bootstrap_lib/code_review/machine_emitted.py",
+    "plugins/bootstrap/bootstrap_lib/code_review/generated.py",
+)
+DETECTOR_ATTR = "detect_signature_bytes"
 
 MAX_STAGED_FILE_BYTES = 1024 * 1024
 LOCAL_TERMS_PATH = PurePosixPath(".githooks/project-terms.txt")
@@ -86,6 +103,68 @@ def staged_blob_size(repo_root: Path, repo_path: str) -> int:
         return int(raw.strip())
     except ValueError as exc:
         raise GuardInspectionError(f"invalid staged size for {repo_path}") from exc
+
+
+def _exec_blob_as_module(name: str, source: bytes, origin: str) -> object:
+    """Execute a blob's source as an anonymous module (nothing touches sys.path)."""
+    spec = importlib.util.spec_from_loader(name, loader=None, origin=origin)
+    if spec is None:  # pragma: no cover - defensive
+        raise GuardInspectionError(f"cannot build a module spec for {origin}")
+    module = importlib.util.module_from_spec(spec)
+    module.__file__ = origin
+    exec(compile(source, origin, "exec"), module.__dict__)  # noqa: S102
+    return module
+
+
+def load_detector(
+    repo_root: Path,
+    candidates: Iterable[str] = DETECTOR_CANDIDATES,
+) -> Callable[[bytes], str | None]:
+    """Load ``detect_signature_bytes`` from the index, falling back to HEAD.
+
+    Every candidate is tried against the index before any is tried against HEAD,
+    so a staged rename wins over the stale HEAD copy of the old name. Failure to
+    load is an inspection failure, not a pass: the caller turns it into a clean
+    refusal.
+    """
+    candidates = tuple(candidates)
+    attempts: list[str] = []
+    for template in (":{}", "HEAD:{}"):
+        for repo_path in candidates:
+            revspec = template.format(repo_path)
+            try:
+                source = _git(repo_root, "cat-file", "blob", revspec)
+            except GuardInspectionError as exc:
+                attempts.append(f"{revspec}: {exc}")
+                continue
+            try:
+                module = _exec_blob_as_module(
+                    "precommit_guard_detector", source, revspec
+                )
+                detect = getattr(module, DETECTOR_ATTR)
+            except Exception as exc:  # noqa: BLE001 - any failure means "unusable"
+                attempts.append(f"{revspec}: {type(exc).__name__}: {exc}")
+                continue
+            if not callable(detect):
+                attempts.append(f"{revspec}: {DETECTOR_ATTR} is not callable")
+                continue
+            return detect
+    raise GuardInspectionError(
+        "could not load the machine-emitted-artifact detector "
+        f"({DETECTOR_ATTR}) from the git index or HEAD; tried "
+        + "; ".join(attempts)
+    )
+
+
+_DEFAULT_DETECTOR: Callable[[bytes], str | None] | None = None
+
+
+def default_detector() -> Callable[[bytes], str | None]:
+    """Detector for callers that did not load one (tests, ad-hoc use)."""
+    global _DEFAULT_DETECTOR
+    if _DEFAULT_DETECTOR is None:
+        _DEFAULT_DETECTOR = load_detector(Path(__file__).resolve().parents[1])
+    return _DEFAULT_DETECTOR
 
 
 def staged_bootstrap_manifests(repo_root: Path) -> dict[str, bytes]:
@@ -304,6 +383,7 @@ def inspect_file(
     content: bytes | None,
     forbidden_targets: set[str],
     terms: Iterable[str],
+    detect: Callable[[bytes], str | None] | None = None,
 ) -> list[Violation]:
     violations: list[Violation] = []
     if size > MAX_STAGED_FILE_BYTES:
@@ -323,7 +403,7 @@ def inspect_file(
 
     if content is None:
         return violations
-    label = detect_signature_bytes(content)
+    label = (detect or default_detector())(content)
     if label:
         violations.append(Violation("generated artifact", path, label))
 
@@ -373,6 +453,7 @@ def main() -> int:
             print(disabled_terms_message(), flush=True)
             terms = []
 
+        detect = load_detector(repo_root)
         manifests = staged_bootstrap_manifests(repo_root)
         targets = manifest_write_targets(
             manifests, lambda path: staged_blob(repo_root, path)
@@ -381,9 +462,21 @@ def main() -> int:
         for path in staged_paths(repo_root):
             size = staged_blob_size(repo_root, path)
             content = None if size > MAX_STAGED_FILE_BYTES else staged_blob(repo_root, path)
-            violations.extend(inspect_file(path, size, content, targets, terms))
+            violations.extend(
+                inspect_file(path, size, content, targets, terms, detect)
+            )
     except (GuardInspectionError, OSError) as exc:
-        print(f"pre-commit: guard inspection failed; refusing commit: {exc}", file=sys.stderr)
+        print(
+            "pre-commit: guard inspection failed; refusing commit "
+            "(this is NOT a detected violation -- the guard could not inspect "
+            f"the staged tree): {exc}",
+            file=sys.stderr,
+        )
+        print(
+            f"If the guard itself is broken and the commit is safe, retry with "
+            f"{OVERRIDE_ENV}=1.",
+            file=sys.stderr,
+        )
         return 1
 
     if violations:

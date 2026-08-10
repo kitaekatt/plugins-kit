@@ -31,6 +31,26 @@ Why a script rather than a checklist -- three footguns it removes:
   - index.html must ride INSIDE the release commit, or master briefly holds a
     page that disagrees with its own marketplace.json.
 
+What preflight refuses on (all of it unbypassable -- no environment variable
+turns any of it off, which is the whole point of a gate that sits after the
+escapable pre-commit hooks):
+
+  - not on dev; a dirty tree; a merge that would not fast-forward; a range with
+    nothing to publish.
+  - commits touching a dev-only (published: false) plugin.
+  - a plugin that does not declare the bootstrap dependency.
+  - no published plugin bumped at all, AND any published plugin whose files
+    changed in the range without a bump (the cache keys on version, so those
+    files would ship under a version consumers already hold and never refetch).
+  - a pyproject.toml version disagreeing with its plugin.json.
+  - awesome-kit's generated orchestration policy drifting from its principles.
+
+The last three exist as pre-commit hooks too, but those are skippable with
+--no-verify (and PLUGINS_KIT_SKIP_BUMP_CHECK=1, whose documented purpose is
+legitimate dev-branch commits between publish checkpoints). Skipping them on dev
+is sanctioned; shipping the result is not, so publish re-runs them from the same
+source of truth rather than restating the rules.
+
 Usage:
   python scripts/publish.py            # preflight, publish, verify
   python scripts/publish.py --check    # preflight + verify only; no writes, no pushes
@@ -45,6 +65,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGINS_DIR = REPO_ROOT / "plugins"
+SCRIPTS_DIR = Path(__file__).resolve().parent
+
+# The repo-wide invariant checks below judge the REAL plugin tree, resolved
+# next to THIS file, rather than PLUGINS_DIR -- same reasoning as
+# _require_bootstrap_dependency: the invariant is a property of the actual
+# plugin tree, and PLUGINS_DIR is patched to a synthetic repo by
+# tests/repo-scripts/test_publish.py. Tests point these two at fixture data.
+REAL_PLUGINS_DIR = REPO_ROOT / "plugins"
+GENERATE_ORCHESTRATION_PY = SCRIPTS_DIR / "generate_orchestration.py"
 MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 INDEX_HTML = REPO_ROOT / "index.html"
 
@@ -186,8 +215,27 @@ def preflight(allow_dev_only: set[str] | None = None) -> list[str]:
 
     _refuse_dev_only_commits(allow_dev_only or set())
     _require_bootstrap_dependency()
+    _require_pyproject_sync()
+    _require_generated_orchestration()
     bumps = _require_version_bump()
+    _require_bump_for_changed_plugins()
     return bumps
+
+
+def _load_rule_module(script_name: str):
+    """Load a sibling checker script as a module, so its rule is used verbatim.
+
+    The publish gate must not restate a rule that a pre-commit hook also
+    enforces -- two copies can disagree, and the copy that loses is always the
+    unbypassable one nobody re-reads.
+    """
+    import importlib.util
+
+    script = SCRIPTS_DIR / script_name
+    spec = importlib.util.spec_from_file_location(script.stem, script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _require_bootstrap_dependency() -> None:
@@ -205,17 +253,11 @@ def _require_bootstrap_dependency() -> None:
     there rather than restated, so the publish gate and the commit gate can
     never disagree.
     """
-    import importlib.util
-
     # Resolved next to THIS file, and scanning the checker's own default
     # plugins dir, rather than via REPO_ROOT: the invariant is a property of
     # the real plugin tree, not of the commit range, and REPO_ROOT is patched
     # to a synthetic repo by tests/repo-scripts/test_publish.py.
-    script = Path(__file__).resolve().parent / "check_bootstrap_dependency.py"
-    spec = importlib.util.spec_from_file_location(
-        "check_bootstrap_dependency", script)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = _load_rule_module("check_bootstrap_dependency.py")
 
     outliers = module.find_outliers()
     if outliers:
@@ -227,6 +269,66 @@ def _require_bootstrap_dependency() -> None:
             ".claude-plugin/plugin.json.\nA dependencies edit is a manifest "
             "change: bump that plugin's version too, or consumers keep the "
             "old manifest.")
+
+
+def _require_pyproject_sync() -> None:
+    """Refuse when a plugin's pyproject.toml states a version its plugin.json
+    disagrees with.
+
+    Enforced at pre-commit by scripts/check_pyproject_sync.py, but that hook is
+    skippable two ways -- --no-verify and PLUGINS_KIT_SKIP_BUMP_CHECK=1, whose
+    DOCUMENTED purpose is legitimate dev-branch commits between publish
+    checkpoints. So nothing enforced this at the moment it reaches consumers,
+    and bootstrap's stated version duly drifted across five releases. This gate
+    honours no escape hatch: the env var is a commit-time allowance, not a
+    publish-time one, and is deliberately not consulted here (find_drift is
+    called directly, bypassing the checker's main()).
+    """
+    module = _load_rule_module("check_pyproject_sync.py")
+    drift = module.find_drift(REAL_PLUGINS_DIR)
+    if drift:
+        raise PublishError(
+            "refusing: pyproject.toml versions disagree with the "
+            "authoritative plugin.json:\n  "
+            + "\n  ".join(drift)
+            + "\n\nplugin.json is the source of truth -- set each "
+              "pyproject.toml version equal to it and commit that. "
+              "(PLUGINS_KIT_SKIP_BUMP_CHECK is a commit-time allowance; it "
+              "does not apply to a publish.)")
+
+
+def _require_generated_orchestration() -> None:
+    """Refuse when awesome-kit's generated orchestration policy has drifted.
+
+    plugins/awesome-kit/skills/orchestrate/defaults/orchestration.yaml is
+    GENERATED from docs/reference/orchestrate/tier-principles.md plus the
+    skill's lexicon.md; a hand-edit or an unregenerated principles change makes
+    the shipped policy disagree with its own source. Also a pre-commit check,
+    also skippable with --no-verify, so it is re-run here where it reaches
+    consumers.
+    """
+    result = subprocess.run(
+        [sys.executable, str(GENERATE_ORCHESTRATION_PY), "--check"],
+        cwd=REPO_ROOT, capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
+        raise PublishError(
+            "refusing: the generated orchestration policy is not current "
+            "(scripts/generate_orchestration.py --check failed).\n"
+            "Regenerate it and commit the result:\n"
+            "  uv run python scripts/generate_orchestration.py --write\n"
+            "Never hand-edit orchestration.yaml -- the principles source is "
+            "authoritative.\n" + detail)
+
+
+def _range_commits() -> list[str]:
+    """The commits a publish would land on master, newest first."""
+    return git("rev-list", f"{REMOTE}/{MASTER_BRANCH}..{DEV_BRANCH}").split()
+
+
+def _commit_files(sha: str) -> list[str]:
+    """Repo-relative paths a commit touched."""
+    return [f for f in git("show", "--name-only", "--format=", sha).split("\n") if f]
 
 
 def _refuse_dev_only_commits(allow: set[str]) -> None:
@@ -253,10 +355,8 @@ def _refuse_dev_only_commits(allow: set[str]) -> None:
         return
 
     offenders: dict[str, set[str]] = {}
-    commits = git("rev-list", f"{REMOTE}/{MASTER_BRANCH}..{DEV_BRANCH}").split()
-    for sha in commits:
-        files = git("show", "--name-only", "--format=", sha).split("\n")
-        for f in files:
+    for sha in _range_commits():
+        for f in _commit_files(sha):
             for plugin in dev_only:
                 if f.startswith(f"plugins/{plugin}/"):
                     offenders.setdefault(sha, set()).add(plugin)
@@ -293,6 +393,56 @@ def _require_version_bump() -> list[str]:
             "merge without a bump changes nothing for users. Bump the version "
             "you mean to release.")
     return bumps
+
+
+def _changed_plugins() -> set[str]:
+    """Published plugins with at least one file changed in the publish range."""
+    known = set(local_plugins())
+    changed = set()
+    for sha in _range_commits():
+        for path in _commit_files(sha):
+            parts = path.split("/")
+            if len(parts) > 2 and parts[0] == "plugins" and parts[1] in known:
+                changed.add(parts[1])
+    return changed
+
+
+def _require_bump_for_changed_plugins() -> None:
+    """Every published plugin whose FILES changed in the range must be bumped.
+
+    _require_version_bump only asserts that SOMETHING was bumped, which is a
+    weaker rule than the pre-commit bump gate it backstops, and the gap is
+    reachable from two individually-sanctioned actions: session A commits
+    plugin X with PLUGINS_KIT_SKIP_BUMP_CHECK=1 (sanctioned on dev), session B
+    later publishes an unrelated plugin Y's bump (sanctioned). X's changed
+    files then ship to consumers under a version string they already hold, and
+    because the cache keys on version they never refetch -- silent divergence,
+    CLAUDE.md's gotcha 3.
+
+    Dev-only (published: false) plugins are exempt: they have no consumers and
+    no cache entry to invalidate. --allow-dev-only therefore does not interact
+    with this check -- it ships files, not a marketplace listing, so a bump
+    would mean nothing.
+    """
+    offenders = []
+    for name in sorted(_changed_plugins()):
+        manifest = local_plugins()[name]
+        if not is_published(manifest):
+            continue
+        new = manifest.get("version")
+        old = version_at(f"{REMOTE}/{MASTER_BRANCH}", name)
+        if old is not None and old == new:
+            offenders.append(f"{name}: files changed, still {new}")
+    if offenders:
+        raise PublishError(
+            "refusing: published plugin(s) have files changed in "
+            f"{REMOTE}/{MASTER_BRANCH}..{DEV_BRANCH} but no version bump:\n  "
+            + "\n  ".join(offenders)
+            + "\n\nThe plugin cache keys on version, so those changes would "
+              "ship under a version consumers already have and would never be "
+              "refetched (CLAUDE.md gotcha 3). Bump each plugin's version in "
+              "its .claude-plugin/plugin.json (and its pyproject.toml, if it "
+              "states one) and commit that.")
 
 
 # --- derived artifacts -----------------------------------------------------

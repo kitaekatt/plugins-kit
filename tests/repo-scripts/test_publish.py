@@ -83,7 +83,28 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(publish, "MARKETPLACE_JSON",
                         root / ".claude-plugin" / "marketplace.json")
     monkeypatch.setattr(publish, "INDEX_HTML", root / "index.html")
+    # The repo-wide invariant gates deliberately judge the REAL tree; point
+    # them at the fixture so these tests neither read nor depend on it.
+    monkeypatch.setattr(publish, "REAL_PLUGINS_DIR", root / "plugins")
+    monkeypatch.setattr(publish, "GENERATE_ORCHESTRATION_PY",
+                        _stub_script(tmp_path, "orchestration_ok.py", 0))
     return root
+
+
+def _stub_script(tmp_path: Path, name: str, exit_code: int, message: str = "") -> Path:
+    """A stand-in for a checker CLI publish shells out to.
+
+    The real generate_orchestration.py reads its three inputs from module-level
+    constants pinned to this repo, so it cannot be aimed at a fixture. What
+    publish.py owns is the WIRING -- that a non-zero check refuses the publish
+    and surfaces the checker's output -- and that is what these stubs exercise.
+    """
+    script = tmp_path / name
+    script.write_text(
+        "import sys\n"
+        f"sys.stdout.write({message!r})\n"
+        f"sys.exit({exit_code})\n")
+    return script
 
 
 def _bump(repo: Path, name: str, version: str, message: str) -> None:
@@ -200,6 +221,128 @@ class TestDevOnlyRefusal:
 
         with pytest.raises(publish.PublishError, match="not dev-only"):
             publish.preflight(allow_dev_only={"pub-kit"})
+
+
+class TestRepoInvariantGates:
+    """The checks that exist as ESCAPABLE pre-commit hooks (--no-verify,
+    PLUGINS_KIT_SKIP_BUMP_CHECK=1) and so were enforced nowhere before the
+    publish gate re-ran them. Skipping them on dev is sanctioned; shipping the
+    result is not."""
+
+    def test_pyproject_drift_blocks_a_publish(self, repo):
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        (repo / "plugins" / "pub-kit" / "pyproject.toml").write_text(
+            '[project]\nname = "pub-kit"\nversion = "1.0.0"\n')
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "pub-kit: add pyproject (drifted)")
+
+        with pytest.raises(publish.PublishError) as exc:
+            publish.preflight()
+
+        message = str(exc.value)
+        assert "pyproject.toml" in message
+        assert "pub-kit: pyproject.toml=1.0.0 plugin.json=1.1.0" in message
+
+    def test_pyproject_gate_ignores_the_commit_time_escape_hatch(self, repo, monkeypatch):
+        """PLUGINS_KIT_SKIP_BUMP_CHECK is a commit-time allowance. Honouring it
+        here would leave the invariant enforced nowhere at all."""
+        monkeypatch.setenv("PLUGINS_KIT_SKIP_BUMP_CHECK", "1")
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        (repo / "plugins" / "pub-kit" / "pyproject.toml").write_text(
+            '[project]\nname = "pub-kit"\nversion = "1.0.0"\n')
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "pub-kit: add pyproject (drifted)")
+
+        with pytest.raises(publish.PublishError, match="pyproject.toml"):
+            publish.preflight()
+
+    def test_pyproject_in_sync_passes(self, repo):
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        (repo / "plugins" / "pub-kit" / "pyproject.toml").write_text(
+            '[project]\nname = "pub-kit"\nversion = "1.1.0"\n')
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "pub-kit: add pyproject")
+
+        assert publish.preflight() == ["pub-kit: 1.0.0 -> 1.1.0"]
+
+    def test_orchestration_drift_blocks_a_publish(self, repo, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            publish, "GENERATE_ORCHESTRATION_PY",
+            _stub_script(tmp_path, "orchestration_drift.py", 1,
+                         "-  tier: low\n+  tier: high\n"))
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+
+        with pytest.raises(publish.PublishError) as exc:
+            publish.preflight()
+
+        message = str(exc.value)
+        assert "orchestration policy is not current" in message
+        assert "--write" in message          # says how to fix it
+        assert "+  tier: high" in message    # surfaces the checker's own diff
+
+
+class TestPerPluginBumpGate:
+    """_require_version_bump only asserts SOMETHING was bumped. Every published
+    plugin whose files changed must be bumped, or its changes ship under a
+    version string the cache will never refetch (gotcha 3)."""
+
+    def test_changed_plugin_without_a_bump_blocks_and_is_named(self, repo):
+        _write_manifest(repo, "other-kit", "0.1.0")
+        (repo / "plugins" / "pub-kit" / "engine.py").write_text("changed\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "pub-kit: engine change; other-kit 0.1.0")
+
+        with pytest.raises(publish.PublishError) as exc:
+            publish.preflight()
+
+        message = str(exc.value)
+        assert "pub-kit: files changed, still 1.0.0" in message
+        assert "other-kit" not in message  # new plugin, nothing to diverge from
+
+    def test_reports_every_offender_at_once(self, repo):
+        _write_manifest(repo, "other-kit", "0.1.0")
+        _write_manifest(repo, "third-kit", "3.0.0")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add other-kit and third-kit")
+        _git(repo, "push", "-q", "origin", "dev")
+        _git(repo, "checkout", "-q", "master")
+        _git(repo, "merge", "-q", "--ff-only", "dev")
+        _git(repo, "push", "-q", "origin", "master")
+        _git(repo, "checkout", "-q", "dev")
+
+        _bump(repo, "other-kit", "0.2.0", "other-kit 0.2.0")
+        (repo / "plugins" / "pub-kit" / "engine.py").write_text("changed\n")
+        (repo / "plugins" / "third-kit" / "lib.py").write_text("changed\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "pub-kit + third-kit changes, no bumps")
+
+        with pytest.raises(publish.PublishError) as exc:
+            publish.preflight()
+
+        message = str(exc.value)
+        assert "pub-kit: files changed, still 1.0.0" in message
+        assert "third-kit: files changed, still 3.0.0" in message
+
+    def test_changed_plugin_with_a_bump_passes(self, repo):
+        (repo / "plugins" / "pub-kit" / "engine.py").write_text("changed\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "pub-kit: engine change")
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+
+        assert publish.preflight() == ["pub-kit: 1.0.0 -> 1.1.0"]
+
+    def test_dev_only_plugin_changed_without_a_bump_does_not_block(self, repo):
+        """A published: false plugin has no consumers and no cache entry, so
+        there is nothing for a stale version string to strand."""
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        (repo / "plugins" / "dev-kit" / "feature.py").write_text("wip\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "dev-kit: experimental feature")
+
+        # --allow-dev-only is what lets its commits into the range at all; the
+        # per-plugin bump gate must not then demand a bump it cannot mean.
+        assert publish.preflight(allow_dev_only={"dev-kit"}) == [
+            "pub-kit: 1.0.0 -> 1.1.0"]
 
 
 class TestVersionReads:

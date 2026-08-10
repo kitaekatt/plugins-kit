@@ -17,9 +17,11 @@ Usage:
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _gitindex  # noqa: E402  (shared Git-index helpers; stdlib-only)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
@@ -33,53 +35,62 @@ def _rel(path: Path) -> str:
     return path.relative_to(REPO_ROOT).as_posix()
 
 
-def _git(args: list[str]) -> str | None:
-    """Run git and return stdout, or None when git cannot answer."""
-    try:
-        proc = subprocess.run(
-            ["git"] + args, cwd=str(REPO_ROOT),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    return proc.stdout.decode("utf-8", "replace")
-
-
 def staged_paths() -> list[str] | None:
     """Repo-relative staged paths, or None when Git does not answer."""
-    out = _git(["diff", "--cached", "--name-only"])
-    if out is None:
-        return None
-    return [line for line in out.splitlines() if line]
+    return _gitindex.staged_paths(REPO_ROOT)
 
 
 def _read(path: Path, *, from_index: bool) -> str | None:
-    """File text, read from the index when asked (falling back to the worktree).
+    """File text: the staged blob when from_index, else the working tree.
 
     The index is what a plain `git commit` turns into history, so it -- not the
-    worktree -- is the thing a pre-commit check must judge. Falling back rather
-    than failing keeps an unreadable-Git clone committable; the publish preflight
-    is the gate that cannot be missed.
+    worktree -- is the thing a pre-commit check must judge. Under from_index
+    there is deliberately NO per-file fallback to the worktree: a path absent
+    from the index is absent from the COMMIT (a staged `git rm --cached` whose
+    worktree file still exists is the case that matters), and mixing the two
+    sources yields a snapshot that is neither the commit nor the tree, which
+    can both false-pass and false-block. The whole-check fallback for an
+    unanswerable Git lives in main(), which drops to worktree mode wholesale.
     """
     if from_index:
-        out = _git(["show", f":{_rel(path)}"])
-        if out is not None:
-            return out
+        return _gitindex.index_text(REPO_ROOT, _rel(path))
     try:
         return path.read_text(encoding="utf-8")
     except OSError:
         return None
 
 
+def _plugin_dirs(*, from_index: bool) -> list[Path]:
+    """Plugin dirs carrying a plugin.json, per the index or the working tree.
+
+    Enumerating the worktree under from_index was a real hole: a plugin.json
+    whose DELETION is staged still exists on disk, so the plugin was judged
+    present in a commit that removes it.
+    """
+    if from_index:
+        rels = _gitindex.index_files(
+            REPO_ROOT, "plugins/*/.claude-plugin/plugin.json")
+        if rels is not None:
+            dirs = []
+            for rel in rels:
+                parts = rel.split("/")
+                # plugins/<name>/.claude-plugin/plugin.json -- exactly.
+                if len(parts) == 4 and parts[2] == ".claude-plugin":
+                    dirs.append(PLUGINS_DIR / parts[1])
+            return sorted(set(dirs))
+    if not PLUGINS_DIR.is_dir():
+        return []
+    return [
+        d for d in sorted(PLUGINS_DIR.iterdir())
+        if (d / ".claude-plugin" / "plugin.json").is_file()
+    ]
+
+
 def _load_plugin_manifests(*, from_index: bool = False) -> dict[str, dict]:
-    """Return {plugin_name: manifest_dict} for every plugin on disk."""
+    """Return {plugin_name: manifest_dict} for every plugin in the snapshot."""
     manifests = {}
-    for plugin_dir in sorted(PLUGINS_DIR.iterdir()):
+    for plugin_dir in _plugin_dirs(from_index=from_index):
         pj_path = plugin_dir / ".claude-plugin" / "plugin.json"
-        if not pj_path.is_file():
-            continue
         text = _read(pj_path, from_index=from_index)
         if text is None:
             continue
@@ -117,12 +128,14 @@ def _is_published(manifest: dict) -> bool:
 
 def regenerate(*, from_index: bool = False) -> dict:
     """Return the regenerated marketplace.json contents."""
-    if not MARKETPLACE_JSON.is_file():
+    if not from_index and not MARKETPLACE_JSON.is_file():
         print(f"error: {MARKETPLACE_JSON} not found", file=sys.stderr)
         sys.exit(1)
     current_text = _read(MARKETPLACE_JSON, from_index=from_index)
     if current_text is None:
-        print(f"error: {MARKETPLACE_JSON} not readable", file=sys.stderr)
+        where = "the index" if from_index else "the working tree"
+        print(f"error: {MARKETPLACE_JSON} not readable from {where}",
+              file=sys.stderr)
         sys.exit(1)
     current = json.loads(current_text)
     manifests = _load_plugin_manifests(from_index=from_index)

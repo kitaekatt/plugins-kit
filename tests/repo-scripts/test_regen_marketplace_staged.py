@@ -152,6 +152,43 @@ class TestStagedStillCatchesDrift:
         assert mod.main(["--check", "--staged"]) == 1
 
 
+class TestStagedDeletionIsHonoured:
+    """The plugin SET must come from the index too, not just each file's text.
+
+    Enumerating plugins from the worktree while reading their text from the
+    index produced a snapshot that was neither: a plugin.json whose deletion is
+    staged still exists on disk, so the plugin was judged present in a commit
+    that removes it.
+    """
+
+    def test_staged_removal_without_regen_blocks(self, repo):
+        path, mod = repo
+        _git(path, "rm", "-q", "-r", "plugins/beta")
+        # marketplace.json still lists beta, so the commit is inconsistent.
+        assert mod.main(["--check", "--staged"]) == 1
+
+    def test_staged_removal_with_regen_passes(self, repo):
+        path, mod = repo
+        _git(path, "rm", "-q", "-r", "plugins/beta")
+        assert mod.main([]) == 0                       # regenerate (beta gone)
+        _git(path, "add", "-A")
+        assert mod.main(["--check", "--staged"]) == 0
+
+    def test_cached_removal_leaving_the_worktree_file_blocks(self, repo):
+        """`git rm --cached`: absent from the commit, still present on disk.
+
+        The worktree-enumerating version passed this, because it found beta on
+        disk and its index blob was gone only for the deleted path -- exactly
+        the mixed snapshot that both false-passes and false-blocks.
+        """
+        path, mod = repo
+        _git(path, "rm", "-q", "--cached",
+             "plugins/beta/.claude-plugin/plugin.json")
+        assert (path / "plugins" / "beta" / ".claude-plugin"
+                / "plugin.json").is_file()
+        assert mod.main(["--check", "--staged"]) == 1
+
+
 class TestFallback:
     def test_falls_back_to_worktree_when_git_cannot_answer(self, repo, monkeypatch, capsys):
         """A check whose input is unavailable must not silently pass."""

@@ -176,3 +176,91 @@ class TestJudgesTheIndex:
             json.dumps({"name": "bar", "version": "9.9.9"}))
         assert self._drift(repo) == [
             "bar: pyproject.toml=0.1.0 plugin.json=9.9.9"]
+
+
+class TestStagedScoping:
+    """`--staged` must judge only the plugins the COMMIT touches.
+
+    Index-awareness alone was not enough: this check judged EVERY plugin
+    whenever ANYTHING was staged, so a concurrent session's in-flight drift in
+    an unrelated plugin blocked every other session's commit. That is a false
+    positive on a commit that cannot possibly have caused it.
+    """
+
+    def _repo(self, tmp_path):
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            subprocess.run(
+                ["git", "-C", str(tmp_path), "config", k, v], check=True)
+        (tmp_path / "plugins").mkdir()
+        (tmp_path / "README.md").write_text("hi\n")
+        return tmp_path
+
+    def _plugin(self, root, name, py_version, pj_version):
+        d = root / "plugins" / name
+        (d / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+        (d / "pyproject.toml").write_text(
+            f'[project]\nname = "{name}"\nversion = "{py_version}"\n')
+        (d / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": name, "version": pj_version}))
+
+    def _commit_all(self, root):
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "-qm", "init"], check=True)
+
+    def _add(self, root, *paths):
+        subprocess.run(
+            ["git", "-C", str(root), "add", *paths], check=True)
+
+    def _main(self, root, monkeypatch, argv):
+        monkeypatch.setattr(_checker, "PLUGINS_DIR", root / "plugins")
+        return _checker.main(argv)
+
+    def test_unrelated_staged_file_does_not_block(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path)
+        self._plugin(repo, "alpha", "1.0.0", "1.0.0")
+        self._commit_all(repo)
+        # Another session drifts beta in the shared tree and stages it.
+        self._plugin(repo, "beta", "1.0.0", "2.0.0")
+        self._add(repo, "plugins/beta")
+        # My commit touches only README.md.
+        (repo / "README.md").write_text("changed\n")
+        self._add(repo, "README.md")
+
+        assert self._main(repo, monkeypatch, ["--staged"]) == 0
+        # The unscoped sweep still sees it -- that is publish.py's job.
+        assert self._main(repo, monkeypatch, []) == 1
+
+    def test_nothing_staged_does_not_block(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path)
+        self._plugin(repo, "alpha", "1.0.0", "2.0.0")   # pre-existing drift
+        self._commit_all(repo)
+        assert self._main(repo, monkeypatch, ["--staged"]) == 0
+
+    def test_real_drift_in_a_staged_plugin_still_blocks(
+            self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path)
+        self._plugin(repo, "alpha", "1.0.0", "1.0.0")
+        self._commit_all(repo)
+        self._plugin(repo, "alpha", "1.0.0", "1.1.0")   # bumped only plugin.json
+        self._add(repo, "plugins/alpha/.claude-plugin/plugin.json")
+        assert self._main(repo, monkeypatch, ["--staged"]) == 1
+
+    def test_staged_fix_passes(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path)
+        self._plugin(repo, "alpha", "1.0.0", "1.0.0")
+        self._commit_all(repo)
+        self._plugin(repo, "alpha", "1.1.0", "1.1.0")
+        self._add(repo, "plugins/alpha")
+        assert self._main(repo, monkeypatch, ["--staged"]) == 0
+
+    def test_failure_message_names_the_inputs_it_judged(
+            self, tmp_path, monkeypatch, capsys):
+        repo = self._repo(tmp_path)
+        self._plugin(repo, "alpha", "1.0.0", "1.0.0")
+        self._commit_all(repo)
+        self._plugin(repo, "alpha", "1.0.0", "1.1.0")
+        self._add(repo, "plugins/alpha/.claude-plugin/plugin.json")
+        assert self._main(repo, monkeypatch, ["--staged"]) == 1
+        assert "(staged inputs)" in capsys.readouterr().err

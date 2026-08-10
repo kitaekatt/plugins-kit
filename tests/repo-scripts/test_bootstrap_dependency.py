@@ -13,6 +13,7 @@ enforcement (see the script's header for why suite-only invariants lose).
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 _SCRIPT = (Path(__file__).resolve().parents[2] / "scripts"
@@ -95,3 +96,105 @@ def test_missing_plugin_json_is_an_outlier(tmp_path):
     _plugin(tmp_path, "some-kit", plugin_json=False)
     (out,) = _checker.find_outliers(tmp_path)
     assert "no .claude-plugin/plugin.json" in out
+
+
+class TestStagedScoping:
+    """`--staged` judges the COMMIT: index-aware and scoped to staged plugins.
+
+    Worktree-wide and unscoped, this check cross-contaminated the shared tree
+    in the worst way available to it -- one session scaffolding plugins/<new>/
+    (no plugin.json yet, or one without the dependencies field) made EVERY
+    commit by EVERY session fail, on a plugin none of them were touching.
+    """
+
+    def _repo(self, tmp_path):
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            subprocess.run(
+                ["git", "-C", str(tmp_path), "config", k, v], check=True)
+        (tmp_path / "plugins").mkdir()
+        (tmp_path / "README.md").write_text("hi\n")
+        return tmp_path
+
+    def _commit_all(self, root):
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "-qm", "init"], check=True)
+
+    def _add(self, root, *paths):
+        subprocess.run(["git", "-C", str(root), "add", *paths], check=True)
+
+    def _main(self, root, monkeypatch, argv):
+        monkeypatch.setattr(_checker, "PLUGINS_DIR", root / "plugins")
+        return _checker.main(argv)
+
+    def test_unrelated_staged_file_does_not_block(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path)
+        _plugin(repo / "plugins", "good-kit", deps=["bootstrap"])
+        self._commit_all(repo)
+        # Another session scaffolds a plugin with no dependencies declared.
+        _plugin(repo / "plugins", "wip-kit", deps=[])
+        self._add(repo, "plugins/wip-kit")
+        # My commit touches only README.md.
+        (repo / "README.md").write_text("changed\n")
+        self._add(repo, "README.md")
+
+        assert self._main(repo, monkeypatch, ["--staged"]) == 0
+        # The unscoped sweep publish.py runs still sees it.
+        assert self._main(repo, monkeypatch, []) == 1
+
+    def test_untracked_scaffold_is_invisible_to_the_commit(
+            self, tmp_path, monkeypatch):
+        """Not staged at all -> not part of any commit -> judged by none."""
+        repo = self._repo(tmp_path)
+        _plugin(repo / "plugins", "good-kit", deps=["bootstrap"])
+        self._commit_all(repo)
+        (repo / "plugins" / "wip-kit" / ".claude-plugin").mkdir(parents=True)
+        (repo / "README.md").write_text("changed\n")
+        self._add(repo, "README.md")
+        assert self._main(repo, monkeypatch, ["--staged"]) == 0
+
+    def test_nothing_staged_does_not_block(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path)
+        _plugin(repo / "plugins", "bad-kit", deps=[])   # pre-existing outlier
+        self._commit_all(repo)
+        assert self._main(repo, monkeypatch, ["--staged"]) == 0
+
+    def test_staged_plugin_without_the_edge_still_blocks(
+            self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path)
+        self._commit_all(repo)
+        _plugin(repo / "plugins", "new-kit", deps=[])
+        self._add(repo, "plugins/new-kit")
+        assert self._main(repo, monkeypatch, ["--staged"]) == 1
+
+    def test_staged_plugin_with_the_edge_passes(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path)
+        self._commit_all(repo)
+        _plugin(repo / "plugins", "new-kit", deps=["bootstrap"])
+        self._add(repo, "plugins/new-kit")
+        assert self._main(repo, monkeypatch, ["--staged"]) == 0
+
+    def test_judges_the_index_not_the_worktree(self, tmp_path, monkeypatch):
+        """A fix left unstaged does not reach the commit, so it does not count."""
+        repo = self._repo(tmp_path)
+        self._commit_all(repo)
+        _plugin(repo / "plugins", "new-kit", deps=[])
+        self._add(repo, "plugins/new-kit")
+        # Fix it in the worktree only.
+        (repo / "plugins" / "new-kit" / ".claude-plugin"
+         / "plugin.json").write_text(json.dumps(
+             {"name": "new-kit", "version": "0.1.0",
+              "dependencies": ["bootstrap"]}))
+        assert self._main(repo, monkeypatch, ["--staged"]) == 1
+        self._add(repo, "plugins/new-kit")
+        assert self._main(repo, monkeypatch, ["--staged"]) == 0
+
+    def test_failure_message_names_the_inputs_it_judged(
+            self, tmp_path, monkeypatch, capsys):
+        repo = self._repo(tmp_path)
+        self._commit_all(repo)
+        _plugin(repo / "plugins", "new-kit", deps=[])
+        self._add(repo, "plugins/new-kit")
+        assert self._main(repo, monkeypatch, ["--staged"]) == 1
+        assert "(staged inputs)" in capsys.readouterr().err

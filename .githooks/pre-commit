@@ -31,13 +31,14 @@ run_python "$REPO_ROOT/scripts/precommit_guard.py"
 # hooksPath is set. Chaining it here preserves those checks rather than
 # silently disabling them.
 #
-# Those checks need this repo's provisioned dependencies (pyyaml). An
-# unprovisioned clone does not have them, and hard-failing there would make the
-# repo un-committable for anyone who has not run bootstrap yet -- so skip them
-# in that case, and SAY SO. A skipped check must be visible, never silent. The
-# public-repo guard above is dependency-free and always runs.
-if run_python -c "import yaml" >/dev/null 2>&1; then
-    "$REPO_ROOT/scripts/pre-commit-version-check.sh"
-else
-    echo "pre-commit: repo version/drift checks SKIPPED -- this clone's Python cannot import yaml; run bootstrap to provision it. The public-repo guard above still ran." >&2
-fi
+# The dependency gating now lives INSIDE that script, per check, because only
+# one of its five checks needs a provisioned dependency (pyyaml) and the other
+# four are stdlib-only. Gating here meant one check's dependency disabled all of
+# them -- on precisely the unprovisioned clones least likely to be correct
+# already. It also probed with THIS interpreter and then ran the checks under
+# `uv run`, a different resolution that can sync a different environment or fail
+# where the probe passed; the script now resolves its own interpreters and says
+# so when it skips something. The public-repo guard above is dependency-free,
+# always runs, and is the only check here that gates commits rather than
+# publishes.
+"$REPO_ROOT/scripts/pre-commit-version-check.sh"

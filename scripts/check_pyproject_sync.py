@@ -24,6 +24,11 @@ Scope: plugin.json is the source of truth. pyproject versions are
 non-authoritative, so a pyproject with no version (or no pyproject at all) is
 out of scope -- the rule is just "if you state one, it must not lie".
 
+Usage:
+  python scripts/check_pyproject_sync.py            # full working-tree sweep
+  python scripts/check_pyproject_sync.py --staged   # the pre-commit gate:
+      index-aware AND scoped to the plugins this commit actually stages
+
 Escape hatch:  PLUGINS_KIT_SKIP_BUMP_CHECK=1 git commit ...   (or --no-verify)
 
 Called by scripts/pre-commit-version-check.sh; also importable, so
@@ -35,63 +40,56 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import tomllib
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _gitindex  # noqa: E402  (shared Git-index helpers; stdlib-only)
 
 PLUGINS_DIR = Path(__file__).resolve().parents[1] / "plugins"
 
-# Index-awareness helpers, mirroring scripts/generate_orchestration.py's
-# staged_paths / index_blob so the two commit gates read staged state the same
-# way. Both return None when Git cannot answer, and every caller falls back to
-# the working tree in that case.
+# Index-awareness comes from scripts/_gitindex.py, which is the single
+# implementation shared by every commit gate here (it used to be a near-copy
+# per script, with divergent timeouts and fallbacks). These thin wrappers keep
+# this module's own names importable.
 
-
-def is_git_repo(repo_root: Path) -> bool:
-    return (repo_root / ".git").exists()
+is_git_repo = _gitindex.is_git_repo
 
 
 def staged_paths(repo_root: Path) -> list[str] | None:
     """Repo-relative staged paths, or None when Git does not answer."""
 
-    if not is_git_repo(repo_root):
-        return []
-    try:
-        proc = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
-            cwd=str(repo_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    text = proc.stdout.decode("utf-8", "replace")
-    return [
-        line.strip().replace("\\", "/")
-        for line in text.splitlines()
-        if line.strip()
-    ]
+    return _gitindex.staged_paths(repo_root)
 
 
 def index_blob(repo_root: Path, rel_path: str) -> str | None:
     """Return a staged blob as text, or None when Git cannot provide it."""
 
-    try:
-        proc = subprocess.run(
-            ["git", "show", f":{rel_path}"],
-            cwd=str(repo_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    return proc.stdout.decode("utf-8", "replace")
+    return _gitindex.index_text(repo_root, rel_path)
+
+
+def is_derivation_input(path: str) -> bool:
+    """Does this repo-relative path participate in the version-sync rule?"""
+
+    return path.startswith("plugins/") and (
+        path.endswith("/pyproject.toml")
+        or path.endswith("/.claude-plugin/plugin.json")
+    )
+
+
+def staged_plugin_names(staged: Sequence[str]) -> set[str]:
+    """Plugin dir names whose pyproject/plugin.json this commit stages."""
+
+    names = set()
+    for path in staged:
+        if not is_derivation_input(path):
+            continue
+        parts = path.split("/")
+        if len(parts) >= 3:
+            names.add(parts[1])
+    return names
 
 
 def plugins_with_both_files(plugins_dir: Path | None = None) -> list[Path]:
@@ -137,6 +135,7 @@ def find_drift(
     plugins_dir: Path | None = None,
     staged: Sequence[str] | None = None,
     repo_root: Path | None = None,
+    only: Collection[str] | None = None,
 ) -> list[str]:
     """Human-readable drift lines, empty when every stated version agrees.
 
@@ -148,6 +147,10 @@ def find_drift(
     version drifted across five releases -- each "fixed" commit shipped the old
     pyproject anyway. ``staged`` is the test injection seam; unavailable Git
     data falls back to the working tree.
+
+    ``only`` narrows the sweep to the named plugin dirs. It is how the
+    ``--staged`` commit gate scopes itself; the default (None) is the FULL
+    sweep, which publish.py and the drift test depend on.
     """
     root = PLUGINS_DIR if plugins_dir is None else plugins_dir
     if repo_root is None:
@@ -157,6 +160,8 @@ def find_drift(
 
     drift = []
     for plugin_dir in plugins_with_both_files(plugins_dir):
+        if only is not None and plugin_dir.name not in only:
+            continue
         py_text, pj_text = _read_pair(plugin_dir, repo_root, from_index)
         py_version = tomllib.loads(py_text).get("project", {}).get("version")
         if py_version is None:
@@ -172,20 +177,53 @@ def find_drift(
 def main(argv: list[str]) -> int:
     if os.environ.get("PLUGINS_KIT_SKIP_BUMP_CHECK") == "1":
         return 0
-    drift = find_drift()
+
+    # --staged is the pre-commit gate: judge the COMMIT, not the shared working
+    # tree. Index-awareness alone was not enough -- this check judged EVERY
+    # plugin whenever ANYTHING was staged, so a concurrent session's in-flight
+    # pyproject drift in an unrelated plugin blocked every other session's
+    # commit. A commit that stages neither file for a plugin cannot change that
+    # plugin's version agreement, so it has nothing to answer for; the drift
+    # belongs to whichever commit introduces it, and publish.py's preflight
+    # runs the FULL sweep (find_drift() with no scoping) before anything can
+    # reach master.
+    where = "working-tree"
+    if "--staged" in argv:
+        repo_root = PLUGINS_DIR.parent
+        verdict, staged = _gitindex.classify_scope(
+            repo_root, is_derivation_input)
+        if verdict == _gitindex.SCOPE_SKIP:
+            return 0
+        if verdict == _gitindex.SCOPE_WORKTREE:
+            # A check that silently passes when its input is unavailable is not
+            # a check: fall back to the full working-tree sweep, loudly.
+            print(
+                "check_pyproject_sync: could not read the index; "
+                "checking the working tree instead.",
+                file=sys.stderr)
+            drift = find_drift()
+        else:
+            where = "staged"
+            drift = find_drift(
+                staged=staged, only=staged_plugin_names(staged))
+    else:
+        drift = find_drift()
+
     if not drift:
         return 0
     print(
-        "pyproject.toml versions drifted from the authoritative plugin.json:",
+        f"pyproject.toml versions drifted from the authoritative plugin.json "
+        f"({where} inputs):",
         file=sys.stderr)
     for line in drift:
         print(f"  {line}", file=sys.stderr)
     print(
         "\nplugin.json is the source of truth -- set each pyproject.toml "
         "version equal to it and stage the result.\n"
-        "Versions above are read from the index (what the commit will "
-        "contain), so an edit you have not staged yet will not show here:\n"
-        "  git add plugins/<name>/pyproject.toml\n"
+        f"Versions above are read from the {where} inputs"
+        + (" (what the commit will contain), so an edit you have not staged "
+           "yet will not show here" if where == "staged" else "")
+        + ":\n  git add plugins/<name>/pyproject.toml\n"
         "(Intentional dev commit? PLUGINS_KIT_SKIP_BUMP_CHECK=1 git commit ...)",
         file=sys.stderr)
     return 1

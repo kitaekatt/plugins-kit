@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,7 +49,7 @@ def test_guard_shares_the_code_review_signature_list():
     """One signature list, two callers.
 
     The guard and bootstrap_lib.code_review.pipeline both answer "did a tool
-    write this file?" -- from bootstrap_lib.code_review.generated. A second copy
+    write this file?" -- from bootstrap_lib.code_review.machine_emitted. A second copy
     here would drift and let a file be refused at commit time while still being
     fanned out to reviewers, or the reverse. These two shapes exist only in the
     shared list, so they fail if the guard ever grows its own.
@@ -128,6 +132,145 @@ def test_repo_unreal_manifest_has_no_repo_write_target():
 
     targets = guard.manifest_write_targets({manifest_path: source}, load_script)
     assert targets == set()
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+
+def _detector_source(label: str) -> str:
+    """A minimal stand-in detector, distinguishable by the label it returns."""
+    return (
+        "def detect_signature_bytes(data):\n"
+        f"    return {label!r} if b'MARK' in data else None\n"
+    )
+
+
+@pytest.fixture()
+def repo(tmp_path: Path) -> Path:
+    """A throwaway repo. Never touches the real index -- see CLAUDE.md."""
+    work = tmp_path / "repo"
+    (work / "scripts").mkdir(parents=True)
+    _git(tmp_path, "init", "-q", str(work))
+    _git(work, "config", "user.email", "guard@test")
+    _git(work, "config", "user.name", "guard test")
+    for candidate in guard.DETECTOR_CANDIDATES:
+        (work / candidate).parent.mkdir(parents=True, exist_ok=True)
+    head_name = guard.DETECTOR_CANDIDATES[-1]  # the older name
+    (work / head_name).write_text(_detector_source("from-HEAD"), encoding="utf-8")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-qm", "init")
+    return work
+
+
+def test_detector_is_loaded_from_the_index_when_staged(repo: Path):
+    """A commit that changes the signature list is judged by its OWN version."""
+    path = repo / guard.DETECTOR_CANDIDATES[-1]
+    path.write_text(_detector_source("from-index"), encoding="utf-8")
+    _git(repo, "add", str(path))
+    path.write_text("raise RuntimeError('worktree is half-applied')\n", encoding="utf-8")
+
+    detect = guard.load_detector(repo)
+
+    assert detect(b"MARK") == "from-index"
+
+
+def test_staged_rename_beats_the_stale_head_copy_of_the_old_name(repo: Path):
+    """Index is tried for EVERY candidate before HEAD is tried for any."""
+    old = repo / guard.DETECTOR_CANDIDATES[-1]
+    new = repo / guard.DETECTOR_CANDIDATES[0]
+    new.write_text(_detector_source("renamed-and-staged"), encoding="utf-8")
+    old.unlink()
+    _git(repo, "add", "-A")
+
+    assert guard.load_detector(repo)(b"MARK") == "renamed-and-staged"
+
+
+def test_detector_falls_back_to_head_when_not_staged(repo: Path):
+    """The worktree copy is renamed away and nothing is staged: HEAD answers."""
+    old = repo / guard.DETECTOR_CANDIDATES[-1]
+    old.rename(repo / guard.DETECTOR_CANDIDATES[0])
+
+    detect = guard.load_detector(repo)
+
+    assert detect(b"MARK") == "from-HEAD"
+
+
+def test_unloadable_detector_raises_inspection_error_naming_the_files(repo: Path):
+    with pytest.raises(guard.GuardInspectionError) as excinfo:
+        guard.load_detector(repo, candidates=("plugins/nope/missing_detector.py",))
+    message = str(excinfo.value)
+    assert "could not load" in message
+    assert "plugins/nope/missing_detector.py" in message
+
+
+def test_broken_staged_detector_still_refuses_rather_than_passing(repo: Path):
+    """A genuinely broken STAGED detector must refuse, never fail open."""
+    only = "plugins/bootstrap/bootstrap_lib/code_review/machine_emitted.py"
+    (repo / only).write_text("def detect_signature_bytes(  # truncated\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    with pytest.raises(guard.GuardInspectionError) as excinfo:
+        guard.load_detector(repo, candidates=(only,))
+    assert "SyntaxError" in str(excinfo.value)
+
+
+def _run_guard(repo: Path) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env.pop(guard.OVERRIDE_ENV, None)
+    return subprocess.run(
+        [sys.executable, str(SCRIPT)],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def test_cli_survives_a_half_applied_worktree_rename(repo: Path):
+    """The 2026-08-09 outage: another session's UNSTAGED rename broke everyone."""
+    (repo / guard.DETECTOR_CANDIDATES[-1]).rename(repo / guard.DETECTOR_CANDIDATES[0])
+    (repo / "notes.txt").write_text("ordinary work\n", encoding="utf-8")
+    _git(repo, "add", "notes.txt")
+
+    result = _run_guard(repo)
+
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_cli_refuses_cleanly_when_the_detector_cannot_be_loaded(repo: Path):
+    _git(repo, "rm", "-q", "--cached", guard.DETECTOR_CANDIDATES[-1])
+    _git(repo, "commit", "-qm", "drop the detector")
+    (repo / "notes.txt").write_text("ordinary work\n", encoding="utf-8")
+    _git(repo, "add", "notes.txt")
+
+    result = _run_guard(repo)
+
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    assert "guard inspection failed" in result.stderr
+    assert "NOT a detected violation" in result.stderr
+    assert guard.DETECTOR_CANDIDATES[0] in result.stderr
+    assert guard.OVERRIDE_ENV in result.stderr
+
+
+def test_cli_still_catches_a_real_violation(repo: Path):
+    # The fixture's stand-in detector flags any file containing MARK, so this
+    # asserts the detection PATH end to end without re-testing the real list
+    # (which the inspect_file tests above already cover).
+    (repo / "artifact.py").write_text("MARK\n", encoding="utf-8")
+    _git(repo, "add", "artifact.py")
+
+    result = _run_guard(repo)
+
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    assert "generated artifact: artifact.py (from-HEAD)" in result.stderr
 
 
 def test_refusal_message_states_principle_doc_and_override():
