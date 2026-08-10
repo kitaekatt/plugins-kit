@@ -210,7 +210,7 @@ A **layered** manifest declares `project_npm` to have bootstrap provision the *p
 Fields (all optional):
 
 - `subdir` — a project-relative subdirectory that becomes the npm working directory: `<project>/<subdir>/package.json` → `<project>/<subdir>/node_modules`. Absent = the project root.
-- `ignore_scripts` — pass `--ignore-scripts` to npm. **Defaults to `false`**, i.e. lifecycle scripts run by default, matching what `npm ci` does at a terminal. This is a deliberate opt-in, not an oversight: `--ignore-scripts` breaks esbuild/sharp/node-gyp/Prisma **silently** — the install still exits 0, leaving a subtly broken tree instead of an honest failure.
+- `ignore_scripts` — pass `--ignore-scripts` to npm. **Defaults to `false`**, i.e. bootstrap does not suppress lifecycle scripts, matching what `npm ci` does at a terminal. This is a deliberate opt-in, not an oversight: `--ignore-scripts` breaks esbuild/sharp/node-gyp/Prisma **silently** — the install still exits 0, leaving a subtly broken tree instead of an honest failure. `false` means bootstrap does not pass the flag; it does not guarantee scripts run. npm 11 added its own `allow-scripts` gate, so npm may still hold a package's install scripts pending `npm approve-scripts` and say so in the captured output. That gate is npm's to answer, not bootstrap's — a session-start hook must not approve arbitrary install scripts on the user's behalf.
 
 The freshness check runs no subprocess: it compares `node_modules/.package-lock.json` (npm's own hidden lockfile, written last by reify) against the visible lockfile's mtime — three `stat` calls. A project that declares no dependencies at all passes with no `node_modules` present.
 
