@@ -10,12 +10,14 @@ Existing plugin ordering in marketplace.json is preserved; new plugins (newly
 "published": true) are appended alphabetically.
 
 Usage:
-  python scripts/regen_marketplace.py            # rewrite marketplace.json
-  python scripts/regen_marketplace.py --check    # exit non-zero on drift
+  python scripts/regen_marketplace.py                     # rewrite marketplace.json
+  python scripts/regen_marketplace.py --check             # working tree; exit non-zero on drift
+  python scripts/regen_marketplace.py --check --staged    # index-aware, for the pre-commit hook
 """
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -27,15 +29,62 @@ TOP_LEVEL_KEYS = ("$schema", "name", "description", "owner")
 DEFAULT_CATEGORY = "development"
 
 
-def _load_plugin_manifests() -> dict[str, dict]:
+def _rel(path: Path) -> str:
+    return path.relative_to(REPO_ROOT).as_posix()
+
+
+def _git(args: list[str]) -> str | None:
+    """Run git and return stdout, or None when git cannot answer."""
+    try:
+        proc = subprocess.run(
+            ["git"] + args, cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.decode("utf-8", "replace")
+
+
+def staged_paths() -> list[str] | None:
+    """Repo-relative staged paths, or None when Git does not answer."""
+    out = _git(["diff", "--cached", "--name-only"])
+    if out is None:
+        return None
+    return [line for line in out.splitlines() if line]
+
+
+def _read(path: Path, *, from_index: bool) -> str | None:
+    """File text, read from the index when asked (falling back to the worktree).
+
+    The index is what a plain `git commit` turns into history, so it -- not the
+    worktree -- is the thing a pre-commit check must judge. Falling back rather
+    than failing keeps an unreadable-Git clone committable; the publish preflight
+    is the gate that cannot be missed.
+    """
+    if from_index:
+        out = _git(["show", f":{_rel(path)}"])
+        if out is not None:
+            return out
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _load_plugin_manifests(*, from_index: bool = False) -> dict[str, dict]:
     """Return {plugin_name: manifest_dict} for every plugin on disk."""
     manifests = {}
     for plugin_dir in sorted(PLUGINS_DIR.iterdir()):
         pj_path = plugin_dir / ".claude-plugin" / "plugin.json"
         if not pj_path.is_file():
             continue
+        text = _read(pj_path, from_index=from_index)
+        if text is None:
+            continue
         try:
-            data = json.loads(pj_path.read_text(encoding="utf-8"))
+            data = json.loads(text)
         except json.JSONDecodeError as e:
             print(f"error: {pj_path}: {e}", file=sys.stderr)
             sys.exit(1)
@@ -66,13 +115,17 @@ def _is_published(manifest: dict) -> bool:
     return manifest.get("published", True) is not False
 
 
-def regenerate() -> dict:
+def regenerate(*, from_index: bool = False) -> dict:
     """Return the regenerated marketplace.json contents."""
     if not MARKETPLACE_JSON.is_file():
         print(f"error: {MARKETPLACE_JSON} not found", file=sys.stderr)
         sys.exit(1)
-    current = json.loads(MARKETPLACE_JSON.read_text(encoding="utf-8"))
-    manifests = _load_plugin_manifests()
+    current_text = _read(MARKETPLACE_JSON, from_index=from_index)
+    if current_text is None:
+        print(f"error: {MARKETPLACE_JSON} not readable", file=sys.stderr)
+        sys.exit(1)
+    current = json.loads(current_text)
+    manifests = _load_plugin_manifests(from_index=from_index)
 
     published = {name: m for name, m in manifests.items() if _is_published(m)}
 
@@ -103,22 +156,69 @@ def _serialize(data: dict) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
+def _is_derivation_input(path: str) -> bool:
+    """Does this repo-relative path participate in the marketplace derivation?"""
+    return path == _rel(MARKETPLACE_JSON) or (
+        path.startswith("plugins/") and path.endswith("/.claude-plugin/plugin.json")
+    )
+
+
 def main(argv: list[str]) -> int:
     check_only = "--check" in argv
+    # --staged judges the INDEX (what a plain `git commit` will record) instead
+    # of the worktree, and only when the commit actually touches the derivation.
+    # Both halves matter, and the second is the one that unblocks the repo's
+    # stated workflow -- commit and push freely, gate publishes:
+    #
+    #   * A worktree check answers the wrong question. It fails on edits you are
+    #     NOT committing -- in this shared tree, another session's in-flight
+    #     version bump blocked every unrelated commit -- and it passes on a
+    #     genuinely inconsistent pair that IS staged, because history is built
+    #     from the index, not the worktree. It is both too strict and too loose.
+    #   * A commit staging neither marketplace.json nor any plugin.json cannot
+    #     change their relationship, so it has nothing to answer for. Pre-existing
+    #     drift is the fault of the commit that introduced it.
+    #
+    # Nothing is given up by relaxing this: publish.py REGENERATES marketplace.json
+    # and then verifies plugin.json agreement before pushing, so drift cannot
+    # reach master (and master is what consumers fetch). Mirrors the index-aware
+    # convention already used by check-staged-version-bump.sh and
+    # generate_orchestration.py --check; this script was the last worktree holdout.
+    staged_mode = "--staged" in argv
 
-    regenerated = regenerate()
+    from_index = False
+    if staged_mode:
+        staged = staged_paths()
+        if staged is None:
+            # Git could not answer -- fall back to the worktree check rather than
+            # skipping. A check that silently passes when its input is missing is
+            # not a check.
+            print(
+                "regen_marketplace: could not read the index; "
+                "checking the working tree instead.",
+                file=sys.stderr,
+            )
+        elif not any(_is_derivation_input(p) for p in staged):
+            return 0
+        else:
+            from_index = True
+
+    regenerated = regenerate(from_index=from_index)
     new_text = _serialize(regenerated)
-    current_text = MARKETPLACE_JSON.read_text(encoding="utf-8")
+    current_text = _read(MARKETPLACE_JSON, from_index=from_index) or ""
 
     if check_only:
         if new_text != current_text:
+            where = "staged" if from_index else "working-tree"
             print(
-                "marketplace.json is out of sync with plugin.json sources.\n"
+                f"marketplace.json is out of sync with its {where} plugin.json sources.\n"
                 "Run: python scripts/regen_marketplace.py",
                 file=sys.stderr,
             )
             return 1
         return 0
+
+    current_text = MARKETPLACE_JSON.read_text(encoding="utf-8")
 
     if new_text == current_text:
         print("marketplace.json already up to date.")

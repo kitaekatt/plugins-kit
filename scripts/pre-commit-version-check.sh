@@ -17,7 +17,13 @@ set -euo pipefail
 # the wrong directory when the hook is a symlink at .git/hooks/pre-commit.
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
-if ! uv run python "$REPO_ROOT/scripts/regen_marketplace.py" --check; then
+# --staged: judge the INDEX (what this commit will record), and only when the
+# commit actually stages marketplace.json or a plugin.json. A worktree-wide
+# check blocked commits over edits they did not contain -- in a tree shared with
+# concurrent sessions, one in-flight version bump blocked everyone -- while
+# still passing a genuinely inconsistent pair that WAS staged. publish.py
+# regenerates and re-verifies before pushing, so master remains protected.
+if ! uv run python "$REPO_ROOT/scripts/regen_marketplace.py" --check --staged; then
     echo ""
     echo "Bump versions / descriptions in plugins/<name>/.claude-plugin/plugin.json,"
     echo "run \`python scripts/regen_marketplace.py\`, stage the result, and commit."
