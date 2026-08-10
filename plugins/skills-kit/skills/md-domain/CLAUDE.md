@@ -121,9 +121,9 @@ claude_md:
         corpus at tests/skills-kit/golden_corpus/ (mechanical goldens byte-compare;
         recorded lane verdicts re-run).
       added: "2026-07-29"
-    - id: coverage_is_a_report_only_third_verb
-      keywords: [coverage verb, third verb, not an audit lane, not a density lens, report-only, GAPS-FOUND, COVERAGE-ASSESSED, code subject, ambient chain, no remediate workflow, registration is go-live]
-      summary: The coverage capability is a REPORT-ONLY third verb (coverage_code_subtree, own coverage-lane.md), not a fifth audit lane and not a --coverage flag. Three contract facts decide it; the report-only narrowing is what makes a third verb cheap.
+    - id: coverage_is_report_only_and_not_an_audit_lane
+      keywords: [coverage verb, third verb, peer verb superseded, discovery phase, not an audit lane, not a density lens, report-only, GAPS-FOUND, COVERAGE-ASSESSED, code subject, ambient chain, no remediate workflow, registration is go-live, coverage_is_a_report_only_third_verb]
+      summary: The coverage capability is REPORT-ONLY and has its own procedure (coverage_code_subtree, own coverage-lane.md) -- it is not a fifth audit lane and not a --coverage flag. Three contract facts decide that; the report-only narrowing is what keeps a separate procedure cheap. The further claim that it is a PEER THIRD VERB is superseded (see the amendment at the end).
       detail: |
         Three shapes were considered: (A) a third verb with its own procedure,
         (B) a --coverage lens threaded through audit_claude_md exactly as
@@ -184,6 +184,43 @@ claude_md:
         no-op diff. Stated rather than skipped, because
         contracts_preserved_verbatim_through_the_fold requires the decision to
         be deliberate, not merely correct.
+
+        AMENDMENT 2026-08-09 -- the PEER-VERB inference is superseded; the three
+        contract facts are NOT. This record was formerly id
+        `coverage_is_a_report_only_third_verb`, and its summary called coverage
+        "a REPORT-ONLY third verb". The framework-vocabulary decision
+        (references/provenance/skill-authoring-decisions.md,
+        dec_20_audit_and_generation_vocabulary) leaves every verified fact above
+        intact and overturns exactly one step of reasoning.
+
+        What survives, verbatim and unweakened -- all three are arguments that
+        coverage is not a fifth AUDIT lane, and the framework agrees with every
+        one of them:
+          - audit-lane.md:19-22 -- the pre-references material "applies to the
+            three per-file lanes"; audit_references is a carved-out outlier, not
+            a general extension point.
+          - audit-lane.md:485-487 -- idempotency is an audit INVARIANT, and
+            coverage disclaims it.
+          - tests/skills-kit/test_domain_members_resolve.py:213-217 and :236 --
+            every audit_* lane but references must declare NOT-AUDITED +
+            DIFF-CLEAN and bind a workflow_remediate; coverage satisfies both by
+            not matching them.
+
+        What is overturned is only the step FROM those facts TO "therefore a peer
+        verb". "Not an audit" does not establish peer status. Under the framework
+        the producing side is generation (and regeneration where the asset already
+        exists), and coverage sits inside that family: it reads code, discovers
+        facts, and proposes where they belong -- code introspection leading to fact
+        discovery and documentation, which dec_20 places in generation/regeneration
+        rather than audit. It is that family's DISCOVERY step, not a third peer.
+
+        The report-only contract does not move an inch, and must not be read as
+        moving. Coverage writes nothing (coverage-lane.md:70 "Nothing is ever
+        applied", :189 "Then STOP", coverage-standards.md:231-232), which is
+        precisely why it is discovery rather than generation proper. Re-homing it
+        under the generation family is a FRAMING change; the mechanism that pins
+        report-only is unchanged (no bound workflow_remediate, pinned at
+        test_domain_members_resolve.py:253-256).
       origin: |
         Surface: the coverage-lane spec argued "separate lane" from subject
         enumeration alone. Finding: an adversarial cross-check (gpt-5.6-sol,

@@ -5,6 +5,14 @@ claude-md-authoring technique to all four artifacts and reads the SAME standards
 docs the audit lane reads -- in the PRODUCING direction (make it compliant)
 rather than the DETECTING direction (find the violation).
 
+**In framework terms this lane is GENERATION.** Generation is the verb: creating
+a document that does not exist. When the artifact already exists it is
+REGENERATION -- the same verb, same procedure, same standards. EXISTENCE DECIDES
+and nothing else does: there is no separate judgment to make, no flag to pass and
+no label to choose per run. The preservation half of regeneration is already
+carried by the summarize-and-reference rule and its loss-free-deletion guard in
+Step 4, which is what keeps a regeneration from spending existing value.
+
 **Single-invocation.** The authoring verb has no fan-out machinery and gains
 none: no Workflow lanes, no pre-images, no detect/remediate split, no review
 mode. Authoring N files is N runs of this procedure. New authoring machinery
@@ -26,7 +34,7 @@ property of the other three artifacts, not an authored artifact. A request to
 request to "add a reference" is authoring whichever artifact carries it. Route
 there rather than improvising.
 
-## Procedure: author or refine an md artifact
+## Procedure: author or refine an md artifact (generate, or regenerate when it exists)
 
 **Goal.** Produce an artifact that is schema-valid where a schema exists,
 compliant with its standards doc, correctly placed, and shaped in the file's

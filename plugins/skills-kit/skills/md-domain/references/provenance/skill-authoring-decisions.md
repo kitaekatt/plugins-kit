@@ -794,6 +794,97 @@ claude_md:
         worked 2026-07-13): a conventions-only root CLAUDE.md would have had to
         invent an insight to validate.
       added: "2026-07-13"
+    - id: dec_20_audit_and_generation_vocabulary
+      keywords:
+        - framework vocabulary
+        - audit definition
+        - code review is an audit of a diff
+        - subtype not sibling
+        - generation is the primary verb
+        - regeneration when the asset exists
+        - existence decides
+        - code introspection belongs to generation
+        - subject discriminates
+        - CV-8 lexical anchor
+        - generated collision
+        - generated_artifact
+      summary: "The four framework terms: AUDIT is making sure something is accurate and compliant; a CODE REVIEW IS AN AUDIT OF A DIFF (a subtype, not a sibling); GENERATION is creating a document that does not exist and is the PRIMARY verb; REGENERATION is generation where the asset already exists, decided by existence alone. Code introspection that leads to fact discovery and documentation belongs to generation/regeneration, not audit. Load-bearing guard: the framework unifies audit as a KIND; the SUBJECT still discriminates."
+      detail: |
+        The definitions, as ratified:
+
+        - AUDIT -- making sure something is accurate and compliant. md-domain's
+          audit verb already matches: audit-framework.md defines FAIL as gating
+          compliance, the verdict pair is COMPLIANT / NON-COMPLIANT, and CD-1..CD-6
+          own the fidelity-and-value half.
+        - A CODE REVIEW IS AN AUDIT OF A DIFF. Review is a SUBTYPE of audit, not a
+          sibling activity. This resolves rather than creates the pre-existing
+          mixed usage inside git-code-review and p4-code-review, which already
+          describe themselves as running "CLAUDE.md compliance audits" and "bug
+          audits" inside a skill named review.
+        - GENERATION -- creating a document that does not exist. It is the PRIMARY
+          verb of the producing direction.
+        - REGENERATION -- generation where the asset already exists. EXISTENCE
+          DECIDES, automatically. There is no separate judgment, no per-run label
+          and no per-candidate label: generation is the verb, and when the item
+          already exists it is always regeneration.
+        - Code introspection that leads to fact discovery and documentation belongs
+          in GENERATION / REGENERATION, not in audit.
+
+        Two consequences already drawn, recorded so they are not relitigated:
+
+        - md-domain does not SOLICIT review mode. Review mode still exists, because
+          git-kit and p4-kit dispatch md-domain's lanes over a diff; md-domain
+          simply does not offer it from its own front door.
+        - md-domain does not offer to enumerate skills. A roster renders no verdict,
+          so it is not an audit. The roster remains available as a utility.
+
+        THE BOUNDARY GUARD -- the framework unifies audit as a KIND; the SUBJECT
+        still discriminates. Document audit and code review are both audits and
+        remain separately named.
+
+        Why the guard is written down rather than left inferable: today the CV-8
+        boundary -- md-domain INFORMS code review and must never identify code
+        issues -- is carried by two different WORDS over two different SUBJECTS
+        (md-domain audits documents; git-kit and p4-kit review diffs). Unifying the
+        kind makes unifying the word a short step, and if both activities are called
+        "audit" without qualification, CV-8 loses its only lexical anchor. The
+        defect-list failure mode -- "md-domain emits a list of what is wrong with the
+        code" -- then becomes a natural reading of the vocabulary rather than a
+        violation of it. That failure mode is the hazard sweep two adversarial
+        reviews already rejected; see coverage-lane.md and CV-8 in
+        coverage-standards.md.
+
+        KNOWN UNRESOLVED COLLISION -- "generated" is already occupied, in the
+        OPPOSITE sense. cohesion-principles.md defines the per-artifact role
+        `generated_artifact` as machine-emitted and NOT hand-maintained: the
+        authored-doc placement and audit rules do not apply to it, and review of it
+        belongs on its generator. The code-review kits carry the same sense in the
+        bundle fields `generated_files` / `generated_axis` / `generated_signature`
+        and the `--review-generated` flag. A CLAUDE.md this framework calls
+        "generated" is the exact opposite: hand-maintained, load-bearing, and
+        reviewed.
+
+        Resolution DIRECTION (ratified): the verb wins. "Generation" is the primary
+        verb of the framework, so the narrower term is the one that should yield --
+        the machine-emitted sense is what gets a qualifier, not the verb.
+
+        The RENAME ITSELF IS UNDECIDED and out of scope. Nothing has been renamed on
+        the strength of this record: the verb token stays `author`, the lane ids stay
+        `author_*`, the artifact role stays `generated_artifact`, and the bundle
+        fields and CLI flag are untouched. Those are contract surface across three
+        plugins and each needs its own decision plus its own golden-corpus
+        re-record, per contracts_preserved_verbatim_through_the_fold. Until then,
+        read this record as the definition of the WORDS, not as a pending rename.
+      origin: |
+        Surface: a terminology audit of md-domain, git-code-review and p4-code-review
+        against the owner's framework (2026-08-09) found the vocabulary stated
+        nowhere in the three plugins, so no divergence was reviewable. Finding: the
+        framework fits the code-review side already and collapses md-domain's
+        producing verb cleanly, but it collides head-on with the existing
+        machine-emitted sense of "generated", and unifying audit as a kind threatens
+        CV-8's lexical anchor. Follow-up: this record plus prose-only alignment;
+        every contract rename deferred to its own decision.
+      added: "2026-08-09"
     - id: ssot_canonical_split
       keywords:
         - SSOT

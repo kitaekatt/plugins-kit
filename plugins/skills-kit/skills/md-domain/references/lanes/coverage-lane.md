@@ -1,8 +1,17 @@
 # The coverage lane
 
-The third verb's procedure. Unlike `audit` and `author`, this one is NOT
+The coverage procedure. Unlike `audit` and `author`, this one is NOT
 parameterized by artifact -- it has exactly one subject shape, and its subject is
 CODE.
+
+**What kind of operation this is.** Coverage is not a peer of `audit`. It renders
+no compliance verdict, so it is not an audit; it creates no document, so it is not
+generation either. It is the DISCOVERY step that feeds generation and
+regeneration: it reads code, discovers facts, and names the destination each fact
+belongs in. Being re-homed under that family changes nothing about what it may do
+-- REPORT-ONLY IS A PROPERTY OF THIS ENTRY POINT, not an accident of the verb
+being listed separately. The lane binds no remediate workflow and never writes,
+whoever calls it and whatever the family is called.
 
 **Status as of 2026-08-08: filled and registered.** The assessment criteria live
 in `references/standards/coverage-standards.md`, callers pass that document's

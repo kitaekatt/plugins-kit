@@ -27,7 +27,7 @@ The cardinality axis of an audit-skill's subject, declared in the SKILL.md's `au
 A named operation declared in an audit-skill's `audit_skill.procedures` block. An audit-skill hosts:
 
 - **One+ findings-bearing procedure** -- the namesake audit operation. Runs the scaffolding, classifies findings into the taxonomy, assigns each a disposition (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL -- legacy AUTO / DISCUSS / SPECIAL for references-audit).
-- **Zero+ supporting procedures** -- inventory or report procedures over the shared subject (e.g. skill-audit's `roster` and `hierarchy`). Share the subject; do not exercise the findings/remediation machinery.
+- **Zero+ supporting procedures** -- inventory or report procedures over the shared subject (e.g. skill-audit's `roster` and `hierarchy`). Share the subject; do not exercise the findings/remediation machinery. **A supporting procedure is not an audit**: it renders no verdict. It is hosted by an audit-skill because it shares the subject, not because it audits anything, and it must be announced as its own operation rather than folded into the audit's name.
 
 Procedures within a skill share the subject but do not have to share rules; the framework permits multiple distinct audit-kinds inside one audit-skill if their procedures share a meaningful subject.
 
@@ -137,7 +137,7 @@ In framework terms: audit_references's subject is one of `directory | skill | pl
 
 ### `audit_skill` lane (via `/md-domain audit skill`)
 
-Operationalizes the **skill-md-audit** audit-kind (plus two corpus-wide inventory procedures, roster and hierarchy, that share the same subject but do not exercise findings/remediation). The lane:
+Operationalizes the **skill-md-audit** audit-kind (plus two corpus-wide inventory procedures, roster and hierarchy, that share the same subject but do not exercise findings/remediation and render no verdict -- they are not audits). The lane:
 
 1. Picks one or more **subjects** of type `skill_md` (one `SKILL.md` per file).
 2. Runs the **scaffolding** (`python -m skills_kit_lib.audit`, from the plugin root) for mechanical schema validation, plus agent-judgment passes for CCP / CRP / ADP placement.

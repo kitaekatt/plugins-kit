@@ -2,7 +2,7 @@
 //
 // Fan-out assessment, one lane per (code subtree, ambient CLAUDE.md chain). This
 // is the first lane in the skill whose subject is CODE rather than a markdown
-// file, which is why it is a third verb rather than a criterion inside
+// file, which is why it has its own procedure rather than being a criterion inside
 // audit_claude_md: the per-file lanes enumerate CLAUDE.md files, and no criterion
 // can have a subject its lane cannot enumerate. The decisive case is a subtree
 // with NO CLAUDE.md at all.
@@ -21,8 +21,9 @@
 //
 // NO REMEDIATE LANE, deliberately. Nothing is ever applied, so there is no
 // coverage-remediate.js, the sonnet+low remediation pin does not apply, and
-// scripts/gen_workflow_js.py is not involved. Report-only is what keeps a third
-// verb cheap.
+// scripts/gen_workflow_js.py is not involved. Report-only is what keeps a
+// separate procedure cheap, and it is a property of this entry point rather than
+// of the verb being listed apart from audit and author.
 //
 // args = {
 //   subjects: [ { root: string,

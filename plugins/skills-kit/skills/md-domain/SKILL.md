@@ -11,18 +11,25 @@ argument-hint: "[audit|author|coverage] [skill|claude-md|project-doc|references|
 
 # md-domain
 
-The single front door for three verbs over project markdown. **Audit** and
-**author** cross four artifacts (`skill`, `claude-md`, `project-doc`,
+The single front door for three dispatch verbs over project markdown. **Audit**
+and **author** cross four artifacts (`skill`, `claude-md`, `project-doc`,
 `references`); **coverage** assesses one `code_subtree` for facts missing from
 its ambient CLAUDE.md chain. Coverage is report-only and is not
 artifact-parameterized. This replaces the former `md-audit` / `md-authoring`
 routers and the member skills they dispatched into.
 
-One skill, one dispatch table, three verb procedures. Audit and author share
+The three are dispatch entries, not three things of the same kind. Auditing is
+making sure something is accurate and compliant. Authoring is generation --
+creating a document that does not exist -- and regeneration where the document
+already exists. Coverage is the DISCOVERY step that feeds generation and
+regeneration: it reads code, discovers facts, and names where each belongs, and
+it writes nothing.
+
+One skill, one dispatch table, three procedures. Audit and author share
 per-artifact standards; coverage has its own criteria and procedure. The "what
 good looks like" documents live in `references/standards/`, the "how to run it"
-procedures live in `references/lanes/`, and the placement spine all three verbs
-defer to lives in `references/cohesion-principles.md`.
+procedures live in `references/lanes/`, and the placement spine all three defer
+to lives in `references/cohesion-principles.md`.
 
 ## Invocation
 
@@ -43,44 +50,53 @@ defer to lives in `references/cohesion-principles.md`.
 ```
 How can I help you with your project markdown?
 
-I run three kinds of work. Each entry below names one analysis and says what it
-READS -- that is what separates a cheap run from an expensive one. Before any
-run I state the analysis by the same name and the exact file scope.
+Just tell me what you want, in your own words. Widest first:
 
-AUDIT -- judges documents that already exist. Reads markdown, and opens source
-only to verify a claim a document already makes.
+  "audit everything"                   every analysis below, across the repo
+  "audit all the skills"               Skill audit
+  "audit the CLAUDE.md files"          CLAUDE.md audit
+  "audit the docs"                     Project-doc audit
+  "check for broken skill references"  Cross-reference audit
 
-  Skill audit            one SKILL.md against its type contract + cohesion,
-                         or one skill references/*.md against its prose criteria
-                         (/md-domain audit skill <path>)
-  CLAUDE.md audit        one CLAUDE.md: cohesion, hygiene, schema
-                         (/md-domain audit claude-md <path>)
-  Project-doc audit      one standalone document: placement + role
-                         (/md-domain audit project-doc <path>)
-  Cross-reference audit  every skill cross-reference in the corpus, for rot
-                         (/md-domain audit references)
-  Skill roster           an inventory of the skill corpus -- no verdicts
-                         (/md-domain audit skill roster)
+  "check <directory> for coverage"     Coverage analysis. Reads the CODE there
+                                       and reports which facts its CLAUDE.md
+                                       chain should carry so a code review can
+                                       act on them. Reports only, never edits.
 
-  Add --density to a CLAUDE.md audit for the opt-in token-efficiency lens.
-  It is advisory: it never changes a verdict.
+Before starting I name the analysis and its exact scope, because what a run
+READS is what makes it cheap or expensive.
 
-AUTHOR -- produces a document, or reshapes one to standard.
-
-  Skill authoring        a new or refined SKILL.md  (/md-domain author skill)
-  CLAUDE.md authoring    a valid claude_md block    (/md-domain author claude-md)
-  Project-doc authoring  placement and role first   (/md-domain author project-doc)
-
-COVERAGE -- derives missing ambient CLAUDE.md facts. READS CODE and reports only;
-it never edits or remediates.
-
-  Coverage analysis      one named directory or --diff
-                         (/md-domain coverage <directory> [--advanced])
+Authoring is not a separate mode -- ask me to write a skill, a CLAUDE.md, or a
+doc and I apply these same standards in the producing direction.
 
 Or can I help you with something else?
 ```
 
 Show the menu and stop; do not load a lane or a standards doc until the user picks.
+
+Three things the greeting deliberately omits, so do not read their absence as
+scope.
+
+**Narrow selectors** -- a single file, a `list` index, `--density`,
+`--advanced` -- are real and documented under "Argument grammar"; a user who
+names one file is served normally.
+
+**The author lanes** still exist in the dispatch table; the greeting frames
+authoring as a direction the standards are read in rather than a verb to pick,
+because nobody arrives wanting to "run author" -- they arrive wanting a
+document written.
+
+**Review mode and the skill roster are NOT offered.** Both capabilities remain
+-- review mode is how `git-kit` and `p4-kit` dispatch these lanes over a diff,
+and the roster is a utility -- but neither is something md-domain solicits from
+a user. Reviewing a diff is an audit of a change, which is the code-review
+skills' job; md-domain informs that review and does not front-door it. An
+inventory renders no verdict, so it is not an audit at all. Offering either
+here invites a user to run the wrong skill.
+
+The right-hand labels are the canonical analysis names that "Naming and scope
+announcement" below requires you to echo. The left column is only the entry
+point.
 
 ### Naming and scope announcement (applies to every run)
 
@@ -94,8 +110,9 @@ not menu decoration:
 - **Echo, do not paraphrase.** A user who picked "Cross-reference audit" must
   see "Cross-reference audit" when it starts. Inventing a synonym per run is how
   a user loses track of which analysis they authorized.
-- **Name every analysis you run.** A dispatch that runs two (an audit plus its
-  roster inventory) announces both, not just the headline one.
+- **Name every analysis you run.** A dispatch that runs two -- an audit plus a
+  roster inventory, which is a separate operation and not part of the audit --
+  announces both, not just the headline one.
 - **Scope is part of the announcement, never implied.** "the corpus" is not a
   scope; the count and the roots are. When a selector expands to more files than
   the user likely pictured, say the number before starting, not after.
@@ -151,9 +168,7 @@ lanes:
       - "audit this SKILL.md"
       - "check my skill against its type contract"
       - "does this skill satisfy the framework"
-      - "review my skill changes before I submit"
       - "audit this skill reference document"
-      - "inventory the skills / skill roster / skill hierarchy"
     change_driver: >-
       Changes when the SKILL.md type contract changes -- skill-standards.md,
       schema_registry.py, or a new per-type rule id -- or when the
@@ -174,7 +189,6 @@ lanes:
       - "check my claude_md block"
       - "is this CLAUDE.md too verbose / audit for token efficiency"
       - "review the directory review-notes file"
-      - "audit the diff on CLAUDE.md before I submit"
     change_driver: >-
       Changes when the CLAUDE.md standards change -- the C/R/A/H rule set, the
       CD code-directory dimension, the DD density lens, or CLAUDE_MD_SCHEMA.
@@ -193,7 +207,6 @@ lanes:
       - "should this design doc graduate to a skill"
       - "is this project document an orphan"
       - "audit my README"
-      - "review the doc changes before I publish"
     change_driver: >-
       Changes when the project-doc standards change -- PD-1..PD-11, the
       maturation pipeline, or a named-role definition (readme, generated).
@@ -290,7 +303,9 @@ ambiguous, ask rather than guessing.
   `list` emits a numbered list from the lane's discover script and stops;
   `<path>` targets a file or directory; `<numbers>` selects by index from the
   last `list` output. `audit skill` also accepts `roster` / `hierarchy` (with an
-  optional output path or `-` for stdout) for corpus inventory.
+  optional output path or `-` for stdout) for corpus inventory. The grammar puts
+  them under `audit skill` because they share its subject; an inventory renders
+  no verdict, so it is NOT an audit -- announce it as its own operation.
 - **Coverage subject** -- a named directory or `--diff`. There is NO whole-repo
   default: if neither is present, say so and stop rather than choosing the cwd.
 - **`--diff` / `--json`** -- coverage-only flags. `--diff` resolves changed
@@ -342,7 +357,7 @@ filter, pre-image materialization, the two documented limits) live in
 ```yaml
 domain_skill:
   _schema_version: "1"
-  identity: The single front door for three verbs over project markdown -- auditing and authoring SKILL.md (and its reference documents), CLAUDE.md, project documents, and skill cross-references, plus report-only coverage analysis over a code subtree and its ambient CLAUDE.md chain.
+  identity: The single front door for three dispatch verbs over project markdown -- auditing and authoring SKILL.md (and its reference documents), CLAUDE.md, project documents, and skill cross-references, plus report-only coverage analysis over a code subtree and its ambient CLAUDE.md chain.
   companions:
     siblings: []
     note: |
@@ -358,7 +373,7 @@ domain_skill:
       - dispatching audit, authoring, or coverage intent to exactly one lane
       - owning the four per-artifact standards docs (what good looks like for skill / claude-md / project-doc / references)
       - owning coverage-standards.md for the code_subtree composition
-      - owning three verb procedures (shared audit, shared authoring, report-only coverage)
+      - owning three procedures (shared audit, shared authoring -- generation and regeneration -- and report-only coverage discovery)
       - owning the placement spine (cohesion-principles) and the shared audit framework, configuration, and content-shape references
     excludes:
       - encoding a newly discovered insight into a persistent location (use knowledge-encoding)
@@ -367,7 +382,7 @@ domain_skill:
       - invoking the skills being audited or authored
   orientation:
     summary: |
-      One skill, one dispatch table, three verbs. Audit and author select an artifact,
+      One skill, one dispatch table, three procedures. Audit and author select an artifact,
       then load its standards plus the verb procedure. Coverage selects code_subtree
       and loads coverage-lane.md plus coverage-standards.md. Audit uses DETECT -> Q&A
       gate -> REMEDIATE, author uses confirm -> place -> apply -> shape -> validate,
