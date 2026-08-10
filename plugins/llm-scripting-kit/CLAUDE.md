@@ -16,12 +16,23 @@ whichever transport produced it. Three transports sit behind one `complete()`:
 `OpenRouterBackend` over HTTP, `ClaudeCliBackend` driving the local
 `claude -p` CLI, and `CodexCliBackend` driving `codex exec`.
 
-The codex transport carries one rule the other two do not need. Codex writes
-model-authored text to BOTH stdout and stderr, and `halt` classifies by
-substring-matching an exception's message -- so `CodexRunError` keeps the
-transcript on attributes and out of the message. Inlining a channel into that
-message makes a healthy run that merely discusses a rate limit classify as a
-persistent halt and abort the caller's whole run.
+The codex transport carries two rules the other two do not need.
+
+**Its consumers must declare `bootstrap_lib` themselves.** `CodexCliBackend`
+builds argv exclusively via `bootstrap_lib.codex.build_codex_exec_argv`, and
+imports it LAZILY so this package stays stdlib-only at import. A consumer venv
+that links `llm_scripting_kit` but not `bootstrap_lib` therefore imports the
+codex backend cleanly and dies on the first dispatch, not at load. A shared lib
+does not carry its own shared-lib edges to a consumer -- each venv declares what
+it needs (`plugins/CLAUDE.md`, "Why shared libs rather than published
+packages"). content-pipeline-kit declares both.
+
+**Model-authored text must stay out of exception messages.** Codex writes its
+transcript to BOTH stdout and stderr, and `halt` classifies by substring-matching
+an exception's message -- so `CodexRunError` keeps the transcript on attributes
+and out of the message. Inlining a channel into that message makes a healthy run
+that merely discusses a rate limit classify as a persistent halt and abort the
+caller's whole run.
 
 It does not own the concerns of a RUN OF MANY CALLS. Response caching, cost
 accounting, budget guarding, batching, concurrency, rate limiting, and

@@ -1,5 +1,5 @@
 {
-  "$comment": "content-pipeline-kit's llm/ package consumes the llm_scripting_kit shared lib for the live (openrouter / claude-cli) backends, so the owner plugin plugins-kit:llm-scripting-kit must be installed for that lib to be published to _shared_libs. Declaring it install: auto makes opting into content-pipeline-kit pull its dependency automatically -- dependency semantics, distinct from the action-triggered opt-in pattern (bootstrap skill, references/action-triggered-install.md).",
+  "$comment": "content-pipeline-kit's llm/ package consumes the llm_scripting_kit shared lib for the live (openrouter / claude-cli / codex-cli) backends, so the owner plugin plugins-kit:llm-scripting-kit must be installed for that lib to be published to _shared_libs. Declaring it install: auto makes opting into content-pipeline-kit pull its dependency automatically -- dependency semantics, distinct from the action-triggered opt-in pattern (bootstrap skill, references/action-triggered-install.md). bootstrap_lib is linked in TRANSITIVELY: CodexCliBackend imports bootstrap_lib.codex (the argv single source of truth) lazily, at dispatch time rather than import time, so without this entry the codex path imports cleanly and then dies on the first call. A shared lib does not carry its own shared-lib edges to a consumer -- each venv declares what it needs.",
   "shared_libs": [
     { "name": "content_pipeline", "src": "lib" }
   ],
@@ -11,7 +11,7 @@
       "install": "auto"
     }
   ],
-  "shared_lib_imports": ["llm_scripting_kit"],
+  "shared_lib_imports": ["llm_scripting_kit", "bootstrap_lib"],
   "venv": {
     "check_imports": ["yaml", "content_pipeline"]
   },
