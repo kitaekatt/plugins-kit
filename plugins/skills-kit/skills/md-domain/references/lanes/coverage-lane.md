@@ -197,6 +197,41 @@ reviewer could act on from the ones that only orient, not to rank them.
 
 Then STOP. No Q&A, no edits, no follow-up pass.
 
+## Handing the report to generation
+
+Stopping is where THIS lane ends, not where the work has to. A caller holding a
+coverage report may invoke the generation lane to write any candidate up. That
+is a separate run of a separate lane, and it takes nothing away from report-only:
+this lane still writes nothing, whoever calls it and whatever they do next.
+
+The two lanes already meet, and the join needs no new machinery:
+
+- **The `destination` field IS a resolved placement.** Every candidate carries
+  the CLAUDE.md the placement algorithm selected. `generation-lane.md` step 2
+  recognizes exactly this case -- "when a placement decision arrives already
+  resolved ... follow it. Do not re-invoke the placement framework for it."
+  A coverage candidate is that case, alongside an audit remediation naming the
+  destination and an orchestrator directive.
+- **`fact`, `why` and `anchors` are the content.** Generation's step 1
+  precondition is a fact needing a home; the candidate is a fact, its
+  justification, and its `file:line` evidence, with the home already named.
+
+Two things the caller has to do, because neither lane does them:
+
+1. **Group by `destination` first.** Generation is single-invocation -- one run
+   writes one document. A report spanning N destinations is N generation runs,
+   each taking that destination's candidates together, so the document is
+   authored as a whole rather than appended to N times.
+2. **Carry the tier through, do not filter on it.** CONTEXT-ONLY is admissible
+   content, not rejected content -- CV-4 classifies candidates, it does not gate
+   them. A caller writing up only the FINDING-CONVERTIBLE ones is making an
+   editorial choice and should say so; the tier is a signal to the reader, not a
+   filter the lanes apply.
+
+What the caller must NOT do is treat the report as pre-approved. Reporting a
+candidate is not a commitment to write it (above), so the decision to generate
+is the caller's and is made per candidate, not per report.
+
 ## Decision rules (verdict)
 
 - `GAPS-FOUND` -- at least one candidate survived assessment.

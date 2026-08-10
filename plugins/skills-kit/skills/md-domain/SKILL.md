@@ -62,6 +62,9 @@ Just tell me what you want, in your own words. Widest first:
                                        and reports which facts its CLAUDE.md
                                        chain should carry so a code review can
                                        act on them. Reports only, never edits.
+                                       Ask me to write the results up afterwards
+                                       and I generate those CLAUDE.md files --
+                                       a separate step you choose, per candidate.
 
 Before starting I name the analysis and its exact scope, because what a run
 READS is what makes it cheap or expensive.
@@ -141,6 +144,20 @@ nothing to generate; a request to "fix my broken references" is a REMEDIATION of
 the `audit_references` lane, and a request to "add a reference" is generating
 whichever artifact carries it (`generate_skill` / `generate_claude_md` /
 `generate_project_doc`). Say so and route there rather than improvising a lane.
+
+**Coverage then generation is a CHAIN, not a composite verb.** "Find what's
+missing and write it up" is the natural end-to-end request, and it is served by
+running `coverage` and then `generate x claude-md` -- two dispatches, in order,
+with the user's decision in between. There is deliberately no `coverage+generate`
+verb: coverage is report-only, and a single verb that discovered and wrote in one
+motion would make the report a formality rather than a decision point.
+
+Route it as a chain: run coverage, present the report, and offer to write up the
+candidates the user picks. Each destination is its own generation run, taking
+that destination's candidates together, with `destination` treated as a
+pre-resolved placement. Caller-side mechanics are in `coverage-lane.md`
+("Handing the report to generation"); the intake side is `generation-lane.md`'s
+precondition.
 
 ### Lane records
 
@@ -284,6 +301,7 @@ lanes:
     invocation_phrasings:
       - "analyze this code directory for missing CLAUDE.md guidance"
       - "run coverage analysis on this subtree"
+      - "find what this directory's CLAUDE.md is missing and write it up"
       - "find code-derived facts that should be ambient"
     change_driver: Changes when coverage criteria, depth semantics, or the report-only procedure change.
 ```

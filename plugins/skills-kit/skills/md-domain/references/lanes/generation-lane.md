@@ -43,6 +43,26 @@ native form.
 **Precondition.** A fact, convention, insight, contract, or document body needs a
 home, and the artifact type has been named (or can be resolved in step 1).
 
+**The fact may arrive pre-derived.** This lane is agnostic about where content
+came from: a conversation with the user, an audit remediation, or a batch handed
+over by another lane. The case with a defined shape is a **coverage report** --
+its candidates carry `fact`, `why`, `anchors` (`file:line` evidence),
+`destination`, and a `tier`. Take them as follows:
+
+- `destination` is a pre-resolved placement (step 2), so the placement framework
+  is not re-invoked for it.
+- `anchors` are the evidence the written content cites; carry them through rather
+  than re-deriving citations.
+- `tier` (FINDING-CONVERTIBLE / CONTEXT-ONLY) is a reader signal that travels
+  with the fact. It does not decide whether to write the fact up, and it is not a
+  standards input -- the artifact's own standards doc governs the output either
+  way.
+
+One run of this procedure writes ONE document, so a report spanning several
+destinations is one run per destination, taking that destination's candidates
+together. `coverage-lane.md` ("Handing the report to generation") is the caller
+side of the same seam.
+
 ### Step 1 -- Confirm the artifact
 
 Confirm which of the four artifacts this is, and that the content belongs there.
@@ -97,9 +117,10 @@ Per artifact this answers:
   SKILL.md will cite it, so it is not born an orphan.
 
 **PRE-RESOLVED PLACEMENT.** When a placement decision arrives already resolved --
-an audit remediation naming the destination, an orchestrator directive -- follow
-it. Do not re-invoke the placement framework for it; invoke it only for content
-without a resolved placement.
+an audit remediation naming the destination, a coverage candidate's
+`destination` field, an orchestrator directive -- follow it. Do not re-invoke the
+placement framework for it; invoke it only for content without a resolved
+placement.
 
 Expected: one target file, justified by the placement algorithm (or accepted as
 pre-resolved).
