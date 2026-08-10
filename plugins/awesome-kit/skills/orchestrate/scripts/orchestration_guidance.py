@@ -85,6 +85,12 @@ RECORD_LISTS = (
     "backend_notes",
 )
 
+# Capability keys rendered for each backend's `capabilities:` block, in
+# display order. A key present in the shipped defaults but absent from this
+# tuple is silently dropped from the rendered output -- see the render site
+# below and TestCapabilityRendering in tests/awesome-kit/test_orchestration_guidance.py.
+CAPABILITY_KEYS = ("tiers", "isolation", "effort", "network", "returns")
+
 
 # --------------------------------------------------------------------------
 # Layer resolution
@@ -885,7 +891,7 @@ def render_backends(
                 shown = [str(t) for t in tiers if str(t) in visible_tiers]
                 caps = dict(caps)
                 caps["tiers"] = ", ".join(shown) if shown else "n/a (no tier selection)"
-            for key in ("tiers", "isolation", "effort", "network", "returns"):
+            for key in CAPABILITY_KEYS:
                 if key in caps and caps[key] not in (None, ""):
                     out.append(f"- {key}: {fold(caps[key])}")
             out.append("")

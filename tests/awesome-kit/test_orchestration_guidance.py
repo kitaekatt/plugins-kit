@@ -72,6 +72,25 @@ class TestRecordListMerge:
         merged = og.deep_merge(base, {"tiers": [{"model": "x"}]})
         assert merged["tiers"] == [{"model": "x"}]
 
+    def test_record_lists_contains_every_expected_key(self):
+        # Pins the exact set: dropping any of these silently flips that key's
+        # override merge from patch-by-id to outright replace, with no other
+        # test to catch the regression.
+        assert set(og.RECORD_LISTS) == {
+            "tiers",
+            "backends",
+            "lexicon",
+            "ladders",
+            "rungs",
+            "tests",
+            "gates",
+            "pulls",
+            "items",
+            "notes",
+            "examples",
+            "backend_notes",
+        }
+
 
 # --------------------------------------------------------------------------
 # Layer resolution
@@ -545,13 +564,11 @@ class TestCapabilityRendering:
     """Capability keys are rendered from an allowlist, so a key added to the
     shipped defaults but not to that list is silently dropped."""
 
-    RENDERED = ("tiers", "isolation", "effort", "network", "returns")
-
     def test_every_shipped_capability_key_is_rendered(self):
         data = yaml.safe_load(og.DEFAULTS_PATH.read_text(encoding="utf-8"))
         for backend in data["backends"]:
             for key in (backend.get("capabilities") or {}):
-                assert key in self.RENDERED, (
+                assert key in og.CAPABILITY_KEYS, (
                     f"{backend['id']}.capabilities.{key} would not be rendered"
                 )
 
