@@ -2,8 +2,9 @@
 
 A *halt* is an error condition that persists across subsequent calls --
 retrying the next work item would fail identically, so the run should stop
-cleanly instead of burning through the remaining corpus. Both transports
-(OpenRouter HTTP, ``claude -p`` subprocess) converge on the same reasons.
+cleanly instead of burning through the remaining corpus. Every transport
+(OpenRouter HTTP, ``claude -p`` subprocess, ``codex exec`` subprocess)
+converges on the same reasons, each through its own marker vocabulary.
 
 Reason constants are plain strings (not an enum) because they are persisted
 into audit records and matched by CLI exit-code mappers -- the string values
@@ -53,6 +54,34 @@ _AUTH_MARKERS = (
     "api_error_status:401",
     "authentication_error",
     "invalid authentication credentials",
+)
+
+
+# Codex CLI failure vocabulary. Codex does NOT emit claude's
+# `"api_error_status":NNN` envelope, so _RATE_LIMIT_MARKERS / _AUTH_MARKERS
+# above cannot classify it and these exist instead.
+#
+# PROVENANCE, stated plainly because it bounds how much these can be trusted:
+# only the SHAPE of the failure is verified (a persistent usage cap and a
+# logged-out CLI both fail every subsequent call, so both are halts). The exact
+# WORDING below is GUESSED -- inferred from the common vocabulary of the
+# ChatGPT/OpenAI surfaces codex fronts, not read off an observed codex run.
+# Markers are therefore deliberately short and generic so a wording variant
+# still matches; when a real codex failure is captured, replace them with the
+# observed strings rather than adding to the guesses.
+_CODEX_RATE_LIMIT_MARKERS = (
+    "usage limit",
+    "rate limit",
+    "rate_limit",
+    "too many requests",
+    "quota exceeded",
+)
+_CODEX_AUTH_MARKERS = (
+    "not logged in",
+    "codex login",
+    "unauthorized",
+    "invalid api key",
+    "authentication failed",
 )
 
 
@@ -131,6 +160,55 @@ def classify_claude_exception(exc: BaseException) -> Optional[str]:
     return None
 
 
+def classify_codex_text(text: str) -> Optional[str]:
+    """Map a codex CLI text channel (stderr / error body) to a halt kind.
+
+    Rate-limit markers are checked before auth markers so a message carrying
+    both classifies as :data:`HALT_RATE_LIMIT`, matching
+    :func:`classify_halt_text`. Falls back to the claude/OpenAI marker set,
+    which costs nothing and catches a message that quotes an upstream HTTP
+    error verbatim. Returns ``None`` when nothing matches.
+    """
+    if not text:
+        return None
+    lower = text.lower()
+    for marker in _CODEX_RATE_LIMIT_MARKERS:
+        if marker in lower:
+            return HALT_RATE_LIMIT
+    for marker in _CODEX_AUTH_MARKERS:
+        if marker in lower:
+            return HALT_AUTH
+    return classify_halt_text(lower)
+
+
+def classify_codex_exception(exc: BaseException) -> Optional[str]:
+    """Map an exception from the codex CLI transport to a halt kind.
+
+    Typed check first, identically to :func:`classify_claude_exception`: the
+    per-call timeout has a dedicated type (:class:`AgentTimeoutError`) and maps
+    to :data:`HALT_RATE_LIMIT`, because a CLI-layer backoff is what a timeout
+    usually is and both transports must halt-and-resume the same way. The
+    substring checks are the fallback for an exception that carries only text.
+
+    INVARIANT this depends on: the caller must keep MODEL-AUTHORED text out of
+    the exception message. Codex writes its transcript to both stdout and
+    stderr, so interpolating either into a message makes a healthy run that
+    merely discusses "rate limit" classify as a persistent halt and abort the
+    whole run. ``codex_backend.CodexRunError`` upholds this by carrying the
+    transcript on attributes instead; do not "improve" an error message there
+    by inlining a channel.
+    """
+    if isinstance(exc, AgentTimeoutError):
+        return HALT_RATE_LIMIT  # CLI-layer backoff is functionally a rate limit
+    msg = (str(exc) or "").lower()
+    reason = classify_codex_text(msg)
+    if reason is not None:
+        return reason
+    if "exceeded" in msg and "timeout" in msg:
+        return HALT_RATE_LIMIT
+    return None
+
+
 __all__ = [
     "HALT_AUTH",
     "HALT_RATE_LIMIT",
@@ -139,4 +217,6 @@ __all__ = [
     "classify_halt_text",
     "classify_openai_exception",
     "classify_claude_exception",
+    "classify_codex_text",
+    "classify_codex_exception",
 ]

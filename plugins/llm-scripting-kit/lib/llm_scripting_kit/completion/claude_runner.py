@@ -1,4 +1,9 @@
-"""Shared ``claude -p`` subprocess runner for completion pipelines.
+"""Shared prompt-on-stdin CLI subprocess runner for completion pipelines.
+
+Named for its first caller (``claude -p``) and kept there so the import path
+stays stable, but :func:`run_cli_streaming` is transport-neutral: it writes a
+prompt to stdin, drains both pipes, honours a timeout, and kills on a
+caller-supplied stderr marker set. :class:`CodexCliBackend` drives it too.
 
 This shared transport centralizes fixes for a main-thread-blocking
 ``readline()`` hang and a cp1252 encoding bug. The defensive details are the
@@ -96,7 +101,7 @@ def looks_like_hard_stop(
     return False
 
 
-def run_claude_streaming(
+def run_cli_streaming(
     cmd: list[str],
     request: str,
     cwd: Path,
@@ -104,8 +109,15 @@ def run_claude_streaming(
     log_prefix: str,
     timeout_s: float,
     hard_stop_markers: tuple[str, ...] = HARD_STOP_STDERR_MARKERS,
+    label: str = "claude -p",
 ) -> tuple[str, str, int]:
-    """Run ``claude -p`` with streamed stderr and a per-call timeout.
+    """Run a prompt-on-stdin CLI with streamed stderr and a per-call timeout.
+
+    Transport-neutral despite this module's name: every claude-specific detail
+    is a parameter (``hard_stop_markers`` for the stderr kill vocabulary,
+    ``label`` for the CLI named in raised error messages), so a second CLI
+    transport reuses the drain/timeout machinery rather than re-deriving it.
+    ``run_claude_streaming`` remains as a back-compat alias.
 
     Returns ``(stdout, stderr, returncode)``. Echoes stderr to the parent
     process in real time prefixed with ``log_prefix`` so rate-limit / backoff
@@ -204,7 +216,7 @@ def run_claude_streaming(
             stderr_tail = full_stderr[-2000:] or "<empty>"
             stdout_tail = full_stdout[-500:] or "<empty>"
             raise AgentTimeoutError(
-                f"claude -p exceeded {timeout_s}s timeout "
+                f"{label} exceeded {timeout_s}s timeout "
                 f"(elapsed {int(elapsed)}s; likely rate-limit backoff "
                 f"at the CLI layer).\n"
                 f"stderr tail:\n{stderr_tail}\n"
@@ -226,16 +238,24 @@ def run_claude_streaming(
 
     if hard_stop_hit:
         raise RuntimeError(
-            f"claude -p hard-stop error (rate limit or auth failure): "
+            f"{label} hard-stop error (rate limit or auth failure): "
             f"{hard_stop_hit[0]}"
         )
 
     return "".join(stdout_chunks), "".join(stderr_chunks), proc.returncode
 
 
+#: Back-compat alias. content-pipeline-kit imports this name from the shared
+#: lib, and a shared lib reaches every consumer at once with no version pin --
+#: so the old name stays bound to the same object rather than being renamed out
+#: from under them.
+run_claude_streaming = run_cli_streaming
+
+
 __all__ = [
     "AgentTimeoutError",
     "HARD_STOP_STDERR_MARKERS",
     "looks_like_hard_stop",
+    "run_cli_streaming",
     "run_claude_streaming",
 ]

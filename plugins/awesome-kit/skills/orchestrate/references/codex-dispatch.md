@@ -7,100 +7,142 @@ the launch -- the rendered policy carries the summary; this carries the detail.
 Rendered policy: `scripts/orchestration_guidance.py`. Backend record and the
 one-line command: `defaults/orchestration.yaml`, `backends[id: codex]`.
 
-## Mechanics
+## Absolute paths, always
 
-Use `codex exec` -- the NON-INTERACTIVE subcommand. Bare
-`codex "<prompt>"` launches the interactive TUI, needs a terminal, and
-dies instantly under run_in_background with
-`Error: stdin is not a terminal`.
+Every path you hand codex -- `-C`, `--add-dir`, `-o` -- is ABSOLUTE. This is a
+hard rule, not a style preference. A relative `-C` combined with `--add-dir`
+voids the entire writable-root set: every write fails, including writes inside
+the root itself. The measured 2x2:
 
-Pass the prompt on STDIN, not as an argument. Real briefs are long and
-full of apostrophes, quotes and backticks; embedding one in a shell
-argument reliably produces `unexpected EOF while looking for matching
-quote` and the dispatch never happens. Write the brief to a file, then
-feed it in -- `-` means "read the prompt from stdin":
+  relative -C, no --add-dir      writes inside the root succeed
+  relative -C, --add-dir TEMP    ALL writes fail, root included
+  absolute -C, --add-dir any     works, including the add-dir target
+
+And pass `-C` explicitly rather than relying on the process cwd: a `cd` inside a
+backgrounded Bash call does not persist.
+
+## The one invocation
+
+There is one sanctioned way to launch a unit. Use it as written.
 
   codex exec -s workspace-write \
-    -c sandbox_workspace_write.network_access=true \
+    -c 'windows.sandbox="unelevated"' \
+    -c 'sandbox_workspace_write.network_access=true' \
+    -C <ABSOLUTE root> \
+    --add-dir <ABSOLUTE session scratchpad> \
     --skip-git-repo-check --color never \
-    -o tmp/codex-<unit>-result.txt - < tmp/prompt-<unit>.md \
-    > tmp/codex-<unit>.log 2>&1
+    -o <ABSOLUTE result file> - < <ABSOLUTE brief file> \
+    > <ABSOLUTE log file> 2>&1
+
+Every element is present because a probe showed its absence fails silently:
+
+  `codex exec`   The NON-INTERACTIVE subcommand. Bare `codex "<prompt>"`
+                 launches the TUI, needs a terminal, and dies instantly under
+                 run_in_background with `Error: stdin is not a terminal`.
+  `-s workspace-write`
+                 The sandbox is the ONLY control in exec mode (see below).
+  `windows.sandbox="unelevated"`
+                 Without it, on Windows, `-s workspace-write` silently degrades
+                 to read-only: every write is declined and the unit still exits
+                 0 with a failure narrative that reads as model incompetence.
+                 Verified as the single deciding variable across two otherwise
+                 identical runs. Do not assume the user's `~/.codex/config.toml`
+                 sets it.
+  `sandbox_workspace_write.network_access=true`
+                 Without it, egress fails with no error text at all -- `curl`
+                 returns HTTP 000 and exit 1.
+  `--add-dir <session scratchpad>`
+                 `%TEMP%` is not writable under workspace-write, and the
+                 session scratchpad lives there. Naming that one directory is
+                 preferred over flipping `exclude_tmpdir_env_var`, which would
+                 grant all of TEMP.
+  `-o <FILE>`    Writes ONLY the agent's final message. This is the return
+                 value; without it you are grepping a transcript that routinely
+                 runs thousands of lines.
+  `--skip-git-repo-check`  Allows running outside a git repo.
+  `--color never`          Keeps ANSI escapes out of the captured log.
+  `-` and stdin  The brief comes from a FILE on stdin, never a shell argument.
+                 Real briefs are long and full of apostrophes, quotes and
+                 backticks; embedding one in an argument reliably produces
+                 `unexpected EOF while looking for matching quote` and the
+                 dispatch never happens.
 
 Launch each unit as its own Bash tool call with run_in_background: true.
 
-Flags that matter:
-  -m, --model <MODEL>
-        The rung. Model ids are FULLY QUALIFIED -- `gpt-5.6-sol`, not
-        `sol`. The bare codenames are not dispatchable and fail at
-        launch.
+Per-unit knobs on top of that shape:
+
+  -m, --model <MODEL>      The rung. Model ids are FULLY QUALIFIED --
+                           `gpt-5.6-sol`, not the bare codename, which is not
+                           dispatchable and fails at launch.
   -c model_reasoning_effort=<low|medium|high|max>
-        The effort dial, and it is a `-c` CONFIG KEY, not a flag --
-        `codex exec --help` does not list it, so looking there and
-        finding nothing is the expected outcome, not a sign it does not
-        exist. Verify a spelling with `--strict-config`, which rejects
-        an unknown key at launch (`unknown configuration field ... in
-        -c/--config override`) instead of silently ignoring it.
-  -s, --sandbox <read-only|workspace-write|danger-full-access>
-        The ONLY safety control in exec mode. `--ask-for-approval` does
-        NOT exist here: exec is non-interactive, so there is nobody to
-        answer a prompt. Default to `workspace-write` for units that edit
-        files, `read-only` for pure research. NEVER pass
-        `--dangerously-bypass-approvals-and-sandbox` -- with no approval
-        prompts to skip, all it buys is removing the sandbox.
-  -c sandbox_workspace_write.network_access=true
-        Opens network egress while keeping writes confined to the
-        workspace. Shipped in the command above; see the network note.
-  --add-dir <DIR>
-        An extra writable root, for the occasional unit whose work
-        legitimately spans two trees. Prefer this over widening -s.
-  -o, --output-last-message <FILE>
-        Writes ONLY the agent's final message to FILE. This is the return
-        value. Without it you are grepping a transcript that routinely
-        runs thousands of lines.
-  -C, --cd <DIR>
-        The working root. Use this rather than `cd <dir> && codex ...`: a
-        directory change inside a backgrounded Bash call does not persist.
-  --skip-git-repo-check   Allows running outside a git repo.
-  --color never           Keeps ANSI escapes out of the captured log.
-  --output-schema <FILE>  JSON Schema for the final response, when you
-                          want the return value machine-parseable.
-  --json                  Emit events as JSONL, for progress tracking.
+                           The effort dial, and a `-c` CONFIG KEY rather than a
+                           flag -- `codex exec --help` does not list it, so
+                           finding nothing there is expected. Verify a spelling
+                           with `--strict-config`, which rejects an unknown key
+                           at launch instead of ignoring it.
+  --output-schema <FILE>   JSON Schema for the final response, when you want
+                           the return value machine-parseable.
+  --json                   Emit events as JSONL, for progress tracking.
 
-Network: bare `-s workspace-write` blocks egress at a loopback proxy, so
-the command above adds `-c sandbox_workspace_write.network_access=true`.
-With it, HTTP and TLS both work. On WINDOWS one thing does not: clients
-using the native schannel TLS stack -- notably `curl.exe` -- fail with
-`SEC_E_NO_CREDENTIALS`, because the sandbox's restricted token cannot
-reach the credential store. Any OpenSSL-based client is fine, so tell the
-unit to use node, python, or MSYS `curl` for HTTPS. Plain `curl.exe` over
-HTTP is also fine. (Measured on codex-cli 0.146.0, Windows: HTTP 200,
-node HTTPS 200, curl.exe HTTPS SEC_E_NO_CREDENTIALS.)
+## Exit 0 is not success
 
-What the sandbox is still for: exec mode has NO approval channel, so
-unlike a background Claude agent -- which can hit the permission layer
-and be denied mid-run -- a Codex unit cannot be interrupted. Workspace
-confinement is the only bound that exists on it, which is why the default
-keeps it even though network is open. Widen with `--add-dir` for a second
-tree; reach for `danger-full-access` only with the user's explicit
-sign-off for that unit.
+`codex exec` has no approval channel -- it rejects `-a/--ask-for-approval`
+outright. An action the sandbox forbids is AUTO-DENIED, never escalated to
+anyone. The denial comes back to the model as a tool error, the model narrates
+around it, and the turn completes normally with exit code 0. So `$?` carries no
+information about whether the work happened. Read the `-o` file, then verify
+against the actual diff: a session's report describes what it intended, not
+necessarily what it did.
 
-Monitoring: the Bash tool's own run_in_background notification tells you
-the process EXITED, not that the work succeeded -- a session that died on
-a bad flag or a quoting error notifies exactly like one that finished. So
-DO tail each log once after launch. Use Monitor to stream output if you
-need live progress. Do not poll with sleep loops.
+The same holds for the Bash tool's run_in_background notification -- it tells
+you the process EXITED, not that the work succeeded. A session that died on a
+bad flag notifies exactly like one that finished.
 
-Parallel isolation: `git worktree add -b wt/<unit> ../<repo>-<unit>-wt master`
-per parallel writer (the -b is required -- master is already checked out
-in the main copy). A fresh worktree contains only TRACKED files, so
-gitignored paths (a repo venv, a staged tmp/ directory) will not be
-there: either give that unit the main tree, or tell it in the brief where
-those resources live.
+One corollary is worth stating because it inverts the usual intuition:
+"permission spam" is never a reason to relax the sandbox, because there is no
+prompting either way. The cost of the sandbox is silent capability loss, not
+interruption.
 
-Collecting: read the `-o` last-message file -- that is the conclusion,
-and usually the only thing that belongs in the orchestrating context.
-Leave the full transcript on disk; consult it only to verify a specific
-claim. The gap is large: a routine unit produced a 1-line result file
-against a 2248-line transcript. Then verify: a Codex session's report
-describes what it intended, not necessarily what it did -- check the
-actual diff before reporting the work as done.
+## What the sandbox does and does not bound
+
+It is an INTEGRITY (write) and EXFILTRATION (network) boundary. It is NOT a
+confidentiality boundary: there is no read restriction at any level. Under
+`-s read-only`, the most restrictive mode, codex read `~/.codex/config.toml`,
+far outside its `-C` root. Assume a codex unit can read anything the invoking
+user can -- SSH keys, .env files, any repo on any drive. Brief accordingly, and
+do not treat `-C` as containment for secrets.
+
+Escape hatch: `-s danger-full-access`, for the case where the set of writable
+roots genuinely cannot be enumerated up front. It requires the user's explicit
+sign-off for that unit. `--dangerously-bypass-approvals-and-sandbox` produced
+identical results in testing and is not a separate capability; prefer
+`-s danger-full-access`, whose intent is legible in the command line.
+
+Network on Windows: with egress open, HTTP and TLS both work, with one
+exception -- clients using the native schannel TLS stack, notably `curl.exe`,
+fail with `SEC_E_NO_CREDENTIALS`, because the sandbox's restricted token cannot
+reach the credential store. Any OpenSSL-based client is fine, so tell the unit
+to use node, python, or MSYS `curl` for HTTPS. Plain `curl.exe` over HTTP is
+also fine. (Measured on codex-cli 0.146.0, Windows: HTTP 200, node HTTPS 200,
+curl.exe HTTPS SEC_E_NO_CREDENTIALS.)
+
+## Monitoring
+
+Tail each log ONCE after launch. Use Monitor to stream output if you need live
+progress. Do not poll with sleep loops.
+
+## Parallel isolation
+
+`git worktree add -b wt/<unit> ../<repo>-<unit>-wt master` per parallel writer
+(the -b is required -- master is already checked out in the main copy), then
+point that unit's `-C` at the worktree's ABSOLUTE path. A fresh worktree
+contains only TRACKED files, so gitignored paths (a repo venv, a staged tmp/
+directory) will not be there: either give that unit the main tree, or tell it in
+the brief where those resources live.
+
+## Collecting
+
+Read the `-o` last-message file -- that is the conclusion, and usually the only
+thing that belongs in the orchestrating context. Leave the full transcript on
+disk; consult it only to verify a specific claim. The gap is large: a routine
+unit produced a 1-line result file against a 2248-line transcript.

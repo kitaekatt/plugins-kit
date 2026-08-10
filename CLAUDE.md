@@ -1015,6 +1015,54 @@ claude_md:
         install has no docs/ directory for those links to resolve against.
       origin: "2026-08-08 -- disclosure gap identified after the unshipping move removed the in-plugin links that used to name this chain."
       added: "2026-08-08"
+    - id: codex_dispatch_is_silent_on_failure
+      keywords: [codex, codex exec, sandbox, workspace-write, windows.sandbox, absolute -C, add-dir, exit 0, no approval channel, permission spam, danger-full-access, reads unrestricted, bootstrap_lib.codex, CodexCliBackend, run_cli_streaming]
+      summary: Every way a codex dispatch can be misconfigured fails SILENTLY at exit 0, so codex machinery is built to refuse bad input rather than trust it. bootstrap_lib.codex is the single source of truth for detection and argv; orchestrate deliberately does NOT consume it.
+      detail: |
+        Every way a codex dispatch can be misconfigured fails silently at exit 0 --
+        judge a run by its `-o` file, never `$?`, and do not relax the sandbox to
+        stop "permission spam" (there is no approval channel either way). The
+        flags, the three verified misconfigurations, the read boundary and the
+        `-s danger-full-access` escape hatch:
+        plugins/awesome-kit/skills/orchestrate/references/codex-dispatch.md.
+        `bootstrap_lib/codex.py` owns detection (which + PATHEXT + `cmd /c` wrap for
+        batch launchers), version parsing, and `build_codex_exec_argv`, which RAISES
+        on a relative path rather than emitting one. Its consumer is dispatch-side
+        (llm-scripting-kit's CodexCliBackend). orchestrate's `detect_backend` stays
+        stdlib-only and generic on purpose: coupling a policy renderer to a
+        codex-specific module would cost a manifest change, a version bump and a
+        venv re-exec guard to dedupe three lines.
+        Publish ordering: bootstrap must ship before or with llm-scripting-kit, or
+        CodexCliBackend raises ModuleNotFoundError on every consumer -- shared libs
+        resolve to the INSTALLED copy via .pth, not the dev tree.
+        Weak spot to replace with observed strings: `halt.classify_codex_exception`'s
+        markers are inferred from OpenAI surfaces, not read off an observed codex
+        failure.
+      origin: "2026-08-10 -- empirical probing of codex-cli 0.146.0 while adding codex as a work backend; the shipped policy had hardcoded network-on, no windows.sandbox, and framed the missing approval flag as a mere gotcha."
+      added: "2026-08-10"
+    - id: run_cli_streaming_rename
+      keywords: [run_claude_streaming, run_cli_streaming, back-compat alias, claude_runner, content-pipeline-kit, shared lib rename, transport-neutral runner]
+      summary: llm-scripting-kit's claude -p subprocess runner is now the transport-neutral run_cli_streaming; run_claude_streaming remains as a back-compat alias because llm-scripting-kit's own completion.backends imports it by name and re-exports it.
+      detail: |
+        The runner in
+        plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/claude_runner.py
+        was always structurally generic -- cmd in, stdin written, both pipes drained
+        on daemon threads, bounded timeout, caller-supplied hard-stop markers -- but
+        was claude-BRANDED in its name and its two error strings. Adding a codex
+        backend made the branding misleading, so it took a `label` parameter and the
+        neutral name. The alias is load-bearing, not courtesy:
+        llm_scripting_kit.completion.backends imports the old name and uses it as
+        ClaudeCliBackend's default `runner`, and completion/__init__ re-exports it.
+        content-pipeline-kit depends on it only transitively (its adapter delegates
+        with runner=None and mentions the name in a docstring), so dropping the
+        alias breaks llm-scripting-kit's own import first --
+        test_completion_codex_backend.py::test_run_claude_streaming_alias_is_the_renamed_runner
+        is what pins it. Re-run tests/llm-scripting-kit before touching it.
+        Note the runner's `(stdout, stderr, returncode)` contract does NOT carry a
+        codex result -- codex returns via `-o <FILE>` -- so CodexCliBackend manages a
+        temp output file around the call rather than parsing stdout.
+      origin: "2026-08-10 -- rename performed while adding CodexCliBackend alongside ClaudeCliBackend."
+      added: "2026-08-10"
   conventions:
     - rule: Commit and push to dev freely without asking; only a PUBLISH (dev -> master) needs the user. Do not coordinate around other agent sessions' concurrent work.
       keywords: [commit freely, push freely, no permission, dev branch, only publishes gated, other agents, concurrent sessions, shared tree, git commit -- paths]

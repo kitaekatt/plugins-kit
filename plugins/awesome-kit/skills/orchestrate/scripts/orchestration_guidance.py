@@ -256,6 +256,20 @@ def detect_backend(backend: Dict[str, Any]) -> Tuple[bool, str]:
         if resolved is None:
             return False, f"`{argv[0]}` not found on PATH"
         argv[0] = resolved
+        # A batch launcher is not an executable: CreateProcess refuses a bare
+        # `.cmd`/`.bat`, so it must be handed to the shell. Resolving without
+        # this reports a CLI absent on exactly the machines where it was
+        # installed by npm or scoop.
+        #
+        # Deliberately duplicated from bootstrap_lib.codex.resolve_cli rather
+        # than imported: this module is stdlib-only by design and detect_backend
+        # is generic over every backend, not codex-specific. Change both
+        # together. That module additionally REFUSES cmd metacharacters, which
+        # is unnecessary here -- this argv comes from trusted config (the
+        # project layer cannot declare detect.command) and carries no
+        # caller-supplied path.
+        if os.name == "nt" and resolved.lower().endswith((".cmd", ".bat")):
+            argv = ["cmd", "/c", *argv]
         try:
             proc = subprocess.run(
                 argv,

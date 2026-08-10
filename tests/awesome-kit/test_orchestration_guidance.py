@@ -283,6 +283,46 @@ class TestDetectBackend:
         assert (ok, reason) == (True, "codex-cli 1.2.3")
         assert seen["name"] == "codex"
 
+    def test_batch_launcher_is_wrapped_in_cmd(self, monkeypatch):
+        """A .cmd is not an executable -- CreateProcess refuses it bare.
+
+        Without the wrap, a CLI installed by npm or scoop reports as absent on
+        exactly the machines where it IS installed.
+        """
+        captured = {}
+
+        class Proc:
+            returncode = 0
+            stdout = b"codex-cli 1.2.3\n"
+
+        def fake_run(argv, **kw):
+            captured["argv"] = list(argv)
+            return Proc()
+
+        monkeypatch.setattr(og.os, "name", "nt")
+        monkeypatch.setattr(og.shutil, "which", lambda name: "C:/tools/codex.cmd")
+        monkeypatch.setattr(og.subprocess, "run", fake_run)
+        ok, _ = og.detect_backend({"detect": {"command": ["codex", "--version"]}})
+        assert ok is True
+        assert captured["argv"][:3] == ["cmd", "/c", "C:/tools/codex.cmd"]
+
+    def test_plain_executable_is_not_wrapped(self, monkeypatch):
+        captured = {}
+
+        class Proc:
+            returncode = 0
+            stdout = b"thing 1.0\n"
+
+        def fake_run(argv, **kw):
+            captured["argv"] = list(argv)
+            return Proc()
+
+        monkeypatch.setattr(og.os, "name", "nt")
+        monkeypatch.setattr(og.shutil, "which", lambda name: "C:/tools/thing.exe")
+        monkeypatch.setattr(og.subprocess, "run", fake_run)
+        og.detect_backend({"detect": {"command": ["thing", "--version"]}})
+        assert captured["argv"][0] == "C:/tools/thing.exe"
+
     def test_nonzero_exit_is_unavailable(self, monkeypatch):
         class Proc:
             returncode = 127

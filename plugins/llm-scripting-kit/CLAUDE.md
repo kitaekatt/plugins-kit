@@ -12,9 +12,16 @@ This layer owns everything a SINGLE completion needs -- endpoint resolution,
 the model registry, credential lookup with source attribution, prompt-cache
 message shaping, and a shared halt taxonomy (`classify_halt_text`, `HaltError`
 in `completion/halt.py`) so a persistent failure classifies identically
-whichever transport produced it. Two transports sit behind one `complete()`:
-`OpenRouterBackend` over HTTP, and `ClaudeCliBackend` driving the local
-`claude -p` CLI.
+whichever transport produced it. Three transports sit behind one `complete()`:
+`OpenRouterBackend` over HTTP, `ClaudeCliBackend` driving the local
+`claude -p` CLI, and `CodexCliBackend` driving `codex exec`.
+
+The codex transport carries one rule the other two do not need. Codex writes
+model-authored text to BOTH stdout and stderr, and `halt` classifies by
+substring-matching an exception's message -- so `CodexRunError` keeps the
+transcript on attributes and out of the message. Inlining a channel into that
+message makes a healthy run that merely discusses a rate limit classify as a
+persistent halt and abort the caller's whole run.
 
 It does not own the concerns of a RUN OF MANY CALLS. Response caching, cost
 accounting, budget guarding, batching, concurrency, rate limiting, and

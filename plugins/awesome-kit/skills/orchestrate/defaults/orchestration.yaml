@@ -414,35 +414,54 @@ backends:
     capabilities:
       tiers: [codex-workhorse, codex-top]
       isolation: >-
-        None built in -- give each parallel writer a worktree (`-C <dir>`) or
-        sequence them; read-only units may share a tree.
+        WRITES only, and only while every flag below is present. READS are
+        unrestricted -- a unit can read any file the user can, on any drive,
+        outside `-C`. Give each parallel writer its own worktree via an
+        absolute `-C`; read-only units may share a tree.
       effort: >-
         Model via `-m`, fully qualified. Effort via `-c
         model_reasoning_effort=<low|medium|high|max>` -- a config key, not a
         flag, so `--help` does not list it.
       network: >-
-        Yes, via the network_access override below; otherwise `-s
-        workspace-write` blocks egress at a loopback proxy.
+        Only with `-c sandbox_workspace_write.network_access=true`. Without
+        it egress fails SILENTLY -- `curl` returns HTTP 000, exit 1, no error
+        text.
       returns: >-
         Content per the brief; `--output-schema <FILE>` can force a JSON
         Schema.
     command: >-
-      codex exec -s workspace-write
-      -c sandbox_workspace_write.network_access=true
-      --skip-git-repo-check --color never -o <last-message-file> -
+      codex exec -s workspace-write -c 'windows.sandbox="unelevated"'
+      -c 'sandbox_workspace_write.network_access=true' -C <ABSOLUTE root>
+      --add-dir <ABSOLUTE session scratchpad> --skip-git-repo-check
+      --color never -o <ABSOLUTE result file> -
     dispatch: |
       `codex exec`, NEVER bare `codex` -- the TUI needs a TTY and dies
-      backgrounded. Brief via
-      stdin (`-`) from a file, never a shell argument. `-o <file>` returns
-      the result; `-C <dir>` sets the working root. Launch backgrounded,
-      then tail the log ONCE: a bad invocation exits in seconds,
-      indistinguishably from a good one.
+      backgrounded. Brief via stdin (`-`) from a file, never a shell
+      argument. Send the command above as written: every element is there
+      because a probe showed its absence fails silently.
 
-      Flag catalog: references/codex-dispatch.md.
+      Every path in it must be ABSOLUTE. A relative `-C` combined with
+      `--add-dir` voids the ENTIRE writable set -- writes inside the root
+      fail too.
+
+      Launch backgrounded, tail the log ONCE, and judge the run by the `-o`
+      file only.
+
+      Flag catalog, and the `-s danger-full-access` escape hatch:
+      references/codex-dispatch.md.
     gotchas:
       - >-
-        `--ask-for-approval` is not an exec flag; the unit cannot be
-        interrupted mid-run.
+        There is no approval channel: `codex exec` rejects `-a`, so a
+        sandbox-forbidden action is AUTO-DENIED, never escalated. The turn
+        then completes with exit 0 and a plausible-sounding failure
+        narrative, so `$?` means nothing -- read the `-o` file.
+      - >-
+        On Windows, `-s workspace-write` silently degrades to read-only
+        unless `-c 'windows.sandbox="unelevated"'` is passed on the command
+        line. Do not rely on the user's `~/.codex/config.toml`.
+      - >-
+        The session scratchpad under `%TEMP%` is not writable under
+        workspace-write; grant exactly it with an absolute `--add-dir`.
       - >-
         On Windows, `curl.exe` HTTPS fails in the sandbox
         (`SEC_E_NO_CREDENTIALS`) even with network open -- a TLS-stack issue,
@@ -453,7 +472,9 @@ backends:
         48s without it (token accounting inconclusive) -- it trades cheap
         shell reads for model round trips, losing single-context cache reuse;
         long-running independent items amortize that.
-      - A `cd` in a backgrounded Bash call does not persist -- use `-C <dir>`.
+      - >-
+        A `cd` in a backgrounded Bash call does not persist -- always pass an
+        absolute `-C`.
 
 # ---------------------------------------------------------------------------
 # Capacity -- best-effort awareness of remaining usage.

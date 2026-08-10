@@ -10,11 +10,13 @@ so callers that only need the raw key (or use a different HTTP client) do not
 pay the SDK install cost.
 
 The completion seam (``llm_scripting_kit.completion``) adds one ``complete()``
-protocol over two transports -- an OpenAI-compatible HTTP endpoint
-(:class:`OpenRouterBackend`) and the local ``claude -p`` CLI, subscription
-billed (:class:`ClaudeCliBackend`) -- so a pipeline can run the same task on
-either purely by configuration. Its seam types and the ``claude -p`` runner are
-stdlib-only; only the OpenRouter transport reaches for ``openai``, lazily.
+protocol over three transports -- an OpenAI-compatible HTTP endpoint
+(:class:`OpenRouterBackend`) and two subscription-billed local CLIs, ``claude
+-p`` (:class:`ClaudeCliBackend`) and ``codex exec``
+(:class:`CodexCliBackend`) -- so a pipeline can run the same task on any of
+them purely by configuration. Its seam types and the CLI runner are
+stdlib-only; only the OpenRouter transport reaches for ``openai``, lazily, and
+only the codex transport reaches for ``bootstrap_lib``, also lazily.
 """
 
 from .constants import API_KEY_ENV, BASE_URL, USER_ENV_FILE, project_env_file
@@ -42,6 +44,8 @@ from .completion import (
     AgentTimeoutError,
     BackendOptions,
     ClaudeCliBackend,
+    CodexCliBackend,
+    CodexRunError,
     HALT_AUTH,
     HALT_INSUFFICIENT_CREDIT,
     HALT_RATE_LIMIT,
@@ -50,6 +54,8 @@ from .completion import (
     LLMResponse,
     OpenRouterBackend,
     classify_claude_exception,
+    classify_codex_exception,
+    classify_codex_text,
     classify_halt_text,
     classify_openai_exception,
 )
@@ -83,6 +89,8 @@ __all__ = [
     "LLMBackend",
     "OpenRouterBackend",
     "ClaudeCliBackend",
+    "CodexCliBackend",
+    "CodexRunError",
     "HaltError",
     "HALT_AUTH",
     "HALT_RATE_LIMIT",
@@ -90,5 +98,7 @@ __all__ = [
     "classify_halt_text",
     "classify_openai_exception",
     "classify_claude_exception",
+    "classify_codex_text",
+    "classify_codex_exception",
     "AgentTimeoutError",
 ]
