@@ -304,11 +304,41 @@ const lanePrompt = (s, root, writtenChildren) => {
 phase('Generate')
 
 const perSubject = []
+// Wrote a document. Only these are offered to a parent as composition input.
 const writtenByRoot = new Set()
+// Reached a decision at all -- written OR null-branch OR skipped. This is what
+// the ordering guard checks, because a null-branch child is legitimately absent
+// and must still count as "its wave completed".
+const processedRoots = new Set()
 
-for (let w = waves.length - 1; w >= 0; w--) {
+// ASCENDING, and the direction is the whole correctness property. waveOf()
+// returns 0 for a directory with NO code-bearing descendants, so wave 0 is the
+// DEEPEST set and each successive wave is shallower. Iterating from
+// waves.length-1 downward therefore runs parents FIRST -- the exact defect this
+// lane exists to prevent, and it does not announce itself: the parent still has
+// its own direct code and its own candidates, so it emits a confident,
+// internally-consistent document composed from children that do not exist yet,
+// and its hoists array is empty because it had nothing to compare.
+// (Shipped inverted in 0.48.0; caught only by a real dispatch, never by reading.)
+for (let w = 0; w < waves.length; w++) {
   const wave = waves[w] || []
   if (!wave.length) continue
+
+  // Structural guard: prove the ordering rather than trusting the loop. Every
+  // descendant of every directory in this wave must ALREADY have been processed.
+  // A future edit that flips the direction again fails here instead of silently
+  // producing composed-from-nothing parents.
+  for (const root of wave) {
+    const unprocessed = descendantsOf(root).filter((d) => !processedRoots.has(d))
+    if (unprocessed.length) {
+      throw new Error(
+        'claude-md-generate: wave ordering violated. ' + root + ' is being composed ' +
+        'before its descendant(s): ' + unprocessed.join(', ') + '. A parent composed ' +
+        'from unwritten children produces an internally-consistent document built ' +
+        'from half its input, so this refuses rather than proceeding.'
+      )
+    }
+  }
 
   log('Wave ' + w + ': ' + wave.length + ' directory/ies (deepest first; every directory ' +
       'below this wave now has a finished document or a recorded null branch)')
@@ -344,6 +374,7 @@ for (let w = waves.length - 1; w >= 0; w--) {
   // the next (shallower) wave starts, because that wave composes from it.
   for (const r of results.filter(Boolean)) {
     perSubject.push(r)
+    processedRoots.add(norm(r.root))
     if (r.written) writtenByRoot.add(norm(r.root))
   }
 }
