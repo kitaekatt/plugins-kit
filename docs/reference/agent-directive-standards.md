@@ -133,7 +133,9 @@ stated precision. Qualifiers are load-bearing: "in-user-scope manifest edits" an
 that anything writing outside `~/.claude` is routed to ASK. That is false: the
 scope guard applies to `json`/`ini` remediations, and shell-rc `PATH` edits land
 outside `~/.claude` and stay AUTO. The error was caught by verifying the citation
-against `remediation-reference.md:33-35` before shipping. Verify citations; do
+against the scope-guard bullet in `remediation-reference.md`'s "Two outcomes:
+auto-fix or ask" section before shipping (cited by section rather than line
+range, so an insertion above it cannot silently invalidate the pointer). Verify citations; do
 not write them from memory.
 
 ## Findings
