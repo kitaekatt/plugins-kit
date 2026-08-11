@@ -108,6 +108,18 @@ if ! "$PLAIN_PYTHON" "$REPO_ROOT/scripts/check_bootstrap_dependency.py" --staged
     failed=1
 fi
 
+# --- instructions we ship to Claude must be checkable ---------------------
+# Text under plugins/ reaches a consumer's session, some of it through the same
+# channel that carries untrusted content, so an unbacked claim of authority is
+# indistinguishable from an attack (docs/reference/agent-directive-standards.md).
+# This covers only the greppable subset; the standard is judgment work. It is
+# here because the judgment half demonstrably failed with the author's full
+# attention -- the session that wrote the standard shipped a false claim inside
+# the standard's own enforcement section.
+if ! "$PLAIN_PYTHON" "$REPO_ROOT/scripts/check_agent_directives.py" --staged; then
+    failed=1
+fi
+
 # --- the generated orchestration policy must match its source -------------
 # The DECISION half of the orchestrate skill's orchestration.yaml is generated
 # one-way from docs/reference/orchestrate/tier-principles.md and

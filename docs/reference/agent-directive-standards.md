@@ -144,16 +144,25 @@ re-tested.
 
 ### Open -- rewording owed
 
-The `awesome-kit` cluster is held pending a decision on what legitimately
-authorizes these claims. Unlike the others it is not a pure rewording: a task
-folder's CLAUDE.md is a file the user accepted, so it may be a valid referent --
-but the claim has to name it, and today none of the four do.
-
 | Site | Criterion | Note |
 |---|---|---|
-| `plugins/awesome-kit/skills/task/scripts/task_system/init.py` | AD-2, AD-3 | "Skill invocations are pre-authorized -- do not ask", written into every new task's CLAUDE.md, naming no grantor. The one that propagates. |
-| `plugins/awesome-kit/skills/task/references/example-claude-md.md` | AD-2, AD-3 | Two sites: the same pre-authorization claim, and a background-dispatch authorization pointing at a section of the same template. |
-| `plugins/awesome-kit/skills/verbose-updates/SKILL.md` | AD-2, AD-3 | "the plan authorizes it" -- names no artifact the agent could open. |
+| `plugins/awesome-kit/skills/verbose-updates/SKILL.md` | AD-2 | "the plan authorizes it" names no artifact. There IS a plan (`plan.md`'s `task_items`); it just is not named. A four-word fix, not worth a version bump alone -- it should ride along with the next `awesome-kit` change. |
+
+### Checked, judged not worth changing
+
+Recorded rather than fixed. A verdict here is a completed check, not a deferred
+TODO -- the same posture as the razor's FAILS. Re-test if evidence appears.
+
+| Site | Criterion | Verdict |
+|---|---|---|
+| `awesome-kit/.../example-claude-md.md` background-dispatch bullet | AD-2 | **Compliant.** "(see Authorizations)" resolves to a real section of the same loaded document, populated per task with specific grants ("editing X, committing to dev, NOT publishing"). The 2026-08-11 sweep called this self-certifying by reading the template rather than a realized task folder; that was wrong. |
+| `awesome-kit/.../init.py` and `example-claude-md.md`, "skill invocations are pre-authorized" | AD-2 | **Trips the criterion, protects nothing.** Invoking a skill loads instructions: it changes no state, spends nothing, reaches nobody. AD-2 exists because an agent cannot distinguish real authority from injected text FOR ACTIONS WITH CONSEQUENCES. Churning a zero-consequence claim would spend a version bump to buy nothing, and the mechanical check deliberately omits the pattern for the same reason. |
+
+The general shape worth carrying: **AD-2's force scales with the consequence of
+the action being authorized.** An unbacked claim licensing an unattended install
+is the failure this standard exists for; an unbacked claim licensing "load these
+instructions" is a wording infelicity. Do not treat the criteria as uniform in
+weight.
 
 ### Remediated 2026-08-11
 
@@ -196,13 +205,45 @@ its own search terms. Automate what automates (see below) and read the rest.
 
 ## Mechanical enforcement
 
-**Not built as of 2026-08-11.** The audit above is judgment-only today; this
-section is the design, not a description of something running.
+`scripts/check_agent_directives.py`, chained from
+`scripts/pre-commit-version-check.sh`, blocks a commit that introduces one of a
+small set of phrases that are violations on sight. Spec:
+`tests/repo-scripts/test_agent_directives.py`.
 
-The highest-signal subset is greppable: the literal phrases under AD-1 and AD-2
-that are hits on sight (`do not report ... to the user`, `fleet policy`,
-`pre-authorized` with no adjacent path). A pre-commit check over those would have
-caught three of the five sites remediated on 2026-08-11 at authoring time.
+**Scoped to `plugins/`, and that scope is load-bearing** -- this document quotes
+every banned phrase as an example, so a repo-wide check would block the policy
+for stating the policy. Scoping to the shipped tree makes that structural rather
+than an exception list. Escape hatch for text that quotes a banned phrase in
+order to prohibit it: `agent-directive-ok` on the same line.
+
+**What it deliberately does not cover, and why the omissions are the
+interesting part:**
+
+- **AD-4 has no keyword.** Its defect is what the user ends up believing, so
+  there is nothing to match on. Judgment only, permanently.
+- **`pre-authorized` is omitted** despite appearing in AD-2's detection list.
+  `example-claude-md.md` pairs the claim with "(see Authorizations)" -- a real
+  section of the same loaded document, which is what the standard asks for. A
+  pattern flagging the compliant form teaches people to disable the check.
+- **`do not tell the user` was tried and removed.** On the live corpus two of
+  its three matches were compliant: orchestrate's "do not tell the user
+  something is 'unavailable' on the strength of its absence" is an instruction
+  NOT TO MAKE A FALSE CLAIM, and openrouter-account's "do not tell the user to
+  run `fix-all`" withholds nothing and cites its reference. The violating sense
+  is "do not tell the user ABOUT something that happened"; the compliant sense
+  is "do not tell the user TO DO something". No regex separates them.
+
+That last one is the general lesson: **the check earns its keep by being
+narrower than the standard.** A grep that fires on compliant text is worse than
+no grep, because the fix people reach for is `--no-verify`.
+
+Building it paid for itself immediately -- it surfaced both compliant sites
+above, which the judgment-based sweep had not examined at all.
+
+Per this repo's check convention it judges the git INDEX and returns success
+when the commit stages none of its inputs (`scripts/_gitindex.py`,
+`classify_scope`), so another session's in-flight violation cannot block a
+commit that does not contain it.
 
 This is deliberately narrower than the criteria. The razor's own experience is
 the reason: its OP-1 is only partly reachable by an automated lane, and every

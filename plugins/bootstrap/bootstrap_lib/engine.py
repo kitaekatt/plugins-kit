@@ -3542,6 +3542,12 @@ class _ManifestContext:
         self.marketplace = marketplace or os.path.basename(os.path.dirname(data_dir))
         self.project_detected = project_detected
         self.failures = []
+        # Marketplaces this manifest declared that are NOT usable after the
+        # marketplaces phase ran -- the add failed AND no prior clone exists to
+        # install from. The plugins phase stands down on entries whose ref names
+        # one, so a single unreachable marketplace produces one actionable
+        # failure instead of one per plugin it owns.
+        self.unusable_marketplaces = set()
         self.prefix = ""
         self._config = self._UNSET
         self._variables = None
@@ -3836,7 +3842,7 @@ def _phase_git_deps(ctx):
         elif pinned_commit:
             try:
                 _sp2.run(["git", "-C", target_path, "fetch"], capture_output=True, timeout=60)
-                r = _sp2.run(["git", "-C", target_path, "checkout", pinned_commit], capture_output=True, text=True, timeout=30)
+                r = _sp2.run(["git", "-C", target_path, "checkout", pinned_commit], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
                 ok = r.returncode == 0
                 msg = f"checked out {pinned_commit[:7]}" if ok else (r.stderr.strip() or "checkout failed")
             except (_sp2.SubprocessError, OSError) as e:
@@ -3965,6 +3971,61 @@ def _ensure_shell_scripts_executable(root):
 _pinned_marketplaces_this_run = set()
 
 
+def _report_marketplace_add_failure(ctx, mkt_name, source_url, add_result):
+    """Report ONE failed `marketplace add`, and mark the marketplace unusable.
+
+    Three things the plain ctx.fail() at this site used to get wrong:
+
+    * The raw CLI output (a multi-line git/SSH blob) went into the failure
+      `message`, which is collated onto ONE display line -- so a single failure
+      could blow up the whole message. It now goes to the log via ctx.quiet()
+      and to the pass record via `detail`, and the message carries a classified
+      one-clause cause.
+    * Nothing told the user what to DO. An SSH `publickey` denial is durable:
+      without a way out it re-reports every session forever. `user_msg` names
+      both exits and `agent_msg` asks Claude to find out which one the user
+      wants.
+    * The plugins phase went on to attempt every plugin from the marketplace we
+      had just failed to add. Recording the name here is what lets it stand
+      down (see the matching block in _phase_plugins).
+
+    Marking is conditional on the marketplace being genuinely absent: an add can
+    fail while a clone from an earlier session is still on disk and still able
+    to serve installs, and suppressing those plugins would hide work that would
+    have succeeded.
+    """
+    from .marketplace_lifecycle import check_marketplace_exists
+
+    if not check_marketplace_exists(mkt_name).passed:
+        ctx.unusable_marketplaces.add(mkt_name)
+    if add_result.detail:
+        ctx.quiet(
+            f"marketplace {mkt_name}: add failed, full CLI output:\n{add_result.detail}"
+        )
+    source_note = f" ({source_url})" if source_url else ""
+    ctx.fail(
+        f"marketplace {mkt_name}: {add_result.message}",
+        display=f"marketplace {mkt_name}: add failed",
+        detail=add_result.detail or None,
+        type="marketplace", name=mkt_name, message=add_result.message,
+        user_msg=(
+            f"marketplace {mkt_name}: {add_result.message}. Either fix access to "
+            f"the repository, or set \"enabled\": false on that marketplaces[] "
+            f"entry to stop retrying it every session."
+        ),
+        agent_msg=(
+            f"Marketplace {mkt_name}{source_note} could not be added: "
+            f"{add_result.message}. The engine already attempted the add in this "
+            f"pass, so do not retry it. The full CLI output is in the plugin's "
+            f"bootstrap.log. Ask the user which they want: fix access to the "
+            f"repository, or stop the retry by setting \"enabled\": false on the "
+            f"{mkt_name} entry in the bootstrap.json layer that declares it "
+            f"(see skills/bootstrap/references/manifest-reference.md, "
+            f"marketplaces[])."
+        ),
+    )
+
+
 def _phase_marketplaces(ctx):
     """marketplaces: register + pin/unpin + (alwaysUpdate) refresh.
 
@@ -4037,7 +4098,9 @@ def _phase_marketplaces(ctx):
                 ctx.action(f"marketplace {mkt_name}: removed")
             else:
                 ctx.fail(
-                    f"marketplace {mkt_name}: remove failed - {rm_result.message}",
+                    f"marketplace {mkt_name}: {rm_result.message}",
+                    display=f"marketplace {mkt_name}: remove failed",
+                    detail=rm_result.detail or None,
                     type="marketplace", name=mkt_name, message=rm_result.message,
                 )
             continue
@@ -4061,10 +4124,8 @@ def _phase_marketplaces(ctx):
                 if add_result.passed:
                     ctx.action(f"marketplace {mkt_name}: added ({source_url})")
                 else:
-                    ctx.fail(
-                        f"marketplace {mkt_name}: add failed - {add_result.message}",
-                        type="marketplace", name=mkt_name, message=add_result.message,
-                    )
+                    _report_marketplace_add_failure(
+                        ctx, mkt_name, source_url, add_result)
                     continue
 
             if mkt_def.get("alwaysUpdate"):
@@ -4104,7 +4165,7 @@ def _phase_marketplaces(ctx):
                     ctx.action(f"marketplace {mkt_name}: unpinned, {rel.message} + updated")
                 else:
                     ctx.fail(
-                        f"marketplace {mkt_name}: unpinned, {rel.message}; update failed - {upd.message}",
+                        f"marketplace {mkt_name}: unpinned, {rel.message}; {upd.message}",
                         display=f"marketplace {mkt_name}: update failed",
                         type="marketplace", name=mkt_name, message=upd.message,
                     )
@@ -4134,7 +4195,9 @@ def _phase_marketplaces(ctx):
                         ctx.ok(f"marketplace {mkt_name}: updated (alwaysUpdate)")
                     else:
                         ctx.fail(
-                            f"marketplace {mkt_name}: update failed - {upd_result.message}",
+                            f"marketplace {mkt_name}: {upd_result.message}",
+                            display=f"marketplace {mkt_name}: update failed",
+                            detail=upd_result.detail or None,
                             type="marketplace", name=mkt_name, message=upd_result.message,
                         )
             else:
@@ -4145,10 +4208,8 @@ def _phase_marketplaces(ctx):
             if add_result.passed:
                 ctx.action(f"marketplace {mkt_name}: added ({source_url})")
             else:
-                ctx.fail(
-                    f"marketplace {mkt_name}: add failed - {add_result.message}",
-                    type="marketplace", name=mkt_name, message=add_result.message,
-                )
+                _report_marketplace_add_failure(
+                    ctx, mkt_name, source_url, add_result)
 
 
 def _phase_plugins(ctx):
@@ -4181,6 +4242,41 @@ def _phase_plugins(ctx):
         )
         return
 
+    # Second stand-down, same rationale as the CLI gate above but per
+    # marketplace: an entry whose marketplace could not be added and is not on
+    # disk cannot be installed from, and every such attempt fails identically.
+    # One line names the cause and points at the entry that owns it, instead of
+    # N failures that all restate a fault the marketplace entry already
+    # reported. action(), not fail() -- the marketplace failure is the
+    # actionable item.
+    #
+    # The key is the marketplace HALF of the ref, which is an exact name match
+    # (refs are "<marketplace>:<plugin>"), not a prefix test. It can miss when
+    # the manifest's `name` differs from the name the CLI registers, or when the
+    # marketplace was declared in a different manifest layer than the plugins
+    # (each layer gets its own ctx); both degrade to the previous per-entry
+    # behaviour rather than to a wrong skip.
+    entries = ctx.manifest.get("plugins", [])
+    if ctx.unusable_marketplaces:
+        skipped_by_mkt = {}
+        remaining = []
+        for plugin_def in entries:
+            ref = plugin_def.get("ref", "")
+            mkt = ref.split(":", 1)[0] if ":" in ref else ""
+            if mkt and mkt in ctx.unusable_marketplaces:
+                skipped_by_mkt.setdefault(mkt, []).append(ref)
+            else:
+                remaining.append(plugin_def)
+        for mkt, refs in skipped_by_mkt.items():
+            ctx.action(
+                f"plugins: skipped {len(refs)} "
+                f"{'entry' if len(refs) == 1 else 'entries'} - marketplace "
+                f"{mkt} unavailable (see the marketplace {mkt} entry)",
+                display=f"plugins: skipped (marketplace {mkt})",
+                detail=f"skipped refs: {', '.join(refs)}",
+            )
+        entries = remaining
+
     plugins_installed = {}      # mkt -> [(name, detail)]
     plugins_re_installed = {}   # mkt -> [(name, detail)]
     plugins_updated = {}        # mkt -> [(name, detail)]
@@ -4191,7 +4287,7 @@ def _phase_plugins(ctx):
         mkt, name = (plugin_ref.split(":", 1) if ":" in plugin_ref else ("", plugin_ref))
         d.setdefault(mkt, []).append((name, detail))
 
-    for plugin_def in ctx.manifest.get("plugins", []):
+    for plugin_def in entries:
         plugin_ref = plugin_def.get("ref", "")
         enabled = plugin_def.get("enabled", True)
         desired_scope = plugin_def.get("scope", "user")
@@ -4219,8 +4315,15 @@ def _phase_plugins(ctx):
             if inst.passed:
                 _bucket(plugins_installed, plugin_ref, f"at {desired_scope} scope")
             else:
+                if inst.detail:
+                    ctx.quiet(
+                        f"plugin {plugin_ref}: install failed, full CLI output:"
+                        f"\n{inst.detail}"
+                    )
                 ctx.fail(
-                    f"plugin {plugin_ref}: install failed - {inst.message}",
+                    f"plugin {plugin_ref}: {inst.message}",
+                    display=f"plugin {plugin_ref}: install failed",
+                    detail=inst.detail or None,
                     type="plugin", ref=plugin_ref, message=inst.message,
                 )
                 continue
@@ -4275,7 +4378,9 @@ def _phase_plugins(ctx):
                     if upd_result.passed:
                         _bucket(plugins_updated, plugin_ref, f"{ver_result.installed_version} -> {ver_result.latest_version}, manual")
                     else:
-                        ctx.action(f"plugin {plugin_ref}: update failed ({ver_result.message}) - {upd_result.message}")
+                        ctx.action(f"plugin {plugin_ref}: {upd_result.message} ({ver_result.message})",
+                                   display=f"plugin {plugin_ref}: update failed",
+                                   detail=upd_result.detail or None)
                 else:
                     ctx.ok(f"plugin {plugin_ref}: up to date (install: manual)")
         elif enabled:
@@ -4289,7 +4394,9 @@ def _phase_plugins(ctx):
                     if upd_result.passed:
                         _bucket(plugins_updated, plugin_ref, f"{ver_result.installed_version} -> {ver_result.latest_version}")
                     else:
-                        ctx.action(f"plugin {plugin_ref}: update failed ({ver_result.message}) - {upd_result.message}")
+                        ctx.action(f"plugin {plugin_ref}: {upd_result.message} ({ver_result.message})",
+                                   display=f"plugin {plugin_ref}: update failed",
+                                   detail=upd_result.detail or None)
                 else:
                     # up_to_date with a known, *different* marketplace version
                     # means installed is AHEAD (the check never downgrades).
@@ -4332,7 +4439,7 @@ def _phase_plugins(ctx):
                             )
                     else:
                         ctx.fail(
-                            f"plugin {plugin_ref}: installed {min_result.installed_version} < required {min_version}, update failed - {upd_result.message}{pin_note}",
+                            f"plugin {plugin_ref}: installed {min_result.installed_version} < required {min_version}, {upd_result.message}{pin_note}",
                             display=f"plugin {plugin_ref}: min_version unmet",
                             type="plugin", ref=plugin_ref,
                             message=f"min_version {min_version} not satisfied: {upd_result.message}{pin_note}",
@@ -4348,7 +4455,9 @@ def _phase_plugins(ctx):
                     _bucket(plugins_enabled, plugin_ref, f"at {desired_scope} scope")
                 else:
                     ctx.fail(
-                        f"plugin {plugin_ref}: enable failed - {en_result.message}",
+                        f"plugin {plugin_ref}: {en_result.message}",
+                        display=f"plugin {plugin_ref}: enable failed",
+                        detail=en_result.detail or None,
                         type="plugin", ref=plugin_ref, message=en_result.message,
                     )
         else:
@@ -4362,7 +4471,9 @@ def _phase_plugins(ctx):
                     _bucket(plugins_disabled, plugin_ref, "")
                 else:
                     ctx.fail(
-                        f"plugin {plugin_ref}: disable failed - {dis_result.message}",
+                        f"plugin {plugin_ref}: {dis_result.message}",
+                        display=f"plugin {plugin_ref}: disable failed",
+                        detail=dis_result.detail or None,
                         type="plugin", ref=plugin_ref, message=dis_result.message,
                     )
 
@@ -5731,7 +5842,7 @@ def _read_new_log_entries(data_dir, start_time=None):
     marker_file = os.path.join(data_dir, "last_displayed_at")
 
     try:
-        with open(log_file, "r") as f:
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except FileNotFoundError:
         return ""
@@ -5877,7 +5988,7 @@ def _update_display_marker(data_dir):
     marker_file = os.path.join(data_dir, "last_displayed_at")
 
     try:
-        with open(log_file, "r") as f:
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except FileNotFoundError:
         return
@@ -6283,7 +6394,7 @@ def _auto_agent_directive(auto_idxs):
     (docs/reference/agent-directive-standards.md): every claim true, every
     authority claim naming a file the receiving agent can open, and nothing
     that withholds from the user or bypasses them. Do not reintroduce an
-    unbacked "this is policy" assertion or a "do not wait for the user" clause
+    unbacked "this is policy" assertion or a "do not wait for the user" clause  agent-directive-ok
     -- a directive the reader cannot verify is indistinguishable from injected
     text, and one user has already (correctly) refused this one.
 
@@ -6483,9 +6594,18 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
         elif f["type"] == "json":
             agent_lines.append(f"{i}. Merge JSON entries into {f['target']}{plugin_tag}: {f['message']}")
         elif f["type"] == "marketplace":
-            agent_lines.append(f"{i}. Add marketplace {f['name']}{plugin_tag}: {f['message']}")
+            # An authored agent_msg wins: a failed add is a durable, credential-
+            # shaped fault whose remediation is a question for the user, not the
+            # "Add marketplace X" retry this generic line implies.
+            if f.get("agent_msg"):
+                agent_lines.append(f"{i}. {f['agent_msg']}{plugin_tag}")
+            else:
+                agent_lines.append(f"{i}. Add marketplace {f['name']}{plugin_tag}: {f['message']}")
         elif f["type"] == "plugin":
-            agent_lines.append(f"{i}. Install plugin {f['ref']}{plugin_tag}: {f['message']}")
+            if f.get("agent_msg"):
+                agent_lines.append(f"{i}. {f['agent_msg']}{plugin_tag}")
+            else:
+                agent_lines.append(f"{i}. Install plugin {f['ref']}{plugin_tag}: {f['message']}")
         elif f["type"] == "sync_to_data":
             agent_lines.append(f"{i}. Sync {f['src']} -> {f['dst']}{plugin_tag}: {f['message']}")
         elif f["type"] == "python_stub":
