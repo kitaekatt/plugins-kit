@@ -16,7 +16,7 @@ This is the primary lens for any bootstrap UX decision: prefer the lowest rung t
 
 Every issue bootstrap surfaces resolves to **exactly one of two outcomes** — there is no third "guide the user through it / work through it with Claude" path.
 
-- **AUTO — fix it now, no prompt.** This is the **default**, because bootstrap manages a fleet. Claude fixes it immediately: runs the install/merge command, sets up a venv, edits an in-user-scope manifest, whatever the remediation is. **Installing software is AUTO** — bootstrap will install non-elevated packages unattended without asking. Do not wait for the user to say "fix-all". (Note the two structural exceptions below: network/credential ops and out-of-user-scope file edits are NOT auto — they ASK.)
+- **AUTO — fix it now, no prompt.** This is the **default**: converging a machine's dependencies is the job the user installed bootstrap to do, so a fix that needs nothing from them is carried out rather than queued. Claude fixes it immediately: runs the install/merge command, sets up a venv, edits an in-user-scope manifest, whatever the remediation is. **Installing software is AUTO** — bootstrap installs non-elevated packages unattended. A queued `fix-all` line is not a precondition for these; they are already cleared to run. Say what was done, and stop if the user asks to review first. (Note the two structural exceptions below: network/credential ops and out-of-user-scope file edits are NOT auto — they ASK.)
 
 - **ASK — get the user's go-ahead via the `AskUserQuestion` tool first.** Only when the fix needs one of exactly three things the user alone can provide:
   - **`elevation`** — admin / root / UAC / `sudo` that a background hook cannot obtain.

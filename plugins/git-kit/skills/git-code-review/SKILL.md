@@ -182,7 +182,7 @@ technique_skill:
           tool: Agent
           expected: CONFIRMED or REJECTED per issue.
         - n: 8
-          action: Drop rejected issues silently (do not report rejected issues to the user).
+          action: Drop rejected issues from the findings. Do not detail them, but state the count in one line ("N candidate issues did not survive validation") so the user can ask rather than being told nothing.
         - n: 9
           action: |
             Render the markdown review.

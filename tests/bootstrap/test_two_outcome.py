@@ -111,7 +111,11 @@ class TestTwoOutcomeEmission:
             {"type": "pypi", "package": "requests", "message": "missing"},
         ]
         sysmsg, ac = _emit(failures, tmp_path)
-        assert "FIX NOW" in ac
+        # The sentinel is the directive's load-bearing content, not a slogan:
+        # the citation has to survive, or the text stops being verifiable by
+        # the agent receiving it. See docs/reference/agent-directive-standards.md.
+        assert "are AUTO under" in ac
+        assert "remediation-reference.md" in ac
         assert "AskUserQuestion" not in ac
         assert "fixing these automatically" in sysmsg
         assert "Claude will ask" not in sysmsg
@@ -125,7 +129,7 @@ class TestTwoOutcomeEmission:
         ]
         sysmsg, ac = _emit(failures, tmp_path)
         assert "AskUserQuestion" in ac
-        assert "FIX NOW" not in ac
+        assert "are AUTO under" not in ac
         assert "Claude will ask" in sysmsg
         # No third-outcome language anywhere.
         assert "manual attention" not in (sysmsg + ac)
@@ -138,10 +142,31 @@ class TestTwoOutcomeEmission:
              "message": "OPENAI_API_KEY is not set"},
         ]
         sysmsg, ac = _emit(failures, tmp_path)
-        assert "FIX NOW" in ac
+        assert "are AUTO under" in ac
         assert "AskUserQuestion" in ac
         assert "fixing these automatically" in sysmsg
         assert "Claude will ask" in sysmsg
+
+    def test_auto_directive_meets_agent_directive_standards(self, tmp_path):
+        # docs/reference/agent-directive-standards.md. This text reaches a
+        # CONSUMER's session via additionalContext -- the same channel that
+        # carries untrusted content -- so it must name the file backing any
+        # authority it claims (AD-2) and must not tell Claude to bypass the
+        # user (AD-3). A user publicly refused the earlier wording on exactly
+        # these grounds on 2026-08-11; this test is what stops it coming back.
+        failures = [
+            {"type": "venv", "remediation_cmd": "python -m venv .venv"},
+            {"type": "pypi", "package": "requests", "message": "missing"},
+        ]
+        _, ac = _emit(failures, tmp_path)
+        lowered = ac.lower()
+        for banned in ("fleet policy", "without asking the user",
+                       "do not wait for the user", "do not tell the user"):
+            assert banned not in lowered, f"agent-directive standards: {banned!r}"
+        # AD-2: the authority claim names a file the receiving agent can open.
+        assert "remediation-reference.md" in ac
+        # AD-3: the user's ability to intervene is stated, not pre-empted.
+        assert "stop" in lowered
 
     def test_custom_failure_can_declare_ask(self, tmp_path):
         # A plugin custom_bootstrap failure that needs a user ACTION declares it
