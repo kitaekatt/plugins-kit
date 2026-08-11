@@ -34,6 +34,33 @@ and out of the message. Inlining a channel into that message makes a healthy run
 that merely discusses a rate limit classify as a persistent halt and abort the
 caller's whole run.
 
+## The seam is uniform; the transports are not
+
+The useful mental model is that you write the prompt pair once and choose the
+executor separately -- but the separation is incomplete, and a caller who
+believes it is clean will get burned. Three things travel with the executor:
+
+**The `model` id is not portable.** An OpenRouter slug means nothing to
+`claude -p`, and codex requires fully-qualified ids. Nothing here translates
+them, so choosing a backend is really choosing a backend AND a model id.
+content-pipeline-kit's `routed_model()` is the in-fleet compensation for this,
+and its existence is the evidence: a genuinely uniform seam would not need it.
+
+**`BackendOptions` is a union, not a neutral description of the work.**
+`user_cache_prefix` is OpenRouter-only; `allowed_tools` is claude-cli-only;
+`effort` reaches claude-cli and codex but not OpenRouter. `temperature` and
+`max_tokens` are accepted and then SILENTLY IGNORED by both CLI backends.
+
+**The same call does not behave the same way.** Retry, timeout defaults, token
+accounting (codex reports one undifferentiated `total_tokens` and no
+input/output split at all), cost (flat zero for both subscription CLIs, real
+money for OpenRouter), and prompt delivery all differ -- codex has no system
+channel and concatenates system and user into one stdin prompt.
+
+So: uniform CALL SHAPE and uniform FAILURE VOCABULARY, not interchangeable
+behaviour. Say so when documenting this layer rather than letting "three
+transports behind one `complete()`" imply more than it delivers.
+
 It does not own the concerns of a RUN OF MANY CALLS. Response caching, cost
 accounting, budget guarding, batching, concurrency, rate limiting, and
 structured-output enforcement all belong to the caller. Those are policy, not
