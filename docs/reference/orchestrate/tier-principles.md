@@ -172,6 +172,141 @@ emits:
         handle them inline.
 ```
 
+### P0.6 -- The plan is a candidate unit
+
+The decomposition or plan the orchestrator authors is itself a unit, and it is
+routed through the tree like any other -- named by the term `plan-checkpoint`.
+
+*The observed failure this exists to prevent (2026-08-11):* the orchestrator
+authored plans as coordination work and proceeded to execute them; the routing
+question was never asked, because the tree routes DELEGATED units and the plan
+was never one. The user had to steer "get fable to review this" by hand, and the
+review found significant issues each time. No rung calibration can fix a unit
+that is never classified, so the fix is upstream of every rung: the plan enters
+the tree explicitly.
+
+*Planhood implies no term.* A settled migration checklist is `known`; only an
+architecture decision is `open`. And downstream units consuming a plan proves
+DEPENDENCY, not propagation -- `load-bearing` asks whether the next step would
+catch a wrong answer, and unit-local checks often would. Call a plan
+`load-bearing` only when a wrong shared decision would survive the downstream
+units' own checks and contaminate several results or a costly commitment. (An
+earlier draft derived `load-bearing` "by construction" from planhood; a
+gpt-5.6-sol design review killed that, correctly -- automatic `load-bearing`
+plus commonplace `unverifiable` would have made the top rung routine.)
+
+*Lifecycle and recursion boundary:* do not launch units briefed from a plan
+that has not resolved; a materially revised plan re-enters as a new candidate
+unit; and routing a plan is never itself a unit -- the checkpoint applies to
+the plan, not to the planning of the plan.
+
+*Overturned by:* a period in which the checkpoint fires only on plans that the
+terminal rung would have handled identically -- the announcement record's
+`plan-checkpoint` term makes that measurable.
+
+```yaml
+emits:
+  shape.tests[plan-is-a-unit]:
+    order: 7
+    id: plan-is-a-unit
+    principle: P0.6
+    text: >-
+      Route the plan itself through this tree as its own unit -- a
+      {plan-checkpoint} -- before briefing anything from it. Planhood implies
+      no other term: a plan is {load-bearing} only when a wrong shared
+      decision would survive the downstream units' own checks. Do not launch
+      units briefed from a plan still in flight; a materially revised plan
+      repeats this checkpoint; routing the plan is never itself a unit.
+```
+
+### P0.7 -- Plan creation vs plan review, decided by brief transferability
+
+Only reached for a `plan-checkpoint` that escalates to its ladder's top rung --
+an unescalated plan is authored inline like any other orchestrator work.
+
+The fork is NOT "is authoring the brief cheaper than authoring the plan": a
+routine plan can be cheap to brief without deserving the top rung, and a large
+plan can be expensive to restate while every constraint sits in referenceable
+files. The test is information fidelity: **can a standalone brief carry or
+reference every decision-relevant constraint without encoding the answer and
+without losing context that exists only in this conversation?**
+
+- **Yes** -> delegate plan CREATION (question brief -- requirements in, plan
+  out).
+- **No** (the constraints accumulated interactively, or the complexity was
+  discovered mid-authoring) -> author the draft and delegate plan REVIEW of
+  the artifact.
+
+*Authorship independence:* a model that created a plan is not an independent
+reviewer of it. When the top model created the plan, the review seat belongs to
+a different family (P0.8); the two-independent-reviews shape applies to an
+orchestrator-authored plan.
+
+```yaml
+emits:
+  shape.tests[plan-create-or-review]:
+    order: 8
+    id: plan-create-or-review
+    principle: P0.7
+    text: >-
+      For a {plan-checkpoint} that escalates to its ladder's top rung: can a
+      standalone brief carry or reference every decision-relevant constraint
+      without encoding the answer and without losing context that exists only
+      in this conversation? Yes -- delegate plan CREATION (question brief).
+      No -- author the draft and delegate plan REVIEW of it. A model that
+      created a plan is not an independent reviewer of it.
+```
+
+### P0.8 -- A top-rung plan review defaults to a second family
+
+Supersedes P3.6, whose intent could never execute (see its tombstone). Two
+independent reviews of a decision everything else builds on; the disagreements
+are the finding. It is a *both*, not a *versus*, so it does not contradict
+P1.1.
+
+*Why the expansion happens HERE:* one unit cannot resolve to two backends under
+ordered elimination -- `cross-check` pulls to Codex and never reaches the
+Claude ladder. So a qualifying review is expanded into TWO units during
+shaping, before backend selection: the primary review, routed down the tree as
+usual, and a `cross-check` child carrying the same brief, which the existing
+backend pulls and Codex rungs route to the second family with no new mechanism.
+
+*Why a default rather than P3.6's "never automatic":* the second seat is
+per-token billed with no pool boundary, and the under-use being corrected was
+observed, not hypothetical. But "no pool" is not "free" -- the child costs
+latency, synthesis, and adjudication, so the default keeps an actionability
+bar: it holds when unwinding the decision after downstream execution would be
+expensive AND a disagreement would change the plan and be adjudicated before
+anything executes. Skipping the child requires naming the reason (cheap to
+unwind, or nobody would act on a disagreement) -- the burden moved from
+justifying the dispatch to justifying the skip.
+
+*Capacity fallback:* top-rung qualification is semantic, dispatchability is
+not. When the top rung is marked LIMITED/UNAVAILABLE, the primary routes down a
+rung and the child still dispatches -- it is then the only high-tier opinion,
+not a second one.
+
+```yaml
+emits:
+  shape.tests[plan-review-second-family]:
+    order: 9
+    id: plan-review-second-family
+    principle: P0.8
+    text: >-
+      A top-rung {plan-checkpoint} review defaults to TWO units when unwinding
+      the decision later would be expensive AND a disagreement would change
+      the plan before anything executes: the primary review, routed as usual,
+      plus a {cross-check} child carrying the same brief, routed by the
+      backend pulls. Skipping the child needs a named reason -- cheap to
+      unwind, or nobody would act on a disagreement. If the top rung is
+      unavailable the primary drops a rung and the child still dispatches.
+      Announce each separately.
+    without_backend:
+      codex: >-
+        With a single model family there is no second-family child -- dispatch
+        the primary review alone.
+```
+
 ---
 
 ## 1. Backend selection
@@ -427,8 +562,20 @@ proving a design runs is not a check on whether the design is right. Tracks the
 `unverifiable` test in lexicon.md; the two must be re-worded together or this guard
 re-imports the old bar one line below the fix.
 
-*Canonical shape:* critical review of a plan or architecture -- all three fire at
-once. This is why fable reviews the plan and opus builds against it.
+*Canonical shape:* critical review of a plan or architecture -- typically all
+three fire at once, and the two-of-three gate needs only two. This is why fable
+reviews the plan and opus builds against it. P0.6-P0.8 are what actually route
+a plan here; before they existed the plan never entered the tree as a unit, and
+the canonical shape sat in this unrendered paragraph while the rendered rung
+carried only downward-pointing guards.
+
+*Observed evidence for the direction of the two-of-three revision (2026-08-11):*
+the awaited telemetry arrived as user steering -- the orchestrator repeatedly
+authored and executed plans until steered "get fable to review this", and the
+review found significant issues each time. That supports the rung firing MORE
+on plan-shaped work (addressed structurally by P0.6-P0.8), and is not yet a
+rung tally; the P4.5 announcement record, now carrying `plan-checkpoint`,
+remains the instrument that settles magnitude.
 
 ```yaml
 emits:
@@ -689,37 +836,25 @@ Shape, sufficiency, `fan-out` and who-authors are backend-independent.
 
 *Emits nothing:* it reuses section 0's decisions and adds no Codex-specific leaf.
 
-### P3.6 -- Running BOTH families on plan review  `render: principles-only`
+### P3.6 -- SUPERSEDED (2026-08-11) by P0.8  `render: none`
 
-Two independent reviews of a decision everything else builds on; the disagreements
-are the finding. It is a *both*, not a *versus*, so it does not contradict P1.1.
+Formerly: "Running BOTH families on plan review is never automatic", requiring
+all of fable qualification, unwinding cost, and willingness to act on a
+disagreement -- rendered as a `render_scope: principles-only` note on the Codex
+ladder.
 
-*Trigger:* **never automatic.** It requires all of: the unit already qualifies for
-fable; unwinding the decision later would cost more than a second review; and you
-will actually act on a disagreement rather than noting it.
+*Why superseded -- two defects, both surfaced by a gpt-5.6-sol design review
+(2026-08-11, itself a P0.8-shaped dispatch):* (1) it could not execute --
+tagged principles-only it never rendered, so the runtime could not know the
+move existed; and a Codex-ladder note is appended after the rungs by the
+renderer, so it is not a branch and cannot create a second dispatch. (2) It was
+housed after backend selection, where one unit cannot resolve to two backends
+under ordered elimination -- `cross-check` pulls to Codex and never reaches the
+Claude ladder at all. The expansion has to happen during shaping, which is
+where P0.8 now puts it. Its surviving intent -- an actionability bar on the
+second review -- lives in P0.8's default-plus-named-skip.
 
-*Why the trigger needs those extra conditions:* `load-bearing` already means "later
-work builds on it", so a trigger phrased around that alone fires on essentially every
-fable-canonical plan review -- making the most expensive recommendation in this file
-the default for the case it was written to be an exception for. The unwinding-cost
-and will-act conditions are what keep it exceptional.
-
-*Rendering:* a note in the Codex tier block. It requires gpt-5.6-sol, so it is **omitted in
-the Codex-absent variant** -- which the principle states about itself, so section 5
-need not decide it.
-
-```yaml
-emits:
-  ladders.codex.notes:
-    - order: 1
-      id: both-families-on-plan-review
-      render_scope: principles-only
-      text: >-
-        Running BOTH families on a plan review is never automatic. It
-        requires all of: the unit already qualifies for fable; unwinding the
-        decision later would cost more than a second review; and you will
-        act on a disagreement rather than noting it.
-```
+*Emits nothing:* retained as history only.
 
 ---
 
@@ -841,15 +976,17 @@ Stays in the same pool and clears most units that look like they need a better m
 Concretely: opus at `xhigh` before reaching for fable at all.
 
 *Sequencing against P2.2:* this applies to units that do NOT meet the top-rung
-conjunction. A unit that meets all three goes to fable directly; up-effort is the
-move for units that merely feel like they need more.
+bar. A unit that already meets the two-of-three conjunction goes to fable
+directly; up-effort is the move for units that merely feel like they need more.
+(An earlier wording said "meeting all three", written when the gate was a
+three-way conjunction and left behind by the two-of-three revision.)
 
 ```yaml
 emits:
   effort.up_effort_note: >-
     Try up-effort before up-tier -- opus at `xhigh` before reaching for fable at
     all. That is the move for units that do NOT meet fable's conjunction; a
-    unit meeting all three goes there directly.
+    unit already meeting the two-of-three bar goes there directly.
 ```
 
 ### P4.4 -- Effort tests
@@ -935,6 +1072,15 @@ emits:
     id: ex-migration
     requires_backend: codex
     text: delegating per-file API migration to codex/gpt-5.6-luna (fan-out)
+  announce.examples[ex-plan-review]:
+    order: 6
+    id: ex-plan-review
+    text: delegating plan review to fable (plan-checkpoint, novel, unverifiable)
+  announce.examples[ex-plan-crosscheck]:
+    order: 7
+    id: ex-plan-crosscheck
+    requires_backend: codex
+    text: delegating plan review second opinion to codex/gpt-5.6-sol (cross-check)
 ```
 
 ---
@@ -982,14 +1128,15 @@ rendered while terra-is-not-a-rung did not, on no principled distinction.
 **`render: principles-only`** marks the converse: a principle that is genuine policy
 but is NOT a routing decision, so it does not belong in an artifact loaded once per
 orchestration. Sections 0-4 contain both routing decisions and procedural ones, and
-only the first kind earns rendered tokens. Tagged today: P0.3, P0.4, P2.5 bullet 3,
-P3.6.
+only the first kind earns rendered tokens.
 
 *Why this tag exists:* "everything in sections 0-4 renders" put briefing procedure --
 including a threshold the file admits is unquantified -- in the first screen the agent
 reads, and gave forty-five tokens to a rule that by its own construction should almost
 never fire. Procedure the orchestrator applies once is not the same artifact as tests
-it evaluates per unit.
+it evaluates per unit. Tagged today: P0.3, P0.4, P2.5 bullet 3. (P3.6 carried the
+tag until its 2026-08-11 supersession -- on a rule whose entire job was runtime
+behaviour, the tag was itself the defect.)
 
 ```yaml
 generator:

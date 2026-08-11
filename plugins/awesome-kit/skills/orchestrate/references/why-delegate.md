@@ -32,7 +32,7 @@ anti_patterns:
       backend this skill has never heard of, disabled one, or marked a tier unavailable
       because its usage is spent. Answering from memory silently ignores every one of
       those and produces confident dispatch to something that is wrong or gone.
-    alternative: Run the policy script at step 3; it is deterministic and sub-second.
+    alternative: Run the policy script before decomposing; it is deterministic and sub-second.
   - id: orchestrator_does_the_work
     name: Orchestrator absorbs the work product
     keywords: [context bloat, reading everything, inline generation]

@@ -108,6 +108,11 @@ lexicon:
 - id: stretch
   kind: concept
   test: Can you say what it would get wrong?
+- id: plan-checkpoint
+  kind: skill
+  render: glossed
+  test: Will other units be briefed from this output before anything re-derives it?
+  gloss: a plan later units will execute against
 - id: conversational
   kind: skill
   render: glossed
@@ -182,6 +187,35 @@ shape:
     without_backend:
       codex: A genuine fan-out then has no other route -- sequence the units or handle them
         inline.
+  - id: plan-is-a-unit
+    principle: P0.6
+    text: >-
+      Route the plan itself through this tree as its own unit -- a {plan-checkpoint} -- before
+      briefing anything from it. Planhood implies no other term: a plan is {load-bearing}
+      only when a wrong shared decision would survive the downstream units' own checks. Do
+      not launch units briefed from a plan still in flight; a materially revised plan repeats
+      this checkpoint; routing the plan is never itself a unit.
+  - id: plan-create-or-review
+    principle: P0.7
+    text: >-
+      For a {plan-checkpoint} that escalates to its ladder's top rung: can a standalone brief
+      carry or reference every decision-relevant constraint without encoding the answer and
+      without losing context that exists only in this conversation? Yes -- delegate plan CREATION
+      (question brief). No -- author the draft and delegate plan REVIEW of it. A model that
+      created a plan is not an independent reviewer of it.
+  - id: plan-review-second-family
+    principle: P0.8
+    text: >-
+      A top-rung {plan-checkpoint} review defaults to TWO units when unwinding the decision
+      later would be expensive AND a disagreement would change the plan before anything executes:
+      the primary review, routed as usual, plus a {cross-check} child carrying the same brief,
+      routed by the backend pulls. Skipping the child needs a named reason -- cheap to unwind,
+      or nobody would act on a disagreement. If the top rung is unavailable the primary drops
+      a rung and the child still dispatches. Announce each separately.
+    without_backend:
+      codex: >-
+        With a single model family there is no second-family child -- dispatch the primary
+        review alone.
 
 # ---------------------------------------------------------------------------
 # Backend
@@ -287,13 +321,6 @@ ladders:
       terminal default. You are on this backend for dispatch shape, not difficulty, so arriving
       units are workhorse-difficulty units that happen to be awkwardly shaped.
     effort: high
-  notes:
-  - id: both-families-on-plan-review
-    render_scope: principles-only
-    text: >-
-      Running BOTH families on a plan review is never automatic. It requires all of: the unit
-      already qualifies for fable; unwinding the decision later would cost more than a second
-      review; and you will act on a disagreement rather than noting it.
 
 # ---------------------------------------------------------------------------
 # Agent type
@@ -337,8 +364,8 @@ effort:
     that rung requires {unverifiable}, so deliberation is the only quality control left.
   up_effort_note: >-
     Try up-effort before up-tier -- opus at `xhigh` before reaching for fable at all. That
-    is the move for units that do NOT meet fable's conjunction; a unit meeting all three goes
-    there directly.
+    is the move for units that do NOT meet fable's conjunction; a unit already meeting the
+    two-of-three bar goes there directly.
   raise_when:
   - ambiguous, or several plausible approaches where picking wrong is expensive
   - you cannot verify the result cheaply
@@ -375,6 +402,11 @@ announce:
   - id: ex-migration
     requires_backend: codex
     text: delegating per-file API migration to codex/gpt-5.6-luna (fan-out)
+  - id: ex-plan-review
+    text: delegating plan review to fable (plan-checkpoint, novel, unverifiable)
+  - id: ex-plan-crosscheck
+    requires_backend: codex
+    text: delegating plan review second opinion to codex/gpt-5.6-sol (cross-check)
 
 # ===========================================================================
 # MACHINE HALF -- not derived from the principles. What this machine has and

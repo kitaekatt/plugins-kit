@@ -14,7 +14,7 @@ procedure and the anti-pattern catalogue.
 
 **Policy is configuration, and it is rendered, not remembered.** Which tier suits which unit,
 which dispatch backends exist on this machine and how to drive them, and how much usage
-capacity is left all vary by user and by machine. Step 3 runs a script that prints the
+capacity is left all vary by user and by machine. Step 2 runs a script that prints the
 resolved policy. Do not answer those questions from this file or from memory -- this file has
 no tier table, deliberately. Users tune the policy by overriding
 [defaults/orchestration.yaml](defaults/orchestration.yaml); see
@@ -57,9 +57,10 @@ technique_skill:
       the user configured -- with its exact mechanics, capabilities and gotchas, and (c)
       best-effort usage capacity plus any manual tier overrides.
     when: |
-      Once per orchestration, at step 3, before choosing tiers or launching anything. Run it
-      inline, not as a delegable unit. Budget a few thousand tokens for its output; it grows
-      with each installed backend.
+      Once per orchestration, at step 2, BEFORE decomposing or planning anything -- the
+      policy's shaping tests govern the plan itself, so rendering after the plan exists
+      arrives too late to route its creation. Run it inline, not as a delegable unit.
+      Budget a few thousand tokens for its output; it grows with each installed backend.
     reading_it: |
       Treat the rendered block as authoritative over anything you believe about model
       lineups or dispatch mechanics: a tier marked UNAVAILABLE or LIMITED must not be
@@ -98,16 +99,22 @@ technique_skill:
             much context as the work. Classify by shape in one glance; if classifying takes more
             thought than that, treat it as delegate-shaped.
         - n: 2
-          action: Decompose into self-contained units and classify each.
-          detail: |
-            Per unit note (a) dependencies -- independent units run in parallel, dependent ones
-            sequence; (b) compression profile -- does the result compress to a small conclusion?
-            High-generation-cost / small-conclusion units are the ideal delegations.
-        - n: 3
           action: Render the orchestration policy by running the script in the policy block above.
           detail: >-
-            Run it once, inline, and keep the output in view for steps 4-5. It is the source
-            of truth for tiers, backends and capacity on this machine.
+            Run it once, inline, BEFORE decomposing -- its shaping tests govern the plan
+            itself, and rendering after the plan exists can only trigger a retrospective
+            review, never route the plan's creation. Keep the output in view for steps 3-5;
+            it is the source of truth for tiers, backends and capacity on this machine.
+        - n: 3
+          action: Decompose into self-contained units and classify each -- the plan itself is the first candidate unit.
+          detail: |
+            The decomposition you are about to author is a unit (the policy's plan-checkpoint
+            shaping tests): route it through the rendered tree before briefing anything from
+            it, which may mean delegating its creation, or authoring it and delegating its
+            review. Then per unit note (a) dependencies -- independent units run in parallel,
+            dependent ones sequence; (b) compression profile -- does the result compress to a
+            small conclusion? High-generation-cost / small-conclusion units are the ideal
+            delegations.
         - n: 4
           action: Pick a backend per unit, then a tier from that backend's ladder.
           detail: >-

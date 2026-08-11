@@ -103,6 +103,20 @@ The rung below would plausibly get this wrong.
 
 ---
 
+## Unit class
+
+### `plan-checkpoint` `[skill]` `render: glossed`
+The unit's output is a plan or decomposition that later units will execute
+against.
+**Test:** will other units be briefed from this output before anything
+re-derives it?
+**Gloss:** "a plan later units will execute against"
+
+*Consequence:* a `plan-checkpoint` is routed through the tree like any unit --
+being a plan makes nothing `open`, `novel`, or `load-bearing` by itself.
+
+---
+
 ## Dispatch shape
 
 Selects the backend.
@@ -184,7 +198,7 @@ touches; it is one `mechanical` unit. A migration needing per-file judgment resi
 collapsing, so it is genuinely N units. Scale is not the discriminator and must never
 be read as one.
 
-*Top rung:* its gate is a conjunction, so all three terms fire together by
-construction -- that is the actual reason, not an inflated one. The gate's
-additional demand (saying what the rung below would get wrong) stays internal and
-is not rendered on the line.
+*Top rung:* its gate is a two-of-three conjunction, so at least two escalation
+terms fire together by construction -- announce the ones that actually fired,
+which may be two or all three. The gate's additional demand (saying what the
+rung below would get wrong) stays internal and is not rendered on the line.

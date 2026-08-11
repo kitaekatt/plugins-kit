@@ -92,6 +92,24 @@ one-way-authorship rule in [CLAUDE.md](CLAUDE.md).
   demand, and because naming it stops `difficult` being smuggled in as a
   criterion.
 
+- **`plan-checkpoint` `render: glossed`.** Added 2026-08-11 with P0.6-P0.8
+  (the plan-is-a-unit shaping principles). A `[skill]` term rather than a
+  criteria alias because the announcement telemetry must be able to show
+  whether those principles caused a dispatch -- without a term of its own,
+  a plan review announces identically to any other fable review and
+  over-firing cannot be measured (the gpt-5.6-sol design review of the
+  proposal flagged exactly this). Glossed because the bare term reads as
+  "an important plan"; the test is narrower -- other units will be BRIEFED
+  from the output. Deliberately does NOT imply `open`, `novel`, or
+  `load-bearing`: an earlier draft derived `load-bearing` "by construction"
+  from planhood, which conflates dependency with propagation (`load-bearing`
+  asks whether the next step would CATCH a wrong answer). The published
+  *Consequence* line carries that negative so the term cannot be read as an
+  escalation shortcut. A companion `brief-transferable` term for the
+  creation-vs-review fork was considered and skipped: the fork is visible in
+  the dispatch line's `<what>` ("plan creation" vs "plan review"), so a term
+  would duplicate telemetry the line already carries.
+
 - **`conversational` `render: glossed`.** Glossed because "will you ask
   follow-ups" catches almost anything and silently disarms `cross-check` -- a
   second opinion is a DELIVERABLE, not a thread.
@@ -110,7 +128,7 @@ Hand-maintained cross-check against the generated policy; keep in sync when
 adding or removing a term, but treat `orchestration.yaml`'s generated
 `lexicon` block as authoritative if the two ever disagree.
 
-`[skill]` (16) -- render into the tree; permitted in announcements:
+`[skill]` (17) -- render into the tree; permitted in announcements:
 
 | term | render |
 |---|---|
@@ -124,6 +142,7 @@ adding or removing a term, but treat `orchestration.yaml`'s generated
 | `novel` | glossed |
 | `load-bearing` | glossed |
 | `unverifiable` | glossed |
+| `plan-checkpoint` | glossed |
 | `conversational` | glossed |
 | `abortable` | bare |
 | `fan-out` | glossed |

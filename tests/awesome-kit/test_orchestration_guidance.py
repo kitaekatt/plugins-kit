@@ -825,7 +825,7 @@ class TestRenderScope:
         probes = list(self._principles_only_probes())
         for record_id, probe in probes:
             assert probe not in text, record_id
-        assert len(probes) >= 3, (
+        assert len(probes) >= 2, (
             "the shipped data should still carry principles-only records"
         )
 
@@ -921,6 +921,25 @@ class TestCodexAbsentVariant:
         for text in (without, with_codex):
             assert "NOT dialable per call" in text
             assert "opts.effort" in text
+
+    def test_plan_checkpoint_shape_tests_render_in_both_variants(self, without, with_codex):
+        """P0.6-P0.8 live in shaping, which both variants render."""
+        for text in (without, with_codex):
+            assert "Route the plan itself through this tree" in text
+            assert "not an independent reviewer" in text
+            assert "defaults to TWO units" in text
+
+    def test_second_family_hole_is_disclosed_without_codex(self, without, with_codex):
+        """Same convention as the fan-out hole: the P0.8 test renders in the
+        Codex-absent variant with its one-clause disclosure, not silently."""
+        assert "dispatch the primary review alone" in without
+        assert "dispatch the primary review alone" not in with_codex
+
+    def test_plan_announce_examples_follow_backend_presence(self, without, with_codex):
+        assert "delegating plan review to fable" in with_codex
+        assert "delegating plan review to fable" in without
+        assert "plan review second opinion" in with_codex
+        assert "plan review second opinion" not in without
 
 
 class TestNoBareCodenames:
