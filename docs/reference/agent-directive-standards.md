@@ -196,9 +196,13 @@ its own search terms. Automate what automates (see below) and read the rest.
 
 ## Mechanical enforcement
 
-The highest-signal subset is greppable, and a pre-commit check covers it: the
-literal phrases under AD-1 and AD-2 that are hits on sight (`do not report ... to
-the user`, `fleet policy`, `pre-authorized` with no adjacent path).
+**Not built as of 2026-08-11.** The audit above is judgment-only today; this
+section is the design, not a description of something running.
+
+The highest-signal subset is greppable: the literal phrases under AD-1 and AD-2
+that are hits on sight (`do not report ... to the user`, `fleet policy`,
+`pre-authorized` with no adjacent path). A pre-commit check over those would have
+caught three of the five sites remediated on 2026-08-11 at authoring time.
 
 This is deliberately narrower than the criteria. The razor's own experience is
 the reason: its OP-1 is only partly reachable by an automated lane, and every
