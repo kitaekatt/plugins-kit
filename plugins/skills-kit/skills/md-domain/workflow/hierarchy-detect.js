@@ -54,6 +54,16 @@ export const meta = {
   phases: [{ title: 'Hierarchy', detail: 'one resolution over one tree' }],
 }
 
+// args may arrive as an object or as a JSON string depending on how the
+// invoker passes it; normalize to an object.
+let input = args
+if (typeof input === 'string') {
+  try { input = JSON.parse(input) } catch (_) { input = null }
+}
+if (!input) {
+  throw new Error('hierarchy-detect.js requires args = { subject, refs }')
+}
+
 const subject = input.subject || {}
 const inventory = Array.isArray(subject.inventory) ? subject.inventory : []
 const reports = Array.isArray(subject.reports) ? subject.reports : []

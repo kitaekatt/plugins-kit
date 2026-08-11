@@ -63,6 +63,16 @@ export const meta = {
 // requires a capped run to announce the cap.
 const DEFAULT_CEILING = 25
 
+// args may arrive as an object or as a JSON string depending on how the
+// invoker passes it; normalize to an object.
+let input = args
+if (typeof input === 'string') {
+  try { input = JSON.parse(input) } catch (_) { input = null }
+}
+if (!input) {
+  throw new Error('coverage-detect.js requires args = { subjects, depth, refs }')
+}
+
 const ceiling = Number.isInteger(input.ceiling) ? input.ceiling : DEFAULT_CEILING
 
 const SUBJECT_FINDINGS_SCHEMA = {
