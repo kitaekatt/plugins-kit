@@ -56,3 +56,60 @@ class TestDetectClassifySharedSkeleton:
 class TestCheckMode:
     def test_check_mode_passes_on_clean_tree(self):
         assert gen.check_remediate() == []
+
+
+class TestNoAccidentalTaggedTemplates:
+    """A backtick inside a prompt template literal makes the lane UNRUNNABLE.
+
+    The prose in these lanes quotes field names, and a writer reaching for
+    markdown backticks (``the `why` field``) inside a template literal ends the
+    template early. The result parses in node as a TAGGED TEMPLATE on an
+    undefined identifier, so `node --check` passes and review-by-reading passes,
+    while the Workflow tool's parser rejects the script outright and the lane
+    dispatches zero agents. coverage-detect.js shipped that way in skills-kit
+    0.47.0 and was caught only by a real dispatch (fixed 0.47.1).
+
+    The detectable shape is the WRITER'S mistake, not the parse result: a
+    markdown-style backtick-quoted bare word outside a comment. Ordinary
+    template code never contains one -- an interpolation starts `${`, and a
+    template's own closing backtick is not preceded by one on the same side.
+    Quoting a field name in prompt prose is the only way this appears, and it
+    is always wrong there: use plain quotes instead.
+    """
+
+    WORKFLOW_DIR = (
+        REPO_ROOT / "plugins" / "skills-kit" / "skills" / "md-domain" / "workflow"
+    )
+    TAGGED = __import__("re").compile(r"`[A-Za-z_$][A-Za-z0-9_$.]*`")
+
+    def _strip_comments(self, text: str) -> str:
+        out, in_block = [], False
+        for line in text.splitlines():
+            stripped = line.lstrip()
+            if in_block:
+                if "*/" in line:
+                    in_block = False
+                out.append("")
+                continue
+            if stripped.startswith("//"):
+                out.append("")
+                continue
+            if stripped.startswith("/*"):
+                in_block = "*/" not in line
+                out.append("")
+                continue
+            out.append(line)
+        return "\n".join(out)
+
+    def test_no_workflow_script_has_a_tagged_template(self):
+        offenders = []
+        for path in sorted(self.WORKFLOW_DIR.glob("*.js")):
+            body = self._strip_comments(path.read_text(encoding="utf-8"))
+            for n, line in enumerate(body.splitlines(), start=1):
+                if self.TAGGED.search(line):
+                    offenders.append(f"{path.name}:{n}: {line.strip()}")
+        assert offenders == [], (
+            "unescaped backtick inside a template literal -- the lane will not "
+            "parse in the Workflow tool even though node accepts it:\n"
+            + "\n".join(offenders)
+        )

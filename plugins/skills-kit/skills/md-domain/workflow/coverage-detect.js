@@ -243,7 +243,7 @@ of code you never opened -- and a fact placed on that basis burdens every reader
 it does not apply to.
 
 Do NOT propose that a fact belongs "higher up", and do not hedge toward it in
-`why`. A fact that genuinely governs a wider area reaches it by HOISTING, which
+the "why" field. A fact that genuinely governs a wider area reaches it by HOISTING, which
 happens later, at the parent, by comparing the finished CLAUDE.md files of
 several children. That is not your job and you do not have the inputs for it.
 
