@@ -52,7 +52,7 @@ technique_skill:
           action: "Write the Required-user-action part -- enumerate every requested item against live state, then classify. State A names one concrete next decision in one sentence; State B uses the exact phrase 'all requested work complete - ready to end session' only when every item verifies as done."
           on_failure: A false State B silently abandons work; when unsure after the enumeration, you are in State A and owe a concrete action. If you have more work, do not end the turn -- do the work.
         - n: 5
-          action: At a work-unit boundary, emit two back-to-back updates (close the finished unit, then open the next), each using the full template. Do not ask permission to move to the next unit -- the plan authorizes it.
+          action: At a work-unit boundary, emit two back-to-back updates (close the finished unit, then open the next), each using the full template. Do not ask permission to move to the next unit -- the agreed plan authorizes it (the task's `plan.md` where there is one, otherwise the plan the user approved this session). If you cannot name the plan you are relying on, you do not have that authorization: ask.
       gotchas:
         - The ordered-step heuristic counts explanatory numbered lists as procedure steps; the real procedure is the three-part template, not those lists.
         - Auto mode authorizes execution, not chasing already-done work or fabricating next steps -- when the next decision is the user's, surface it and stop.
@@ -62,7 +62,7 @@ technique_skill:
       name: Asking permission to move to the next work-unit
       keywords: [permission gate, should i proceed, next phase, round trip]
       why_it_seems_right: Confirming the transition feels safe and collaborative.
-      why_it_is_wrong: The plan or phase sequence already authorizes the transition; the gate costs a round-trip the user did not need to pay.
+      why_it_is_wrong: The agreed plan -- the task's `plan.md`, or the plan the user approved this session -- already authorizes the transition; the gate costs a round-trip the user did not need to pay. Where no such plan exists there is no authorization to invoke, and asking is correct.
       alternative: Move forward by default; surface only a genuine decision (scope ambiguity, risk, missing input) in the next update's Required-user-action slot.
     - id: stacked-deliverables
       name: Re-issuing unrequested work while-I-am-at-it
@@ -133,7 +133,7 @@ In a multi-work-unit context -- a plan with phases, a sequence of tasks, a stage
 
 Splitting the reply this way keeps each update scoped to a single work-unit, so a user reading only end-of-turn messages can track unit boundaries cleanly.
 
-Asking the user for permission to move on to the next work-unit is an anti-pattern. The plan or phase sequence already authorizes the transition -- moving forward is the default. "Should I proceed to the next phase?" forces the user to confirm work that does not need confirmation, and the cost is one round-trip the user did not need to pay. If the next unit raises a genuine decision (a scope ambiguity, an unforeseen risk, a missing input), surface that decision in the second update's *Required user action* slot directly; do not use it as a permission gate on the transition itself.
+Asking the user for permission to move on to the next work-unit is an anti-pattern whenever a plan is in place -- the task's `plan.md`, or the plan the user approved this session. That plan already authorizes the transition, so moving forward is the default. Where you cannot name the plan you are relying on, you do not hold that authorization and asking is right. "Should I proceed to the next phase?" forces the user to confirm work that does not need confirmation, and the cost is one round-trip the user did not need to pay. If the next unit raises a genuine decision (a scope ambiguity, an unforeseen risk, a missing input), surface that decision in the second update's *Required user action* slot directly; do not use it as a permission gate on the transition itself.
 
 ## Supporting rules
 

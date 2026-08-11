@@ -146,9 +146,7 @@ re-tested.
 
 ### Open -- rewording owed
 
-| Site | Criterion | Note |
-|---|---|---|
-| `plugins/awesome-kit/skills/verbose-updates/SKILL.md` | AD-2 | "the plan authorizes it" names no artifact. There IS a plan (`plan.md`'s `task_items`); it just is not named. A four-word fix, not worth a version bump alone -- it should ride along with the next `awesome-kit` change. |
+None.
 
 ### Checked, judged not worth changing
 
@@ -174,7 +172,8 @@ weight.
 | `plugins/bootstrap/skills/bootstrap/references/remediation-reference.md` (AUTO bullet) | AD-2, AD-3 | The doc-side twin, and the citation target of the above -- so it had to be fixed first or the replacement would have pointed at the same defect. |
 | `plugins/unreal-kit/hooks/userpromptsubmit/ue-console-cmd.sh` | AD-4 | Now reports the call's outcome: acknowledge briefly on success, state the error on failure, "never report a success you have not observed". Dropped "Silently". |
 | `plugins/p4-kit/skills/p4-code-review/SKILL.md` | AD-1 | Rejected issues are still not detailed, but a one-line count is stated. |
-| `plugins/git-kit/skills/git-code-review/SKILL.md` | AD-1 | Same change; the two lines were byte-identical. |
+| `plugins/git-kit/skills/git-code-review/SKILL.md` | AD-1 | Same change; the two lines were byte-identical. Both files are GENERATED from `scripts/gen_code_review_skills.py` -- the first attempt hand-edited the rendered output and was caught by `tests/bootstrap/code_review/test_skill_drift.py`. Fix the template. |
+| `plugins/awesome-kit/skills/verbose-updates/SKILL.md` (3 sites) | AD-2 | "the plan authorizes it" named no artifact. Now names the task's `plan.md` or the plan approved in-session, AND states that an agent who cannot name one does not hold the authorization -- which is what makes the claim falsifiable rather than merely more specific. Committed to `dev` without a version bump, to ride with the next `awesome-kit` publish. |
 
 ### Defensible -- checked, no change owed
 
