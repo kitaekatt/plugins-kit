@@ -185,6 +185,7 @@ Analysis depth: basic | advanced
 - [<FINDING-CONVERTIBLE | CONTEXT-ONLY>] <fact>  ->  destination: <CLAUDE.md the placement algorithm selects>
   <why it belongs there, and why it is not ambient today>
   evidence: <file:line>[, <file:line> ...]
+  [scope: LEAF-ONLY | PROMOTE -> <dir>]   [sibling overlap: <document>, <reaches | does not reach> this subtree]
 
 ### Coverage verdict
 GAPS-FOUND | COVERAGE-ASSESSED
@@ -238,6 +239,32 @@ Two things the caller has to do, because neither lane does them:
 What the caller must NOT do is treat the report as pre-approved. Reporting a
 candidate is not a commitment to write it (above), so the decision to generate
 is the caller's and is made per candidate, not per report.
+
+### Two carriage fields, for a tree-scale resolution downstream
+
+A candidate may also carry `scope` (`LEAF-ONLY` or `PROMOTE -> <dir>`) and
+`sibling_overlap` (a sibling document that states the fact, and whether it
+reaches this subtree's author). Both are OPTIONAL, and their optionality is the
+point: deciding whether a fact belongs at this leaf or at a parent requires
+reading the parent or a sibling, which is a read outside this lane's subject.
+This lane is therefore not required to answer it. The fields exist so that a
+judgment a CALLER already made survives into the persisted report instead of
+living in a hand-rolled brief beside it -- and so a `--json` report is a
+complete input to the hierarchy lane, which owns that judgment and makes it
+itself when the field is absent.
+
+### Persisting a report
+
+`--json` emits the report as structured JSON: one or more subjects, each with a
+`root` and a `candidates` list. Writing those to a caller-chosen directory is
+what makes a set of per-subtree runs into an input for a tree-scale resolution
+(`hierarchy-lane.md`). There is no registry and no state directory: the report
+this lane already emits IS the durable representation, and where it lives is
+the caller's choice.
+
+A subject whose `candidates` list is empty is an EXPLICIT assessed-null, and it
+is worth persisting for exactly that reason -- downstream, "assessed, nothing
+found" and "never assessed" must not look alike.
 
 ## Decision rules (verdict)
 

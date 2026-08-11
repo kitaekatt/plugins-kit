@@ -3,40 +3,45 @@ _schema_version: 1
 name: md-domain
 author: christina
 skill-type: domain-skill
-description: Use when auditing or generating project markdown -- SKILL.md, CLAUDE.md, project docs, cross-refs -- or analyzing code for missing ambient CLAUDE.md coverage. Do NOT use for knowledge-encoding or update-documentation.
+description: Use when auditing or generating project markdown -- SKILL.md, CLAUDE.md, project docs, cross-refs -- analyzing code for missing ambient CLAUDE.md coverage, or resolving CLAUDE.md placement across a tree. Do NOT use for knowledge-encoding or update-documentation.
 disable-model-invocation: false
 user-invocable: true
-argument-hint: "[audit|generate|coverage] [skill|claude-md|project-doc|references|<directory>] [<path>|--diff] [--review] [--density] [--json] [--advanced] [fast]"
+argument-hint: "[audit|generate|coverage|hierarchy] [skill|claude-md|project-doc|references|<directory>] [<path>|--diff] [--reports <dir>] [--review] [--density] [--json] [--advanced] [fast]"
 ---
 
 # md-domain
 
-The single front door for three dispatch verbs over project markdown. **Audit**
+The single front door for four dispatch verbs over project markdown. **Audit**
 and **generate** cross four artifacts (`skill`, `claude-md`, `project-doc`,
 `references`); **coverage** assesses one `code_subtree` for facts missing from
-its ambient CLAUDE.md chain. Coverage is report-only and is not
+its ambient CLAUDE.md chain; **hierarchy** resolves where every fact in one
+`claude_md_tree` belongs. Coverage and hierarchy are report-only and are not
 artifact-parameterized. This replaces the former `md-audit` / `md-authoring`
 routers and the member skills they dispatched into.
 
-The three are dispatch entries, not three things of the same kind. Auditing is
+The four are dispatch entries, not four things of the same kind. Auditing is
 making sure something is accurate and compliant. Generation is creating a
 document that does not exist -- and regeneration where the document already
 exists. Coverage is the DISCOVERY step that feeds generation and
 regeneration: it reads code, discovers facts, and names where each belongs, and
-it writes nothing.
+it writes nothing. Hierarchy is the RESOLUTION step between them: it takes those
+facts plus the tree's existing documents and selects exactly one home per fact,
+and it writes nothing either.
 
-One skill, one dispatch table, three procedures. Audit and generate share
-per-artifact standards; coverage has its own criteria and procedure. The "what
-good looks like" documents live in `references/standards/`, the "how to run it"
-procedures live in `references/lanes/`, and the placement spine all three defer
-to lives in `references/cohesion-principles.md`.
+One skill, one dispatch table, four procedures. Audit and generate share
+per-artifact standards; coverage and hierarchy each have their own criteria and
+procedure. The "what good looks like" documents live in `references/standards/`,
+the "how to run it" procedures live in `references/lanes/`, and the placement
+spine they all defer to lives in `references/cohesion-principles.md`.
 
 ## Invocation
 
 - **Bare** -- `/md-domain` greets with the menu below; pick a verb + artifact.
 - **Argument-dispatched** -- `/md-domain audit skill <path>`,
   `/md-domain generate claude-md`, `/md-domain audit references [flags]`, and
-  `/md-domain coverage <directory> [--advanced]` jump straight into that lane.
+  `/md-domain coverage <directory> [--advanced]`, and
+  `/md-domain hierarchy <directory> [--reports <dir>]` jump straight into that
+  lane.
 - **Natural language** -- routed by the verb and subject named. Each lane
   record below declares the `invocation_phrasings` that should reach it.
 - **Review mode** -- append `--review` to an `audit` dispatch on `skill`,
@@ -44,6 +49,9 @@ to lives in `references/cohesion-principles.md`.
   "Review mode" below.
 - **Coverage mode** -- name a directory or pass `--diff`; there is no whole-repo
   default. Coverage reads code and reports without editing code or markdown.
+- **Hierarchy mode** -- name a tree root, optionally with `--reports <dir>`;
+  there is no whole-repo default. Hierarchy reads the tree's CLAUDE.md files and
+  the persisted reports and emits a placement plan, editing nothing.
 
 ### Bare-invocation greeting
 
@@ -65,6 +73,14 @@ Just tell me what you want, in your own words. Widest first:
                                        Ask me to write the results up afterwards
                                        and I generate those CLAUDE.md files --
                                        a separate step you choose, per candidate.
+
+  "resolve placement across <dir>"     Hierarchy resolution. Takes the coverage
+                                       reports you have kept plus the CLAUDE.md
+                                       files already in that tree, and works out
+                                       ONE home for each fact -- what merges,
+                                       what moves up, what comes back out of a
+                                       document, and what to delete where. It
+                                       emits the plan; it never edits anything.
 
 Before starting I name the analysis and its exact scope, because what a run
 READS is what makes it cheap or expensive.
@@ -122,9 +138,10 @@ not menu decoration:
 
 ## Dispatch table
 
-For audit and generate, route by verb AND artifact. Coverage has one non-artifact
-subject, `code_subtree`. In every case load the selected procedure plus its
-standards doc -- exactly those two, never the whole tree.
+For audit and generate, route by verb AND artifact. Coverage and hierarchy each
+have one non-artifact subject -- `code_subtree` and `claude_md_tree`. In every
+case load the selected procedure plus its standards doc -- exactly those two,
+never the whole tree.
 
 | Verb x artifact or subject | Lane id | Procedure | Standards doc |
 |---|---|---|---|
@@ -137,6 +154,7 @@ standards doc -- exactly those two, never the whole tree.
 | generate x project-doc | `generate_project_doc` | `references/lanes/generation-lane.md` | `references/standards/project-doc-standards.md` |
 | generate x references | -- (no lane) | -- | -- |
 | coverage (code subtree) | `coverage_code_subtree` | `references/lanes/coverage-lane.md` | `references/standards/coverage-standards.md` |
+| hierarchy (claude_md_tree) | `hierarchy_claude_md_tree` | `references/lanes/hierarchy-lane.md` | `references/standards/hierarchy-standards.md` |
 
 **`generate x references` has no lane, deliberately.** Cross-references are not a
 generated artifact -- they are an emergent property of the other three. There is
@@ -158,6 +176,23 @@ that destination's candidates together, with `destination` treated as a
 pre-resolved placement. Caller-side mechanics are in `coverage-lane.md`
 ("Handing the report to generation"); the intake side is `generation-lane.md`'s
 precondition.
+
+**At TREE scale the chain gains a middle link.** When several subtrees were
+assessed and their reports kept, the same fact arrives once per sibling -- a
+sibling's CLAUDE.md is not ambient for a subtree, so per-subtree coverage
+re-reports it correctly -- and no leaf can judge whether its fact belongs at a
+parent. `hierarchy` is the phase that sees the whole tree at once:
+
+```
+coverage (per leaf, N runs) -> hierarchy (tree, 1 run) -> generate (per destination, M runs)
+```
+
+with the user's decision between each arrow. It is a CHAIN for the same reason
+the two-link form is: hierarchy is report-only, and a verb that resolved and
+wrote in one motion would make the plan a formality. As shipped the middle link
+is OPT-IN -- it never runs as a side effect of a coverage or generation
+dispatch, and a tree-scale regeneration request offers it by name rather than
+running it.
 
 ### Lane records
 
@@ -304,17 +339,36 @@ lanes:
       - "find what this directory's CLAUDE.md is missing and write it up"
       - "find code-derived facts that should be ambient"
     change_driver: Changes when coverage criteria, depth semantics, or the report-only procedure change.
+  - id: hierarchy_claude_md_tree
+    verb: hierarchy
+    subject: claude_md_tree
+    standards: references/standards/hierarchy-standards.md
+    procedure: references/lanes/hierarchy-lane.md
+    discover_script: scripts/discover_hierarchy.py
+    workflow_detect: workflow/hierarchy-detect.js
+    verdicts: [CHAIN-COHERENT, RESOLUTION-PROPOSED]
+    report_only: true
+    consumes_reports: true
+    invocation_phrasings:
+      - "resolve CLAUDE.md placement across this tree"
+      - "merge these coverage reports into one plan"
+      - "which of these facts should move up to a parent CLAUDE.md"
+      - "de-duplicate the facts my sibling subtrees both reported"
+    change_driver: >-
+      Changes when the placement-resolution criteria (hierarchy-standards.md),
+      the persisted-report input contract, or the report-only procedure change.
 ```
 
 ## Argument grammar
 
 Audit/generate positional form: `<verb> <artifact> [selector] [flags]`.
 Coverage form: `coverage (<directory> | --diff) [--json] [--advanced]`.
+Hierarchy form: `hierarchy <directory> [--reports <dir>] [--json]`.
 Verb and subject may be inferred from natural language; when a required part is
 ambiguous, ask rather than guessing.
 
-- **Verb** -- `audit` | `generate` | `coverage`. Absent and unrecoverable from
-  phrasing -> show the menu.
+- **Verb** -- `audit` | `generate` | `coverage` | `hierarchy`. Absent and
+  unrecoverable from phrasing -> show the menu.
 - **Artifact** (audit / generate only) -- `skill` | `claude-md` | `project-doc`
   | `references`.
 - **Selector** (audit lanes) -- `(none)` audits the cwd artifact if present;
@@ -326,8 +380,15 @@ ambiguous, ask rather than guessing.
   no verdict, so it is NOT an audit -- announce it as its own operation.
 - **Coverage subject** -- a named directory or `--diff`. There is NO whole-repo
   default: if neither is present, say so and stop rather than choosing the cwd.
-- **`--diff` / `--json`** -- coverage-only flags. `--diff` resolves changed
-  code into subtree subjects; `--json` emits the report as structured JSON.
+- **Hierarchy subject** -- a named tree root. There is NO whole-repo default and
+  no `--diff` form: the leaf enumeration must cover a whole tree for the input
+  inventory to mean anything.
+- **`--reports <dir>`** -- hierarchy-only. A directory of persisted coverage
+  reports (JSON), one or more subjects each. Absence is not an error; it selects
+  a run with no candidates.
+- **`--diff` / `--json`** -- `--diff` is coverage-only and resolves changed code
+  into subtree subjects; `--json` emits the report as structured JSON on either
+  report-only lane.
 - **`--advanced`** -- coverage-only exhaustive reads plus invariant-discovery
   and verification passes. Without an explicit depth, prompt interactively; a
   non-interactive dispatch takes basic and discloses `defaults: depth=basic`.
@@ -375,7 +436,7 @@ filter, pre-image materialization, the two documented limits) live in
 ```yaml
 domain_skill:
   _schema_version: "1"
-  identity: The single front door for three dispatch verbs over project markdown -- auditing and generating SKILL.md (and its reference documents), CLAUDE.md, project documents, and skill cross-references, plus report-only coverage analysis over a code subtree and its ambient CLAUDE.md chain.
+  identity: The single front door for four dispatch verbs over project markdown -- auditing and generating SKILL.md (and its reference documents), CLAUDE.md, project documents, and skill cross-references, plus report-only coverage analysis over a code subtree and report-only placement resolution over a CLAUDE.md tree.
   companions:
     siblings: []
     note: |
@@ -388,10 +449,11 @@ domain_skill:
       end-of-session-review triggers.
   scope:
     covers:
-      - dispatching audit, generation, or coverage intent to exactly one lane
+      - dispatching audit, generation, coverage, or hierarchy intent to exactly one lane
       - owning the four per-artifact standards docs (what good looks like for skill / claude-md / project-doc / references)
       - owning coverage-standards.md for the code_subtree composition
-      - owning three procedures (shared audit, shared generation -- new documents and regeneration of existing ones -- and report-only coverage discovery)
+      - owning hierarchy-standards.md for the claude_md_tree composition
+      - owning four procedures (shared audit, shared generation -- new documents and regeneration of existing ones -- report-only coverage discovery, and report-only hierarchy resolution)
       - owning the placement spine (cohesion-principles) and the shared audit framework, configuration, and content-shape references
     excludes:
       - encoding a newly discovered insight into a persistent location (use knowledge-encoding)
@@ -400,18 +462,21 @@ domain_skill:
       - invoking the skills being audited or generated
   orientation:
     summary: |
-      One skill, one dispatch table, three procedures. Audit and generate select an artifact,
+      One skill, one dispatch table, four procedures. Audit and generate select an artifact,
       then load its standards plus the verb procedure. Coverage selects code_subtree
-      and loads coverage-lane.md plus coverage-standards.md. Audit uses DETECT -> Q&A
-      gate -> REMEDIATE, generate uses confirm -> place -> apply -> shape -> validate,
-      and coverage uses discover -> assess -> report and STOP. Coverage never
-      remediates code or markdown. Placement -- which file a fact belongs in -- defers to
+      and loads coverage-lane.md plus coverage-standards.md; hierarchy selects
+      claude_md_tree and loads hierarchy-lane.md plus hierarchy-standards.md. Audit uses
+      DETECT -> Q&A gate -> REMEDIATE, generate uses confirm -> place -> apply -> shape ->
+      validate, coverage uses discover -> assess -> report and STOP, and hierarchy uses
+      discover -> resolve -> report and STOP. Neither coverage nor hierarchy remediates
+      code or markdown. Placement -- which file a fact belongs in -- defers to
       references/cohesion-principles.md; it is never re-derived in a lane or standards doc.
     behavioral_guardrails:
       - Announce every run by its canonical analysis name plus the concrete file scope BEFORE starting (see "Naming and scope announcement"). Echo the menu's name verbatim rather than paraphrasing it, name every analysis a dispatch runs rather than only the headline one, and give scope as a count plus roots -- never as "the corpus". The names are the user's only handle on which analysis they authorized.
-      - Route by verb AND subject. Audit and generate require an artifact; coverage accepts only code_subtree and is not artifact-parameterized. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the generation lane's producing direction when the user asked for a verdict.
+      - Route by verb AND subject. Audit and generate require an artifact; coverage accepts only code_subtree and hierarchy only claude_md_tree, and neither is artifact-parameterized. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the generation lane's producing direction when the user asked for a verdict.
       - One lane at a time. On a bare invocation show the menu and wait; do not co-load standards docs or verb procedures. A typical invocation loads this SKILL.md plus one lane plus one standards doc.
-      - Detection and remediation are separate phases for audit. The audit pass produces a verdict; it does not silently mutate the subject. Remediation is dispatched after the Q&A gate, as its own work. Coverage has no remediation phase and must stop after reporting.
+      - Detection and remediation are separate phases for audit. The audit pass produces a verdict; it does not silently mutate the subject. Remediation is dispatched after the Q&A gate, as its own work. Coverage and hierarchy have no remediation phase and must stop after reporting.
+      - An affirmative verdict is never emitted over inputs the run did not have. Coverage refuses DISCOVERY-FAILED subtrees; hierarchy reports INPUTS-INCOMPLETE, with no verdict, whenever an enumerated leaf has no input, a document went unread, or an input candidate was not accounted for. Both are computed from an inventory the report carries in full, not asserted by the assessment.
       - Audit findings carry a four-disposition classification (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL), assigned instance-level by the lane's detect classifier -- the taxonomy `bucket` is only the default. Report contract, in this order and with no hedging - SERIOUS summarized at the TOP (never auto-fixed), FIX as an applied count landing in a reviewable CL (review mode - PROPOSED, never applied), IMPROVE as a count plus one-line pitches (opt-in discussion), SILENT omitted entirely. The references lane retains the legacy AUTO / DISCUSS / SPECIAL lanes. Coverage uses only GAPS-FOUND / COVERAGE-ASSESSED and never remediates.
       - Defer placement to references/cohesion-principles.md -- which CLAUDE.md, which skill, whether content graduates. Do not re-derive the placement algorithm inside a lane, a standards doc, or from memory. A placement already resolved upstream (an audit remediation naming the destination, an orchestrator directive) is followed, not re-derived.
       - Summarize-and-reference, do not restate. Keep a fact in its SSOT and reference it elsewhere; the compact form is a reminder plus a reference, and only when the fact fits about a dozen tokens -- beyond that, reference only. See cohesion-principles `summarize_and_reference` and its loss-free-deletion guard.
@@ -431,6 +496,10 @@ domain_skill:
         path: references/standards/coverage-standards.md
         keywords: [coverage standards, code subtree, ambient claude.md, absent facts, CV criteria, basic advanced, analysis depth, candidate admission]
         summary: What makes a code-derived fact earn ambient CLAUDE.md cost -- CV admission criteria, the basic/advanced depth contract, evidence floor, suppression rules, and report-only boundary. Read by coverage_code_subtree.
+      - id: hierarchy_standards
+        path: references/standards/hierarchy-standards.md
+        keywords: [hierarchy standards, claude_md_tree, placement resolution, one home per fact, HR criteria, input inventory, unplaceable, subtraction, disposition re-judged, merge precision]
+        summary: What makes a placement resolution over a whole CLAUDE.md tree honest -- HR-1..HR-7 (one home per fact, shallowest true depth, precedent over hoisting, complete input inventory, downward-only disposition flips, merge preserves precision, unplaceable declared), the inventory the verdict is computed from, and the report-only boundary. Read by hierarchy_claude_md_tree.
       - id: project_doc_standards
         path: references/standards/project-doc-standards.md
         keywords: [project document standards, PD-1, maturation, graduate to skill, orphan, discoverability, one hop, readme role, generated artifact, ancestor convention]
@@ -479,6 +548,10 @@ domain_skill:
         path: references/lanes/coverage-lane.md
         keywords: [coverage procedure, code subtree, ambient chain, report only, gaps found, coverage assessed, refs.criteria, analysis depth, no remediation]
         summary: The coverage procedure for the non-artifact code_subtree subject -- intent and depth gate, mechanical discovery, criteria-bound assessment, report shape, and STOP. It reads code and never remediates.
+      - id: hierarchy_lane
+        path: references/lanes/hierarchy-lane.md
+        keywords: [hierarchy procedure, claude_md_tree, placement resolution, persisted coverage reports, input inventory, INPUTS-INCOMPLETE, chain coherent, resolution proposed, subtraction order, report only]
+        summary: The hierarchy procedure for the non-artifact claude_md_tree subject -- intent gate, independent leaf enumeration and inventory building, criteria-bound resolution over persisted reports plus the tree's documents, the computed verdict and its refusal conditions, the report shape, and STOP. It resolves placement and never writes.
       - id: authoring_patterns
         path: references/authoring-patterns/
         keywords: [content shape, three surfaces, yaml header markdown embedded yaml, structure asserts, area ownership, area config, actions pattern, query tool pattern, how to shape a fact]
@@ -532,6 +605,8 @@ domain_skill:
 - **How to generate** -- `references/lanes/generation-lane.md`.
 - **How to run coverage analysis** -- `references/lanes/coverage-lane.md`.
 - **What earns a coverage candidate** -- `references/standards/coverage-standards.md`.
+- **How to run a hierarchy resolution** -- `references/lanes/hierarchy-lane.md`.
+- **What makes a placement resolution honest** -- `references/standards/hierarchy-standards.md`.
 - **Encoding a newly discovered insight into a persistent home** -- `knowledge-encoding` (in skills-kit).
 - **End-of-session review of what the work implies for the docs** -- `update-documentation` (in skills-kit).
 - **Designing a materialized-insight tool** -- `materialized-output` (in skills-kit).

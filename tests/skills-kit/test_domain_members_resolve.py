@@ -3,13 +3,13 @@
 Successor of the old member-resolution integration test. Before the md-domain
 fold (2026-07-29) skills-kit expressed its verb x artifact matrix as TOPOLOGY --
 two router skills declaring members that had to resolve against the on-disk skill
-pool. The fold replaced that with DATA: one skill, one dispatch table, eight lane
-records. The member-resolution question became vacuous (there are no members to
+pool. The fold replaced that with DATA: one skill, one dispatch table, a lane
+record per dispatch entry. The member-resolution question became vacuous (there are no members to
 dangle); the questions that replaced it are the ones the phase-3 design's "Router
 enforcement" section names:
 
 (a) the skills-kit skill roster on disk is exactly the four surviving skills;
-(b) md-domain's dispatch table holds exactly the eight lanes, and
+(b) md-domain's dispatch table holds exactly the registered lanes, and
     `generate x references` is deliberately absent;
 (c) every lane record carries the two REQUIRED fields (settled decision 3) --
     invocation_phrasings (>= 3) and change_driver;
@@ -54,6 +54,10 @@ DISSOLVED = (
     "cohesion-principles",
 )
 
+# `table_key` is the left-hand cell of the human-readable dispatch table row.
+# It is spelled out per lane rather than derived because the non-artifact lanes
+# each phrase their subject differently in prose, and a derived key would only
+# ever be checked against itself.
 EXPECTED_LANES = {
     "audit_skill": {"verb": "audit", "artifact": "skill"},
     "audit_claude_md": {"verb": "audit", "artifact": "claude-md"},
@@ -62,7 +66,16 @@ EXPECTED_LANES = {
     "generate_skill": {"verb": "generate", "artifact": "skill"},
     "generate_claude_md": {"verb": "generate", "artifact": "claude-md"},
     "generate_project_doc": {"verb": "generate", "artifact": "project-doc"},
-    "coverage_code_subtree": {"verb": "coverage", "subject": "code_subtree"},
+    "coverage_code_subtree": {
+        "verb": "coverage",
+        "subject": "code_subtree",
+        "table_key": "coverage (code subtree)",
+    },
+    "hierarchy_claude_md_tree": {
+        "verb": "hierarchy",
+        "subject": "claude_md_tree",
+        "table_key": "hierarchy (claude_md_tree)",
+    },
 }
 
 # Lane-record keys whose value is a path relative to the md-domain skill dir.
@@ -131,7 +144,7 @@ class TestSkillsKitRoster:
 
 
 class TestDispatchTable:
-    """(b) -- exactly eight lanes, and generate x references is deliberately absent."""
+    """(b) -- exactly the registered lanes, and generate x references is deliberately absent."""
 
     def test_lane_roster_is_exact(self):
         assert sorted(LANE_IDS) == sorted(EXPECTED_LANES), (
@@ -176,7 +189,7 @@ class TestDispatchTable:
             key = (
                 f"{expected['verb']} x {expected['artifact']}"
                 if "artifact" in expected
-                else "coverage (code subtree)"
+                else expected["table_key"]
             )
             assert key in rows, f"dispatch table has no `{key}` row"
             assert rows[key] == f"`{lane_id}`", (

@@ -151,6 +151,22 @@ standards_set:
         section 3.
 ```
 
+## Two optional carriage fields on a candidate
+
+Beyond the criteria above, a candidate record may carry `scope` (`LEAF-ONLY` or
+`PROMOTE -> <dir>`) and `sibling_overlap` (a sibling document stating the fact,
+and whether it reaches this subtree's author). Neither is a criterion and
+neither is required.
+
+They are optional deliberately. Judging whether a fact belongs at this leaf or
+at a parent means reading the parent or a sibling -- a read outside this
+subject, which is precisely what `no-cross-apply-placement` constrains the
+ANSWER of without licensing. So this document does not require the judgment; it
+provides somewhere for a caller who made it anyway to record it, so the
+persisted report is a complete input to a resolution over the whole tree
+(`hierarchy-standards.md`), which owns that judgment and makes it itself when
+the field is absent.
+
 ## Analysis depth: basic and advanced
 
 Depth is a caller-supplied parameter, not a per-run judgment. It changes how

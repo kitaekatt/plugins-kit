@@ -111,6 +111,16 @@ const SUBJECT_FINDINGS_SCHEMA = {
           // CV-7's evidence floor. minItems:1 because an empty array satisfies a
           // bare `required` while citing nothing.
           anchors: { type: 'array', minItems: 1, items: { type: 'string' } },
+          // Carriage fields for a tree-scale resolution downstream. OPTIONAL,
+          // and deliberately so: judging whether a fact belongs at this leaf or
+          // at a parent requires reading the parent or a sibling, which is
+          // outside this lane's subject -- so this lane is not required to
+          // answer it, and the hierarchy lane (whose subject contains the
+          // parent) decides when the field is absent. They exist so that a
+          // judgment a CALLER already made survives into the persisted report
+          // instead of living in a hand-rolled brief beside it.
+          scope: { type: 'string' },          // 'LEAF-ONLY' | 'PROMOTE -> <dir>'
+          sibling_overlap: { type: 'string' }, // a sibling document stating this fact: which, and whether it reaches this subtree
         },
       },
     },

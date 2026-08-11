@@ -229,6 +229,77 @@ claude_md:
         the criteria seam (coverage-detect.js refuses without refs.criteria) and
         the registration/go-live pairing above.
       added: "2026-08-08"
+    - id: hierarchy_is_the_resolution_phase_over_a_tree
+      keywords: [hierarchy verb, claude_md_tree, placement resolution, tree unit, report only, INPUTS-INCOMPLETE, computed verdict, sibling blindness, depth invisible per leaf, one home per fact, opt-in phase]
+      summary: The hierarchy lane's subject is a TREE, and its verdicts are COMPUTED from an inventory the lane builds itself. It is the resolution phase between coverage (discovery) and generation (writing) -- not a fourth peer verb, not a coverage flag, and not an audit lane.
+      detail: |
+        WHY A NEW UNIT RATHER THAN A WIDER SELECTOR. Two properties of the
+        existing lanes force it, and both are correct behaviour rather than
+        defects to fix in place:
+          - SIBLING BLINDNESS. A sibling's CLAUDE.md is not ambient for a
+            subtree, so per-subtree coverage rightly re-reports a shared fact
+            once per sibling. Only a pass whose subject is the whole tree can
+            see both reporters at once and collapse them.
+          - DEPTH IS INVISIBLE PER LEAF. Whether a fact belongs at the leaf or at
+            a parent cannot be judged from inside the leaf's subject; the
+            judgment belongs to a lane whose subject contains the parent.
+        WHY NOT COVERAGE. coverage-standards.md's present-content-not-re-audited
+        is fail-severity -- coverage judges ABSENT facts only. Hierarchy judges
+        the PLACEMENT of present facts, so folding it in breaks coverage's own
+        hardest boundary. WHY NOT AN AUDIT LANE. The audit criteria are
+        per-document; every hierarchy criterion is a relation BETWEEN documents,
+        and an audit has no artifact to render a verdict on when the input is a
+        set of proposals.
+        THE VERDICT IS COMPUTED, AND THAT IS THE WHOLE POINT. The false pass here
+        is a resolution handed 10 of 18 leaf reports treating the other 8 as
+        empty candidate sets. So the lane enumerates the leaves ITSELF (a
+        caller-supplied list cannot notice what it already forgot), builds a
+        per-leaf inventory, and decides the incomplete-input cases in
+        hierarchy-detect.js BEFORE any agent dispatch. INPUTS-INCOMPLETE is
+        deliberately NOT in the lane record's `verdicts` -- it is what the lane
+        reports INSTEAD of a verdict -- and it is tallied apart from both
+        affirmative verdicts, the same posture as coverage's DISCOVERY-FAILED
+        and review mode's NOT-AUDITED.
+        FOUR THINGS ARE DERIVED RATHER THAN TRUSTED, because a schema can require
+        a list but cannot express these: the subtraction table (computed from the
+        merged facts, so "emitted per source" is true by construction and the
+        agent schema carries no subtractions field at all); input accounting
+        (every candidate appears in exactly one of destination / rejection /
+        unplaceable, checkable only because discover_hierarchy.py assigns each
+        candidate a stable id); the downward-only disposition flip; and the
+        verdict itself. The unplaceable item schema declares NO destination
+        property, so an unplaceable fact cannot be quietly assigned to the root.
+        REPORT-ONLY IS A HARD PROPERTY OF THE ENTRY POINT, for three reasons that
+        each break concretely: the plan spans lanes with an ordering constraint
+        (write the destination before subtracting the source, or a fact exists
+        nowhere and nothing greps for an absence); it contains editorial
+        rejections a user must overrule per item; and disposition re-judgment is
+        a judgment call on the least stable quantity in the chain.
+        SCOPE AS SHIPPED: the resolution over persisted reports. The pure
+        chain-audit face (extracting facts from written prose with no reports) is
+        the harder judgment problem and is not in this lane's contract -- a run
+        with no reports and no documents reports INPUTS-INCOMPLETE rather than
+        improvising one. The phase is OPT-IN: it is not wired as an implied first
+        phase of tree-scale generation, and it changes nothing about CV-3,
+        sibling reach, or reachability.
+        ONE DESIGN TENSION RESOLVED HERE. The coverage candidate record gains
+        `scope` and `sibling_overlap`, and both are OPTIONAL. Requiring coverage
+        to emit `scope` would make it read a parent or a sibling -- a read outside
+        its own subject, and the very judgment finding 2 above assigns to this
+        lane. The fields exist so a judgment a CALLER already made survives into
+        the persisted report; hierarchy makes the judgment itself when they are
+        absent.
+      origin: |
+        Surface: tree-scale CLAUDE.md work was being done by hand-rolled merge
+        plans, with the depth and de-duplication judgments living in a
+        caller-side brief rather than in any lane. Finding: the two candidate
+        analyses (merge/promotion resolution over proposals, and chain
+        de-duplication over written documents) are ONE analysis, because a
+        written fact is a candidate whose current location is its proposed
+        destination -- and a real tree mid-work is mixed. Follow-up: the criteria
+        seam (hierarchy-detect.js refuses without refs.criteria) and the
+        computed-verdict refusal above.
+      added: "2026-08-10"
     - id: coverage_depth_asks_rather_than_defaults
       keywords: [basic advanced, analysis depth, intent gate, AskUserQuestion, extreme experience, default disclosure, verdict carries the mode, one dial not two]
       summary: Coverage depth is one dial with two operating points (basic / advanced). When the invocation expresses no depth the intent gate ASKS via AskUserQuestion rather than defaulting -- the rare case where prompting beats a sensible default, because both directions of a silent wrong choice are expensive and invisible.

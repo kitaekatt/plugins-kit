@@ -89,6 +89,33 @@ compositions:
     nests: [directory, skill]
     discovery_priority: 40
 
+  - id: claude_md_tree
+    description: >-
+      A named directory root together with every CLAUDE.md governing files
+      beneath it, and any persisted candidate reports targeting subtrees under
+      it. The unit of a placement resolution across a tree, as opposed to
+      code_subtree's single-subtree unit.
+    marker: 'user-named directory root; leaves, documents and reports resolved by discover_hierarchy.py'
+    contains:
+      optional:
+        - kind: claude_md
+          at: '<root>/CLAUDE.md'
+        - kind: claude_md
+          at: '<root>/**/CLAUDE.md'
+        # The one constituent no other composition has: another lane's PERSISTED
+        # OUTPUT. Coverage reports are not a primitive and belong to no other
+        # composition, so a lane consuming them had nowhere to declare that
+        # input. Declared here rather than as a lane-record field so the
+        # registry stays the single place a composition is described.
+        - kind: candidate_reports
+          at: '<caller-chosen directory>/*.json'
+          note: 'persisted coverage reports, one or more subjects each; absence selects the chain-audit face'
+    leaves: 'directories at or beneath <root> directly containing at least one code file, after structural exclusions'
+    ambient_chain: 'CLAUDE.md files from the nearest .git root through <root>, root-most first; may be empty'
+    nests_inside: [project, directory]
+    nests: [directory, code_subtree, skill]
+    discovery_priority: 41
+
   - id: directory
     description: A plain directory with no special marker. The fallback when no other composition matches.
     marker: 'any directory'
