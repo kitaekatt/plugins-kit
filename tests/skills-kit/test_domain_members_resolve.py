@@ -69,7 +69,10 @@ EXPECTED_LANES = {
     "coverage_code_subtree": {
         "verb": "coverage",
         "subject": "code_subtree",
-        "table_key": "coverage (code subtree)",
+        # The lane id stays `coverage_code_subtree` (a stable identifier), but
+        # the table's human-readable key names the real unit: one directory's
+        # own direct code files, never a subtree.
+        "table_key": "coverage (one directory)",
     },
     "hierarchy_claude_md_tree": {
         "verb": "hierarchy",

@@ -289,6 +289,34 @@ claude_md:
         lane. The fields exist so a judgment a CALLER already made survives into
         the persisted report; hierarchy makes the judgment itself when they are
         absent.
+
+        AMENDMENT -- this record's PREMISE is superseded by
+        `the_subject_is_one_directory_not_a_subtree`. Read that record first.
+        Both justifications for a tree-scale unit rested on the coverage subject
+        being a SUBTREE: sibling blindness (a subtree cannot see its siblings)
+        and depth-invisible-per-leaf (a subtree cannot judge whether a fact
+        belongs at its parent). Under the settled model a parent's composition
+        reads every child CLAUDE.md directly, so the parent SEES both reporters
+        and makes the depth judgment itself, with the documents in hand rather
+        than from one-line proposals. Both properties this lane existed to
+        supply are now supplied by the pass that consumes them.
+        The `scope` / `sibling_overlap` fields are RETIRED (read-only
+        compatibility surface); the criterion that licensed a candidate to name
+        an ancestor destination is rewritten as
+        `fact-scoped-to-this-directory`, which forbids it. Nothing may
+        reintroduce nomination from below.
+        What is NOT overturned: the computed-verdict discipline and the
+        report-only entry point are sound and worth preserving wherever the
+        equivalent judgments now live -- an affirmative verdict must still be
+        computed from an inventory the pass builds itself rather than asserted,
+        and a plan spanning an ordering constraint must still be presented rather
+        than applied.
+        STATUS: the lane ships but its criteria describe the retired model. It is
+        redundant rather than reducible -- do not narrow it to a
+        "repetition detector", because the parent already observes repetition
+        among its own children. Retiring it versus leaving it dormant is a
+        cosmetic call that gates nothing; the hazard while it remains is a caller
+        getting a confident answer built on retired assumptions.
       origin: |
         Surface: tree-scale CLAUDE.md work was being done by hand-rolled merge
         plans, with the depth and de-duplication judgments living in a
@@ -300,6 +328,79 @@ claude_md:
         seam (hierarchy-detect.js refuses without refs.criteria) and the
         computed-verdict refusal above.
       added: "2026-08-10"
+    - id: the_subject_is_one_directory_not_a_subtree
+      keywords: [non-recursive subject, direct code files, one directory, not a subtree, child claude.md as input, hoisting at the parent, no nomination from below, bottom-up order, regenerating commits to descendants, vcs ignore exclusion, task folder claude.md, scope in the sentence, fact-scoped-to-this-directory, promotion retired, unit mismatch]
+      summary: A coverage subject is ONE DIRECTORY'S OWN DIRECT code files, never a subtree. A parent gets its content by reading its children's finished CLAUDE.md files and hoisting what repeats -- placement is never nominated from below. This SUPERSEDES the promotion machinery (`scope`, `sibling_overlap`, an assessment naming an ancestor destination).
+      detail: |
+        THE DEFECT THAT FORCED IT. Three components each defined "a code
+        directory" differently, and nothing reconciled them: coverage's subject
+        was a whole subtree RECURSIVELY (`discover_coverage.py <dir>` on a
+        directory with 4 direct files reported 125); the hierarchy lane's leaf
+        was a directory DIRECTLY holding code; and a campaign's hand-kept ledger
+        used a third definition. So a directory holding code AND code-bearing
+        descendants could not produce a per-leaf report without re-reading its
+        subtree and duplicating every descendant's facts -- and any
+        de-duplication downstream then compared facts against copies of
+        themselves.
+
+        THE RESOLUTION IS A NEW MODEL, NOT A PATCH TO EITHER UNIT. Both
+        candidate patches were rejected. Narrowing the leaf definition left
+        coverage still recursive. Making the subject non-recursive ALONE loses
+        content, because a parent's own scope then has no source. The owner's
+        model supplies the missing input: composing D reads D's direct code PLUS
+        every child CLAUDE.md. That second input is what makes the non-recursive
+        subject lossless rather than merely narrower, and it is the load-bearing
+        part -- omit it and the model is strictly worse than what it replaced.
+
+        WHY PLACEMENT MOVED TO THE PARENT. The retired criterion invited an
+        assessment to name a destination above itself, which it cannot justify:
+        it read only its own directory, so it cannot know whether the fact holds
+        of code it never opened. Hoisting happens where the evidence is -- the
+        parent, comparing documents it has actually read. A fact repeated across
+        children moves up; a fact only one child has stays there. This also
+        removes an inference the resolver was making from one-line facts without
+        access to the evidence behind them.
+
+        REPETITION IS THE TRIGGER, WORDING IS THE TEST. The two are not the same
+        criterion and they come apart in both directions -- a fact in 2 of 20
+        children hoisted verbatim becomes ambient for 18 directories it does not
+        govern, and a fact true of every child that only one child noticed never
+        triggers at all. The resolution is that a hoisted fact must be WORDED so
+        it is true as stated at its new depth, usually by naming its subjects
+        ("Tools and stack-traces both ..."). Scope lives in the sentence, not in
+        a separate mechanism. The escape clause -- it stays in the children when
+        no such wording exists short of a list of exceptions -- protects the
+        observed case of a mirrored-directory rule whose honest wording at the
+        parent would enumerate fifteen exclusions.
+
+        ORDERING IS A HARD DEPENDENCY, WITH TWO CONSEQUENCES THAT MUST BE STATED.
+        Bottom-up: regenerating D commits to regenerating every descendant first.
+        So a root regeneration is a whole-corpus operation -- there is no cheap
+        root refresh -- and a STALE child document silently corrupts its parent.
+
+        EXCLUSION IS BY THE PROJECT'S VCS, and it is not cosmetic. Reading every
+        child CLAUDE.md unconditionally otherwise ingests documents that are not
+        directory guidance at all: a task folder's CLAUDE.md is about a piece of
+        WORK. Detecting what the VCS ignores answers that mechanically instead of
+        asking, which is the preferred shape for an observable fact.
+
+        COMPATIBILITY. `destination` is pinned to the subject directory --
+        degenerate, kept so reports written before this model stay loadable.
+        `scope` and `sibling_overlap` are read-only for the same reason and must
+        not be emitted or reintroduced under another name.
+      origin: |
+        Surface: applying the coverage -> generation chain to a real corpus, a
+        hierarchy run could not satisfy its own input inventory for any directory
+        holding both code and code-bearing descendants. Finding: the two lanes
+        disagreed about what a directory is, and the ledger supplied a third
+        definition; the recursive subject was the root cause rather than the
+        inventory check. Follow-up: `applies_to: code_subtree` and the lane id
+        `coverage_code_subtree` are now imprecise names for a
+        single-directory subject -- the rename is deliberately NOT bundled here,
+        because it touches the dispatch table, the framework registry, the lane
+        records and their tests, and a partial rename is the worse failure. It is
+        recorded as its own change.
+      added: "2026-08-11"
     - id: coverage_depth_asks_rather_than_defaults
       keywords: [basic advanced, analysis depth, intent gate, AskUserQuestion, extreme experience, default disclosure, verdict carries the mode, one dial not two]
       summary: Coverage depth is one dial with two operating points (basic / advanced). When the invocation expresses no depth the intent gate ASKS via AskUserQuestion rather than defaulting -- the rare case where prompting beats a sensible default, because both directions of a silent wrong choice are expensive and invisible.

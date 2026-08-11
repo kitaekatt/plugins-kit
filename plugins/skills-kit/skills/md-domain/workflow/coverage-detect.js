@@ -1,10 +1,10 @@
 // md-domain coverage verb -- DETECT workflow (the only phase; report-only).
 //
-// Fan-out assessment, one lane per (code subtree, ambient CLAUDE.md chain). This
+// Fan-out assessment, one lane per (code directory, ambient CLAUDE.md chain). This
 // is the first lane in the skill whose subject is CODE rather than a markdown
 // file, which is why it has its own procedure rather than being a criterion inside
 // audit_claude_md: the per-file lanes enumerate CLAUDE.md files, and no criterion
-// can have a subject its lane cannot enumerate. The decisive case is a subtree
+// can have a subject its lane cannot enumerate. The decisive case is a directory
 // with NO CLAUDE.md at all.
 //
 // WHAT THIS IS FOR: md-domain is not a code-review tool. This verb reads code
@@ -34,7 +34,7 @@
 //                 unknownExtensions: { [ext: string]: number } } ],
 //     (all produced by scripts/discover_coverage.py, which is side-effect free and
 //     reads no file contents. Do NOT recompute the ambient chain here: the chain
-//     INCLUDES a CLAUDE.md at the subtree root, and its upward walk stops at the
+//     INCLUDES a CLAUDE.md at the directory root, and its upward walk stops at the
 //     nearest .git so a nested repo never inherits the outer repo's chain. Both
 //     are easy to get wrong by eye.)
 //   ceiling: integer|undefined   // candidate cap PER SUBTREE; default below
@@ -50,13 +50,13 @@
 
 export const meta = {
   name: 'md-domain-coverage-detect',
-  description: 'Fan-out coverage assessment: which facts about this code subtree belong in a CLAUDE.md and are not ambient for it (report-only, no edits)',
-  phases: [{ title: 'Coverage', detail: 'one lane per code subtree' }],
+  description: 'Fan-out coverage assessment: which facts about this code directory belong in a CLAUDE.md and are not ambient for it (report-only, no edits)',
+  phases: [{ title: 'Coverage', detail: 'one lane per code directory' }],
 }
 
 // Candidate cap, applied PER SUBTREE (not per run). A per-run cap divided across
-// subjects would give each subtree an arbitrary share that shrinks as the run
-// widens, which is a worse answer than capping each subtree consistently. The
+// subjects would give each directory an arbitrary share that shrinks as the run
+// widens, which is a worse answer than capping each directory consistently. The
 // aggregate is reported so a wide run cannot look complete when it is not.
 // When the cap is hit the report SAYS so -- silent truncation in the verb that
 // reports silent truncation would be its own joke, and the repo's own rule
@@ -106,8 +106,11 @@ const SUBJECT_FINDINGS_SCHEMA = {
           // The fact as it would read in a CLAUDE.md -- not a description of a
           // defect, and not a code location on its own.
           fact: { type: 'string' },
-          // The CLAUDE.md the placement algorithm selects: ambient for the code
-          // it describes, never wherever is convenient.
+          // ALWAYS the assessed directory. Degenerate by design: an
+          // assessment reads only its own directory's direct code, so it has no
+          // basis to place a fact anywhere else. Kept as a field so reports
+          // written before this model stay loadable. A value naming anywhere
+          // else violates fact-scoped-to-this-directory.
           destination: { type: 'string' },
           why: { type: 'string' },
           // CV-4. FINDING-CONVERTIBLE means a reviewer could catch a violation:
@@ -121,16 +124,21 @@ const SUBJECT_FINDINGS_SCHEMA = {
           // CV-7's evidence floor. minItems:1 because an empty array satisfies a
           // bare `required` while citing nothing.
           anchors: { type: 'array', minItems: 1, items: { type: 'string' } },
-          // Carriage fields for a tree-scale resolution downstream. OPTIONAL,
-          // and deliberately so: judging whether a fact belongs at this leaf or
-          // at a parent requires reading the parent or a sibling, which is
-          // outside this lane's subject -- so this lane is not required to
-          // answer it, and the hierarchy lane (whose subject contains the
-          // parent) decides when the field is absent. They exist so that a
-          // judgment a CALLER already made survives into the persisted report
-          // instead of living in a hand-rolled brief beside it.
-          scope: { type: 'string' },          // 'LEAF-ONLY' | 'PROMOTE -> <dir>'
-          sibling_overlap: { type: 'string' }, // a sibling document stating this fact: which, and whether it reaches this subtree
+          // `scope` ('LEAF-ONLY' | 'PROMOTE -> <dir>') and `sibling_overlap`
+          // were REMOVED from this schema deliberately, and the removal is the
+          // enforcement -- with additionalProperties:false above, an assessment
+          // now CANNOT emit them. They were the promotion machinery: a candidate
+          // nominating a destination above itself, which an assessment cannot
+          // justify from a directory it never opened. A fact reaches a wider
+          // area by HOISTING at the parent, which compares child documents it
+          // has actually read.
+          //
+          // This is an OUTPUT schema, so it constrains only new emissions --
+          // reports persisted before this model keep both fields on disk and
+          // still load. Do not re-add them here to "stay compatible": that
+          // conflates what a run may produce with what a loader may read, and it
+          // reopens the exact nomination path fact-scoped-to-this-directory
+          // forbids.
         },
       },
     },
@@ -169,8 +177,8 @@ if (depth !== 'basic' && depth !== 'advanced') {
 const lanePrompt = (s) => {
   const chain = s.ambientClaudeMdPaths || []
   const chainClause = chain.length
-    ? `The CLAUDE.md files AMBIENT for this subtree, root-most first:\n${chain.map((p) => `  - ${p}`).join('\n')}\n\nRead every one. A fact already carried by an ambient claim that RESOLVES is NOT a candidate -- that suppression is applied HERE, at assessment time, because establishing it requires reading the ambient document and usually the source it anchors to.`
-    : `This subtree has NO ambient CLAUDE.md. Nothing loads for this code at all. That is not an error and not a skip -- it is the strongest form of the finding this verb exists to surface.`
+    ? `The CLAUDE.md files AMBIENT for this directory, root-most first:\n${chain.map((p) => `  - ${p}`).join('\n')}\n\nRead every one. A fact already carried by an ambient claim that RESOLVES is NOT a candidate -- that suppression is applied HERE, at assessment time, because establishing it requires reading the ambient document and usually the source it anchors to.`
+    : `This directory has NO ambient CLAUDE.md. Nothing loads for this code at all. That is not an error and not a skip -- it is the strongest form of the finding this verb exists to surface.`
 
   const exclusionClause = (s.skipped || []).length
     ? `\nAlready excluded structurally (do not assess, and mention in notes):\n${s.skipped.map((k) => `  - [${k.reason}] ${k.path}`).join('\n')}`
@@ -188,9 +196,9 @@ source. At this depth COVERAGE-ASSESSED means verified absent.`
     : `ANALYSIS DEPTH: basic. Use a bounded, sampled read and one assessment pass.
 At this depth COVERAGE-ASSESSED means not found within budget.`
 
-  return `Assess the CLAUDE.md COVERAGE of one code subtree.
+  return `Assess the CLAUDE.md COVERAGE of ONE DIRECTORY.
 
-Subtree: ${s.root}
+Directory: ${s.root}
 Code files (${(s.codeFiles || []).length}):
 ${(s.codeFiles || []).map((p) => `  - ${p}`).join('\n')}
 
@@ -223,11 +231,21 @@ not your judgment about what seems important, decides what earns ambient cost.
 The observation kinds it builds on are in ${input.refs.observationKinds || 'the claude-md standards doc'}
 (the GENERATION direction's list of what is worth writing up).
 
-DESTINATION. Every candidate names the CLAUDE.md the placement algorithm in
-${input.refs.placement || 'references/cohesion-principles.md'} selects -- ambient for the code it
-describes. Ambient budget is PER FILE: putting a fact in a file that already
-loads somewhere else does not make it reach this code. Do not default to the
-nearest CLAUDE.md.
+SCOPE, AND IT IS THE HARDEST RULE HERE. Every candidate must be a fact about
+THIS DIRECTORY'S OWN DIRECT code, and its destination is ALWAYS this directory.
+You are not choosing a placement. Set destination to the directory named above,
+verbatim, on every candidate.
+
+REJECT a fact whose subject is a file in a subdirectory, a sibling, or a parent.
+Each of those is assessed on its own terms and receives the fact from its own
+run. You read only this directory, so you cannot know whether such a fact holds
+of code you never opened -- and a fact placed on that basis burdens every reader
+it does not apply to.
+
+Do NOT propose that a fact belongs "higher up", and do not hedge toward it in
+`why`. A fact that genuinely governs a wider area reaches it by HOISTING, which
+happens later, at the parent, by comparing the finished CLAUDE.md files of
+several children. That is not your job and you do not have the inputs for it.
 
 TIER (CV-4). Classify every surviving candidate as FINDING-CONVERTIBLE or
 CONTEXT-ONLY. FINDING-CONVERTIBLE requires ALL THREE: an imperative a reviewer
@@ -245,7 +263,7 @@ layout, and repeated patterns start an investigation; they are not evidence on
 their own. A fact you cannot anchor to observed source is DROPPED, not hedged
 and not reported with a guess at a location.
 
-CEILING. Report at most ${ceiling} candidates FOR THIS SUBTREE. If you would have exceeded it, set
+CEILING. Report at most ${ceiling} candidates FOR THIS DIRECTORY. If you would have exceeded it, set
 ceilingReached: true and say in notes how many you set aside. Never truncate
 silently.
 
@@ -253,18 +271,18 @@ HONESTY. Your result is a SAMPLE, not an inventory -- two thorough reviewers ove
 one corpus found largely different facts. Do not imply exhaustiveness.
 
 VERDICT. GAPS-FOUND if at least one candidate survives; COVERAGE-ASSESSED if the
-subtree was assessed and none did. NEVER emit COMPLIANT or NON-COMPLIANT: those
+directory was assessed and none did. NEVER emit COMPLIANT or NON-COMPLIANT: those
 belong to the document lanes and answer a different question. A CLAUDE.md can be
-COMPLIANT while its subtree is GAPS-FOUND at the same moment.
+COMPLIANT while its directory is GAPS-FOUND at the same moment.
 
 Return the structured object.`
 }
 
 // Structural refusal (never let a discovery failure read as a clean pass).
-// `codeFiles` empty AND `unknownExtensions` non-empty means the subtree was
+// `codeFiles` empty AND `unknownExtensions` non-empty means the directory was
 // never READ -- nothing in it matched a known code, doc, or asset type -- not
 // that it was verified clean. Letting that reach the agent risks a
-// COVERAGE-ASSESSED verdict ("verified absent") over a subtree nobody looked
+// COVERAGE-ASSESSED verdict ("verified absent") over a directory nobody looked
 // at, so this subject never gets an agent dispatch at all: it is decided here,
 // mechanically, before any tokens are spent.
 const hasUnknownExtensions = (s) =>
@@ -283,7 +301,7 @@ const discoveryFailure = (s) => {
     notes: [
       `discovery failure: 0 recognized code files but unrecognized extensions ` +
       `present (${entries}) -- CODE_DATA_EXT does not cover them, so this ` +
-      `subtree was never read. This is NOT COVERAGE-ASSESSED.`,
+      `directory was never read. This is NOT COVERAGE-ASSESSED.`,
     ],
   }
 }
@@ -337,7 +355,7 @@ const results = perSubject.filter(Boolean).map((r) => {
 
 // The ambient chain is an INPUT fact, not something the lane reports back, so
 // the uncovered tally is computed from the subjects rather than the results --
-// reading it off the agent's object would count every subtree as uncovered.
+// reading it off the agent's object would count every directory as uncovered.
 const chainSizeByRoot = new Map(
   subjects.map((s) => [String(s.root), (s.ambientClaudeMdPaths || []).length])
 )
@@ -362,12 +380,12 @@ const totals = results.reduce((acc, r) => {
   if (r.verdict === 'GAPS-FOUND') acc.gapsFound++
   if (r.verdict === 'COVERAGE-ASSESSED') acc.assessed++
   // Counted apart from both verdicts, deliberately: DISCOVERY-FAILED is
-  // neither "gaps found" nor "assessed clean" -- it means the subtree could
+  // neither "gaps found" nor "assessed clean" -- it means the directory could
   // not be classified at all, and folding it into assessed would be exactly
   // the fake pass this refusal exists to prevent.
   if (r.verdict === 'DISCOVERY-FAILED') acc.discoveryFailed++
   if (r.ceilingReached) acc.ceilingReached++
-  // Counted apart from the verdicts: a subtree nothing covers is the finding
+  // Counted apart from the verdicts: a directory nothing covers is the finding
   // this verb exists for, and folding it into gapsFound would hide it.
   if (!chainSizeByRoot.get(String(r.root))) acc.uncovered++
   return acc
@@ -384,11 +402,11 @@ const totals = results.reduce((acc, r) => {
   uncovered: 0,
 })
 
-// The ceiling is per subtree, so a wide run's aggregate is subjects x ceiling.
-// Stating the aggregate keeps a capped multi-subtree run from reading as
-// complete just because no single subtree looks truncated.
+// The ceiling is per directory, so a wide run's aggregate is subjects x ceiling.
+// Stating the aggregate keeps a capped multi-directory run from reading as
+// complete just because no single directory looks truncated.
 const ceilingNote = totals.ceilingReached
-  ? `, ${totals.ceilingReached}/${results.length} subtree(s) hit the per-subtree ceiling of ${ceiling} (those results are capped, not complete)`
+  ? `, ${totals.ceilingReached}/${results.length} directory/ies hit the per-directory ceiling of ${ceiling} (those results are capped, not complete)`
   : ''
 const severeNote = totals.severe ? `, ${totals.severe} severe-deficiency` : ''
 // CV-4: the tier split rides on the summary line so the classification is
@@ -401,13 +419,13 @@ const evidenceNote = totals.unanchored
   ? `, ${totals.unanchored} candidate(s) arrived with NO anchor -- CV-7 evidence floor breached`
   : ''
 const discoveryFailedNote = totals.discoveryFailed
-  ? `, ${totals.discoveryFailed} subtree(s) DISCOVERY-FAILED -- unrecognized ` +
+  ? `, ${totals.discoveryFailed} directory/ies DISCOVERY-FAILED -- unrecognized ` +
     `extensions with zero recognized code files, never read, not COVERAGE-ASSESSED`
   : ''
 const uncoveredNote = totals.uncovered
-  ? `, ${totals.uncovered} subtree(s) with NO ambient CLAUDE.md at all`
+  ? `, ${totals.uncovered} directory/ies with NO ambient CLAUDE.md at all`
   : ''
 
-log(`Coverage (depth=${depth}): assessed ${results.length}/${subjects.length} subtree(s): ${totals.gapsFound} GAPS-FOUND, ${totals.assessed} COVERAGE-ASSESSED, ${totals.candidates} candidate(s)${tierNote}${severeNote}${evidenceNote}${uncoveredNote}${discoveryFailedNote}${ceilingNote}. Advisory and non-idempotent: re-runs may differ, and nothing is applied.`)
+log(`Coverage (depth=${depth}): assessed ${results.length}/${subjects.length} directory/ies: ${totals.gapsFound} GAPS-FOUND, ${totals.assessed} COVERAGE-ASSESSED, ${totals.candidates} candidate(s)${tierNote}${severeNote}${evidenceNote}${uncoveredNote}${discoveryFailedNote}${ceilingNote}. Advisory and non-idempotent: re-runs may differ, and nothing is applied.`)
 
 return { perSubject: results, totals, ceiling, depth }

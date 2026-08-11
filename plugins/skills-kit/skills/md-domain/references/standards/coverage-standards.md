@@ -7,10 +7,31 @@ which passes this document's path as `refs.criteria` to
 `workflow/coverage-detect.js`. The workflow applies these criteria verbatim; it
 does not paraphrase them and does not supply criteria of its own.
 
-**Subject.** A code subtree plus the ambient CLAUDE.md chain above it -- not a
-markdown file. Every other standards doc in this directory judges a document
-that exists. This one judges what is ABSENT from one, which is why its criteria
-read as admission tests rather than compliance rules.
+**Subject.** ONE DIRECTORY'S OWN DIRECT code files, plus the ambient CLAUDE.md
+chain above it -- not a markdown file, and **not a subtree**. Assessing D reads
+the code files that sit directly in D and never descends into D's
+subdirectories: each of those is its own subject, assessed on its own terms.
+Every other standards doc in this directory judges a document that exists. This
+one judges what is ABSENT from one, which is why its criteria read as admission
+tests rather than compliance rules.
+
+The chain still walks UPWARD without limit -- only the code-file set is
+non-recursive. Ancestors are what make a fact already-ambient (CV-2), so
+suppression would break if the chain stopped.
+
+**Why not a subtree.** A recursive subject makes the same fact arrive once per
+enclosing directory, so a parent's assessment duplicates every descendant's
+findings and any de-duplication downstream compares facts against copies of
+themselves. A parent gets its content instead by reading its children's finished
+CLAUDE.md files -- see `references/lanes/generation-lane.md`, parent
+composition. That input is what makes the non-recursive subject lossless rather
+than merely narrower.
+
+**Excluded directories.** A directory the project's VCS is configured to ignore
+is not a subject and its CLAUDE.md is not an input: git -> `check-ignore
+--no-index`; Perforce -> `p4 ignores`; neither -> nothing is excluded. This is
+what keeps a task folder's or a scratch directory's CLAUDE.md -- a document
+about a piece of work, not about code -- out of a parent's composition.
 
 **Direction.** Coverage decides whether an absent fact should be present. It
 never judges present content: that is CD-1..CD-6 in `claude-md-standards.md`
@@ -34,8 +55,8 @@ standards_set:
   _schema_version: "1"
   identity: >-
     Admission criteria deciding which code-derived facts earn a place in an
-    ambient CLAUDE.md, applied to a code subtree and its ancestor chain rather
-    than to a markdown document.
+    ambient CLAUDE.md, applied to one directory's own direct code files plus its
+    ancestor chain, rather than to a markdown document.
   applies_to: code_subtree
   criteria:
     - id: absent-fact-earns-ambient-cost
@@ -59,8 +80,9 @@ standards_set:
 
     - id: already-ambient-suppressed
       statement: >-
-        A fact already carried by any CLAUDE.md in the subtree's ancestor chain
-        is never a candidate, including at a trigger site closer to the code.
+        A fact already carried by any CLAUDE.md in this directory's ancestor
+        chain is never a candidate, including at a trigger site closer to the
+        code.
       severity: fail
       enforcement: judgment
       keywords: [already ambient, inherited, duplication, trigger site, restatement, ancestor chain]
@@ -69,18 +91,23 @@ standards_set:
         it. Proposing it again in a subdirectory is duplication the placement
         spine forbids, however close to the code that copy would sit.
 
-    - id: no-cross-apply-placement
+    - id: fact-scoped-to-this-directory
       statement: >-
-        The destination must be a CLAUDE.md in an ancestor directory of every
-        file the fact governs, and of no file it does not.
+        A candidate must be a fact about the assessed directory's own direct
+        code. Its destination is that directory, always; an assessment never
+        proposes a fact for anywhere else.
       severity: fail
       enforcement: judgment
-      keywords: [placement, ancestor chain, no cross apply, sibling subtree, scope, destination]
+      keywords: [scope, this directory only, destination is the subject, no nomination, no promotion, no hoisting from below, sibling subtree]
       example: >-
-        A seed variable belonging to one sandbox's tests must not be proposed
-        for a sibling sandbox that never uses it. A sibling's CLAUDE.md never
-        loads for this subtree, so such a placement reaches nobody it should and
-        burdens everybody it should not.
+        REJECT a fact whose subject is a file in a subdirectory, a sibling, or a
+        parent -- each of those is assessed on its own terms and would receive
+        the fact from its own run. An assessment that read only this directory
+        has no basis to place anything anywhere else: it cannot see whether the
+        fact holds of code it never opened. A fact that genuinely governs a
+        wider area reaches that area by HOISTING, which happens at the parent
+        when the parent observes the same fact in more than one child's
+        document -- never by nomination from below.
 
     - id: candidate-tier-classified
       statement: >-
@@ -151,21 +178,29 @@ standards_set:
         section 3.
 ```
 
-## Two optional carriage fields on a candidate
+## Two RETIRED carriage fields on a candidate
 
-Beyond the criteria above, a candidate record may carry `scope` (`LEAF-ONLY` or
-`PROMOTE -> <dir>`) and `sibling_overlap` (a sibling document stating the fact,
-and whether it reaches this subtree's author). Neither is a criterion and
-neither is required.
+A candidate record may still carry `scope` (`LEAF-ONLY` or `PROMOTE -> <dir>`)
+and `sibling_overlap` (a sibling document stating the fact, and whether it
+reaches this directory's author). **Neither is produced any more, and neither is
+a criterion.** They are read-only compatibility surface: reports written before
+this model exists carry them, and a loader must not choke on them.
 
-They are optional deliberately. Judging whether a fact belongs at this leaf or
-at a parent means reading the parent or a sibling -- a read outside this
-subject, which is precisely what `no-cross-apply-placement` constrains the
-ANSWER of without licensing. So this document does not require the judgment; it
-provides somewhere for a caller who made it anyway to record it, so the
-persisted report is a complete input to a resolution over the whole tree
-(`hierarchy-standards.md`), which owns that judgment and makes it itself when
-the field is absent.
+They were the promotion machinery -- an assessment nominating a destination
+above itself. `fact-scoped-to-this-directory` now forbids exactly that, for the
+reason the fields themselves half-admitted: judging whether a fact belongs here
+or at a parent means reading the parent or a sibling, which is outside the
+subject. The judgment was never licensed; it was merely given somewhere to sit.
+
+A fact reaches a wider area by HOISTING instead -- the parent observes the same
+fact in more than one child's document and lifts it, rewording it so it is true
+as stated at its new depth. That happens during parent composition
+(`references/lanes/generation-lane.md`), where the documents being compared have
+actually been read.
+
+**Do not emit either field, and do not reintroduce an equivalent.** A
+`destination` pointing anywhere but the subject directory is a criterion
+violation, not a hint.
 
 ## Analysis depth: basic and advanced
 
@@ -182,7 +217,7 @@ operating points.
 
 `basic` is not a degraded mode. It is the level a Claude Code power user should
 expect from a routine invocation: bounded, repeatable, and worth running on a
-subtree without planning for it. `advanced` is the full treatment -- the shape
+directory without planning for it. `advanced` is the full treatment -- the shape
 the generation method itself ran -- and is correspondingly expensive.
 
 **Advanced is not "basic, but more".** Its invariant-discovery pass runs before

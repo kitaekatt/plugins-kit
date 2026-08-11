@@ -19,14 +19,22 @@ its ambient CLAUDE.md chain; **hierarchy** resolves where every fact in one
 artifact-parameterized. This replaces the former `md-audit` / `md-authoring`
 routers and the member skills they dispatched into.
 
+**Coverage's subject is ONE DIRECTORY'S OWN DIRECT code files -- never a
+subtree.** Assessing a directory never descends into its subdirectories: each of
+those is its own subject. A parent's content comes instead from its own direct
+code plus its children's finished CLAUDE.md files. The lane id
+`coverage_code_subtree` and the composition name `code_subtree` are legacy
+identifiers for that single-directory subject; the unit is the directory.
+
 The four are dispatch entries, not four things of the same kind. Auditing is
 making sure something is accurate and compliant. Generation is creating a
 document that does not exist -- and regeneration where the document already
 exists. Coverage is the DISCOVERY step that feeds generation and
-regeneration: it reads code, discovers facts, and names where each belongs, and
-it writes nothing. Hierarchy is the RESOLUTION step between them: it takes those
-facts plus the tree's existing documents and selects exactly one home per fact,
-and it writes nothing either.
+regeneration: it reads one directory's code, discovers facts about it, and writes
+nothing. Hierarchy resolves placement across a whole tree from persisted
+candidate proposals; it writes nothing either, and it is not part of the
+bottom-up chain described below -- see `CLAUDE.md`'s amendment to
+`hierarchy_is_the_resolution_phase_over_a_tree`.
 
 One skill, one dispatch table, four procedures. Audit and generate share
 per-artifact standards; coverage and hierarchy each have their own criteria and
@@ -48,7 +56,8 @@ spine they all defer to lives in `references/cohesion-principles.md`.
   `claude-md`, or `project-doc` to audit a CHANGE rather than a file. See
   "Review mode" below.
 - **Coverage mode** -- name a directory or pass `--diff`; there is no whole-repo
-  default. Coverage reads code and reports without editing code or markdown.
+  default. Coverage reads that directory's own direct code files -- not its
+  subdirectories -- and reports without editing code or markdown.
 - **Hierarchy mode** -- name a tree root, optionally with `--reports <dir>`;
   there is no whole-repo default. Hierarchy reads the tree's CLAUDE.md files and
   the persisted reports and emits a placement plan, editing nothing.
@@ -66,13 +75,23 @@ Just tell me what you want, in your own words. Widest first:
   "audit the docs"                     Project-doc audit
   "check for broken skill references"  Cross-reference audit
 
-  "check <directory> for coverage"     Coverage analysis. Reads the CODE there
-                                       and reports which facts its CLAUDE.md
-                                       chain should carry so a code review can
-                                       act on them. Reports only, never edits.
-                                       Ask me to write the results up afterwards
-                                       and I generate those CLAUDE.md files --
-                                       a separate step you choose, per candidate.
+  "check <directory> for coverage"     Coverage analysis. Reads the code files
+                                       sitting directly IN that directory -- not
+                                       its subdirectories, each of which is its
+                                       own run -- and reports which facts its
+                                       CLAUDE.md chain should carry so a code
+                                       review can act on them. Reports only,
+                                       never edits. Ask me to write the results
+                                       up afterwards and I generate that
+                                       CLAUDE.md -- a separate step you choose,
+                                       per candidate.
+
+  "give <dir> and everything under     The whole-tree form: one coverage run and
+   it CLAUDE.md files"                 one generation per directory, DEEPEST
+                                       FIRST, because a parent is composed from
+                                       its own code plus its children's finished
+                                       documents. Committing to a directory
+                                       commits to everything beneath it.
 
   "resolve placement across <dir>"     Hierarchy resolution. Takes the coverage
                                        reports you have kept plus the CLAUDE.md
@@ -153,7 +172,7 @@ never the whole tree.
 | generate x claude-md | `generate_claude_md` | `references/lanes/generation-lane.md` | `references/standards/claude-md-standards.md` |
 | generate x project-doc | `generate_project_doc` | `references/lanes/generation-lane.md` | `references/standards/project-doc-standards.md` |
 | generate x references | -- (no lane) | -- | -- |
-| coverage (code subtree) | `coverage_code_subtree` | `references/lanes/coverage-lane.md` | `references/standards/coverage-standards.md` |
+| coverage (one directory) | `coverage_code_subtree` | `references/lanes/coverage-lane.md` | `references/standards/coverage-standards.md` |
 | hierarchy (claude_md_tree) | `hierarchy_claude_md_tree` | `references/lanes/hierarchy-lane.md` | `references/standards/hierarchy-standards.md` |
 
 **`generate x references` has no lane, deliberately.** Cross-references are not a
@@ -177,22 +196,33 @@ pre-resolved placement. Caller-side mechanics are in `coverage-lane.md`
 ("Handing the report to generation"); the intake side is `generation-lane.md`'s
 precondition.
 
-**At TREE scale the chain gains a middle link.** When several subtrees were
-assessed and their reports kept, the same fact arrives once per sibling -- a
-sibling's CLAUDE.md is not ambient for a subtree, so per-subtree coverage
-re-reports it correctly -- and no leaf can judge whether its fact belongs at a
-parent. `hierarchy` is the phase that sees the whole tree at once:
+**At TREE scale the chain runs BOTTOM-UP, one directory at a time.** Each
+directory is assessed on its own direct code, then composed; a parent is
+composed only after every directory beneath it has a finished CLAUDE.md, because
+its second input IS those documents:
 
 ```
-coverage (per leaf, N runs) -> hierarchy (tree, 1 run) -> generate (per destination, M runs)
+for each directory, deepest first:
+    coverage (its own direct code) -> generate (that directory)
 ```
 
-with the user's decision between each arrow. It is a CHAIN for the same reason
-the two-link form is: hierarchy is report-only, and a verb that resolved and
-wrote in one motion would make the plan a formality. As shipped the middle link
-is OPT-IN -- it never runs as a side effect of a coverage or generation
-dispatch, and a tree-scale regeneration request offers it by name rather than
-running it.
+Two properties follow, and both are constraints rather than conveniences.
+Generating a directory COMMITS to generating every descendant of it first, so a
+root regeneration is a whole-corpus operation and there is no cheap root
+refresh. And a stale child document silently corrupts its parent, because the
+parent trusts it as an input.
+
+De-duplication happens during parent composition, by HOISTING: a fact appearing
+in more than one child's document moves to their common ancestor, reworded so it
+is true as stated at that depth. It is never proposed from below --
+`fact-scoped-to-this-directory` in `references/standards/coverage-standards.md`
+forbids an assessment from placing a fact outside the directory it read.
+
+`hierarchy` predates this and resolved placement from candidate proposals
+instead. A parent that reads its children's documents makes the same
+observations with the documents in hand, so the lane is not part of the chain
+above. See `CLAUDE.md`'s amendment to
+`hierarchy_is_the_resolution_phase_over_a_tree` before invoking it.
 
 ### Lane records
 
@@ -335,7 +365,7 @@ lanes:
     depth_modes: [basic, advanced]
     invocation_phrasings:
       - "analyze this code directory for missing CLAUDE.md guidance"
-      - "run coverage analysis on this subtree"
+      - "run coverage analysis on this directory"
       - "find what this directory's CLAUDE.md is missing and write it up"
       - "find code-derived facts that should be ambient"
     change_driver: Changes when coverage criteria, depth semantics, or the report-only procedure change.
@@ -387,7 +417,7 @@ ambiguous, ask rather than guessing.
   reports (JSON), one or more subjects each. Absence is not an error; it selects
   a run with no candidates.
 - **`--diff` / `--json`** -- `--diff` is coverage-only and resolves changed code
-  into subtree subjects; `--json` emits the report as structured JSON on either
+  into per-directory subjects; `--json` emits the report as structured JSON on either
   report-only lane.
 - **`--advanced`** -- coverage-only exhaustive reads plus invariant-discovery
   and verification passes. Without an explicit depth, prompt interactively; a
@@ -436,7 +466,7 @@ filter, pre-image materialization, the two documented limits) live in
 ```yaml
 domain_skill:
   _schema_version: "1"
-  identity: The single front door for four dispatch verbs over project markdown -- auditing and generating SKILL.md (and its reference documents), CLAUDE.md, project documents, and skill cross-references, plus report-only coverage analysis over a code subtree and report-only placement resolution over a CLAUDE.md tree.
+  identity: The single front door for four dispatch verbs over project markdown -- auditing and generating SKILL.md (and its reference documents), CLAUDE.md, project documents, and skill cross-references, plus report-only coverage analysis over one directory's direct code and report-only placement resolution over a CLAUDE.md tree.
   companions:
     siblings: []
     note: |
@@ -451,7 +481,7 @@ domain_skill:
     covers:
       - dispatching audit, generation, coverage, or hierarchy intent to exactly one lane
       - owning the four per-artifact standards docs (what good looks like for skill / claude-md / project-doc / references)
-      - owning coverage-standards.md for the code_subtree composition
+      - owning coverage-standards.md for the code_subtree composition (one directory's direct code, not a subtree)
       - owning hierarchy-standards.md for the claude_md_tree composition
       - owning four procedures (shared audit, shared generation -- new documents and regeneration of existing ones -- report-only coverage discovery, and report-only hierarchy resolution)
       - owning the placement spine (cohesion-principles) and the shared audit framework, configuration, and content-shape references
@@ -476,7 +506,7 @@ domain_skill:
       - Route by verb AND subject. Audit and generate require an artifact; coverage accepts only code_subtree and hierarchy only claude_md_tree, and neither is artifact-parameterized. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the generation lane's producing direction when the user asked for a verdict.
       - One lane at a time. On a bare invocation show the menu and wait; do not co-load standards docs or verb procedures. A typical invocation loads this SKILL.md plus one lane plus one standards doc.
       - Detection and remediation are separate phases for audit. The audit pass produces a verdict; it does not silently mutate the subject. Remediation is dispatched after the Q&A gate, as its own work. Coverage and hierarchy have no remediation phase and must stop after reporting.
-      - An affirmative verdict is never emitted over inputs the run did not have. Coverage refuses DISCOVERY-FAILED subtrees; hierarchy reports INPUTS-INCOMPLETE, with no verdict, whenever an enumerated leaf has no input, a document went unread, or an input candidate was not accounted for. Both are computed from an inventory the report carries in full, not asserted by the assessment.
+      - An affirmative verdict is never emitted over inputs the run did not have. Coverage refuses DISCOVERY-FAILED directories; hierarchy reports INPUTS-INCOMPLETE, with no verdict, whenever an enumerated leaf has no input, a document went unread, or an input candidate was not accounted for. Both are computed from an inventory the report carries in full, not asserted by the assessment.
       - Audit findings carry a four-disposition classification (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL), assigned instance-level by the lane's detect classifier -- the taxonomy `bucket` is only the default. Report contract, in this order and with no hedging - SERIOUS summarized at the TOP (never auto-fixed), FIX as an applied count landing in a reviewable CL (review mode - PROPOSED, never applied), IMPROVE as a count plus one-line pitches (opt-in discussion), SILENT omitted entirely. The references lane retains the legacy AUTO / DISCUSS / SPECIAL lanes. Coverage uses only GAPS-FOUND / COVERAGE-ASSESSED and never remediates.
       - Defer placement to references/cohesion-principles.md -- which CLAUDE.md, which skill, whether content graduates. Do not re-derive the placement algorithm inside a lane, a standards doc, or from memory. A placement already resolved upstream (an audit remediation naming the destination, an orchestrator directive) is followed, not re-derived.
       - Summarize-and-reference, do not restate. Keep a fact in its SSOT and reference it elsewhere; the compact form is a reminder plus a reference, and only when the fact fits about a dozen tokens -- beyond that, reference only. See cohesion-principles `summarize_and_reference` and its loss-free-deletion guard.
@@ -494,7 +524,7 @@ domain_skill:
         summary: What a good CLAUDE.md looks like -- the classic C/R/A/H rule set, the CD code-directory review-notes dimension (shapes, observation kinds, anchoring discipline), and the opt-in DD density lens. Read by both the audit_claude_md and generate_claude_md lanes.
       - id: coverage_standards
         path: references/standards/coverage-standards.md
-        keywords: [coverage standards, code subtree, ambient claude.md, absent facts, CV criteria, basic advanced, analysis depth, candidate admission]
+        keywords: [coverage standards, one directory not a subtree, direct code files, non-recursive subject, ambient claude.md, absent facts, CV criteria, basic advanced, analysis depth, candidate admission, hoisting, vcs ignore exclusion]
         summary: What makes a code-derived fact earn ambient CLAUDE.md cost -- CV admission criteria, the basic/advanced depth contract, evidence floor, suppression rules, and report-only boundary. Read by coverage_code_subtree.
       - id: hierarchy_standards
         path: references/standards/hierarchy-standards.md
@@ -546,7 +576,7 @@ domain_skill:
         summary: The ONE generation procedure, parameterized by artifact -- confirm the artifact, resolve placement via cohesion-principles, apply the artifact's standards doc in the PRODUCING direction, shape per the authoring-patterns cluster, validate. Single-invocation; no fan-out machinery.
       - id: coverage_lane
         path: references/lanes/coverage-lane.md
-        keywords: [coverage procedure, code subtree, ambient chain, report only, gaps found, coverage assessed, refs.criteria, analysis depth, no remediation]
+        keywords: [coverage procedure, one directory, direct code, non-recursive, ambient chain, report only, gaps found, coverage assessed, refs.criteria, analysis depth, no remediation]
         summary: The coverage procedure for the non-artifact code_subtree subject -- intent and depth gate, mechanical discovery, criteria-bound assessment, report shape, and STOP. It reads code and never remediates.
       - id: hierarchy_lane
         path: references/lanes/hierarchy-lane.md

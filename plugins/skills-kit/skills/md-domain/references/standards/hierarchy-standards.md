@@ -1,5 +1,24 @@
 # Hierarchy Standards
 
+**READ THIS FIRST -- THESE CRITERIA DESCRIBE A SUPERSEDED MODEL.** They resolve
+placement over candidate proposals produced by a SUBTREE-scoped coverage run. A
+coverage subject is one directory's own direct code files
+(`coverage-standards.md`, Subject), and `fact-scoped-to-this-directory` forbids
+a candidate from naming a destination outside the directory it was assessed
+from, so the input these criteria assume is no longer produced.
+
+`shallowest-true-depth` remains sound IN SUBSTANCE -- a fact lives at the
+shallowest directory where it is true of everything below it -- but its framing
+names the retired direction ("promotes a candidate"). Under the current model it
+is a COMPOSITION-time judgment over a parent's children's finished documents,
+and it is paired with a wording test: a hoisted fact must be worded so it is
+true as stated at its new depth, or it stays in the children. See
+`references/lanes/generation-lane.md`, parent composition, which cites this
+criterion as the depth authority.
+
+Disposition of the lane as a whole: `CLAUDE.md`'s amendment to
+`hierarchy_is_the_resolution_phase_over_a_tree`.
+
 What makes a placement resolution over a whole CLAUDE.md tree honest.
 
 Read by the `hierarchy_claude_md_tree` lane

@@ -1,5 +1,35 @@
 # The hierarchy lane
 
+**READ THIS FIRST -- THIS LANE DESCRIBES A SUPERSEDED MODEL.** It is built
+throughout on coverage's subject being a SUBTREE and on candidates nominating a
+destination above themselves. Neither holds: a coverage subject is one
+directory's own direct code files
+(`references/standards/coverage-standards.md`, Subject), and
+`fact-scoped-to-this-directory` forbids an assessment from placing a fact
+outside the directory it read.
+
+Both properties this lane exists to supply -- seeing past sibling blindness, and
+judging depth from outside a single leaf -- are supplied instead by PARENT
+COMPOSITION, which reads every child CLAUDE.md directly and hoists what repeats
+(`references/lanes/generation-lane.md`, parent composition). A parent makes the
+same judgments with the documents in hand rather than from one-line proposals.
+
+Consequences for anyone here:
+
+- The lane still runs, and it will produce a confident resolution built on
+  retired assumptions. That is the hazard.
+- A report persisted under the current model carries no `scope` and no
+  `sibling_overlap`; the lane treats their absence as "make the judgment
+  myself", so it will not fail loudly.
+- What remains worth preserving is the COMPUTED-VERDICT discipline, not the
+  placement reasoning: an affirmative verdict must be computed from an inventory
+  the pass builds itself, never asserted, and a plan spanning an ordering
+  constraint must be presented rather than applied.
+
+Full disposition, and why the lane is redundant rather than reducible to a
+repetition detector: `CLAUDE.md`'s amendment to
+`hierarchy_is_the_resolution_phase_over_a_tree`.
+
 The hierarchy procedure. Like `coverage`, this one is NOT parameterized by
 artifact -- it has exactly one subject shape, and its subject is a TREE: a named
 directory root, the CLAUDE.md files governing it, and the persisted coverage

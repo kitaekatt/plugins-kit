@@ -1,18 +1,24 @@
 """Tests for the coverage verb's scripts/discover_coverage.py.
 
-discover_coverage.py resolves the coverage subject -- (code subtree, its ambient
-CLAUDE.md chain) -- and applies the STRUCTURAL exclusions. It is the mechanical
-half of the verb and decides nothing about what the code means, so it is fully
-testable ahead of the analysis criteria.
+discover_coverage.py resolves the coverage subject -- (one directory's own direct
+code files, its ambient CLAUDE.md chain) -- and applies the STRUCTURAL
+exclusions. It is the mechanical half of the verb and decides nothing about what
+the code means, so it is fully testable ahead of the analysis criteria.
 
-Two behaviours are pinned here because they are the ones the design turns on and
-the ones a plausible-looking implementation gets wrong:
+Three behaviours are pinned here because they are the ones the design turns on
+and the ones a plausible-looking implementation gets wrong:
 
-  * The ambient chain INCLUDES a CLAUDE.md at the subtree root. The document
-    lanes' resolver deliberately starts at the target's PARENT (the target being
-    the CLAUDE.md itself); reusing that convention here would drop the single
-    most ambient file for a directory subject.
-  * A subtree with NO ambient CLAUDE.md returns an EMPTY chain rather than
+  * The code-file set is NON-RECURSIVE. A child directory is its own subject;
+    composing a parent reads its children's finished CLAUDE.md files, not their
+    source. A recursive subject made every ancestor re-derive its descendants'
+    facts, and the old contract is pinned inverted in
+    TestNonRecursiveSubject.
+  * The ambient chain INCLUDES a CLAUDE.md at the directory itself, and it still
+    walks UPWARD. The document lanes' resolver deliberately starts at the
+    target's PARENT (the target being the CLAUDE.md itself); reusing that
+    convention here would drop the single most ambient file for a directory
+    subject.
+  * A directory with NO ambient CLAUDE.md returns an EMPTY chain rather than
     climbing to something that does not load for it. That null case is the one
     the whole verb exists to surface, so it must be representable.
 
@@ -29,14 +35,24 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DISCOVER_PATH = (
-    REPO_ROOT / "plugins" / "skills-kit" / "skills"
-    / "md-domain" / "scripts" / "discover_coverage.py"
+SCRIPTS_DIR = (
+    REPO_ROOT / "plugins" / "skills-kit" / "skills" / "md-domain" / "scripts"
 )
+DISCOVER_PATH = SCRIPTS_DIR / "discover_coverage.py"
+HIERARCHY_PATH = SCRIPTS_DIR / "discover_hierarchy.py"
+VCS_IGNORE_PATH = SCRIPTS_DIR / "vcs_ignore.py"
 
-_spec = importlib.util.spec_from_file_location("cov_discover", DISCOVER_PATH)
-cov = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(cov)
+
+def _load(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+cov = _load("cov_discover", DISCOVER_PATH)
+vcs = _load("cov_vcs_ignore", VCS_IGNORE_PATH)
+hier = _load("cov_hier_discover", HIERARCHY_PATH)
 
 
 def _write(path: Path, text: str = "x\n") -> None:
@@ -124,14 +140,14 @@ class TestAmbientChain:
         assert all("outer" != p.parent.name for p in chain)
 
 
-class TestWalkSubtree:
+class TestWalkDirectory:
     def test_collects_code_files_and_ignores_docs(self, tmp_path):
         root = tmp_path / "src"
         _write(root / "main.c")
         _write(root / "util.py")
         _write(root / "README.md")
 
-        code_files, skipped, _, _ = cov.walk_subtree(root)
+        code_files, skipped, _, _ = cov.walk_directory(root)
 
         assert {p.name for p in code_files} == {"main.c", "util.py"}
         assert skipped == []
@@ -142,7 +158,7 @@ class TestWalkSubtree:
         _write(root / "node_modules" / "dep.js")
         _write(root / "vendor" / "lib.c")
 
-        code_files, skipped, _, _ = cov.walk_subtree(root)
+        code_files, skipped, _, _ = cov.walk_directory(root)
 
         assert {p.name for p in code_files} == {"main.c"}
         assert _reasons({"skipped": skipped}) == {cov.SKIP_VENDORED}
@@ -153,7 +169,7 @@ class TestWalkSubtree:
         _write(root / "main.c")
         _write(root / "generated" / "schema_pb2.py")
 
-        code_files, skipped, _, _ = cov.walk_subtree(root)
+        code_files, skipped, _, _ = cov.walk_directory(root)
 
         assert {p.name for p in code_files} == {"main.c"}
         assert _reasons({"skipped": skipped}) == {cov.SKIP_GENERATED}
@@ -164,7 +180,7 @@ class TestWalkSubtree:
         _mkrepo(root / "submodule")
         _write(root / "submodule" / "inner.c")
 
-        code_files, skipped, _, _ = cov.walk_subtree(root)
+        code_files, skipped, _, _ = cov.walk_directory(root)
 
         assert {p.name for p in code_files} == {"main.c"}
         assert _reasons({"skipped": skipped}) == {cov.SKIP_NESTED_REPO}
@@ -175,7 +191,7 @@ class TestWalkSubtree:
         _write(root / "__pycache__" / "main.cpython-312.pyc")
         _write(root / ".venv" / "lib.py")
 
-        code_files, skipped, noise, _ = cov.walk_subtree(root)
+        code_files, skipped, noise, _ = cov.walk_directory(root)
 
         assert {p.name for p in code_files} == {"main.c"}
         assert skipped == []
@@ -187,12 +203,12 @@ class TestWalkSubtree:
         _write(root / "main.c", "int main(void){return 0;}\n")
 
         def _explode(*args, **kwargs):
-            raise AssertionError("walk_subtree must not read file contents")
+            raise AssertionError("walk_directory must not read file contents")
 
         monkeypatch.setattr(Path, "read_text", _explode)
         monkeypatch.setattr(Path, "read_bytes", _explode)
 
-        code_files, _, _, _ = cov.walk_subtree(root)
+        code_files, _, _, _ = cov.walk_directory(root)
 
         assert {p.name for p in code_files} == {"main.c"}
 
@@ -201,57 +217,124 @@ class TestWalkSubtree:
     sys.platform == "win32", reason="symlink creation needs privileges on Windows"
 )
 class TestSymlinks:
-    def test_symlink_resolving_outside_the_subtree_is_skipped(self, tmp_path):
+    """The whole containment/alias problem DISSOLVES under a non-recursive
+    subject: a linked directory is never descended into, so it can neither pull
+    foreign code in nor emit one real directory's files twice, whatever it
+    resolves to. These tests pin that dissolution -- if a later change
+    reintroduces descent, all four fail rather than the symlink defects
+    reappearing silently.
+    """
+
+    def test_symlink_to_an_outside_directory_contributes_nothing(self, tmp_path):
         outside = tmp_path / "outside"
         _write(outside / "foreign.c")
         root = tmp_path / "src"
         _write(root / "main.c")
         (root / "linked").symlink_to(outside, target_is_directory=True)
 
-        code_files, skipped, _, _ = cov.walk_subtree(root)
+        code_files, _, _, _ = cov.walk_directory(root)
 
         assert {p.name for p in code_files} == {"main.c"}
-        assert cov.SKIP_SYMLINK_OUT in _reasons({"skipped": skipped})
 
-    def test_circular_symlink_is_skipped_not_fatal(self, tmp_path):
-        """Path.resolve() raises RuntimeError, not OSError, on a symlink loop.
-
-        pathlib's check_eloop deliberately converts the ELOOP OSError into
-        RuntimeError("Symlink loop from ..."), so catching OSError alone lets a
-        circular symlink crash the whole walk instead of being recorded and
-        skipped -- in the very branch that exists to keep the walk robust.
+    def test_circular_symlink_is_not_fatal(self, tmp_path):
+        """A loop used to reach Path.resolve(), which raises RuntimeError rather
+        than OSError on ELOOP. Nothing resolves a child directory any more, so
+        the loop is simply never followed.
         """
         root = tmp_path / "src"
         _write(root / "main.c")
         (root / "loop_a").symlink_to(root / "loop_b", target_is_directory=True)
         (root / "loop_b").symlink_to(root / "loop_a", target_is_directory=True)
 
-        code_files, skipped, _, _ = cov.walk_subtree(root)
+        code_files, _, _, _ = cov.walk_directory(root)
 
-        assert "main.c" in {p.name for p in code_files}
-        assert cov.SKIP_SYMLINK_OUT in _reasons({"skipped": skipped})
+        assert {p.name for p in code_files} == {"main.c"}
 
-    def test_symlink_staying_inside_the_subtree_is_followed(self, tmp_path):
+    def test_symlink_staying_inside_is_still_not_part_of_the_subject(self, tmp_path):
+        """Old contract: an inside-resolving link WAS followed and its files
+        collected. Under the settled model `real/` is its own subject and
+        `alias/` names the same one -- neither belongs to this directory.
+        """
         root = tmp_path / "src"
         _write(root / "real" / "kept.c")
         (root / "alias").symlink_to(root / "real", target_is_directory=True)
 
-        code_files, skipped, _, _ = cov.walk_subtree(root)
+        code_files, _, _, _ = cov.walk_directory(root)
 
-        assert "kept.c" in {p.name for p in code_files}
-        assert cov.SKIP_SYMLINK_OUT not in _reasons({"skipped": skipped})
+        assert code_files == []
 
-    def test_alias_of_an_already_walked_directory_yields_no_duplicates(self, tmp_path):
-        """Two names for one real directory must not emit its files twice."""
+    def test_alias_of_one_real_directory_yields_no_duplicates(self, tmp_path):
+        """Two names for one real directory must not emit its files twice -- now
+        true by construction rather than by a visited-set.
+        """
         root = tmp_path / "src"
+        _write(root / "own.c")
         _write(root / "real" / "kept.c")
         (root / "alias").symlink_to(root / "real", target_is_directory=True)
 
-        code_files, _, _, _ = cov.walk_subtree(root)
+        code_files, _, _, _ = cov.walk_directory(root)
 
-        resolved = [p.resolve() for p in code_files]
-        assert len(resolved) == len(set(resolved))
-        assert [p.name for p in code_files].count("kept.c") == 1
+        assert [p.name for p in code_files] == ["own.c"]
+
+
+class TestNonRecursiveSubject:
+    """The subject is ONE DIRECTORY'S OWN code files.
+
+    The old contract was recursive: `discover_coverage.py <dir>` on a directory
+    holding 4 direct files reported 125, because it swept the whole subtree. Every
+    ancestor therefore re-derived its descendants' facts from source, and any
+    de-duplication downstream compared facts against copies of themselves. Under
+    the settled model a child directory is its own subject and reaches its parent
+    through its own finished CLAUDE.md, never through this walk.
+    """
+
+    def test_code_bearing_children_contribute_nothing(self, tmp_path):
+        root = tmp_path / "src"
+        _write(root / "app.js")
+        _write(root / "index.js")
+        _write(root / "engine" / "physics.js")
+        _write(root / "engine" / "solver" / "deep.js")
+        _write(root / "ui" / "panel.js")
+
+        code_files, _, _, _ = cov.walk_directory(root)
+
+        assert [p.name for p in code_files] == ["app.js", "index.js"]
+
+    def test_directory_whose_code_is_all_in_children_is_an_empty_subject(self, tmp_path):
+        root = tmp_path / "src"
+        _write(root / "engine" / "physics.js")
+        _write(root / "README.md")
+
+        code_files, _, _, unknown = cov.walk_directory(root)
+
+        assert code_files == []
+        # Empty, not a discovery failure: nothing unaccounted-for was seen HERE.
+        assert unknown == {}
+
+    def test_unknown_extensions_are_not_collected_from_children(self, tmp_path):
+        root = tmp_path / "src"
+        _write(root / "here.xyz")
+        _write(root / "child" / "there.xyz")
+        _write(root / "child" / "deeper" / "elsewhere.xyz")
+
+        _, _, _, unknown = cov.walk_directory(root)
+
+        assert unknown == {".xyz": 1}
+
+    def test_the_ambient_chain_still_walks_upward(self, tmp_path):
+        """Only the CODE set stopped recursing. Ambience is unchanged."""
+        repo = _mkrepo(tmp_path / "repo")
+        _write(repo / "CLAUDE.md", "# root\n")
+        _write(repo / "src" / "CLAUDE.md", "# src\n")
+        _write(repo / "src" / "app.js")
+        _write(repo / "src" / "engine" / "physics.js")
+
+        subject = cov.build_subject(repo / "src")
+
+        assert [Path(p).parent.name for p in subject["ambientClaudeMdPaths"]] == [
+            "repo", "src",
+        ]
+        assert [Path(p).name for p in subject["codeFiles"]] == ["app.js"]
 
 
 class TestExtensionCoverage:
@@ -267,7 +350,7 @@ class TestExtensionCoverage:
         _write(root / "player.gd")
         _write(root / "player.gd.uid")  # unrelated unknown ext, not code
 
-        code_files, _, _, unknown = cov.walk_subtree(root)
+        code_files, _, _, unknown = cov.walk_directory(root)
 
         assert {p.name for p in code_files} == {"player.gd"}
         assert unknown.get(".uid") == 1
@@ -286,7 +369,7 @@ class TestExtensionCoverage:
         _write(root / "CHANGELOG")
         _write(root / "README.md")
 
-        code_files, _, _, unknown = cov.walk_subtree(root)
+        code_files, _, _, unknown = cov.walk_directory(root)
 
         assert code_files == []
         assert unknown == {}
@@ -300,7 +383,7 @@ class TestExtensionCoverage:
         _write(root / "Makefile")
         _write(root / "Dockerfile")
 
-        code_files, _, _, unknown = cov.walk_subtree(root)
+        code_files, _, _, unknown = cov.walk_directory(root)
 
         assert code_files == []
         assert unknown == {"": 2}
@@ -309,7 +392,7 @@ class TestExtensionCoverage:
         root = tmp_path / "godot_project"
         _write(root / "main.tscn")
 
-        code_files, _, _, _ = cov.walk_subtree(root)
+        code_files, _, _, _ = cov.walk_directory(root)
 
         assert {p.name for p in code_files} == {"main.tscn"}
 
@@ -318,7 +401,7 @@ class TestExtensionCoverage:
         _write(root / "build.mjs")
         _write(root / "loader.cjs")
 
-        code_files, _, _, _ = cov.walk_subtree(root)
+        code_files, _, _, _ = cov.walk_directory(root)
 
         assert {p.name for p in code_files} == {"build.mjs", "loader.cjs"}
 
@@ -329,7 +412,7 @@ class TestExtensionCoverage:
         _write(root / "two.xyz")
         _write(root / "three.xyz")
 
-        _, _, _, unknown = cov.walk_subtree(root)
+        _, _, _, unknown = cov.walk_directory(root)
 
         assert unknown == {".xyz": 3}
 
@@ -339,7 +422,7 @@ class TestExtensionCoverage:
         for i in range(105):
             _write(root / f"item{i}.qux")
 
-        _, _, _, unknown = cov.walk_subtree(root)
+        _, _, _, unknown = cov.walk_directory(root)
 
         assert unknown == {".qux": 105}
 
@@ -353,7 +436,7 @@ class TestExtensionCoverage:
         _write(root / "lib.dll")
         _write(root / "yarn.lock")
 
-        _, _, _, unknown = cov.walk_subtree(root)
+        _, _, _, unknown = cov.walk_directory(root)
 
         assert unknown == {}
 
@@ -365,7 +448,7 @@ class TestExtensionCoverage:
         _write(root / "notes.rst")
         _write(root / "notes.txt")
 
-        _, _, _, unknown = cov.walk_subtree(root)
+        _, _, _, unknown = cov.walk_directory(root)
 
         assert unknown == {}
 
@@ -550,3 +633,225 @@ class TestCli:
 
         assert result.returncode == 0
         assert "NONE" in result.stdout
+
+
+@pytest.fixture(autouse=True)
+def _clear_vcs_detection_cache():
+    """Detection is cached per directory for the life of the process; a test that
+    creates a repository where a previous test saw none must not inherit the old
+    answer. Both module copies are cleared -- discover_coverage imports its own
+    instance of vcs_ignore through the scripts dir.
+    """
+    import sys as _sys
+
+    def _clear():
+        vcs.clear_cache()
+        other = _sys.modules.get("vcs_ignore")
+        if other is not None and other is not vcs:
+            other.clear_cache()
+
+    _clear()
+    yield
+    _clear()
+
+
+class TestVcsIgnorePredicate:
+    """Three VCS states, and the third is the one that must exclude NOTHING.
+
+    A tree under no version control has no ignore information; inventing some
+    would silently drop a real coverage subject. Every failure path degrades to
+    the same empty answer.
+    """
+
+    def test_git_project_is_detected(self, git_repo):
+        assert vcs.detect_vcs(git_repo) == vcs.GIT
+
+    def test_no_vcs_is_detected_as_none_and_excludes_nothing(self, tmp_path):
+        plain = tmp_path / "plain"
+        _write(plain / "main.c")
+
+        assert vcs.detect_vcs(plain) is None
+        assert vcs.ignored_paths([plain / "main.c"], root=plain) == set()
+
+    def test_p4_project_is_detected_from_a_config_marker(self, tmp_path):
+        """Filesystem-only detection, deliberately: `p4 info` contacts a server,
+        so a machine with P4PORT set and no reachable server would pay a timeout
+        per directory and a wrong answer would look like a slow one.
+        """
+        proj = tmp_path / "depot_ws"
+        _write(proj / "main.c")
+        _write(proj / ".p4config", "P4CLIENT=ws\n")
+
+        assert vcs.detect_vcs(proj) == vcs.P4
+
+    def test_p4_query_failure_excludes_nothing(self, tmp_path, monkeypatch):
+        """The p4 branch is UNVERIFIED, so it must fail toward including the
+        subject: a missing binary, a non-zero exit, or an unparseable line
+        yields no exclusion at all.
+        """
+        proj = tmp_path / "depot_ws"
+        _write(proj / "main.c")
+        _write(proj / ".p4config", "P4CLIENT=ws\n")
+        seen = {}
+
+        def _fake_run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            raise OSError("p4 not installed")
+
+        monkeypatch.setattr(vcs.subprocess, "run", _fake_run)
+
+        assert vcs.ignored_paths([proj / "main.c"], root=proj, vcs=vcs.P4) == set()
+        assert seen["cmd"][:1] == ["p4"] and "ignores" in seen["cmd"]
+
+    def test_git_ignored_directory_is_reported(self, git_repo):
+        _write(git_repo / ".gitignore", "tmpwork/\n")
+        _write(git_repo / "tmpwork" / "scratch.py")
+
+        ignored = vcs.ignored_paths(
+            [git_repo / "tmpwork", git_repo / "engine"], root=git_repo
+        )
+
+        assert ignored == {git_repo / "tmpwork"}
+        assert vcs.is_ignored(git_repo / "tmpwork")
+        assert not vcs.is_ignored(git_repo / "engine")
+
+    def test_no_index_is_required_for_a_tracked_but_ignored_path(self, git_repo):
+        """The question is whether the ignore RULES cover the path. Plain
+        `check-ignore` consults the index first and calls a TRACKED path
+        not-ignored, which is the opposite answer.
+        """
+        _write(git_repo / ".gitignore", "forced/\n")
+        _write(git_repo / "forced" / "kept.py")
+        _git(git_repo, "add", "-f", "forced/kept.py")
+        _git(git_repo, "commit", "-qm", "force-add an ignored path")
+
+        assert vcs.is_ignored(git_repo / "forced")
+        assert vcs.is_ignored(git_repo / "forced" / "kept.py")
+
+    def test_one_subprocess_covers_the_whole_batch(self, git_repo, monkeypatch):
+        """A tree walk asks about hundreds of paths; one subprocess per path is
+        the difference between a discovery step and a stall.
+        """
+        # The directory must EXIST: a trailing-slash pattern matches directories
+        # only, and git cannot classify a path that is not on disk.
+        _write(git_repo / ".gitignore", "tmpwork/\n")
+        _write(git_repo / "tmpwork" / "scratch.py")
+        calls = []
+        real_run = vcs.subprocess.run
+
+        def _counting_run(cmd, **kwargs):
+            calls.append(cmd)
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr(vcs.subprocess, "run", _counting_run)
+
+        ignored = vcs.ignored_paths(
+            [git_repo / f"d{i}" for i in range(20)] + [git_repo / "tmpwork"],
+            root=git_repo,
+            vcs=vcs.GIT,
+        )
+
+        assert ignored == {git_repo / "tmpwork"}
+        # One check-ignore for 21 paths. The rev-parse that finds the worktree
+        # root is fixed-cost and cached, so only this count scales with input.
+        assert len([c for c in calls if "check-ignore" in c]) == 1
+
+    def test_the_worktree_root_is_never_reported_ignored(self, git_repo):
+        """A repository cannot be excluded from itself, and git's answer for the
+        root under --no-index is actively wrong: the root's repo-relative path is
+        empty and matches a BLANK LINE in .gitignore. Observed live on git
+        2.55.0.windows.3 -- a real project's root reported ignored by
+        `.gitignore:55` with an empty pattern. Guarded, not tolerated: the false
+        positive would have declared every file in the project excluded.
+        """
+        _write(git_repo / ".gitignore", "a\n\nb\n\n")
+
+        assert not vcs.is_ignored(git_repo)
+        assert vcs.ignored_paths([git_repo], root=git_repo) == set()
+        assert cov.build_subject(git_repo)["rootExclusion"] is None
+
+    def test_empty_input_spends_no_subprocess(self, git_repo, monkeypatch):
+        def _explode(*args, **kwargs):
+            raise AssertionError("no subprocess for an empty batch")
+
+        monkeypatch.setattr(vcs.subprocess, "run", _explode)
+
+        assert vcs.ignored_paths([], root=git_repo) == set()
+
+
+class TestIgnoredPathsShapeTheSubject:
+    def test_ignored_files_are_excluded_and_recorded(self, git_repo):
+        _write(git_repo / ".gitignore", "generated_api.py\n")
+        _write(git_repo / "engine" / "generated_api.py")
+
+        subject = cov.build_subject(git_repo / "engine")
+
+        assert [Path(p).name for p in subject["codeFiles"]] == ["main.c"]
+        assert {
+            (Path(e["path"]).name, e["reason"]) for e in subject["skipped"]
+        } == {("generated_api.py", cov.SKIP_IGNORED)}
+
+    def test_ignored_child_directory_is_reported_not_silent(self, git_repo):
+        _write(git_repo / ".gitignore", "engine/scratch/\n")
+        _write(git_repo / "engine" / "scratch" / "throwaway.c")
+
+        subject = cov.build_subject(git_repo / "engine")
+
+        assert (
+            {"path": str(git_repo / "engine" / "scratch"), "reason": cov.SKIP_IGNORED}
+            in subject["skipped"]
+        )
+
+    def test_named_ignored_root_is_honoured_but_reported(self, git_repo):
+        """Same posture as a vendored root: the user asked for it by name."""
+        _write(git_repo / ".gitignore", "tmpwork/\n")
+        _write(git_repo / "tmpwork" / "scratch.py")
+
+        subject = cov.build_subject(git_repo / "tmpwork")
+
+        assert subject["rootExclusion"] == cov.SKIP_IGNORED
+        assert [Path(p).name for p in subject["codeFiles"]] == ["scratch.py"]
+
+    def test_no_vcs_excludes_nothing_from_the_subject(self, tmp_path):
+        plain = tmp_path / "plain"
+        _write(plain / "main.c")
+
+        subject = cov.build_subject(plain)
+
+        assert [Path(p).name for p in subject["codeFiles"]] == ["main.c"]
+        assert subject["rootExclusion"] is None
+        assert subject["skipped"] == []
+
+
+class TestHierarchyStillRecurses:
+    """discover_hierarchy.py imports the shared exclusions from
+    discover_coverage.py but has its OWN walk, and that walk MUST keep
+    recursing: its job is to enumerate every code-bearing directory in a tree.
+    Making the coverage subject non-recursive must not reach it.
+    """
+
+    def _tree(self, tmp_path):
+        root = _mkrepo(tmp_path / "repo")
+        _write(root / "top.js")
+        _write(root / "engine" / "physics.js")
+        _write(root / "engine" / "solver" / "deep.js")
+        _write(root / "ui" / "panel.js")
+        _write(root / "docs" / "notes.md")  # not a leaf: no code
+        return root
+
+    def test_leaf_enumeration_reaches_every_depth(self, tmp_path):
+        root = self._tree(tmp_path)
+
+        leaves, _, _, _ = hier.walk_tree(root)
+
+        assert {Path(p).name for p in leaves} == {"repo", "engine", "solver", "ui"}
+
+    def test_coverage_and_hierarchy_now_disagree_on_purpose(self, tmp_path):
+        """The contrast IS the fix: one unit is a directory, the other a tree."""
+        root = self._tree(tmp_path)
+
+        leaves, _, _, _ = hier.walk_tree(root)
+        code_files, _, _, _ = cov.walk_directory(root)
+
+        assert len(leaves) == 4
+        assert [p.name for p in code_files] == ["top.js"]

@@ -63,6 +63,93 @@ destinations is one run per destination, taking that destination's candidates
 together. `coverage-lane.md` ("Handing the report to generation") is the caller
 side of the same seam.
 
+**A coverage report is not the whole input for a directory that has children.**
+Its candidates come from that directory's own direct code, which is the entire
+subject of a coverage run (`coverage-lane.md`, "Subject and unit"). The second
+input is the children's own CLAUDE.md files, and reading them is part of this
+procedure, not of the report -- see "Parent composition" below.
+
+### Parent composition -- the second input, and the order it forces
+
+A `claude-md` run whose directory contains child directories is a COMPOSITION,
+and it has TWO inputs:
+
+1. **The directory's own direct code.** Non-recursive: the code files sitting
+   directly in it, never its descendants' files. This is what a coverage report
+   for the directory carries.
+2. **Every child directory's CLAUDE.md, already written.** Reading the child
+   documents is the second input, not an optional enrichment. A composition that
+   skips it produces a document whose only content is the parent's own thin layer
+   of direct code, which is strictly worse than what a recursive subject would
+   have produced.
+
+The second input is what makes the non-recursive subject lossless rather than
+merely narrower (`../standards/coverage-standards.md:22-28`). Neither input
+substitutes for the other, and a child document that has not been written yet is
+not an input -- it is a missing prerequisite, which is what the ordering rule
+below is about.
+
+**Which child documents count.** A directory the project's VCS is configured to
+ignore is not a subject and its CLAUDE.md is not an input: git ->
+`check-ignore --no-index`; Perforce -> `p4 ignores`; neither -> nothing is
+excluded (`../standards/coverage-standards.md:30-34`). This is what keeps a task
+folder's or a scratch directory's CLAUDE.md -- a document about a piece of WORK,
+not about code -- out of the composition.
+
+**Hoisting is where de-duplication happens.** A fact appearing in more than one
+child's document moves to their common ancestor. That movement is discovered HERE,
+at the parent, because this is the only place the documents being compared have
+actually been read. It is never nominated from below: an assessment that read only
+its own directory cannot know whether the fact holds of code it never opened, and
+`fact-scoped-to-this-directory` forbids it proposing a destination anywhere else
+(`../standards/coverage-standards.md:94-110`). Depth itself is
+`shallowest-true-depth` -- the shallowest directory where the fact is true of
+everything below it, and no shallower
+(`../standards/hierarchy-standards.md:78-92`).
+
+**Repetition triggers a hoist; WORDING licenses it.** These are two tests, not
+one, and they come apart in both directions -- a fact stated by 2 of 20 children
+and hoisted verbatim becomes ambient for 18 directories it does not govern, and a
+fact true of every child that only one child noticed never triggers at all. So a
+hoisted fact must be WORDED so it is true as stated of everything below its new
+home, usually by naming its subjects explicitly ("Tools and stack-traces both
+..."). Scope lives in the sentence; there is no separate scoping mechanism. When
+no such wording exists short of a list of exceptions, the fact does not hoist --
+it stays in the children.
+
+**A hoisted fact leaves duplication behind.** Once the parent carries it, each
+child's copy is a near-verbatim restatement of an ancestor instruction that
+already loads ambient, which is a C-1 finding
+(`../standards/claude-md-standards.md:84-94`), and the sibling copies are the C-2
+case the hoist answers (`:96-104`). Removing them is part of the hoist, not a
+later tidy-up -- and because one run writes one document, it is one further run of
+this procedure per child document.
+
+**Order is strictly BOTTOM-UP, and it is a hard dependency.** Regenerating D
+COMMITS to regenerating every descendant of D first. Two consequences, both of
+which must be stated to a caller rather than left implied:
+
+- **A root regeneration is a whole-corpus operation.** Every directory beneath the
+  root is in scope, in depth order. There is no cheap "just refresh the root": a
+  root composed from unrefreshed children is a root composed from the previous
+  corpus.
+- **A stale child document silently corrupts its parent.** The parent composes
+  what the child SAYS, not what the child's code does. A child left unregenerated
+  contributes facts that no longer hold, suppresses hoists whose repetition it no
+  longer shows, and triggers hoists for facts its code no longer carries -- and
+  the parent it produces is internally consistent, so nothing about the result
+  looks wrong.
+
+**Where this sits in the spine.** Parent composition is a case WITHIN steps 1-5,
+not a replacement for them. Step 1 still confirms the artifact is a `claude-md`.
+Step 2's placement question is already answered -- the document is this
+directory's own CLAUDE.md -- but where content sits inside it still defers to
+`../cohesion-principles.md`. Step 3 applies `../standards/claude-md-standards.md`
+in the producing direction to the merged content, hoisted material included. Step
+4 is where a hoist that collapses several child statements into one is governed by
+summarize-and-reference and the loss-free-deletion guard. Step 5 validates the one
+document this run wrote.
+
 ### Step 1 -- Confirm the artifact
 
 Confirm which of the four artifacts this is, and that the content belongs there.
@@ -228,6 +315,9 @@ Expected: 0 FAILs on the target, or a stated reason a JUDGMENT row is accepted.
   not a `claude_md:` block, and the schema validator is never run on them.
 - Line-only anchors in a code-directory file. Line numbers rot fast; prefer a
   symbol anchor and drop the number unless the gotcha is sub-function.
+- Taking a VCS-ignored child directory's CLAUDE.md as a composition input. A task
+  folder's document is about a piece of work, not about code beneath the parent;
+  ask the VCS rather than the directory's name.
 - Generating a project doc with no inbound citation. A doc nothing points at never
   loads. Add the pointer from the owning CLAUDE.md or SKILL.md in the same pass.
 - Restating skill-owned content in a project doc. When a skill exists for the
@@ -243,8 +333,18 @@ Expected: 0 FAILs on the target, or a stated reason a JUDGMENT row is accepted.
 - **Same fact in two CLAUDE.mds.** It seems safer -- putting the fact in both the
   root and the subsystem file guarantees the reader sees it. It is wrong: two
   copies drift independently and CCP/SSOT breaks. The placement algorithm yields
-  exactly one home; if sibling scopes also need the fact, bubble it up to the
-  common parent -- still one copy.
+  exactly one home; if sibling scopes also need the fact, HOIST it to the common
+  parent -- still one copy, reworded so it is true as stated at its new depth, and
+  removed from the children.
+- **Composing a parent without reading its children's documents.** The parent's
+  own direct code is only half its input. A document built from that half alone is
+  not a lean parent, it is a parent missing everything its subtree established.
+- **Regenerating a parent before its descendants.** It looks like the cheap way to
+  refresh a root and it produces a confidently-worded document composed from the
+  previous corpus. Bottom-up is a dependency, not a preference.
+- **Hoisting on repetition alone.** Two children out of twenty is repetition; it is
+  not a licence. If the fact cannot be worded so it holds of everything below its
+  new home, it stays where it is.
 - **Creating a skill for static reference text.** Step 1 of the packaging razor
   rules it out: if the content does not execute a process or fetch dynamic
   information, it is a reference doc inside an existing home, not a skill.
@@ -259,4 +359,5 @@ Expected: 0 FAILs on the target, or a stated reason a JUDGMENT row is accepted.
 - How a fact is shaped -- `../authoring-patterns/content-authoring.md`.
 - Skill-artifact deep references (vocabulary, worked examples, domain layering,
   sub-domain schema, script reference) -- `../skill-domain/`.
+- Discovering the facts a directory's own direct code implies -- `coverage-lane.md`.
 - Judging an existing artifact instead of producing one -- `audit-lane.md`.
