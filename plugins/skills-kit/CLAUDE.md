@@ -261,7 +261,7 @@ claude_md:
         - token cost
         - agent() model default
       why: "Without explicit tiers, every fan-out lane inherits the main-loop session model and effort -- a 20-file audit on a top-tier session is 20 top-tier lanes, mostly wasted, while a low-effort session would silently under-power detection. Each lane declares the RIGHT tier for its work instead: remediation applies already-decided edits (the judgment happened at the Q&A gate), so sonnet at low effort suffices; detection/classification IS the audits' judgment core (CCP/CRP/ADP criteria application), the judge stage that warrants opus at high effort. User directive 2026-07-13 (explicitly: pin the right effort, do not inherit)."
-    - rule: "Every workflow script must bind its input as `let input = args` (with the JSON.parse guard for the string form) at the top of the script body. `input` is NOT a runtime global -- a script that reads a bare `input` throws `Error: input is not defined` on its first line and dispatches zero agents. Before shipping a new lane, RUN it once through the Workflow tool; a lane that has only been read has not been tested."
+    - rule: "A workflow lane is shipped only after ONE REAL DISPATCH through the Workflow tool. Reading it is not testing it, `node --check` is not testing it, and the text-substring contract tests in tests/skills-kit are not testing it -- all three pass on a lane that dispatches zero agents. Two known unrunnable shapes, each of which defeated the checks that caught the other: (a) a bare `input` instead of `let input = args` (with the JSON.parse guard for the string form), which throws `Error: input is not defined` on the first line; (b) a markdown-style backtick-quoted word in prompt prose inside a template literal, which ends the template early -- node accepts the result as a tagged template on an undefined identifier while the Workflow parser rejects the whole script. Do not treat either enumerated shape as the rule; the rule is the dispatch."
       keywords:
         - input is not defined
         - workflow args binding
@@ -269,8 +269,14 @@ claude_md:
         - lane never ran
         - written not working
         - verify by running
+        - one real dispatch
+        - backtick in prompt prose
+        - tagged template
+        - unexpected token
+        - node --check passes
+        - parse error workflow
         - JSON string args
-      why: "coverage-detect.js and hierarchy-detect.js both shipped without the binding and were unrunnable from the day they were published -- every call died before the criteria guard and before the preflight, so no failure surfaced in any report. The defect survived the 0.46.0 publish because the campaign using coverage had worked around it with a plain opus agent handed the same refs.criteria path, which was recorded as an off-pin shortcut rather than as evidence the pinned path was broken. Fixed in 0.46.1; the eight older workflows all had the binding (skill-detect.js:118-123). The general lesson is the repo's never_hand_make_a_plugins_output rule applied to a lane: a plugin change is verified by the plugin doing the thing, and for a workflow that means one real dispatch."
+      why: "coverage-detect.js and hierarchy-detect.js both shipped without the binding and were unrunnable from the day they were published -- every call died before the criteria guard and before the preflight, so no failure surfaced in any report. The defect survived the 0.46.0 publish because the campaign using coverage had worked around it with a plain opus agent handed the same refs.criteria path, which was recorded as an off-pin shortcut rather than as evidence the pinned path was broken. Fixed in 0.46.1; the eight older workflows all had the binding (skill-detect.js:118-123). THEN IT HAPPENED AGAIN: coverage-detect.js shipped unrunnable in 0.47.0 on the backtick shape and was caught only by the first real dispatch (fixed 0.47.1, with a regression test in tests/skills-kit/test_workflow_js_drift.py). That recurrence is why this rule now names the DISPATCH rather than a line to check: the 0.46.1 wording was followed to the letter -- the file did bind `let input = args`, and a session verified exactly that by reading -- which is precisely what made it look tested. The general lesson is the repo's never_hand_make_a_plugins_output rule applied to a lane: a plugin change is verified by the plugin doing the thing."
     - rule: Surface a framework decision as a lessons-learned entry with surface / finding / follow-up provenance before the contract change ships. Land it in skills/md-domain/references/provenance/ (framework and standards decisions), skills/md-domain/CLAUDE.md (decisions about the skill's own shape), or skills_kit_lib/CLAUDE.md (validator-side decisions).
       keywords:
         - provenance
