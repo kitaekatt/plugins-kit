@@ -123,3 +123,38 @@ copies: `git-kit/scripts`, `p4-kit/scripts`, `skills-kit/scripts`,
 `unreal-kit/lib`, `awesome-kit/skills/task/scripts`.
 
 `path_repair.py` follows the same vendoring discipline.
+
+## Duplicated seam types across a shared-lib boundary
+
+When one plugin's library adapts another's, the seam types are duplicated on
+purpose: the consumer keeps its own `Response` / `Options` / protocol types as
+its caller-facing surface and adapts field-for-field across the boundary, so a
+shape change surfaces at the adapter instead of propagating silently.
+content-pipeline-kit's `llm/backends.py` does exactly this over
+`llm_scripting_kit.completion`.
+
+The duplication has a cost to state wherever the seam is documented: two
+identically-named types in a dependency chain are still two types.
+`llm_scripting_kit.completion.halt.HaltError` and
+`content_pipeline.llm.platform.HaltError` share a name and nothing else, so a
+consumer that catches the former around a `content_pipeline` call gets a
+handler that never fires and no error anywhere. When adding a duplicated type
+to a seam, name it distinctly or document which side a caller must import from.
+
+## Describing a plugin
+
+Describe a plugin by the question it answers and the altitude it holds, in one
+sentence, before anything else. llm-scripting-kit answers which endpoint,
+model, key, and transport, then makes one call; content-pipeline-kit answers
+what a run of many calls needs. State the dependency direction and the reason
+for it in the same breath: a concern sits above the line when it is a policy
+question -- what a cache is keyed on, what a budget is measured against, how
+many calls run at once, what a valid output looks like -- that the lower layer
+would have to answer once on behalf of every caller by guessing.
+
+Three descriptions to avoid, because each one leaves the reader unable to
+decide whether to adopt: by packaging (what files or subpackages it ships), by
+size (line or module counts, "the largest module"), and by negation (what it is
+not, or what it does not do). A missing capability is only worth naming when it
+names the owner instead -- "run-level retry belongs to the caller" is a
+boundary; "no retry" is a gap.

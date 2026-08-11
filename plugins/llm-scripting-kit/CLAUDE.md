@@ -16,6 +16,14 @@ whichever transport produced it. Three transports sit behind one `complete()`:
 `OpenRouterBackend` over HTTP, `ClaudeCliBackend` driving the local
 `claude -p` CLI, and `CodexCliBackend` driving `codex exec`.
 
+This layer classifies; it does not halt. Every backend exposes
+`classify_halt(exc)` and the transports raise ordinary errors carrying
+classifiable text -- nothing here raises `HaltError` itself. Converting a
+classification into a stop is the caller's, because only the caller knows
+whether it is mid-sweep with hundreds of items left or running a one-shot
+script that should simply die. Exporting the type instead of raising it is what
+lets a new consumer inherit the taxonomy rather than invent one.
+
 The codex transport carries two rules the other two do not need.
 
 **Its consumers must declare `bootstrap_lib` themselves.** `CodexCliBackend`

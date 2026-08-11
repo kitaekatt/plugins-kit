@@ -71,13 +71,14 @@ endpoints:
 
 ## Completion seam
 
-`llm_scripting_kit.completion` puts two transports behind one `complete()` so a
-pipeline can switch between a paid HTTP endpoint and the local `claude -p` CLI
-(subscription-billed, no per-call metering) purely by configuration:
+`llm_scripting_kit.completion` puts three transports behind one `complete()` so
+a pipeline can switch between a paid HTTP endpoint and either of two
+subscription-billed local CLIs -- `claude -p` and `codex exec`, billed on
+separate accounts -- purely by configuration:
 
 ```python
 from llm_scripting_kit.completion import (
-    OpenRouterBackend, ClaudeCliBackend, BackendOptions,
+    OpenRouterBackend, ClaudeCliBackend, CodexCliBackend, BackendOptions,
 )
 
 backend = ClaudeCliBackend()                       # or OpenRouterBackend(endpoint="local")

@@ -1,10 +1,22 @@
 # CLAUDE.md -- content-pipeline-kit plugin
 
-Guidance for an AI agent working in this plugin. content-pipeline-kit ships the
-`content_pipeline` library that sits behind LLM-in-the-loop batch content
-pipelines. `skills/content-pipeline-domain/SKILL.md` owns the vocabulary and the
+Guidance for an AI agent working in this plugin.
+`skills/content-pipeline-domain/SKILL.md` owns the vocabulary and the
 abstraction map; `references/design-discipline.md` beside it carries the
 philosophy behind the opt-in guardrails.
+
+content-pipeline-kit answers the questions a RUN of many LLM calls raises:
+which units need doing, which are stale and need regenerating, which are
+already done and must be left alone, whether a result is valid, what the run
+cost, and where the output goes. Those mechanics are the same whatever the
+content is; the domain judgement stays in the consuming project.
+
+A consumer imports the library and drives it from its own entry point. The
+package ships no console script: `cli.scaffold.dispatch` is a dispatch helper a
+consumer wires its own commands onto, and the orchestration loop, config
+loading, prompt content, field names, the pricing table, and persistence are
+all the consumer's. Say that before describing any subpackage -- a consumer
+that expects a runnable tool has already misunderstood the layer.
 
 ## The dependency on llm-scripting-kit is one-way by design
 
@@ -29,3 +41,63 @@ than about running many.
 `openai` is declared in this plugin's own `pyproject.toml` even though the SDK is
 reached through the shared lib -- shared libs share source, not dependencies. See
 `plugins/CLAUDE.md`, "Why shared libs rather than published packages".
+
+## What consumers adopt, and what they rebuild
+
+Two independent production consumers, building unrelated content on this
+library without coordinating, stopped adopting at the same line. Both took the
+HORIZONTAL concerns and both wrote their own VERTICAL ones. When two
+unconnected consumers stop at the same line, treat that line as a real seam.
+That is the durable part; the per-module detail below is a dated observation,
+not a standing fact.
+
+Observed 2026-08-11 by reading two consumer projects outside this repo, so
+nothing here can verify or refresh it. Adopted from the library:
+`freshness.hashing`, `freshness.classify`, `store.attributed`,
+`store.intermediary`, `validate.contract`, `llm.platform`, `llm.backends`.
+Written by each project instead: the orchestration loop, the candidate store,
+the human round-trip, and the delivery choreography for its VCS.
+
+Read it as strong evidence about the seam and weak evidence about any one
+module. `pipeline.convergence_loop` was the sharp case at that date: one
+consumer's hand-rolled sequencer had the same stage order and the same stall
+window as the library's and still did not import it. The reasons that consumer
+recorded were that the library signature could not carry its bookkeeping (a
+resume token threaded through every stage, per-stage thread pools with
+main-thread-only store mutation, a progressive save, a verdict read from
+on-disk metrics), and that the port was incremental and converted the leaf
+subsystems first. Nobody had reported trying the library loop and finding it
+wanting.
+
+Two consequences for how to answer a consumer. A consumer starting clean should
+try `pipeline.*` before writing its own; a consumer porting a working loop
+should expect to keep it. And when a consumer keeps its own, say the cost out
+loud: at that same date one consumer was maintaining its convergence loop in
+three variants while a generic implementation sat unused here. The seam is not
+a reason to stop asking whether a vertical module has earned reuse.
+
+## Backend selection is process-wide
+
+Backend selection is process-global (`CONTENT_PIPELINE_LLM_BACKEND`, with
+`CONTENT_PIPELINE_LLM_MODEL` overriding the requested model). The consequence
+to state to a consumer: two pipelines that need different backends cannot share
+a process, and nothing at a call site signals that one of them got the other's
+backend, so a changed environment variable can move output quality with no
+local signal.
+
+**Unresolved: the mock seam does not override that selection, though four
+places say it does.** `route()` reads `active_backend_name()` first and only
+consults a supplied instance for the name ALREADY active. With
+`CONTENT_PIPELINE_LLM_BACKEND` unset the active name is `openrouter`, so
+`route(mock=FakeBackend())` returns a live `OpenRouterBackend` and never looks
+at the mock. A test must call `set_active_backend("mock")` too --
+`tests/content-pipeline-kit/test_llm_backends.py::test_routing_injected_instance_wins`
+does exactly that, which is what keeps the discrepancy invisible. The
+always-wins claim appears in `llm/backends.py`'s module docstring and its
+`route` docstring, and in
+`skills/content-pipeline-domain/references/building-a-pipeline.md`. Until an
+owner resolves it, treat the injected-mock guarantee as ABSENT and set the
+active backend explicitly in tests. The safer resolution is in the code -- have
+`route` return a supplied `mock` unconditionally -- because editing the three
+doc sites instead would fossilize "a test can reach a paid transport" as
+intended behavior.
