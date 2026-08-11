@@ -75,7 +75,7 @@ def sudo_noninteractive_available() -> bool:
     try:
         result = subprocess.run(
             [sudo, "-n", "true"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
         )
         return result.returncode == 0
     except subprocess.TimeoutExpired:
@@ -118,7 +118,7 @@ def dpkg_installed(pkg: str) -> bool:
     try:
         result = subprocess.run(
             [dpkg_query, "-W", "-f", "${db:Status-Status}", pkg],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         )
     except subprocess.TimeoutExpired:
         return False
@@ -176,7 +176,7 @@ def _run(argv, timeout: int = 600):
     try:
         result = subprocess.run(
             list(argv),
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
             stdin=subprocess.DEVNULL,
             env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
         )

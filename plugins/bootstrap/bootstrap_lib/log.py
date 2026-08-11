@@ -59,7 +59,7 @@ def write_log_block(
     # plugin's data dir ended up with an empty DACL on Windows: PermissionError
     # from this open() aborted the whole engine. Degrade to stderr and continue.
     try:
-        with open(log_file, "a") as f:
+        with open(log_file, "a", encoding="utf-8", errors="replace") as f:
             f.write("".join(lines))
     except OSError as e:
         print(
@@ -84,7 +84,7 @@ def _trim_log(log_file: str) -> None:
     historical block, never a corrupt current one.
     """
     try:
-        with open(log_file, "r") as f:
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
             all_lines = f.readlines()
         if len(all_lines) <= MAX_LOG_LINES:
             return
@@ -98,7 +98,7 @@ def _trim_log(log_file: str) -> None:
             if line.startswith("--- ") and " done in " not in line:
                 cut = i
                 break
-        with open(log_file, "w") as f:
+        with open(log_file, "w", encoding="utf-8", errors="replace") as f:
             f.writelines(all_lines[cut:])
     except (FileNotFoundError, PermissionError):
         pass

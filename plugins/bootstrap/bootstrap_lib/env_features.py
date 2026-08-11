@@ -109,17 +109,17 @@ def run_env_command(command: str, timeout: int) -> Tuple[Optional[int], str]:
             bash = resolve_bash()
             if bash:
                 proc = subprocess.run(
-                    [bash, "-c", command], capture_output=True, text=True,
+                    [bash, "-c", command], capture_output=True, text=True, encoding="utf-8", errors="replace",
                     timeout=timeout,
                 )
             else:
                 proc = subprocess.run(
-                    command, shell=True, capture_output=True, text=True,
+                    command, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
                     timeout=timeout,
                 )
         else:
             proc = subprocess.run(
-                command, shell=True, capture_output=True, text=True,
+                command, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=timeout,
             )
     except subprocess.TimeoutExpired:
@@ -454,7 +454,7 @@ def check_macos_default(domain: str, key: str, value) -> Result:
     try:
         proc = subprocess.run(
             ["defaults", "read", domain, key], capture_output=True,
-            text=True, timeout=_DEFAULTS_TIMEOUT,
+            text=True, encoding="utf-8", errors="replace", timeout=_DEFAULTS_TIMEOUT,
         )
     except (subprocess.SubprocessError, OSError) as e:
         return Result(
@@ -488,7 +488,7 @@ def fix_macos_default(domain: str, key: str, value) -> Tuple[bool, str]:
     try:
         proc = subprocess.run(
             ["defaults", "write", domain, key, *_defaults_write_args(value)],
-            capture_output=True, text=True, timeout=_DEFAULTS_TIMEOUT,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=_DEFAULTS_TIMEOUT,
         )
     except (subprocess.SubprocessError, OSError) as e:
         return False, f"defaults write failed: {e}"
@@ -638,7 +638,7 @@ def list_login_items() -> Tuple[Optional[List[str]], str]:
         proc = subprocess.run(
             ["osascript", "-e",
              'tell application "System Events" to get the name of every login item'],
-            capture_output=True, text=True, timeout=_OSASCRIPT_TIMEOUT,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=_OSASCRIPT_TIMEOUT,
         )
     except (subprocess.SubprocessError, OSError) as e:
         return None, f"osascript login-item query failed: {e}"
@@ -673,7 +673,7 @@ def add_login_item(path: str, hidden: bool) -> Tuple[bool, str]:
     )
     try:
         proc = subprocess.run(
-            ["osascript", "-e", script], capture_output=True, text=True,
+            ["osascript", "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=_OSASCRIPT_TIMEOUT,
         )
     except (subprocess.SubprocessError, OSError) as e:

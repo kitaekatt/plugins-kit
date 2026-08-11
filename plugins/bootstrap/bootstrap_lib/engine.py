@@ -4242,40 +4242,31 @@ def _phase_plugins(ctx):
         )
         return
 
+    entries = ctx.manifest.get("plugins", [])
     # Second stand-down, same rationale as the CLI gate above but per
-    # marketplace: an entry whose marketplace could not be added and is not on
-    # disk cannot be installed from, and every such attempt fails identically.
-    # One line names the cause and points at the entry that owns it, instead of
-    # N failures that all restate a fault the marketplace entry already
-    # reported. action(), not fail() -- the marketplace failure is the
+    # marketplace: a plugin cannot be INSTALLED from a marketplace that could
+    # not be added and is not on disk, and every such attempt fails
+    # identically. One line names the cause and points at the entry that owns
+    # it, instead of N failures that all restate a fault the marketplace entry
+    # already reported. action(), not fail() -- the marketplace failure is the
     # actionable item.
     #
-    # The key is the marketplace HALF of the ref, which is an exact name match
-    # (refs are "<marketplace>:<plugin>"), not a prefix test. It can miss when
-    # the manifest's `name` differs from the name the CLI registers, or when the
+    # Scope is the INSTALL, not the entry. Everything else the loop does for a
+    # declared plugin -- disabling it, fixing its scope, enabling it at one --
+    # is local settings work that succeeds whether or not the marketplace is
+    # reachable. Dropping those entries wholesale meant an `enabled: false`
+    # entry silently never got disabled while the line reported only a skip.
+    #
+    # getattr: a phase must tolerate a context stub that predates this
+    # attribute (tests build minimal recording contexts).
+    unusable = getattr(ctx, "unusable_marketplaces", None) or set()
+    # The key is the marketplace HALF of the ref, an exact name match (refs are
+    # "<marketplace>:<plugin>"), not a prefix test. It can miss when the
+    # manifest's `name` differs from the name the CLI registers, or when the
     # marketplace was declared in a different manifest layer than the plugins
     # (each layer gets its own ctx); both degrade to the previous per-entry
     # behaviour rather than to a wrong skip.
-    entries = ctx.manifest.get("plugins", [])
-    if ctx.unusable_marketplaces:
-        skipped_by_mkt = {}
-        remaining = []
-        for plugin_def in entries:
-            ref = plugin_def.get("ref", "")
-            mkt = ref.split(":", 1)[0] if ":" in ref else ""
-            if mkt and mkt in ctx.unusable_marketplaces:
-                skipped_by_mkt.setdefault(mkt, []).append(ref)
-            else:
-                remaining.append(plugin_def)
-        for mkt, refs in skipped_by_mkt.items():
-            ctx.action(
-                f"plugins: skipped {len(refs)} "
-                f"{'entry' if len(refs) == 1 else 'entries'} - marketplace "
-                f"{mkt} unavailable (see the marketplace {mkt} entry)",
-                display=f"plugins: skipped (marketplace {mkt})",
-                detail=f"skipped refs: {', '.join(refs)}",
-            )
-        entries = remaining
+    installs_skipped = {}       # mkt -> [ref]
 
     plugins_installed = {}      # mkt -> [(name, detail)]
     plugins_re_installed = {}   # mkt -> [(name, detail)]
@@ -4309,6 +4300,14 @@ def _phase_plugins(ctx):
                 # User is expected to install via `claude plugin install ...`;
                 # we only manage updates once they do. Don't surface a failure.
                 ctx.ok(f"plugin {plugin_ref}: not installed (install: manual; run `claude plugin install {cli_ref}` to enable)")
+                continue
+            _mkt = plugin_ref.split(":", 1)[0] if ":" in plugin_ref else ""
+            if _mkt and _mkt in unusable:
+                # The marketplace this plugin lives in could not be added and is
+                # not on disk. Do not attempt the install: it is a CLI spawn and
+                # a network round-trip against a host that already refused us,
+                # and its failure would only restate the marketplace entry's.
+                installs_skipped.setdefault(_mkt, []).append(plugin_ref)
                 continue
             # Auto-install via CLI
             inst = install_plugin(plugin_ref, scope=desired_scope, project_dir=ctx.project_dir)
@@ -4476,6 +4475,17 @@ def _phase_plugins(ctx):
                         detail=dis_result.detail or None,
                         type="plugin", ref=plugin_ref, message=dis_result.message,
                     )
+
+    # One line per unreachable marketplace, naming the entry that owns the
+    # actionable failure. Always visible (action, not ok): work was declined.
+    for _mkt, _refs in installs_skipped.items():
+        ctx.action(
+            f"plugins: skipped {len(_refs)} "
+            f"{'install' if len(_refs) == 1 else 'installs'} - marketplace "
+            f"{_mkt} unavailable (see the marketplace {_mkt} entry)",
+            display=f"plugins: skipped (marketplace {_mkt})",
+            detail=f"skipped refs: {', '.join(_refs)}",
+        )
 
     # Flush plugin-action accumulators as consolidated per-marketplace lines.
     def _emit_plugin_verb(verb, buckets):

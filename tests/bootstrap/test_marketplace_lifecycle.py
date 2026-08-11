@@ -365,7 +365,7 @@ class TestMarketplaceAlwaysUpdate:
         with patch("bootstrap_lib.marketplace_lifecycle.check_marketplace_current",
                     return_value=LifecycleResult(passed=False, ref="my-market", message="updates available")), \
              patch("bootstrap_lib.marketplace_lifecycle.update_marketplace",
-                    return_value=LifecycleResult(passed=False, ref="my-market", message="network error")):
+                    return_value=LifecycleResult(passed=False, ref="my-market", message="update failed (network error)")):
             failures = _process_manifest(
                 manifest, "windows", str(tmp_path / "data"), str(tmp_path / "root"),
                 action_entries, ok_entries, plugin_name="test",
@@ -1017,7 +1017,7 @@ class TestEngineMinVersionFlow:
         ok_entries = []
 
         with patch("bootstrap_lib.marketplace_lifecycle.update_plugin",
-                   return_value=LifecycleResult(passed=False, ref="plugins-kit:bootstrap", message="network error")), \
+                   return_value=LifecycleResult(passed=False, ref="plugins-kit:bootstrap", message="update failed (network error)")), \
              patch("bootstrap_lib.marketplace_lifecycle.check_plugin_version") as mock_ver:
             mock_ver.return_value = type("R", (), {"up_to_date": True})()
             failures = _process_manifest(
@@ -1025,7 +1025,7 @@ class TestEngineMinVersionFlow:
                 action_entries, ok_entries, plugin_name="test",
             )
 
-        assert any("update failed - network error" in e for e in action_entries)
+        assert any("update failed (network error)" in e for e in action_entries)
         assert any(f["type"] == "plugin" and "min_version 0.9.1 not satisfied" in f.get("message", "") for f in failures)
 
     def test_should_record_failure_when_update_succeeds_but_still_too_old(self, tmp_path, monkeypatch):

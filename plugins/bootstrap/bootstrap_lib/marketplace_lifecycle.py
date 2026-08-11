@@ -18,6 +18,10 @@ class LifecycleResult(NamedTuple):
     passed: bool
     ref: str
     message: str
+    # Full CLI output for a failure. `message` is deliberately SHORT so it can
+    # be printed on a collated line; `detail` is where the raw text lives for
+    # the log and the pass record. Empty on success and on non-CLI failures.
+    detail: str = ""
 
 
 class VersionCheckResult(NamedTuple):
@@ -42,12 +46,12 @@ def _query_system_shell_for_claude(is_windows: bool) -> Optional[str]:
             result = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
                  "$ErrorActionPreference='SilentlyContinue'; (Get-Command claude).Source"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
             )
         else:
             result = subprocess.run(
                 ["bash", "-lc", "command -v claude"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
             )
         if result.returncode == 0:
             path = result.stdout.strip().strip('"').strip("'")
@@ -158,12 +162,76 @@ def _run_claude(args: list, timeout: int = 120, cwd: Optional[str] = None) -> tu
     try:
         result = subprocess.run(
             [claude] + args,
-            capture_output=True, text=True, timeout=timeout, env=env,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=env,
             cwd=cwd or None,
         )
         return result.returncode == 0, result.stdout, result.stderr
     except (subprocess.SubprocessError, OSError) as e:
         return False, "", str(e)
+
+
+# Longest cause phrase we will lift verbatim out of unrecognised CLI output.
+# Wider than messages.ITEM_MAX because the cause is only ever ONE clause inside
+# a message, never the whole collated item.
+CAUSE_MAX = 60
+
+# Recognised failure causes, most specific first. Each entry is
+# (substrings to look for in the CLI's combined output, the short cause to
+# report). Matching is case-insensitive. The point is not to enumerate every
+# possible error -- it is that the COMMON ones get a stable, one-clause name
+# so the message surfaces stay short and the same fault reads the same way
+# every session.
+_CLI_ERROR_CAUSES = (
+    (("permission denied (publickey)", "ssh authentication failed"),
+     "SSH authentication failed - no access to the repository"),
+    (("repository not found", "does not appear to be a git repository"),
+     "repository not found"),
+    (("could not resolve host", "network is unreachable", "connection timed out",
+      "failed to connect", "operation timed out"),
+     "network unreachable"),
+    (("authentication failed", "403 forbidden", "401 unauthorized",
+      "invalid credentials"),
+     "authentication failed"),
+    (("not found in marketplace",), "not listed in the marketplace"),
+    (("already exists",), "already exists"),
+    (("no space left on device",), "no space left on device"),
+)
+
+
+def summarize_cli_error(stderr: str) -> str:
+    """One short, whole-clause cause for a failed CLI call.
+
+    Raw CLI/git output is multi-line and long -- embedding it in a failure
+    `message` puts the whole blob onto every message surface, once per affected
+    entry (the engine collates items onto one line, so a single unbounded item
+    is enough to blow up the whole display). Classify it here instead and hand
+    the raw text to the caller as `detail`.
+
+    Never truncates mid-clause and never emits an ellipsis: an unrecognised
+    error falls back to a whole-clause head of its first line, or to a pointer
+    at the log when even that does not fit.
+    """
+    text = (stderr or "").strip()
+    if not text:
+        return "no output from the CLI"
+    haystack = text.lower()
+    for needles, cause in _CLI_ERROR_CAUSES:
+        if any(n in haystack for n in needles):
+            return cause
+    from .messages import derive_short
+    first = text.splitlines()[0].strip()
+    if len(first) <= CAUSE_MAX:
+        return first
+    return derive_short(first, CAUSE_MAX) or "see the bootstrap log"
+
+
+def _cli_failure(verb: str, ref: str, stderr: str) -> LifecycleResult:
+    """A failed CLI operation: short classified message, raw output in detail."""
+    return LifecycleResult(
+        passed=False, ref=ref,
+        message=f"{verb} failed ({summarize_cli_error(stderr)})",
+        detail=(stderr or "").strip(),
+    )
 
 
 # --- Marketplace operations ---
@@ -191,7 +259,7 @@ def add_marketplace(source_url: str, name: str = "") -> LifecycleResult:
     ref = name or source_url
     if ok:
         return LifecycleResult(passed=True, ref=ref, message="marketplace added")
-    return LifecycleResult(passed=False, ref=ref, message=f"add failed: {stderr.strip()}")
+    return _cli_failure("add", ref, stderr)
 
 
 def remove_marketplace(name: str) -> LifecycleResult:
@@ -199,7 +267,7 @@ def remove_marketplace(name: str) -> LifecycleResult:
     ok, stdout, stderr = _run_claude(["plugin", "marketplace", "remove", name])
     if ok:
         return LifecycleResult(passed=True, ref=name, message="marketplace removed")
-    return LifecycleResult(passed=False, ref=name, message=f"remove failed: {stderr.strip()}")
+    return _cli_failure("remove", name, stderr)
 
 
 def check_marketplace_current(name: str) -> LifecycleResult:
@@ -222,7 +290,7 @@ def check_marketplace_current(name: str) -> LifecycleResult:
         # Fetch latest from remote
         subprocess.run(
             ["git", "fetch", "--quiet"],
-            cwd=install_loc, capture_output=True, text=True, timeout=60,
+            cwd=install_loc, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
         )
         # Compare local HEAD to upstream. Check returncodes (B17): a repo
         # without an upstream tracking branch makes `rev-parse @{u}` fail,
@@ -231,11 +299,11 @@ def check_marketplace_current(name: str) -> LifecycleResult:
         # current rather than stale.
         local_proc = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=install_loc, capture_output=True, text=True, timeout=10,
+            cwd=install_loc, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
         )
         remote_proc = subprocess.run(
             ["git", "rev-parse", "@{u}"],
-            cwd=install_loc, capture_output=True, text=True, timeout=10,
+            cwd=install_loc, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
         )
         if local_proc.returncode != 0:
             return LifecycleResult(passed=True, ref=name, message="cannot read local HEAD; skipping update check")
@@ -277,15 +345,15 @@ def update_marketplace(name: str = "") -> LifecycleResult:
             try:
                 pull = subprocess.run(
                     ["git", "pull"],
-                    cwd=install_loc, capture_output=True, text=True, timeout=60,
+                    cwd=install_loc, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
                 )
                 if pull.returncode == 0:
                     return LifecycleResult(passed=True, ref=ref, message="marketplace updated (git pull fallback)")
-                return LifecycleResult(passed=False, ref=ref, message=f"git pull fallback failed: {pull.stderr.strip()}")
+                return _cli_failure("git pull fallback", ref, pull.stderr)
             except (subprocess.SubprocessError, OSError) as e:
                 return LifecycleResult(passed=False, ref=ref, message=f"git pull fallback error: {e}")
 
-    return LifecycleResult(passed=False, ref=ref, message=f"update failed: {stderr.strip()}")
+    return _cli_failure("update", ref, stderr)
 
 
 # --- Marketplace pin operations ---
@@ -328,7 +396,7 @@ def _git(args: list, cwd: str, timeout: int = 30) -> subprocess.CompletedProcess
     try:
         return subprocess.run(
             ["git"] + args,
-            cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env,
+            cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=env,
         )
     except (subprocess.SubprocessError, OSError) as e:
         return subprocess.CompletedProcess(args=["git"] + args, returncode=1, stdout="", stderr=str(e))
@@ -692,7 +760,7 @@ def install_plugin(
     )
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="installed")
-    return LifecycleResult(passed=False, ref=plugin_ref, message=f"install failed: {stderr.strip()}")
+    return _cli_failure("install", plugin_ref, stderr)
 
 
 def uninstall_plugin(
@@ -705,7 +773,7 @@ def uninstall_plugin(
     )
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="uninstalled")
-    return LifecycleResult(passed=False, ref=plugin_ref, message=f"uninstall failed: {stderr.strip()}")
+    return _cli_failure("uninstall", plugin_ref, stderr)
 
 
 def _recorded_scope(cli_ref: str, plugin_ref: str) -> str:
@@ -749,7 +817,7 @@ def update_plugin(
     )
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="updated")
-    return LifecycleResult(passed=False, ref=plugin_ref, message=f"update failed: {stderr.strip()}")
+    return _cli_failure("update", plugin_ref, stderr)
 
 
 class ScopeSyncResult(NamedTuple):
@@ -1181,7 +1249,7 @@ def enable_plugin_in_claude(plugin_ref: str) -> LifecycleResult:
     ok, stdout, stderr = _run_claude(["plugin", "enable", cli_ref])
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="enabled in Claude Code")
-    return LifecycleResult(passed=False, ref=plugin_ref, message=f"enable failed: {stderr.strip()}")
+    return _cli_failure("enable", plugin_ref, stderr)
 
 
 def disable_plugin_in_claude(plugin_ref: str) -> LifecycleResult:
@@ -1190,4 +1258,4 @@ def disable_plugin_in_claude(plugin_ref: str) -> LifecycleResult:
     ok, stdout, stderr = _run_claude(["plugin", "disable", cli_ref])
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="disabled in Claude Code")
-    return LifecycleResult(passed=False, ref=plugin_ref, message=f"disable failed: {stderr.strip()}")
+    return _cli_failure("disable", plugin_ref, stderr)

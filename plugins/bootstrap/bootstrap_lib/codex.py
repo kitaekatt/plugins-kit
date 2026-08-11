@@ -370,7 +370,7 @@ def probe_config_key(key: str, *, timeout: float = 60.0) -> bool:
             input="",
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):

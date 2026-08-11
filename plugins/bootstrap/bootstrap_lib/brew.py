@@ -81,7 +81,7 @@ def _run_brew(brew_bin: str, args, timeout: int = 600) -> Tuple[bool, str]:
     try:
         result = subprocess.run(
             [brew_bin] + list(args),
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
         )
         return result.returncode == 0, (result.stdout + result.stderr).strip()
     except subprocess.TimeoutExpired:

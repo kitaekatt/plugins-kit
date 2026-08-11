@@ -67,7 +67,7 @@ def _run_powershell(command: str, timeout: int = 300) -> Tuple[bool, str]:
         result = subprocess.run(
             [ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
              "-Command", command],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
         )
         return result.returncode == 0, (result.stdout + result.stderr).strip()
     except subprocess.TimeoutExpired:

@@ -555,7 +555,7 @@ def launch_fix_runner(queue: str, current_os: str,
     try:
         proc = subprocess.run(
             [_powershell_exe(), "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         # The timeout kills only the PowerShell process WAITING on the elevated

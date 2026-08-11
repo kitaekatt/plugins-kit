@@ -66,7 +66,7 @@ def purelib_of(python: str) -> Optional[str]:
         proc = subprocess.run(
             [python, "-c", "import sysconfig;print(sysconfig.get_path('purelib'))"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=20,
         )
     except (OSError, subprocess.SubprocessError):

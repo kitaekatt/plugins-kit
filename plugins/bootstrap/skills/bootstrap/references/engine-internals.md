@@ -447,7 +447,7 @@ pass.
 
 A **collated** message is one that flattens several independent items onto a
 single line: a display section's action list, the elevation queue's task
-labels, the ASK-item list in the `AskUserQuestion` directive. Three rules apply
+labels, the ASK-item list in the `AskUserQuestion` directive. Four rules apply
 to every one of them; `bootstrap_lib/messages.py` is the implementation.
 
 **1. Number the items: `(1) x; (2) y`.** A bare separator produces a run-on
@@ -489,6 +489,24 @@ cannot tell what was dropped. Three mechanisms, in order:
    over-length. That is a **bug at the call site**, not a case to paper over --
    and `tests/bootstrap/test_message_width.py` fails the build for it, naming
    the file and line.
+
+**4. Never interpolate raw subprocess output into an entry.** The width audit
+above reads *static* text: an interpolated value is `PLACEHOLDER` to it, so a
+call site that embeds a captured `stderr` passes the build and then emits a
+ten-line git blob inside a single collated item at runtime. Because mechanism 3
+degrades to "render it whole", one such item is enough to turn the whole
+display into a wall of text -- and with one item per affected entry, an
+unreachable marketplace with four plugins printed it five times.
+
+Classify the output where it is captured instead:
+`marketplace_lifecycle.summarize_cli_error()` maps the common CLI/git failures
+(SSH `publickey` denial, unresolvable host, repository not found, not listed in
+the marketplace) to one short clause, and `_cli_failure()` returns it as
+`LifecycleResult.message` with the raw text on `LifecycleResult.detail`. The
+caller then routes the raw text to the log with `ctx.quiet()` and to the pass
+record with `detail=`, and nothing multi-line reaches a message surface. An
+unrecognised error falls back to a whole-clause head of its first line, so this
+never reintroduces a cut-off marker.
 
 For failure *labels*, `item_label()` applies the same principle to a candidate
 list, friendliest-first:
@@ -613,9 +631,14 @@ The engine uses two entry lists: `action_entries` (always displayed) and `ok_ent
 - **detect → remediate (created, installed, updated)** → append to `action_entries` (always logged)
 - **detect → fail (unresolvable)** → append to `action_entries` + add to fix-all failures
 
-**The aggregate exception (`quiet_entries`).** One narrow third list exists for remediations the pass reports **in aggregate**: `_ManifestContext.quiet(msg)` appends to `quiet_entries`, which are written to the log unconditionally (they are actions, so they are never gated on `log_success`) but never rendered into a display section. It is legitimate ONLY when some later step emits one display entry that speaks for all of them; the sole sanctioned use is the shared-lib publish/link events, aggregated by `_SharedLibLinkLog` into the single Step 4c line. The user-visible outcome is still logged; what is suppressed is the *per-plugin repetition*, not the outcome. A check that goes quiet without an aggregate line is the "silent bootstrap operation" bug this contract exists to prevent.
+**The aggregate exception (`quiet_entries`).** One narrow third list exists for remediations the pass reports **in aggregate**: `_ManifestContext.quiet(msg)` appends to `quiet_entries`, which are written to the log unconditionally (they are actions, so they are never gated on `log_success`) but never rendered into a display section. It is legitimate ONLY when some other entry displayed in the same pass speaks for what went quiet. Two sanctioned uses: the shared-lib publish/link events, aggregated by `_SharedLibLinkLog` into the single Step 4c line; and the raw CLI output behind a failed marketplace add or plugin install, where the displayed failure entry carries the classified one-clause cause and `quiet()` keeps the full text recoverable from the log (see "Collated message text", rule 4). The user-visible outcome is still logged; what is suppressed is the *per-plugin repetition*, not the outcome. A check that goes quiet without an aggregate line is the "silent bootstrap operation" bug this contract exists to prevent.
 
-**The precondition exception (a phase that stands down).** A phase whose every operation depends on one unmet precondition emits a single `action` entry and returns, adding **no** fix-all failures — an exception to the "detect → fail → add to fix-all failures" rule above, and the second and last sanctioned deviation from this contract. The sole use is the `claude` CLI: `_phase_marketplaces` and `_phase_plugins` both shell out to it for every entry, so they call `resolve_claude_cli()` once up front and stand down together when it returns `None`.
+**The precondition exception (a phase that stands down).** A phase whose every operation depends on one unmet precondition emits a single `action` entry and returns, adding **no** fix-all failures — an exception to the "detect → fail → add to fix-all failures" rule above, and the second and last sanctioned deviation from this contract. There are two sanctioned instances, both in the marketplace/plugin phases:
+
+- **The `claude` CLI (whole phase).** `_phase_marketplaces` and `_phase_plugins` both shell out to it for every entry, so they call `resolve_claude_cli()` once up front and stand down together when it returns `None`.
+- **An unusable marketplace (the installs that depend on it).** When a `marketplace add` fails *and* `check_marketplace_exists` still reports the marketplace absent, `_report_marketplace_add_failure` records the name on `ctx.unusable_marketplaces`; `_phase_plugins` then declines the *install* for any not-yet-installed entry whose ref names it, emitting one `action` line per marketplace after the loop. Those installs are not merely un-reported, they are **not attempted** — each is a CLI spawn and a network round-trip against a host that already refused us.
+
+  Three constraints, each learned by getting it wrong. **The scope is the install, not the entry:** everything else the loop does for a declared plugin — disabling it, fixing its scope, enabling it at one — is local settings work that succeeds whether or not the marketplace is reachable, and an earlier revision that dropped the whole entry meant an `enabled: false` declaration silently never took effect while the line reported only a skip. **The key is "unusable", not "the add failed":** an add can fail while a clone from an earlier session is still on disk and still able to serve installs, and a failed `alwaysUpdate` refresh of a present marketplace is never a cascade root. **The match is exact-name on the marketplace half** of the `<marketplace>:<plugin>` ref, not a prefix test — it misses when the manifest's `name` differs from the name the CLI registers, or when the marketplace and the plugins were declared in different manifest layers (each layer gets its own context), and both misses degrade to the previous per-entry behaviour rather than to a wrong skip.
 
 The rule it encodes: **the phase that owns a precondition owns its report.** The tools phase already emits the actionable failure for `claude`; a per-entry failure here would add nothing but volume, and each one would be an offer to retry an operation with a known-false precondition. Before this gate, a manifest with ten plugins produced ten identical failures and a fix-all prompt asking permission to attempt all ten — with the single line naming the actual cause printed *below* its own consequences. The outcome is still logged; what is suppressed is the *fan-out*, not the outcome, exactly as with `quiet_entries`.
 

@@ -56,11 +56,11 @@ def _run_check_cmd(check_cmd: str) -> bool:
         if sys.platform == "win32" or "MSYSTEM" in os.environ:
             bash = resolve_bash()
             if bash:
-                result = subprocess.run([bash, "-c", check_cmd], capture_output=True, text=True, timeout=30)
+                result = subprocess.run([bash, "-c", check_cmd], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             else:
-                result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True, timeout=30)
+                result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         else:
-            result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         return result.returncode == 0
     except (subprocess.TimeoutExpired, OSError):
         return False
@@ -164,7 +164,7 @@ def run_install(install_cmd: str, timeout: int = INSTALL_TIMEOUT_SECONDS) -> tup
                 result = subprocess.run(
                     [bash, "-c", install_cmd],
                     capture_output=True,
-                    text=True,
+                    text=True, encoding="utf-8", errors="replace",
                     timeout=timeout,
                 )
             else:
@@ -172,7 +172,7 @@ def run_install(install_cmd: str, timeout: int = INSTALL_TIMEOUT_SECONDS) -> tup
                     install_cmd,
                     shell=True,
                     capture_output=True,
-                    text=True,
+                    text=True, encoding="utf-8", errors="replace",
                     timeout=timeout,
                 )
         else:
@@ -180,7 +180,7 @@ def run_install(install_cmd: str, timeout: int = INSTALL_TIMEOUT_SECONDS) -> tup
                 install_cmd,
                 shell=True,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 timeout=timeout,
             )
         output = (result.stdout + result.stderr).strip()
