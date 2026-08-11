@@ -117,6 +117,25 @@ for (const report of reports) {
 
 const norm = (p) => String(p == null ? '' : p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 
+// Document identity across MIXED path forms. A candidate's `destination` comes
+// from a persisted report and is routinely repo-relative ('kernel/CLAUDE.md'),
+// while the resolution names the same document absolutely
+// ('D:/proj/kernel/CLAUDE.md'). A bare norm() comparison calls those two
+// different documents, which is not a cosmetic difference: it is what the
+// subtraction derivation below tests, so every promoted candidate whose
+// reporter ALREADY proposed the resolved destination produces a phantom
+// removal -- and those phantoms then feed the per-leaf arithmetic that
+// re-judges dispositions. Segment-aligned suffix matching is deliberately
+// conservative: 'kernel/CLAUDE.md' matches '<abs>/kernel/CLAUDE.md' but never
+// 'other-kernel/CLAUDE.md', and two absolute paths still compare exactly.
+const sameDocument = (a, b) => {
+  const x = norm(a)
+  const y = norm(b)
+  if (!x || !y) return false
+  if (x === y) return true
+  return x.endsWith('/' + y) || y.endsWith('/' + x)
+}
+
 // ---------------------------------------------------------------------------
 // STRUCTURAL REFUSAL, evaluated BEFORE any agent dispatch.
 //
@@ -539,7 +558,7 @@ for (const group of destinations) {
     for (const id of fact.sources || []) {
       const candidate = candidateById.get(id)
       if (!candidate) continue
-      if (norm(candidate.proposedDestination) === norm(group.destination)) continue
+      if (sameDocument(candidate.proposedDestination, group.destination)) continue
       subtractions.push({
         source: candidate.leaf,
         sourceReport: candidate.source,
@@ -556,23 +575,32 @@ for (const group of destinations) {
 // Per-leaf arithmetic behind the disposition re-judgment. `after` is the count
 // of a leaf's candidates that still land at that leaf; everything else moved,
 // was rejected, or is unplaceable.
-const removedByLeaf = new Map()
-const countRemoval = (leaf) => removedByLeaf.set(norm(leaf), (removedByLeaf.get(norm(leaf)) || 0) + 1)
-for (const s of subtractions) countRemoval(s.source)
-for (const r of rejections) {
-  const c = candidateById.get(r.candidateId)
-  if (c) countRemoval(c.leaf)
-}
-for (const u of unplaceable) {
-  const c = candidateById.get(u.candidateId)
-  if (c) countRemoval(c.leaf)
+//
+// It is counted POSITIVELY -- candidates resolved TO the leaf's own document --
+// rather than as before-minus-removals. The subtractive form silently assumes
+// every departure shows up as a subtraction, and a subtraction is only emitted
+// when the resolved destination differs from the one the REPORTER proposed. A
+// reporter that already proposed the parent (the normal case, since coverage
+// candidates carry a `scope` of `PROMOTE -> <dir>`) therefore produces no
+// subtraction, and the leaf's `after` count keeps facts that resolved
+// elsewhere. Counting arrivals cannot drift from the resolution that way.
+const stayedByLeaf = new Map()
+for (const group of destinations) {
+  for (const fact of group.facts || []) {
+    for (const id of fact.sources || []) {
+      const candidate = candidateById.get(id)
+      if (!candidate) continue
+      // Does this fact land at the reporting leaf's OWN document?
+      if (!sameDocument(group.destination, `${candidate.leaf}/CLAUDE.md`)) continue
+      stayedByLeaf.set(norm(candidate.leaf), (stayedByLeaf.get(norm(candidate.leaf)) || 0) + 1)
+    }
+  }
 }
 
 const dispositions = (Array.isArray(raw.dispositions) ? raw.dispositions : []).map((d) => {
   const report = reports.find((r) => norm(r.root) === norm(d.leaf))
   const before = report ? report.candidateCount : null
-  const removed = removedByLeaf.get(norm(d.leaf)) || 0
-  const after = before === null ? null : Math.max(0, before - removed)
+  const after = before === null ? null : (stayedByLeaf.get(norm(d.leaf)) || 0)
   const row = { ...d, candidatesBefore: before, candidatesAfter: after }
   // disposition-re-judged: downward-only. This is arithmetic, not preference --
   // subtraction only REMOVES content from a leaf, so an upward flip would
