@@ -36,9 +36,20 @@
 // args = {
 //   subjects: [ { root: string,
 //                 codeFiles: string[],
-//                 candidates: [ ... ],              // from that directory's coverage report
-//                 ambientClaudeMdPaths: string[],   // root-most first; MAY be empty
+//                 reportPath: string|undefined,     // PREFERRED -- the agent reads it
+//                 candidates: [ ... ]|undefined,    // legacy inline form; see below
+//                 ambientClaudeMdPaths: string[],   // HINT ONLY -- the agent derives its own
 //                 skipNote: string|null } ],        // set => null branch, no document
+//
+// TWO INPUTS ARE DERIVED AGENT-SIDE RATHER THAN TRUSTED FROM THE CALLER, and both
+// for the same reason: the workflow script has no filesystem access, the agent
+// does, so anything requiring a look at disk must be resolved on that side.
+//   - reportPath over inline candidates -- inlining makes the ORCHESTRATING context
+//     carry the whole report corpus as args (49KB for five directories), which does
+//     not scale and pushes callers into trimming candidates to fit.
+//   - ambientClaudeMdPaths is a HINT -- a caller list is a snapshot that goes stale
+//     the moment an earlier wave writes an ancestor, which is precisely the document
+//     the run must not duplicate.
 //   refs: { standards: <abs path to references/standards/claude-md-standards.md>,
 //           lane:      <abs path to references/lanes/generation-lane.md>,
 //           placement: <abs path to references/cohesion-principles.md> }
@@ -90,6 +101,32 @@ const placementRef = needRef('placement',
 const subjects = Array.isArray(input.subjects) ? input.subjects : []
 if (!subjects.length) {
   throw new Error('claude-md-generate: no subjects. Nothing to generate.')
+}
+
+// A subject with NEITHER a reportPath NOR inline candidates is almost always a
+// wiring mistake -- a caller that meant to pass reports and passed none. Left
+// unchecked it silently produces a document written from code alone, which is
+// indistinguishable in the output from an assessed directory that legitimately
+// yielded nothing. Refuse, and name the subjects, rather than generate an
+// un-assessed corpus that looks assessed.
+const inputless = subjects.filter(
+  (s) => !s.skipNote && !s.reportPath && !(Array.isArray(s.candidates) && s.candidates.length)
+)
+if (inputless.length && inputless.length === subjects.length) {
+  throw new Error(
+    'claude-md-generate: no subject has a reportPath or inline candidates. Every ' +
+    'directory would be written from its code alone, which is indistinguishable in ' +
+    'the output from an assessed directory that yielded nothing. Pass reportPath per ' +
+    'subject (preferred) or candidates, or set skipNote to take the null branch ' +
+    'deliberately. Subjects: ' + inputless.map((s) => s.root).join(', ')
+  )
+}
+if (inputless.length) {
+  // s.root verbatim, NOT norm() -- norm is declared further down and would be in
+  // the temporal dead zone here, throwing ReferenceError before any agent runs.
+  log('NOTE: ' + inputless.length + ' of ' + subjects.length + ' subject(s) have no ' +
+      'coverage input and will be written from code alone: ' +
+      inputless.map((s) => String(s.root)).join(', '))
 }
 
 const DOC_SCHEMA = {
@@ -203,16 +240,38 @@ for (const r of roots) {
 }
 
 const lanePrompt = (s, root, writtenChildren) => {
+  // The ambient chain is DERIVED BY THE AGENT, not trusted from the caller.
+  // A caller-supplied list is a snapshot, and it goes stale the moment an earlier
+  // wave writes an ancestor document -- which is exactly when it matters most,
+  // because that ancestor is the one thing this run must not duplicate. Observed
+  // live in 0.49.0: a run was handed only the repo root while its real parent
+  // existed on disk, and the fact that the child noticed and corrected it is the
+  // only reason the output was not a C-1 duplication.
+  //
+  // The agent has filesystem access and the workflow script does not, so the
+  // derivation belongs on that side. Any caller-supplied list is a HINT.
   const chain = s.ambientClaudeMdPaths || []
-  const chainClause = chain.length
-    ? 'The CLAUDE.md files AMBIENT for this directory, root-most first:\n' +
-      chain.map((p) => '  - ' + p).join('\n') +
-      '\n\nRead every one. Do NOT restate a fact an ancestor already carries. ' +
-      'BUT: an ambient claim that is FALSE does not suppress anything -- ' +
-      'de-duplicating against a false claim de-duplicates against nothing. ' +
-      'When an ambient claim contradicts what you observe in this code, say so in notes ' +
-      'and write the fact anyway.'
-    : 'This directory has NO ambient CLAUDE.md. Nothing loads for this code at all.'
+  const hintClause = chain.length
+    ? '\n\nThe caller believes the chain to be the list below. Treat it as a HINT ONLY, ' +
+      'and prefer what you actually find on disk -- a caller list can be a stale ' +
+      'snapshot taken before an ancestor was written:\n' +
+      chain.map((p) => '  - ' + p).join('\n')
+    : ''
+
+  const chainClause =
+    'DERIVE YOUR OWN AMBIENT CHAIN FIRST, BEFORE ANYTHING ELSE. Walk UP from this ' +
+    'directory to the repository root, collecting every CLAUDE.md you find on the way ' +
+    '(stop at the directory containing .git). Those, root-most first, are the documents ' +
+    'ambient for this code. Do not assume the set; look.\n\n' +
+    'Read every one. Do NOT restate a fact an ancestor already carries -- that is a C-1 ' +
+    'parent-child duplication failure. When an ancestor states a fact and this directory ' +
+    'has only a local DELTA on it, write the delta alone and point at the ancestor.\n\n' +
+    'BUT: an ambient claim that is FALSE suppresses nothing -- de-duplicating against a ' +
+    'false claim de-duplicates against nothing. When an ambient claim contradicts what ' +
+    'you observe here, say so in notes and write the fact anyway.\n\n' +
+    'If what you find differs from the caller hint below, SAY SO IN NOTES. That ' +
+    'disagreement is a caller defect worth surfacing, not a detail to absorb quietly.' +
+    hintClause
 
   const compositionClause = writtenChildren.length
     ? '\nCOMPOSITION -- THIS DIRECTORY HAS CHILDREN, AND THEIR DOCUMENTS ARE YOUR SECOND INPUT.\n' +
@@ -236,13 +295,32 @@ const lanePrompt = (s, root, writtenChildren) => {
       'which is a separate run per child -- you do NOT edit the child documents.'
     : '\nThis directory has no in-scope children, so there is no composition step and no hoisting.'
 
+  // Candidates arrive one of two ways, and reportPath is STRONGLY preferred at
+  // any scale beyond a handful of directories.
+  //
+  // Workflow scripts have no filesystem access, so inlining candidates forces the
+  // ORCHESTRATING context to carry every subject's full report as args -- measured
+  // at 49KB for five directories, which does not survive a 43-directory corpus and
+  // makes the caller trim candidates to fit, silently degrading the documents.
+  // Agents DO have filesystem access, so handing over a PATH moves the cost from
+  // O(corpus) in the caller to O(1). Same reasoning as the ambient chain above:
+  // derive at the side that can actually look.
   const candidates = s.candidates || []
-  const candidateClause = candidates.length
-    ? '\nCOVERAGE CANDIDATES for this directory (' + candidates.length + '). These are ' +
-      'pre-derived facts with evidence anchors. Carry the anchors through rather than ' +
-      're-deriving citations.\n\n' +
-      JSON.stringify(candidates, null, 2)
-    : '\nThis directory has NO coverage candidates.'
+  const candidateClause = s.reportPath
+    ? '\nCOVERAGE CANDIDATES -- READ THEM YOURSELF from:\n  ' + s.reportPath + '\n\n' +
+      'It is JSON with a "candidates" array; each entry carries "fact", "why", ' +
+      '"anchors" (file:line evidence), "destination" and "tier". Read the file before ' +
+      'writing anything. Carry the anchors through rather than re-deriving citations.\n' +
+      'If the file is missing or unreadable, SAY SO IN NOTES and set written false -- ' +
+      'do not improvise candidates from the code, which would silently substitute an ' +
+      'un-assessed directory for an assessed one.'
+    : candidates.length
+      ? '\nCOVERAGE CANDIDATES for this directory (' + candidates.length + '), inlined by ' +
+        'the caller. Pre-derived facts with evidence anchors; carry the anchors through ' +
+        'rather than re-deriving citations.\n\n' +
+        JSON.stringify(candidates, null, 2)
+      : '\nThis directory has NO coverage candidates. Assess it from its own direct code ' +
+        'alone, and be readier than usual to take the null branch.'
 
   return 'Write ONE code-directory CLAUDE.md, for exactly this directory.\n\n' +
     'Directory: ' + root + '\n' +
