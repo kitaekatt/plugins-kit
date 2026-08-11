@@ -90,7 +90,21 @@ logins and never call `get_api_key`.
 **Candidate fix.** Correct the count, and scope the credential prose to the HTTP
 transport.
 
-## 7. `stale_editable_self_install` remains open
+## 7. Two path helpers are not re-exported from the package root
+
+`legacy_project_env_file` and `project_env_files` are defined in
+`llm_scripting_kit/constants.py` and importable from there, but
+`llm_scripting_kit/__init__.py` imports and lists only `project_env_file`
+(singular) in `__all__`.
+
+A caller following the package's own convention -- import from the root --
+finds one of the three and has to discover that the other two live one module
+down. Minor, but it is an inconsistency in the public surface.
+
+**Candidate fix.** Re-export both from the package root, or document that
+`constants` is the intended import site for the path helpers.
+
+## 8. `stale_editable_self_install` remains open
 
 Recorded in the root `CLAUDE.md` knowledge base and marked unfixed: a plugin's
 own editable-install `.pth` never re-points on a version bump, so a plugin can
