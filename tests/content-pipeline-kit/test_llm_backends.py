@@ -264,6 +264,24 @@ def test_routing_injected_instance_wins():
     assert route(mock=mine) is mine
 
 
+def test_routing_injected_mock_wins_without_active_backend_set():
+    """Regression: a supplied mock must win even with no backend selected.
+
+    Previously ``route`` read ``active_backend_name()`` first and only
+    consulted a supplied instance for the name ALREADY active -- so
+    ``route(mock=...)`` with ``CONTENT_PIPELINE_LLM_BACKEND`` unset (the
+    default state, not merely cleared) silently returned a live
+    ``OpenRouterBackend`` and ignored the mock. This test never calls
+    ``set_active_backend``, so it fails against that defect and passes only
+    when a supplied mock wins unconditionally.
+    """
+    assert active_backend_name() == "openrouter"
+    mine = MockBackend(responses=["x"])
+    result = route(mock=mine)
+    assert result is mine
+    assert not isinstance(result, OpenRouterBackend)
+
+
 def test_routed_model_substitutes_for_claude(monkeypatch):
     set_active_backend("claude-cli")
     monkeypatch.setenv(backends.MODEL_ENV, "claude-sonnet-4-6")

@@ -487,13 +487,19 @@ def route(
 ) -> Any:
     """Return the process-active backend instance.
 
-    Reads :data:`BACKEND_ENV`. A caller-supplied instance for the active name
-    wins (the mock seam always wins so tests never route to a live transport);
-    otherwise a default instance is constructed.
+    A supplied ``mock`` wins UNCONDITIONALLY, regardless of
+    :data:`BACKEND_ENV` -- checked before the active name is even read, so a
+    test can inject a mock without also calling :func:`set_active_backend`.
+    This is the seam that keeps tests off a live transport; it must never be
+    contingent on environment state. Absent a supplied ``mock``, reads
+    :data:`BACKEND_ENV` and returns the active backend, using any other
+    caller-supplied instance for that name, otherwise constructing a default.
     """
+    if mock is not None:
+        return mock
     name = active_backend_name()
     if name == "mock":
-        return mock if mock is not None else MockBackend()
+        return MockBackend()
     if name == "claude-cli":
         return claude_cli if claude_cli is not None else ClaudeCliBackend()
     if name == "codex-cli":

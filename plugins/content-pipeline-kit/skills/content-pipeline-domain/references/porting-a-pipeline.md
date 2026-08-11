@@ -12,7 +12,7 @@ port one subsystem, prove equivalence with the tool's OWN tests, then move to
 the next." Porting in dependency order with a pinned equivalence baseline at
 each step keeps risk at a minimum and makes every collapse auditable.
 
-## 0. Inventory the monolith against the 12 subpackages
+## 0. Inventory the monolith against the 11 subpackages
 
 Before porting anything, map the existing tool's modules onto the library's
 subpackages. For each existing module, name the subpackage it collapses onto:

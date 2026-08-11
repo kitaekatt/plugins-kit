@@ -114,3 +114,40 @@ fixed; the self-install variant was not.
 Listed here because it can make any behavioral claim about these plugins
 unreproducible on a machine in that state -- including the claims in the
 architecture document set.
+
+## 9. `route(mock=)` did not always win -- resolved
+
+**Status: resolved in this commit.** `content_pipeline.llm.backends.route()`
+read `active_backend_name()` first and only consulted a supplied `mock` for
+the name ALREADY active. With `CONTENT_PIPELINE_LLM_BACKEND` unset (the
+default state, not merely cleared) the active name was `openrouter`, so
+`route(mock=FakeBackend())` silently returned a live `OpenRouterBackend` and
+never looked at the mock -- a test injecting a mock could reach a paid
+transport. The existing test passed only because it called
+`set_active_backend("mock")` first. Three doc sites (`llm/backends.py`'s
+module docstring, `route()`'s own docstring, and
+`skills/content-pipeline-domain/references/building-a-pipeline.md`) already
+claimed a supplied mock always wins, which is what let the discrepancy go
+unnoticed.
+
+Two resolutions were considered: (1) fix the code so a supplied `mock` wins
+unconditionally, or (2) edit the three doc sites to describe the actual
+(env-dependent) behavior. Option 1 was chosen -- option 2 would have
+fossilized "a test can reach a paid transport" as intended behavior, which is
+the actual defect. `route()` now checks for a supplied `mock` before reading
+`BACKEND_ENV` at all. Regression test:
+`tests/content-pipeline-kit/test_llm_backends.py::test_routing_injected_mock_wins_without_active_backend_set`,
+which never calls `set_active_backend` and fails against the pre-fix code.
+
+## 10. Porting doc's "12 subpackages" was stale -- resolved
+
+**Status: resolved in this commit.** `references/porting-a-pipeline.md`
+(section 0 header) and `SKILL.md`'s materialized-summary line for that
+reference both said "the 12 subpackages," left over from before the `config`
+subpackage was deleted (see item 8's neighbor, the 0.6.6 release that dropped
+`config` because config loading is project-side by design). The library
+actually ships 11 subpackages (`audit`, `cli`, `deliver`, `freshness`, `llm`,
+`pipeline`, `providers`, `roundtrip`, `store`, `validate`, `vcs`, verified
+against `lib/content_pipeline/`), and the porting doc's own table already
+listed all of them correctly across 10 rows (`deliver` and `vcs` share one
+row). Both "12" references are now "11"; the table needed no row changes.

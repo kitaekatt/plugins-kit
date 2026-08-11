@@ -85,19 +85,11 @@ a process, and nothing at a call site signals that one of them got the other's
 backend, so a changed environment variable can move output quality with no
 local signal.
 
-**Unresolved: the mock seam does not override that selection, though four
-places say it does.** `route()` reads `active_backend_name()` first and only
-consults a supplied instance for the name ALREADY active. With
-`CONTENT_PIPELINE_LLM_BACKEND` unset the active name is `openrouter`, so
-`route(mock=FakeBackend())` returns a live `OpenRouterBackend` and never looks
-at the mock. A test must call `set_active_backend("mock")` too --
-`tests/content-pipeline-kit/test_llm_backends.py::test_routing_injected_instance_wins`
-does exactly that, which is what keeps the discrepancy invisible. The
-always-wins claim appears in `llm/backends.py`'s module docstring and its
-`route` docstring, and in
-`skills/content-pipeline-domain/references/building-a-pipeline.md`. Until an
-owner resolves it, treat the injected-mock guarantee as ABSENT and set the
-active backend explicitly in tests. The safer resolution is in the code -- have
-`route` return a supplied `mock` unconditionally -- because editing the three
-doc sites instead would fossilize "a test can reach a paid transport" as
-intended behavior.
+A supplied `mock` wins unconditionally in `route()`, checked before
+`active_backend_name()` is even read -- a test never has to call
+`set_active_backend("mock")` first to keep a routed call off a live transport.
+(This was not always true: `route()` used to consult the active name first and
+only honor a supplied instance for the name already active, so
+`route(mock=FakeBackend())` with `CONTENT_PIPELINE_LLM_BACKEND` unset silently
+reached a live `OpenRouterBackend`. Fixed; see
+`tests/content-pipeline-kit/test_llm_backends.py::test_routing_injected_mock_wins_without_active_backend_set`.)
