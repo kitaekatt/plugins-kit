@@ -13,10 +13,35 @@ no label to choose per run. The preservation half of regeneration is already
 carried by the summarize-and-reference rule and its loss-free-deletion guard in
 Step 4, which is what keeps a regeneration from spending existing value.
 
-**Single-invocation.** The generation verb has no fan-out machinery and gains
-none: no Workflow lanes, no pre-images, no detect/remediate split, no review
-mode. Generating N files is N runs of this procedure. New generation machinery
-would be new scope.
+**Single-invocation by default.** One run of this procedure writes ONE document,
+and generating N documents is N runs of it. There is no pre-image, no
+detect/remediate split, and no review mode -- those belong to the audit lane and
+answer a question generation does not ask.
+
+**The one exception is TREE-SCALE `claude-md` generation**, which binds
+`workflow/claude-md-generate.js`. It exists because at tree scale the runs are
+not independent: parent composition below makes a directory's document an INPUT
+to its parent's, so the N runs carry a topological order whose violation is
+silent. The lane does not change this procedure -- each agent it dispatches
+performs exactly the five steps below -- it supplies the two things a caller
+otherwise has to get right by hand every time:
+
+- **The wave order**, derived from the subject set rather than taken on trust, so
+  a parent cannot start before its descendants have finished. `parallel()` alone
+  is one barrier over one set and `pipeline()` has no barrier between items;
+  neither expresses a dependency graph. A LOOP over waves, each wave a
+  `parallel()` barrier, does.
+- **The model pin** (opus + high). Without it a generation run inherits whatever
+  model the session happens to be on, which for judgment-heavy work -- placement,
+  wording a hoist so it is true as stated at a new depth, de-duplicating against
+  the chain -- is silently under- or over-powered.
+
+An earlier revision of this paragraph stated that the verb "has no fan-out
+machinery and gains none: no Workflow lanes ... New generation machinery would be
+new scope." That was the correct call while the only known consumer was a
+single-document request; it was overturned deliberately once tree-scale
+generation became a real workload. Single-document generation is unaffected and
+still needs no lane.
 
 Load this together with exactly one standards doc, selected by the dispatch
 table:

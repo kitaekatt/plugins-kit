@@ -330,6 +330,7 @@ lanes:
     artifact: claude-md
     standards: references/standards/claude-md-standards.md
     procedure: references/lanes/generation-lane.md
+    workflow_generate: workflow/claude-md-generate.js
     verdicts: [COMPLIANT, NON-COMPLIANT]
     invocation_phrasings:
       - "write a claude_md block"

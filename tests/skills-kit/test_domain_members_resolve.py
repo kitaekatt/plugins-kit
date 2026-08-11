@@ -91,6 +91,7 @@ PATH_KEYS = (
     "workflow_detect",
     "workflow_classify",
     "workflow_remediate",
+    "workflow_generate",
 )
 
 
