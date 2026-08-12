@@ -88,27 +88,50 @@ cannot distinguish "hoisted at the parent" from "silently lost".
 
 ### G5 `[REF]` Generation loses 23% of admitted candidates, and mostly not for structural reasons
 
-Measured across all 46 reports and all 45 documents: **310 admitted candidates,
-235 written, 4 hoisted, 71 absent (23%)**. "Absent" means the fact is expressed
-neither in the assessed directory's document nor at its stated destination.
+Measured across 46 of the 48 reports and all 45 documents: **310 candidates
+measured, 235 written, 4 hoisted, 71 absent (23%)**. "Absent" means the fact is
+expressed neither in the assessed directory's document nor at its stated
+destination. (The corpus is 48 reports / 316 candidates; the two dot-prefixed
+reports, `.claude.json` and `.claude-hooks.json` with 6 candidates between them,
+were missed by the measurement's file glob and are unmeasured.)
 
-The loss is concentrated, and decomposes into three distinct mechanisms:
+The loss decomposes into four distinct mechanisms:
 
 | Mechanism | Absent | Share |
 |---|---:|---:|
-| Null branch taken despite admitted candidates | 11 | 15% |
+| Plain omission: document written from its own current report, fact absent anyway | ~29 | 41% |
 | Destination directory has no document and cannot get one (G3) | ~17 | 24% |
-| Plain omission: document written, destination writable, fact absent anyway | ~43 | 61% |
+| Stale document suppressed regeneration (G5d) | 14 | 20% |
+| Null branch taken despite admitted candidates (G5b) | 11 | 15% |
 
-**The third mechanism is the largest, and it has nothing structural to blame.**
-The extreme case is `src/kernel`: 14 admitted candidates, all naming that same
-directory as their destination, a document duly written -- and not one of the 14
-expressed in it. Its six sections are different facts entirely. Spot-checked
-independently: the distinctive candidate terms (`INPUT mesh`, `atlas`,
-`earClip`) appear nowhere in the emitted document.
+`src/ui` 6 of 9 absent, `src/effects` 3 of 4, `src/inventory` 3 of 6,
+`src/tools` 3 of 6, `src/rendering` 2 of 6 make up most of the plain-omission
+share.
 
-Others in the same class: `src/ui` 6 of 9 absent, `src/effects` 3 of 4,
-`src/inventory` 3 of 6, `src/tools` 3 of 6, `src/rendering` 2 of 6.
+**Two mirrored directory names caused a real analytical error, and the same
+confusion may exist in the pipeline.** `kernel/src` (C++) and `src/kernel` (JS)
+are different subjects whose reports are `kernel-src.json` and `src-kernel.json`
+under the pipeline's path-flattening scheme. An earlier draft cited `kernel/src`
+as proof of plain omission; it is not -- three of its four candidates target the
+unwritable `kernel/CLAUDE.md` and the fourth, which targets its own directory,
+was correctly written. `kernel/src` is evidence for G3, not for omission.
+
+### G5d `[OBS]` An existing document suppresses regeneration, discarding the newer report
+
+`src/kernel/CLAUDE.md` was committed 2026-08-10 by the pilot run (`e654891`,
+corrected in `c637e3b`). Every other document in the corpus landed 2026-08-12
+(`eb46f45` 34 documents, `ca3f6a3` 9, `b371a26` 1). Its coverage report
+`src-kernel.json` post-dates the document -- the report's own
+`sibling_overlap` field cites the document's existing "Zero-copy mesh views"
+section.
+
+So wave 0 skipped the directory because a document was already present, and all
+14 of its admitted candidates were discarded without a record. The document is
+not wrong; it is answering an older question.
+
+This is the regeneration failure mode specifically: the chain has no notion of
+a document being STALE with respect to a newer report. Re-running coverage on a
+documented directory produces candidates nothing will ever consume.
 
 Two secondary signals:
 
@@ -135,11 +158,13 @@ nothing is recorded either way.
 A null branch over a GAPS-FOUND report is a contradiction that should have to
 be justified per candidate, not per directory.
 
-### G5c `[OBS]` Two documents have no coverage report at all
+### G5c RETRACTED -- two documents appeared to have no report
 
-`.claude/CLAUDE.md` (55 lines) and `.claude/hooks/CLAUDE.md` (58 lines) exist in
-the corpus with no report in `reports-json/` under any name. Their content has
-no traceable discovery input. Whatever produced them is not the measured chain.
+Claimed that `.claude/CLAUDE.md` and `.claude/hooks/CLAUDE.md` had no coverage
+report. False: `.claude.json` and `.claude-hooks.json` exist and were missed by
+a `glob('*.json')` that does not match dot-prefixed files. Retained here as a
+retraction because the same glob bug produced the retracted G10 and the
+310-vs-316 denominator above.
 
 ### G6 `[REF]` Emitted `Verify` commands are never executed
 
@@ -185,10 +210,12 @@ repeated rule after testing its inherited visibility"
 The root carries a stale 75-line directory tree that six children then write
 corrective text against.
 
-### G10 `[OBS]` Report count does not match the enumeration
+### G10 RETRACTED -- report count appeared not to match the enumeration
 
-46 reports exist for 48 in-scope directories (49 enumerated, 1 VCS-ignored).
-Nothing reconciles the two, so a directory can be silently unassessed.
+Claimed 46 reports for 48 in-scope directories. False: there are 48 reports.
+The two dot-prefixed ones were missed by a `glob('*.json')`. No enumeration
+mismatch exists. Retained as a retraction, and as the reason every count in
+this document names its denominator.
 
 ### G11 `[OBS]` The cross-tree reach failure is a quality failure, not a model limit
 
@@ -227,20 +254,29 @@ is out of scope; what remains is a reading failure.
 
 ## Part 2 -- remediation plan
 
-**The ordering premise, stated honestly.** An earlier draft claimed
-measurability (P1-P3) must come first because no later fix could otherwise be
-shown to have worked. The G5 decomposition partly refutes that as a
-PRIORITISATION: schema, writable destinations and reconciliation together
-address roughly 28 of the 71 lost facts (39%). The largest mechanism -- 43
-facts, 61% -- is a generation run receiving a candidate and simply not writing
-it, with a writable local destination and a document that did get written. A
-ledger makes that visible; it does not fix it.
+**The ordering premise, stated honestly, after two corrections.** The first
+draft asserted that measurability (P1-P3) must come first because no later fix
+could otherwise be shown to have worked -- which was a claim about
+verifiability doing duty as a claim about priority. The G5 decomposition, twice
+revised, now supports a sharper reading:
 
-So the ordering stands only in the weak form: P1-P3 must come first because
-without them the fix for the dominant problem cannot be VERIFIED. They are not
-the fix. P3 is therefore reformulated below from an audit artifact into an
-output contract of the generation run, which is the actual remedy for the
-dominant mechanism.
+| Loss mechanism | Absent | Addressed by |
+|---|---:|---|
+| Plain omission | ~29 (41%) | P3 output contract -- but see open question 1 |
+| Unwritable destination | ~17 (24%) | P2 |
+| Stale document skipped | 14 (20%) | P8 |
+| Null branch over admitted candidates | 11 (15%) | P3 |
+
+So 59% of the loss has a specific structural cause with a specific fix, and
+41% is the residual that P3 makes VISIBLE without necessarily fixing. That is a
+better position than the previous draft claimed, and it was reached by being
+wrong twice -- once by attributing the residual to a directory whose loss was
+actually structural (`kernel/src`), once by a file glob that dropped two
+reports.
+
+The ordering therefore stands, but for a plainer reason than "measurability
+first": P2, P3 and P8 each fix a named mechanism, and P3 is also the instrument
+that measures whether P4-P6 worked.
 
 ### P1. One candidate schema, enforced at emit (fixes G1, G2, partly G5)
 
@@ -328,6 +364,22 @@ outcome; an unrecorded duplicate is not.
 ### P7. Enforce the authoring form (fixes G9)
 
 No H1 title, no directory inventory, at emit.
+
+### P8. A document must be stale-checked against its report (fixes G5d)
+
+The chain has no concept of a document being out of date with respect to a
+newer assessment, so a documented directory is silently skipped and its report
+discarded. A generation run must compare the document's provenance against the
+report that would compose it, and treat `document older than report` as
+REGENERATE rather than SKIP.
+
+This is the item that makes the workflow a REgeneration workflow rather than a
+one-shot. It also determines what a second run over an already-documented
+corpus is worth, which is the question the validation below actually asks.
+
+Minimum viable form: record, in or beside each document, the identity of the
+report it was composed from. A run whose report differs from the recorded one
+regenerates; a run whose report matches skips legitimately.
 
 ### Validation: regenerate and score
 
