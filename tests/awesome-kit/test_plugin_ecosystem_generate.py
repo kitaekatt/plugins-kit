@@ -12,6 +12,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 _SCRIPT = (
     Path(__file__).resolve().parents[2]
     / "plugins" / "awesome-kit" / "skills" / "plugin-ecosystem" / "scripts" / "generate.py"
@@ -263,3 +265,88 @@ class TestPublicMode:
 
     def test_badge_helper_tolerates_missing_state(self):
         assert "if (!state) return null;" in self._render(True)
+
+
+class TestMarketplaceMetadataOverrides:
+    """--marketplace-json and --poster redirect the two per-marketplace inputs at
+    a source tree. Both cached copies lag the source by one publish, so a
+    marketplace generating its own landing page must not read either of them --
+    and --poster additionally opts a marketplace in with no clone installed."""
+
+    def _home(self, tmp_path, monkeypatch, clones=None):
+        home = tmp_path / "home" / ".claude"
+        for name, poster in (clones or {}).items():
+            d = home / "plugins" / "marketplaces" / name / ".claude-plugin"
+            d.mkdir(parents=True)
+            if poster is not None:
+                (d / "poster.yaml").write_text(poster, encoding="utf-8")
+            (d / "marketplace.json").write_text(
+                json.dumps({"plugins": [{"name": "cached-only"}]}), encoding="utf-8")
+        monkeypatch.setattr(generate, "home_claude", lambda: home)
+        return home
+
+    def _source(self, tmp_path, subtitle="from source", plugins=("fresh",)):
+        src = tmp_path / "src"
+        src.mkdir(exist_ok=True)
+        poster = src / "poster.yaml"
+        poster.write_text(f"subtitle: {subtitle}\n", encoding="utf-8")
+        listing = src / "marketplace.json"
+        listing.write_text(
+            json.dumps({"plugins": [{"name": n} for n in plugins]}), encoding="utf-8")
+        return poster, listing
+
+    def test_poster_override_beats_the_cached_clone(self, tmp_path, monkeypatch):
+        self._home(tmp_path, monkeypatch, clones={"mkt": "subtitle: from cache\n"})
+        poster, listing = self._source(tmp_path)
+        out = generate.collect_marketplace_metadata({"mkt": listing}, {"mkt": poster})
+        assert out["mkt"]["poster"]["subtitle"] == "from source"
+        assert out["mkt"]["plugin_names"] == {"fresh"}
+
+    def test_poster_override_opts_in_a_marketplace_with_no_clone(self, tmp_path, monkeypatch):
+        self._home(tmp_path, monkeypatch)
+        poster, listing = self._source(tmp_path)
+        out = generate.collect_marketplace_metadata({"mkt": listing}, {"mkt": poster})
+        assert set(out) == {"mkt"}
+        assert out["mkt"]["plugin_names"] == {"fresh"}
+
+    def test_other_installed_marketplaces_still_collected(self, tmp_path, monkeypatch):
+        """The override adds and replaces; it does not scope. Scoping is
+        --marketplace's job, which is why publish.py passes both."""
+        self._home(tmp_path, monkeypatch, clones={"private": "subtitle: theirs\n"})
+        poster, listing = self._source(tmp_path)
+        out = generate.collect_marketplace_metadata({"mkt": listing}, {"mkt": poster})
+        assert set(out) == {"mkt", "private"}
+
+    def test_clone_without_poster_yaml_still_skipped(self, tmp_path, monkeypatch):
+        self._home(tmp_path, monkeypatch, clones={"silent": None})
+        assert generate.collect_marketplace_metadata() == {}
+
+    def test_missing_override_path_exits(self, tmp_path, monkeypatch):
+        self._home(tmp_path, monkeypatch)
+        with pytest.raises(SystemExit) as exc:
+            generate.collect_marketplace_metadata({}, {"mkt": tmp_path / "nope.yaml"})
+        assert "does not exist" in str(exc.value)
+
+    def test_override_without_any_listing_exits(self, tmp_path, monkeypatch):
+        """A poster override with no clone AND no --marketplace-json has no plugin
+        listing at all, which would silently render an empty column."""
+        self._home(tmp_path, monkeypatch)
+        poster, _ = self._source(tmp_path)
+        with pytest.raises(SystemExit) as exc:
+            generate.collect_marketplace_metadata({}, {"mkt": poster})
+        assert "--marketplace-json" in str(exc.value)
+
+
+class TestParseNamePath:
+    def test_parses_pairs(self, tmp_path):
+        out = generate._parse_name_path(["a=/x/y", "b=/z"], "--poster")
+        assert out == {"a": Path("/x/y"), "b": Path("/z")}
+
+    def test_rejects_missing_separator(self):
+        with pytest.raises(SystemExit) as exc:
+            generate._parse_name_path(["justaname"], "--poster")
+        assert "--poster expects NAME=PATH" in str(exc.value)
+
+    def test_rejects_empty_half(self):
+        with pytest.raises(SystemExit):
+            generate._parse_name_path(["=/x"], "--marketplace-json")

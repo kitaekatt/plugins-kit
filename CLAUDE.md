@@ -243,13 +243,11 @@ After publish:
 
 ### The marketplace landing page (`index.html`) — regenerate at publish time
 
-The repo-root **`index.html`** is the marketplace's public landing page (the GitHub-Pages-style poster listing every plugin and its skills). It is **generated, not hand-edited** — by awesome-kit's plugin-ecosystem skill. Regenerate it with:
+The repo-root **`index.html`** is the marketplace's public landing page (the GitHub-Pages-style poster listing every plugin and its skills). It is **generated, not hand-edited** — by awesome-kit's plugin-ecosystem skill, invoked by **`scripts/publish.py`**, which is the source of truth for the invocation. Do not assemble the command yourself; `regenerate()` in that script carries the flags and a comment explaining what each one is holding back.
 
-```bash
-python plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py \
-  --marketplace plugins-kit --title "plugins-kit marketplace" \
-  --output ./index.html --no-open
-```
+**The generator's default job is to describe the MACHINE it runs on**, which is the wrong job here and fails in a way a glance at a 100KB generated file will not catch. Five flags redirect its inputs at the working copy — `--marketplace`, `--public`, `--marketplace-json`, `--poster`, `--config` — and **`--marketplace` is the one whose omission leaks rather than misreports**: without it the page carries every other marketplace installed on the build machine, private ones included, into a public repo. `verify()` re-parses the generated page and refuses on a foreign marketplace or embedded machine state, so a future edit that drops a flag fails the publish instead of shipping.
+
+Repo-side inputs the page reads, all under `.claude-plugin/`: `marketplace.json` (the listing), `poster.yaml` (marketplace subtitle + url), and `index-page.yaml` (page copy — it exists to shadow the per-machine `~/.claude/.local-data/awesome-kit/plugin-ecosystem-poster.yaml` the generator defaults to).
 
 **It crawls installPaths, not the working directory.** `generate.py` reads `~/.claude/plugins/installed_plugins.json` and walks each plugin's **`installPath`**, filtered by `marketplace.json`. In a normal session those paths point at the **cache** (`~/.claude/plugins/cache/<mkt>/<plugin>/<version>/`), which only refetches from **master** — so a plain regen before the merge reproduces the *old* page. That constraint is what used to force the regen after the merge. **Registry v2 caveat:** newer Claude Code keeps that registry at `{"plugins": {}}`; since awesome-kit 0.10.0 `generate.py` falls back to scanning the cache layout for refs the registry doesn't record (see the `registry_v2_empty` insight below), so a normal-mode regen renders the machine's cached plugins rather than an empty page.
 

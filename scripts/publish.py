@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -75,6 +76,8 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 REAL_PLUGINS_DIR = REPO_ROOT / "plugins"
 GENERATE_ORCHESTRATION_PY = SCRIPTS_DIR / "generate_orchestration.py"
 MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
+POSTER_YAML = REPO_ROOT / ".claude-plugin" / "poster.yaml"
+INDEX_PAGE_YAML = REPO_ROOT / ".claude-plugin" / "index-page.yaml"
 INDEX_HTML = REPO_ROOT / "index.html"
 
 DEV_BRANCH = "dev"
@@ -455,16 +458,33 @@ def regenerate() -> bool:
     is about to be published. Restoring is a finally: leaving the tree flipped
     silently loads plugins from the working copy in the next session.
 
-    --public is mandatory here: the default poster badges each plugin on/off/
-    installed from THIS machine's enabledPlugins, which is meaningless-to-wrong
-    on a page checked in for other people to read.
+    generate.py's default job is to describe the MACHINE it runs on -- every
+    input it reads is local state. Publishing needs the opposite: a page that
+    describes this repo at this release and comes out identical on any
+    maintainer's machine. Every flag below redirects one of those inputs at the
+    working copy, and each is load-bearing rather than decorative:
 
-    --marketplace-json is mandatory for the same class of reason: generate.py
-    filters phantom installs against the CACHED marketplace.json, which lags the
-    source by one publish. A plugin introduced in this release is not in it yet,
-    so it would be dropped from its own release's page (how hue-kit 0.7.0 shipped
-    a page missing bootstrap-stuck-fix 0.1.0). Point it at the copy just
-    regenerated above.
+    --marketplace scopes the page to this marketplace. Without it the page
+    includes every marketplace with a poster.yaml installed on the generating
+    machine -- on a machine carrying a private marketplace, that publishes it to
+    a public repo. It is the one flag whose omission leaks rather than merely
+    misreports, so verify() re-checks the result.
+
+    --public drops the on/off/installed badges, which report THIS machine's
+    enabledPlugins -- meaningless-to-wrong on a page checked in for other people.
+
+    --marketplace-json points the phantom-install filter at the listing
+    regenerated above. The CACHED listing lags the source by one publish, so a
+    plugin introduced in this release is absent from it and gets filtered off its
+    own release's page (how hue-kit 0.7.0 shipped a page missing
+    bootstrap-stuck-fix 0.1.0).
+
+    --poster reads the marketplace's subtitle and url from the repo for the same
+    reason, and additionally removes the requirement that the publishing machine
+    have plugins-kit installed as a marketplace at all.
+
+    --config supplies the page copy from the repo instead of the maintainer's
+    ~/.claude/.local-data/awesome-kit/plugin-ecosystem-poster.yaml.
     """
     run([sys.executable, str(REGEN_MARKETPLACE_PY)], "marketplace.json regen")
 
@@ -473,6 +493,8 @@ def regenerate() -> bool:
         run([sys.executable, str(GENERATE_PY),
              "--marketplace", MARKETPLACE_NAME,
              "--marketplace-json", f"{MARKETPLACE_NAME}={MARKETPLACE_JSON}",
+             "--poster", f"{MARKETPLACE_NAME}={POSTER_YAML}",
+             "--config", str(INDEX_PAGE_YAML),
              "--title", PAGE_TITLE,
              "--output", str(INDEX_HTML),
              "--public",
@@ -521,6 +543,43 @@ def push_and_merge() -> None:
         git("checkout", DEV_BRANCH)
 
 
+def check_index_scope(index_text: str) -> list[str]:
+    """Refuse an index.html that describes anything but this marketplace.
+
+    regenerate() scopes the page with --marketplace, and dropping that flag does
+    not fail or look wrong -- it silently adds every OTHER marketplace installed
+    on the generating machine, private ones included, and commits them to a
+    public repo. That failure is invisible in a diff-free glance at a 100KB
+    generated file, so it is checked against the artifact rather than trusted to
+    the invocation. The same parse catches a --public regression, which would
+    embed this machine's enabledPlugins.
+    """
+    match = re.search(r"^const data = (\{.*\});$", index_text, re.MULTILINE)
+    if not match:
+        return ["index.html does not embed a parseable data block -- "
+                "the generator's output shape changed; update check_index_scope"]
+    try:
+        data = json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        return [f"index.html data block is not valid JSON: {exc}"]
+
+    problems = []
+    foreign = sorted({p.get("marketplace") for p in data.get("plugins", [])
+                      if p.get("marketplace") != MARKETPLACE_NAME})
+    foreign += [m for m in data.get("marketplace_order", [])
+                if m != MARKETPLACE_NAME and m not in foreign]
+    if foreign:
+        problems.append(
+            f"index.html describes marketplaces other than {MARKETPLACE_NAME}: "
+            f"{', '.join(str(m) for m in foreign)} -- this page ships to a public "
+            f"repo. regenerate() must pass --marketplace {MARKETPLACE_NAME}.")
+    if any("state" in p for p in data.get("plugins", [])):
+        problems.append(
+            "index.html embeds per-plugin state, which describes the generating "
+            "machine's enabledPlugins. regenerate() must pass --public.")
+    return problems
+
+
 def verify() -> list[str]:
     """Post-publish verification. Returns a list of problems (empty = good)."""
     problems = []
@@ -535,6 +594,7 @@ def verify() -> list[str]:
     marketplace = json.loads(MARKETPLACE_JSON.read_text(encoding="utf-8"))
     listed = {p["name"]: p.get("version") for p in marketplace.get("plugins", [])}
     index_text = INDEX_HTML.read_text(encoding="utf-8")
+    problems.extend(check_index_scope(index_text))
 
     for name, manifest in local_plugins().items():
         if not is_published(manifest):

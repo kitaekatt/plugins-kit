@@ -75,17 +75,27 @@ uv run python scripts/dev-tree.py dev        # installPaths -> this working copy
 python plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py \
   --marketplace plugins-kit --title "plugins-kit marketplace" \
   --marketplace-json plugins-kit=.claude-plugin/marketplace.json \
+  --poster plugins-kit=.claude-plugin/poster.yaml \
+  --config .claude-plugin/index-page.yaml \
   --output ./index.html --public --no-open
 uv run python scripts/dev-tree.py normal     # ALWAYS restore, even if the regen failed
 uv run python scripts/dev-tree.py status     # confirm: installPaths @ cache: <n>, not 0
 ```
 
+Keep this in step with `regenerate()` in `scripts/publish.py`, which is the
+source of truth for the flag set; a preview built with fewer flags is not
+previewing the page that will ship.
+
 **Always restore dev-tree mode.** Leaving it on silently repoints every plugin
 at the working copy for all later sessions -- a footgun far worse than a stale
 page.
 
-**Both flags are load-bearing -- a regen without them produces a page worse
-than the published one.** `--public` drops the on/off/installed state badges,
+**Every flag is load-bearing -- a regen without them produces a page worse
+than the published one, and `--marketplace` produces one that leaks.** Without
+`--marketplace plugins-kit` the page carries every OTHER marketplace with a
+`poster.yaml` installed on this machine -- on a box holding a private
+marketplace, committing that publishes it (observed: 23 plugins across 2
+marketplaces instead of 15 across 1). `--public` drops the on/off/installed state badges,
 which describe the generating machine rather than the marketplace; omit it and
 a checked-in page carries this box's `"state": "on"/"unmanaged"` values (and
 loses the flow-to-content-height CSS). `--marketplace-json` overrides the
@@ -93,7 +103,12 @@ listing that the phantom-install filter reads: the **cached** `marketplace.json`
 under `~/.claude/plugins/marketplaces/` lags the source by one publish, so a
 plugin added in the current release is absent from it and gets dropped from its
 own release's page. That filter exists to catch plugins *removed* upstream; it
-misfires on ones *added*. `publish.py` passes both.
+misfires on ones *added*. `--poster` does the same for the marketplace's own
+`poster.yaml` (subtitle, url), which the cached clone lags identically, and
+`--config` takes the page copy from `.claude-plugin/index-page.yaml` instead of
+the per-machine `~/.claude/.local-data/awesome-kit/plugin-ecosystem-poster.yaml`.
+`publish.py` passes all of them, and its `verify()` re-parses the generated page
+to refuse a foreign marketplace or embedded machine state.
 
 **Preview vs publish -- same mechanism, different commit rule.** At publish
 time dev is the about-to-be master, so its page is the published page --

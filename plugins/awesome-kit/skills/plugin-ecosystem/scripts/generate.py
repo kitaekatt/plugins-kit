@@ -16,6 +16,13 @@ regardless of where the skill is run from) and opens it in the browser unless
 
 A marketplace appears in the poster only if it ships a poster.yaml (opt-in gate).
 Plugin on/off badge precedence: YAML override > settings.json enabledPlugins > bootstrap.json declaration.
+
+Every read above is machine state, which is the point when a user is posting
+their own ecosystem and the wrong thing when a marketplace author is generating
+its published landing page. For that second job, --marketplace scopes the page to
+one marketplace and --marketplace-json / --poster / --config redirect its listing,
+its metadata, and the page copy at the source tree instead. See publish.py in the
+plugins-kit repo for a worked invocation.
 """
 from __future__ import annotations
 
@@ -178,7 +185,8 @@ def collect_skills(plugin_root: Path, poster_overrides: dict) -> list[dict]:
     return skills
 
 
-def collect_marketplace_metadata(listing_overrides: dict | None = None) -> dict:
+def collect_marketplace_metadata(listing_overrides: dict | None = None,
+                                 poster_overrides: dict | None = None) -> dict:
     """Return {marketplace_name: {poster, plugin_names}} for marketplaces that opted in.
 
     plugin_names is the set of plugin names currently listed in the marketplace's
@@ -190,27 +198,53 @@ def collect_marketplace_metadata(listing_overrides: dict | None = None) -> dict:
     so a plugin added in the current release is absent from it and the phantom
     filter drops it -- the filter is meant to catch REMOVALS and misfires on
     ADDITIONS. Publishing passes the repo's freshly regenerated marketplace.json
-    here so a brand-new plugin appears on its own release's page."""
+    here so a brand-new plugin appears on its own release's page.
+
+    poster_overrides does the same for the marketplace's own poster.yaml (its
+    subtitle, url, and state declarations), and additionally OPTS THE MARKETPLACE
+    IN: a name listed here appears even when the generating machine has no clone
+    of it under ~/.claude/plugins/marketplaces/. A marketplace author generating
+    its landing page is describing the source tree in front of them, not their
+    install of it -- the cached poster.yaml lags a publish exactly like the
+    cached listing does, and requiring the marketplace to be installed makes the
+    page depend on machine state that has nothing to do with the release.
+    """
     root = home_claude() / "plugins" / "marketplaces"
     overrides = listing_overrides or {}
+    posters = poster_overrides or {}
     out = {}
-    if not root.is_dir():
-        return out
-    for child in sorted(root.iterdir()):
-        if not child.is_dir():
-            continue
-        if child.name.startswith("temp_"):
-            continue
-        poster = child / ".claude-plugin" / "poster.yaml"
-        if not poster.exists():
-            continue
-        listing = overrides.get(child.name) or (child / ".claude-plugin" / "marketplace.json")
+
+    def add(name: str, poster_path: Path, cached_listing: Path | None) -> None:
+        listing = overrides.get(name) or cached_listing
+        if listing is None:
+            sys.exit(f"--poster {name}: no plugin listing available -- pass "
+                     f"--marketplace-json {name}=<path/to/marketplace.json>")
         marketplace_json = load_json(Path(listing))
         plugin_names = {p.get("name") for p in marketplace_json.get("plugins", []) if p.get("name")}
-        out[child.name] = {
-            "poster": load_yaml(poster),
+        out[name] = {
+            "poster": load_yaml(poster_path),
             "plugin_names": plugin_names,
         }
+
+    if root.is_dir():
+        for child in sorted(root.iterdir()):
+            if not child.is_dir():
+                continue
+            if child.name.startswith("temp_"):
+                continue
+            if child.name in posters:
+                continue  # handled below, from the override rather than the clone
+            poster = child / ".claude-plugin" / "poster.yaml"
+            if not poster.exists():
+                continue
+            add(child.name, poster, child / ".claude-plugin" / "marketplace.json")
+
+    for name, poster_path in posters.items():
+        if not poster_path.exists():
+            sys.exit(f"--poster {name}: {poster_path} does not exist")
+        cached = root / name / ".claude-plugin" / "marketplace.json"
+        add(name, poster_path, cached if cached.exists() else None)
+
     return out
 
 
@@ -819,6 +853,17 @@ def render_html(title: str, tagline: str, plugins: list[dict],
 DEFAULT_USER_CONFIG = Path.home() / ".claude" / ".local-data" / "awesome-kit" / "plugin-ecosystem-poster.yaml"
 
 
+def _parse_name_path(raw_values: list[str] | None, flag: str) -> dict:
+    """Parse repeatable NAME=PATH options into {name: Path}."""
+    out = {}
+    for raw in raw_values or []:
+        name, sep, path = raw.partition("=")
+        if not sep or not name.strip() or not path.strip():
+            sys.exit(f"{flag} expects NAME=PATH, got: {raw}")
+        out[name.strip()] = Path(path.strip()).expanduser()
+    return out
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--project", type=Path, default=None,
@@ -851,14 +896,18 @@ def main(argv: list[str]) -> int:
                          "publish, so a plugin added in the current release is filtered out as a "
                          "phantom install; point this at the freshly regenerated marketplace.json "
                          "to include it. Used by publish.py.")
+    ap.add_argument("--poster", action="append", default=None,
+                    metavar="NAME=PATH",
+                    help="Read NAME's poster.yaml (subtitle, url, state declarations) from PATH "
+                         "instead of the cached clone under ~/.claude/plugins/marketplaces/, and "
+                         "treat NAME as opted in even when no clone is present. Repeatable. Use "
+                         "when generating a marketplace's own landing page from its source tree, "
+                         "so the page does not depend on the generating machine's install. "
+                         "Used by publish.py.")
     args = ap.parse_args(argv)
 
-    listing_overrides = {}
-    for raw in args.marketplace_json or []:
-        name, sep, path = raw.partition("=")
-        if not sep or not name.strip() or not path.strip():
-            sys.exit(f"--marketplace-json expects NAME=PATH, got: {raw}")
-        listing_overrides[name.strip()] = Path(path.strip()).expanduser()
+    listing_overrides = _parse_name_path(args.marketplace_json, "--marketplace-json")
+    poster_overrides = _parse_name_path(args.poster, "--poster")
 
     project_root = (args.project or Path.cwd()).resolve()
     output = args.output or (home_claude() / "plugin-ecosystem.html")
@@ -868,7 +917,7 @@ def main(argv: list[str]) -> int:
     tagline = user_config.get("tagline", "")
     overrides = user_config.get("states") or {}
 
-    marketplaces = collect_marketplace_metadata(listing_overrides)
+    marketplaces = collect_marketplace_metadata(listing_overrides, poster_overrides)
     if not marketplaces:
         sys.exit("No marketplaces have opted in (no .claude-plugin/poster.yaml files found "
                  "under ~/.claude/plugins/marketplaces/).")

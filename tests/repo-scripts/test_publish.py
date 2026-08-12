@@ -381,3 +381,42 @@ class TestVerify:
         problems = publish.verify()
 
         assert any("dev-only plugin dev-kit is listed" in p for p in problems)
+
+
+class TestIndexScopeGuard:
+    """The page ships to a PUBLIC repo, so a dropped --marketplace does not merely
+    misreport -- it publishes every other marketplace installed on the generating
+    machine. Checked against the artifact, not trusted to the invocation."""
+
+    def _page(self, plugins, order=("plugins-kit",)):
+        data = {"plugins": plugins, "marketplace_order": list(order)}
+        return f"<script>\nconst data = {json.dumps(data)};\nfunction el() {{}}\n</script>"
+
+    def test_clean_page_passes(self):
+        page = self._page([{"marketplace": "plugins-kit", "name": "pub-kit"}])
+        assert publish.check_index_scope(page) == []
+
+    def test_foreign_marketplace_flagged(self):
+        page = self._page(
+            [{"marketplace": "plugins-kit", "name": "pub-kit"},
+             {"marketplace": "private-plugins", "name": "secret-kit"}],
+            order=("plugins-kit", "private-plugins"))
+
+        problems = publish.check_index_scope(page)
+
+        assert any("private-plugins" in p and "--marketplace" in p for p in problems)
+
+    def test_foreign_marketplace_in_order_only_flagged(self):
+        """An empty foreign column still names the marketplace on the page."""
+        page = self._page([{"marketplace": "plugins-kit", "name": "pub-kit"}],
+                          order=("plugins-kit", "private-plugins"))
+        assert any("private-plugins" in p for p in publish.check_index_scope(page))
+
+    def test_embedded_state_flagged(self):
+        page = self._page([{"marketplace": "plugins-kit", "name": "pub-kit", "state": "on"}])
+        assert any("--public" in p for p in publish.check_index_scope(page))
+
+    def test_unparseable_page_is_a_problem_not_a_pass(self):
+        """An output-shape change must fail loudly; a silent pass would retire the
+        guard without anyone noticing."""
+        assert publish.check_index_scope("<html>no data block</html>")

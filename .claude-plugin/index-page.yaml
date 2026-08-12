@@ -1,0 +1,16 @@
+# Page copy for the generated repo-root index.html.
+#
+# scripts/publish.py passes this to the plugin-ecosystem generator as --config,
+# which otherwise defaults to
+# ~/.claude/.local-data/awesome-kit/plugin-ecosystem-poster.yaml -- a per-machine
+# file describing whoever is publishing. This file exists so the published page's
+# copy comes from the repo instead, and is identical whichever machine builds it.
+#
+# The generator's `states:` key is deliberately absent: publish.py renders with
+# --public, which strips per-plugin state from the page entirely. Marketplace-level
+# metadata (subtitle, url) lives in .claude-plugin/poster.yaml, passed as --poster.
+#
+# The page title is passed explicitly by publish.py (PAGE_TITLE) and wins over a
+# `title:` here.
+
+tagline: ""

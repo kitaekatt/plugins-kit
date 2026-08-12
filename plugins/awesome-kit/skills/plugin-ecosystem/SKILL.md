@@ -43,12 +43,28 @@ When the user invokes the skill with an argument, map the keyword to the right C
 
 `--defaults` sources the on/off badge straight from project `bootstrap.json` declarations and ignores the operator's live `settings.json` toggles. Use it to depict "how this project ships" regardless of who's running the skill.
 
-`--marketplace NAME` restricts the poster to one (or several) opted-in marketplaces. When exactly one marketplace remains, the column grid collapses to a single centered column -- ideal for generating a per-marketplace `index.html` landing page. Combine with `--title`, `--output`, and `--no-open` for headless index-page builds:
+`--marketplace NAME` restricts the poster to one (or several) opted-in marketplaces. When exactly one marketplace remains, the column grid collapses to a single centered column.
+
+### Generating a marketplace's landing page
+
+A poster describes the MACHINE it is generated on: which marketplaces are installed, which plugins are enabled, and the operator's own title and tagline. A landing page checked into a marketplace's repo has to describe the SOURCE TREE instead, identically on whoever's machine builds it -- so every one of those inputs needs redirecting, and each flag below fixes a specific way the machine leaks onto the page:
 
 ```bash
-generate.py --marketplace plugins-kit --title "plugins-kit marketplace" \
-            --output ./index.html --no-open
+generate.py --marketplace plugins-kit \
+            --marketplace-json plugins-kit=./.claude-plugin/marketplace.json \
+            --poster plugins-kit=./.claude-plugin/poster.yaml \
+            --config ./.claude-plugin/index-page.yaml \
+            --title "plugins-kit marketplace" \
+            --output ./index.html --public --no-open
 ```
+
+- `--marketplace` scopes the page. **Omitting it publishes every other marketplace installed on the build machine** -- including private ones, into a public repo. Treat it as load-bearing, not cosmetic.
+- `--public` strips the on/off/installed badges, which report the build machine's `enabledPlugins`.
+- `--marketplace-json` points the phantom-install filter at the repo's listing; the cached copy lags the source by one publish, so a plugin added in this release would be filtered off its own release's page.
+- `--poster` reads the marketplace's subtitle and url from the repo for the same reason, and lets the page build on a machine that does not have the marketplace installed at all.
+- `--config` takes the title and tagline from a repo file instead of the operator's own poster config.
+
+Automate this rather than typing it: plugins-kit builds its `index.html` from `scripts/publish.py`, which passes all of the above and then re-parses the generated page to confirm no foreign marketplace or machine state got in.
 
 ## How to Invoke
 
@@ -64,6 +80,9 @@ Optional flags:
 - `--output PATH` -- HTML output path (default: `~/.claude/plugin-ecosystem.html`).
 - `--title TEXT` -- one-shot title override (the config YAML is the persistent home).
 - `--no-open` -- write the file without opening it in the browser.
+- `--public` -- published-page variant: no state badges, page flows to its content height.
+- `--marketplace-json NAME=PATH` -- read NAME's plugin listing from PATH instead of the cached clone.
+- `--poster NAME=PATH` -- read NAME's `poster.yaml` from PATH instead of the cached clone, and treat NAME as opted in even with no clone installed.
 
 Stdlib only; the generated HTML is a single self-contained file.
 
