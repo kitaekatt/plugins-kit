@@ -106,8 +106,8 @@ standards_set:
         has no basis to place anything anywhere else: it cannot see whether the
         fact holds of code it never opened. A fact that genuinely governs a
         wider area reaches that area by HOISTING, which happens at the parent
-        when the parent observes the same fact in more than one child's
-        document -- never by nomination from below.
+        when the parent observes the fact in a child's document -- never by
+        nomination from below.
 
     - id: candidate-tier-classified
       statement: >-
@@ -192,9 +192,9 @@ reason the fields themselves half-admitted: judging whether a fact belongs here
 or at a parent means reading the parent or a sibling, which is outside the
 subject. The judgment was never licensed; it was merely given somewhere to sit.
 
-A fact reaches a wider area by HOISTING instead -- the parent observes the same
-fact in more than one child's document and lifts it, rewording it so it is true
-as stated at its new depth. That happens during parent composition
+A fact reaches a wider area by HOISTING instead -- the parent observes the fact
+in a child's document and lifts it, rewording it so it is true as stated at its
+new depth. That happens during parent composition
 (`references/lanes/generation-lane.md`), where the documents being compared have
 actually been read.
 

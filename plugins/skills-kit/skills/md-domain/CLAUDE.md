@@ -330,7 +330,7 @@ claude_md:
       added: "2026-08-10"
     - id: the_subject_is_one_directory_not_a_subtree
       keywords: [non-recursive subject, direct code files, one directory, not a subtree, child claude.md as input, hoisting at the parent, no nomination from below, bottom-up order, regenerating commits to descendants, vcs ignore exclusion, task folder claude.md, scope in the sentence, fact-scoped-to-this-directory, promotion retired, unit mismatch]
-      summary: A coverage subject is ONE DIRECTORY'S OWN DIRECT code files, never a subtree. A parent gets its content by reading its children's finished CLAUDE.md files and hoisting what repeats -- placement is never nominated from below. This SUPERSEDES the promotion machinery (`scope`, `sibling_overlap`, an assessment naming an ancestor destination).
+      summary: A coverage subject is ONE DIRECTORY'S OWN DIRECT code files, never a subtree. A parent gets its content by reading its children's finished CLAUDE.md files and hoisting what a wording test licenses at its depth -- placement is never nominated from below. This SUPERSEDES the promotion machinery (`scope`, `sibling_overlap`, an assessment naming an ancestor destination).
       detail: |
         THE DEFECT THAT FORCED IT. Three components each defined "a code
         directory" differently, and nothing reconciled them: coverage's subject
@@ -356,22 +356,28 @@ claude_md:
         assessment to name a destination above itself, which it cannot justify:
         it read only its own directory, so it cannot know whether the fact holds
         of code it never opened. Hoisting happens where the evidence is -- the
-        parent, comparing documents it has actually read. A fact repeated across
-        children moves up; a fact only one child has stays there. This also
+        parent, comparing documents it has actually read. A fact found in a
+        child's document hoists when the wording test licenses it at the
+        parent's depth, whether one child stated it or many. This also
         removes an inference the resolver was making from one-line facts without
         access to the evidence behind them.
 
-        REPETITION IS THE TRIGGER, WORDING IS THE TEST. The two are not the same
-        criterion and they come apart in both directions -- a fact in 2 of 20
-        children hoisted verbatim becomes ambient for 18 directories it does not
-        govern, and a fact true of every child that only one child noticed never
-        triggers at all. The resolution is that a hoisted fact must be WORDED so
-        it is true as stated at its new depth, usually by naming its subjects
-        ("Tools and stack-traces both ..."). Scope lives in the sentence, not in
-        a separate mechanism. The escape clause -- it stays in the children when
-        no such wording exists short of a list of exceptions -- protects the
-        observed case of a mirrored-directory rule whose honest wording at the
-        parent would enumerate fifteen exclusions.
+        WORDING IS THE ONLY TEST; THERE IS NO SEPARATE REPETITION TRIGGER. This
+        record used to gate a hoist on repetition first and treat wording as a
+        second check. That trigger was dropped by owner decision on 2026-08-12,
+        because this same record already conceded the gap it left open: "a fact
+        true of every child that only one child noticed never triggers at all"
+        -- and that concession is the evidence the decision acts on, not a new
+        observation. The failure direction the old trigger guarded against is
+        still real and still governs the test: a fact in 2 of 20 children
+        hoisted verbatim becomes ambient for 18 directories it does not govern.
+        The resolution is that a hoisted fact must be WORDED so it is true as
+        stated at its new depth, usually by naming its subjects ("Tools and
+        stack-traces both ..."). Scope lives in the sentence, not in a separate
+        mechanism. The escape clause -- it stays in the children when no such
+        wording exists short of a list of exceptions -- protects the observed
+        case of a mirrored-directory rule whose honest wording at the parent
+        would enumerate fifteen exclusions.
 
         ORDERING IS A HARD DEPENDENCY, WITH TWO CONSEQUENCES THAT MUST BE STATED.
         Bottom-up: regenerating D commits to regenerating every descendant first.

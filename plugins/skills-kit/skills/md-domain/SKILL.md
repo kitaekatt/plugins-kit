@@ -212,9 +212,10 @@ root regeneration is a whole-corpus operation and there is no cheap root
 refresh. And a stale child document silently corrupts its parent, because the
 parent trusts it as an input.
 
-De-duplication happens during parent composition, by HOISTING: a fact appearing
-in more than one child's document moves to their common ancestor, reworded so it
-is true as stated at that depth. It is never proposed from below --
+De-duplication happens during parent composition, by HOISTING: a fact found in a
+child's document -- one child or several -- moves to their common ancestor when
+it can be reworded so it is true as stated at that depth. It is never proposed
+from below --
 `fact-scoped-to-this-directory` in `references/standards/coverage-standards.md`
 forbids an assessment from placing a fact outside the directory it read.
 

@@ -114,6 +114,17 @@ substitutes for the other, and a child document that has not been written yet is
 not an input -- it is a missing prerequisite, which is what the ordering rule
 below is about.
 
+**A hoist is PROPOSED, then verified, then written -- never written on
+speculation.** Composing a directory records each candidate hoist as a
+proposal: the wording, the child document it came from, and the specific files
+the wording claims to hold of. A verification phase then checks each candidate
+against exactly those named files; only a candidate that survives is written
+into the document. This bounds the check to the claim it verifies -- reading a
+stated file set once, answering one question -- and it is not a license to
+re-read a child's source wholesale: composition's two inputs above are still
+the only things a hoist may be based on, and verification reads only the files
+a candidate itself names, never a child's directory at large.
+
 **Which child documents count.** A directory the project's VCS is configured to
 ignore is not a subject and its CLAUDE.md is not an input: git ->
 `check-ignore --no-index`; Perforce -> `p4 ignores`; neither -> nothing is
@@ -121,8 +132,9 @@ excluded (`../standards/coverage-standards.md:30-34`). This is what keeps a task
 folder's or a scratch directory's CLAUDE.md -- a document about a piece of WORK,
 not about code -- out of the composition.
 
-**Hoisting is where de-duplication happens.** A fact appearing in more than one
-child's document moves to their common ancestor. That movement is discovered HERE,
+**Hoisting is where de-duplication happens.** A fact found in a child's document --
+whether repeated across children or stated by only one -- moves to their common
+ancestor when the wording test below licenses it. That movement is discovered HERE,
 at the parent, because this is the only place the documents being compared have
 actually been read. It is never nominated from below: an assessment that read only
 its own directory cannot know whether the fact holds of code it never opened, and
@@ -132,14 +144,19 @@ its own directory cannot know whether the fact holds of code it never opened, an
 everything below it, and no shallower
 (`../standards/hierarchy-standards.md:78-92`).
 
-**Repetition triggers a hoist; WORDING licenses it.** These are two tests, not
-one, and they come apart in both directions -- a fact stated by 2 of 20 children
-and hoisted verbatim becomes ambient for 18 directories it does not govern, and a
-fact true of every child that only one child noticed never triggers at all. So a
-hoisted fact must be WORDED so it is true as stated of everything below its new
-home, usually by naming its subjects explicitly ("Tools and stack-traces both
-..."). Scope lives in the sentence; there is no separate scoping mechanism. When
-no such wording exists short of a list of exceptions, the fact does not hoist --
+**WORDING is the only test; there is no separate repetition trigger.** A fact
+found in a single child's document may hoist, provided it passes the test below.
+The repetition trigger that used to gate a hoist first was dropped, by owner
+decision on 2026-08-12, because this document already conceded the gap it left
+open: "a fact true of every child that only one child noticed never triggers at
+all" -- and that concession is the evidence the decision acts on, not a new
+observation. The failure direction the old trigger guarded against is still real
+and still governs the test: a fact stated by 2 of 20 children and hoisted
+verbatim becomes ambient for 18 directories it does not govern. So a hoisted
+fact must be WORDED so it is true as stated of everything below its new home,
+usually by naming its subjects explicitly ("Tools and stack-traces both ...").
+Scope lives in the sentence; there is no separate scoping mechanism. When no
+such wording exists short of a list of exceptions, the fact does not hoist --
 it stays in the children.
 
 **A hoisted fact leaves duplication behind.** Once the parent carries it, each
@@ -164,6 +181,14 @@ which must be stated to a caller rather than left implied:
   longer shows, and triggers hoists for facts its code no longer carries -- and
   the parent it produces is internally consistent, so nothing about the result
   looks wrong.
+
+**The propose-verify-write phase runs per wave, not once at the end of the
+corpus.** Because a grandparent composes from its children's finished documents,
+deferring verification to the end of the whole run would leave nothing above the
+leaves writable -- every composition above the first would be waiting on
+documents that are not yet finished. So each depth level runs compose, then
+verify, then write for that wave alone, and only then does the next (shallower)
+wave begin.
 
 **Where this sits in the spine.** Parent composition is a case WITHIN steps 1-5,
 not a replacement for them. Step 1 still confirms the artifact is a `claude-md`.

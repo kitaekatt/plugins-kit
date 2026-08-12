@@ -10,7 +10,8 @@ outside the directory it read.
 
 Both properties this lane exists to supply -- seeing past sibling blindness, and
 judging depth from outside a single leaf -- are supplied instead by PARENT
-COMPOSITION, which reads every child CLAUDE.md directly and hoists what repeats
+COMPOSITION, which reads every child CLAUDE.md directly and hoists what a
+wording test licenses at its depth
 (`references/lanes/generation-lane.md`, parent composition). A parent makes the
 same judgments with the documents in hand rather than from one-line proposals.
 
