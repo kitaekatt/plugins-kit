@@ -40,6 +40,7 @@
 //                 candidates: [ ... ]|undefined,    // legacy inline form; see below
 //                 ambientClaudeMdPaths: string[],   // HINT ONLY -- the agent derives its own
 //                 skipNote: string|null } ],        // set => null branch, no document
+//   finishedDocuments: string[]|undefined,           // dirs done by an EARLIER run
 //
 // TWO INPUTS ARE DERIVED AGENT-SIDE RATHER THAN TRUSTED FROM THE CALLER, and both
 // for the same reason: the workflow script has no filesystem access, the agent
@@ -50,6 +51,13 @@
 //   - ambientClaudeMdPaths is a HINT -- a caller list is a snapshot that goes stale
 //     the moment an earlier wave writes an ancestor, which is precisely the document
 //     the run must not duplicate.
+//
+// finishedDocuments makes the corpus walkable INCREMENTALLY. Composition input comes
+// from writtenByRoot, which this run alone populates, so without it a parent can only
+// be composed in the same run that writes its children -- and a parent dispatched
+// alone takes the no-children branch and emits a composed-from-nothing document with
+// nothing in the output to show it. Naming the already-finished directories restores
+// the topology; the documents themselves are still read off disk by the agent.
 //   refs: { standards: <abs path to references/standards/claude-md-standards.md>,
 //           lane:      <abs path to references/lanes/generation-lane.md>,
 //           placement: <abs path to references/cohesion-principles.md> }
@@ -204,7 +212,36 @@ const DOC_SCHEMA = {
 // ordering is the one thing whose violation is invisible in the output.
 // ---------------------------------------------------------------------------
 const norm = (p) => String(p).replace(/\\/g, '/').replace(/\/+$/, '')
-const roots = subjects.map((s) => norm(s.root))
+const subjectRoots = subjects.map((s) => norm(s.root))
+
+// Directories whose CLAUDE.md was written by an EARLIER run and which are not being
+// regenerated now. Without this the lane can only compose a parent in the same run
+// that writes its children, because writtenByRoot is populated from THIS run's
+// results alone -- so an incremental parent wave silently takes the no-children
+// branch and emits a composed-from-nothing document, the exact failure the wave
+// barrier exists to prevent. Declaring them here makes them full participants in
+// the topology (descendant computation, the ordering guard, composition input)
+// while never being dispatched.
+//
+// They are TOPOLOGY ONLY. Their content still reaches the parent by the same route
+// as any other child -- the agent reads the document off disk -- so this adds no
+// caller-supplied content and no second source of truth.
+const finishedDocuments = Array.isArray(input.finishedDocuments)
+  ? input.finishedDocuments.map(norm)
+  : []
+const finishedSet = new Set(finishedDocuments)
+const overlap = subjectRoots.filter((r) => finishedSet.has(r))
+if (overlap.length) {
+  throw new Error(
+    'claude-md-generate: ' + overlap.join(', ') + ' appear(s) in BOTH subjects and ' +
+    'finishedDocuments. A directory is either being generated now or already ' +
+    'finished, and treating one as both would let a parent compose from a document ' +
+    'this run is concurrently rewriting.'
+  )
+}
+
+// The full topology: everything being generated now, plus everything already done.
+const roots = subjectRoots.concat(finishedDocuments)
 
 // EVERY descendant, at any depth. Used for the wave number only: a directory must
 // come after everything beneath it, however deep.
@@ -232,8 +269,10 @@ const waveOf = (p) => {
 }
 
 const byRoot = new Map(subjects.map((s) => [norm(s.root), s]))
+// Waves are built from the SUBJECT roots only -- a finished directory shapes the
+// wave NUMBERS (it is a descendant of its ancestors) but is never dispatched.
 const waves = []
-for (const r of roots) {
+for (const r of subjectRoots) {
   const w = waveOf(r)
   if (!waves[w]) waves[w] = []
   waves[w].push(r)
@@ -388,6 +427,18 @@ const writtenByRoot = new Set()
 // the ordering guard checks, because a null-branch child is legitimately absent
 // and must still count as "its wave completed".
 const processedRoots = new Set()
+
+// A directory finished by an earlier run satisfies both: its wave is complete, and
+// it has a document to offer its parent.
+for (const r of finishedDocuments) {
+  processedRoots.add(r)
+  writtenByRoot.add(r)
+}
+if (finishedDocuments.length) {
+  log('Composing against ' + finishedDocuments.length + ' document(s) written by an ' +
+      'earlier run; those directories are NOT regenerated. A stale one silently ' +
+      'corrupts its parent -- the model trusts a child document as an input.')
+}
 
 // ASCENDING, and the direction is the whole correctness property. waveOf()
 // returns 0 for a directory with NO code-bearing descendants, so wave 0 is the
