@@ -124,7 +124,7 @@ technique_skill:
             tier are stated in the output; deviate per unit when the unit's shape argues for
             it. Honour UNAVAILABLE/LIMITED markings.
         - n: 5
-          action: Launch background units -- each prompt a standalone brief (goal, paths, constraints, return shape).
+          action: Launch background units -- each prompt a standalone brief (goal, paths, constraints, premises, return shape).
           detail: |
             Use the launch mechanics the rendered policy gives for the chosen backend; they
             differ materially between backends (a CLI backend has no built-in isolation or
@@ -134,8 +134,40 @@ technique_skill:
             artifacts and their generators, build/commit-time gates, load-bearing paths other
             code or docs resolve against, or the only remaining link/reference to something
             the unit just removed.
+
+            PREMISES, MARKED. The other four fields ask only whether a brief is executable, so
+            a confidently wrong brief satisfies all of them. State every load-bearing premise
+            and label it `established:` (naming the evidence -- a trace, a diff, a prior unit's
+            verified report) or `hypothesis:`. A causal mechanism you inferred, a claim that
+            existing work functions, and an inherited parameter you did not derive are all
+            hypotheses until evidence is cited. Marking is a classification you perform at
+            authoring time; that act is the point, and it is what the field list never asked
+            for. Do not grade confidence numerically -- the label is binary.
+
+            A HYPOTHESIS MAY FUND AN INVESTIGATION, NEVER A CHANGE OR A DEPLOYMENT. To brief a
+            mutation on a premise, promote it with evidence first, or split the unit: establish,
+            then change. Where the two must ride together, say so and require the agent to
+            check the premise before its first mutation.
+
+            The return shape must require the agent to report each premise as confirmed,
+            refuted or untested, and a REFUTED premise halts the work and reports instead of
+            proceeding. This is the half that binds: you will mislabel a guess as a fact, and
+            the far side of the dispatch is where that gets caught before it ships.
+
+            Scope a verification unit by what the change under test actually touches -- its
+            behavioral effects plus any named shared dependency -- never by the subject area it
+            lives in. "Verify the device" re-tests everything the device does; "verify the
+            launch path" tests the change. And derive temporal parameters (sampling windows,
+            settle times) from the failure being chased, stating the basis; an interval
+            inherited from other work is a hypothesis wearing a number.
         - n: 6
-          action: While units run, do orchestrator-level work only (plan synthesis, inline units, or wait).
+          action: While units run, do orchestrator-level work only (plan synthesis, inline units, or wait) -- and keep running units current.
+          detail: >-
+            A constraint that changes while units run does not reach them by itself. Enumerate
+            the affected running units and push the delta through the backend's follow-up
+            channel (SendMessage for the Agent tool); a unit with no such channel is cancelled
+            and relaunched, or its result treated as pre-change and re-verified. Say which you
+            did. Silently letting a unit finish against a superseded constraint spends it twice.
         - n: 7
           action: Synthesize completed results; cross-check units that disagree before accepting either.
           detail: |
@@ -151,6 +183,6 @@ technique_skill:
           action: Relay the substance -- findings, decisions, verified-vs-reported -- in your final message.
       gotchas:
         - Delegating then redoing the work inline pays both costs; once dispatched, wait for the result.
-        - Parallel units editing the same files clobber each other -- use isolation appropriate to the backend, or sequence them.
+        - Parallel units editing the same files clobber each other -- but a shared-file conflict is a PARTITIONING problem before it is a scheduling one. Re-split the work by file ownership first (one owner per file, stated in each brief), then use isolation appropriate to the backend, and sequence only what genuinely remains. Reaching for sequencing first serialises work that had no real dependency.
         - A unit that correctly removes or relocates something can silently destroy the only signpost pointing at it -- a green result and a clean diff will not surface that; only the unit's own disclosure does.
 ```
