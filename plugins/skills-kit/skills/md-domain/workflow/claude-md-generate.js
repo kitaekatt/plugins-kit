@@ -64,7 +64,25 @@
 //   houseStyle: <abs path to an exemplar CLAUDE.md>|undefined
 // }
 //
-// Returns { perSubject, waves, totals }.
+// Returns { perSubject, waves, waveRecords, totals }.
+//
+// EACH WAVE IS THREE STEPS, NOT ONE: compose (which PROPOSES hoists and writes
+// none), verify (which settles each proposal against exactly the files it named),
+// apply (which writes the survivors). The ordering is a dependency rather than a
+// batching preference: a parent composes from its children's FINISHED documents,
+// so deferring verification to the end of the corpus would leave nothing above
+// the leaves writable at all. The phase runs INSIDE the wave loop for that
+// reason, and the wave barrier below refuses a parent whose descendants are not
+// yet RESOLVED -- a document with candidates still pending is not finished in the
+// sense the barrier means.
+//
+// Why not write first and retract later: a retraction is a follow-up, and this
+// corpus's measured behaviour is that follow-ups do not land. A wrong ambient
+// rule at a parent stands over every descendant for as long as it stands. It
+// also makes a broken phase INVISIBLE -- under write-then-verify a phase that
+// never ran leaves documents that look exactly like a phase that ran and
+// approved everything, whereas here it produces zero hoists and a recorded
+// absence.
 
 export const meta = {
   name: 'md-domain-claude-md-generate',
@@ -117,9 +135,21 @@ if (!subjects.length) {
 // indistinguishable in the output from an assessed directory that legitimately
 // yielded nothing. Refuse, and name the subjects, rather than generate an
 // un-assessed corpus that looks assessed.
+//
+// EXCEPT a composition-only subject, which has no coverage report BY DESIGN.
+// A COVERAGE subject holds code files directly; a COMPOSITION subject is any
+// directory that, or beneath which, code lives (discover_composition.py). A
+// directory with no direct code is therefore never assessed and never has a
+// report -- its whole input is its children's finished documents. Judging it by
+// the report test would refuse a legitimate run and, worse, describe it as
+// "written from code alone" when code alone is exactly what it does not have.
+// The caller marks it with compositionOnly; discover_composition.py names the
+// set as codeFreeCompositionSubjects.
 const inputless = subjects.filter(
-  (s) => !s.skipNote && !s.reportPath && !(Array.isArray(s.candidates) && s.candidates.length)
+  (s) => !s.skipNote && !s.compositionOnly &&
+    !s.reportPath && !(Array.isArray(s.candidates) && s.candidates.length)
 )
+const compositionOnly = subjects.filter((s) => !s.skipNote && s.compositionOnly)
 if (inputless.length && inputless.length === subjects.length) {
   throw new Error(
     'claude-md-generate: no subject has a reportPath or inline candidates. Every ' +
@@ -136,6 +166,13 @@ if (inputless.length) {
       'coverage input and will be written from code alone: ' +
       inputless.map((s) => String(s.root)).join(', '))
 }
+if (compositionOnly.length) {
+  // The inverse of the note above, and it must not be collapsed into it: these
+  // are written from their children's documents, having no direct code at all.
+  log('NOTE: ' + compositionOnly.length + ' of ' + subjects.length + ' subject(s) hold no ' +
+      'direct code and are composed from their children\'s documents alone: ' +
+      compositionOnly.map((s) => String(s.root)).join(', '))
+}
 
 const DOC_SCHEMA = {
   type: 'object',
@@ -143,7 +180,10 @@ const DOC_SCHEMA = {
   // Every field is REQUIRED. An optional disclosure field is a field a run can
   // satisfy on paper and omit in fact -- the same reasoning that makes `notes`
   // required in coverage-detect.js.
-  required: ['root', 'written', 'path', 'sections', 'droppedCandidates', 'verifications', 'hoists', 'notes'],
+  required: [
+    'root', 'written', 'path', 'sections', 'droppedCandidates', 'verifications',
+    'hoists', 'candidateHoists', 'notProposed', 'notes',
+  ],
   properties: {
     root: { type: 'string' },
     // false is a REAL result: the null branch of the done-condition, a directory
@@ -186,8 +226,17 @@ const DOC_SCHEMA = {
         },
       },
     },
-    // Set only by a composition. A hoist must be worded so it is true as stated
-    // at the parent depth, and it obliges the child copies to be removed.
+    // Set only by a composition, and it now holds VERIFIED hoists ONLY. A hoist
+    // must be worded so it is true as stated at the parent depth, and it obliges
+    // the child copies to be removed. fromChildren MAY name a SINGLE child: the
+    // repetition trigger is gone and wording is the whole test, so the field's
+    // plural name is a plural of arity, not a threshold -- do not restore a
+    // more-than-one rule from it.
+    //
+    // The composing run returns this EMPTY. It is populated by the apply step,
+    // from the candidates the verification phase let through, and the lane
+    // DERIVES each entry from its candidate rather than taking a second
+    // statement of the same thing on trust.
     hoists: {
       type: 'array',
       items: {
@@ -198,6 +247,148 @@ const DOC_SCHEMA = {
           fact: { type: 'string' },
           fromChildren: { type: 'array', items: { type: 'string' } },
           wording: { type: 'string' },
+        },
+      },
+    },
+    // PROPOSED, NOT WRITTEN. A composition records here every hoist it would
+    // have made; the verification phase settles each one, and only survivors are
+    // applied to the document. Nothing speculative reaches a document, because a
+    // wrong ambient rule at a parent stands over every descendant until someone
+    // retracts it -- and the retraction is exactly the follow-up this corpus
+    // shows does not land.
+    //
+    // THIS IS NOT UPWARD NOMINATION, and a later reader will suspect that it is,
+    // because the words "candidate" and "verification" belong to the rejected
+    // design. Under that design a CHILD named a destination above itself and the
+    // parent had to weigh a nomination that had crossed the child-parent
+    // boundary. Here the PARENT proposes a hoist into ITS OWN document, from
+    // documents it already holds, and the record lives in the parent's own
+    // result. That placement is what makes the distinction MECHANICAL rather
+    // than cultural: no child ever writes a candidate, so no candidate can cross
+    // a boundary. Moving this array anywhere a child can write it reintroduces
+    // the rejected design whatever the surrounding prose says.
+    candidateHoists: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'fromClaim', 'fromChildren', 'wording', 'claimedOver', 'check'],
+        properties: {
+          id: { type: 'string' },
+          // The CHILD CLAIM this derives from, by its identity -- never a
+          // directory name alone. The hoisted wording is by construction not the
+          // child's wording, so a directory reference cannot say which claim.
+          fromClaim: { type: 'string' },
+          // The child directory or directories whose documents stated it. ONE is
+          // an ordinary, expected value.
+          fromChildren: { type: 'array', items: { type: 'string' }, minItems: 1 },
+          // The exact sentence proposed for THIS document, worded true at THIS
+          // directory's depth.
+          wording: { type: 'string' },
+          // REQUIRED AND NON-EMPTY, and this is the field that bounds the whole
+          // design. Verification reads exactly this set and nothing else, so a
+          // candidate that cannot name the files its claim is about is not a
+          // proposal but a guess, and it is refused at proposal time rather than
+          // carried into the phase.
+          claimedOver: { type: 'array', items: { type: 'string' }, minItems: 1 },
+          check: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['kind', 'detail', 'expected'],
+            properties: {
+              // 'none' is the honest third value, not an escape: it records that
+              // no admissible check exists, which resolves to hoist-unverifiable
+              // and a REFUSAL. Omitting the candidate instead would make an
+              // uncheckable claim indistinguishable from one nobody thought of.
+              kind: { type: 'string', enum: ['mechanical', 'bounded-read', 'none'] },
+              detail: { type: 'string' },
+              expected: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+    // The composition's OWN judgment, with no phase involved: a child claim it
+    // considered and left in the child. Required, because a composition that
+    // proposes nothing and records no absence is indistinguishable from one with
+    // nothing to propose -- and the second is a legitimate result while the
+    // first is a failure that would otherwise score as a clean run.
+    notProposed: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['fromClaim', 'reason'],
+        properties: {
+          fromClaim: { type: 'string' },
+          reason: { type: 'string' },
+        },
+      },
+    },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+}
+
+// The verification phase's result, one per composition that proposed anything.
+// Three dispositions, and they are the PHASE's output over the proposed set. The
+// fourth disposition in the model -- not-proposed -- is the composition's own
+// judgment and never reaches this schema, which is why it lives on DOC_SCHEMA
+// instead. Keeping the two apart is what lets a run tell "proposed and refuted"
+// from "never proposed": both produce zero hoists and they are different results.
+const VERIFY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['root', 'dispositions', 'notes'],
+  properties: {
+    root: { type: 'string' },
+    dispositions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'disposition', 'reason', 'filesRead'],
+        properties: {
+          id: { type: 'string' },
+          disposition: {
+            type: 'string',
+            enum: ['hoist-verified', 'hoist-rejected', 'hoist-unverifiable'],
+          },
+          reason: { type: 'string' },
+          // What the check ACTUALLY read, which is checked against claimedOver
+          // below. Declaring it turns the read bound from prompt text into a
+          // mechanical property: a verification that read outside the claim has
+          // discovered a mis-scoped candidate, and the lane can say so without
+          // trusting the agent to notice. It is also the provenance edge a
+          // verified hoist adds -- the parent's claim can go false when these
+          // files change while every child document stays byte-identical.
+          filesRead: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+    notes: { type: 'array', items: { type: 'string' } },
+  },
+}
+
+// The apply step. Separate from composition because the composing run wrote a
+// document with NO hoists in it, so the survivors are an ADDITION to an existing
+// file rather than a filter over one -- there is nothing to retract, which is the
+// property the whole ordering buys.
+const APPLY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['root', 'path', 'applied', 'notes'],
+  properties: {
+    root: { type: 'string' },
+    path: { type: 'string' },
+    applied: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'section'],
+        properties: {
+          id: { type: 'string' },
+          section: { type: 'string' },
         },
       },
     },
@@ -321,18 +512,68 @@ const lanePrompt = (s, root, writtenChildren) => {
       'than the recursive subject it replaced.\n\n' +
       'HOISTING is where de-duplication happens, and it happens HERE because this is the ' +
       'only place the documents being compared have actually been read. A fact appearing ' +
-      'in more than one child moves up to this directory.\n\n' +
-      'REPETITION TRIGGERS A HOIST; WORDING LICENSES IT. These are two tests and they come ' +
-      'apart in both directions. A fact stated by 2 of 20 children, hoisted verbatim, ' +
-      'becomes ambient for 18 directories it does not govern. So a hoisted fact must be ' +
-      'WORDED so it is true as stated of everything below this directory -- usually by ' +
-      'naming its subjects explicitly. Scope lives in the sentence; there is no separate ' +
-      'scoping mechanism. When no such wording exists short of a list of exceptions, the ' +
-      'fact DOES NOT HOIST -- it stays in the children, and you say so in notes.\n\n' +
-      'Report every hoist you make in the hoists field, naming which children stated it ' +
-      'and the exact wording you used. A hoist obliges the child copies to be removed, ' +
-      'which is a separate run per child -- you do NOT edit the child documents.'
-    : '\nThis directory has no in-scope children, so there is no composition step and no hoisting.'
+      'in ANY of these children is a hoist candidate for this directory.\n\n' +
+      'WORDING LICENSES A HOIST, AND IT IS THE ONLY TEST. There is no separate repetition ' +
+      'trigger: one child stating a fact is enough to consider it, and you may HYPOTHESIZE ' +
+      'from the documents you hold that a fact reported by one child also governs its ' +
+      'siblings. But the wording test is unchanged and it is now carrying the whole load. ' +
+      'A fact stated by 2 of 20 children, hoisted verbatim, becomes ambient for 18 ' +
+      'directories it does not govern. So a hoisted fact must be WORDED so it is true as ' +
+      'stated of everything below this directory -- usually by naming its subjects ' +
+      'explicitly. Scope lives in the sentence; there is no separate scoping mechanism. ' +
+      'When no such wording exists short of a list of exceptions, the fact DOES NOT HOIST ' +
+      '-- it stays in the children, and you say so in notes.\n\n' +
+      'YOU DO NOT MAKE A HOIST HERE. YOU PROPOSE ONE. Write this document from your own ' +
+      'direct code and the undisputed content of these children, and leave every hoist OUT ' +
+      'of it: the hoists field must come back EMPTY from this run. Each hoist you would ' +
+      'have made goes into candidateHoists instead, and a separate verification step ' +
+      'settles it before one word of it is written. A speculative ambient rule at this ' +
+      'depth stands over every descendant until someone retracts it, and retractions do ' +
+      'not land -- so nothing unverified is written at all.\n\n' +
+      'EACH CANDIDATE CARRIES FIVE THINGS AND ALL OF THEM ARE REQUIRED:\n' +
+      '  - id: stable within this run, so a verdict can name it.\n' +
+      '  - fromClaim: the child claim it derives from, by its identity. A directory name ' +
+      'alone will not do -- your wording is by construction not the child wording, so the ' +
+      'directory cannot say which claim you mean.\n' +
+      '  - fromChildren: the child directory or directories that stated it. ONE is an ' +
+      'ordinary value here, not an anomaly to apologize for.\n' +
+      '  - wording: the exact sentence proposed for THIS document, already worded true at ' +
+      'THIS depth. Not the child sentence.\n' +
+      '  - claimedOver: the specific repository-relative FILES the wording claims to hold ' +
+      'of. Non-empty. If you cannot name them, you do not have a proposal, you have a ' +
+      'guess -- record it in notProposed instead.\n' +
+      '  - check: how to settle it, defined next.\n\n' +
+      'A CHECK NAMES ITS FILE SET IN ADVANCE, and there are exactly two admissible kinds ' +
+      'plus one honest refusal:\n' +
+      '  - kind mechanical: a read-only command, run FROM THE REPOSITORY ROOT with ' +
+      'repository-relative paths, over exactly the files in claimedOver, plus the expected ' +
+      'result stated in expected as a PREDICATE over its output ("every listed file ' +
+      'matches"), never as a remembered count. Its search space must not include the ' +
+      'generated CLAUDE.md corpus, which grows as this run writes.\n' +
+      '  - kind bounded-read: open exactly the files in claimedOver, no discovery and no ' +
+      'widening, and answer whether the wording is true as stated of them. detail says ' +
+      'what to look for; expected says what a true answer looks like.\n' +
+      '  - kind none: no admissible check exists. That resolves to hoist-unverifiable and ' +
+      'the candidate is REFUSED -- the fact stays where the child put it. Record it anyway. ' +
+      'A refusal that is counted is a result; a candidate you quietly drop is not.\n\n' +
+      'THE READ BOUND, WHICH IS THE ONE THING A PLAUSIBLE HYPOTHESIS WILL TEMPT YOU TO ' +
+      'VIOLATE ON YOUR OWN INITIATIVE. Your inputs are your own direct code files and the ' +
+      'child DOCUMENTS listed above. Do NOT open a child source file to decide what the ' +
+      'child should have said. RE-EVALUATING a directory -- opening its code to see what ' +
+      'facts emerge -- is unbounded, its cost compounds with every level above it, and it ' +
+      'is forbidden at composition. VERIFYING one claim -- checking one stated sentence ' +
+      'against one stated set of named files -- is bounded by the claim, and it is the ' +
+      'only source reading a hoist ever causes. It happens in the verification step, over ' +
+      'claimedOver, not here.\n\n' +
+      'REPORT WHAT YOU CONSIDERED AND DID NOT PROPOSE, in notProposed, one entry per child ' +
+      'claim you weighed and left in the child, with the reason -- almost always that no ' +
+      'wording is true at this depth short of a list of exceptions. Without this a ' +
+      'composition that proposed nothing is indistinguishable from one that had nothing to ' +
+      'propose, and only the second is a legitimate result.\n\n' +
+      'A hoist obliges the child copies to be removed, which is a separate run per child ' +
+      '-- you do NOT edit the child documents.'
+    : '\nThis directory has no in-scope children, so there is no composition step and no ' +
+      'hoisting: return hoists, candidateHoists and notProposed all empty.'
 
   // Candidates arrive one of two ways, and reportPath is STRONGLY preferred at
   // any scale beyond a handful of directories.
@@ -415,23 +656,109 @@ const lanePrompt = (s, root, writtenChildren) => {
     'Return the structured object.'
 }
 
+// Step 2 of the wave. Settle the candidates ONE composition proposed, against
+// exactly the files those candidates named.
+//
+// Granularity note, because the batching argument in the design reads as though
+// it should apply here: within a single wave every subject is a disjoint subtree
+// of every other, so their claimedOver sets do not overlap and a wave-wide batch
+// would save no reads. Batching ACROSS waves is what would pay, and it is exactly
+// what the dependency forbids -- a shallower wave composes from documents this
+// wave has not finished resolving yet.
+const verifyPrompt = (r) => {
+  return 'Settle proposed CLAUDE.md hoist candidates. Decide them; write nothing.\n\n' +
+    'Directory: ' + r.root + '\n' +
+    'Its document, already written: ' + (r.path || (r.root + '/CLAUDE.md')) + '\n\n' +
+    'A composition of this directory proposed the candidates below. NONE of them is in ' +
+    'the document, and none may be put there by you. Your entire job is to return one ' +
+    'disposition per candidate id.\n\n' +
+    JSON.stringify(r.candidateHoists, null, 2) + '\n\n' +
+    'HOW TO SETTLE EACH ONE, by its check.kind:\n' +
+    '  - mechanical: run the command in check.detail as a READ-ONLY command, from the ' +
+    'REPOSITORY ROOT, with repository-relative paths. Compare its output to the predicate ' +
+    'in check.expected. If the command would write, move, or delete anything, do not run ' +
+    'it -- that is hoist-unverifiable, with the reason.\n' +
+    '  - bounded-read: read exactly the files in that candidate claimedOver and answer ' +
+    'whether its wording is true AS STATED of them.\n' +
+    '  - none: hoist-unverifiable. Do not go looking for a check the proposer could not ' +
+    'find. A refused candidate is a recorded result, and the fact stays where the child ' +
+    'put it.\n\n' +
+    'THE READ BOUND IS THE POINT OF THIS STEP, AND IT IS NOT NEGOTIABLE BY CURIOSITY. ' +
+    'Read only the files a candidate names in its own claimedOver. You are VERIFYING one ' +
+    'stated sentence against one stated file set -- you are NOT re-evaluating any ' +
+    'directory, and opening a directory code to see what facts emerge is forbidden here ' +
+    'exactly as it is at composition. If settling a candidate would require a file its ' +
+    'claimedOver does not name, you have discovered that the candidate is MIS-SCOPED: ' +
+    'return hoist-rejected saying so. That is a rejection, not a licence to widen the ' +
+    'read, and widening it is caught -- filesRead is checked against claimedOver.\n\n' +
+    'Record filesRead as exactly the files you opened or the command touched. It is ' +
+    'checked, and it becomes the provenance edge for a verified claim: these files can ' +
+    'change while every child document stays byte-identical, and the claim goes false ' +
+    'with nothing else moving.\n\n' +
+    'Give every disposition a reason a later reader can act on. For hoist-rejected, say ' +
+    'what the check actually returned, not that it failed.\n\n' +
+    'A REJECTION RATE IS EVIDENCE THIS STEP IS WORKING. Verifying every candidate is the ' +
+    'shape a rubber stamp takes. Do not reach for a verdict that keeps the proposal ' +
+    'alive.\n\n' +
+    'Return one disposition per candidate id above -- all of them, none invented. Do NOT ' +
+    'edit any file, do not stage or commit, and do not create or switch any git branch.\n\n' +
+    'Return the structured object.'
+}
+
+// Step 3 of the wave. The survivors, and only the survivors, enter the document.
+// This is an ADDITION to a file that was written without any hoist in it, not a
+// filter over a file that already contains speculative ones -- which is why no
+// retraction path exists to fail.
+const applyPrompt = (r, verified) => {
+  return 'Add VERIFIED hoists to an existing CLAUDE.md. Add exactly these and nothing ' +
+    'else.\n\n' +
+    'Directory: ' + r.root + '\n' +
+    'Document to edit: ' + (r.path || (r.root + '/CLAUDE.md')) + '\n\n' +
+    'Each entry below was proposed by this directory own composition and then checked ' +
+    'against the files it named. The wording is SETTLED: write each sentence as given. ' +
+    'Rewording it here would put an unverified claim into the document under a verified ' +
+    'claim disposition, which is the one outcome this whole ordering exists to prevent. ' +
+    'If a wording cannot be placed as written, leave it out and say so in notes.\n\n' +
+    JSON.stringify(verified, null, 2) + '\n\n' +
+    'Placement within the document defers to ' + placementRef + ', and the surface form ' +
+    'to the code-directory section of ' + standardsRef + '. Put each sentence in the ' +
+    'section where it belongs, creating one if none fits, and report which section took ' +
+    'it.\n\n' +
+    'Do NOT add anything else, do NOT re-word existing content, and do NOT touch the ' +
+    'child documents -- removing the child copies a hoist obliges is a separate run per ' +
+    'child.\n\n' +
+    'ASCII only. Edit exactly one file. Do not stage, commit, or create or switch any git ' +
+    'branch.\n\n' +
+    'Return the structured object.'
+}
+
 // ---------------------------------------------------------------------------
-// Dispatch, wave by wave, deepest first. The loop IS the topological order.
+// Dispatch, wave by wave, deepest first. The loop IS the topological order, and
+// each wave is now COMPOSE -> VERIFY -> APPLY rather than a single step.
 // ---------------------------------------------------------------------------
 phase('Generate')
 
 const perSubject = []
 // Wrote a document. Only these are offered to a parent as composition input.
 const writtenByRoot = new Set()
-// Reached a decision at all -- written OR null-branch OR skipped. This is what
-// the ordering guard checks, because a null-branch child is legitimately absent
-// and must still count as "its wave completed".
-const processedRoots = new Set()
+// RESOLVED, which is a stronger condition than the "processed" this set used to
+// hold. A directory is resolved when it has been composed AND every candidate
+// hoist it proposed has a terminal disposition AND the survivors have been
+// applied -- written OR null-branch OR skipped, in each case with nothing left
+// pending. The ordering guard checks THIS, because a document whose candidates
+// are still unresolved is not finished in the sense the barrier means: a parent
+// composing from it would be reading a document that is about to gain sentences.
+const resolvedRoots = new Set()
+// One record per wave, and its ABSENCE is a failure rather than a silent pass.
+// A corpus in which nothing hoisted is the expected output of both a correct run
+// over children sharing nothing hoistable AND a run whose verification step never
+// executed; these numbers are what tell those two apart.
+const waveRecords = []
 
-// A directory finished by an earlier run satisfies both: its wave is complete, and
-// it has a document to offer its parent.
+// A directory finished by an earlier run satisfies both: it is resolved, and it
+// has a document to offer its parent.
 for (const r of finishedDocuments) {
-  processedRoots.add(r)
+  resolvedRoots.add(r)
   writtenByRoot.add(r)
 }
 if (finishedDocuments.length) {
@@ -454,17 +781,20 @@ for (let w = 0; w < waves.length; w++) {
   if (!wave.length) continue
 
   // Structural guard: prove the ordering rather than trusting the loop. Every
-  // descendant of every directory in this wave must ALREADY have been processed.
-  // A future edit that flips the direction again fails here instead of silently
-  // producing composed-from-nothing parents.
+  // descendant of every directory in this wave must ALREADY be RESOLVED -- not
+  // merely composed, but composed with every candidate hoist dispositioned and
+  // every survivor applied. A future edit that flips the direction again, or that
+  // moves verification out of the wave to batch it at the end, fails here instead
+  // of silently producing parents composed from documents still due to change.
   for (const root of wave) {
-    const unprocessed = descendantsOf(root).filter((d) => !processedRoots.has(d))
-    if (unprocessed.length) {
+    const unresolved = descendantsOf(root).filter((d) => !resolvedRoots.has(d))
+    if (unresolved.length) {
       throw new Error(
         'claude-md-generate: wave ordering violated. ' + root + ' is being composed ' +
-        'before its descendant(s): ' + unprocessed.join(', ') + '. A parent composed ' +
-        'from unwritten children produces an internally-consistent document built ' +
-        'from half its input, so this refuses rather than proceeding.'
+        'before its descendant(s) are resolved: ' + unresolved.join(', ') + '. A parent ' +
+        'composed from unwritten -- or from not-yet-resolved -- children produces an ' +
+        'internally-consistent document built from half its input, so this refuses ' +
+        'rather than proceeding.'
       )
     }
   }
@@ -480,7 +810,8 @@ for (let w = 0; w < waves.length; w++) {
     if (s.skipNote) {
       return Promise.resolve({
         root, written: false, path: '', sections: [], droppedCandidates: [],
-        verifications: [], hoists: [], notes: ['skipped by caller: ' + s.skipNote],
+        verifications: [], hoists: [], candidateHoists: [], notProposed: [],
+        notes: ['skipped by caller: ' + s.skipNote],
       })
     }
 
@@ -499,13 +830,164 @@ for (let w = 0; w < waves.length; w++) {
     }).then((r) => ({ ...r, root }))
   }))
 
-  // The barrier above is the dependency. Record what this wave produced BEFORE
-  // the next (shallower) wave starts, because that wave composes from it.
-  for (const r of results.filter(Boolean)) {
-    perSubject.push(r)
-    processedRoots.add(norm(r.root))
-    if (r.written) writtenByRoot.add(norm(r.root))
+  // ---- Step 1 done: COMPOSE (propose). ----
+  const composed = results.filter(Boolean).map((r) => ({ ...r, root: norm(r.root) }))
+
+  // A composition that WROTE a hoist has done the one thing the ordering removes,
+  // and it has already done it -- the sentence is in the file. Refuse rather than
+  // absorb it: tolerating it silently degrades the run to hoist-on-plausibility
+  // while every count still looks healthy, which is precisely the shape of
+  // failure this design was chosen over.
+  const speculative = composed.filter((r) => (r.hoists || []).length)
+  if (speculative.length) {
+    throw new Error(
+      'claude-md-generate: ' + speculative.map((r) => r.root).join(', ') + ' returned a ' +
+      'WRITTEN hoist from the composition step. A composition proposes into ' +
+      'candidateHoists and writes none; hoists is populated only by the apply step, ' +
+      'from candidates the verification step let through. The document(s) named now ' +
+      'contain an unverified ambient claim and must be regenerated.'
+    )
   }
+
+  // ---- Step 2: VERIFY. ----
+  const proposers = composed.filter((r) => (r.candidateHoists || []).length)
+  const verdictByRoot = new Map()
+  if (proposers.length) {
+    const verdicts = await parallel(proposers.map((r) => () =>
+      agent(verifyPrompt(r), {
+        label: 'verify-hoists:' + r.root.split('/').pop(),
+        phase: 'Generate',
+        model: 'opus',
+        effort: 'high',
+        schema: VERIFY_SCHEMA,
+      }).then((v) => ({ ...v, root: r.root }))
+    ))
+    for (const v of verdicts.filter(Boolean)) verdictByRoot.set(norm(v.root), v)
+  }
+
+  // Resolution accounting, and every branch of it is a REFUSAL rather than a
+  // count. "Candidates proposed, no dispositions returned" is a failed run in the
+  // scoring model, not a wave that hoisted nothing, so it must not be reachable
+  // by omission here either.
+  const dispositionsByRoot = new Map()
+  for (const r of proposers) {
+    const v = verdictByRoot.get(r.root)
+    if (!v || !Array.isArray(v.dispositions)) {
+      throw new Error(
+        'claude-md-generate: ' + r.root + ' proposed ' + r.candidateHoists.length +
+        ' candidate hoist(s) and the verification step returned no dispositions. That ' +
+        'is a failed run, not a wave that hoisted nothing -- the two are different ' +
+        'results and are never folded together.'
+      )
+    }
+    const byId = new Map(v.dispositions.map((d) => [d.id, d]))
+    const missing = r.candidateHoists.filter((c) => !byId.has(c.id)).map((c) => c.id)
+    if (missing.length) {
+      throw new Error(
+        'claude-md-generate: ' + r.root + ' has candidate(s) with no disposition: ' +
+        missing.join(', ') + '. Every proposed candidate gets exactly one of ' +
+        'hoist-verified, hoist-rejected, hoist-unverifiable.'
+      )
+    }
+    const invented = v.dispositions.filter((d) => !r.candidateHoists.some((c) => c.id === d.id))
+    if (invented.length) {
+      throw new Error(
+        'claude-md-generate: ' + r.root + ' returned disposition(s) for candidate id(s) ' +
+        'that were never proposed: ' + invented.map((d) => d.id).join(', ') + '.'
+      )
+    }
+
+    // THE READ BOUND, ENFORCED RATHER THAN REQUESTED. Prompt text asking an agent
+    // not to widen its read is exactly the kind of instruction a plausible
+    // hypothesis talks it out of, and the widening leaves no trace in the
+    // document. filesRead against claimedOver turns it into a mechanical
+    // property: a check that had to look outside the claim did not verify the
+    // claim, it discovered the candidate was mis-scoped, and a mis-scope is a
+    // rejection. Downgrading rather than throwing is deliberate -- the run's own
+    // answer is preserved verbatim in the reason, and one over-eager check does
+    // not cost the corpus.
+    for (const d of v.dispositions) {
+      const c = r.candidateHoists.find((x) => x.id === d.id)
+      const claimed = new Set((c.claimedOver || []).map(norm))
+      const escaped = (d.filesRead || []).map(norm).filter((f) => !claimed.has(f))
+      if (escaped.length && d.disposition === 'hoist-verified') {
+        d.disposition = 'hoist-rejected'
+        d.reason =
+          'MIS-SCOPED (enforced by the lane, not reported by the check): verification ' +
+          'read file(s) the candidate did not claim over -- ' + escaped.join(', ') + '. ' +
+          'A claim can only be verified over the files it named in advance. The check ' +
+          'reported: ' + String(d.reason)
+      }
+    }
+    dispositionsByRoot.set(r.root, v.dispositions)
+  }
+
+  // ---- Step 3: APPLY the survivors, and nothing else. ----
+  const applyTargets = proposers
+    .map((r) => ({
+      r,
+      verified: r.candidateHoists.filter((c) =>
+        (dispositionsByRoot.get(r.root) || []).some(
+          (d) => d.id === c.id && d.disposition === 'hoist-verified')),
+    }))
+    .filter((t) => t.verified.length && t.r.written)
+  const appliedByRoot = new Map()
+  if (applyTargets.length) {
+    const applied = await parallel(applyTargets.map((t) => () =>
+      agent(applyPrompt(t.r, t.verified), {
+        label: 'apply-hoists:' + t.r.root.split('/').pop(),
+        phase: 'Generate',
+        model: 'opus',
+        effort: 'high',
+        schema: APPLY_SCHEMA,
+      }).then((a) => ({ ...a, root: t.r.root }))
+    ))
+    for (const a of applied.filter(Boolean)) appliedByRoot.set(norm(a.root), a)
+  }
+
+  // The barrier above is the dependency. Record what this wave produced BEFORE
+  // the next (shallower) wave starts, because that wave composes from it -- and
+  // a wave is not recorded until all three of its steps are done, which is what
+  // makes resolvedRoots stronger than the old processed set.
+  let proposed = 0, verified = 0, rejected = 0, unverifiable = 0, notProposed = 0
+  for (const r of composed) {
+    const dispositions = dispositionsByRoot.get(r.root) || []
+    const applied = appliedByRoot.get(r.root)
+    const appliedIds = new Set(((applied && applied.applied) || []).map((a) => a.id))
+
+    // hoists is DERIVED from the candidates the phase passed AND the apply step
+    // actually placed, never taken as a second statement of the same thing. A
+    // verified candidate the apply step left out is not a hoist, and saying so
+    // here is what keeps every hoists entry corresponding to a sentence in the
+    // document.
+    const hoists = (r.candidateHoists || [])
+      .filter((c) => appliedIds.has(c.id))
+      .map((c) => ({ fact: c.fromClaim, fromChildren: c.fromChildren, wording: c.wording }))
+
+    proposed += (r.candidateHoists || []).length
+    notProposed += (r.notProposed || []).length
+    for (const d of dispositions) {
+      if (d.disposition === 'hoist-verified') verified++
+      else if (d.disposition === 'hoist-rejected') rejected++
+      else unverifiable++
+    }
+
+    const record = { ...r, hoists, hoistDispositions: dispositions }
+    if (applied && applied.notes && applied.notes.length) {
+      record.notes = (r.notes || []).concat(applied.notes.map((n) => 'apply: ' + n))
+    }
+    perSubject.push(record)
+    resolvedRoots.add(r.root)
+    if (r.written) writtenByRoot.add(r.root)
+  }
+
+  waveRecords.push({
+    wave: w, subjects: wave.length, composed: composed.length,
+    phaseRan: true, proposed, verified, rejected, unverifiable, notProposed,
+  })
+  log('Wave ' + w + ' resolved: ' + proposed + ' candidate hoist(s) proposed, ' +
+      verified + ' verified, ' + rejected + ' rejected, ' + unverifiable +
+      ' unverifiable; ' + notProposed + ' child claim(s) considered and not proposed.')
 }
 
 // ---------------------------------------------------------------------------
@@ -515,7 +997,18 @@ const totals = perSubject.reduce((acc, r) => {
   if (r.written) acc.written++
   else acc.nullBranch++
   acc.sections += (r.sections || []).length
+  // VERIFIED hoists only, because hoists now holds nothing else. The proposed
+  // set is counted beside it rather than inside it: "proposed and refuted" and
+  // "never proposed" are different results and neither is a hoist, so a single
+  // number over them would answer no question anyone asks.
   acc.hoists += (r.hoists || []).length
+  acc.proposed += (r.candidateHoists || []).length
+  acc.notProposed += (r.notProposed || []).length
+  for (const d of r.hoistDispositions || []) {
+    if (d.disposition === 'hoist-verified') acc.verified++
+    else if (d.disposition === 'hoist-rejected') acc.rejected++
+    else acc.unverifiable++
+  }
   acc.dropped += (r.droppedCandidates || []).length
   // The at-risk class: a fact declined here that can only re-enter above by a
   // hoist some child must first have written down. Counted separately because
@@ -525,7 +1018,37 @@ const totals = perSubject.reduce((acc, r) => {
   // is the shape a report-not-artifact run takes, so it is surfaced.
   if (r.written && !(r.verifications || []).length) acc.unverified++
   return acc
-}, { written: 0, nullBranch: 0, sections: 0, hoists: 0, dropped: 0, escalated: 0, unverified: 0 })
+}, {
+  written: 0, nullBranch: 0, sections: 0, hoists: 0, dropped: 0, escalated: 0,
+  unverified: 0, proposed: 0, verified: 0, rejected: 0, unverifiable: 0, notProposed: 0,
+})
+
+// A verified candidate that never became a hoist means the apply step dropped one
+// after the phase passed it. Surfaced rather than reconciled silently, because it
+// is the one way a settled sentence can still fail to reach a document.
+const unappliedNote = totals.verified > totals.hoists
+  ? ', ' + (totals.verified - totals.hoists) + ' verified candidate(s) were NOT applied ' +
+    'to a document -- review these, a settled wording that never landed is a loss'
+  : ''
+
+// Proposed but zero-rate outcomes read very differently and must not be inferred
+// from the hoist count alone. A phase that rejects nothing is the shape a rubber
+// stamp takes; a wave with no record at all is a failed run whatever its
+// documents look like, which is why waveRecords is returned rather than summed
+// away here.
+const candidateNote = totals.proposed
+  ? ', ' + totals.proposed + ' candidate hoist(s) proposed -> ' + totals.verified +
+    ' verified / ' + totals.rejected + ' rejected / ' + totals.unverifiable +
+    ' unverifiable' +
+    (totals.rejected + totals.unverifiable === 0
+      ? ' (NOTHING refused: read that as a rubber stamp until a sample is checked by hand)'
+      : '')
+  : ', NO candidate hoists were proposed' +
+    (totals.notProposed
+      ? ' (' + totals.notProposed + ' child claim(s) considered and left in the child)'
+      : ' AND no child claim was recorded as considered -- a composition that proposes ' +
+        'nothing and records no absence is indistinguishable from one with nothing to ' +
+        'propose, and only the second is a legitimate result')
 
 const escalatedNote = totals.escalated
   ? ', ' + totals.escalated + ' candidate(s) named an ancestor destination and were NOT ' +
@@ -540,9 +1063,14 @@ const nullNote = totals.nullBranch
   : ''
 
 log('Generate: ' + totals.written + ' document(s) written across ' + waves.length +
-    ' wave(s), ' + totals.sections + ' section(s), ' + totals.hoists + ' hoist(s)' +
+    ' wave(s), ' + totals.sections + ' section(s), ' + totals.hoists +
+    ' VERIFIED hoist(s)' + candidateNote + unappliedNote +
     nullNote + escalatedNote + unverifiedNote +
     '. Verify against the ARTIFACT, not this report: a lane result describes what each ' +
     'run intended.')
 
-return { perSubject, waves, totals }
+// waveRecords is part of the contract, not a diagnostic. Scoring a run needs to
+// tell "the phase ran and nothing qualified" from "the phase never ran", and the
+// documents look identical in both cases -- the record is the only thing that
+// separates them, and its ABSENCE is a failure rather than a silent pass.
+return { perSubject, waves, waveRecords, totals }
