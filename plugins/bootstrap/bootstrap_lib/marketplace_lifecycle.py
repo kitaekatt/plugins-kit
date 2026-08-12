@@ -1196,6 +1196,18 @@ def enable_plugin_at_scope(
     Edits surgically (the file's other keys, ordering, indentation and line
     endings are left alone) because the target is frequently a shared,
     source-controlled settings.json.
+
+    REFUSES to overwrite an explicit `false` at USER scope. A missing entry and
+    an entry set to `false` are different things: the first is an install that
+    never finished writing its enablement, which is exactly what this function
+    exists to repair; the second is somebody having turned the plugin off, and
+    convergence must not undo a decision. Repairing it silently is worse than
+    leaving it broken -- the user disables a plugin, the next prompt in any live
+    session re-enables it, and nothing explains why. Bootstrap already declines
+    to fight a project-scope opt-out (its enable check reads only the non-local
+    settings.json, so a settings.local.json disable is invisible to it); this is
+    the user-scope equivalent. The refusal is reported to the caller so it
+    surfaces as an issue to fix rather than passing as a no-op.
     """
     from .settings_writable import (
         ensure_writable, preserve_line_endings, settings_path_for_scope,
@@ -1224,6 +1236,23 @@ def enable_plugin_at_scope(
             data = {}
         if not isinstance(data, dict):
             raise ValueError("settings root is not an object")
+        existing = data.get("enabledPlugins")
+        if (
+            scope == "user"
+            and isinstance(existing, dict)
+            and existing.get(cli_ref) is False
+        ):
+            # Explicit opt-out, not a half-finished install. See the docstring:
+            # absent means "never written" (repair it), false means "turned off"
+            # (leave it, and say so).
+            return LifecycleResult(
+                passed=False, ref=plugin_ref,
+                message=(
+                    "disabled at user scope by an explicit false entry in "
+                    "{0}; not re-enabling automatically -- remove the entry, or "
+                    "set it to true, to turn it back on".format(settings_path)
+                ),
+            )
         data.setdefault("enabledPlugins", {})[cli_ref] = True
         os.makedirs(os.path.dirname(settings_path), exist_ok=True)
         with preserve_line_endings(settings_path):

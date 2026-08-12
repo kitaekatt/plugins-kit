@@ -105,3 +105,53 @@ class TestEnablePluginAtScope:
 
         assert not result.passed
         assert path.read_text(encoding="utf-8") == "{ not json"  # left untouched
+
+
+class TestUserScopeOptOut:
+    """An explicit `false` at user scope is a decision, not drift.
+
+    Convergence repairs an entry that was never written; it must not undo one
+    somebody set. Absent and false are therefore treated differently, and only
+    at user scope -- a project-scope opt-out already lives in settings.local.json,
+    which this function is never asked to repair.
+    """
+
+    def test_explicit_false_at_user_scope_is_refused(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        path = _settings(tmp_path, {"enabledPlugins": {"b@mkt": False}})
+        before = path.read_bytes()
+
+        result = enable_plugin_at_scope("mkt:b", "user")
+
+        assert not result.passed
+        assert "not re-enabling automatically" in result.message
+        assert path.read_bytes() == before  # the opt-out survives byte-for-byte
+
+    def test_absent_entry_at_user_scope_is_still_enabled(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        path = _settings(tmp_path, {"enabledPlugins": {"a@mkt": True}})
+
+        assert enable_plugin_at_scope("mkt:b", "user").passed
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert data["enabledPlugins"] == {"a@mkt": True, "b@mkt": True}
+
+    def test_refusal_names_only_the_opted_out_plugin(self, tmp_path, monkeypatch):
+        """One plugin's opt-out must not block enabling a different one."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        path = _settings(tmp_path, {"enabledPlugins": {"b@mkt": False}})
+
+        assert not enable_plugin_at_scope("mkt:b", "user").passed
+        assert enable_plugin_at_scope("mkt:c", "user").passed
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert data["enabledPlugins"] == {"b@mkt": False, "c@mkt": True}
+
+    def test_project_scope_false_is_unaffected(self, tmp_path):
+        """The guard is user-scope only; project-scope behavior does not change."""
+        path = _settings(tmp_path, {"enabledPlugins": {"b@mkt": False}})
+
+        assert enable_plugin_at_scope("mkt:b", "project", str(tmp_path)).passed
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert data["enabledPlugins"] == {"b@mkt": True}
