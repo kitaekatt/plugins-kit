@@ -2,9 +2,9 @@
 
 Status: Part 1 (measured deficiencies) is settled measurement with its own
 retractions. Part 2 is the plan after its one blocking decision was made --
-P0 was answered on 2026-08-12 by owner decision (Option B, bounded) and every
-other item has been reviewed against it. Nothing in Part 2 is implemented, and
-the shipped-document amendments Part 2 lists have NOT been made.
+P0 was answered on 2026-08-12 by owner decision (Option C) and every other item
+has been reviewed against it. Nothing in Part 2 is implemented, and the
+shipped-document and workflow-prompt amendments Part 2 lists have NOT been made.
 
 Subject: the md-domain `coverage` -> `generate` chain, as exercised on
 `D:/dev/woodworking-sim` (46 coverage reports, 310 candidates, 45 emitted
@@ -125,37 +125,40 @@ as proof of plain omission; it is not -- three of its four candidates target the
 unwritable `kernel/CLAUDE.md` and the fourth, which targets its own directory,
 was correctly written. `kernel/src` is evidence for G3, not for omission.
 
-### G12 `[OBS]` Coverage emits a retired placement vocabulary that generation cannot consume
+### G12 `[OBS]` Coverage emitted a retired placement vocabulary that generation could not consume
 
-**This is the dominant defect.** 78 of 316 candidates carry `scope: PROMOTE`
-with a destination above the assessed directory. Under the settled model
+**This was the dominant defect, and this section is the PRE-DECISION diagnosis
+that led to P0.** It is retained in its diagnostic form because the measurement
+is what made the decision possible; the decision itself is recorded in P0, and
+the disposition below is stated in the past tense because it has been answered.
+
+78 of 316 candidates carry `scope: PROMOTE` with a destination above the
+assessed directory. Under the model in force when the corpus was produced,
 promotion is retired -- a fact reaches a wider scope only by HOISTING, which the
-PARENT performs after noticing the fact repeated across its children's finished
-DOCUMENTS. Nothing is ever nominated from below.
+PARENT performs after noticing the fact in its children's finished DOCUMENTS.
+Nothing is ever nominated from below.
 
-That leaves a PROMOTE candidate with no path to any document:
+That left a PROMOTE candidate with no path to any document:
 
 - the child's own run is forbidden to write it (`fact-scoped-to-this-directory`);
 - the parent's run composes from child DOCUMENTS, not child REPORTS, and the
-  child was forbidden to write the fact, so the parent never sees it;
+  child was forbidden to write the fact, so the parent never saw it;
 - the destination it names is advisory text no stage reads.
 
 The correlation is close to exact in ten reports. It is NOT deterministic,
 which is its own finding: `pass2-src-api` has 7 candidates, all 7 PROMOTE, and
 loses none -- so some runs write a PROMOTE candidate locally, ignoring the
-destination, and others drop it. The field is honoured inconsistently rather
+destination, and others drop it. The field was honoured inconsistently rather
 than uniformly ignored.
 
 This subsumes G3 (an unwritable `godot/` destination is one PROMOTE
 destination among others), G4, and G5b (all 11 null-branch candidates are
-PROMOTE). It is one decision, not four fixes.
+PROMOTE). It was one decision, not four fixes.
 
-**The decision this forces, and it must be made before anything else in Part 2
-is worth building:** either coverage stops emitting non-local destinations
-entirely, or composition gains child REPORTS as a third input so a parent can
-see what its children routed upward. Both reviewers reached this independently.
-The plan's P2 chose neither and instead smuggled half the reversal in for
-code-free directories only (see P2 below).
+**The decision it forced** was whether coverage stops emitting non-local
+destinations, whether composition gains child REPORTS as a third input, or
+whether the existing two-input composition is widened at the point where it
+already concedes a gap. That question was settled on 2026-08-12; see P0.
 
 ### G5d `[REVISED]` A report produced after its document measures nothing
 
@@ -306,6 +309,11 @@ PORTING.md rules apply`. The signal was in the subject the run was handed. The
 genuinely-undiscoverable class exists but is small, and by the owner's ruling it
 is out of scope; what remains is a reading failure.
 
+G11 is load-bearing for P0's measurement: four of the twelve `godot/` facts were
+found by only one report while their evidence sits in several children's own
+files, which is a recall failure at the sibling runs rather than a limit of the
+composition model.
+
 ### Deliberately NOT treated as deficiencies
 
 - A directory with no local signal cannot discover an obligation owed to
@@ -329,10 +337,10 @@ revised, now supports a sharper reading:
 | PROMOTE candidate with no consumer (G12) | ~57 (80%) | **P0** -- one model decision |
 | Report post-dates its document (G5d) | 14 (20%) | not a loss; excluded from the baseline |
 
-**This kills the plan's original shape.** Three drafts distributed the loss
+**This killed the plan's original shape.** Three drafts distributed the loss
 across four mechanisms and proposed a fix per mechanism. There is essentially
 one mechanism, it is a MODEL question rather than an implementation defect, and
-until it is decided the rest of the plan is building instrumentation around an
+until it was decided the rest of the plan was building instrumentation around an
 unresolved contradiction.
 
 The path to that was three consecutive wrong attributions -- `kernel/src` (a
@@ -345,232 +353,328 @@ regardless as instrumentation, but they are no longer claimed as remedies.
 P4-P8 should not be designed until P0 is settled, because P0 changes what a
 destination MEANS and therefore what every later item validates against.
 
-**P0 was settled on 2026-08-12 (owner decision): Option B, bounded.** The
-sections below are the plan as it stands after that decision. Each item states
-whether the decision changed it; an item marked reviewed-and-unchanged was
-re-read against Option B and found unaffected, which is a different claim from
-not having been revisited.
+**P0 was settled on 2026-08-12 (owner decision): Option C.** The sections
+below are the plan as it stands after that decision. Each item states whether
+the decision changed it; an item marked reviewed-and-unchanged was re-read
+against Option C and found unaffected, which is a different claim from not
+having been revisited.
 
-### P0. SETTLED 2026-08-12 -- Option B, bounded (fixes G12, subsuming G3/G4/G5b)
+### P0. SETTLED 2026-08-12 -- Option C (fixes G12, subsuming G3/G4/G5b)
 
-**Status: decided. Authority: owner decision, 2026-08-12.** This item is no
-longer an open question and no longer carries a recommendation.
+**Status: decided. Authority: owner decision, 2026-08-12.** This item is a
+decision record. It is no longer an open question and no longer carries a
+recommendation.
 
 Coverage emitted upward destinations; the composition model had retired upward
 nomination. One of the two had to move, and the choice had to apply to EVERY
-directory rather than to a favoured class. Two options were on the table.
+directory rather than to a favoured class.
 
-**Option A -- coverage stops emitting non-local destinations. NOT TAKEN.**
-Every candidate would target the directory it was assessed from. A fact
-governing a wider area would reach it only when the parent, reading its
-children's finished documents, noticed the repetition and hoisted. This
-preserves the settled model exactly and needs no reversal of anything. It was
-rejected on one measured cost: a fact that appears in only ONE child never
-repeats, so it never triggers a hoist -- it is either written narrowly at the
-child, where it over-reaches, or lost. The 13 `godot/` port facts (G3) and the
-whole-port and re-port duties the audit rated most valuable are mostly of that
-kind. Option A trades the corpus's most valuable facts for model purity. This
-paragraph is retained so a later reader can see what was traded away; it is not
-a live alternative.
+#### What was decided
+
+**Option C -- keep the composition model exactly as it is, and drop hoisting's
+repetition trigger. TAKEN.** Concretely:
+
+1. A parent's composition still has exactly TWO inputs: its own direct code
+   files, and its children's finished CLAUDE.md documents. There is no third
+   input, no routing field, no new disposition, and no child-report edge.
+2. A fact still reaches a wider scope only by HOISTING, performed at the parent
+   over documents the parent has actually read. Nomination from below still
+   NEVER happens.
+3. **The single change:** the trigger "the fact appears in more than one child"
+   is dropped. A parent MAY hoist a fact it finds in a SINGLE child's finished
+   document, provided the WORDING test still passes -- the fact must be worded
+   so it is true as stated at the parent's depth, of everything below it.
+4. `fact-scoped-to-this-directory` is NOT reversed. Coverage keeps emitting
+   local destinations only, and its retired carriage fields stay retired.
+
+#### Why this is a small change rather than a new model
+
+The shipped model already concedes the exact gap Option C closes, in the same
+paragraph that states the trigger:
+`plugins/skills-kit/skills/md-domain/references/lanes/generation-lane.md:135-143`
+says the repetition and wording tests "come apart in both directions", and names
+the second direction outright -- "a fact true of every child that only one child
+noticed never triggers at all" (`:138`). The same concession is stated a second
+time at `plugins/skills-kit/skills/md-domain/CLAUDE.md:364-374`.
+
+So the model already holds that WORDING, not repetition, is what licenses a
+hoist. Repetition was doing duty as a cheap heuristic for wording, and the
+shipped text already records that it is an unsound one. Option C removes the
+heuristic and keeps the test.
+
+#### The measurement that decided it
+
+The 13 candidates routing to `godot/` (G3) were the case Option B was proposed
+to rescue. Measured against the corpus reports in
+`dev/tasks/md-domain-review-enablement/reports-json/`, those 13 candidates are
+**12 distinct facts**, and they distribute like this:
+
+| Class | Facts | What Option C does with them |
+|---|---:|---|
+| Already discovered independently by 2+ sibling reports | 5 | Ordinary repetition-hoisting already fires; no new machinery needed |
+| Partially repeated (stated by one report, echoed in part by another) | 2 | Hoistable under either trigger once the parent reads both documents |
+| Found by one report, evidence present in several children's own files | 4 | A recall failure at the sibling runs (G11), not a model limit |
+| Genuinely single-child | 1 | Reachable only because Option C drops the repetition trigger |
+
+The five independently-repeated facts are the autoload rule, the units-CM rule,
+the audio `stop_owner` rule, the headless `user://` gate, and the
+no-aggregate-runner rule. Corroboration at file granularity in the reports
+directory: `autoload` appears in `godot-assets-audio.json`, `godot-scripts.json`,
+`godot-stations.json` and `godot-tests.json`; `stop_owner` in
+`godot-scripts.json` and `godot-stations.json`; `user://` in
+`godot-scripts.json` and `godot-tests.json`. The 2 partial repeats are the
+oracle-divergence fact and the WoodKernel-is-Windows-only fact. The single
+genuinely-single-child fact is `godot-tests`' private-surface fact.
+
+**The conclusion that follows.** Under Option C all 12 facts are STRUCTURALLY
+reachable, because every one of them is written at the child that assessed it
+and the parent reads those documents. What Option B offered over Option C on
+this evidence is not reach -- it is a shortcut past a recall failure that G11
+already classifies as a quality problem.
+
+**The residue Option C cannot reach**, stated so it is not discovered later as a
+surprise: a fact that fails the CHILD's own local value bar and therefore never
+enters any document at all. Nothing the parent reads can contain it. On this
+sample that is plausibly one fact in twelve. Option C accepts that residue.
+
+#### Options rejected, retained so a later reader can see the trade
+
+**Option A -- coverage stops emitting non-local destinations, model otherwise
+untouched. NOT TAKEN, and it is the closest neighbour of what was taken.**
+Every candidate targets the directory it was assessed from; a wider fact reaches
+its scope only by repetition-triggered hoisting. It was rejected on one cost: a
+fact appearing in only ONE child never repeats, so it never triggers a hoist --
+it is either written narrowly at the child, where it over-reaches, or lost.
+Option C is Option A with exactly that cost removed, which is why Option A is
+not a live alternative but also not far from the decision.
 
 **Option B -- composition gains children's ROUTED CANDIDATES as a third input.
-TAKEN, BOUNDED.** Concretely:
+NOT TAKEN.** A parent would compose from its own code, its children's documents,
+AND its children's coverage candidates whose `destination` names an ancestor.
+Upward routing would become real rather than advisory, and the parent would
+weigh a nomination it could decline.
 
-1. A parent directory's CLAUDE.md composition has THREE inputs, not two: its
-   own direct code files; its children's finished CLAUDE.md documents; and its
-   children's ROUTED coverage candidates, meaning candidates whose
-   `destination` names a directory above the one that was assessed.
-2. Upward routing is therefore REAL rather than advisory. A routed candidate
-   reaches a consumer -- the run that composes the named destination -- which
-   is exactly what G12 measured as missing.
-3. **The bound.** A parent MAY CONSUME a child's routed candidate. A child may
-   still NEVER write outside itself, and a routed destination is an input the
-   parent WEIGHS, not an obligation the child IMPOSES. The parent may decline
-   it, reword it, or route it further up, and its decision is final.
+Option B was provisionally settled on 2026-08-12 and threaded through this
+document in commit `928b907`. Two independent adversarial reviews then returned
+NOT-READY on it. The reasons it was set aside:
 
-**This is a deliberate partial reversal of `fact-scoped-to-this-directory`
-(`plugins/skills-kit/skills/md-domain/references/standards/coverage-standards.md:94-110`),
-and it is recorded here as one rather than presented as a clarification.** What
-is reversed is precisely the destination clause -- ":97-98 `Its destination is
-that directory, always; an assessment never proposes a fact for anywhere
-else.`" What is NOT reversed is the criterion's evidence clause: a candidate
-must still be a fact about the assessed directory's own direct code, cited to a
-file and line in that directory. The reversal moves where a candidate may POINT,
-not what it may be about.
+- **It is a deliberate partial reversal of a fail-severity criterion.**
+  `plugins/skills-kit/skills/md-domain/references/standards/coverage-standards.md:94-110`
+  states that a candidate's destination "is that directory, always". The reason
+  the criterion exists (`:104-107`: an assessment that read only this directory
+  "cannot see whether the fact holds of code it never opened") remains true
+  under Option B; only the consequence was to be downgraded. That is a real
+  model reversal, and it obliged amendments across three shipped documents plus
+  a mechanical unblocking of `workflow/coverage-detect.js`, whose schema sets
+  `additionalProperties: false` (`:98`) and pins `destination` to the assessed
+  directory (`:109-113`).
+- **The measurement above shows it was not needed for the case it was chosen
+  for.** 11 of the 12 `godot/` facts are reachable without it, and the twelfth
+  is reachable under Option C.
+- **It opened three questions the plan could not close**: how far up a candidate
+  may route, what happens to a candidate the parent declines, and whether a
+  candidate routed above a run's root is permanently undispositioned. All three
+  disappear with Option B.
 
-**The cost, stated plainly.** The reason the criterion existed does not go
-away. `coverage-standards.md:104-107` states it: "An assessment that read only
-this directory has no basis to place anything anywhere else: it cannot see
-whether the fact holds of code it never opened." That remains true under Option
-B. What changes is the CONSEQUENCE, not the premise: because a routed candidate
-is now a nomination the parent may ignore rather than a placement anyone must
-honour, an unjustifiable nomination costs the parent a rejection instead of
-producing a wrong document. The bound is what makes the reversal survivable, and
-it is strictly weaker than the retired promotion model, in which a child
-nominated a destination it then expected someone to honour.
+Nothing in Option C revives `sibling_overlap` or the `PROMOTE` vocabulary, and
+nothing in it licenses a child to write outside itself.
 
-Three consequences follow immediately and are handled by the items below:
+#### The scope of the change -- it is not doc-only
 
-- The bottom-up dependency now spans child REPORTS as well as child DOCUMENTS
-  (P8).
-- A destination naming a directory that is not itself a coverage subject -- the
-  20 candidates of G3 -- still needs a run to exist at that directory (P2).
-- Every routed candidate needs a terminal disposition at its destination, not
-  only at its origin (P3).
+The repetition trigger is implemented in the WORKFLOW PROMPT, not only in
+prose. `plugins/skills-kit/skills/md-domain/workflow/claude-md-generate.js:322-324`
+instructs the composing agent that "A fact appearing in more than one child
+moves up to this directory", and `:325-331` states "REPETITION TRIGGERS A HOIST;
+WORDING LICENSES IT" with the two-tests framing. An agent dispatched by that
+prompt applies the repetition trigger whatever the references say.
 
-Nothing in Option B licenses a child to write, and nothing in it revives
-`sibling_overlap` or the `PROMOTE` vocabulary; see the shipped-document change
-list below for the exact wording that must move.
+So Option C is a documentation change PLUS a workflow prompt change. **The
+references and the prompt are inputs to the same dispatched run, so they must
+ship in ONE skills-kit version bump.** Shipping the references first would put a
+composing agent under a prompt that contradicts the reference it is handed;
+shipping the prompt first would put it under a reference that contradicts the
+prompt. Either ordering produces a run whose behaviour cannot be attributed.
 
-### P1. REVISED -- one candidate schema, enforced at emit (fixes G1, G2, partly G5)
+Two mechanical questions were checked rather than assumed:
 
-**Option B changes this item.** `destination` is no longer pinned to the
-assessed directory, so the schema must express what a LEGAL routed destination
-is -- otherwise the reversal reintroduces exactly the free-text drift G2
-measured, with a consumer now actually reading it.
+- **The `hoists` schema field needs no structural change.**
+  `claude-md-generate.js:191-203` declares `hoists` with
+  `required: ['fact', 'fromChildren', 'wording']`, and `fromChildren` (`:199`)
+  is an array of strings, which already admits a single element. What needs
+  amending is WORDING, in two places: the prompt's instruction to report "which
+  children stated it" (`:332-334`), which reads as presupposing more than one,
+  and the schema comment at `:189-190`.
+- **No test pins the repetition trigger.**
+  `tests/skills-kit/test_coverage_workflow_contract.py` pins the COVERAGE side
+  only -- the two verdicts, the criteria seam, and the `tier`/`anchors`/
+  `destination` candidate fields (`:279-306`). Option C changes none of those.
+  `tests/skills-kit/test_workflow_js_drift.py` covers the four generated
+  REMEDIATE lanes and the detect/classify skeletons, not `claude-md-generate.js`.
+  A regression test for the amended trigger therefore does not exist and would
+  have to be written; that is a gap to fill, not a blocker discovered late.
+
+### P1. REVISED -- one candidate schema with a stable identity, enforced at emit (fixes G1, G2, partly G5)
+
+**Option C removes the routing field this item carried under Option B, and adds
+the identity requirement two reviews found missing.** `destination` goes back to
+being pinned to the assessed directory, so the schema does not have to express
+what a legal non-local destination is. What it does have to express, and never
+did, is WHICH CANDIDATE a downstream record is talking about.
 
 Define a single candidate record and validate it before a report is written:
 
 | Field | Type | Rule |
 |---|---|---|
+| `id` | string | required; stable within the report, `<report stem>#<index>` |
 | `fact` | string | required |
-| `destination` | string | required; repo-relative directory, no `CLAUDE.md` suffix, no annotation, no absolute path; MUST be either the assessed directory or a strict ANCESTOR of it -- never a sibling, never a descendant |
-| `routing` | enum | `local` \| `routed`; required; `routed` iff `destination` is an ancestor |
+| `destination` | string | required; repo-relative directory, no `CLAUDE.md` suffix, no annotation, no absolute path; the assessed directory, always (CV-3, unchanged) |
 | `convertibility` | enum | `finding-convertible` \| `context-only`; required (CV-4) |
 | `rationale` | string | required |
-| `evidence` | list | required, non-empty; each entry `path:line` inside the ASSESSED directory (CV-7) |
+| `evidence` | list | required, non-empty; each entry `path:line` inside the assessed directory (CV-7) |
 | `severe_deficiency` | bool | optional, default false |
 
-Four rules in that table are Option B's doing and each is load-bearing:
+**Stable identity is the addition, and the prior art already exists in the
+repo.** `plugins/skills-kit/skills/md-domain/scripts/discover_hierarchy.py:176-183`
+states the requirement in its own docstring -- candidates get "a stable `_id`
+(`<file stem>#<index>`), which is what the lane's input-accounting check counts
+against -- without a stable identity a dropped candidate is indistinguishable
+from a merged one" -- and `:217-226` assigns it. That is exactly the property
+P3 and the Validation section need and neither previously specified. Adopt the
+same scheme rather than inventing a second one, and make it a report field
+rather than a loader-applied annotation, so the identity survives being written
+to disk.
 
-- **Ancestor-or-self, enforced.** Option B licenses routing UPWARD only. A
-  sibling destination is still unjustifiable for the reason
-  `coverage-standards.md:104-107` gives, and it has no consumer either -- a
-  sibling's run reads neither this directory's documents nor its reports.
-- **`routing`, not `scope`.** The retired vocabulary is `scope` with values
-  `LEAF-ONLY` / `PROMOTE -> <dir>`
-  (`plugins/skills-kit/skills/md-domain/references/standards/coverage-standards.md:183`).
-  Reusing either name would make a report written under Option B
-  indistinguishable from one written under the model G12 measured, and the
-  corpus already contains 78 of the latter. A distinct field name is what makes
-  the two eras mechanically separable.
-- **`routing` is derived, not asserted.** It is a function of `destination` and
-  the assessed directory, so validation computes it rather than trusting it.
-  An emitter that could set them inconsistently is a second source of truth.
-- **Evidence stays local.** This is the half of `fact-scoped-to-this-directory`
-  that P0 did NOT reverse, and putting it in the schema is what stops the
-  reversal widening past its bound.
+**Why identity cannot be text matching, under Option C specifically.** A hoist
+REWORDS the fact -- that is the wording test, stated at
+`generation-lane.md:139-141` and enforced in the prompt at
+`claude-md-generate.js:327-330`. A parent may also merge several child
+statements into one (`generation-lane.md:174`). So the reconciliation P3
+promises -- child claim to parent hoisted claim -- cannot be done by comparing
+strings, and no amount of care in the prose makes it mechanical. The parent's
+`hoists` entry must name the child claim by ID.
 
 Retire `tier`/`why`/`anchors` as aliases with a one-version compatibility read.
 A report that fails validation does not get written -- a malformed candidate is
-worse than a missing one because it looks routable.
+worse than a missing one because it looks consumable.
 
 **Reconciliation owed against the shipped schema.** `tier`, `why` and `anchors`
 are not merely one of the corpus's four observed shapes; they are the REQUIRED
 field names in the shipped workflow schema
 (`plugins/skills-kit/skills/md-domain/workflow/coverage-detect.js:104`), which
-also sets `additionalProperties: false` (`:98`). So this item is a change to a
-published contract, not a tidy-up of corpus drift, and the rename decision
-belongs with the amendments listed under "Shipped-document amendments Option B
-implies" below rather than being made here.
+also sets `additionalProperties: false` (`:98`), and they are pinned by
+`tests/skills-kit/test_coverage_workflow_contract.py:292-306`. So this item is a
+change to a published contract with a test to update, not a tidy-up of corpus
+drift. It is independent of P0 and can ship on its own schedule.
 
-### P2. REVISED -- composition subject vs coverage subject (fixes G3)
+### P2. SETTLED -- a code-free directory with children IS a composition subject (fixes G3)
 
-**The previously withdrawn P2 is reinstated in a narrower form.** The old
-version let generation instantiate a document at a code-free directory "when
-two or more children route a fact to it". All three objections to it were about
-the smuggling, not about the underlying gap, and Option B removes all three:
+**This item is settled here rather than listed as open, because under Option C
+it is load-bearing.** `godot/` holds no direct code files -- only
+`project.godot`, a `.tres` and an `.svg` -- so it is not a coverage subject and
+no assessment runs there. If no GENERATION run happens at a code-free directory
+that has children, the 12 facts of P0's measurement have nowhere to hoist TO,
+and Option C delivers nothing at all. Both adversarial reviews identified this
+independently, and both noted it is independent of the A/B/C choice.
 
-- (a) it required generation to read child routes while claiming not to --
-  generation now reads them openly, as P0's third input;
-- (b) it applied only to code-free directories, so identical routed facts
-  stayed lost for `src/` -- routing is now uniform across every directory, and
-  this item no longer carries the routing rule at all;
-- (c) it did not fire for `godot/extensions/woodkernel/`, which has one
-  contributing child -- the two-or-more threshold was a borrowed hoisting
-  trigger and is dropped. One routed candidate is enough for the parent to have
-  something to weigh.
+**The answer: a directory is a COMPOSITION subject when it has at least one
+in-scope child CLAUDE.md, whether or not it has direct code files. The COVERAGE
+subject rule is untouched -- such a directory is still never assessed, because
+there is nothing in it to assess.**
 
-What remains is a real and separate question that Option B does NOT answer:
-**a directory with no direct code files is not a COVERAGE subject, and nothing
-yet says whether it is a COMPOSITION subject.** G3's 20 candidates route to
-`godot/` (13), `kernel/` (6) and `godot/extensions/woodkernel/` (1), all with
-zero direct code files. Under Option B those candidates now have a consumer in
-principle, and still no run to consume them.
+Its generation run is the degenerate case of the existing two inputs: the first
+input (own direct code) is empty, the second (children's finished documents) is
+not. It is not a new mode.
 
-The item: **a directory is a composition subject when it has at least one child
-CLAUDE.md or at least one inbound routed candidate, whether or not it has
-direct code files.** Its run has an empty first input and non-empty second and
-third inputs, which is a degenerate case of P0's three, not a new mode. The
-subject rule for COVERAGE is untouched -- such a directory is still never
-assessed, because there is nothing in it to assess.
+**The shipped workflow already tolerates this shape, which is what makes the
+cost small.** `claude-md-generate.js:120-131` refuses only when EVERY subject
+lacks a report and inline candidates; the partial case is explicitly allowed and
+merely logged (`:132-138`). A code-free parent is exactly a subject with no
+report among subjects that have them.
 
-This is the one place the plan changes what gets WRITTEN rather than what gets
-read, so it should be built after P0's read side and validated by the G3 check
-in the Validation section (`godot/CLAUDE.md` and `kernel/CLAUDE.md` exist and
-carry the facts routed to them).
+**The costs, stated rather than implied:**
+
+1. **An enumerator change, caller-side.** The subject set is built from coverage
+   discovery, which never produces a code-free directory. Something must add
+   directories that hold no code but have at least one in-scope child. Until
+   that exists, P2 is a rule with no producer, and Option C's reach at `godot/`
+   and `kernel/` is zero.
+2. **A false log line.** `claude-md-generate.js:135-137` announces that
+   inputless subjects "will be written from code alone". For a composition-only
+   subject that is exactly backwards -- it is written from child documents
+   alone. The message must distinguish the two, or the one diagnostic that
+   surfaces this case actively misdescribes it.
+3. **Documents that may be empty, and that is acceptable.** A code-free parent
+   whose children share nothing hoistable produces nothing. The null branch is
+   already a legal, recorded outcome (`written: false`,
+   `claude-md-generate.js:480-483`), so the cost is one wasted dispatch per such
+   directory, not a bad document.
+4. **A subject with no own report.** P3's accounting and P8's provenance must
+   both accept a subject whose own-report entry is absent; see those items.
+
+**The alternative considered and rejected**: letting a child's run write its
+parent's document when the parent is code-free. Barred by the one-document-per-
+run contract (`generation-lane.md:86-89`) and by the prohibition on a child
+writing outside itself, which Option C explicitly does not touch.
 
 ### P3. REVISED -- per-candidate accounting as the generation run's OUTPUT CONTRACT (fixes G4, G5, G5b, G10)
 
-**Option B changes this item**, in the one way that matters: a routed candidate
-is no longer terminal at its origin. The earlier draft called this the
-load-bearing item because it targeted the dominant loss mechanism; under P0 the
-model decision is the remedy and this is the instrumentation that proves it
-landed, which is the ordering premise above applied to this item.
+**Option C simplifies this item back to one-sided accounting.** Option B's
+`routed` disposition and its matching obligation at the destination are
+REVERSED: there is no inter-run handoff to account for, because a candidate
+never leaves the run that received it.
 
 Today a generation run receives N candidates and returns one document. Nothing
 in its contract obliges it to say what became of each candidate, so silently
 writing 0 of 14 (`src/kernel`) is a conforming run. The fix is to change what a
-run RETURNS, not to add a check after it:
+run RETURNS, not to add a check after it.
 
 A run must emit, alongside the document, one terminal disposition per admitted
-candidate:
+candidate, keyed by the candidate `id` P1 defines:
 
 - `written` -- expressed in this document (cite the section)
-- `hoisted` -- deferred to a named ancestor that the run also confirms exists
-  or will be composed
-- `routed` -- Option B's disposition: handed to the named ancestor's run as an
-  input. NOT terminal at this run, and this is the whole point of naming it
-  separately from `hoisted` and `deferred`
 - `declined` -- with a reason from a closed set (already ambient; not evidenced
-  in this directory; superseded by a broader candidate)
-- `deferred` -- destination not yet composed, with the destination named
+  in this directory; superseded by a broader candidate; below the local value
+  bar)
+- `deferred` -- the run could not complete the judgment, with the reason
 
+Every disposition is terminal at this run. `declined` is a legitimate and
+expected outcome -- the requirement is that it be stated, not that it be rare.
 A run that returns a document without a full disposition set is INCOMPLETE and
-its output is not accepted. `declined` is a legitimate and expected outcome --
-the requirement is that it be stated, not that it be rare.
+its output is not accepted.
 
-**Option B makes accounting two-sided, and that is the substantive change here.**
-A `routed` disposition discharges the CHILD's obligation and creates the
-PARENT's: the run composing the destination must return a terminal disposition
-for every routed candidate it received, exactly as it does for its own. Three
-outcomes are legal there -- `written`, `declined` with a reason, or `routed`
-again to a higher ancestor -- and a candidate is not accounted for until some
-run returns one of the first two. Without this, Option B would replace a fact
-that vanished at the child with a fact that vanishes at the parent, and the G12
-measurement could not tell the two apart.
+**The parent side, which Option C makes an addition rather than a handoff.** A
+composition already reports `hoists` (`claude-md-generate.js:191-203`). Under
+Option C that record gains two obligations:
 
-One consequence worth stating because it is the bound made mechanical: the
-parent's disposition set is where "the parent may decline" stops being a
-sentence in P0 and becomes an artifact. A declined routed candidate is recorded
-with a reason at the destination, so a child's nomination that nobody honoured
-is visible rather than silent -- which is precisely the property G12 found
-missing.
+- **Name the child claim by ID.** `fromChildren` today names directories
+  (`:199`). It must name the child's claim identity, because the hoisted wording
+  is by construction not the child's wording (P1).
+- **Record the NOT-hoisted decision too.** A parent that considered a child's
+  fact and left it in the child must say so, with the reason -- almost always
+  "no wording is true at this depth short of a list of exceptions", which is the
+  escape clause the model already states (`generation-lane.md:141-143`). Without
+  this, Option C's failure mode is invisible: a composition that hoists nothing
+  and reports no absence looks identical to a composition with nothing to hoist.
+  This is the Option C analogue of the flaw the reviews found in Option B's
+  scoring, and it is why the Validation section below measures two independent
+  quantities.
 
 Consequences for G5b: a null branch becomes expressible only as a document with
-every candidate `declined` or `routed`, each with a reason or a destination.
-"No insight worth capturing" stops being a directory-level assertion that
-silently swallows 11 admitted facts. Note this is exactly the case Option B
-converts rather than fixes: all 11 null-branch candidates are PROMOTE-scoped
-(G12), so under Option B they become routed candidates their parents must
-account for.
+every candidate `declined`, each with a reason. "No insight worth capturing at
+this scope" stops being a directory-level assertion that silently swallows 11
+admitted facts.
 
-Run-level reconciliation (every enumerated directory has a report, every report
-a document or a full decline set, every routed candidate a terminal disposition
-at an ancestor) then becomes a cheap mechanical check over those dispositions,
-and the scoring key for the regeneration test below.
+Consequence for P2: a composition-only subject has no candidates of its own, so
+its disposition set is legitimately empty and its `hoists` set carries the whole
+of its output contract. An empty disposition set must therefore be distinguished
+from a missing one.
 
-### P4. REVISED -- execute Verify AFTER the write, not at emit (fixes G6)
+Run-level reconciliation (every enumerated directory has a report or is a
+composition-only subject; every report's every candidate has a terminal
+disposition; every hoist names a child claim that exists) then becomes a cheap
+mechanical check, and the scoring key for the regeneration test below.
+
+### P4. REVISED -- execute Verify AFTER the write, in ONE coordinate system (fixes G6)
 
 Where a Verify is a shell command, run it and compare its output to the claim.
 
@@ -586,26 +690,44 @@ corpus-self-referential commands outright. The command needs a defined cwd,
 expected predicate, and read-only classification -- none of which P1's schema
 currently specifies.
 
-**Option B's one effect on this item: the cwd becomes ambiguous for a routed
-candidate.** Its evidence is `path:line` inside the assessed directory (P1) but
-the claim it becomes is written at an ancestor, so "run the command from the
-subject's directory" now names two different directories. Pin it explicitly:
-a Verify runs from the directory of the document that CARRIES the claim, and
-any path in the command is repo-relative so the two readings cannot diverge
-silently. This is a specification gap Option B opens, not a defect it causes --
-under the pre-decision model every claim was written where its evidence was.
+**One coordinate system, and it is the repository root.** The prior draft of
+this item set the cwd to the directory of the document carrying the claim while
+also requiring every path in the command to be repository-relative. Those are
+incompatible: a repository-relative path does not resolve from a nested
+directory, so every emitted command would either fail or silently match nothing.
+Pick one and state it once:
+
+- **cwd is the repository root, for every Verify, in every document.**
+- **Every path in a Verify command is repository-relative.**
+
+The alternative (cwd at the carrying document, paths relative to it) was
+considered and rejected: it makes an otherwise identical claim carry different
+command text depending on which document it ends up in, so a hoist would have to
+rewrite the command as well as the wording -- adding a second, silent way for a
+hoist to be wrong.
+
+Under Option C this is a plain specification gap rather than something the
+decision opened. A hoisted claim moves from a child to a parent, so a
+document-relative command would have to be rewritten on every hoist; a
+root-relative one does not change at all.
 
 ### P5. UNCHANGED-REVIEWED -- a verification pass over the emitted document (fixes G7)
 
-**Option B does not change this item.** Its subject is a written document and
-the code that document cites; where a claim was routed from does not alter what
-re-checking it means, and a claim hoisted or routed to a parent is re-checked by
-the parent's pass exactly like any other claim it carries.
+**Option C does not change this item.** Its subject is a written document and
+the code that document cites. A hoisted claim is re-checked by the parent's pass
+exactly like any other claim the parent carries, and whether the hoist was
+triggered by one child or several does not alter what re-checking means.
 
 Post-emit, pre-commit: re-check every claim in the written document against the
 code it cites, with fresh context and the document as the subject. The
 reference places this between emission and consolidation as its own phase with
 its own manifest.
+
+One interaction worth naming: under Option C a single-child hoist has exactly
+one child document behind it, so the parent's claim rests on a narrower evidence
+base than a repetition-triggered hoist did. That raises the value of this pass
+rather than changing its design -- the wording test is a judgment, and this is
+the only stage that re-tests it against code.
 
 ### P6. REVISED -- a corpus pass, as a READ-ONLY planner plus ordinary per-directory runs (fixes G8)
 
@@ -628,334 +750,435 @@ remove-from-child, or the child's evidence for the hoist disappears before the
 parent is composed and the parent is immediately stale. Retention is a
 legitimate outcome; an unrecorded duplicate is not.
 
-**Option B narrows this item's expected volume without removing it, and the
-distinction matters for whether it is worth building.** Duplication has two
-sources: a fact independently written by several children (P6's subject), and a
-fact that should have sat at the parent all along. Option B addresses only the
-second, and addresses it BEFORE the duplication exists rather than after -- the
-parent receives the routed candidate and writes it once, so no child copy is
-created to remove. What P6 is left with is the first source, which routing
-cannot reach because no child proposed anything upward. The six measured
-clusters (G8) are not yet sorted between the two, and that sort is what would
-tell us how much of P6 survives; it is not attempted here because it would be a
-re-measurement.
+**Option C's effect on this item is the opposite of Option B's, and it is worth
+stating because the direction reversed.** Option B was expected to SHRINK P6 by
+routing facts to the parent before any child copy existed. Option C creates no
+such bypass: every fact is still written at its assessing child first, and a
+hoist still leaves the child copy behind (`generation-lane.md:145-151`). Option
+C also makes hoists MORE frequent by construction, since a single child is now
+enough to trigger one. So P6's expected volume goes UP, not down, and the
+add-at-parent-before-remove-from-child ordering constraint applies to more
+pairs.
 
-The ordering constraint above is unaffected in direction but gains a second
-instance: under Option B a fact can reach a parent by routing as well as by
-hoisting, and add-at-parent must precede remove-from-child in both cases.
+That does not make P6 more urgent -- it is still a consolidation pass over a
+finished corpus -- but it removes the argument, made under Option B, that the
+decision might shrink P6 enough to question whether it is worth building.
 
 ### P7. UNCHANGED-REVIEWED -- enforce the authoring form (fixes G9)
 
-**Option B does not change this item.** No H1 title, no directory inventory, at
+**Option C does not change this item.** No H1 title, no directory inventory, at
 emit. These are properties of a document's surface form and are indifferent to
 where its content came from -- including at a P2 composition-only directory,
 whose document is subject to the same form rules as any other.
 
-### P8. REVISED -- a document must be stale-checked against its report (fixes G5d)
+### P8. REVISED -- provenance that records negative dependencies (fixes G5d)
 
 The chain has no concept of a document being out of date with respect to a
 newer assessment, so a documented directory is silently skipped and its report
 discarded. A generation run must compare the document's provenance against the
-report that would compose it, and treat `document older than report` as
+inputs that would compose it, and treat `any input newer than the document` as
 REGENERATE rather than SKIP.
 
 This is the item that makes the workflow a REgeneration workflow rather than a
 one-shot. It also determines what a second run over an already-documented
 corpus is worth, which is the question the validation below actually asks.
 
-Minimum viable form: record, in or beside each document, the identity of the
-report it was composed from. A run whose report differs from the recorded one
-regenerates; a run whose report matches skips legitimately.
+**Under Option C the provenance edges are the two composition inputs, and
+nothing else.** Option B's third edge -- a child REPORT from which a routed
+candidate was consumed -- is REVERSED, because no run consumes another
+directory's report. A document's provenance records:
 
-**Option B widens what a document's provenance must record, and this is the
-item Option B changes most.** A parent's document is now composed from three
-inputs, so "the report it was composed from" is no longer sufficient
-provenance: a parent is stale when its OWN report is newer, when any child's
-DOCUMENT is newer, or when any child's REPORT contributed a routed candidate
-and has since changed. The third is the one Option B adds, and it is the one
-that is invisible without being recorded, because a child's report can be
-re-run without its document changing at all -- so nothing about the parent or
-the child looks different.
+- **its own coverage report**, by identity and content digest -- **nullable**,
+  because a P2 composition-only subject has no report and a null entry there
+  must be a recorded fact rather than a missing field;
+- **every eligible child DOCUMENT**, by path and content digest.
 
-Minimum viable form, revised: record the identity of the directory's own
-report, of each child document read, AND of each child report from which a
-routed candidate was consumed. The bottom-up dependency already stated in
+**Digest every eligible child document, including the ones that contributed
+nothing.** This is the correction two reviews converged on, and it is the whole
+substance of the change. Recording only the inputs a hoist was drawn FROM
+detects a changed or removed input; it cannot detect a child document that
+previously carried nothing relevant and LATER gains something hoistable. Under
+Option C that case is not an edge case at all -- it is the ordinary one, because
+a single child is now enough to license a hoist, so any child gaining any fact
+can change what the parent should say. A provenance record listing only
+contributing children reports a parent as current precisely when the new content
+arrived somewhere it was not looking.
+
+So the rule is: the eligible set is every in-scope child document at composition
+time, contributing or not, and the parent is stale when any digest in that set
+changes, when a child document appears or disappears, or when its own report
+changes.
+
+The bottom-up dependency already stated in
 `plugins/skills-kit/skills/md-domain/references/lanes/generation-lane.md:153-166`
-is unchanged in direction; Option B adds edges to it, and
-`:161-166` ("a stale child document silently corrupts its parent") now holds of
-a stale child REPORT for the same reason and by the same mechanism.
+is unchanged in direction and needs no amendment for Option C. Its statement at
+`:161-166` that "a stale child document silently corrupts its parent" is exactly
+the property this item makes detectable, and Option C strengthens the mechanism
+it names -- a stale child now "suppresses hoists whose repetition it no longer
+shows" for hoists that need no repetition at all.
 
-### Validation: REVISED -- regenerate and score
+### Precondition: the publication gate
+
+**Nothing in this plan may be validated by regenerating the corpus until the
+amended skills-kit version is PUBLISHED and the running machine's plugin cache
+carries it.** Both adversarial reviews named a variant of this as the highest
+risk in the plan, and neither the pre-decision draft nor the Option B draft
+contained it.
+
+The failure it prevents: skills-kit is a published plugin, and a session loads
+its skill and workflow files from the plugin cache, not from this working copy.
+The repository's own rule is that the cache keys on version (`CLAUDE.md:473`),
+so an edited-but-unpublished `claude-md-generate.js` is structurally invisible to
+a normal session. A corpus-scale regeneration run started before publication
+would dispatch every composition under the OLD prompt -- the one that says "A
+fact appearing in more than one child moves up to this directory"
+(`claude-md-generate.js:322-324`) -- while the plan, the ledger and the scoring
+all describe Option C. The run would reproduce the original defect under the new
+terminology, and because the amended documentation would be sitting in the tree,
+a reviewer reading the plan alongside the results could read the outcome as
+partial success.
+
+The gate, in order:
+
+1. The reference amendments and the prompt amendment are committed together on
+   `dev` with a skills-kit version bump (P0, "the scope of the change").
+2. skills-kit is published through `scripts/publish.py` (`CLAUDE.md:220-222`).
+3. The machine that will run the regeneration confirms the installed skills-kit
+   version matches the release, by reading the version its session actually
+   loaded -- not by reading the working copy.
+4. Only then is the regeneration started.
+
+No step here is optional, and step 3 is the one that is easy to skip: the
+working copy and the cache disagree silently, which is the condition this gate
+exists to catch.
+
+### Validation: REVISED -- regenerate and score TWO independent quantities
 
 The point of P1-P3 is that the fix can be tested rather than asserted.
-Regenerate woodworking-sim and score against the ledger.
+Regenerate woodworking-sim, after the publication gate above, and score.
 
-**Two scoring caveats, both from decisions already taken and both required
-before a number from this run means anything:**
+**One score is not enough, and this is the correction both reviews forced.**
+Under Option B the flaw was that a run which routed every candidate upward and
+then declined every one of them at the parent scored as zero unaccounted
+candidates and passed. The Option C analogue is exact: a corpus in which every
+composition hoists NOTHING, and reports no absence because it was never obliged
+to report a not-hoisted decision, also scores as fully accounted. Accounting
+completeness and content outcome are different questions and must be reported as
+two numbers that cannot substitute for each other.
+
+**Quantity 1 -- accounting completeness.** Mechanical, and the target is exact.
+
+- Every enumerated directory has a report, or is a P2 composition-only subject
+  with a recorded null own-report.
+- Every admitted candidate, by `id` (P1), has exactly one terminal disposition
+  (P3).
+- Every `hoists` entry names a child claim ID that exists in that child's
+  disposition set.
+- Every composition records a not-hoisted decision with a reason for each child
+  claim it considered and left in place.
+- **Target: zero unaccounted candidates.** Anything else is a failed run,
+  independent of content.
+
+**Quantity 2 -- content outcome.** Judgment, and the target is a reviewed
+distribution rather than a threshold. Report, as rates over the accounted set:
+
+- `written` at the assessing child;
+- `declined` with a reason, broken down by reason;
+- considered-but-not-hoisted at the parent, with a reason;
+- `hoisted`, split by single-child and multi-child trigger -- the split is the
+  direct measure of what Option C bought.
+
+Then compare against a reviewed expected outcome for the known high-value cases,
+fixed BEFORE the run so it cannot be fitted afterwards:
+
+- the 5 independently-repeated `godot/` facts hoist to `godot/` (these would
+  have hoisted under repetition alone, so a failure here indicts the run, not
+  the decision);
+- the 2 partial repeats hoist to `godot/` or carry a stated not-hoisted reason;
+- the 4 recall-failure facts appear in the assessing child at minimum, and the
+  sibling runs that missed them are checked against G11's file-share table;
+- the 1 genuinely-single-child fact hoists to `godot/` or carries a stated
+  not-hoisted reason -- this is the single case that exists only because Option
+  C dropped the repetition trigger, and a silent absence here means the prompt
+  amendment did not take;
+- `kernel/`'s 6 candidates are dispositioned at their assessing children and
+  either hoisted to `kernel/` or refused with a reason.
+
+**Two scoring caveats, both from decisions already taken:**
 
 - The 23% headline is not a valid baseline (G5d). Any report produced after its
   document scores near 100% absent by construction, and 14 of the 71 absences
-  are of that class. Exclude them before scoring, per open question 2 below.
-- Under Option B a routed candidate is scored at its DESTINATION, not at its
-  origin. Scoring it at the origin would count a correctly-routed fact as a
-  loss and reproduce the exact confusion G4 recorded, where the corpus could not
-  distinguish "hoisted at the parent" from "silently lost".
+  are of that class. Exclude them before scoring, per open question 3 below.
+- A hoisted fact is scored at the document that CARRIES it, not at the
+  directory that assessed it. Scoring at the origin would count a correct hoist
+  as a loss and reproduce the exact confusion G4 recorded, where the corpus
+  could not distinguish "hoisted at the parent" from "silently lost".
 
-Checks:
+Additional checks:
 
-- every admitted candidate has a terminal disposition (P3), and every `routed`
-  disposition is matched by a terminal disposition at its destination;
-- **the absent rate falls from the corrected baseline toward zero, where
-  "absent" means no disposition OR a `written` claim the document does not
-  support**;
-- no candidate's `destination` is a sibling or a descendant of the assessed
-  directory (P1's ancestor-or-self rule);
-- no report emits `scope`, `sibling_overlap`, or the `PROMOTE` vocabulary --
-  the reversal is bounded, so the retired fields must not return under Option B
-  cover;
+- `godot/CLAUDE.md` and `kernel/CLAUDE.md` EXIST -- this is the P2 check, and it
+  is the precondition for every `godot/` and `kernel/` expectation above.
+  If it fails, none of the hoisting results mean anything;
+- `godot/extensions/woodkernel/` is decided explicitly: it has one contributing
+  child, so under Option C it is a composition subject like any other and its
+  document either exists with content or records a null branch with a reason;
+- no candidate's `destination` is anything but the assessed directory (CV-3 is
+  unchanged by Option C, so a non-local destination in a post-amendment report
+  is a regression);
+- no report emits `scope`, `sibling_overlap`, or the `PROMOTE` vocabulary;
 - `src/kernel` writes or explicitly declines all 14 of its candidates (today:
   0 written, 0 declined, 14 silently absent), subject to the G5d exclusion
   above, which is exactly this directory;
-- `godot/scripts` writes or routes its 11 whole-port facts, and each routed one
-  is dispositioned at `godot/` (today: all 11 lost to a `godot/CLAUDE.md` that
-  was never created);
-- `godot/CLAUDE.md` and `kernel/CLAUDE.md` exist and carry the facts routed to
-  them -- this is the P2 check, and it is the single sharpest test of Option B
-  end to end, since it exercises routing, the composition-only subject, and
-  two-sided accounting at once;
-- `godot/extensions/woodkernel/` is decided explicitly: its one routed
-  candidate is either written there or declined with a reason. A single
-  contributing child is the case the withdrawn P2 could not express, so
-  silence here means P2 was rebuilt with the same threshold defect;
 - the `pass2-*` gap closes: no subset of the run loses 55% while the rest
   loses 20%;
-- no emitted Verify command disagrees with its claim;
+- no emitted Verify command disagrees with its claim, and every one runs from
+  the repository root with repository-relative paths (P4);
 - no fact appears at both a parent and a child without a recorded retain.
 
 The 71 absent facts are themselves the answer key: they are enumerated per
 directory in the measurement outputs, so a regeneration can be scored against
 a known list rather than re-audited from scratch. The key needs one correction
 before use -- the 14 G5d absences are not losses and must be removed from it --
-and one relabelling: the 78 PROMOTE-scoped candidates become the routed set,
-and their expected outcome changes from "written at the child" to
-"dispositioned at the destination".
+and one relabelling: the 78 PROMOTE-scoped candidates keep their facts but lose
+their destinations, and their expected outcome becomes "written at the assessing
+child, and hoisted or refused-with-a-reason at the ancestor".
 
 The pre-fix corpus is the control and is preserved in woodworking-sim git
 history. Ad-hoc hand edits to the corpus weaken specific checks and are
 recorded in `regeneration-ledger.md`.
 
-## Shipped-document amendments Option B implies
+## Shipped-document and workflow amendments Option C implies
 
-The model Option B partially reverses is recorded in PUBLISHED skills-kit
-content. **None of these amendments is made here.** skills-kit is a published
-plugin; amending it is a separate, separately-authorized step, with a version
-bump and the ordinary publish flow. This section is the change list to approve
-or reject, nothing more.
+**None of these amendments is made here.** skills-kit is a published plugin;
+amending it is a separate, separately-authorized step, with a version bump and
+the ordinary publish flow. This section is the change list to approve or reject,
+nothing more. See the publication gate above for why the whole list must ship in
+one version.
 
-Each entry quotes the passage that becomes false and states what it must say
-instead. Line numbers are as of 2026-08-12.
+**How this inventory was built, and why the method changed.** The Option B
+change list was assembled by grepping the retired placement vocabulary (`scope`,
+`sibling_overlap`, `PROMOTE`, "nomination"). That method missed every passage
+that states the model WITHOUT those words -- it omitted
+`workflow/claude-md-generate.js` entirely, which is where the rule is actually
+enforced on a running agent, plus `SKILL.md`, several `coverage-lane.md`
+passages, and the keyword list in `md-domain/CLAUDE.md`. This inventory was
+built instead by READING every surface that describes parent composition or
+hoisting: `SKILL.md`, `CLAUDE.md`, the four files under `references/lanes/`, the
+three under `references/standards/`, and `workflow/claude-md-generate.js`, with
+grep used only to locate line numbers within files already identified by
+reading. The result is smaller than Option B's list -- 10 passages across 6
+files, against roughly 13 across 3 plus 4 unread surfaces -- because Option C
+changes one rule rather than reversing a criterion.
 
-### plugins/skills-kit/skills/md-domain/CLAUDE.md -- the authority
+Line numbers are as of 2026-08-12.
 
-This file holds the decision Option B amends, so it is the one that must change
-FIRST; the other two describe what it decides.
+### plugins/skills-kit/skills/md-domain/workflow/claude-md-generate.js -- the enforcing surface
 
-1. `:333`, the summary of `the_subject_is_one_directory_not_a_subtree`:
-   "A parent gets its content by reading its children's finished CLAUDE.md
-   files and hoisting what repeats -- placement is never nominated from below.
-   This SUPERSEDES the promotion machinery (`scope`, `sibling_overlap`, an
-   assessment naming an ancestor destination)."
-   Must say instead: a parent composes from its own direct code, its children's
-   finished CLAUDE.md files, and its children's ROUTED candidates; a child may
-   nominate an ancestor destination but may never write outside itself, and the
-   parent's decision on a nomination is final. The supersession of
-   `sibling_overlap` stands; the supersession of an ancestor destination is
-   partially reversed as of 2026-08-12.
+This is the file that must change FIRST in the reviewer's attention, whatever
+the commit order, because it is the only one a dispatched agent reads.
 
-2. `:355-362`, "WHY PLACEMENT MOVED TO THE PARENT", specifically `:356-359`:
-   "The retired criterion invited an assessment to name a destination above
-   itself, which it cannot justify: it read only its own directory, so it
-   cannot know whether the fact holds of code it never opened."
-   The REASONING must be kept verbatim -- Option B does not dispute it -- and
-   its CONCLUSION downgraded: because the assessment cannot justify the
-   placement, its nomination BINDS nobody. The parent, which has read the
-   documents, decides. This is the load-bearing edit in the whole list: the
-   premise survives and only the consequence moves, and an amendment that
-   deletes the premise would lose the reason the bound exists.
+1. `:322-324`: "HOISTING is where de-duplication happens, and it happens HERE
+   because this is the only place the documents being compared have actually
+   been read. A fact appearing in more than one child moves up to this
+   directory."
+   The final sentence must become the single-child form: a fact appearing in ANY
+   child's document is a hoist candidate, and the wording test decides it. The
+   first sentence is unchanged and must be kept -- it states why the parent is
+   the right place, which Option C does not touch.
 
-3. `:386-390`, COMPATIBILITY: "`destination` is pinned to the subject directory
-   -- degenerate, kept so reports written before this model stay loadable.
-   `scope` and `sibling_overlap` are read-only for the same reason and must not
-   be emitted or reintroduced under another name."
-   Must say instead: `destination` is the subject directory or a strict ancestor
-   of it, and is no longer degenerate; `sibling_overlap` stays retired and
-   read-only; `scope` stays retired under that NAME and with those VALUES, and
-   the routing distinction is carried by a differently-named field (P1's
-   `routing`) so pre-decision and post-decision reports remain mechanically
-   distinguishable.
+2. `:325-331`: "REPETITION TRIGGERS A HOIST; WORDING LICENSES IT. These are two
+   tests and they come apart in both directions. A fact stated by 2 of 20
+   children, hoisted verbatim, becomes ambient for 18 directories it does not
+   govern. ..."
+   The headline must become the one-test form -- WORDING licenses a hoist, and
+   there is no separate trigger. The 2-of-20 example must be KEPT: it is the
+   direction of the failure Option C does not fix, and dropping it would read as
+   a licence to hoist anything found anywhere. The escape clause at `:330-331`
+   ("When no such wording exists short of a list of exceptions, the fact DOES NOT
+   HOIST") is unchanged and becomes the whole of the test.
 
-4. `:303-307`, inside the amendment to `hierarchy_is_the_resolution_phase_over_a_tree`:
-   "The `scope` / `sibling_overlap` fields are RETIRED (read-only compatibility
-   surface); the criterion that licensed a candidate to name an ancestor
-   destination is rewritten as `fact-scoped-to-this-directory`, which forbids
-   it. Nothing may reintroduce nomination from below."
-   The final sentence becomes false and must be amended to the bounded form:
-   nomination from below is permitted as a non-binding input to the parent;
-   PLACEMENT from below remains forbidden. This entry is outside the insight the
-   decision brief named, and it is included because the same claim is stated
-   twice in one file -- amending only the first would leave the file
-   self-contradicting.
+3. `:332-334`: "Report every hoist you make in the hoists field, naming which
+   children stated it and the exact wording you used."
+   Must accept a single child without reading as an anomaly, and must gain P3's
+   second obligation: report the facts you CONSIDERED and did not hoist, with
+   the reason. Without that addition, a composition that hoists nothing is
+   indistinguishable from one with nothing to hoist, which is the failure the
+   Validation section's second quantity exists to catch.
 
-### plugins/skills-kit/skills/md-domain/references/standards/coverage-standards.md
+4. `:189-190`, the schema comment above `hoists`: "Set only by a composition. A
+   hoist must be worded so it is true as stated at the parent depth, and it
+   obliges the child copies to be removed."
+   True as written and worth keeping. It should gain one sentence stating that
+   `fromChildren` may name a single child, so a later reader does not restore the
+   repetition trigger from the field's plural name. The FIELD (`:199`) needs no
+   structural change: it is already an array of strings.
 
-1. `:24-28`, "Why not a subtree": "A parent gets its content instead by reading
-   its children's finished CLAUDE.md files -- see
-   `references/lanes/generation-lane.md`, parent composition. That input is what
-   makes the non-recursive subject lossless rather than merely narrower."
-   Must name the third input alongside the second, since under Option B it is
-   the routed candidates, not the child documents alone, that carry the
-   single-child facts. The losslessness claim is what Option B was chosen to
-   make true; as written it credits the wrong input.
-
-2. `:94-110`, the `fact-scoped-to-this-directory` criterion. The statement
-   `:97-98` -- "Its destination is that directory, always; an assessment never
-   proposes a fact for anywhere else." -- is the sentence P0 reverses. It must
-   become: the destination is that directory or a strict ancestor of it, and a
-   non-local destination is a nomination the ancestor's composition may accept
-   or decline. The FIRST clause of the statement (`:96-97`, "A candidate must be
-   a fact about the assessed directory's own direct code") is unchanged and must
-   be kept, because it is the bound.
-   The keywords at `:101` include `no nomination, no promotion, no hoisting from
-   below`, which must be replaced rather than extended -- a keyword that
-   contradicts the criterion routes readers to the wrong answer.
-   The example at `:107-110` -- "A fact that genuinely governs a wider area
-   reaches that area by HOISTING, which happens at the parent when the parent
-   observes the same fact in more than one child's document -- never by
-   nomination from below." -- must state both routes: hoisting on repetition,
-   and routing on nomination, with the parent deciding in both cases.
-   **The rule id must NOT be renamed**, however poorly `fact-scoped-to-this-directory`
-   now describes the criterion. `plugins/skills-kit/skills/md-domain/CLAUDE.md:104-118`
-   preserves all rule ids verbatim through the fold and makes the golden corpus
-   the gate on them; a rename is its own decision with its own re-record. Record
-   the id/name mismatch as a follow-up instead.
-
-3. `:181-203`, "Two RETIRED carriage fields on a candidate". `:201-203` --
-   "Do not emit either field, and do not reintroduce an equivalent. A
-   `destination` pointing anywhere but the subject directory is a criterion
-   violation, not a hint." -- has two claims and they now diverge. The field ban
-   stands for both `scope` and `sibling_overlap`. The destination claim is
-   reversed for ancestors and stands for everything else. The section must be
-   split so the reader cannot read the surviving half as licence for the
-   reversed one.
+5. `:135-137`, the inputless NOTE: "N of M subject(s) have no coverage input and
+   will be written from code alone".
+   False for a P2 composition-only subject, which is written from child
+   documents alone. Must distinguish a subject with code but no report from a
+   subject with no code and children. This is a P2 amendment rather than a
+   hoisting one, but it ships in the same version.
 
 ### plugins/skills-kit/skills/md-domain/references/lanes/generation-lane.md
 
-1. `:99-100`: "A `claude-md` run whose directory contains child directories is a
-   COMPOSITION, and it has TWO inputs" plus the numbered list at `:102-109`.
-   Must become THREE inputs, the third being the children's routed candidates,
-   with the bound stated in the same place: the parent may decline any of them.
+1. `:124-125`: "A fact appearing in more than one child's document moves to their
+   common ancestor."
+   Must become the single-child form. The rest of that paragraph (`:125-133`),
+   including "It is never nominated from below" and the `shallowest-true-depth`
+   reference, is unchanged and must be kept -- Option C does not touch nomination
+   or depth.
 
-2. `:91-95`: "The second input is the children's own CLAUDE.md files, and
-   reading them is part of this procedure, not of the report". Must name both
-   the second and third inputs; the "part of this procedure, not of the report"
-   framing is correct and should be kept for the third as well.
+2. `:135-143`, "Repetition triggers a hoist; WORDING licenses it."
+   This paragraph is the decision's own evidence and must be rewritten rather
+   than deleted. Its concession at `:138` -- "a fact true of every child that
+   only one child noticed never triggers at all" -- is what Option C acts on, and
+   the amended paragraph should say so explicitly: the repetition trigger was
+   dropped on 2026-08-12 because this document already recorded that wording, not
+   repetition, is the licensing test. Keep the 2-of-20 warning at `:136-137`
+   verbatim; it is the failure direction that survives.
 
-3. `:111-113`: "The second input is what makes the non-recursive subject
-   lossless rather than merely narrower ... Neither input substitutes for the
-   other". Same correction as coverage-standards item 1, and the
-   neither-substitutes claim must extend to three.
+### plugins/skills-kit/skills/md-domain/references/standards/coverage-standards.md
 
-4. `:124-133`, "Hoisting is where de-duplication happens", specifically
-   `:127-130`: "It is never nominated from below: an assessment that read only
-   its own directory cannot know whether the fact holds of code it never opened,
-   and `fact-scoped-to-this-directory` forbids it proposing a destination
-   anywhere else (`../standards/coverage-standards.md:94-110`)."
-   Must distinguish the two routes: HOISTING is never nominated from below and
-   that is unchanged; ROUTING is nomination from below and is now permitted,
-   non-binding. The cross-reference line range at `:130` will move when
-   coverage-standards is amended and must be re-resolved rather than carried
-   over.
+1. `:107-110`, the example under `fact-scoped-to-this-directory`: "A fact that
+   genuinely governs a wider area reaches that area by HOISTING, which happens at
+   the parent when the parent observes the same fact in more than one child's
+   document -- never by nomination from below."
+   Only the middle clause changes: the parent observes the fact in a child's
+   document. "Never by nomination from below" is unchanged and is the clause that
+   must survive intact, because Option C explicitly does not reverse this
+   criterion. The statement at `:96-98` and the rule id are UNCHANGED.
 
-5. `:153-166`, "Order is strictly BOTTOM-UP". Direction is unchanged and the
-   two stated consequences hold. It must gain the third input's edge: a child's
-   REPORT is now an input to its parent, so a re-assessed child invalidates its
-   parent even when the child's document does not change. `:161-166`, "A stale
-   child document silently corrupts its parent", holds identically of a stale
-   child report and should say so -- this is P8's requirement expressed at the
-   place the dependency is defined.
+2. `:101`, the criterion's keywords: `[scope, this directory only, destination is
+   the subject, no nomination, no promotion, no hoisting from below, sibling
+   subtree]`.
+   Every one of these stays correct under Option C -- no keyword contradicts the
+   amended criterion, because the criterion itself is unamended. Named here so
+   the reader knows it was checked rather than skipped: this plan argues
+   elsewhere that a keyword list contradicting its criterion routes readers to
+   the wrong answer, and the same check applied here returns no change.
 
-6. `:364-366`, the anti-pattern "Composing a parent without reading its
-   children's documents ... The parent's own direct code is only half its
-   input." The arithmetic is now wrong as well as the list: direct code is one
-   of three inputs, and a composition that reads the child documents but ignores
-   the routed candidates is the same anti-pattern in its Option B form.
+3. `:195-197`, in "Two RETIRED carriage fields on a candidate": "A fact reaches a
+   wider area by HOISTING instead -- the parent observes the same fact in more
+   than one child's document and lifts it, rewording it so it is true as stated
+   at its new depth."
+   Same single-child amendment as item 1. The retired-fields ban at `:185-187`
+   and `:201-203` is UNCHANGED and must be kept in full: Option C revives
+   neither field and does not license a non-local destination.
 
-### Surfaces this list does not cover, found but not read
+### plugins/skills-kit/skills/md-domain/CLAUDE.md
 
-Named so the owner can scope the amendment, not analyzed here. Each was located
-by grep for the retired vocabulary and is quoted only by line:
+1. `:333`, the summary of `the_subject_is_one_directory_not_a_subtree`: "A parent
+   gets its content by reading its children's finished CLAUDE.md files and
+   hoisting what repeats -- placement is never nominated from below."
+   "hoisting what repeats" becomes "hoisting what a wording test licenses at its
+   depth". The supersession clause is UNCHANGED.
 
-- `plugins/skills-kit/skills/md-domain/workflow/coverage-detect.js:127-134` --
-  a comment stating `scope` and `sibling_overlap` "were REMOVED from this schema
-  deliberately, and the removal is the enforcement", and `:109-113` -- a comment
-  pinning `destination` to "ALWAYS the assessed directory". With
-  `additionalProperties: false` at `:98` and the required list at `:104`, this
-  file MECHANICALLY blocks Option B: an assessment cannot emit a routing field
-  at all. It is the binding constraint, not documentation of one.
-- `plugins/skills-kit/skills/md-domain/references/lanes/coverage-lane.md:299-316`
-  -- a second copy of the retired-fields section, whose `:315-316` repeats the
-  do-not-reintroduce ban.
-- `plugins/skills-kit/skills/md-domain/references/lanes/hierarchy-lane.md:22`
-  and `plugins/skills-kit/skills/md-domain/workflow/hierarchy-detect.js:111,584`
-  -- the hierarchy lane consumes `sibling_overlap` and reasons about
-  `PROMOTE`-scoped candidates. That lane already ships describing a retired
-  model (`plugins/skills-kit/skills/md-domain/CLAUDE.md:315-319`), so Option B
-  changes what it is wrong ABOUT rather than making it newly wrong.
+2. `:359-360`, under "WHY PLACEMENT MOVED TO THE PARENT": "A fact repeated across
+   children moves up; a fact only one child has stays there."
+   The second half is exactly what Option C reverses and must be amended. The
+   surrounding reasoning at `:355-359` is unchanged and must be kept verbatim --
+   it is the justification for hoisting happening at the parent, which Option C
+   relies on rather than disputes.
+
+3. `:364-374`, "REPETITION IS THE TRIGGER, WORDING IS THE TEST."
+   The heading and the framing must change to wording-is-the-only-test, keeping
+   the 2-of-20 example and the mirrored-directory escape clause at `:371-374`,
+   which is the observed case where honest wording at the parent would enumerate
+   fifteen exclusions. As with `generation-lane.md:135-143`, this paragraph's
+   own concession at `:367-368` is the decision's evidence and should be cited
+   as such rather than deleted.
+
+4. `:332`, the insight's keywords, which include `hoisting at the parent`. That
+   keyword survives; nothing in the list names repetition, so no keyword
+   contradicts the amended detail. Checked, no change.
+
+### plugins/skills-kit/skills/md-domain/SKILL.md
+
+1. `:215-217`: "De-duplication happens during parent composition, by HOISTING: a
+   fact appearing in more than one child's document moves to their common
+   ancestor, reworded so it is true as stated at that depth."
+   Single-child amendment. `:217-219` ("It is never proposed from below") is
+   unchanged. This is the surface the Option B list missed entirely, and it is
+   the one most readers meet first.
+
+### plugins/skills-kit/skills/md-domain/references/lanes/hierarchy-lane.md
+
+1. `:13`: "PARENT COMPOSITION, which reads every child CLAUDE.md directly and
+   hoists what repeats".
+   Same phrase, same amendment. This lane already ships describing a retired
+   model (`plugins/skills-kit/skills/md-domain/CLAUDE.md:314-319`), so the change
+   is for internal consistency rather than correctness of the lane, and it is the
+   lowest-priority entry in this list.
+
+### Surfaces read and found to need NO amendment
+
+Named because "not on the list" and "not looked at" are different claims, and
+the Option B list conflated them.
+
+- `plugins/skills-kit/skills/md-domain/references/lanes/coverage-lane.md`. Its
+  statements at `:196-203` ("Every candidate's destination is the assessed
+  directory ... reaches that area by HOISTING at the parent during composition
+  -- never by nomination from here"), `:264-270`, and the anti-pattern at
+  `:416-419` are all still true under Option C, because the coverage side does
+  not move. This is the strongest single indicator that Option C is a smaller
+  change than Option B: the entire coverage lane is untouched.
+- `plugins/skills-kit/skills/md-domain/workflow/coverage-detect.js`. Under
+  Option B this file MECHANICALLY blocked the decision (`:98`
+  `additionalProperties: false`, `:104` the required list, `:109-113` pinning
+  `destination`). Under Option C it needs no change at all for the hoisting
+  decision. It changes only if P1 is adopted, which is independent.
+- `tests/skills-kit/test_coverage_workflow_contract.py`. Pins the coverage
+  contract, not the hoisting trigger; unaffected by Option C, affected by P1
+  (`:279-306`).
 
 ## Open questions this plan does not settle
 
-1. **How far up may a candidate route?** Option B permits an ancestor
-   destination and does not say whether that means the immediate parent only or
-   any ancestor. Any-ancestor is what the corpus needs -- `godot/scripts` routes
-   to `godot/`, its immediate parent, but 13 `godot/` candidates arrive from
-   more than one depth -- and it is also the weaker bound, since a fact can
-   travel arbitrarily far from the evidence that justified it without any
-   intermediate run seeing it. Parent-only forces each hop through a run that
-   has read the documents, at the cost of a fact needing several hops to arrive.
-2. **What happens to a routed candidate the parent declines?** The bound makes
-   the parent's decision final, which is correct, and leaves the fact with
-   nowhere to go. Two readings: the decline is terminal and the fact is dropped
-   with a recorded reason, or the child retains a narrow local fallback. The
-   first is cleaner; the second is what would have prevented the G3 losses if
-   the parent had refused. This must be settled before P3's disposition set is
-   frozen, because the two produce different closed sets.
-3. **Does routing above the run's root leave a candidate permanently
-   undispositioned?** A run scoped to a subtree can receive a candidate routed
-   above its own root, where no run will ever compose the destination. P3 would
-   record it as `routed` forever, which is a silent loss wearing a disposition.
-4. **Why does a PROMOTE candidate sometimes get written anyway?**
-   `pass2-src-api` routes all seven candidates upward and loses none. If some
-   runs silently write a routed candidate locally, the destination field is
-   being honoured inconsistently. Option B does not remove this question, it
-   sharpens it: under the settled model that behaviour becomes a fact written
-   in two places, since the destination's run will also receive it.
-5. **A valid baseline.** The 23% figure conflates report-then-document with
+1. **Does a single-child hoist need a stronger wording bar than a multi-child
+   one?** Option C makes both licensable by the same test. An argument exists
+   that one child's evidence is weaker evidence for a claim about all children,
+   and that the parent should be told to say so. Left open deliberately: adding a
+   second bar re-creates a two-test model under a new name, and the Validation
+   section's single-vs-multi split will measure whether it is needed.
+2. **Who enumerates composition-only subjects?** P2 settles that they ARE
+   subjects; it does not settle which component adds them to the subject set.
+   Coverage discovery cannot, because such a directory is not a coverage subject.
+   This blocks P2's delivery, not its decision.
+3. **A valid baseline.** The 23% figure conflates report-then-document with
    document-then-report. Re-measure with post-document reports excluded before
    scoring any regeneration. The reviewers' estimate is that the real figure is
    materially lower.
-6. **Submit gates** (`claude-md-generation-method.md:400-413`) are a
+4. **Why does a PROMOTE candidate sometimes get written anyway?**
+   `pass2-src-api` routes all seven candidates upward and loses none. Some runs
+   silently wrote a PROMOTE candidate locally and others dropped it, so the
+   destination field was honoured inconsistently. Under Option C the field goes
+   back to being local-only, so the inconsistency cannot recur -- but the
+   question of what varied between those runs is unanswered, and it is a
+   question about run-to-run determinism rather than about the model.
+5. **Submit gates** (`claude-md-generation-method.md:400-413`) are a
    deterministic consumer surface that bypasses ancestor-chain reach entirely.
    No document in the corpus carries one. Whether generation should emit them is
-   unresolved, and Option B does not bear on it.
-7. **Whether P6 (a corpus pass) can be reconciled with the one-document-per-run
-   contract**, or requires changing it. Option B does not settle this; it only
-   reduces how much duplication P6 is expected to find (see P6).
+   unresolved, and Option C does not bear on it.
+6. **Whether P6 (a corpus pass) can be reconciled with the one-document-per-run
+   contract**, or requires changing it. Option C does not settle this, and it
+   raises P6's expected volume rather than lowering it (see P6).
 
 RESOLVED, with the resolution recorded rather than the question deleted:
 
-- **P0, Option A or Option B.** Settled 2026-08-12 by owner decision: Option B,
-  bounded. See P0 above for the choice, the bound, the reversal and its cost.
-  This was the question that had to be answered before work started.
+- **P0, the promotion question.** Settled 2026-08-12 by owner decision: Option
+  C. See P0 for the choice, the measurement behind it, and what Options A and B
+  traded. Option B was provisionally settled and threaded through this document
+  in commit `928b907`; two adversarial reviews returned NOT-READY and the owner
+  chose Option C instead. This was the question that had to be answered before
+  work started.
+- **Whether a code-free directory is a composition subject.** Settled in P2: it
+  is, when it has at least one in-scope child document. Under Option C this is
+  not optional -- without it the decision reaches nothing at `godot/` or
+  `kernel/`.
+- **Three Option B questions retired with the option**: how far up a candidate
+  may route, what happens when a parent declines a routed candidate, and whether
+  routing above a run's root leaves a candidate permanently undispositioned. All
+  three presupposed routing and have no meaning under Option C.
 - **The `pass2-*` question.** `reports-json-superseded/` holds first-pass
   reports for exactly those six directories, and the task record documents the
   superseded recursive-unit pass. The 55%-vs-20% gap was also double-counting --
