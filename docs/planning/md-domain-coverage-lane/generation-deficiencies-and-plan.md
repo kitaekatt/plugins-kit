@@ -1,0 +1,257 @@
+# CLAUDE.md generation: measured deficiencies and a remediation plan
+
+Status: DRAFT, under review. Nothing here is agreed or implemented.
+
+Subject: the md-domain `coverage` -> `generate` chain, as exercised on
+`D:/dev/woodworking-sim` (46 coverage reports, 310 candidates, 45 emitted
+CLAUDE.md files, 4 recorded null branches).
+
+Standard: the two references in `D:/dev/code-review-research`,
+`docs/reference/claude-md-generation-method.md` (the executed six-phase
+pipeline) and `docs/reference/md-domain-coverage-gaps.md` (that method compared
+against md-domain 0.43.0). Both are pinned to 0.43.0, so their DESCRIPTION of
+md-domain is stale; their normative principles are not.
+
+Deficiencies are marked `[REF]` when a reference states the principle, and
+`[OBS]` when the corpus shows a defect neither reference addresses. Every
+number below was computed from the reports and the emitted corpus, not
+estimated.
+
+## Part 1 -- measured deficiencies
+
+### G1 `[OBS]` Three incompatible candidate schemas in one corpus
+
+The 46 reports carry four distinct candidate shapes:
+
+| Shape | Reports | Candidates |
+|---|---:|---:|
+| `convertibility, destination, evidence, fact, rationale, scope, sibling_overlap` | 28 | 155 |
+| `anchors, destination, fact, tier, why` | 10 | 99 |
+| `anchors, destination, fact, severeDeficiency, tier, why` | 7 | 56 |
+| (no candidates) | 1 | 0 |
+
+The same concepts appear under different keys -- `tier` vs `convertibility`,
+`why` vs `rationale`, `anchors` vs `evidence`. No downstream consumer can read
+a field without first sniffing which shape it got. This is the root cause of
+several numbers below, because half the corpus is measured against a key the
+other half does not have.
+
+Neither reference anticipates this. `md-domain-coverage-gaps.md:289` notes a
+single contract-to-schema seam (CV-4's tier has no schema field); it does not
+contemplate concurrent divergent shapes.
+
+### G2 `[OBS]` `destination` is unnormalized free text
+
+203 of 310 candidates (65.5%) carry a destination that is not a clean
+repo-relative path. Observed forms, all in the same corpus:
+
+```
+CLAUDE.md (repo root)
+D:/dev/woodworking-sim/src/CLAUDE.md
+D:/dev/woodworking-sim/src/inventory/CLAUDE.md (new)
+src/CLAUDE.md (does not exist yet)
+```
+
+Absolute Windows paths, parenthetical annotations, and a bare `CLAUDE.md` with
+a prose gloss. `scope` is worse: five candidates put an entire paragraph of
+prose into the field where an enum belongs. A router cannot act on any of it.
+
+`md-domain-coverage-gaps.md:427-432` frames representation as an open question.
+The free-text drift is ours.
+
+### G3 `[REF]` Candidates route to documents that cannot exist
+
+20 candidates name a destination with no document on disk:
+
+| Destination | Candidates | Direct code files |
+|---|---:|---:|
+| `godot/` | 13 | 0 |
+| `kernel/` | 6 | 0 |
+| `godot/extensions/woodkernel/` | 1 | 0 |
+
+All three have zero direct code files, so under the settled model they are not
+coverage subjects and no generation run will ever write them. **Coverage's
+CV-3 placement rule and generation's subject rule disagree about what a valid
+destination is**, and 20 admitted facts fall into the gap.
+
+This is audit finding S1 measured. The reference's answer is the structural
+unit: "A parent with multiple meaningful child units can become a structural
+unit even when the parent has no direct source"
+(`claude-md-generation-method.md:85-87`).
+
+### G4 `[REF]` A quarter of candidates name a directory the run will not write
+
+78 of 310 (25.2%) name a destination other than the assessed directory, while a
+generation run writes exactly one document -- that directory's. Some are later
+picked up when the parent is composed; nothing records which, so the corpus
+cannot distinguish "hoisted at the parent" from "silently lost".
+
+### G5 `[REF]` Generation drops admitted candidates without recording it
+
+`kernel/src` is the proven case: the report admitted four facts (aliasing
+pointers from `computeOccludedSet`; `guideX` profile space vs the recentered
+mesh; packParts hardcoding a snapshot of a live gameplay table; the
+hash-container rule). The emitted document carries the last one only. No
+record explains the other three.
+
+There is currently no artifact that answers "was every admitted candidate
+written, hoisted, or deliberately declined?"
+
+### G6 `[REF]` Emitted `Verify` commands are never executed
+
+The reference makes Verify a first-class field -- "A concrete source, symbol,
+command, or comparison that tests it" (`claude-md-generation-method.md:154`) --
+and runs a separate post-emission source-verification phase (`:53`).
+
+We emit Verify text and never run it. Consequences in the corpus:
+`src/CLAUDE.md:54` states a grep lacking `--include=*.js`, so it counts
+CLAUDE.md files as code (claimed 15, truth 13, now returns 16);
+`test/fixtures/CLAUDE.md:17-18` states a check that contradicts its own
+correct conclusion.
+
+### G7 `[REF]` No verification pass over the emitted document
+
+Distinct from G6: claims that were wrong at write time and that nothing
+re-checks. `godot/tests/CLAUDE.md:120-121` asserts three files repeat a seed
+"with no rationale"; all three carry a rationale comment. The repo root
+retains at least eight stale claims, and it sits on every file's ancestor
+chain.
+
+### G8 `[REF]` No corpus pass, so duplication is contractual rather than accidental
+
+Phase 6 "compares every parent/child CLAUDE.md pair across the generated
+hierarchy, simulates moving or removing text, and checks the resulting
+inherited context before retaining a change"
+(`claude-md-generation-method.md:239-244`).
+
+We have hoisting instead, and hoisting is strictly weaker by construction: one
+run writes exactly one document, so a parent that hoists a fact cannot remove
+the child copies. Six clusters survive, roughly 250-350 lines, and the
+duplication has already produced a factual error (G6's 15-vs-13) one commit
+after the hoist.
+
+Note the reference does NOT demand subtraction: consolidation "can retain a
+repeated rule after testing its inherited visibility"
+(`md-domain-coverage-gaps.md:216-219`). It demands a tested decision per pair.
+
+### G9 `[REF]` Authoring form rules are not applied
+
+"No title header and no directory inventory"
+(`claude-md-generation-method.md:299-302`). 45 of 45 documents open with an H1.
+The root carries a stale 75-line directory tree that six children then write
+corrective text against.
+
+### G10 `[OBS]` Report count does not match the enumeration
+
+46 reports exist for 48 in-scope directories (49 enumerated, 1 VCS-ignored).
+Nothing reconciles the two, so a directory can be silently unassessed.
+
+### Deliberately NOT treated as deficiencies
+
+- A directory with no local signal cannot discover an obligation owed to
+  another tree. Owner's ruling: not a problem this workflow needs to solve.
+- Document size against the reference's 30-50/10-30 budgets. The reference
+  states these are budgets, not limits, and its own corpus missed both ends.
+  Seven of eight parents were judged to earn their length.
+- Defect enumeration. md-domain declines it by contract (CV-8), correctly.
+
+## Part 2 -- remediation plan
+
+Ordering principle: fix what makes the pipeline MEASURABLE first (P1-P3), then
+what makes it CORRECT (P4-P6), then form (P7). Without P1-P3 no later fix can
+be shown to have worked.
+
+### P1. One candidate schema, enforced at emit (fixes G1, G2, partly G5)
+
+Define a single candidate record and validate it before a report is written:
+
+| Field | Type | Rule |
+|---|---|---|
+| `fact` | string | required |
+| `destination` | string | required; repo-relative directory, no `CLAUDE.md` suffix, no annotation, no absolute path |
+| `convertibility` | enum | `finding-convertible` \| `context-only`; required (CV-4) |
+| `scope` | enum | `local` \| `promote` \| `hoist`; required |
+| `rationale` | string | required |
+| `evidence` | list | required, non-empty; each entry `path:line` (CV-7) |
+| `severe_deficiency` | bool | optional, default false |
+
+Retire `tier`/`why`/`anchors` as aliases with a one-version compatibility read.
+A report that fails validation does not get written -- a malformed candidate is
+worse than a missing one because it looks routable.
+
+### P2. Destinations must be writable by construction (fixes G3)
+
+Adopt the smaller of the two available fixes: **generation may instantiate a
+document at any directory named as a destination, including one with no direct
+code files.** A code-free directory remains a non-subject for ASSESSMENT (it
+has nothing to read); it becomes a valid TARGET for composition when two or
+more children route a fact to it.
+
+Rejected alternative: constrain coverage to name only subjects. That preserves
+the invariant but discards the 20 facts, and the facts are correct -- `godot/`
+genuinely is where the port-wide rules belong.
+
+### P3. A candidate ledger, reconciled at the end of a run (fixes G4, G5, G10)
+
+Every admitted candidate gets one of exactly four terminal dispositions,
+recorded: `written` (in this directory's document), `hoisted` (written at an
+ancestor, naming it), `declined` (with a reason), `deferred` (destination not
+yet composed). A run ends by reconciling: every candidate has a disposition,
+every enumerated directory has a report, every report has a document or a
+recorded null.
+
+This is the artifact that makes G5 visible, and it is the scoring key for the
+regeneration test below.
+
+### P4. Execute Verify at generation time (fixes G6)
+
+Where a Verify is a shell command, run it and compare its output to the claim
+in the same breath. A mismatch blocks the emit and returns the candidate for
+restatement. Where Verify is a source comparison rather than a command, it
+falls to P5.
+
+### P5. A verification pass over the emitted document (fixes G7)
+
+Post-emit, pre-commit: re-check every claim in the written document against the
+code it cites, with fresh context and the document as the subject. The
+reference places this between emission and consolidation as its own phase with
+its own manifest.
+
+### P6. A corpus pass (fixes G8)
+
+After all documents exist, walk every parent/child pair and decide -- remove
+from the child, move to the parent, retain at both, or relocate to a narrower
+child -- recording the decision and its reason. Retention is a legitimate
+outcome; an unrecorded duplicate is not.
+
+### P7. Enforce the authoring form (fixes G9)
+
+No H1 title, no directory inventory, at emit.
+
+### Validation: regenerate and score
+
+The point of P1-P3 is that the fix can be tested rather than asserted.
+Regenerate woodworking-sim and score against the ledger:
+
+- every admitted candidate has a terminal disposition (P3);
+- the four `kernel/src` candidates all land or carry a stated decline;
+- `godot/CLAUDE.md` and `kernel/CLAUDE.md` exist and carry the 19 facts routed
+  to them;
+- no emitted Verify command disagrees with its claim;
+- no fact appears at both a parent and a child without a recorded retain.
+
+The pre-fix corpus is the control and is preserved in woodworking-sim git
+history. Ad-hoc hand edits to the corpus weaken specific checks and are
+recorded in `regeneration-ledger.md`.
+
+## Open questions this plan does not settle
+
+1. Should the ~20 cross-tree reach failures (audit S3) be sorted into
+   "signal was in the directory's own files" vs "no local signal"? The first
+   class is a P4/P5 problem; the second is out of scope by the owner's ruling.
+   The sort has not been done.
+2. Submit gates (`claude-md-generation-method.md:400-413`) are a deterministic
+   consumer surface that bypasses ancestor-chain reach entirely. No document in
+   the corpus carries one. Whether generation should emit them is unresolved.
+3. Whether P6 (a corpus pass) can be reconciled with the one-document-per-run
+   contract, or requires changing it.
