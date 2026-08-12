@@ -95,18 +95,23 @@ destination. (The corpus is 48 reports / 316 candidates; the two dot-prefixed
 reports, `.claude.json` and `.claude-hooks.json` with 6 candidates between them,
 were missed by the measurement's file glob and are unmeasured.)
 
-The loss decomposes into four distinct mechanisms:
+**Adversarial review dissolved the four-mechanism account below into one
+dominant defect (G12) plus a measurement artifact.** The loss is not
+distributed across independent causes; it is very nearly a single one:
 
 | Mechanism | Absent | Share |
 |---|---:|---:|
-| Plain omission: document written from its own current report, fact absent anyway | ~29 | 41% |
-| Destination directory has no document and cannot get one (G3) | ~17 | 24% |
-| Stale document suppressed regeneration (G5d) | 14 | 20% |
-| Null branch taken despite admitted candidates (G5b) | 11 | 15% |
+| PROMOTE-scoped candidate, which no consumer exists for (G12) | ~57 | 80% |
+| Measurement artifact: report post-dates its document (G5d, revised) | 14 | 20% |
 
-`src/ui` 6 of 9 absent, `src/effects` 3 of 4, `src/inventory` 3 of 6,
-`src/tools` 3 of 6, `src/rendering` 2 of 6 make up most of the plain-omission
-share.
+The earlier decomposition into "plain omission / unwritable destination / stale
+document / null branch" was an artifact of not checking the `scope` field. All
+four buckets are dominated by the same thing: 78 of 316 candidates are
+PROMOTE-scoped, and in ten reports the absent count EXACTLY equals the promote
+count (`godot-scripts` 11/11, `kernel-src` 3/3, `src-effects` 3/3,
+`pass2-src-debug` 3/3, `pass2-src-devtools` 3/3, `pass2-bots-lib` 5/5, and
+four more). The null branches (G5b) are not a separate mechanism either -- all
+11 of their candidates are PROMOTE.
 
 **Two mirrored directory names caused a real analytical error, and the same
 confusion may exist in the pipeline.** `kernel/src` (C++) and `src/kernel` (JS)
@@ -116,7 +121,62 @@ as proof of plain omission; it is not -- three of its four candidates target the
 unwritable `kernel/CLAUDE.md` and the fourth, which targets its own directory,
 was correctly written. `kernel/src` is evidence for G3, not for omission.
 
-### G5d `[OBS]` An existing document suppresses regeneration, discarding the newer report
+### G12 `[OBS]` Coverage emits a retired placement vocabulary that generation cannot consume
+
+**This is the dominant defect.** 78 of 316 candidates carry `scope: PROMOTE`
+with a destination above the assessed directory. Under the settled model
+promotion is retired -- a fact reaches a wider scope only by HOISTING, which the
+PARENT performs after noticing the fact repeated across its children's finished
+DOCUMENTS. Nothing is ever nominated from below.
+
+That leaves a PROMOTE candidate with no path to any document:
+
+- the child's own run is forbidden to write it (`fact-scoped-to-this-directory`);
+- the parent's run composes from child DOCUMENTS, not child REPORTS, and the
+  child was forbidden to write the fact, so the parent never sees it;
+- the destination it names is advisory text no stage reads.
+
+The correlation is close to exact in ten reports. It is NOT deterministic,
+which is its own finding: `pass2-src-api` has 7 candidates, all 7 PROMOTE, and
+loses none -- so some runs write a PROMOTE candidate locally, ignoring the
+destination, and others drop it. The field is honoured inconsistently rather
+than uniformly ignored.
+
+This subsumes G3 (an unwritable `godot/` destination is one PROMOTE
+destination among others), G4, and G5b (all 11 null-branch candidates are
+PROMOTE). It is one decision, not four fixes.
+
+**The decision this forces, and it must be made before anything else in Part 2
+is worth building:** either coverage stops emitting non-local destinations
+entirely, or composition gains child REPORTS as a third input so a parent can
+see what its children routed upward. Both reviewers reached this independently.
+The plan's P2 chose neither and instead smuggled half the reversal in for
+code-free directories only (see P2 below).
+
+### G5d `[REVISED]` A report produced after its document measures nothing
+
+Originally claimed as "a stale document suppresses regeneration". The timeline
+is real -- `src/kernel/CLAUDE.md` was committed 2026-08-10 by the pilot
+(`e654891`, `c637e3b`) while every other document landed 2026-08-12, and its
+report post-dates it -- but the conclusion was wrong.
+
+`src-kernel.json:11-12` names the existing document among its inputs and lists
+six facts "Suppressed as already ambient (src/kernel/CLAUDE.md)" -- exactly the
+document's six sections. CV-2 suppression makes a post-document re-assessment's
+candidates DISJOINT from that document by construction. So the 14 "absent"
+facts are not a loss at all: they are the candidates CV-2 was designed to
+surface, and no generation run ever consumed them.
+
+Two consequences:
+
+1. The 23% headline is not a usable baseline. Any report produced after its
+   document scores ~100% absent by design. The measurement must exclude that
+   class before a regeneration can be scored against it.
+2. The real defect here is thinner than claimed but still present: nothing
+   records which report composed which document, so this class cannot be
+   identified without reading commit dates by hand.
+
+### G5d-orig `[OBS]` An existing document suppresses regeneration, discarding the newer report
 
 `src/kernel/CLAUDE.md` was committed 2026-08-10 by the pilot run (`e654891`,
 corrected in `c637e3b`). Every other document in the corpus landed 2026-08-12
@@ -262,21 +322,24 @@ revised, now supports a sharper reading:
 
 | Loss mechanism | Absent | Addressed by |
 |---|---:|---|
-| Plain omission | ~29 (41%) | P3 output contract -- but see open question 1 |
-| Unwritable destination | ~17 (24%) | P2 |
-| Stale document skipped | 14 (20%) | P8 |
-| Null branch over admitted candidates | 11 (15%) | P3 |
+| PROMOTE candidate with no consumer (G12) | ~57 (80%) | **P0** -- one model decision |
+| Report post-dates its document (G5d) | 14 (20%) | not a loss; excluded from the baseline |
 
-So 59% of the loss has a specific structural cause with a specific fix, and
-41% is the residual that P3 makes VISIBLE without necessarily fixing. That is a
-better position than the previous draft claimed, and it was reached by being
-wrong twice -- once by attributing the residual to a directory whose loss was
-actually structural (`kernel/src`), once by a file glob that dropped two
-reports.
+**This kills the plan's original shape.** Three drafts distributed the loss
+across four mechanisms and proposed a fix per mechanism. There is essentially
+one mechanism, it is a MODEL question rather than an implementation defect, and
+until it is decided the rest of the plan is building instrumentation around an
+unresolved contradiction.
 
-The ordering therefore stands, but for a plainer reason than "measurability
-first": P2, P3 and P8 each fix a named mechanism, and P3 is also the instrument
-that measures whether P4-P6 worked.
+The path to that was three consecutive wrong attributions -- `kernel/src` (a
+mirrored directory name), a glob that dropped two reports, and a suppression
+rule mistaken for omission. Each was caught by measurement or by review, none
+by inspection of the plan.
+
+Revised ordering: **P0 first and alone.** P1 and P3 are worth building
+regardless as instrumentation, but they are no longer claimed as remedies.
+P4-P8 should not be designed until P0 is settled, because P0 changes what a
+destination MEANS and therefore what every later item validates against.
 
 ### P1. One candidate schema, enforced at emit (fixes G1, G2, partly G5)
 
@@ -296,17 +359,42 @@ Retire `tier`/`why`/`anchors` as aliases with a one-version compatibility read.
 A report that fails validation does not get written -- a malformed candidate is
 worse than a missing one because it looks routable.
 
-### P2. Destinations must be writable by construction (fixes G3)
+### P0. Settle the promotion question, once, uniformly (fixes G12, subsuming G3/G4/G5b)
 
-Adopt the smaller of the two available fixes: **generation may instantiate a
-document at any directory named as a destination, including one with no direct
-code files.** A code-free directory remains a non-subject for ASSESSMENT (it
-has nothing to read); it becomes a valid TARGET for composition when two or
-more children route a fact to it.
+Coverage emits upward destinations; the composition model retired upward
+nomination. One of the two must move, and the choice must apply to EVERY
+directory rather than to a favoured class.
 
-Rejected alternative: constrain coverage to name only subjects. That preserves
-the invariant but discards the 20 facts, and the facts are correct -- `godot/`
-genuinely is where the port-wide rules belong.
+**Option A -- coverage stops emitting non-local destinations.** Every candidate
+targets the directory it was assessed from. A fact that governs a wider area
+reaches it only when the parent, reading its children's finished documents,
+notices the repetition and hoists. Preserves the model exactly. Cost: a fact
+that appears in only ONE child never repeats, so it never hoists -- it is
+either written narrowly at the child (where it over-reaches) or lost. The 13
+`godot/` port facts are mostly of this kind.
+
+**Option B -- composition gains child REPORTS as a third input.** A parent
+composes from its own code, its children's documents, AND its children's
+routed candidates. Upward routing becomes real rather than advisory. Cost: this
+is the retired promotion model returning under another name, and it reopens
+what `fact-scoped-to-this-directory` was introduced to close.
+
+**Recommendation: Option B, narrowly.** Option A is internally cleaner but
+loses the single-child cross-tree facts, which are exactly the facts the audit
+found most valuable (the whole-port rules at `godot/`, the C++ re-port duty).
+Option B's cost is a real model reversal and should be taken deliberately,
+recorded as such, and bounded: a parent may consume a child's ROUTED candidate,
+but a child may still not write outside itself. That is weaker than the retired
+promotion, which let a child nominate a destination it then expected someone to
+honour.
+
+**P2 as previously written is withdrawn.** It let generation instantiate a
+document at a code-free directory "when two or more children route a fact to
+it", which (a) requires generation to read child routes -- i.e. Option B --
+while claiming not to, (b) applies the rule only to code-free directories, so
+the identical routed facts stay lost for `src/`, and (c) does not even fire for
+`godot/extensions/woodkernel/`, which has one contributing child. Both
+reviewers identified it as smuggling half of Option B in.
 
 ### P3. Per-candidate accounting as the generation run's OUTPUT CONTRACT (fixes G4, G5, G5b, G10)
 
@@ -340,12 +428,21 @@ Run-level reconciliation (every enumerated directory has a report, every report
 a document or a full decline set) then becomes a cheap mechanical check over
 those dispositions, and the scoring key for the regeneration test below.
 
-### P4. Execute Verify at generation time (fixes G6)
+### P4. Execute Verify -- AFTER the write, not at emit (fixes G6)
 
-Where a Verify is a shell command, run it and compare its output to the claim
-in the same breath. A mismatch blocks the emit and returns the candidate for
-restatement. Where Verify is a source comparison rather than a command, it
-falls to P5.
+Where a Verify is a shell command, run it and compare its output to the claim.
+
+Both reviewers rejected the emit-time formulation, correctly. The corpus's one
+measured Verify failure (`src/CLAUDE.md:54`, 15 vs 13) **rotted after the
+write**: the grep lacks `--include=*.js`, so it counts CLAUDE.md files, and
+generation itself keeps adding those. A check that passed at emit was wrong one
+commit later, and it now returns 16.
+
+So: run assertions post-write, over the corpus as it will actually be read, and
+either exclude generated documentation from any command's search space or ban
+corpus-self-referential commands outright. The command needs a defined cwd,
+expected predicate, and read-only classification -- none of which P1's schema
+currently specifies.
 
 ### P5. A verification pass over the emitted document (fixes G7)
 
@@ -354,12 +451,26 @@ code it cites, with fresh context and the document as the subject. The
 reference places this between emission and consolidation as its own phase with
 its own manifest.
 
-### P6. A corpus pass (fixes G8)
+### P6. A corpus pass, as a READ-ONLY planner plus ordinary per-directory runs (fixes G8)
 
-After all documents exist, walk every parent/child pair and decide -- remove
-from the child, move to the parent, retain at both, or relocate to a narrower
-child -- recording the decision and its reason. Retention is a legitimate
-outcome; an unrecorded duplicate is not.
+Both reviewers independently proposed the same reconciliation with the
+one-document-per-run contract, which the earlier formulation could not satisfy:
+
+1. **Plan (read-only).** After all documents exist, walk every parent/child
+   pair and emit a decision ledger -- remove from child, move to parent, retain
+   at both, relocate to a narrower child -- with a reason per pair. Reads span
+   the corpus; nothing is written.
+2. **Apply.** Ordinary per-directory generation runs take that ledger as an
+   input. Each run still writes exactly one document.
+
+Reads are corpus-wide, writes stay local, and no fact is placed anywhere its
+own directory's run does not write it -- so this is not top-down placement
+returning by the back door.
+
+Ordering constraint the reviewers flagged: add-at-parent must precede
+remove-from-child, or the child's evidence for the hoist disappears before the
+parent is composed and the parent is immediately stale. Retention is a
+legitimate outcome; an unrecorded duplicate is not.
 
 ### P7. Enforce the authoring form (fixes G9)
 
@@ -410,21 +521,24 @@ recorded in `regeneration-ledger.md`.
 
 ## Open questions this plan does not settle
 
-1. **Why does a generation run omit a candidate it was given?** This is the
-   61% mechanism and the plan treats it as a contract problem (P3). If the
-   cause is instead a context or budget limit -- 14 candidates not fitting a
-   document the run is implicitly sizing -- then P3 makes the loss visible and
-   converts it into 14 `declined` entries without recovering the facts. That
-   would need a different fix (split the document, or raise the budget), and
-   nothing currently distinguishes the two causes.
-2. **What were the `pass2-*` runs?** Six reports carry that prefix and lose
-   55% of their candidates against 20% elsewhere. Nothing records what made
-   them a second pass or how they differed. Until that is known, the 55% may
-   be a defect in a route that no longer exists.
-3. `.claude/CLAUDE.md` and `.claude/hooks/CLAUDE.md` have no report (G5c).
-   Whether they were hand-written or produced by an unrecorded route is
-   unknown, and it bears on how much of the corpus the measured chain
-   actually produced.
+1. **P0 Option A or Option B.** This is the only question that has to be
+   answered before work starts, and it is a model decision rather than a
+   technical one.
+2. **Why does a PROMOTE candidate sometimes get written anyway?**
+   `pass2-src-api` routes all seven candidates upward and loses none. If some
+   runs silently write a PROMOTE candidate locally, the destination field is
+   being honoured inconsistently, and Option A would change the behaviour of
+   those runs too.
+3. **A valid baseline.** The 23% figure conflates report-then-document with
+   document-then-report. Re-measure with post-document reports excluded before
+   scoring any regeneration. The reviewers' estimate is that the real figure is
+   materially lower.
+
+RESOLVED since the draft: the `pass2-*` question. `reports-json-superseded/`
+holds first-pass reports for exactly those six directories, and the task record
+documents the superseded recursive-unit pass. The 55%-vs-20% gap was also
+double-counting -- 11 of the 16 pass2 losses ARE the 11 null-branch losses, and
+all of those are PROMOTE.
 2. Submit gates (`claude-md-generation-method.md:400-413`) are a deterministic
    consumer surface that bypasses ancestor-chain reach entirely. No document in
    the corpus carries one. Whether generation should emit them is unresolved.
