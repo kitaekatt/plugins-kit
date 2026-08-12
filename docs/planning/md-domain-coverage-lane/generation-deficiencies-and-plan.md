@@ -86,16 +86,60 @@ generation run writes exactly one document -- that directory's. Some are later
 picked up when the parent is composed; nothing records which, so the corpus
 cannot distinguish "hoisted at the parent" from "silently lost".
 
-### G5 `[REF]` Generation drops admitted candidates without recording it
+### G5 `[REF]` Generation loses 23% of admitted candidates, and mostly not for structural reasons
 
-`kernel/src` is the proven case: the report admitted four facts (aliasing
-pointers from `computeOccludedSet`; `guideX` profile space vs the recentered
-mesh; packParts hardcoding a snapshot of a live gameplay table; the
-hash-container rule). The emitted document carries the last one only. No
-record explains the other three.
+Measured across all 46 reports and all 45 documents: **310 admitted candidates,
+235 written, 4 hoisted, 71 absent (23%)**. "Absent" means the fact is expressed
+neither in the assessed directory's document nor at its stated destination.
+
+The loss is concentrated, and decomposes into three distinct mechanisms:
+
+| Mechanism | Absent | Share |
+|---|---:|---:|
+| Null branch taken despite admitted candidates | 11 | 15% |
+| Destination directory has no document and cannot get one (G3) | ~17 | 24% |
+| Plain omission: document written, destination writable, fact absent anyway | ~43 | 61% |
+
+**The third mechanism is the largest, and it has nothing structural to blame.**
+The extreme case is `src/kernel`: 14 admitted candidates, all naming that same
+directory as their destination, a document duly written -- and not one of the 14
+expressed in it. Its six sections are different facts entirely. Spot-checked
+independently: the distinctive candidate terms (`INPUT mesh`, `atlas`,
+`earClip`) appear nowhere in the emitted document.
+
+Others in the same class: `src/ui` 6 of 9 absent, `src/effects` 3 of 4,
+`src/inventory` 3 of 6, `src/tools` 3 of 6, `src/rendering` 2 of 6.
+
+Two secondary signals:
+
+- Reports named `pass2-*` lose **55%** of their candidates (16 of 29) against
+  **20%** for ordinary reports (55 of 281). Whatever the second-pass route was,
+  it is materially worse, and nothing records what distinguished it.
+- Loss is not explained by a destination pointing elsewhere. `godot/stations`
+  has an unwritable destination and loses nothing; `pass2-src-api` routes all
+  seven candidates elsewhere and loses nothing. Conversely `src/kernel` routes
+  nothing elsewhere and loses everything.
 
 There is currently no artifact that answers "was every admitted candidate
-written, hoisted, or deliberately declined?"
+written, hoisted, or deliberately declined?" -- so all 71 losses are silent.
+
+### G5b `[OBS]` The null branch discards admitted candidates
+
+Three of the four recorded null branches had non-empty reports: `bots/lib` (5
+candidates), `src/debug` (3), `src/devtools` (3). "No insight worth capturing at
+this scope" was recorded over 11 facts a coverage pass had already admitted,
+with no per-candidate reason. For `bots/lib` the task record asserts the
+decline was correct under `fact-scoped-to-this-directory`; for the other two
+nothing is recorded either way.
+
+A null branch over a GAPS-FOUND report is a contradiction that should have to
+be justified per candidate, not per directory.
+
+### G5c `[OBS]` Two documents have no coverage report at all
+
+`.claude/CLAUDE.md` (55 lines) and `.claude/hooks/CLAUDE.md` (58 lines) exist in
+the corpus with no report in `reports-json/` under any name. Their content has
+no traceable discovery input. Whatever produced them is not the measured chain.
 
 ### G6 `[REF]` Emitted `Verify` commands are never executed
 
@@ -146,10 +190,36 @@ corrective text against.
 46 reports exist for 48 in-scope directories (49 enumerated, 1 VCS-ignored).
 Nothing reconciles the two, so a directory can be silently unassessed.
 
+### G11 `[OBS]` The cross-tree reach failure is a quality failure, not a model limit
+
+The audit reported ~20 cross-tree obligations documented on the side that does
+not need them, and it was tempting to blame the direct-code subject rule -- a
+directory cannot document an obligation it has no way to discover.
+
+Measured, that excuse mostly does not hold. Share of each receiving directory's
+own files that name the other tree:
+
+| Directory | Files naming the other tree |
+|---|---|
+| `kernel/src` | 10 / 10 (100%) |
+| `kernel/include/woodkernel` | 11 / 11 (100%) |
+| `kernel/tests` | 2 / 2 (100%) |
+| `godot/stations` | 5 / 8 (62%) |
+| `src/kernel` | 6 / 10 (60%) |
+| `godot/scripts` | 34 / 61 (55%) |
+| `godot/tests` | 7 / 57 (12%) |
+| `src/ui` | 2 / 28 (7%) |
+
+Every `kernel/src` file opens with `// Port of src/kernel/<name>.js ...
+PORTING.md rules apply`. The signal was in the subject the run was handed. The
+genuinely-undiscoverable class exists but is small, and by the owner's ruling it
+is out of scope; what remains is a reading failure.
+
 ### Deliberately NOT treated as deficiencies
 
 - A directory with no local signal cannot discover an obligation owed to
   another tree. Owner's ruling: not a problem this workflow needs to solve.
+  Per G11 this class is smaller than the audit implied.
 - Document size against the reference's 30-50/10-30 budgets. The reference
   states these are budgets, not limits, and its own corpus missed both ends.
   Seven of eight parents were judged to earn their length.
@@ -157,9 +227,20 @@ Nothing reconciles the two, so a directory can be silently unassessed.
 
 ## Part 2 -- remediation plan
 
-Ordering principle: fix what makes the pipeline MEASURABLE first (P1-P3), then
-what makes it CORRECT (P4-P6), then form (P7). Without P1-P3 no later fix can
-be shown to have worked.
+**The ordering premise, stated honestly.** An earlier draft claimed
+measurability (P1-P3) must come first because no later fix could otherwise be
+shown to have worked. The G5 decomposition partly refutes that as a
+PRIORITISATION: schema, writable destinations and reconciliation together
+address roughly 28 of the 71 lost facts (39%). The largest mechanism -- 43
+facts, 61% -- is a generation run receiving a candidate and simply not writing
+it, with a writable local destination and a document that did get written. A
+ledger makes that visible; it does not fix it.
+
+So the ordering stands only in the weak form: P1-P3 must come first because
+without them the fix for the dominant problem cannot be VERIFIED. They are not
+the fix. P3 is therefore reformulated below from an audit artifact into an
+output contract of the generation run, which is the actual remedy for the
+dominant mechanism.
 
 ### P1. One candidate schema, enforced at emit (fixes G1, G2, partly G5)
 
@@ -191,17 +272,37 @@ Rejected alternative: constrain coverage to name only subjects. That preserves
 the invariant but discards the 20 facts, and the facts are correct -- `godot/`
 genuinely is where the port-wide rules belong.
 
-### P3. A candidate ledger, reconciled at the end of a run (fixes G4, G5, G10)
+### P3. Per-candidate accounting as the generation run's OUTPUT CONTRACT (fixes G4, G5, G5b, G10)
 
-Every admitted candidate gets one of exactly four terminal dispositions,
-recorded: `written` (in this directory's document), `hoisted` (written at an
-ancestor, naming it), `declined` (with a reason), `deferred` (destination not
-yet composed). A run ends by reconciling: every candidate has a disposition,
-every enumerated directory has a report, every report has a document or a
-recorded null.
+This is the load-bearing item, because it targets the 61% mechanism.
 
-This is the artifact that makes G5 visible, and it is the scoring key for the
-regeneration test below.
+Today a generation run receives N candidates and returns one document. Nothing
+in its contract obliges it to say what became of each candidate, so silently
+writing 0 of 14 (`src/kernel`) is a conforming run. The fix is to change what a
+run RETURNS, not to add a check after it:
+
+A run must emit, alongside the document, one terminal disposition per admitted
+candidate:
+
+- `written` -- expressed in this document (cite the section)
+- `hoisted` -- deferred to a named ancestor that the run also confirms exists
+  or will be composed
+- `declined` -- with a reason from a closed set (already ambient; not
+  scoped to this directory; superseded by a broader candidate)
+- `deferred` -- destination not yet composed, with the destination named
+
+A run that returns a document without a full disposition set is INCOMPLETE and
+its output is not accepted. `declined` is a legitimate and expected outcome --
+the requirement is that it be stated, not that it be rare.
+
+Consequences for G5b: a null branch becomes expressible only as a document with
+every candidate `declined`, each with a reason. "No insight worth capturing"
+stops being a directory-level assertion that silently swallows 11 admitted
+facts.
+
+Run-level reconciliation (every enumerated directory has a report, every report
+a document or a full decline set) then becomes a cheap mechanical check over
+those dispositions, and the scoring key for the regeneration test below.
 
 ### P4. Execute Verify at generation time (fixes G6)
 
@@ -234,11 +335,22 @@ The point of P1-P3 is that the fix can be tested rather than asserted.
 Regenerate woodworking-sim and score against the ledger:
 
 - every admitted candidate has a terminal disposition (P3);
-- the four `kernel/src` candidates all land or carry a stated decline;
-- `godot/CLAUDE.md` and `kernel/CLAUDE.md` exist and carry the 19 facts routed
-  to them;
+- **the absent rate falls from 23% (71 of 310) toward zero, where "absent"
+  means no disposition OR a `written` claim the document does not support**;
+- `src/kernel` writes or explicitly declines all 14 of its candidates (today:
+  0 written, 0 declined, 14 silently absent);
+- `godot/scripts` writes or hoists its 11 whole-port facts (today: all 11 lost
+  to a `godot/CLAUDE.md` that was never created);
+- `godot/CLAUDE.md` and `kernel/CLAUDE.md` exist and carry the facts routed to
+  them;
+- the `pass2-*` gap closes: no subset of the run loses 55% while the rest
+  loses 20%;
 - no emitted Verify command disagrees with its claim;
 - no fact appears at both a parent and a child without a recorded retain.
+
+The 71 absent facts are themselves the answer key: they are enumerated per
+directory in the measurement outputs, so a regeneration can be scored against
+a known list rather than re-audited from scratch.
 
 The pre-fix corpus is the control and is preserved in woodworking-sim git
 history. Ad-hoc hand edits to the corpus weaken specific checks and are
@@ -246,10 +358,21 @@ recorded in `regeneration-ledger.md`.
 
 ## Open questions this plan does not settle
 
-1. Should the ~20 cross-tree reach failures (audit S3) be sorted into
-   "signal was in the directory's own files" vs "no local signal"? The first
-   class is a P4/P5 problem; the second is out of scope by the owner's ruling.
-   The sort has not been done.
+1. **Why does a generation run omit a candidate it was given?** This is the
+   61% mechanism and the plan treats it as a contract problem (P3). If the
+   cause is instead a context or budget limit -- 14 candidates not fitting a
+   document the run is implicitly sizing -- then P3 makes the loss visible and
+   converts it into 14 `declined` entries without recovering the facts. That
+   would need a different fix (split the document, or raise the budget), and
+   nothing currently distinguishes the two causes.
+2. **What were the `pass2-*` runs?** Six reports carry that prefix and lose
+   55% of their candidates against 20% elsewhere. Nothing records what made
+   them a second pass or how they differed. Until that is known, the 55% may
+   be a defect in a route that no longer exists.
+3. `.claude/CLAUDE.md` and `.claude/hooks/CLAUDE.md` have no report (G5c).
+   Whether they were hand-written or produced by an unrecorded route is
+   unknown, and it bears on how much of the corpus the measured chain
+   actually produced.
 2. Submit gates (`claude-md-generation-method.md:400-413`) are a deterministic
    consumer surface that bypasses ancestor-chain reach entirely. No document in
    the corpus carries one. Whether generation should emit them is unresolved.
