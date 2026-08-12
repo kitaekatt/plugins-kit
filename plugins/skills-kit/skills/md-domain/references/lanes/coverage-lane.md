@@ -303,7 +303,7 @@ and `sibling_overlap` (a sibling document stating the fact, and whether it
 reaches this directory's author). **Neither is produced, and neither is a
 criterion.** They are read-only compatibility surface -- reports written before
 this model carry them and a loader must not choke on them --
-`../standards/coverage-standards.md:181-203` is the authority.
+`../standards/coverage-standards.md:190-212` is the authority.
 
 They were the promotion machinery: an assessment nominating a destination above
 itself. CV-3 forbids exactly that, for the reason the fields half-admitted --

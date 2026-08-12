@@ -623,7 +623,10 @@ const lanePrompt = (s, root, writtenChildren) => {
     'The value gate is the third: an orientation sentence naming what the directory ' +
     'contains earns nothing. What earns a section is a cross-boundary hazard, a ' +
     'silent-failure mode, a magic constant with a non-obvious contract, a coupling ' +
-    'invisible from inside any one file.\n\n' +
+    'invisible from inside any one file, or a deliberate oddity whose apparent ' +
+    'wrongness invites correction -- code that looks wrong on purpose, documented ' +
+    'with its reason, an explicit do-not-simplify, and what to do instead, because ' +
+    'the code shows the oddity without showing the intent.\n\n' +
     'A CANDIDATE NAMING A DESTINATION OUTSIDE THIS DIRECTORY. Older persisted reports were ' +
     'produced under a retired model in which an assessment could nominate an ancestor. Do ' +
     'NOT write such a fact here as though it governed this directory. But do NOT drop it ' +
@@ -635,7 +638,12 @@ const lanePrompt = (s, root, writtenChildren) => {
     '  - Any claim imposing a PROHIBITION (never, do not, must not) must be checked ' +
     'against the code in THIS directory, not merely against the candidate that proposed ' +
     'it. Generation has previously admitted a claim correctly and over-generalized it in ' +
-    'the writing; nothing else checks a carried-forward rule as RESTATED.\n' +
+    'the writing; nothing else checks a carried-forward rule as RESTATED. Known ' +
+    'failure shape: a rule carried from a source document (for example, PORTING.md or ' +
+    'a design note) is restated with stronger force or scope. The source does not ' +
+    'license that stronger claim. Verify the exact restatement independently against ' +
+    'the code; if unsupported, weaken it to a claim supported by both source and code. ' +
+    'Cite the source beside the rule.\n' +
     '  - Verify by EXECUTING, not by asserting. A previous run claimed every module here ' +
     'has a matching C++ file; an ls disproved it, and the writer had reported it verified. ' +
     'Record every claim you checked, with the command, in verifications. A claim you ' +

@@ -61,16 +61,25 @@ standards_set:
   criteria:
     - id: absent-fact-earns-ambient-cost
       statement: >-
-        A candidate fact must be durable, consequential, and not cheaply
-        recoverable by reading the code it describes.
+        A candidate fact must be durable and consequential. It is not
+        "cheaply recoverable" when a straightforward reading of the local
+        files where the mistake would be made does not reveal it -- for
+        example, a local obligation whose counterpart lives elsewhere, an
+        invariant the code obeys without stating, or the rationale for a
+        deliberate oddity whose apparent wrongness invites correction.
       severity: judgment
       enforcement: judgment
-      keywords: [earns its place, ambient cost, durable, consequential, cheaply recoverable, value bar]
+      keywords: [earns its place, ambient cost, durable, consequential, cheaply recoverable, local view, negative knowledge, intentional oddity, value bar]
       example: >-
         ADMIT a two-place registration requirement that a compiler never
-        enforces. REJECT a restatement of what a function's name already says,
-        and REJECT a file inventory, which the reader can regenerate by listing
-        the directory. Apply 'cheaply recoverable' to the FACT, never to the
+        enforces. ADMIT a deliberate oddity documented with its reason and
+        what to do instead -- the Shape-A "deliberate hack/workaround (and
+        don't simplify)" observation kind in claude-md-standards.md section
+        3.2. Its apparent wrongness invites correction, while the compliant
+        code shows the oddity but not its intent. REJECT a restatement of
+        what a function's name
+        already says, and REJECT a file inventory, which the reader can
+        regenerate by listing the directory. Apply 'cheaply recoverable' to the FACT, never to the
         area it sits in: a docstring that states an invariant for the cases it
         handles does not make the case it omits recoverable. When source
         commentary covers part of a topic, name the specific proposition being

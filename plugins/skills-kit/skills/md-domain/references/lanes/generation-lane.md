@@ -139,7 +139,7 @@ at the parent, because this is the only place the documents being compared have
 actually been read. It is never nominated from below: an assessment that read only
 its own directory cannot know whether the fact holds of code it never opened, and
 `fact-scoped-to-this-directory` forbids it proposing a destination anywhere else
-(`../standards/coverage-standards.md:94-110`). Depth itself is
+(`../standards/coverage-standards.md:103-119`). Depth itself is
 `shallowest-true-depth` -- the shallowest directory where the fact is true of
 everything below it, and no shallower
 (`../standards/hierarchy-standards.md:78-92`).
