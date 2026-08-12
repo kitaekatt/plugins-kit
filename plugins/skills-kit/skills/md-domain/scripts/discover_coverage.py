@@ -45,6 +45,16 @@ belongs to the assessment step, not here.
 
 Every exclusion is RECORDED and reported, never silently applied.
 
+This module also hosts `walk_tree`, a RECURSIVE tree-descent primitive shared
+by discover_hierarchy.py and discover_composition.py. It is never used to
+build a coverage subject -- `walk_directory` above stays the non-recursive
+unit this module's own subject is defined over. `walk_tree` lives here rather
+than in either consumer because it descends using the same structural
+exclusions this module owns (`_skip_reason`, `NOISE_DIR_NAMES`,
+`SKIP_NESTED_REPO`, `MAX_DEPTH`), the same precedent `MAX_DEPTH` already set
+before this move: one home for a shared constant or primitive, so the verbs
+that use it cannot disagree about what it means.
+
 A file whose extension is recognized as neither code, doc, nor a common asset
 type is also RECORDED, never dropped with no trace: it is counted (aggregated
 by extension) into `unknownExtensions`. Silently dropping such a file made a
@@ -67,7 +77,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from discover_claude_md import CODE_DATA_EXT, _MD_LIKE, find_project_root  # noqa: E402
-from vcs_ignore import ignored_paths  # noqa: E402
+from vcs_ignore import detect_vcs, ignored_paths  # noqa: E402
 
 # Directory basenames that are vendored / third-party or build output. Matched
 # against a single path component. `build`/`Build` and `target` are ambiguous
@@ -127,9 +137,10 @@ EXTENSIONLESS_NON_CODE = {
     "changelog", "codeowners", "version", "readme", "patents", "owners",
 }
 
-# Depth ceiling for a RECURSIVE walk. This module's own walk is one level deep
-# and never consults it; discover_hierarchy.py's tree walk imports it from here
-# so the two verbs cannot disagree about how deep a tree is read.
+# Depth ceiling for the RECURSIVE walk (`walk_tree`, below). `walk_directory`
+# above is one level deep and never consults it; discover_hierarchy.py and
+# discover_composition.py import `walk_tree` from here so all three verbs
+# cannot disagree about how deep a tree is read.
 MAX_DEPTH = 12
 
 # Skip reasons, reported verbatim.
@@ -270,6 +281,105 @@ def walk_directory(
 
     code_files.sort(key=str)
     return code_files, skipped, noise_pruned, unknown_extensions
+
+
+def walk_tree(root: Path) -> tuple[list[Path], list[Path], list[dict], int]:
+    """Return (leaves, claude_md_paths, skipped, noise_pruned) under `root`.
+
+    RECURSIVE, unlike `walk_directory` above -- and that is deliberate rather
+    than a relapse into the retired recursive-subject model. This primitive
+    answers a different question than a coverage subject does: "does at least
+    one code file exist at or beneath this directory", which two callers need
+    (the hierarchy verb's leaf enumeration, and the composition subject set in
+    `discover_composition.py`) and neither of which is a coverage subject. A
+    coverage subject stays exactly `walk_directory`'s non-recursive unit; this
+    function is never used to build one -- see the module docstring's first
+    bullet.
+
+    A LEAF is a directory directly holding at least one code file. CLAUDE.md
+    files are collected at every level, whether or not that level is a leaf --
+    a directory of pure documentation is not a leaf but its document still
+    governs the tree.
+
+    The project's VCS ignore rules are applied DURING the descent, one
+    `ignored_paths` query per visited directory (covering that directory's own
+    entries), so an ignored subtree is pruned before it is entered rather than
+    filtered out of an already-complete walk. Reused without this, a code file
+    inside an ignored directory would pull that directory's ancestors into
+    scope -- exactly the case a composition subject must never see. `root`'s
+    own VCS status is not queried here; an explicitly named root is the
+    caller's concern (see `root_exclusion`), the same split `walk_directory`
+    already makes.
+
+    Side-effect free: it stats and lists directories, queries VCS ignore
+    status, and reads nothing else.
+    """
+    root = root.resolve()
+    vcs_kind = detect_vcs(root)
+    leaves: list[Path] = []
+    claude_mds: list[Path] = []
+    skipped: list[dict] = []
+    noise_pruned = 0
+    visited: set[Path] = {root}
+
+    def descend(directory: Path, depth: int) -> None:
+        nonlocal noise_pruned
+        if depth > MAX_DEPTH:
+            skipped.append({"path": str(directory), "reason": "depth-limit"})
+            return
+        try:
+            entries = sorted(directory.iterdir(), key=lambda p: p.name)
+        except OSError:
+            return
+
+        ignored = ignored_paths(entries, root=root, vcs=vcs_kind) if entries else set()
+
+        has_code = False
+        for entry in entries:
+            name = entry.name
+            if entry.is_dir():
+                if name in NOISE_DIR_NAMES:
+                    noise_pruned += 1
+                    continue
+                reason = _skip_reason(name)
+                if reason is None and (entry / ".git").exists():
+                    reason = SKIP_NESTED_REPO
+                if reason is None and entry in ignored:
+                    reason = SKIP_IGNORED
+                if reason is not None:
+                    skipped.append({"path": str(entry), "reason": reason})
+                    continue
+                if name.startswith(".") and name != ".claude":
+                    noise_pruned += 1
+                    continue
+                try:
+                    target = entry.resolve()
+                except (OSError, RuntimeError):
+                    skipped.append({"path": str(entry), "reason": SKIP_SYMLINK_OUT})
+                    continue
+                if not _is_within(target, root):
+                    skipped.append({"path": str(entry), "reason": SKIP_SYMLINK_OUT})
+                    continue
+                if target in visited:
+                    continue
+                visited.add(target)
+                descend(entry, depth + 1)
+            elif entry.is_file():
+                if name == "CLAUDE.md":
+                    claude_mds.append(entry)
+                elif is_code_file(entry):
+                    if entry in ignored:
+                        skipped.append({"path": str(entry), "reason": SKIP_IGNORED})
+                    else:
+                        has_code = True
+
+        if has_code:
+            leaves.append(directory)
+
+    descend(root, 0)
+    leaves.sort(key=str)
+    claude_mds.sort(key=str)
+    return leaves, claude_mds, skipped, noise_pruned
 
 
 def _is_within(candidate: Path, root: Path) -> bool:

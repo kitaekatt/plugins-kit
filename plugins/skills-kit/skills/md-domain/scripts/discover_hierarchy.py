@@ -32,9 +32,10 @@ Definitions used here, and nowhere else:
     is empty is an EXPLICIT ASSESSED-NULL -- materially different from no report
     at all, which is why the two get different inventory statuses.
 
-Structural exclusions (vendored, generated, noise, nested repositories) are
-shared with discover_coverage.py rather than re-implemented, so the two verbs
-cannot disagree about what is in a tree.
+The recursive tree walk itself (`walk_tree`) is not implemented here: it is
+imported from discover_coverage.py, which also hosts discover_composition.py's
+copy of the same primitive, so no two verbs can disagree about what is in a
+tree or how deep it is read.
 
 Stdlib-only. Reads the report files it was pointed at and nothing else; it
 opens no CLAUDE.md and no source file.
@@ -51,15 +52,9 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from discover_coverage import (  # noqa: E402
-    MAX_DEPTH,
-    NOISE_DIR_NAMES,
-    SKIP_NESTED_REPO,
-    SKIP_SYMLINK_OUT,
-    _is_within,
-    _skip_reason,
     ambient_chain,
-    is_code_file,
     root_exclusion,
+    walk_tree,
 )
 
 # Inventory statuses. `MISSING` is deliberately the only upper-case one: it is
@@ -79,77 +74,6 @@ def _key(path: Path) -> str:
     inventory reports every leaf MISSING on one platform and none on the other.
     """
     return os.path.normcase(str(path))
-
-
-def walk_tree(root: Path) -> tuple[list[Path], list[Path], list[dict], int]:
-    """Return (leaves, claude_md_paths, skipped, noise_pruned) under `root`.
-
-    A leaf is a directory directly holding at least one code file. CLAUDE.md
-    files are collected at every level, whether or not that level is a leaf --
-    a directory of pure documentation is not a leaf but its document still
-    governs the tree.
-
-    Side-effect free: it stats and lists directories, and reads nothing.
-    """
-    root = root.resolve()
-    leaves: list[Path] = []
-    claude_mds: list[Path] = []
-    skipped: list[dict] = []
-    noise_pruned = 0
-    visited: set[Path] = {root}
-
-    def descend(directory: Path, depth: int) -> None:
-        nonlocal noise_pruned
-        if depth > MAX_DEPTH:
-            skipped.append({"path": str(directory), "reason": "depth-limit"})
-            return
-        try:
-            entries = sorted(directory.iterdir(), key=lambda p: p.name)
-        except OSError:
-            return
-
-        has_code = False
-        for entry in entries:
-            name = entry.name
-            if entry.is_dir():
-                if name in NOISE_DIR_NAMES:
-                    noise_pruned += 1
-                    continue
-                reason = _skip_reason(name)
-                if reason is not None:
-                    skipped.append({"path": str(entry), "reason": reason})
-                    continue
-                if (entry / ".git").exists():
-                    skipped.append({"path": str(entry), "reason": SKIP_NESTED_REPO})
-                    continue
-                if name.startswith(".") and name != ".claude":
-                    noise_pruned += 1
-                    continue
-                try:
-                    target = entry.resolve()
-                except (OSError, RuntimeError):
-                    skipped.append({"path": str(entry), "reason": SKIP_SYMLINK_OUT})
-                    continue
-                if not _is_within(target, root):
-                    skipped.append({"path": str(entry), "reason": SKIP_SYMLINK_OUT})
-                    continue
-                if target in visited:
-                    continue
-                visited.add(target)
-                descend(entry, depth + 1)
-            elif entry.is_file():
-                if name == "CLAUDE.md":
-                    claude_mds.append(entry)
-                elif is_code_file(entry):
-                    has_code = True
-
-        if has_code:
-            leaves.append(directory)
-
-    descend(root, 0)
-    leaves.sort(key=str)
-    claude_mds.sort(key=str)
-    return leaves, claude_mds, skipped, noise_pruned
 
 
 def _subjects_from_payload(payload) -> list[dict]:
