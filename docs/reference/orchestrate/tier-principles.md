@@ -721,6 +721,20 @@ an actual dispatch before it ships**, not by inspection.
 "GPT-5", "GPT-5" and "GPT-5.4"; models are unreliable self-identifiers. The test
 proves the identifier is accepted, nothing more.
 
+*The user, however, speaks the bare codenames* -- "have sol decide", "send it to
+luna" -- and the guard as first written said only that those names fail at `-m`.
+That leaves the reader to conclude the request is unsatisfiable, when the right
+reading is a naming convention: a bare codename designates the rung whose
+identifier ends with it. So the guard states the RESOLUTION as well as the
+prohibition.
+
+It states it as a rule over the prefix rather than as a table of the three names,
+for two reasons. A table would have to be maintained against the ladder it
+duplicates, and -- load-bearing -- writing the bare names into the shipped policy
+is precisely what `test_shipped_data_never_writes_a_bare_codename` forbids, since
+a bare codename sitting in the data is one copy-paste away from being a `-m`
+argument. The rule form carries no literal codename, so it cannot become one.
+
 ```yaml
 emits:
   ladders.codex.guards:
@@ -728,6 +742,11 @@ emits:
       value: >-
         Model identifiers are FULLY QUALIFIED as written above; the bare
         codenames are not dispatchable by `-m`.
+    - order: 2
+      value: >-
+        A user naming a bare codename means the rung whose identifier ends with
+        it -- resolve it to the `gpt-5.6-` form and dispatch that. The bare name
+        is what the user says; it is never what `-m` receives.
 ```
 
 ### P3.1 -- gpt-5.6-sol at max effort, or do not run it here
@@ -826,7 +845,7 @@ missing case is.
 ```yaml
 emits:
   ladders.codex.guards:
-    - order: 2
+    - order: 3
       value: There is no gpt-5.6-terra rung.
 ```
 

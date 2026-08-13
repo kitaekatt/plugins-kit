@@ -893,6 +893,14 @@ def render_backends(
         out.append("")
         out.append(f"*Detected: {reason}.*")
         out.append("")
+        # Rendered BEFORE the mechanics, because it decides whether the reader
+        # should be composing a launch at all. A backend that is present but
+        # must not be chosen by the decision tree has no other way to say so:
+        # every other field here describes HOW to drive it, and a reader who
+        # has reached the command has already decided to.
+        if backend.get("selection"):
+            out.append(f"**Selection.** {fold(backend['selection'])}")
+            out.append("")
         if backend.get("prefer_for"):
             out.append(f"**Prefer for.** {fold(backend['prefer_for'])}")
             out.append("")

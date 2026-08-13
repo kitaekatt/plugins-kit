@@ -31,12 +31,17 @@ probed tomorrow with no edit here:
   * every `ladders[].rungs[].model` on the Codex ladder, via
     `codex exec -m <id>` with a one-word prompt, carrying that rung's
     `effort:` value as `-c model_reasoning_effort=<effort>`;
+  * every `-m <id>` hardcoded in a `backends[].command`, via that backend's own
+    launch form. A backend with no ladder has no rung to carry its model, so
+    the id lives in the command line instead -- `grok`'s record pins
+    `-m grok-4.6` there -- and an unchecked hardcoded id is exactly the defect
+    class above;
   * every `-c <key>=` config key named anywhere in orchestration.yaml or in
     references/codex-dispatch.md, via `codex exec --strict-config` with an
     EMPTY prompt -- an unknown key is rejected while loading config, before any
     model call, so key validation costs zero tokens.
 
-Cost: one trivial dispatch per model id (5 on the shipped policy), plus one
+Cost: one trivial dispatch per model id (6 on the shipped policy), plus one
 zero-token launch per config key.
 
 Usage
@@ -63,6 +68,7 @@ rather than papered over: the check is a tool, not a gate.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -145,6 +151,26 @@ def collect_probes(policy: dict[str, Any], policy_path: Path = POLICY_PATH) -> l
                     f"its rungs are NOT dispatch-checked ({where})",
                     file=sys.stderr,
                 )
+
+    # A model id pinned inside a backend's one-line `command:`. A backend with
+    # no ladder still names a model -- grok's record hardcodes `-m grok-4.6`
+    # precisely because it has no rung to carry it -- and a hardcoded id is the
+    # exact thing this script exists for. Reading it out of the command string
+    # rather than a dedicated field keeps ONE copy of that id in the policy;
+    # a second field to scan would be a second thing to keep in step.
+    for backend in policy.get("backends") or []:
+        command = backend.get("command")
+        if not command:
+            continue
+        backend_id = str(backend.get("id"))
+        for model in re.findall(r"(?:^|\s)-m\s+(\S+)", str(command)):
+            probes.append(
+                Probe(
+                    f"{backend_id}-model",
+                    model,
+                    f"{policy_name} backends[id={backend_id}].command",
+                )
+            )
 
     for key, where in sorted(collect_config_keys(policy_path).items()):
         probes.append(Probe("codex-config-key", key, where))
@@ -251,6 +277,58 @@ def probe_codex_model(model: str, effort: str | None) -> tuple[bool, str]:
     return False, _last_meaningful(output) or f"exit {result.returncode}"
 
 
+def probe_grok_model(model: str) -> tuple[bool, str]:
+    """Dispatch one trivial turn at a grok model id.
+
+    `--prompt-file` is the headless form, and it is NOT combinable with `-p`
+    (which takes the prompt as its own value), so the probe writes the prompt
+    to a file the way a real dispatch does. `--output-format json` puts the
+    reply on stdout as `text`; an unusable model id fails before that.
+
+    Deliberately NOT the launch shape the policy documents. That shape is for
+    doing work: `--always-approve` and the live repo as `--cwd`. This asks one
+    question -- does the identifier dispatch -- and answering it needs no tool
+    call at all, so the probe runs rooted in the throwaway temp dir with
+    `--permission-mode dontAsk`, which auto-DENIES anything not pre-approved
+    rather than prompting (so it cannot hang either). That is the analogue of
+    the codex probe's `-s read-only`, and it matters more here: grok's sandbox
+    is off by default and unenforceable on Windows, so `--cwd` is the only
+    thing standing between a validation run and the working tree.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        brief = Path(tmp) / "brief.txt"
+        brief.write_text(PROMPT, encoding="utf-8")
+        cmd = [
+            "grok",
+            "--prompt-file",
+            str(brief),
+            "-m",
+            model,
+            "--cwd",
+            tmp,
+            "--permission-mode",
+            "dontAsk",
+            "--no-subagents",
+            "--output-format",
+            "json",
+        ]
+        result = _run(cmd, stdin="", timeout=MODEL_TIMEOUT)
+    if result is None:
+        return False, f"timed out after {MODEL_TIMEOUT}s"
+    output = (result.stdout + result.stderr).strip()
+    if result.returncode != 0:
+        return False, _last_meaningful(output) or f"exit {result.returncode}"
+    try:
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        # Exit 0 with unparseable stdout means the run did not produce a
+        # result object -- report it rather than counting it as a pass.
+        return False, _last_meaningful(output) or "stdout was not a JSON object"
+    reply = str(payload.get("text", "")).strip()
+    stop = payload.get("stopReason")
+    return True, f"replied: {reply[:120]}" + (f" (stopReason={stop})" if stop else "")
+
+
 def probe_codex_config_key(key: str) -> tuple[bool, str]:
     """Validate a `-c` key with ZERO token cost.
 
@@ -302,7 +380,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--backend",
-        choices=["all", "claude", "codex"],
+        choices=["all", "claude", "codex", "grok"],
         default="all",
         help="restrict the probes to one backend (default: all)",
     )
@@ -325,10 +403,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     policy_path = args.policy.resolve()
     policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
     probes = collect_probes(policy, policy_path)
-    if args.backend == "claude":
-        probes = [p for p in probes if p.kind.startswith("claude")]
-    elif args.backend == "codex":
-        probes = [p for p in probes if p.kind.startswith("codex")]
+    if args.backend != "all":
+        probes = [p for p in probes if p.kind.startswith(args.backend)]
 
     print(f"Source of truth: {_rel(policy_path)}")
     print(f"{len(probes)} identifier(s) to validate by real dispatch.\n")
@@ -340,7 +416,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     needed = {p.kind.split("-")[0] for p in probes}
     blocked: list[str] = []
-    for backend, binary in (("claude", "claude"), ("codex", "codex")):
+    for backend, binary in (("claude", "claude"), ("codex", "codex"), ("grok", "grok")):
         if backend in needed and not backend_available(binary):
             blocked.append(
                 f"{backend}: `{binary}` is not on PATH, so its identifiers "
@@ -360,6 +436,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif probe.kind == "codex-model":
             effort = probe.extra.split("=", 1)[1] if probe.extra else None
             ok, detail = probe_codex_model(probe.value, effort)
+        elif probe.kind == "grok-model":
+            ok, detail = probe_grok_model(probe.value)
         else:
             ok, detail = probe_codex_config_key(probe.value)
         print("OK" if ok else "FAILED")

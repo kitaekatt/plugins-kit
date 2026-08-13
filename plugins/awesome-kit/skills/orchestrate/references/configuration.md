@@ -275,6 +275,7 @@ Machine data. Which backends exist here and how to drive them; not derived from 
 | `id` | yes | Merge key, e.g. `agent`, `codex`. Also the ladder id. |
 | `name` | | Display name. |
 | `detect` | | Availability rule (below). Absent means always available. |
+| `selection` | | When this backend may be chosen at all. Rendered first, above the mechanics. Set it on a backend the decision tree must never route to (see below). |
 | `prefer_for` | | One line about what this backend is. |
 | `capabilities` | | Map rendered as bullets. Recognised keys: `tiers` (list of rung ids, filtered to the ones that render), `isolation`, `effort`, `network`, `returns`. Quote `yes`/`no` -- YAML reads them as booleans otherwise. |
 | `command` | | One-line invocation, rendered as a code block. |
@@ -306,6 +307,43 @@ advertise mechanics for a tool that is not installed.
 The project layer may not declare an executable field. `detect.command` and `capacity.command`
 are stripped from it, because that layer is a file inside whatever repository happens to be the
 cwd -- machine-level trust is a different question from repo-level trust.
+
+### Request-only backends
+
+A backend with no ladder has no rungs, so `capabilities.tiers` renders as "n/a (no tier
+selection)" and no tier decision can land on it. That is necessary but not sufficient: the
+skill's procedure picks a BACKEND before it picks a tier, so a ladder-less backend is still a
+candidate at that step, and it is the only candidate visible at all when the tree's backend
+block is itself gated on a backend that is absent.
+
+`selection` is what closes that. State the condition under which the backend may be chosen;
+the skill treats a backend carrying it as off the routing table except under that condition.
+The shipped `grok` record is the worked example -- present on the machine, fully documented,
+and reachable only when the user names it.
+
+That is a default, not a verdict on the backend. If you want a request-only backend to become
+an ordinary routing target -- an xAI subscription you would rather spend than your Claude
+pool, say -- override it in your user or project layer: clear the restriction and give it a
+ladder, and it participates like any other backend.
+
+```yaml
+backends:
+  - id: grok
+    selection: null              # drop the restriction
+    capabilities: {tiers: [grok-workhorse]}
+ladders:
+  - id: grok                     # ladder id must equal the backend id
+    label: Grok
+    rungs:
+      - id: grok-workhorse
+        model: grok-4.6
+        criteria: []
+        terminal: true
+        text: terminal default.
+```
+
+The same layer is where you change a pinned model or the launch `command` -- both are ordinary
+machine-half fields, so a new model release does not have to wait on a plugin publish.
 
 Adding a backend is the intended way to support a custom orchestrator. Give it a ladder too, or
 it has no rungs:

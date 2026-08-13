@@ -979,6 +979,115 @@ class TestNoBareCodenames:
                 assert prefix.endswith("gpt-5.6-"), f"bare `{name}` in the shipped data"
 
 
+class TestRequestOnlyBackend:
+    """Grok is present-but-not-eligible: fully documented so a user-named
+    dispatch can be driven correctly, and reachable by nothing else.
+
+    Two independent mechanisms carry that, and both are asserted here because
+    either alone leaks. No ladder keeps it out of every TIER decision; the
+    `selection` line keeps it out of the BACKEND decision, which happens first
+    and would otherwise see a third backend carrying a ready-made command.
+    """
+
+    ONLY_MODEL = "grok-4.6"
+
+    @staticmethod
+    def _render(monkeypatch, tmp_path, *, present):
+        """Force grok's detection either way rather than patching `shutil.which`.
+
+        `detect_backend` RUNS the command, so a faked PATH hit still fails the
+        probe -- and the honest version (let the real machine decide) makes the
+        present-variant assertions pass only where grok happens to be
+        installed. Stubbing the one backend's verdict keeps both variants true
+        on every machine, including CI.
+        """
+        real = og.detect_backend
+
+        def detect(backend):
+            if backend.get("id") == "grok":
+                return (present, "stubbed") if present else (False, "stubbed absent")
+            return real(backend)
+
+        monkeypatch.setattr(og, "detect_backend", detect)
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        return og.render(config, provenance)
+
+    def test_shipped_grok_record_has_no_ladder_and_claims_no_tiers(self):
+        data = shipped()
+        grok = next(b for b in data["backends"] if b["id"] == "grok")
+        assert not (grok.get("capabilities") or {}).get("tiers")
+        assert "grok" not in {l["id"] for l in data["ladders"]}
+        assert grok.get("selection"), "a ladder-less backend must state its condition"
+
+    def test_shipped_data_names_only_the_sanctioned_grok_model(self):
+        """`grok models` also offers 4.5. Naming it anywhere in the policy is
+        one copy-paste away from dispatching it."""
+        raw = og.DEFAULTS_PATH.read_text(encoding="utf-8")
+        for match in re.finditer(r"\bgrok-[0-9][^\s`'\"]*", raw):
+            assert match.group(0) == self.ONLY_MODEL, match.group(0)
+
+    def test_the_record_renders_with_its_selection_line_when_detected(
+        self, monkeypatch, tmp_path
+    ):
+        text = self._render(monkeypatch, tmp_path, present=True)
+        assert "Grok CLI" in text
+        assert "**Selection.**" in text
+        assert self.ONLY_MODEL in text
+        # No ladder -> the capability line says so rather than naming rungs.
+        assert "n/a (no tier selection)" in text
+
+    def test_selection_precedes_the_mechanics(self, monkeypatch, tmp_path):
+        """A reader who has reached the command has already decided to launch."""
+        text = self._render(monkeypatch, tmp_path, present=True)
+        assert text.index("**Selection.**") < text.index("--always-approve")
+
+    def test_the_whole_record_disappears_when_grok_is_absent(
+        self, monkeypatch, tmp_path
+    ):
+        text = self._render(monkeypatch, tmp_path, present=False)
+        for probe in ("Grok CLI", "grok-4.6", "--always-approve", "--no-subagents"):
+            assert probe not in text, probe
+
+    def test_grok_is_named_by_no_gate_pull_or_rung(self):
+        """The decision tree must not reach it -- being listed is not being
+        eligible, and a pull naming it would make it eligible."""
+        data = shipped()
+        block = data["backend"]
+        for row in (block.get("gates") or []) + (block.get("pulls") or []):
+            assert row["backend"] != "grok", row["id"]
+        for ladder in data["ladders"]:
+            for rung in ladder["rungs"]:
+                assert "grok" not in str(rung.get("model", "")), rung["id"]
+
+    def test_selection_is_optional_and_absent_backends_render_no_such_line(self):
+        """Only a restricted backend gets the heading; the others must not
+        acquire one by accident."""
+        data = shipped()
+        for backend in data["backends"]:
+            if backend["id"] != "grok":
+                assert "selection" not in backend, backend["id"]
+
+
+class TestUserSpokenCodenames:
+    """A user says `sol`; `-m` needs `gpt-5.6-sol`. The policy has to carry the
+    RESOLUTION, not only the prohibition -- and has to carry it without writing
+    a bare codename into shipped data (see TestNoBareCodenames)."""
+
+    def test_the_codex_ladder_states_how_a_spoken_codename_resolves(self):
+        guards = " ".join(
+            next(l for l in shipped()["ladders"] if l["id"] == "codex")["guards"]
+        )
+        assert "gpt-5.6-" in guards
+        assert "resolve" in guards.lower()
+
+    def test_the_resolution_rule_renders(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        text = og.render(config, provenance)
+        assert "resolve it to the `gpt-5.6-` form" in text
+
+
 class TestRungRendering:
     def test_or_groups_and_conjunctions_render(self, layered):
         rung = {

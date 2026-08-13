@@ -303,6 +303,10 @@ ladders:
   - >-
     Model identifiers are FULLY QUALIFIED as written above; the bare codenames are not dispatchable
     by `-m`.
+  - >-
+    A user naming a bare codename means the rung whose identifier ends with it -- resolve
+    it to the `gpt-5.6-` form and dispatch that. The bare name is what the user says; it is
+    never what `-m` receives.
   - There is no gpt-5.6-terra rung.
   rungs:
   - id: codex-top
@@ -513,6 +517,78 @@ backends:
       - >-
         A `cd` in a backgrounded Bash call does not persist -- always pass an
         absolute `-C`.
+
+  - id: grok
+    name: Grok CLI
+    detect:
+      command: [grok, --version]
+    selection: >-
+      ON EXPLICIT USER REQUEST ONLY. This backend has no ladder and appears in
+      no gate or pull, so nothing in the decision tree routes work here and it
+      is never the answer to "which backend suits this unit". Dispatch here
+      only when the user names it -- a user who says "grok" means this backend
+      at `-m grok-4.6`. Otherwise route the unit as though this section were
+      absent.
+    capabilities:
+      tiers: []
+      isolation: >-
+        The sandbox is `off` by DEFAULT on every platform, and enforceable only
+        on Linux (Landlock) and macOS (Seatbelt) -- on Windows `--sandbox` is
+        accepted and does nothing, an unknown profile name included. So a unit
+        has whatever access the user has unless you both pass a profile and are
+        on a platform that enforces it. `-w/--worktree` is a no-op under
+        headless, so parallel writers share the tree -- give each its own `git
+        worktree` and `--cwd`, or run one at a time.
+      effort: >-
+        Model via `-m grok-4.6`. Effort via `--effort` -- grok-4.6's menu is
+        `low|medium|high|xhigh`; it does NOT accept `max`, so do not carry that
+        level over from the scale above.
+      network: >-
+        yes, unrestricted by default. Restrictable only where the sandbox
+        enforces, and child-process blocking is Linux-only even there.
+      returns: >-
+        `--output-format json` writes one object to stdout: `text` is the final
+        message, `stopReason` says how the turn ended, plus `sessionId`,
+        `usage` and `num_turns`. There is no `-o` flag. `--json-schema <FILE>`
+        constrains `text` to a schema.
+    command: >-
+      grok --prompt-file <ABSOLUTE brief> -m grok-4.6 --cwd <ABSOLUTE root>
+      --always-approve --no-subagents --output-format json
+      > <ABSOLUTE result.json> 2> <ABSOLUTE log>
+    dispatch: |
+      Headless is `--prompt-file <FILE>` on its own. `-p` is the OTHER
+      single-turn form and takes the prompt as its own value, so
+      `-p --prompt-file X` is a launch-time argument error, not a combination.
+
+      `--always-approve` is required, not a convenience: without it a
+      backgrounded unit blocks on the first tool prompt with nobody to answer
+      it. `--deny` rules still apply on top of it and are the only hard block
+      available on Windows.
+
+      Read `.text` from the result JSON -- that is the conclusion. Check
+      `stopReason` too; a unit stopped by `max_turns` exits 0 with a partial
+      answer.
+
+      Flag catalog, the sandbox reality, and the inherited-instructions trap:
+      references/grok-dispatch.md.
+    gotchas:
+      - >-
+        A grok unit is a second Claude-compatible harness, not a bare worker:
+        it discovers this repo's CLAUDE.md, `.claude/rules/`,
+        `.claude/settings.json` permissions, and the installed Claude Code
+        skills -- `orchestrate` among them. Brief it to do the work, not to
+        orchestrate it; `--no-subagents` stops it fanning out on its own.
+      - >-
+        There is no sandbox on Windows at any setting. A grok unit can write
+        anywhere the user can, `--cwd` notwithstanding. Do not brief one on the
+        assumption that a root confines it.
+      - >-
+        `--sandbox <PROFILE>` accepts an unknown profile name silently on
+        Windows rather than refusing to start, so a typo reads as a working
+        sandbox. Pass no `--sandbox` here rather than one that cannot enforce.
+      - >-
+        `--tools` / `--disallowed-tools` / `--max-turns` are headless-only; in
+        the TUI they are warned about and ignored.
 
 # ---------------------------------------------------------------------------
 # Capacity -- best-effort awareness of remaining usage.

@@ -40,7 +40,7 @@ technique_skill:
       - subagent authoring (defining new agent types)
 
   policy:
-    keywords: [model choice, model tier, backend, codex, custom orchestrator, usage limit, capacity, rate limit, configurable, override, pool]
+    keywords: [model choice, model tier, backend, codex, grok, custom orchestrator, usage limit, capacity, rate limit, configurable, override, pool]
     render: |
       Use the plugin venv's Python explicitly -- not `uv run python`, which resolves the
       venv from the cwd and misses this plugin's dependencies when run from another project
@@ -71,6 +71,11 @@ technique_skill:
       something is "unavailable" on the strength of its absence. (`--explain` reports what
       was gated and why, if you need to answer that question.)
 
+      Being LISTED is not the same as being ELIGIBLE. A backend whose block opens with a
+      `**Selection.**` line is not a routing target: it is documented so you can drive it
+      correctly when its stated condition holds, and it is off the table otherwise. Route
+      as though it were absent until that condition is met -- typically the user naming it.
+
   asset_dependencies:
     - path: defaults/orchestration.yaml
       consumer: scripts/orchestration_guidance.py
@@ -82,6 +87,12 @@ technique_skill:
       consumer: defaults/orchestration.yaml (backends[codex].dispatch)
       purpose: the flag catalog and launch mechanics the rendered summary points at
       invariant: The one-line `command:` in the backend record matches the worked example here.
+    - path: references/grok-dispatch.md
+      consumer: defaults/orchestration.yaml (backends[grok].dispatch)
+      purpose: the flag catalog and launch mechanics for the request-only Grok backend
+      invariant: >-
+        The one-line `command:` in the backend record matches the worked example here, and
+        both name `grok-4.6` -- the only sanctioned model on this backend.
 
   techniques:
     - id: orchestrate
@@ -122,7 +133,10 @@ technique_skill:
             are comparable only within a ladder -- across them the decision is dispatch
             shape, pool, and independence, not model capability. Default backend and default
             tier are stated in the output; deviate per unit when the unit's shape argues for
-            it. Honour UNAVAILABLE/LIMITED markings.
+            it. Honour UNAVAILABLE/LIMITED markings. A backend carrying a `**Selection.**`
+            restriction is excluded from this step unless its stated condition holds -- no
+            unit's shape argues its way onto one. When the user names a backend or a model,
+            that names the dispatch: take the named one and skip this step.
         - n: 5
           action: Launch background units -- each prompt a standalone brief (goal, paths, constraints, premises, return shape).
           detail: |
