@@ -544,6 +544,10 @@ domain_skill:
         path: references/cohesion-principles.md
         keywords: [placement, where does this live, ccp crp adp, load graph, per artifact role, placement algorithm, skill packaging razor, placement follows trigger shape, summarize and reference, maturation pipeline]
         summary: The placement spine -- the content_allocation framework (load graph, CCP/CRP/ADP applied to placement, the placement algorithm, per-artifact roles, the skill maturation pipeline, placement_follows_trigger_shape, the two-step skill_packaging_razor, summarize_and_reference). Every lane and every standards doc defers here for WHERE a fact lives; on divergence, this document wins.
+      - id: capability_boundaries
+        path: references/capability-boundaries.md
+        keywords: [what md-domain does not do, code review, code audit, does not exist, division of labour, external capability, defect, potential defects, release valve, informs review, accountable for covering, subject is a change, subject is a codebase]
+        summary: The capability boundaries -- md-domain owns a document, code review owns a CHANGE (git-kit, p4-kit), and code audit owns a CODEBASE at rest and DOES NOT EXIST YET. Carries the specification for that absent capability so its absence is not read as an md-domain gap, the one-directional relationship to review (md-domain informs, review raises), the CLAUDE-potential-defects.md hand-off, and the accountable-for-covering test. Read before letting any lane report a code defect.
       - id: coverage_gap
         path: references/coverage-gap.md
         keywords: [what the audit does not check, coverage not assessed, clean audit missed hazards, compliant is not sufficient for review, absent content, gotcha crawler, ambient coverage, hazard sweep rejected, coverage lane design, held-out validation, documenting a bug fossilizes it]
@@ -639,6 +643,7 @@ domain_skill:
 - **What earns a coverage candidate** -- `references/standards/coverage-standards.md`.
 - **How to run a hierarchy resolution** -- `references/lanes/hierarchy-lane.md`.
 - **What makes a placement resolution honest** -- `references/standards/hierarchy-standards.md`.
+- **What this domain does NOT do, and who owns it instead** -- `references/capability-boundaries.md`.
 - **Encoding a newly discovered insight into a persistent home** -- `knowledge-encoding` (in skills-kit).
 - **End-of-session review of what the work implies for the docs** -- `update-documentation` (in skills-kit).
 - **Designing a materialized-insight tool** -- `materialized-output` (in skills-kit).
