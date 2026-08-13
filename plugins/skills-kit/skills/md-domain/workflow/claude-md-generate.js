@@ -325,6 +325,36 @@ const DOC_SCHEMA = {
         },
       },
     },
+    // OPTIONAL, deliberately -- most subjects will have none, and forcing an
+    // empty array onto every subject is noise. A candidate fact hazard-durability
+    // REJECTED from the document because it describes a defect's transient
+    // state -- true only until the defect is fixed, so writing it as ambient
+    // prose would fossilize a false instruction the moment the fix lands.
+    // Recorded here instead of being dropped or rewritten as an invariant to
+    // sneak it into the document -- that rewrite is the same scope-widening
+    // mistake as writing the transient state directly. UNVERIFIED and never a
+    // finding: see coverage-standards.md (hazard-durability) and
+    // capability-boundaries.md ("The hand-off: CLAUDE-potential-defects.md").
+    potentialDefects: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['anchor', 'observed', 'suspected', 'checked', 'whyNotAmbient'],
+        properties: {
+          // "path:line"
+          anchor: { type: 'string' },
+          // strictly factual -- cheap to state truly
+          observed: { type: 'string' },
+          // the inference; kept apart from observed
+          suspected: { type: 'string' },
+          // what was actually done; often "nothing beyond the read above"
+          checked: { type: 'string' },
+          // the hazard-durability verdict: why this is transient, not durable
+          whyNotAmbient: { type: 'string' },
+        },
+      },
+    },
     // Set only by a composition, and it now holds VERIFIED hoists ONLY. A hoist
     // must be worded so it is true as stated at the parent depth, and it obliges
     // the child copies to be removed. fromChildren MAY name a SINGLE child: the
@@ -488,6 +518,26 @@ const APPLY_SCHEMA = {
     path: { type: 'string' },
     created: { type: 'boolean' },
     sections: { type: 'array', items: { type: 'string' } },
+    // OPTIONAL, same shape as DOC_SCHEMA's. The create path had no surface for
+    // this before -- a null-branch subject's potentialDefects come from the
+    // composition step (lanePrompt), which normally writes the sidecar itself,
+    // but the field is mirrored here so an apply/create turn can report one too
+    // if it is the step that ends up with a directory to write into.
+    potentialDefects: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['anchor', 'observed', 'suspected', 'checked', 'whyNotAmbient'],
+        properties: {
+          anchor: { type: 'string' },
+          observed: { type: 'string' },
+          suspected: { type: 'string' },
+          checked: { type: 'string' },
+          whyNotAmbient: { type: 'string' },
+        },
+      },
+    },
     applied: {
       type: 'array',
       items: {
@@ -798,11 +848,45 @@ const lanePrompt = (s, root, writtenChildren) => {
     'has a matching C++ file; an ls disproved it, and the writer had reported it verified. ' +
     'Record every claim you checked, with the command, in verifications. A claim you ' +
     'cannot verify is DROPPED or stated with its limit -- never hedged into the prose.\n\n' +
+    'A SEVERE HAZARD REJECTED BY hazard-durability IS NOT DISCARDED -- IT GOES TO ' +
+    'potentialDefects. hazard-durability (' + standardsRef + ') rejects a hazard fact from ' +
+    'this document when it describes a defect transient state -- true only until someone ' +
+    'fixes it, so writing it as ambient prose would fossilize a false instruction the moment ' +
+    'the fix lands. When that is what you are looking at, AND ONLY when it is severe, record ' +
+    'it in potentialDefects instead of dropping it or rewriting it as an invariant to get it ' +
+    'into the document -- that rewrite is the same scope-widening mistake as writing the ' +
+    'transient state directly.\n' +
+    'potentialDefects entries are UNVERIFIED POSSIBILITIES, never findings. Do NOT spend ' +
+    'effort verifying one, and do NOT go looking for defects: only what you encounter while ' +
+    'reading THIS directory own direct code for the purpose above is eligible, the same ' +
+    'eligibility rule as a coverage candidate. Keep observed strictly factual -- what the ' +
+    'code does, cheap to state truly -- and put every inference in suspected, which is where ' +
+    'a confident falsehood would otherwise enter. checked records what you actually did about ' +
+    'it, which is very often "nothing beyond the read above" -- do not claim a check you did ' +
+    'not run. whyNotAmbient is the one-sentence hazard-durability verdict: why this is a ' +
+    'transient defect state rather than a durable invariant.\n' +
+    'IF potentialDefects IS NON-EMPTY, WRITE THE SIDECAR FILE YOURSELF, in this same turn: ' +
+    root + '/CLAUDE-potential-defects.md. This is independent of whether you also write a ' +
+    'CLAUDE.md this turn -- write it even on the null branch. Check first whether that file ' +
+    'already exists; if it does, do NOT overwrite it and do NOT merge into it -- leave it ' +
+    'untouched and say so in notes. Otherwise write it as: a short prose header stating these ' +
+    'are unverified possible defects noticed while documenting this directory, that this is ' +
+    'NOT a findings list and NOT a code review, and that verification and removal belong to ' +
+    'the code-audit capability described in ../capability-boundaries.md -- then one YAML ' +
+    'block with root key potential_defects, _schema_version "1", status unverified, and ' +
+    'entries: one object per potentialDefects item plus a stable id (pd-1, pd-2, ...). If you ' +
+    'also write a CLAUDE.md this turn, it may carry a ONE-LINE pointer to the sidecar file and ' +
+    'NO entry content -- the sidecar is never a composition input, so a defect claim can never ' +
+    'hoist upward into ambient guidance.\n\n' +
     'THE BOUNDARY YOU MUST NOT CROSS. md-domain INFORMS code review; it does not perform ' +
     'it. Reading the code is in scope ONLY as a source of insight for the document that ' +
-    'will be ambient for it. Do NOT identify code defects, do NOT propose fixes, and do ' +
-    'NOT edit any file other than the one CLAUDE.md you are writing. A run that returns a ' +
-    'defect list has done the wrong work.\n\n' +
+    'will be ambient for it. Do NOT identify code defects, do NOT propose fixes, and do NOT ' +
+    'edit any file other than the one CLAUDE.md you are writing, EXCEPT the ' +
+    'CLAUDE-potential-defects.md sidecar above -- that file is the one sanctioned release ' +
+    'valve for a severe hazard that hazard-durability rejected, and writing an entry into it is ' +
+    'not identifying a defect for review, it is recording an unverified possibility for a ' +
+    'capability that does not exist yet. A run that returns a defect LIST, or that edits any ' +
+    'other file, has done the wrong work.\n\n' +
     'DOCUMENTING A HAZARD CAN FOSSILIZE A BUG. Before writing a hazard into ambient prose, ' +
     'ask whether the honest remedy is a code fix or a loud failure. If you judge so, say ' +
     'it in notes -- not in the document, and do not fix it yourself.\n\n' +
@@ -1043,6 +1127,7 @@ for (let w = 0; w < waves.length; w++) {
         root, written: false, writtenFalseReason: 'null-branch', path: '', sections: [],
         candidatesRead: 0, candidateDispositions: [], droppedCandidates: [],
         verifications: [], hoists: [], candidateHoists: [], notProposed: [],
+        potentialDefects: [],
         notes: ['skipped by caller: ' + s.skipNote],
       })
     }
@@ -1382,6 +1467,15 @@ const totals = perSubject.reduce((acc, r) => {
   // hoist some child must first have written down. Counted separately because
   // folding it into `dropped` is how it would go quiet.
   acc.escalated += (r.droppedCandidates || []).filter((d) => d.escalateToAncestor).length
+  // potentialDefects is the hazard-durability release valve (capability-boundaries.md,
+  // "The hand-off"). defectFiles counts subjects, not files-actually-created-by-this-run:
+  // a subject with a non-empty array ends this run with a CLAUDE-potential-defects.md in
+  // its directory either way, whether freshly written or already present and left alone
+  // per the prompt's leave-pre-existing-file-untouched instruction (the pre-existing case
+  // is surfaced in that subject's notes, not distinguished here).
+  const defectCount = (r.potentialDefects || []).length
+  acc.potentialDefects += defectCount
+  if (defectCount) acc.defectFiles++
   // A document with zero recorded verifications is not proof of anything, but it
   // is the shape a report-not-artifact run takes, so it is surfaced. A CREATED
   // document is in scope here too -- it is a document, and exempting it would let
@@ -1392,6 +1486,7 @@ const totals = perSubject.reduce((acc, r) => {
   written: 0, created: 0, nullBranch: 0, sections: 0, hoists: 0, dropped: 0,
   escalated: 0, incomplete: 0,
   unverified: 0, proposed: 0, verified: 0, rejected: 0, unverifiable: 0, notProposed: 0,
+  potentialDefects: 0, defectFiles: 0,
 })
 
 // A verified candidate that never became a hoist means the apply step dropped one
@@ -1451,6 +1546,12 @@ const escalatedNote = totals.escalated
 const unverifiedNote = totals.unverified
   ? ', ' + totals.unverified + ' document(s) recorded NO executed verification'
   : ''
+const potentialDefectsNote = totals.potentialDefects
+  ? ', ' + totals.potentialDefects + ' potential defect(s) recorded across ' +
+    totals.defectFiles + ' CLAUDE-potential-defects.md file(s) -- UNVERIFIED possibilities, ' +
+    'never findings; verification belongs to the code-audit capability described in ' +
+    'capability-boundaries.md'
+  : ''
 const nullNote = totals.nullBranch
   ? ', ' + totals.nullBranch + ' directory/ies took the null branch (no document, recorded)'
   : ''
@@ -1463,7 +1564,7 @@ const createdNote = totals.created
 log('Generate: ' + totals.written + ' document(s) written across ' + waves.length +
     ' wave(s)' + createdNote + ', ' + totals.sections + ' section(s), ' + totals.hoists +
     ' VERIFIED hoist(s)' + candidateNote + unappliedNote + createFailureNote +
-    incompleteNote + nullNote + escalatedNote + unverifiedNote +
+    incompleteNote + nullNote + escalatedNote + unverifiedNote + potentialDefectsNote +
     '. Verify against the ARTIFACT, not this report: a lane result describes what each ' +
     'run intended.')
 

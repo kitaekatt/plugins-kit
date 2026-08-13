@@ -126,7 +126,47 @@ audit by accretion:
   and no entry content. The file is not a composition input, so a defect claim
   cannot hoist upward and become ambient guidance.
 - **No file when there are no entries.** An empty one implies a clean bill of
-  health that nothing established.
+  health that nothing established. An ABSENT file means "nothing was recorded",
+  never "nothing is wrong here".
+
+The format, in full -- a short prose header stating what the file is, then one
+YAML block. Using the one observation this rule has actually produced:
+
+```yaml
+potential_defects:
+  _schema_version: "1"
+  status: unverified
+  entries:
+    - id: pd-1
+      anchor: docs/parity_ref/capture_web.mjs:3
+      observed: >-
+        Imports playwright-core. It appears in neither package.json nor
+        package-lock.json, and is absent from node_modules. The file's own
+        header asserts it is "already in node_modules transitively".
+      suspected: >-
+        The script cannot run as checked in, and the documented remedy
+        (npx playwright install chromium) fetches the browser binary rather
+        than the package.
+      checked: >-
+        Nothing beyond the four reads above. Not executed.
+      why_not_ambient: >-
+        hazard-durability -- transient defect state; written as ambient prose
+        it would fossilize into a false instruction once fixed.
+```
+
+`observed` states only what was seen and must be true as written. `suspected`
+carries every inference, and is where a wrong entry is expected to be wrong.
+`checked` records what was actually done, and "nothing beyond the read above"
+is a complete and honest answer. `why_not_ambient` names the criterion that
+rejected the fact, which is what keeps the file a residue of a decision rather
+than a second output channel.
+
+**The field names differ on purpose across the boundary, and this is not
+drift.** The lane's agent-result schema carries `whyNotAmbient` in camelCase,
+alongside its neighbours `writtenFalseReason` and `candidatesRead`; the emitted
+FILE carries `why_not_ambient`, alongside every other YAML block in this skill.
+The writing agent translates one to the other. Do not "fix" either side to
+match the other without changing both.
 
 ## The test, when it is not obvious
 
