@@ -128,6 +128,13 @@ def _validate(schema: dict, value) -> None:
     elif t == "boolean":
         if not isinstance(value, bool):
             raise _Invalid("expected boolean")
+    elif t == "integer":
+        # `type: 'integer'` was a NO-OP in this validator until the candidate
+        # accounting fields arrived, so a schema declaring it was silently
+        # untested. bool is excluded deliberately: it is an int in Python and
+        # `candidatesRead: true` must not pass for a count.
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise _Invalid("expected integer")
 
 
 DOC_SCHEMA = _extract_literal("DOC_SCHEMA")
@@ -155,12 +162,31 @@ def _candidate(**overrides) -> dict:
     return base
 
 
+def _dropped(**overrides) -> dict:
+    base = {
+        "index": 3,
+        "fact": "The station scene registers its autoload twice.",
+        "reason": "the repo root already says it",
+        "reasonCode": "already-ambient",
+    }
+    base.update(overrides)
+    return base
+
+
 def _document(**overrides) -> dict:
+    # EVERY required key belongs here, and keeping it complete is load-bearing
+    # rather than tidy. `pytest.raises(_Invalid)` does not inspect the message, so
+    # a base document missing a newly-required key makes every negative test in
+    # this file pass on "missing required key: <the new one>" instead of on the
+    # property it names. That is why the negatives below carry `match=`.
     base = {
         "root": "godot",
         "written": True,
+        "writtenFalseReason": "n/a",
         "path": "godot/CLAUDE.md",
         "sections": ["Autoloads"],
+        "candidatesRead": 0,
+        "candidateDispositions": [],
         "droppedCandidates": [],
         "verifications": [],
         "hoists": [],
@@ -189,13 +215,13 @@ class TestCandidateHoistsIsRequiredNotOptional:
     def test_a_document_omitting_candidate_hoists_is_rejected(self):
         doc = _document()
         del doc["candidateHoists"]
-        with pytest.raises(_Invalid):
+        with pytest.raises(_Invalid, match="missing required key: candidateHoists"):
             _validate(DOC_SCHEMA, doc)
 
     def test_a_document_omitting_not_proposed_is_rejected(self):
         doc = _document()
         del doc["notProposed"]
-        with pytest.raises(_Invalid):
+        with pytest.raises(_Invalid, match="missing required key: notProposed"):
             _validate(DOC_SCHEMA, doc)
 
 
@@ -214,24 +240,24 @@ class TestCandidateRecordShape:
         An empty array satisfies a bare `required` while naming no file at all,
         which is precisely the guess the phase refuses to carry.
         """
-        with pytest.raises(_Invalid):
+        with pytest.raises(_Invalid, match="fewer than minItems"):
             _validate(DOC_SCHEMA, _document(candidateHoists=[_candidate(claimedOver=[])]))
 
     def test_a_missing_claimed_over_is_rejected(self):
         c = _candidate()
         del c["claimedOver"]
-        with pytest.raises(_Invalid):
+        with pytest.raises(_Invalid, match="missing required key: claimedOver"):
             _validate(DOC_SCHEMA, _document(candidateHoists=[c]))
 
     def test_a_missing_check_is_rejected(self):
         c = _candidate()
         del c["check"]
-        with pytest.raises(_Invalid):
+        with pytest.raises(_Invalid, match="missing required key: check"):
             _validate(DOC_SCHEMA, _document(candidateHoists=[c]))
 
     def test_an_undeclared_candidate_field_is_rejected(self):
         """additionalProperties:false -- a routing field cannot be smuggled in."""
-        with pytest.raises(_Invalid):
+        with pytest.raises(_Invalid, match="additional property: destination"):
             _validate(DOC_SCHEMA, _document(
                 candidateHoists=[_candidate(destination="godot")]))
 
@@ -252,7 +278,7 @@ class TestSingleChildCandidateIsProposable:
             candidateHoists=[_candidate(fromChildren=["godot/tests"])]))
 
     def test_zero_children_does_not(self):
-        with pytest.raises(_Invalid):
+        with pytest.raises(_Invalid, match="fewer than minItems"):
             _validate(DOC_SCHEMA, _document(candidateHoists=[_candidate(fromChildren=[])]))
 
     def test_prompt_no_longer_states_the_repetition_trigger(self):
@@ -435,7 +461,10 @@ class TestWaveIsComposeVerifyApply:
         src = _src()
         loop = src[src.index("for (let w = 0; w < waves.length; w++)"):src.index("// Totals.")]
         assert loop.index("agent(lanePrompt") < loop.index("agent(verifyPrompt")
-        assert loop.index("agent(verifyPrompt") < loop.index("agent(applyPrompt")
+        # The third step dispatches applyPrompt OR createPrompt, chosen by whether
+        # the composition produced a document; both are inside this loop.
+        assert loop.index("agent(verifyPrompt") < loop.index("applyPrompt(t.r, t.verified)")
+        assert loop.index("agent(verifyPrompt") < loop.index("createPrompt(")
 
     def test_verification_pins_opus_high_like_the_composition(self):
         src = _src()
@@ -535,9 +564,29 @@ class TestApplyStep:
         prompt = _prompt_body("const applyPrompt", "// ------")
         assert "do NOT touch the " in prompt
 
-    def test_apply_is_an_addition_not_a_filter(self):
+    def test_apply_is_an_addition_or_a_creation_never_a_filter(self):
+        """It was an ADDITION only, and that framing is what discarded the hoists
+        of a null-branch subject: with no file to add to, the survivors had
+        nowhere to go. The step now has two shapes and both comments say so."""
         src = _src()
-        assert "an ADDITION to a file that was written without any hoist" in src
+        assert "the survivors are an ADDITION to a document written without any" in src
+        assert "ADDITION to a document written without any hoist in it" in src
+        assert "the CREATION of the document those hoists now" in src
+        assert "never a filter over a file that already" in src
+        assert "an ADDITION to a file that was written without any hoist" not in src
+
+    def test_apply_schema_carries_created_and_sections_at_the_top_level(self):
+        """Not inside the applied item, whose required set is pinned above.
+
+        `created` is what tells the lane a document exists for a subject whose
+        composition returned written false; `sections` is there because that
+        composition returned none.
+        """
+        assert "created" in APPLY_SCHEMA["required"]
+        assert "sections" in APPLY_SCHEMA["required"]
+        assert APPLY_SCHEMA["properties"]["created"]["type"] == "boolean"
+        assert APPLY_SCHEMA["properties"]["sections"]["type"] == "array"
+        assert "created" not in APPLY_SCHEMA["properties"]["applied"]["items"]["properties"]
 
 
 class TestDriftTestDoesNotOwnThisFile:
@@ -641,3 +690,256 @@ class TestCompositionOnlySubjectsAreNotInputless:
         assert "written from code alone" in src
         assert "composed from their children" in src
         assert src.index("written from code alone") != src.index("composed from their children")
+
+
+# ---------------------------------------------------------------------------
+# The apply filter, EXERCISED rather than asserted as a substring. The predicate
+# is extracted from the lane and mechanically translated to Python -- the
+# translation raises if any JS construct survives it, so a rewritten predicate
+# fails loudly here instead of being tested by a substring that still matches.
+# ---------------------------------------------------------------------------
+def _apply_filter_predicate() -> str:
+    src = _src()
+    start = src.index(".filter((t) => ") + len(".filter((t) => ")
+    expr = src[start:src.index("\n  const appliedByRoot", start)].strip()
+    assert expr.endswith(")"), expr
+    expr = expr[:-1]  # the paren closing .filter(
+    py = (
+        expr.replace("t.verified.length", "len(t['verified'])")
+        .replace("t.r.writtenFalseReason", "t['r']['writtenFalseReason']")
+        .replace("t.r.written", "t['r']['written']")
+        .replace("===", "==")
+        .replace("&&", "and")
+        .replace("||", "or")
+    )
+    assert "t." not in py, "untranslated member access in the apply filter: " + py
+    assert "=>" not in py and "!" not in py, "unexpected construct: " + py
+    # Parenthesized: the JS expression spans two lines, and a bare newline outside
+    # brackets is a syntax error in Python.
+    return "(" + py + ")"
+
+
+APPLY_FILTER = _apply_filter_predicate()
+
+
+def _admits(survivors: int, written: bool, reason: str) -> bool:
+    target = {
+        "verified": ["candidate"] * survivors,
+        "r": {"written": written, "writtenFalseReason": reason},
+    }
+    return bool(eval(APPLY_FILTER, {"__builtins__": {"len": len}}, {"t": target}))
+
+
+class TestNullBranchHoistsAreNotDiscarded:
+    """A judged null branch and a failed input read are different results.
+
+    The filter used to require `t.r.written`, so a directory that assessed its own
+    code, found nothing worth ambient cost, and then proposed hoists that SURVIVED
+    verification had those settled sentences dropped with nothing in the output to
+    show it (godot/assets in the 2026-08-12 run).
+    """
+
+    def test_a_null_branch_subject_with_survivors_is_applied(self):
+        assert _admits(1, False, "null-branch") is True
+
+    def test_an_input_unreadable_subject_is_refused(self):
+        """It was never assessed at all -- writing a document for it is what the
+        inputless guard refuses."""
+        assert _admits(1, False, "input-unreadable") is False
+
+    def test_survivors_remain_the_core_predicate(self):
+        """godot/extensions is the control: nulled, zero survivors, no document."""
+        assert _admits(0, False, "null-branch") is False
+        assert _admits(0, True, "n/a") is False
+
+    def test_a_written_subject_is_unaffected(self):
+        assert _admits(1, True, "n/a") is True
+
+    def test_the_create_variant_carries_the_chain_and_the_artifact_type(self):
+        """Without the chain clause a created document restates whatever an
+        ancestor already carries, and C-1 is unenforced on exactly the documents
+        this path newly produces."""
+        prompt = _prompt_body("const createPrompt", "// ------")
+        assert "chainClauseFor(s)" in prompt
+        assert "artifactTypeClause" in prompt
+
+    def test_the_shared_clauses_are_declared_once_for_both_prompts(self):
+        src = _src()
+        assert "const chainClauseFor = (s) => {" in src
+        assert "const artifactTypeClause =" in src
+        assert src.index("const chainClauseFor") < src.index("const lanePrompt")
+
+    def test_the_verify_prompt_does_not_claim_a_missing_document_exists(self):
+        prompt = _prompt_body("const verifyPrompt", "// Step 3 of the wave")
+        assert "NO DOCUMENT EXISTS FOR THIS DIRECTORY YET" in prompt
+        assert "const documentClause = r.written" in prompt
+
+    def test_a_created_document_is_offered_to_its_parent(self):
+        """writtenByRoot is composition input; a created document invisible to it
+        is a document the ancestor never reads."""
+        src = _src()
+        assert "if (r.written || created) writtenByRoot.add(r.root)" in src
+
+    def test_a_created_document_is_counted_as_written_with_its_sections(self):
+        src = _src()
+        assert "const hasDocument = r.written || r.created" in src
+        assert "if (hasDocument) acc.written++" in src
+        assert "if (hasDocument && !(r.verifications || []).length) acc.unverified++" in src
+        assert "record.sections = applied.sections || []" in src
+        assert "record.path = applied.path || (r.root + '/CLAUDE.md')" in src
+
+    def test_the_retired_diagnostic_has_a_successor(self):
+        """unappliedNote is what caught this defect and it stops firing once the
+        create path works; a future break must not revert to silence."""
+        src = _src()
+        assert "createFailures.push(failure)" in src
+        assert "createFailureNote" in src
+        assert "totals.verified > totals.hoists" in src  # unappliedNote retained
+
+
+class TestCandidateAccounting:
+    """Every candidate read gets exactly one terminal disposition.
+
+    Of 122 fresh candidates one run expressed 112 and declined 8; the other 2
+    appeared in no field at all, with droppedCandidates and notProposed both
+    empty and every reported number internally consistent.
+    """
+
+    def test_the_three_new_fields_are_required(self):
+        for field in ("candidatesRead", "candidateDispositions", "writtenFalseReason"):
+            assert field in DOC_SCHEMA["required"], field
+
+    def test_candidates_read_is_an_integer_so_zero_is_not_missing(self):
+        assert DOC_SCHEMA["properties"]["candidatesRead"]["type"] == "integer"
+        _validate(DOC_SCHEMA, _document(candidatesRead=0))
+        with pytest.raises(_Invalid, match="expected integer"):
+            _validate(DOC_SCHEMA, _document(candidatesRead="12"))
+
+    def test_the_disposition_enum_is_exactly_the_three_terminal_values(self):
+        items = DOC_SCHEMA["properties"]["candidateDispositions"]["items"]
+        assert items["properties"]["disposition"]["enum"] == [
+            "written", "declined", "deferred",
+        ]
+
+    def test_a_disposition_entry_carries_index_excerpt_and_disposition(self):
+        items = DOC_SCHEMA["properties"]["candidateDispositions"]["items"]
+        assert set(items["required"]) == {"index", "factExcerpt", "disposition"}
+
+    def test_the_fact_excerpt_is_required_because_indices_drift(self):
+        """Coverage is expressly non-idempotent, so an index into a regenerated
+        report names a different candidate."""
+        entry = {"index": 1, "disposition": "written", "section": "Autoloads"}
+        with pytest.raises(_Invalid, match="missing required key: factExcerpt"):
+            _validate(DOC_SCHEMA, _document(candidateDispositions=[entry]))
+
+    def test_a_fourth_disposition_is_rejected(self):
+        entry = {"index": 1, "factExcerpt": "f", "disposition": "escalated"}
+        with pytest.raises(_Invalid, match="not in enum"):
+            _validate(DOC_SCHEMA, _document(candidateDispositions=[entry]))
+
+    def test_dropped_candidates_carry_an_index_and_a_reason_code(self):
+        required = set(DOC_SCHEMA["properties"]["droppedCandidates"]["items"]["required"])
+        assert required == {"index", "fact", "reason", "reasonCode"}
+        _validate(DOC_SCHEMA, _document(droppedCandidates=[_dropped()]))
+
+    def test_the_reason_codes_are_exactly_the_five(self):
+        """The fifth exists because escalateToAncestor maps to none of the other
+        four, and it was used three times in one live run."""
+        props = DOC_SCHEMA["properties"]["droppedCandidates"]["items"]["properties"]
+        assert props["reasonCode"]["enum"] == [
+            "already-ambient",
+            "not-evidenced-here",
+            "superseded-by-broader-candidate",
+            "below-local-value-bar",
+            "destination-outside-this-directory",
+        ]
+        assert "escalateToAncestor" in props
+
+    def test_written_false_reason_is_exactly_the_three_values(self):
+        assert DOC_SCHEMA["properties"]["writtenFalseReason"]["enum"] == [
+            "null-branch", "input-unreadable", "n/a",
+        ]
+
+    def test_a_decline_is_stated_once_and_derived_from_there(self):
+        """Two agent-authored records of one decline can disagree."""
+        src = _src()
+        assert "const declined = (r.droppedCandidates || []).map((d) => ({" in src
+        assert "disposition: 'declined'," in src
+        prompt = _prompt_body("const lanePrompt", "// Step 2 of the wave")
+        assert "A DECLINE goes in droppedCandidates ONLY" in prompt
+        assert "Do NOT also list it in candidateDispositions" in prompt
+
+    def test_the_prompt_requires_one_terminal_disposition_per_candidate(self):
+        prompt = _prompt_body("const lanePrompt", "// Step 2 of the wave")
+        assert "EVERY CANDIDATE GETS EXACTLY ONE TERMINAL DISPOSITION" in prompt
+        assert "NUMBER THE CANDIDATES AS YOU READ THEM" in prompt
+        assert "SAY WHICH FALSE IT IS" in prompt
+
+    def test_candidate_count_is_required_from_the_caller(self):
+        """candidatesRead alone is self-attested: an agent that reads 14, expresses
+        12 and reports 12 passes every internal check."""
+        src = _src()
+        assert "const uncounted = subjects.filter(" in src
+        block = src[src.index("const uncounted = subjects.filter("):src.index("const DOC_SCHEMA")]
+        assert "s.reportPath && !Number.isInteger(s.candidateCount)" in block
+        assert "throw new Error" in block
+        assert "its candidates.length as an integer on the subject" in block
+
+    def test_an_inline_candidates_subject_derives_its_own_count(self):
+        src = _src()
+        assert "if (Array.isArray(s.candidates)) return s.candidates.length" in src
+
+    def test_the_completeness_check_downgrades_rather_than_throwing(self):
+        """It runs AFTER compose has written every document in the wave, so a
+        throw aborts the run and leaves a half-written corpus with no result."""
+        src = _src()
+        block = src[src.index("const shortfalls = []"):src.index("perSubject.push(record)")]
+        assert "throw" not in block
+        assert "record.incomplete = true" in block
+        assert "record.incompleteReasons = shortfalls" in block
+
+    def test_the_completeness_check_covers_the_seven_properties(self):
+        src = _src()
+        block = src[src.index("const shortfalls = []"):src.index("perSubject.push(record)")]
+        assert "duplicate candidate index" in block
+        assert "index outside 1.." in block
+        assert "allDispositions.length !== read" in block
+        assert "count !== null && read !== count" in block
+        assert "d.disposition === 'written' && !sectionSet.has(d.section)" in block
+        assert "d.disposition === 'deferred' && !String(d.reason || '').trim()" in block
+        assert "does not appear exactly once in the dispositions" in block
+
+    def test_incomplete_subjects_are_counted_and_named(self):
+        src = _src()
+        assert "if (r.incomplete) acc.incomplete++" in src
+        assert "incomplete: 0," in src
+        assert "const incompleteNote" in src
+        assert "did NOT close their candidate " in src
+
+    def test_a_skipped_subject_closes_at_zero_and_is_exempt_from_the_count(self):
+        """A skip can legitimately carry a non-zero candidateCount: the report
+        exists, the caller chose not to spend it."""
+        src = _src()
+        literal = src[src.index("if (s.skipNote) {"):src.index("// Only children that ACTUALLY")]
+        assert "candidatesRead: 0, candidateDispositions: []" in literal
+        assert "writtenFalseReason: 'null-branch'" in literal
+        assert "const count = subj.skipNote ? null : candidateCountOf(subj)" in src
+
+
+class TestNoBacktickedNewVocabulary:
+    """The reasonCode and disposition names must never be backtick-quoted in
+    prompt prose -- that is the shape that shipped coverage-detect.js unrunnable
+    in 0.47.0. TestNoAccidentalTaggedTemplate is the general guard; this names
+    the vocabulary this change introduced."""
+
+    VOCAB = [
+        "already-ambient", "not-evidenced-here", "superseded-by-broader-candidate",
+        "below-local-value-bar", "destination-outside-this-directory",
+        "written", "declined", "deferred", "null-branch", "input-unreadable",
+        "candidatesRead", "candidateDispositions", "writtenFalseReason", "created",
+    ]
+
+    def test_no_new_name_appears_backtick_quoted(self):
+        src = _src()
+        offenders = [word for word in self.VOCAB if "`" + word + "`" in src]
+        assert offenders == [], offenders

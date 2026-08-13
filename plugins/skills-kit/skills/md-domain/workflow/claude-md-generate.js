@@ -37,6 +37,7 @@
 //   subjects: [ { root: string,
 //                 codeFiles: string[],
 //                 reportPath: string|undefined,     // PREFERRED -- the agent reads it
+//                 candidateCount: integer,          // REQUIRED with reportPath; see below
 //                 candidates: [ ... ]|undefined,    // legacy inline form; see below
 //                 ambientClaudeMdPaths: string[],   // HINT ONLY -- the agent derives its own
 //                 skipNote: string|null } ],        // set => null branch, no document
@@ -51,6 +52,12 @@
 //   - ambientClaudeMdPaths is a HINT -- a caller list is a snapshot that goes stale
 //     the moment an earlier wave writes an ancestor, which is precisely the document
 //     the run must not duplicate.
+// candidateCount is the EXCEPTION to that split, and deliberately so. The agent's own
+// candidatesRead is self-attested and defeatable -- an agent that reads 14, expresses
+// 12 and reports candidatesRead 12 passes every internal check -- so the denominator
+// must come from a party that did not do the expressing. The caller resolved
+// reportPath, so it can read the report and count its candidates array. Required
+// whenever reportPath is set; derived from the array for the inline form.
 //
 // finishedDocuments makes the corpus walkable INCREMENTALLY. Composition input comes
 // from writtenByRoot, which this run alone populates, so without it a parent can only
@@ -174,6 +181,33 @@ if (compositionOnly.length) {
       compositionOnly.map((s) => String(s.root)).join(', '))
 }
 
+// THE DENOMINATOR IS CALLER-SUPPLIED, AND IT IS FAIL-CLOSED FOR THE SAME REASON THE
+// standards SEAM IS. Candidate accounting compares what the agent says it read against
+// a count the agent did not produce; without that second party, "112 of 122 expressed"
+// degrades to "112 of however many I chose to mention", which is exactly the shape the
+// silent-drop defect took -- 2 candidates with no terminal disposition anywhere and
+// every internal check green. An inline-candidates subject needs nothing from the
+// caller: the array in hand IS the count.
+const candidateCountOf = (s) => {
+  if (Number.isInteger(s.candidateCount)) return s.candidateCount
+  if (Array.isArray(s.candidates)) return s.candidates.length
+  return null
+}
+const uncounted = subjects.filter(
+  (s) => !s.skipNote && s.reportPath && !Number.isInteger(s.candidateCount)
+)
+if (uncounted.length) {
+  throw new Error(
+    'claude-md-generate: subject(s) with a reportPath and no candidateCount: ' +
+    uncounted.map((s) => String(s.root)).join(', ') + '. candidateCount is the LENGTH ' +
+    'OF THE candidates ARRAY in that report -- read the JSON at reportPath and pass ' +
+    'its candidates.length as an integer on the subject. It is required because the ' +
+    'agent\'s own candidatesRead cannot be checked against anything it did not also ' +
+    'produce, so a candidate the agent never mentioned would leave no trace at all. ' +
+    'See references/lanes/generation-lane.md.'
+  )
+}
+
 const DOC_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -181,7 +215,9 @@ const DOC_SCHEMA = {
   // satisfy on paper and omit in fact -- the same reasoning that makes `notes`
   // required in coverage-detect.js.
   required: [
-    'root', 'written', 'path', 'sections', 'droppedCandidates', 'verifications',
+    'root', 'written', 'writtenFalseReason', 'path', 'sections',
+    'candidatesRead', 'candidateDispositions',
+    'droppedCandidates', 'verifications',
     'hoists', 'candidateHoists', 'notProposed', 'notes',
   ],
   properties: {
@@ -190,8 +226,53 @@ const DOC_SCHEMA = {
     // with no insight worth capturing at its scope. It must be recorded rather
     // than left implicit, or "every directory is done" is unfalsifiable.
     written: { type: 'boolean' },
+    // WHICH false, and the two are not the same result. A JUDGED null branch is a
+    // directory assessed and found to earn no ambient cost -- its verified hoists
+    // still belong in a document, so the apply step creates one. An UNREADABLE
+    // INPUT is a failed read: the directory was never assessed at all, and writing
+    // it from hoists alone is what the inputless guard above refuses. Folding them
+    // into one boolean is how a verified hoist got discarded silently.
+    writtenFalseReason: {
+      type: 'string',
+      enum: ['null-branch', 'input-unreadable', 'n/a'],
+    },
     path: { type: 'string' },
     sections: { type: 'array', items: { type: 'string' } },
+    // HOW MANY CANDIDATES THIS RUN ACTUALLY READ. Required and integer so that 0 --
+    // a legitimate answer for a directory with no report -- is distinguishable from
+    // a field the run omitted. Checked against the caller's candidateCount.
+    candidatesRead: { type: 'integer' },
+    // ONE TERMINAL DISPOSITION PER CANDIDATE READ. The defect this exists for is
+    // silent: of 122 fresh candidates one run expressed 112 and declined 8, and the
+    // other 2 appeared in no field at all -- droppedCandidates and notProposed both
+    // empty, every count internally consistent.
+    //
+    // The agent authors the written and deferred entries ONLY. The declined entries
+    // are DERIVED IN CODE from droppedCandidates, because two agent-authored records
+    // of one decline can disagree and this file already refuses a second statement
+    // of a thing it can derive.
+    //
+    // factExcerpt is required and load-bearing rather than decorative. Coverage is
+    // expressly non-idempotent, so an index into a REGENERATED report names a
+    // different candidate; the excerpt cannot be verified here, but it makes the
+    // record self-describing and index drift visible to a reader. It is a WORKAROUND
+    // for the absent stable candidate id (P1 of the coverage-lane deficiencies plan,
+    // unimplemented) -- not the intended end state.
+    candidateDispositions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['index', 'factExcerpt', 'disposition'],
+        properties: {
+          index: { type: 'integer' },
+          factExcerpt: { type: 'string' },
+          disposition: { type: 'string', enum: ['written', 'declined', 'deferred'] },
+          section: { type: 'string' },
+          reason: { type: 'string' },
+        },
+      },
+    },
     // A candidate the run declined. Required with a reason so a dropped fact is
     // never silently absent -- the retired promotion machinery in older persisted
     // reports makes this the likeliest way a fact goes missing.
@@ -200,10 +281,28 @@ const DOC_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['fact', 'reason'],
+        required: ['index', 'fact', 'reason', 'reasonCode'],
         properties: {
+          // 1-based position in the report's candidates array. This is what lets
+          // the lane derive the declined dispositions from here rather than take a
+          // second, disagreeable statement of the same decline.
+          index: { type: 'integer' },
           fact: { type: 'string' },
           reason: { type: 'string' },
+          // The free-text reason above stays: a code is comparable across runs and
+          // a sentence is actionable, and neither replaces the other. The fifth
+          // code exists because escalateToAncestor below maps to none of the other
+          // four, and it was used three times in one live run.
+          reasonCode: {
+            type: 'string',
+            enum: [
+              'already-ambient',
+              'not-evidenced-here',
+              'superseded-by-broader-candidate',
+              'below-local-value-bar',
+              'destination-outside-this-directory',
+            ],
+          },
           // Set when the candidate names a destination outside this directory.
           // Those are the pre-settled-model reports, and the fact is at risk of
           // being lost entirely -- it can only re-enter at an ancestor by
@@ -369,17 +468,26 @@ const VERIFY_SCHEMA = {
   },
 }
 
-// The apply step. Separate from composition because the composing run wrote a
-// document with NO hoists in it, so the survivors are an ADDITION to an existing
-// file rather than a filter over one -- there is nothing to retract, which is the
+// The apply step. Separate from composition because the composing run never wrote
+// a hoist, so the survivors are an ADDITION to a document written without any --
+// or, when the composition took the JUDGED null branch, the whole content of a
+// document created here. Either way it is never a filter over a file that already
+// holds speculative sentences, so there is nothing to retract, which is the
 // property the whole ordering buys.
 const APPLY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['root', 'path', 'applied', 'notes'],
+  // created and sections are TOP LEVEL, not per applied item. created is what tells
+  // the lane a document now exists for a subject whose composition returned written
+  // false -- without it the run reports a null branch over a file on disk, and the
+  // parent never offers it as composition input. sections is here because a created
+  // document's compose step returned none.
+  required: ['root', 'path', 'created', 'sections', 'applied', 'notes'],
   properties: {
     root: { type: 'string' },
     path: { type: 'string' },
+    created: { type: 'boolean' },
+    sections: { type: 'array', items: { type: 'string' } },
     applied: {
       type: 'array',
       items: {
@@ -469,17 +577,22 @@ for (const r of subjectRoots) {
   waves[w].push(r)
 }
 
-const lanePrompt = (s, root, writtenChildren) => {
-  // The ambient chain is DERIVED BY THE AGENT, not trusted from the caller.
-  // A caller-supplied list is a snapshot, and it goes stale the moment an earlier
-  // wave writes an ancestor document -- which is exactly when it matters most,
-  // because that ancestor is the one thing this run must not duplicate. Observed
-  // live in 0.49.0: a run was handed only the repo root while its real parent
-  // existed on disk, and the fact that the child noticed and corrected it is the
-  // only reason the output was not a C-1 duplication.
-  //
-  // The agent has filesystem access and the workflow script does not, so the
-  // derivation belongs on that side. Any caller-supplied list is a HINT.
+// The ambient chain is DERIVED BY THE AGENT, not trusted from the caller.
+// A caller-supplied list is a snapshot, and it goes stale the moment an earlier
+// wave writes an ancestor document -- which is exactly when it matters most,
+// because that ancestor is the one thing this run must not duplicate. Observed
+// live in 0.49.0: a run was handed only the repo root while its real parent
+// existed on disk, and the fact that the child noticed and corrected it is the
+// only reason the output was not a C-1 duplication.
+//
+// The agent has filesystem access and the workflow script does not, so the
+// derivation belongs on that side. Any caller-supplied list is a HINT.
+//
+// DECLARED HERE RATHER THAN INSIDE lanePrompt because the CREATE variant of the
+// apply step needs the identical text: a document created from verified hoists
+// alone has an ambient chain like any other, and without this clause C-1 is
+// unenforced on exactly the documents that path newly produces.
+const chainClauseFor = (s) => {
   const chain = s.ambientClaudeMdPaths || []
   const hintClause = chain.length
     ? '\n\nThe caller believes the chain to be the list below. Treat it as a HINT ONLY, ' +
@@ -487,9 +600,7 @@ const lanePrompt = (s, root, writtenChildren) => {
       'snapshot taken before an ancestor was written:\n' +
       chain.map((p) => '  - ' + p).join('\n')
     : ''
-
-  const chainClause =
-    'DERIVE YOUR OWN AMBIENT CHAIN FIRST, BEFORE ANYTHING ELSE. Walk UP from this ' +
+  return 'DERIVE YOUR OWN AMBIENT CHAIN FIRST, BEFORE ANYTHING ELSE. Walk UP from this ' +
     'directory to the repository root, collecting every CLAUDE.md you find on the way ' +
     '(stop at the directory containing .git). Those, root-most first, are the documents ' +
     'ambient for this code. Do not assume the set; look.\n\n' +
@@ -502,6 +613,21 @@ const lanePrompt = (s, root, writtenChildren) => {
     'If what you find differs from the caller hint below, SAY SO IN NOTES. That ' +
     'disagreement is a caller defect worth surfacing, not a detail to absorb quietly.' +
     hintClause
+}
+
+// Also shared with the CREATE variant, and for the same reason: a created document
+// is a code-directory CLAUDE.md exactly as a composed one is, and a step that does
+// not say so writes the wrong artifact in the right place.
+const artifactTypeClause =
+  'ARTIFACT TYPE. This is a CODE-DIRECTORY CLAUDE.md -- a review-notes file, the BRANCH ' +
+  'in step 1 of ' + laneRef + '. It carries NO claude_md: YAML block and the schema ' +
+  'validator is NEVER run on it. Follow the code-directory section of ' + standardsRef +
+  ' in the PRODUCING direction: the documented shapes, the high-value observation kinds, ' +
+  'symbol anchors in preference to line numbers, no machine-specific absolute paths, and ' +
+  'the value gate applied to every entry.'
+
+const lanePrompt = (s, root, writtenChildren) => {
+  const chainClause = chainClauseFor(s)
 
   const compositionClause = writtenChildren.length
     ? '\nCOMPOSITION -- THIS DIRECTORY HAS CHILDREN, AND THEIR DOCUMENTS ARE YOUR SECOND INPUT.\n' +
@@ -591,9 +717,11 @@ const lanePrompt = (s, root, writtenChildren) => {
       'It is JSON with a "candidates" array; each entry carries "fact", "why", ' +
       '"anchors" (file:line evidence), "destination" and "tier". Read the file before ' +
       'writing anything. Carry the anchors through rather than re-deriving citations.\n' +
-      'If the file is missing or unreadable, SAY SO IN NOTES and set written false -- ' +
-      'do not improvise candidates from the code, which would silently substitute an ' +
-      'un-assessed directory for an assessed one.'
+      'If the file is missing or unreadable, SAY SO IN NOTES, set written false AND set ' +
+      'writtenFalseReason to input-unreadable -- do not improvise candidates from the ' +
+      'code, which would silently substitute an un-assessed directory for an assessed ' +
+      'one. That value is not interchangeable with null-branch: it says this directory ' +
+      'was never assessed, so nothing may be written for it from any other source.'
     : candidates.length
       ? '\nCOVERAGE CANDIDATES for this directory (' + candidates.length + '), inlined by ' +
         'the caller. Pre-derived facts with evidence anchors; carry the anchors through ' +
@@ -606,12 +734,7 @@ const lanePrompt = (s, root, writtenChildren) => {
     'Directory: ' + root + '\n' +
     'Its own direct code files, NON-RECURSIVE (' + (s.codeFiles || []).length + '):\n' +
     (s.codeFiles || []).map((p) => '  - ' + p).join('\n') + '\n\n' +
-    'ARTIFACT TYPE. This is a CODE-DIRECTORY CLAUDE.md -- a review-notes file, the BRANCH ' +
-    'in step 1 of ' + laneRef + '. It carries NO claude_md: YAML block and the schema ' +
-    'validator is NEVER run on it. Follow the code-directory section of ' + standardsRef +
-    ' in the PRODUCING direction: the documented shapes, the high-value observation kinds, ' +
-    'symbol anchors in preference to line numbers, no machine-specific absolute paths, and ' +
-    'the value gate applied to every entry.\n\n' +
+    artifactTypeClause + '\n\n' +
     'Placement within the document defers to ' + placementRef + '. The placement of the ' +
     'DOCUMENT itself is already resolved: it is this directory own CLAUDE.md.\n' +
     chainClause + compositionClause + candidateClause + '\n\n' +
@@ -627,6 +750,33 @@ const lanePrompt = (s, root, writtenChildren) => {
     'wrongness invites correction -- code that looks wrong on purpose, documented ' +
     'with its reason, an explicit do-not-simplify, and what to do instead, because ' +
     'the code shows the oddity without showing the intent.\n\n' +
+    'EVERY CANDIDATE GETS EXACTLY ONE TERMINAL DISPOSITION, AND THE ACCOUNTING IS CHECKED.\n' +
+    'NUMBER THE CANDIDATES AS YOU READ THEM, from 1, in the order they appear in the ' +
+    'candidates array. Report how many you read in candidatesRead -- the count of what you ' +
+    'actually read, not the count of what you used. A run that expressed 112 of 122 and ' +
+    'declined 8 left 2 with no terminal disposition anywhere, in no field at all, and every ' +
+    'number it reported was internally consistent. That is the failure this closes.\n' +
+    'Where each disposition goes, and this split is not a style choice:\n' +
+    '  - WRITTEN or DEFERRED go in candidateDispositions, one entry per candidate, with ' +
+    'index, factExcerpt (the candidate fact verbatim, first 80 characters or so), and ' +
+    'disposition. A written entry names the section of THIS document that took it. A ' +
+    'deferred entry carries a non-empty reason.\n' +
+    '  - A DECLINE goes in droppedCandidates ONLY -- with index, fact, reasonCode and a ' +
+    'free-text reason. Do NOT also list it in candidateDispositions. The lane derives the ' +
+    'declined entries from droppedCandidates, and two records of one decline can disagree.\n' +
+    'The five reasonCode values, and choose the one that is true rather than the one that ' +
+    'is convenient: already-ambient (an ancestor carries it), not-evidenced-here (the ' +
+    'anchors do not support it against this code), superseded-by-broader-candidate (another ' +
+    'candidate you wrote states it more generally), below-local-value-bar (true, evidenced, ' +
+    'and not worth ambient cost here), destination-outside-this-directory (see the next ' +
+    'paragraph -- set escalateToAncestor as well).\n' +
+    'factExcerpt is required because coverage is not idempotent: an index alone names a ' +
+    'different candidate the moment the report is regenerated, so the excerpt is what makes ' +
+    'the record readable later.\n\n' +
+    'SAY WHICH FALSE IT IS. When written is false, writtenFalseReason is null-branch (you ' +
+    'assessed this directory and nothing earned ambient cost) or input-unreadable (you ' +
+    'could not read the report, so you assessed nothing). When written is true it is n/a. ' +
+    'The two false values are different results and are treated differently downstream.\n\n' +
     'A CANDIDATE NAMING A DESTINATION OUTSIDE THIS DIRECTORY. Older persisted reports were ' +
     'produced under a retired model in which an assessment could nominate an ancestor. Do ' +
     'NOT write such a fact here as though it governed this directory. But do NOT drop it ' +
@@ -657,8 +807,11 @@ const lanePrompt = (s, root, writtenChildren) => {
     'ask whether the honest remedy is a code fix or a loud failure. If you judge so, say ' +
     'it in notes -- not in the document, and do not fix it yourself.\n\n' +
     'THE NULL BRANCH IS A REAL RESULT. If nothing in this directory earns ambient cost at ' +
-    'this scope level, write NO file, set written false, and say why in notes. That is an ' +
-    'admissible outcome, not a failure -- but it must be RECORDED, never left implicit.\n\n' +
+    'this scope level, write NO file, set written false, set writtenFalseReason to ' +
+    'null-branch, and say why in notes. That is an admissible outcome, not a failure -- but ' +
+    'it must be RECORDED, never left implicit. Note that a null branch does NOT discard ' +
+    'your hoist candidates: a verified hoist still belongs at this depth, and the apply ' +
+    'step creates a document for it. Propose them as you would otherwise.\n\n' +
     'ASCII only. Write exactly one file and touch nothing else. Do not stage, commit, or ' +
     'create or switch any git branch.\n\n' +
     'Return the structured object.'
@@ -674,12 +827,25 @@ const lanePrompt = (s, root, writtenChildren) => {
 // what the dependency forbids -- a shallower wave composes from documents this
 // wave has not finished resolving yet.
 const verifyPrompt = (r) => {
+  // A null-branch subject has NO document, and telling this step that one exists is
+  // a false premise it cannot detect -- it was told exactly that in a live run. The
+  // candidates are settled against their own claimedOver either way, so the branch
+  // costs nothing and removes an invitation to go looking for a missing file.
+  const documentClause = r.written
+    ? 'Its document, already written: ' + (r.path || (r.root + '/CLAUDE.md')) + '\n\n' +
+      'A composition of this directory proposed the candidates below. NONE of them is in ' +
+      'the document, and none may be put there by you. Your entire job is to return one ' +
+      'disposition per candidate id.\n\n'
+    : 'NO DOCUMENT EXISTS FOR THIS DIRECTORY YET. Its composition took the null branch -- ' +
+      'nothing in its own direct code earned ambient cost -- so there is no CLAUDE.md here ' +
+      'to read, and its absence is expected rather than a fault to investigate. That ' +
+      'changes nothing about your job: each candidate is settled against the files named ' +
+      'in its own claimedOver, and never against the document. Your entire job is to ' +
+      'return one disposition per candidate id.\n\n'
+
   return 'Settle proposed CLAUDE.md hoist candidates. Decide them; write nothing.\n\n' +
     'Directory: ' + r.root + '\n' +
-    'Its document, already written: ' + (r.path || (r.root + '/CLAUDE.md')) + '\n\n' +
-    'A composition of this directory proposed the candidates below. NONE of them is in ' +
-    'the document, and none may be put there by you. Your entire job is to return one ' +
-    'disposition per candidate id.\n\n' +
+    documentClause +
     JSON.stringify(r.candidateHoists, null, 2) + '\n\n' +
     'HOW TO SETTLE EACH ONE, by its check.kind:\n' +
     '  - mechanical: run the command in check.detail as a READ-ONLY command, from the ' +
@@ -714,9 +880,12 @@ const verifyPrompt = (r) => {
 }
 
 // Step 3 of the wave. The survivors, and only the survivors, enter the document.
-// This is an ADDITION to a file that was written without any hoist in it, not a
-// filter over a file that already contains speculative ones -- which is why no
-// retraction path exists to fail.
+// It is never a filter over a file that already contains speculative sentences --
+// which is why no retraction path exists to fail. It takes one of two shapes: an
+// ADDITION to a document written without any hoist in it, or, when the composition
+// took the judged null branch, the CREATION of the document those hoists now
+// justify. The second shape exists because the survivors of a null-branch subject
+// were previously discarded in silence.
 const applyPrompt = (r, verified) => {
   return 'Add VERIFIED hoists to an existing CLAUDE.md. Add exactly these and nothing ' +
     'else.\n\n' +
@@ -737,6 +906,49 @@ const applyPrompt = (r, verified) => {
     'child.\n\n' +
     'ASCII only. Edit exactly one file. Do not stage, commit, or create or switch any git ' +
     'branch.\n\n' +
+    'Set created false -- this document already existed. Report the sections you touched ' +
+    'in sections.\n\n' +
+    'Return the structured object.'
+}
+
+// The CREATE variant, for a subject whose composition took the JUDGED null branch
+// and whose candidates then survived verification. It is a separate builder rather
+// than a flag on the one above because it needs two clauses that step never had:
+// the ambient chain (without it a created document restates whatever an ancestor
+// already carries, and C-1 goes unenforced on exactly the documents this path newly
+// produces) and the artifact type (without it the step writes some other kind of
+// markdown in a code directory). Both are shared verbatim with the compose prompt.
+//
+// It is NOT reachable for an input-unreadable subject. That distinction is enforced
+// at the apply filter, not here -- a prompt cannot refuse a dispatch it received.
+const createPrompt = (s, r, verified) => {
+  return 'CREATE a code-directory CLAUDE.md holding exactly these VERIFIED hoists, and ' +
+    'nothing else.\n\n' +
+    'Directory: ' + r.root + '\n' +
+    'Document to create: ' + (r.path || (r.root + '/CLAUDE.md')) + '\n\n' +
+    'THIS DIRECTORY HAS NO DOCUMENT YET, AND THAT IS THE EXPECTED STATE. Its composition ' +
+    'assessed its own direct code and found nothing that earned ambient cost -- a real ' +
+    'result, not a failure. What it DID find is the hoists below: facts drawn from its ' +
+    'children documents, worded true at this depth, and each one then checked against the ' +
+    'files it named. A verified hoist belongs at this depth whether or not the directory ' +
+    'own code had anything to say, so the document exists to carry them.\n\n' +
+    'Each entry below is SETTLED: write each sentence as given. Rewording it here would ' +
+    'put an unverified claim into the document under a verified claim disposition, which ' +
+    'is the one outcome this whole ordering exists to prevent. If a wording cannot be ' +
+    'placed as written, leave it out and say so in notes.\n\n' +
+    JSON.stringify(verified, null, 2) + '\n\n' +
+    artifactTypeClause + '\n\n' +
+    chainClauseFor(s) + '\n\n' +
+    'Placement within the document defers to ' + placementRef + ', and the surface form ' +
+    'to the code-directory section of ' + standardsRef + '. Create the sections these ' +
+    'sentences need and no others, and report which section took each sentence.\n\n' +
+    'ADD NOTHING BEYOND THE SENTENCES ABOVE. Do not re-assess this directory own code, do ' +
+    'not add an orientation paragraph describing what the directory contains (it earns ' +
+    'nothing), and do NOT touch the child documents -- removing the child copies a hoist ' +
+    'obliges is a separate run per child.\n\n' +
+    'ASCII only. Write exactly one file. Do not stage, commit, or create or switch any git ' +
+    'branch.\n\n' +
+    'Set created true and report the sections you created in sections.\n\n' +
     'Return the structured object.'
 }
 
@@ -762,6 +974,9 @@ const resolvedRoots = new Set()
 // over children sharing nothing hoistable AND a run whose verification step never
 // executed; these numbers are what tell those two apart.
 const waveRecords = []
+// Subjects whose verified hoists had no document to land in. Collected across waves
+// so the end-of-run summary names them, since a per-wave log line scrolls away.
+const createFailures = []
 
 // A directory finished by an earlier run satisfies both: it is resolved, and it
 // has a document to offer its parent.
@@ -815,9 +1030,18 @@ for (let w = 0; w < waves.length; w++) {
 
     // A subject the caller marked as skipped never reaches an agent. Deciding it
     // here, mechanically, keeps a skip from being reported as a written document.
+    //
+    // It closes its candidate accounting at ZERO -- nothing was read, so nothing
+    // needs a disposition -- and it is EXEMPT from the candidateCount cross-check
+    // below, because a skipped subject can legitimately carry a non-zero
+    // candidateCount: the report exists, the caller chose not to spend it.
+    // writtenFalseReason is null-branch because no document is produced and the
+    // reason is not a failed read; nothing downstream can create one for it, since
+    // a skip proposes no candidates and so is never an apply target.
     if (s.skipNote) {
       return Promise.resolve({
-        root, written: false, path: '', sections: [], droppedCandidates: [],
+        root, written: false, writtenFalseReason: 'null-branch', path: '', sections: [],
+        candidatesRead: 0, candidateDispositions: [], droppedCandidates: [],
         verifications: [], hoists: [], candidateHoists: [], notProposed: [],
         notes: ['skipped by caller: ' + s.skipNote],
       })
@@ -938,19 +1162,52 @@ for (let w = 0; w < waves.length; w++) {
         (dispositionsByRoot.get(r.root) || []).some(
           (d) => d.id === c.id && d.disposition === 'hoist-verified')),
     }))
-    .filter((t) => t.verified.length && t.r.written)
+    // SURVIVORS ARE THE PREDICATE; the document's existence is not. A composition
+    // that took the JUDGED null branch still proposed candidates, and a candidate
+    // that survived verification is a fact established at THIS depth -- discarding
+    // it because the directory's own code had nothing to say loses a verified fact
+    // in silence, which is what this filter used to do. An INPUT-UNREADABLE subject
+    // is the opposite case and stays excluded: it was never assessed, so writing a
+    // document for it is the thing the inputless guard refuses. godot/extensions --
+    // nulled with zero survivors -- is the control confirming that t.verified.length
+    // remains the core of the predicate.
+    .filter((t) => t.verified.length &&
+      (t.r.written || t.r.writtenFalseReason === 'null-branch'))
   const appliedByRoot = new Map()
   if (applyTargets.length) {
     const applied = await parallel(applyTargets.map((t) => () =>
-      agent(applyPrompt(t.r, t.verified), {
-        label: 'apply-hoists:' + t.r.root.split('/').pop(),
-        phase: 'Generate',
-        model: 'opus',
-        effort: 'high',
-        schema: APPLY_SCHEMA,
-      }).then((a) => ({ ...a, root: t.r.root }))
+      agent(
+        t.r.written
+          ? applyPrompt(t.r, t.verified)
+          : createPrompt(byRoot.get(t.r.root) || {}, t.r, t.verified),
+        {
+          label: (t.r.written ? 'apply-hoists:' : 'create-from-hoists:') +
+            t.r.root.split('/').pop(),
+          phase: 'Generate',
+          model: 'opus',
+          effort: 'high',
+          schema: APPLY_SCHEMA,
+        }).then((a) => ({ ...a, root: t.r.root }))
     ))
     for (const a of applied.filter(Boolean)) appliedByRoot.set(norm(a.root), a)
+  }
+
+  // REPLACES THE DIAGNOSTIC THIS FIX RETIRES. unappliedNote at the end of the run
+  // is what CAUGHT the silent discard, and it stops firing once the create path
+  // works. Without a successor, a future break in that path reverts to exactly the
+  // same silent loss with nothing in the output to show it. A note, not a throw:
+  // the rest of the corpus is unaffected and a half-written run helps nobody.
+  for (const t of applyTargets) {
+    if (t.r.written) continue
+    const a = appliedByRoot.get(t.r.root)
+    if (!a || a.created !== true) {
+      const failure = t.r.root + ' (' + t.verified.length + ' verified hoist(s))'
+      createFailures.push(failure)
+      log('LOSS: ' + failure + ' took the null branch, its hoists were verified, and the ' +
+          'apply step did NOT report creating a document. Those settled sentences exist ' +
+          'nowhere. This is the failure the create path was added to close -- treat a ' +
+          'recurrence as that path breaking, not as an odd result.')
+    }
   }
 
   // The barrier above is the dependency. Record what this wave produced BEFORE
@@ -980,13 +1237,103 @@ for (let w = 0; w < waves.length; w++) {
       else unverifiable++
     }
 
-    const record = { ...r, hoists, hoistDispositions: dispositions }
+    // CANDIDATE ACCOUNTING. The declined dispositions are DERIVED from
+    // droppedCandidates rather than authored beside it, for the same reason hoists
+    // is derived above: two agent-authored records of one decline can disagree, and
+    // nothing could then say which is true. The merged set is what the checks below
+    // and every later reader see.
+    const declined = (r.droppedCandidates || []).map((d) => ({
+      index: d.index,
+      factExcerpt: String(d.fact || '').slice(0, 80),
+      disposition: 'declined',
+      reason: String(d.reasonCode || 'unspecified') + ': ' + String(d.reason || ''),
+    }))
+    const allDispositions = (r.candidateDispositions || []).concat(declined)
+
+    const created = !!(applied && applied.created === true)
+    const record = { ...r, hoists, hoistDispositions: dispositions, created,
+                     candidateDispositions: allDispositions }
+    if (created) {
+      // The composition returned path '' and sections [] because it wrote nothing.
+      // A created document exists, so the record must say where it is and what is
+      // in it -- otherwise perSubject reports a null branch over a file on disk and
+      // every downstream count reads that report rather than the disk.
+      record.path = applied.path || (r.root + '/CLAUDE.md')
+      record.sections = applied.sections || []
+    }
     if (applied && applied.notes && applied.notes.length) {
       record.notes = (r.notes || []).concat(applied.notes.map((n) => 'apply: ' + n))
     }
+
+    // THE COMPLETENESS CHECK DOWNGRADES; IT DOES NOT THROW. By the time it runs,
+    // compose has already written every document in this wave to disk, so a throw
+    // aborts the run and leaves a half-written corpus with no result object at all
+    // -- trading a 1.6% accounting loss for a 100% one. It follows the read-bound
+    // precedent above (downgrade, say why in-line) rather than the verify-side
+    // throws, which fire before anything has been written. The contract it enforces
+    // is therefore: every candidate has a disposition, OR the run NAMES the subjects
+    // that failed to provide one. Both halves are falsifiable.
+    //
+    // The conditional requirements live here rather than in DOC_SCHEMA because the
+    // schema cannot express them -- a section that must exist in a sibling array, a
+    // reason required only for one enum value.
+    const subj = byRoot.get(r.root) || {}
+    const count = subj.skipNote ? null : candidateCountOf(subj)
+    const read = r.candidatesRead
+    const shortfalls = []
+    const indices = allDispositions.map((d) => d.index)
+    if (new Set(indices).size !== indices.length) {
+      shortfalls.push('duplicate candidate index/indices')
+    }
+    if (count !== null && indices.some((i) => !Number.isInteger(i) || i < 1 || i > count)) {
+      shortfalls.push('index outside 1..' + count)
+    }
+    if (allDispositions.length !== read) {
+      shortfalls.push(allDispositions.length + ' disposition(s) for ' + read +
+                      ' candidate(s) read')
+    }
+    if (count !== null && read !== count) {
+      shortfalls.push('read ' + read + ' of ' + count + ' candidate(s) in the report')
+    }
+    const sectionSet = new Set(record.sections || [])
+    for (const d of allDispositions) {
+      if (d.disposition === 'written' && !sectionSet.has(d.section)) {
+        shortfalls.push('written candidate ' + d.index + ' names section ' +
+                        JSON.stringify(d.section) + ', which this document does not have')
+      }
+      if (d.disposition === 'deferred' && !String(d.reason || '').trim()) {
+        shortfalls.push('deferred candidate ' + d.index + ' carries no reason')
+      }
+    }
+    for (const d of r.droppedCandidates || []) {
+      if (allDispositions.filter((x) => x.index === d.index).length !== 1) {
+        shortfalls.push('dropped candidate ' + d.index +
+                        ' does not appear exactly once in the dispositions')
+      }
+    }
+    // The two false values must stay distinguishable in both directions, or the
+    // apply filter above is deciding on a field nobody maintained.
+    const wfr = r.writtenFalseReason
+    if (r.written && wfr !== 'n/a') {
+      shortfalls.push('written true with writtenFalseReason ' + String(wfr))
+    }
+    if (!r.written && wfr === 'n/a') {
+      shortfalls.push('written false with writtenFalseReason n/a -- say which false it is')
+    }
+    if (shortfalls.length) {
+      record.incomplete = true
+      record.incompleteReasons = shortfalls
+      log('INCOMPLETE ACCOUNTING: ' + r.root + ' -- ' + shortfalls.join('; ') +
+          '. The run continues; the documents already written are unaffected.')
+    }
+
     perSubject.push(record)
     resolvedRoots.add(r.root)
-    if (r.written) writtenByRoot.add(r.root)
+    // A CREATED document counts exactly as a written one here. Without this the
+    // parent never reads it: writtenByRoot is what offers a child's document as
+    // composition input, so a document created from verified hoists would exist on
+    // disk and be invisible to every ancestor.
+    if (r.written || created) writtenByRoot.add(r.root)
   }
 
   waveRecords.push({
@@ -1002,8 +1349,21 @@ for (let w = 0; w < waves.length; w++) {
 // Totals. Derived, never taken on trust.
 // ---------------------------------------------------------------------------
 const totals = perSubject.reduce((acc, r) => {
-  if (r.written) acc.written++
+  // A DOCUMENT EXISTS EITHER WAY. r.written is the composition's answer about its
+  // own direct code; a created document is one the apply step wrote from verified
+  // hoists after that answer was false. Counting the second as a null branch is how
+  // a run reported "0 document(s) written ... 3 VERIFIED hoist(s)" with three
+  // documents on disk. created is counted separately as well, because the two are
+  // different provenances and a reader should be able to see how many of each.
+  const hasDocument = r.written || r.created
+  if (hasDocument) acc.written++
   else acc.nullBranch++
+  if (r.created) acc.created++
+  if (r.incomplete) acc.incomplete++
+  // r.sections is the apply step's list for a created document (see the record
+  // assembly above) and the composition's for a written one; compose returns none
+  // for a null branch, so reading it unconditionally undercounts by exactly the
+  // sections the create path produced.
   acc.sections += (r.sections || []).length
   // VERIFIED hoists only, because hoists now holds nothing else. The proposed
   // set is counted beside it rather than inside it: "proposed and refuted" and
@@ -1023,11 +1383,14 @@ const totals = perSubject.reduce((acc, r) => {
   // folding it into `dropped` is how it would go quiet.
   acc.escalated += (r.droppedCandidates || []).filter((d) => d.escalateToAncestor).length
   // A document with zero recorded verifications is not proof of anything, but it
-  // is the shape a report-not-artifact run takes, so it is surfaced.
-  if (r.written && !(r.verifications || []).length) acc.unverified++
+  // is the shape a report-not-artifact run takes, so it is surfaced. A CREATED
+  // document is in scope here too -- it is a document, and exempting it would let
+  // the create path be the one way to reach a corpus with no recorded checks.
+  if (hasDocument && !(r.verifications || []).length) acc.unverified++
   return acc
 }, {
-  written: 0, nullBranch: 0, sections: 0, hoists: 0, dropped: 0, escalated: 0,
+  written: 0, created: 0, nullBranch: 0, sections: 0, hoists: 0, dropped: 0,
+  escalated: 0, incomplete: 0,
   unverified: 0, proposed: 0, verified: 0, rejected: 0, unverifiable: 0, notProposed: 0,
 })
 
@@ -1037,6 +1400,28 @@ const totals = perSubject.reduce((acc, r) => {
 const unappliedNote = totals.verified > totals.hoists
   ? ', ' + (totals.verified - totals.hoists) + ' verified candidate(s) were NOT applied ' +
     'to a document -- review these, a settled wording that never landed is a loss'
+  : ''
+
+// The candidate accounting that did not close. LOUD and NAMED, because the whole
+// point of the downgrade is that the run finishes: a count alone would say a
+// disposition is missing without saying whose, and the alternative to naming them
+// here is the silence this replaced.
+const incompleteSubjects = perSubject.filter((r) => r.incomplete)
+const incompleteNote = incompleteSubjects.length
+  ? ', ' + incompleteSubjects.length + ' subject(s) did NOT close their candidate ' +
+    'accounting and are marked incomplete -- ' +
+    incompleteSubjects.map((r) => r.root + ' [' + (r.incompleteReasons || []).join('; ') + ']')
+      .join(' | ') +
+    '. Every candidate is meant to carry exactly one terminal disposition; for these ' +
+    'subjects that is unproven, so treat their reports as partial'
+  : ''
+
+// The successor to unappliedNote for the create path specifically; see the in-wave
+// check that fills this.
+const createFailureNote = createFailures.length
+  ? ', ' + createFailures.length + ' null-branch subject(s) had VERIFIED hoists and no ' +
+    'document was created for them: ' + createFailures.join(', ') +
+    ' -- those settled sentences exist nowhere'
   : ''
 
 // Proposed but zero-rate outcomes read very differently and must not be inferred
@@ -1070,10 +1455,15 @@ const nullNote = totals.nullBranch
   ? ', ' + totals.nullBranch + ' directory/ies took the null branch (no document, recorded)'
   : ''
 
+const createdNote = totals.created
+  ? ' (' + totals.created + ' of them CREATED by the apply step for a directory whose own ' +
+    'code earned nothing, from verified hoists alone)'
+  : ''
+
 log('Generate: ' + totals.written + ' document(s) written across ' + waves.length +
-    ' wave(s), ' + totals.sections + ' section(s), ' + totals.hoists +
-    ' VERIFIED hoist(s)' + candidateNote + unappliedNote +
-    nullNote + escalatedNote + unverifiedNote +
+    ' wave(s)' + createdNote + ', ' + totals.sections + ' section(s), ' + totals.hoists +
+    ' VERIFIED hoist(s)' + candidateNote + unappliedNote + createFailureNote +
+    incompleteNote + nullNote + escalatedNote + unverifiedNote +
     '. Verify against the ARTIFACT, not this report: a lane result describes what each ' +
     'run intended.')
 

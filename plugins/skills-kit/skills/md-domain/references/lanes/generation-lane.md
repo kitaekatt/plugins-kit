@@ -190,6 +190,33 @@ documents that are not yet finished. So each depth level runs compose, then
 verify, then write for that wave alone, and only then does the next (shallower)
 wave begin.
 
+**A judged null branch does NOT discard its verified hoists, and the write step
+creates the document they need.** The null branch is an answer about a
+directory's OWN DIRECT CODE -- nothing there earned ambient cost. It says nothing
+about the facts that directory's children established, and a hoist that survived
+verification is established at this depth whatever the local code had to say. So
+when a composition returns no document and its candidates survive, the write step
+CREATES one holding exactly those sentences; it derives its own ambient chain and
+follows the code-directory standards like any other. The directory then offers
+that document to its parent as composition input, exactly as a composed one does.
+
+**Which false it is must be recorded, because the two are treated differently.**
+A JUDGED null branch is the case above. An UNREADABLE INPUT -- the coverage report
+missing or unopenable -- means the directory was never assessed at all, and no
+document is created for it from any source; that is the same refusal the
+no-coverage-input guard makes. A run that records only "not written" cannot tell
+them apart, and the first one's verified hoists were previously lost in silence.
+
+**Every candidate gets exactly one terminal disposition, and the count comes from
+the caller.** A run states how many candidates it read and gives each one a
+disposition -- written, deferred, or (recorded once, in the dropped set with a
+reason code) declined. The denominator is the length of the report's candidates
+array, supplied by the caller that resolved the report path, because a count the
+same run produces cannot check that run's own omissions. When the accounting does
+not close, the run marks those subjects incomplete and NAMES them rather than
+aborting: the documents are already on disk by then, so the contract is "every
+candidate has a disposition, or the run says whose does not".
+
 **Where this sits in the spine.** Parent composition is a case WITHIN steps 1-5,
 not a replacement for them. Step 1 still confirms the artifact is a `claude-md`.
 Step 2's placement question is already answered -- the document is this
