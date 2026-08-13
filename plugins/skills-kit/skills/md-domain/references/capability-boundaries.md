@@ -95,12 +95,13 @@ destroyed at the moment it was noticed is not.
 The one place md-domain emits anything defect-shaped, and it is a RELEASE VALVE
 rather than an output.
 
-**STATUS: specified, not implemented.** No lane writes this file yet, and
-`standards/coverage-standards.md`'s "Code review" bullet still describes the
-superseded route -- a severe deficiency folded into the CLAUDE.md as content.
-That route is what this section replaces, and the criteria and lane changes
-implementing it are a separate change. Until they land, read this section as
-the design and that bullet as the behaviour.
+**STATUS: the criteria route here, the lane does not write the file yet.**
+`standards/coverage-standards.md` carries the admission rule
+(`hazard-durability`) and the boundary statement, so a coverage run is directed
+to this destination. The generation lane's write step is not implemented, so
+until it is, a run has nowhere to put what the criteria tell it to record --
+treat an absent CLAUDE-potential-defects.md as "not implemented", never as "no
+defects observed".
 
 A candidate fact is sometimes rejected from a CLAUDE.md by `hazard-durability`
 -- it describes a defect's transient state, which written as ambient prose

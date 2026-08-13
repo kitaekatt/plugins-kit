@@ -86,6 +86,20 @@ standards_set:
         suppressed and check that the commentary states THAT proposition -- a
         suppression whose justification is 'this area is documented' is
         mis-scoped.
+        A FACT ANCHORED TO A SINGLE SITE IS CHECKED AT THAT SITE. Before
+        admitting a fact whose subject is one file -- often one function or one
+        line -- read the site and state whether commentary there already
+        carries the proposition. If it does, the fact is recoverable and is
+        REJECTED. If it does not but a comment there would reach the reader who
+        would make the mistake, report that a comment is the remedy and do NOT
+        admit the fact: an ambient document loads for every reader beneath it to
+        deliver something the one reader who needs it would have seen anyway.
+        A single-site fact is admissible only when a comment at the site would
+        NOT serve -- the fact's other end is in another file, it must reach an
+        author writing NEW code rather than reading the existing code, it holds
+        across the directory, or the file cannot be edited. Judge by which of
+        those holds, never by how important the fact is; a very important fact
+        about one line is still a comment.
 
     - id: already-ambient-suppressed
       statement: >-
@@ -143,9 +157,17 @@ standards_set:
       example: >-
         ADMIT the invariant a defect reveals ("callers must X because Y is not
         checked anywhere"). REJECT the defect's transient state as prose: a fix
-        erases it and leaves a false instruction behind. A non-durable hazard
-        qualifies only when it is severe AND no fix is in flight, and it is then
-        reported as a severe deficiency, never as documentation content.
+        erases it and leaves a false instruction behind.
+        THE REJECTED OBSERVATION IS NOT DISCARDED. A non-durable hazard that is
+        severe goes to the directory's CLAUDE-potential-defects.md as an
+        UNVERIFIED possible defect -- never into the document, and never
+        rewritten as an invariant to get it in. That rewrite is a scope
+        widening, the same operation that turns a true observation into a false
+        ambient claim. The overflow file exists so this rejection stops
+        destroying information; it is a release valve, not an output, and
+        admission to it requires this criterion to have rejected the fact
+        first. Contract, format, and the consuming capability:
+        ../capability-boundaries.md.
 
     - id: loud-failure-excluded
       statement: >-
@@ -300,9 +322,15 @@ happened, which is precisely what the prompt exists to prevent.
   generation grants it no licence to write. It proposes a destination; it
   never creates or edits one. The generation lane is the only surface that
   writes.
-- **Code review.** Coverage never enumerates defects. A severe deficiency
-  noticed in passing is reported under CV-5's carve-out as CLAUDE.md content,
-  not as a defect list.
+- **Code review, and code audit.** Coverage never enumerates defects and never
+  goes looking for them. A severe deficiency noticed in passing -- while reading
+  this directory's own direct code for the purpose above, never by a hunting
+  pass -- is recorded as an UNVERIFIED possible defect in the directory's
+  CLAUDE-potential-defects.md, under `hazard-durability`. Coverage does not
+  verify it, decide whether it is worth fixing, or retire it once fixed; those
+  belong to a code-audit capability that does not exist yet. Who owns what, and
+  why the boundary is drawn at the subject rather than the topic:
+  ../capability-boundaries.md.
 
 ## Configuring these criteria
 
