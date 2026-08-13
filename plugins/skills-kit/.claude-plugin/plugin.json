@@ -1,6 +1,6 @@
 {
   "name": "skills-kit",
-  "version": "0.54.0",
+  "version": "0.55.0",
   "description": "Author and audit every md file a project loads or ships -- CLAUDE.md, SKILL.md, project docs, and their cross-references -- for placement, cohesion, and drift.",
   "author": {
     "name": "Christina"
