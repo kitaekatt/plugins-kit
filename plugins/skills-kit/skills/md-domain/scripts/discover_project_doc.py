@@ -54,6 +54,14 @@ _PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 if str(_PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_ROOT))
 
+# Sibling scripts are imported by module name; make this directory importable
+# even when the module is loaded by path (importlib) rather than run directly.
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from project_root import PROJECT_MARKERS, find_project_root  # noqa: E402,F401
+
 try:
     from skills_kit_lib.dirwalk import iter_dirs  # noqa: E402
 except Exception:  # pragma: no cover - fallback when the lib is unavailable
@@ -135,27 +143,15 @@ def role_hint(path: Path) -> str | None:
     return None
 
 
-# Project-root markers, VCS-agnostic: git, mercurial, svn, AND perforce
-# (.p4config.txt) -- the audited project may not be a git repo.
-_PROJECT_MARKERS = (".git", ".hg", ".svn", ".p4config.txt")
-
-
-def find_project_root(start: Path) -> Path | None:
-    """Nearest ancestor of `start` (inclusive) holding a project marker, else None.
-
-    Used to scope the inbound-citation (orphan) scan to the whole project even
-    when only a subdirectory is being audited -- a doc under .claude/docs is
-    cited from CLAUDE.md / skills elsewhere in the repo, so an orphan check that
-    only scanned .claude/docs would false-positive on nearly everything. Markers
-    cover git/hg/svn and Perforce (.p4config.txt) so non-git projects resolve too.
-    """
-    current = start if start.is_dir() else start.parent
-    while True:
-        if any((current / marker).exists() for marker in _PROJECT_MARKERS):
-            return current
-        if current == current.parent:
-            return None
-        current = current.parent
+# The project-root walk is shared with discover_coverage.py -- import rather
+# than copy so the marker set cannot drift. Re-exported under the historical
+# names because this module is the one callers and tests reach it through.
+#
+# Used here to scope the inbound-citation (orphan) scan to the whole project even
+# when only a subdirectory is being audited -- a doc under .claude/docs is cited
+# from CLAUDE.md / skills elsewhere in the repo, so an orphan check that only
+# scanned .claude/docs would false-positive on nearly everything.
+_PROJECT_MARKERS = PROJECT_MARKERS
 
 
 def _config_dir() -> Path:

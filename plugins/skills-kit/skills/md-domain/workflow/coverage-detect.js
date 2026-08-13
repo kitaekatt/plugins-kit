@@ -35,7 +35,8 @@
 //     (all produced by scripts/discover_coverage.py, which is side-effect free and
 //     reads no file contents. Do NOT recompute the ambient chain here: the chain
 //     INCLUDES a CLAUDE.md at the directory root, and its upward walk stops at the
-//     nearest .git so a nested repo never inherits the outer repo's chain. Both
+//     nearest PROJECT marker (.git/.hg/.svn/.p4config.txt) so a nested project
+//     never inherits the outer project's chain. Both
 //     are easy to get wrong by eye.)
 //   ceiling: integer|undefined   // candidate cap PER SUBTREE; default below
 //   depth: 'basic'|'advanced'    // resolved by the lane's intent gate

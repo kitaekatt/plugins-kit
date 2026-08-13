@@ -76,7 +76,12 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from discover_claude_md import CODE_DATA_EXT, _MD_LIKE, find_project_root  # noqa: E402
+from discover_claude_md import CODE_DATA_EXT, _MD_LIKE  # noqa: E402
+# The ambient chain stops at the PROJECT root, which is not the same question as
+# the claude-md audit lane's git boundary: a Perforce workspace has no .git
+# anywhere, so a git-only walk would report "no project" for every directory in
+# it and truncate the chain to the subject's own CLAUDE.md (or to nothing).
+from project_root import find_project_root  # noqa: E402
 from vcs_ignore import detect_vcs, ignored_paths  # noqa: E402
 
 # Directory basenames that are vendored / third-party or build output. Matched
@@ -159,10 +164,12 @@ def is_code_file(path: Path) -> bool:
 def ambient_chain(directory: Path) -> list[Path]:
     """Return the CLAUDE.md files ambient for `directory`, root-most first.
 
-    Walks from `directory` itself upward to the repository root, collecting
-    CLAUDE.md at each level. The walk stops at the nearest .git -- a nested
-    repository's chain is its own. Returns an empty list when nothing covers the
-    directory at all, which is the case the coverage verb most exists to surface.
+    Walks from `directory` itself upward to the PROJECT root, collecting
+    CLAUDE.md at each level. The walk stops at the nearest project marker
+    (.git/.hg/.svn/.p4config.txt -- see project_root.py) -- a nested project's
+    chain is its own, and a Perforce workspace resolves like a git one. Returns
+    an empty list when nothing covers the directory at all, which is the case the
+    coverage verb most exists to surface.
     """
     project_root = find_project_root(directory)
     chain: list[Path] = []
@@ -175,7 +182,7 @@ def ambient_chain(directory: Path) -> list[Path]:
             break
         if current == current.parent:
             break
-        # Outside a repo, do not climb past the named directory's own tree.
+        # Outside any project, do not climb past the named directory's own tree.
         if project_root is None:
             break
         current = current.parent

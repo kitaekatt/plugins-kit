@@ -131,6 +131,12 @@ def find_project_root(cwd: Path) -> Path | None:
     """Return the project root: the nearest directory at or above cwd that holds
     a .git entry (directory or file). None when cwd is not inside a git repo --
     the audit then treats cwd as having no in-project ancestors.
+
+    Deliberately git-ONLY, and the only such resolver in this scripts directory:
+    the claude-md audit lane's ancestor scope is defined by the git repository
+    boundary. Anything asking the broader question ("where does this PROJECT
+    start", including a Perforce workspace) must use project_root.find_project_root
+    instead -- do not widen this one.
     """
     current = cwd
     while True:

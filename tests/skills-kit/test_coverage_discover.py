@@ -139,6 +139,56 @@ class TestAmbientChain:
         assert [p.parent.name for p in chain] == ["inner"]
         assert all("outer" != p.parent.name for p in chain)
 
+    def test_perforce_workspace_resolves_its_ancestors(self, tmp_path):
+        """A P4 workspace has no .git anywhere; the chain must still climb.
+
+        A git-only root walk returns None here, which the guard below treats as
+        "no project" and turns into a self-only chain -- so every ancestor
+        CLAUDE.md a Perforce project actually loads went unseen, and the
+        already-ambient-suppressed criterion had nothing to suppress against.
+        """
+        ws = tmp_path / "workspace"
+        (ws / "Source" / "Editor" / "Private").mkdir(parents=True, exist_ok=True)
+        _write(ws / ".p4config.txt", "P4CLIENT=ws\n")
+        _write(ws / "CLAUDE.md", "# workspace\n")
+        _write(ws / "Source" / "CLAUDE.md", "# source\n")
+        _write(ws / "Source" / "Editor" / "CLAUDE.md", "# editor\n")
+
+        assert not (ws / ".git").exists()
+
+        chain = cov.ambient_chain(ws / "Source" / "Editor")
+        assert [p.parent.name for p in chain] == ["workspace", "Source", "Editor"]
+
+        # A deeper directory with no CLAUDE.md of its own still sees all three.
+        deep = cov.ambient_chain(ws / "Source" / "Editor" / "Private")
+        assert [p.parent.name for p in deep] == ["workspace", "Source", "Editor"]
+
+    def test_rootless_directory_still_does_not_climb(self, tmp_path):
+        """No marker of any kind: the walk must not leave the named tree.
+
+        The guard exists so a directory outside every project cannot pick up an
+        unrelated ancestor's CLAUDE.md (a home directory's, say). Widening the
+        marker set must not weaken it.
+        """
+        loose = tmp_path / "loose" / "src"
+        loose.mkdir(parents=True, exist_ok=True)
+        _write(tmp_path / "loose" / "CLAUDE.md", "# not a project\n")
+
+        assert cov.ambient_chain(loose) == []
+
+    def test_walk_stops_at_nested_perforce_boundary(self, tmp_path):
+        """The nested-project boundary holds for a non-git marker too."""
+        outer = _mkrepo(tmp_path / "outer")
+        _write(outer / "CLAUDE.md", "# outer\n")
+        inner = outer / "vendored" / "inner"
+        inner.mkdir(parents=True, exist_ok=True)
+        _write(inner / ".p4config.txt", "P4CLIENT=inner\n")
+        _write(inner / "CLAUDE.md", "# inner\n")
+
+        chain = cov.ambient_chain(inner)
+
+        assert [p.parent.name for p in chain] == ["inner"]
+
 
 class TestWalkDirectory:
     def test_collects_code_files_and_ignores_docs(self, tmp_path):

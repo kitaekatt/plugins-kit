@@ -86,6 +86,17 @@ class TestProjectBoundary:
         deep.mkdir(parents=True, exist_ok=True)
         assert discover.find_project_root(deep) == tmp_path / "proj"
 
+    def test_find_project_root_is_git_only(self, tmp_path):
+        """The claude-md audit lane's boundary is the git repo, deliberately.
+
+        discover_coverage moved to the VCS-agnostic walk in project_root.py; this
+        resolver must NOT follow it, or the audit lane's ancestor scope changes.
+        """
+        proj = tmp_path / "p4proj"
+        (proj / "a").mkdir(parents=True, exist_ok=True)
+        (proj / ".p4config.txt").write_text("P4CLIENT=x\n", encoding="utf-8")
+        assert discover.find_project_root(proj / "a") is None
+
     def test_ancestor_above_project_root_is_excluded(self, tmp_path):
         # CLAUDE.md above the project root must not be scanned.
         outside_md = tmp_path / "CLAUDE.md"
