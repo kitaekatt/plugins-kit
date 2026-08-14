@@ -232,6 +232,60 @@ Example:
 }
 ```
 
+## `agent_skills_link` — Codex Skill Discovery Link
+
+A **layered** boolean opt-out for an automatic project-root behavior:
+bootstrap links `<project>/.agents/skills` to `<project>/.claude/skills` so
+the Codex CLI (which reads project skills from `.agents/skills`) can invoke
+the same skills Claude Code reads from `.claude/skills`. Enabled by default
+-- there is no opt-in field, only an opt-out.
+
+```json
+{
+  "agent_skills_link": false
+}
+```
+
+- **Type**: strict JSON boolean. `type(value) is bool` in the implementation
+  (`plugins/bootstrap/bootstrap_lib/agent_skills_check.py`) -- `null`,
+  strings, and numbers (including `0`/`1`) are invalid and produce a failure.
+- **Absent or `true`**: automatic linking is enabled (the default).
+- **`false`**: opt out for the root governed by that manifest layer.
+- Layering follows the same 5-layer scalar-replacement precedence as every
+  other layered field (project-local > project > user-local > user > legacy
+  user), documented under "Layer Priority" below. Project `true` overrides
+  user `false`; project `false` overrides user `true`; a user value applies
+  only when no project layer overrides it.
+- Root-local: this field is NOT dispatched through `_MANIFEST_PHASES` (that
+  table's dispatch is truthy-gated, and `false` is the operative,
+  meaningful value here), so it cannot be declared by a shipped plugin's
+  own `bootstrap.json` -- only by a layered manifest
+  (`~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`), same
+  restriction as `project_npm` above.
+
+**Scope note (v1): current project root only.** The check links only when
+the current project directory IS the git repository root (`git rev-parse
+--show-toplevel` normalizes to the same path) -- Codex resolves a project
+root by walking up from CWD to a `project_root_markers` entry, defaulting to
+`.git`, so linking anywhere else would never be discovered by Codex. A
+directory that is not a git worktree at all, or that is nested inside one,
+is a quick-exit skip, not a failure. This also means a Perforce-only
+workspace with no `.git` is skipped for v1, even though the Perforce
+exclusion path is implemented in full -- a tree can be both git- and
+P4-managed. Plugin install paths are explicitly out of scope: a plugin
+cache directory is never a CWD and is not a git repo, so a link created
+there would never be discovered by Codex.
+
+Once `<project>/.agents` exists (by any means -- bootstrap's own link, or
+anything else), bootstrap performs exactly one `lstat` on later passes and
+stops: it will not repair a dangling or misdirected link, will not update
+VCS exclusions later, and will not preserve user content on a
+user-requested deletion. Delete `.agents` to make bootstrap rebuild it.
+
+See `plugins/bootstrap/skills/bootstrap/references/engine-internals.md` for
+the check/fix/re-check flow and `remediation-reference.md` for failure
+handling.
+
 ## `shared_libs` / `shared_lib_imports` — Cross-Plugin First-Party Libraries
 
 These two keys let one plugin reuse another plugin's first-party Python library **without declaring a dependency on the owning plugin** (reuse-by-availability). The engine shares the library SOURCE via a `.pth` file; it does NOT install third-party dependencies — each importing plugin declares those itself in its own `pyproject.toml` (a static test, `tests/bootstrap/test_dependency_completeness.py`, catches omissions).

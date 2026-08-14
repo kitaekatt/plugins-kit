@@ -776,6 +776,20 @@ def _main():
         bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in pn_ok)
         all_failures.extend(pn_failures)
 
+    # Step 3d3: agent_skills_link -- link <project>/.agents/skills to
+    # <project>/.claude/skills for Codex CLI discovery. Runs once per pass,
+    # even when the merged layered manifest is empty (the field defaults to
+    # enabled), and OUTSIDE _MANIFEST_PHASES -- see
+    # _run_agent_skills_link_check's docstring for why.
+    asl_value = layered_manifest.get("agent_skills_link") if layered_manifest else None
+    asl_action, asl_ok, asl_failures = _run_agent_skills_link_check(
+        args.project_dir, asl_value, current_os, data_dir, plugin_root,
+    )
+    bootstrap_action_entries.extend(asl_action)
+    bootstrap_ok_entries.extend(asl_ok)
+    if asl_failures:
+        all_failures.extend(asl_failures)
+
     # Step 3e: Process the layered env.json manifest (identity-bearing
     # personalization; bootstrap-env-refactor spec 4.4). Placement is
     # load-bearing: immediately AFTER the layered bootstrap.json manifest
@@ -3914,6 +3928,171 @@ def _phase_git_config(ctx):
                 key=key,
                 message=result.message,
             )
+
+
+_AGENT_SKILLS_FAILURE_KWARGS = {
+    "type": "agent_skills_link",
+    "persist_across_sessions": True,
+    "ask_reason": "action",
+}
+
+
+def _run_agent_skills_link_check(project_dir, agent_skills_link_value,
+                                  current_os, data_dir, plugin_root):
+    """agent_skills_link: link <project>/.agents/skills -> .claude/skills for
+    Codex, once per pass. Deliberately NOT dispatched via _MANIFEST_PHASES
+    (that table's dispatch is truthy-gated at _process_manifest, so a
+    boolean opt-out whose meaningful value is `false` cannot be an ordinary
+    phase entry -- see agent_skills_check.py's module docstring and D1-D8 in
+    the design). Returns (action_entries, ok_entries, failures).
+
+    All decision logic and filesystem/VCS work lives in
+    bootstrap_lib.agent_skills_check; this function owns every user-facing
+    message and routes outcomes through _ManifestContext.ok/action/fail so
+    the "one outcome per check" contract is structural here too.
+    """
+    from .agent_skills_check import (
+        check_project_agent_skills_link, create_agent_skills_link,
+    )
+
+    ctx = _ManifestContext(
+        {}, current_os, data_dir, plugin_root,
+        [], [], "bootstrap", project_dir, True,
+    )
+
+    if not project_dir:
+        # D8: project_dir is optional (args.project_dir at engine.py); never
+        # build a path from None. Mirrors _phase_git_config's no-project skip.
+        ctx.ok("agent skills link: skipped (no project directory)")
+        return ctx.action_entries, ctx.ok_entries, ctx.failures
+
+    root_label = "project:%s" % os.path.abspath(project_dir)
+
+    def _fail(message, detail_message):
+        ctx.fail(
+            "agent skills link (%s): failed; %s" % (root_label, message),
+            message=detail_message,
+            **_AGENT_SKILLS_FAILURE_KWARGS,
+        )
+
+    outcome = check_project_agent_skills_link(project_dir, agent_skills_link_value)
+    status = outcome.status
+
+    if status == "existing":
+        ctx.ok(
+            "agent skills link (%s): skipped; .agents already exists; "
+            "delete .agents to rebuild" % root_label
+        )
+    elif status == "lstat_error":
+        _fail("cannot stat .agents: %s" % outcome.detail, outcome.detail)
+    elif status == "not_directory":
+        _fail("root is not a directory", "root is not a directory")
+    elif status == "not_worktree":
+        ctx.ok(
+            "agent skills link (%s): skipped; no repository root marker" % root_label
+        )
+    elif status == "not_toplevel":
+        ctx.ok(
+            "agent skills link (%s): skipped; not the repository root (%s)"
+            % (root_label, outcome.toplevel)
+        )
+    elif status == "root_check_error":
+        _fail("cannot determine repository root: %s" % outcome.detail, outcome.detail)
+    elif status == "invalid_option":
+        _fail("agent_skills_link must be a boolean", "agent_skills_link must be a boolean")
+    elif status == "opt_out":
+        ctx.ok("agent skills link (%s): skipped; agent_skills_link is false" % root_label)
+    elif status == "codex_unavailable":
+        ctx.ok(
+            "agent skills link (%s): skipped; Codex CLI unavailable: %s"
+            % (root_label, outcome.detail)
+        )
+    elif status == "source_missing":
+        ctx.ok(
+            "agent skills link (%s): skipped; .claude/skills is not a directory"
+            % root_label
+        )
+    elif status == "source_empty":
+        ctx.ok("agent skills link (%s): skipped; .claude/skills is empty" % root_label)
+    elif status == "source_read_error":
+        _fail("cannot read .claude/skills: %s" % outcome.detail, outcome.detail)
+    elif status == "fixable":
+        fix = create_agent_skills_link(project_dir)
+        _resolve_agent_skills_fix(ctx, root_label, project_dir,
+                                   agent_skills_link_value, fix)
+    else:  # pragma: no cover - defensive; every status above is exhaustive
+        _fail("unrecognized check status %r" % status, "unrecognized check status %r" % status)
+
+    return ctx.action_entries, ctx.ok_entries, ctx.failures
+
+
+def _resolve_agent_skills_fix(ctx, root_label, project_dir,
+                               agent_skills_link_value, fix):
+    """Report the fixer's outcome, running the authoritative re-check
+    (design step 12) before allowing a success to be reported as `action`."""
+    from .agent_skills_check import SOURCE_DISPLAY, check_project_agent_skills_link
+
+    def _fail(message, detail_message):
+        ctx.fail(
+            "agent skills link (%s): failed; %s" % (root_label, message),
+            message=detail_message,
+            **_AGENT_SKILLS_FAILURE_KWARGS,
+        )
+
+    if fix.status == "race_existing":
+        ctx.ok(
+            "agent skills link (%s): skipped; .agents already exists; "
+            "delete .agents to rebuild" % root_label
+        )
+        return
+    if fix.status == "mkdir_failed":
+        _fail("could not create .agents: %s" % fix.detail, fix.detail)
+        return
+    if fix.status == "vcs_failed":
+        _fail("VCS exclusion failed: %s" % fix.detail, fix.detail)
+        return
+    if fix.status == "vcs_failed_cleanup_failed":
+        _fail(
+            "VCS exclusion failed: %s; cleanup failed: %s; delete .agents "
+            "before retrying" % (fix.detail, fix.cleanup_detail),
+            fix.detail,
+        )
+        return
+    if fix.status == "link_failed":
+        _fail(
+            "link creation failed: %s; VCS exclusion remains for retry" % fix.detail,
+            fix.detail,
+        )
+        return
+    if fix.status == "link_failed_cleanup_failed":
+        _fail(
+            "link creation failed: %s; cleanup failed: %s; delete .agents "
+            "before retrying" % (fix.detail, fix.cleanup_detail),
+            fix.detail,
+        )
+        return
+    if fix.status == "verify_error":
+        _fail("cannot verify .agents after creation: %s" % fix.detail, fix.detail)
+        return
+    if fix.status != "created":  # pragma: no cover - defensive
+        _fail("unrecognized fix status %r" % fix.status, "unrecognized fix status %r" % fix.status)
+        return
+
+    # Design step 12: the authoritative re-check. Its first operation is
+    # lstat(".agents"), which the .agents we just created will satisfy
+    # immediately -- so this call is cheap, not a second full check.
+    recheck = check_project_agent_skills_link(project_dir, agent_skills_link_value)
+    if recheck.status == "lstat_error":
+        _fail("cannot verify .agents after creation: %s" % recheck.detail, recheck.detail)
+        return
+    if recheck.status != "existing":
+        _fail(".agents is absent after creation", ".agents is absent after creation")
+        return
+
+    ctx.action(
+        "agent skills link (%s): created .agents/skills -> %s using %s; %s"
+        % (root_label, SOURCE_DISPLAY, fix.mechanism, fix.vcs_result)
+    )
 
 
 def _phase_sync_to_data(ctx):

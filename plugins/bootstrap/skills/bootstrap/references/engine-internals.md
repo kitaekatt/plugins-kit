@@ -130,6 +130,69 @@ separate `bootstrap-stuck-fix` plugin (`scripts/repair_registry.py`), which has
 no prior version to be wedged on. See the delivery-path rule in the repo
 CLAUDE.md and the `update_lifecycle` fact in the bootstrap SKILL.md.
 
+### Step 3d3: `agent_skills_link` — Codex skill discovery link
+
+Runs once per pass, right after the layered `project_venv`/`project_npm`
+steps and unconditionally (even when the merged layered manifest is empty,
+since the field defaults to enabled). Implementation:
+`bootstrap_lib/agent_skills_check.py` (the side-effect-free check and the
+fixer) plus `bootstrap_lib/engine.py::_run_agent_skills_link_check` (owns
+every user-facing message and routes outcomes through
+`_ManifestContext.ok/action/fail`).
+
+**Deliberately outside `_MANIFEST_PHASES`.** That table's dispatch is
+truthy-gated (`any(manifest.get(k) for k in keys)` at `_process_manifest`),
+so a boolean opt-out whose meaningful, actionable value is `false` cannot be
+an ordinary phase entry — a merged `{"agent_skills_link": false}` is exactly
+the shape that dispatch would silently skip. `_run_agent_skills_link_check`
+is called directly instead, with the effective value already resolved from
+`layered_manifest.get("agent_skills_link")`.
+
+**Quick-exit invariant.** The very first operation, before config lookup,
+Codex detection, source inspection, or any VCS command, is `os.lstat(project
+/ ".agents")`. Any object at that path — directory, file, symlink, dangling
+symlink, junction — short-circuits to one `ok` entry and nothing else runs.
+This is the escape hatch: once `.agents` exists by any means, later passes
+pay one `lstat` and stop. There is no repair path; the user deletes
+`.agents` to make bootstrap rebuild it.
+
+**Check → fix → authoritative re-check.** `check_project_agent_skills_link`
+is side-effect-free and returns a `SkillsLinkCheck` naming exactly one of:
+quick-exit (`existing`), a root-scoping skip (`not_worktree`/`not_toplevel`
+— see the `agent_skills_link` manifest-reference section for why v1 links
+only at the git repository root), an option/Codex/source skip, or
+`fixable`. Only on `fixable` does the engine call
+`create_agent_skills_link`, which `mkdir`s `.agents`, applies Git/P4
+exclusions, creates the link (real symlink, falling back to an NTFS
+junction on Windows only for the privilege signal, WinError 1314 — see
+`agent_skills_check._create_link`), and verifies the link itself. The
+engine then re-runs `check_project_agent_skills_link` — its first operation
+is the same `lstat`, so the re-check is cheap, not a second full pass — and
+only a resulting `existing` status is reported as `action`; anything else
+(including the fixer having reported success) is a `failed; .agents is
+absent after creation` or `cannot verify` failure. The re-check, not the
+fixer's own return value, controls the final outcome.
+
+**Failure type**: every failure branch uses `type="agent_skills_link"`,
+`persist_across_sessions=True`, `ask_reason="action"` — the failure clears
+the project cooldown (`engine.py:_run_agent_skills_link_check`'s callers,
+same as every other failure) so a persistent misconfiguration re-runs the
+check every SessionStart rather than silently going stale. It is
+deliberately NOT in `_AUTO_FIXABLE_TYPES`: the normal pass has already
+attempted every safe automatic repair by the time a failure reaches the
+user, so fix-all re-running it would just reproduce the same failure.
+
+**Bounded cleanup.** A failed VCS-exclusion or link-creation attempt removes
+only what that attempt itself created — a fresh empty `.agents`, and any
+partial link/junction under it. A successful VCS exclusion that precedes a
+later link-creation failure is left in place (harmless, and it makes the
+next attempt cheaper); a `cleanup failed` outcome tells the user to delete
+`.agents` before retrying rather than attempting further automatic repair.
+
+**Cold-clone lifecycle.** This converges on a Claude Code SessionStart. A
+user who opens a fresh clone only in Codex, never in Claude Code, gets no
+link — the mechanism has nothing to run from.
+
 ### Plugin updates target the recorded scope
 
 `marketplace_lifecycle.update_plugin` runs `claude plugin update <ref> --scope

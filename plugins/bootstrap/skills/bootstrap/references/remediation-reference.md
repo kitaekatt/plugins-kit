@@ -62,6 +62,61 @@ Every issue bootstrap surfaces resolves to **exactly one of two outcomes** — t
 | PyPI package missing | Check extracted file exists locally | Download from PyPI and extract |
 | Git dependency not cloned / wrong branch / wrong pinned commit | Check dir exists + is a git repo + `rev-parse` matches the declared branch (or pinned `commit`) | Clone once; pinned commits are fetched + re-checked-out. No steady-state pull — an existing clone on the right branch is never updated against its remote |
 
+## Agent Skills Link Conditions (`agent_skills_link`)
+
+Links `<project>/.agents/skills` to `<project>/.claude/skills` so the Codex
+CLI can invoke the same skills Claude Code reads. Full mechanics: the
+`agent_skills_link` field in
+[manifest-reference.md](./manifest-reference.md) and the "Step 3d3" section
+of [engine-internals.md](./engine-internals.md). This is always an ASK
+failure (`ask_reason="action"`, `persist_across_sessions=True`) —
+`agent_skills_link` is not in `_AUTO_FIXABLE_TYPES`, because the normal pass
+has already attempted every safe automatic repair before any of these
+reaches the user.
+
+| Condition | Check Method | Remediation |
+|-----------|-------------|-------------|
+| `.agents` already exists (any kind) | `os.lstat` | None — quick-exit `ok`. Delete `.agents` to make bootstrap rebuild it; bootstrap never repairs a dangling or misdirected link in place |
+| Project root is not the git repository root (v1 scope) | `git rev-parse --show-toplevel` compared to the project dir; no `.git` at all is a separate skip | None — `ok` skip. Codex resolves a project root by walking up to a `.git` marker, so linking anywhere else would never be discovered |
+| `agent_skills_link` present but not a strict JSON boolean | `type(value) is bool` | None auto — fix the manifest value (`null`/strings/numbers including `0`/`1` are invalid) |
+| Codex CLI unavailable | `bootstrap_lib.codex.detect_codex()` | None — `ok` skip; nothing to link against |
+| `.claude/skills` missing, not a directory, or empty | `os.path.isdir` + `os.scandir` | None — `ok` skip; nothing to link |
+| `.agents/skills` (or a Git/P4-tracked ancestor) is tracked by version control | `git ls-files --literal-pathspecs` (Git); Perforce mapping check | Refuses to write an exclusion over a tracked path — untrack the path first |
+| Git/P4 exclusion cannot be established | See VCS steps below | Removes the freshly created empty `.agents` and fails with the reason; a `cleanup failed` variant additionally tells the user to delete `.agents` before retrying |
+| Symlink creation fails and (Windows only) the junction fallback also fails, or fails outright on POSIX | `os.symlink`, then on Windows only for WinError 1314 `_winapi.CreateJunction` | No copy fallback is ever created. Removes the partial link/junction and the empty `.agents`; VCS exclusions already written are left in place (harmless, makes the retry cheaper) |
+| `.agents` absent, or unverifiable, on the authoritative post-fix re-check | Re-run of the side-effect-free check | Fails even though the fixer itself reported success — the re-check, not the fixer's return value, decides the outcome |
+
+**Windows privilege behavior.** A real directory symlink is attempted
+first; the NTFS junction fallback fires *only* for the specific
+privilege/unsupported-filesystem signal (WinError 1314, no
+`SeCreateSymbolicLinkPrivilege` — no Developer Mode, not elevated). Any
+other symlink failure (a destination collision, an unrelated access-denied
+error) is a real failure and is never masked by attempting a junction.
+
+**Git guidance.** Exclusion is written to the repository-local
+`info/exclude` (via `git rev-parse --git-path info/exclude`), never to the
+tracked `.gitignore` — `.agents` is a local bootstrap artifact, and editing
+`.gitignore` would dirty shared project policy. The generated rule anchors
+the `skills` child specifically (`/.agents/skills/`), not the whole of
+`.agents/`, because Codex also uses `.agents/plugins/marketplace.json` for
+repo-level plugin config that a whole-parent rule would hide from `git
+status` later. `info/exclude` lives in `$GIT_COMMON_DIR` and is therefore
+shared across every worktree linked to that repository, not scoped to the
+one bootstrap ran in.
+
+**Perforce guidance.** Perforce support is implemented in full (v1 scope
+excludes it only via the git-root requirement above, not by omission — a
+tree can be both git- and P4-managed). Workspace detection prefers `p4
+where`, falling back to local evidence (an effective `P4CONFIG` file, a
+root/ancestor `.p4ignore` or `p4ignore.txt`) when the server is
+unreachable; `p4 ignores -i -v` (documented as requiring no server access)
+drives the actual write decision. When `P4IGNORE` is unset, bootstrap
+prefers a missing root-local `p4ignore.txt` over touching a possibly
+depot-tracked `.p4ignore`; when `P4IGNORE` is explicit, only a missing
+root-local file already named by that setting is written. Bootstrap never
+edits an ignore file outside the project root, never runs `p4 set`, and
+never appends to an existing ignore file.
+
 ## Marketplace Conditions
 
 | Condition | Check Method | Remediation |

@@ -336,16 +336,16 @@ reference_skill:
   references:
     - id: engine_internals
       path: references/engine-internals.md
-      keywords: [engine, internals, processing order, self-setup, manifest phase, script phase, messaging protocol, execution flow, throttling, first run, clean install, phases, design principles, shared library, hybrid model]
+      keywords: [engine, internals, processing order, self-setup, manifest phase, script phase, messaging protocol, execution flow, throttling, first run, clean install, phases, design principles, shared library, hybrid model, agent_skills_link, agent skills link, codex skills, .agents, .agents/skills, agents directory]
       summary: Engine internals deep-dive.
     - id: manifest_reference
       path: references/manifest-reference.md
-      keywords: [bootstrap.json, env.json, manifest, schema, fields, variable expansion, layered config, merge semantics, identity keys, example, marketplace pin, pin field, unpin workflow, machines registry, env gate, env_checks, symlinks, shell_rc, macos_defaults, macos_hotkeys, login_items, personalization]
-      summary: bootstrap.json manifest field reference (incl. the marketplace pin field and the unpin workflow) PLUS the sibling env.json personalization manifest (machines registry, env gate, the five declarative features, and the env_checks contract).
+      keywords: [bootstrap.json, env.json, manifest, schema, fields, variable expansion, layered config, merge semantics, identity keys, example, marketplace pin, pin field, unpin workflow, machines registry, env gate, env_checks, symlinks, shell_rc, macos_defaults, macos_hotkeys, login_items, personalization, agent_skills_link, codex, .agents/skills]
+      summary: bootstrap.json manifest field reference (incl. the marketplace pin field, the unpin workflow, and the agent_skills_link Codex-discovery opt-out) PLUS the sibling env.json personalization manifest (machines registry, env gate, the five declarative features, and the env_checks contract).
     - id: remediation_reference
       path: references/remediation-reference.md
-      keywords: [condition, remediation, check method, tool missing, venv broken, marketplace, plugin scope, fix-all, blocking, manual operation, pinned wrong commit, pin removed, unresolvable pin]
-      summary: Per-condition remediation reference (incl. the marketplace pin conditions).
+      keywords: [condition, remediation, check method, tool missing, venv broken, marketplace, plugin scope, fix-all, blocking, manual operation, pinned wrong commit, pin removed, unresolvable pin, agent_skills_link, agent skills link, codex, .agents, symlink, junction, p4ignore, info/exclude]
+      summary: Per-condition remediation reference (incl. the marketplace pin conditions and the agent_skills_link Git/P4/Windows-junction failure modes).
     - id: deferred_requirements_ref
       path: references/deferred-requirements.md
       keywords: [deferred requirement, add_deferred_requirement, defer until needed, escalate vs defer, no fix-all, session-start nag, API key prompt, optional precondition, deferred_requirements.json, point of need, ask late, custom_bootstrap author guide]

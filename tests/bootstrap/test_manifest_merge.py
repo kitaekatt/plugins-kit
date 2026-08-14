@@ -175,6 +175,32 @@ class TestScalarOverride:
         assert result == {"a": 1, "b": 2}
 
 
+class TestAgentSkillsLinkScalarPrecedence:
+    """Named contract test for the agent_skills_link boolean field
+    (plugins/bootstrap/bootstrap_lib/agent_skills_check.py): scalar
+    replacement, not merging -- the higher layer's explicit value always
+    wins outright, with no special-casing required in manifest_merge.py
+    itself."""
+
+    def test_project_true_overrides_user_false(self):
+        user = {"agent_skills_link": False}
+        project = {"agent_skills_link": True}
+        assert merge_manifests(user, project)["agent_skills_link"] is True
+
+    def test_project_false_overrides_user_true(self):
+        user = {"agent_skills_link": True}
+        project = {"agent_skills_link": False}
+        assert merge_manifests(user, project)["agent_skills_link"] is False
+
+    def test_user_false_survives_with_no_project_override(self):
+        user = {"agent_skills_link": False}
+        project = {}
+        assert merge_manifests(user, project)["agent_skills_link"] is False
+
+    def test_absent_in_both_layers_stays_absent(self):
+        assert "agent_skills_link" not in merge_manifests({}, {})
+
+
 class TestInputsNotMutated:
     def test_base_not_mutated(self):
         base = {"plugins": [{"ref": "mk:a", "enabled": True}]}

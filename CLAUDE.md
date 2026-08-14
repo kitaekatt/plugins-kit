@@ -49,6 +49,7 @@ plugins-kit/                          # Marketplace root
 | `plugins/bootstrap/bootstrap_lib/plugin_resolve.py` | Plugin registry resolution |
 | `plugins/bootstrap/bootstrap_lib/path_check.py` | PATH entry validation |
 | `plugins/bootstrap/bootstrap_lib/manifest_merge.py` | Deep-merge for layered bootstrap.json files |
+| `plugins/bootstrap/bootstrap_lib/agent_skills_check.py` | `agent_skills_link` check/fixer: links `<project>/.agents/skills` to `<project>/.claude/skills` for Codex, incl. Git/P4 exclusion |
 | `plugins/bootstrap/engine/config.py` | Config loading, migration, persistence |
 | `plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh` | SessionStart hook (bash wrapper for engine) |
 | `plugins/bootstrap/bootstrap.json` | Bootstrap plugin's own manifest |
