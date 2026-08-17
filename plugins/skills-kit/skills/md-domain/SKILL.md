@@ -85,49 +85,36 @@ live in `references/lanes/`, and the placement spine they all defer to lives in
 ### Bare-invocation greeting
 
 ```
-How can I help you with your project markdown?
+Tell me in your own words what you want to do with your project markdown.
 
-Tell me what you want in your own words. Grouped by what you want to work on:
+WHAT I CAN DO
+  audit      check an existing document against its standards, and give a verdict
+  analyze    read one directory's own code and report what its CLAUDE.md should
+             carry -- not its subdirectories, each of which is its own run; never edits
+  author     produce a document from content you supply, held to the standards
+  generate   produce a CLAUDE.md out of analysis, so every claim traces back to code
 
-SKILLS -- a SKILL.md and its reference documents
-  "audit this skill"              Skill audit -- against its type contract
-  "audit all the skills"          Skill audit, across the repo
-  "write me a new skill"          Skill authoring -- I write it to the standards
+WHAT I CAN DO IT TO
+  skills             a SKILL.md and its reference documents      audit, author
+  CLAUDE.md          one directory's ambient guidance            audit, author, generate
+  project docs       READMEs, design records, docs/              audit, author
+  cross-references   the links between all of the above          audit only
 
-CLAUDE.md
-  "audit the CLAUDE.md files"     CLAUDE.md audit
-  "write a CLAUDE.md for <dir>"   CLAUDE.md authoring -- from what you tell me
-  "analyze <dir>"                 Code analysis. Reads the code sitting directly
-                                  IN that directory -- not its subdirectories,
-                                  each of which is its own run -- and reports
-                                  COVERAGE: the facts its CLAUDE.md chain should
-                                  carry, each with the evidence behind it.
-                                  Reports only, never edits.
-  "generate <dir>'s CLAUDE.md"    CLAUDE.md generation -- writes the document out
-                                  of that coverage, so every claim traces back to
-                                  code. I analyze first if we have none yet.
-  "regenerate <dir>'s CLAUDE.md"  The same, over a document that already exists.
-                                  What I can re-verify is kept; what I cannot is
-                                  kept only where it is marked to retain. On a
-                                  document with no markings yet I propose them
-                                  and change nothing.
-  "give <dir> and everything      The whole-tree form: analyze then generate per
-   under it CLAUDE.md files"      directory, DEEPEST FIRST, because a parent is
-                                  composed from its own code plus its children's
-                                  finished documents. Committing to a directory
-                                  commits to everything beneath it.
+FOR EXAMPLE
+  "audit this skill"                     one SKILL.md against its type contract
+  "audit the docs"                       every project document under docs/
+  "check for broken references"          cross-reference audit across the repo
+  "audit everything"                     all of the above, across the repo
+  "analyze src/cache"                    what that directory's CLAUDE.md is missing
+  "author me a new skill"                from what you tell me
+  "author a README for this project"     same, as a project doc
+  "generate src/cache's CLAUDE.md"       out of the analysis; I analyze first if needed
+  "give src/ and everything under it CLAUDE.md files"
+                                         the whole-tree form, deepest first
 
-PROJECT DOCS -- READMEs, design records, references under docs/
-  "audit the docs"                Project-doc audit
-  "write a design doc / README"   Project-doc authoring
-
-ACROSS ALL THREE
-  "check for broken references"   Cross-reference audit
-  "audit everything"              every audit above, across the repo
-
-AUTHORING vs GENERATION is about where the content comes from. Authoring takes
-what you give me and makes it meet the standards. Generation builds the document
-out of analysis, so it can be checked back against the code later.
+Generating over a document that already exists keeps what I can re-verify against
+the code and whatever you have marked to retain; on a document with no markings
+yet I propose them and change nothing.
 
 Before starting I name the analysis and its exact scope, because what a run
 READS is what makes it cheap or expensive.
@@ -160,9 +147,12 @@ footnote below the whole audit list. Authoring and generation now appear per
 artifact. Do not re-collapse them into a footnote -- see `CLAUDE.md`,
 `producing_verbs_are_offered_not_footnoted`.
 
-The right-hand labels are the canonical analysis names that "Naming and scope
-announcement" below requires you to echo. The left column is only the entry
-point.
+The canonical analysis name that "Naming and scope announcement" below requires
+you to echo is COMPOSED from the greeting's two lists -- the verb plus the
+artifact it is applied to: "Skill audit", "CLAUDE.md audit", "Project-doc audit",
+"Cross-reference audit", "Skill authoring", "CLAUDE.md authoring", "Project-doc
+authoring", "CLAUDE.md generation", and "Code analysis" for `analyze`. The
+example phrasings are entry points only, and are deliberately not exhaustive.
 
 ### Naming and scope announcement (applies to every run)
 

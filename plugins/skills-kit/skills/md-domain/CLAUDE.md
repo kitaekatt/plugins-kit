@@ -504,8 +504,8 @@ claude_md:
         Follow-up: the audit-against-source depth in consequence 3.
       added: "2026-08-17"
     - id: producing_verbs_are_offered_not_footnoted
-      keywords: [greeting, menu, generate not listed, deliberately omits, falsified, type-first menu, document types, do not re-collapse, discoverability]
-      summary: The greeting groups entries by DOCUMENT TYPE and names authoring and generation per type. An earlier revision omitted them on the reasoning that nobody arrives wanting to "run generate"; a user did, which falsified it. Do not re-collapse them into a footnote.
+      keywords: [greeting, menu, generate not listed, deliberately omits, falsified, type-first menu, capability-first menu, verbs then targets, document types, do not re-collapse, discoverability]
+      summary: The greeting names authoring and generation as first-class capabilities. An earlier revision omitted them on the reasoning that nobody arrives wanting to "run generate"; a user did, which falsified it. Do not re-collapse them into a footnote. The LAYOUT went type-first (2026-08-17) and then capability-first (0.57.1, same day) -- see the amendment; only the do-not-footnote rule is invariant.
       detail: |
         The retired text was a documented deliberate omission, which is why it
         survived: SKILL.md carried it under "Three things the greeting
@@ -514,11 +514,36 @@ claude_md:
         counterexample refutes a claim of that shape, and one arrived. The
         producing verbs now appear per artifact and SKILL.md carries a
         do-not-re-collapse note pointing here.
-        THE MENU IS NOW TYPE-FIRST, by owner direction: group by the DOCUMENT
-        TYPE being worked on (skills / CLAUDE.md / project docs / across-all),
-        then list what can be done to that type. The prior shape was verb-first
+        THE MENU WENT TYPE-FIRST, by owner direction: group by the DOCUMENT TYPE
+        being worked on (skills / CLAUDE.md / project docs / across-all), then
+        list what can be done to that type. The shape it replaced was verb-first
         and widest-first, which reads well only if you already know the verb set
         -- the exact thing a first-time user does not have.
+
+        AMENDMENT 0.57.1 (2026-08-17, same day, owner-reviewed against the
+        rendered menu) -- THE LAYOUT IS NOW CAPABILITY-FIRST: one line per verb,
+        then one line per target naming which verbs apply to it, then a short
+        example list covering each verb and each target without attempting full
+        coverage. Type-first was right to reject verb-first-and-widest-first, but
+        it solved the wrong half: repeating the verbs under every type made the
+        menu long and still never stated the verb SET anywhere, so a reader
+        assembled it by induction across four groups. Naming the four verbs once,
+        up front, is what actually gives a first-time reader the vocabulary
+        type-first was reaching for.
+        THREE THINGS THE NEW SHAPE MUST KEEP, each load-bearing:
+          - The per-target verb list, because the matrix is NOT full. `generate`
+            is claude-md-only and `references` is audit-only; a bare target list
+            implies a completeness that would generate wrong requests.
+          - Regeneration as ONE sentence at the foot, not a menu entry. The owner
+            ruled it "really just a short-cut for generate over a file that is
+            already authored", and it is not a separate thing to pick -- but the
+            propose-markings-first behaviour stays stated, because it is the
+            safety catch on the only path that overwrites hand-written prose.
+          - `author`, never `write`, as the verb word in examples (owner's
+            alignment); "write" survives only inside plain descriptions.
+        The canonical analysis names are now COMPOSED (verb + artifact) rather
+        than read off a right-hand column; SKILL.md states that where the column
+        pointer used to be.
         WHAT REMAINS DELIBERATELY OMITTED, and why these are not the same
         mistake: narrow selectors (a single file, `list`, `--density`) are
         refinements WITHIN a chosen verb, not entry points; review mode and the
