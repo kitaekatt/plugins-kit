@@ -38,15 +38,18 @@ import RunAdapter``) and every existing call site --
 ``system_for``, ``user_for``, ``parse_fn``, ``validators``) and
 :func:`finalize_run` (``parse_fn``, ``apply``, ``reconcile``) -- keeps working
 with no signature change, exactly as that module's own docstring promised
-("widenings -- new fields, not signature changes"). ``parse_fn`` remains a
-single field shared by both call sites, not two independently-supplied
-copies, which is what makes D1's "finalize re-parses with the SAME function
-the driver submitted under" requirement hold BY CONSTRUCTION rather than by
-the caller remembering to pass the same callable twice (see
-``drivers/inline.py``'s module docstring, "The adapter is one object", and
-``execution/adapter.py``'s module docstring for the full five-responsibility
-mapping and the new ``execution/protocol.py`` mountable-handler layer built
-on top of it).
+("widenings -- new fields, not signature changes"). ``finalize_run`` resolves
+its parse function via ``adapter.resolve_validation_spec(adapter.unit_for(unit_id)).parse_fn``
+-- the SAME method call ``execution.protocol``'s ``submit`` verb uses to
+evaluate the text in the first place -- rather than reading ``adapter.parse_fn``
+directly, which is what makes D1's "finalize re-parses with the SAME function
+the driver submitted under" requirement hold BY CONSTRUCTION even for a
+consumer whose ``validation_spec_for`` varies ``parse_fn`` per unit, not only
+for the common case where ``parse_fn`` is the same single field both call
+sites would have read anyway (see ``drivers/inline.py``'s module docstring,
+"The adapter is one object", and ``execution/adapter.py``'s module docstring
+for the full five-responsibility mapping and the new ``execution/protocol.py``
+mountable-handler layer built on top of it).
 
 ``parse_fn`` MUST be deterministic and store-independent for tracked runs:
 finalize re-runs it on text recorded at submit time, potentially long after
@@ -506,15 +509,19 @@ def finalize_run(
     during THIS call -- a reconciled-as-landed unit is not included, since
     its side effect was not (re)run here.
 
-    Never re-adjudicates a verdict (D1, invariant 5): ``adapter.parse_fn`` is
-    called mechanically on the durably recorded ``accepted_text`` to recover
-    the payload object; no validator runs again.
+    Never re-adjudicates a verdict (D1, invariant 5): the parse function
+    resolved via ``adapter.resolve_validation_spec(adapter.unit_for(unit_id)).parse_fn``
+    -- the SAME resolution ``execution.protocol``'s ``submit`` verb used to
+    evaluate this text in the first place, not a second, independently
+    reached ``adapter.parse_fn`` reference -- is called mechanically on the
+    durably recorded ``accepted_text`` to recover the payload object; no
+    validator runs again.
 
     Fails closed on a ``None`` payload (D6): an ACCEPTED unit whose
     ``accepted_text`` is ``None`` (``accept_unit`` permits omitting ``text``;
     a pre-0.7.2 row may also have migrated to ``NULL``) raises
-    :class:`MissingAcceptedTextError` rather than calling
-    ``adapter.parse_fn(None)`` and applying whatever it returns.
+    :class:`MissingAcceptedTextError` rather than resolving a parse function
+    and calling it with ``None``.
     """
     applied: List[str] = []
     units = sorted(store.list_units(run_id), key=lambda u: u.ordinal)
@@ -540,7 +547,28 @@ def finalize_run(
         if unit.accepted_text is None:
             raise MissingAcceptedTextError(unit.unit_id)
 
-        payload = adapter.parse_fn(unit.accepted_text)
+        # D1 fix (grok-4.6 review of 46d4a2b, defect 2): resolve the parse
+        # function through `adapter.resolve_validation_spec`, the SAME path
+        # `execution.protocol`'s `submit` verb uses -- rather than calling
+        # `adapter.parse_fn` directly. When `validation_spec_for` is unset
+        # (the common case), `resolve_validation_spec` composes its
+        # `ValidationSpec` from `parse_fn` itself, so this is byte-identical
+        # to the old direct call. When `validation_spec_for` IS set (a
+        # consumer whose parse behavior varies per unit -- the field's
+        # documented purpose), `resolve_validation_spec(work_unit).parse_fn`
+        # is the SAME callable `submit` evaluated the accepted text under,
+        # because both call sites resolve it through the identical method on
+        # the identical adapter object for the identical unit. Before this
+        # fix, finalize always used `adapter.parse_fn`, so D1 ("finalize
+        # re-parses with the SAME function the driver submitted under") held
+        # only when `validation_spec_for` was None -- exactly the one case
+        # where the two calls could not already diverge. `unit_for` must be
+        # deterministic and store-independent for the same reason `parse_fn`
+        # must (see the module docstring): it is being called fresh here,
+        # potentially long after and in a different process from `submit`.
+        work_unit = adapter.unit_for(unit.unit_id)
+        parse_fn = adapter.resolve_validation_spec(work_unit).parse_fn
+        payload = parse_fn(unit.accepted_text)
         store.record_apply_started(run_id, unit.unit_id, at=at)
         adapter.apply(unit.unit_id, payload)
         store.record_apply_succeeded(run_id, unit.unit_id, at=at)

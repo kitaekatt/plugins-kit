@@ -30,16 +30,19 @@ so guessing compatibility is exactly the failure D1's adapter-identity
 refusal already rejects for the adapter axis; the wire axis gets the same
 discipline.
 
-:func:`dispatch` never lets a Python exception escape across this boundary.
-Every failure -- a malformed envelope, an unknown verb, a version mismatch,
-or any exception a verb handler raises (a stale fencing token, an unknown
-run, a store error) -- is caught and rendered as ``{"ok": false, "error":
-{...}}``, the same "catch broadly, report the outcome, never a raw
+:func:`dispatch` never lets an :class:`Exception` escape across this
+boundary. Every failure -- a malformed envelope, an unknown verb, a version
+mismatch, or any ``Exception`` a verb handler raises (a stale fencing token,
+an unknown run, a store error) -- is caught and rendered as ``{"ok": false,
+"error": {...}}``, the same "catch broadly, report the outcome, never a raw
 traceback" discipline ``cli.scaffold.dispatch`` already applies to argv
 dispatch (see that module). This is what "malformed envelopes must be
 refused loudly" means here: an explicit, typed, machine-readable refusal in
 the reply -- never a silent no-op, never a default verb, never a stack trace
-leaked to an untrusted worker process.
+leaked to an untrusted worker process. A :class:`BaseException` that is not
+an ``Exception`` (``SystemExit``, ``KeyboardInterrupt``) is deliberately NOT
+caught -- it signals the process should stop, not that this one request
+failed -- and propagates normally; see :func:`dispatch`'s own docstring.
 
 Security posture (plan A-min.3, restated for this module specifically)
 ----------------------------------------------------------------------------
@@ -72,6 +75,7 @@ no-op'ing.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 from content_pipeline.execution.adapter import RunAdapter, require_compatible_adapter
@@ -81,7 +85,13 @@ from content_pipeline.execution.controller import (
     prepare_run,
     resume_run,
 )
-from content_pipeline.execution.model import ExecutionError, UnitRecord, UnknownRunError, UsageRecord
+from content_pipeline.execution.model import (
+    ExecutionError,
+    StaleFenceError,
+    UnitRecord,
+    UnknownRunError,
+    UsageRecord,
+)
 from content_pipeline.execution.status import compute_status
 from content_pipeline.execution.store import DEFAULT_LEASE_SECONDS, ExecutionStore
 from content_pipeline.freshness.classify import FreshnessState
@@ -159,6 +169,89 @@ def _require(payload: Mapping[str, Any], key: str) -> Any:
     return payload[key]
 
 
+def _require_text(payload: Mapping[str, Any]) -> str:
+    """Require ``payload["text"]`` as a JSON string, allowing ``""`` (defect
+    5, grok-4.6 review of 46d4a2b). The general :func:`_require` treats
+    ``""`` as missing -- right for ``run_id``/``unit_id``/``worker_id``, but
+    wrong for ``text``: ``store.accept_unit(text="")`` and the inline driver
+    both permit empty text, so routing ``text`` through :func:`_require`
+    wrongly refused an otherwise-valid empty submission. Also refuses any
+    non-string value (a JSON number or boolean) rather than passing it
+    through to :func:`~content_pipeline.llm.platform.evaluate_submission`
+    and the SQLite ``TEXT`` column, where it would silently read back as a
+    different Python value than what was submitted."""
+    if "text" not in payload:
+        raise MalformedEnvelopeError("payload missing required key 'text'")
+    text = payload["text"]
+    if not isinstance(text, str):
+        raise MalformedEnvelopeError(
+            f"payload 'text' must be a JSON string, got {type(text).__name__}"
+        )
+    return text
+
+
+def _require_bool_flag(payload: Mapping[str, Any], key: str, *, default: bool) -> bool:
+    """Require ``payload[key]`` to be a real JSON boolean when present
+    (defect 4, grok-4.6 review of 46d4a2b). Plain ``bool(value)`` coerces
+    Python-truthiness: ``bool("false")`` and ``bool("0")`` are both
+    ``True``, so a model emitting the JSON string ``"terminal": "false"``
+    (instead of the JSON boolean ``false``) would permanently fail a unit
+    that should have been retried -- and ``FAILED`` is terminal, so the
+    retry is gone for good. The argv surface (``cli/run.py``) already avoids
+    this with an exact ``== "1"`` comparison; this is the JSON-native
+    equivalent: refuse loudly rather than silently coerce."""
+    if key not in payload:
+        return default
+    value = payload[key]
+    if not isinstance(value, bool):
+        raise MalformedEnvelopeError(
+            f"payload {key!r} must be a JSON boolean, got {type(value).__name__}"
+        )
+    return value
+
+
+def _resolve_lease_seconds(payload: Mapping[str, Any], default: float) -> float:
+    """Resolve the lease duration for ``claim``/``renew``, bounded by the
+    mount's own configured ``lease_seconds`` policy (defect 3, grok-4.6
+    review of 46d4a2b).
+
+    Mount-time ``lease_seconds`` is TRUSTED policy (the module's own
+    "Security posture" section: policy is supplied by the consumer's own
+    entry point, a payload is untrusted data); a worker-supplied override
+    used to be honored UNBOUNDED. ``json.loads("1e309")`` parses to
+    ``float("inf")``; ``now + inf`` is ``inf``; ``store.claim_unit`` treats
+    ``lease_expires_at > now`` as live, so such a lease never expires. Once
+    the worker holding it died, nothing on the protocol surface could
+    reclaim the unit: ``fail``/``renew``/``submit`` all need the (now
+    permanently live) fencing token, ``status`` does not return one,
+    ``pause`` only blocks NEW claims, and ``finalize`` skips ``CLAIMED``
+    units outright. This matters more than an ordinary input-validation gap
+    because in phase B this envelope is MODEL-authored -- untrusted data by
+    construction.
+
+    A worker MAY request a SHORTER lease than policy (a legitimate "this
+    unit is fast, don't hold a slow-lease-sized lock" request); it may never
+    request a LONGER one -- the payload never overrides policy upward, only
+    within it, via ``min(requested, default)``. Also refuses a non-finite or
+    non-positive value outright, so the failure is a loud, typed
+    :class:`MalformedEnvelopeError` rather than a silently clamped one.
+    """
+    if "lease_seconds" not in payload:
+        return default
+    raw = payload["lease_seconds"]
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise MalformedEnvelopeError(
+            f"payload 'lease_seconds' must be a finite positive number, got {raw!r}"
+        ) from exc
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise MalformedEnvelopeError(
+            f"payload 'lease_seconds' must be a finite positive number, got {raw!r}"
+        )
+    return min(seconds, default)
+
+
 def _usage_from_payload(payload: Mapping[str, Any]) -> Optional[UsageRecord]:
     keys = ("input_tokens", "output_tokens", "cache_hit_tokens")
     if not any(k in payload for k in keys):
@@ -217,6 +310,24 @@ def build_handlers(
     plain ``ValueError`` naming the gap instead of silently no-op'ing.
     """
 
+    def _require_compatible_run(run_id: str) -> None:
+        """D1's incompatible-resume refusal, extended to the WORKER verbs
+        (defect/design-gap, grok-4.6 review of 46d4a2b): ``require_compatible_adapter``
+        used to run only on the orchestrator verbs (``prepare``/``resume``/
+        ``finalize``) -- never on ``claim``/``read``/``submit``/``fail``/
+        ``renew``, which are the only verbs a short-lived worker actually
+        sends. A process mounting adapter ``v2`` against a ``v1`` run could
+        accept text ``v1`` would have rejected, and a later ``v1`` finalize
+        would re-parse it without ever re-validating -- precisely the hazard
+        the version tag exists to prevent. Cheap (one extra ``store.get_run``
+        read already paid for by ``claim``/``fail``/``renew`` internally, new
+        only for ``read``/``submit``) and safe (every existing caller uses
+        matching ``adapter_version`` on both sides, the A-min.1/A-min.2
+        default included), so it is applied uniformly rather than reported
+        as a design question."""
+        run = _get_run_or_raise(store, run_id)
+        require_compatible_adapter(run, adapter)
+
     def _prepare(payload: Mapping[str, Any]) -> Any:
         run_id = _require(payload, "run_id")
         unit_ids = payload.get("unit_ids")
@@ -248,7 +359,8 @@ def build_handlers(
         run_id = _require(payload, "run_id")
         unit_id = _require(payload, "unit_id")
         worker_id = _require(payload, "worker_id")
-        seconds = float(payload["lease_seconds"]) if "lease_seconds" in payload else lease_seconds
+        _require_compatible_run(run_id)
+        seconds = _resolve_lease_seconds(payload, lease_seconds)
         result = store.claim_unit(run_id, unit_id, worker_id, lease_seconds=seconds)
         return {
             "run_id": run_id,
@@ -260,6 +372,7 @@ def build_handlers(
     def _read(payload: Mapping[str, Any]) -> Any:
         run_id = _require(payload, "run_id")
         unit_id = _require(payload, "unit_id")
+        _require_compatible_run(run_id)
         unit = adapter.unit_for(unit_id)
         request = adapter.resolve_prepared_request(unit)
         return {
@@ -272,8 +385,21 @@ def build_handlers(
     def _submit(payload: Mapping[str, Any]) -> Any:
         run_id = _require(payload, "run_id")
         unit_id = _require(payload, "unit_id")
+        _require_compatible_run(run_id)
         fencing_token = int(_require(payload, "fencing_token"))
-        text = _require(payload, "text")
+        text = _require_text(payload)
+        # Defect 1 (grok-4.6 review of 46d4a2b): the fencing check used to
+        # happen only on the ACCEPT path, inside `store.accept_unit` -- the
+        # REJECT path (invalid text) never touched the store at all, so a
+        # stale token paired with invalid text returned an `{"ok": true,
+        # "accepted": false}` retry-feedback reply, telling a worker it
+        # still owned a claim it had already lost to a reclaiming worker.
+        # `store.renew_lease`/`fail_unit` check the fence FIRST, before any
+        # other work; do the same here, before spending an evaluation on
+        # text a stale claimant no longer has standing to submit.
+        current_unit = store.get_unit(run_id, unit_id)
+        if current_unit is not None and fencing_token != current_unit.fencing_token:
+            raise StaleFenceError(run_id, unit_id, fencing_token, current_unit.fencing_token)
         unit = adapter.unit_for(unit_id)
         spec = adapter.resolve_validation_spec(unit)
         evaluation = evaluate_submission(text, spec)
@@ -295,8 +421,9 @@ def build_handlers(
     def _fail(payload: Mapping[str, Any]) -> Any:
         run_id = _require(payload, "run_id")
         unit_id = _require(payload, "unit_id")
+        _require_compatible_run(run_id)
         fencing_token = int(_require(payload, "fencing_token"))
-        terminal = bool(payload.get("terminal", False))
+        terminal = _require_bool_flag(payload, "terminal", default=False)
         store.fail_unit(
             run_id,
             unit_id,
@@ -310,13 +437,22 @@ def build_handlers(
     def _renew(payload: Mapping[str, Any]) -> Any:
         run_id = _require(payload, "run_id")
         unit_id = _require(payload, "unit_id")
+        _require_compatible_run(run_id)
         fencing_token = int(_require(payload, "fencing_token"))
-        seconds = float(payload["lease_seconds"]) if "lease_seconds" in payload else lease_seconds
+        seconds = _resolve_lease_seconds(payload, lease_seconds)
         lease_expires_at = store.renew_lease(run_id, unit_id, fencing_token, lease_seconds=seconds)
         return {"run_id": run_id, "unit_id": unit_id, "lease_expires_at": lease_expires_at}
 
     def _status(payload: Mapping[str, Any]) -> Any:
         run_id = _require(payload, "run_id")
+        # `compute_status` raises a plain `KeyError` for an unknown run by its
+        # own design (see that function's docstring: "a caller that needs a
+        # typed error should call store.get_run first") -- every sibling verb
+        # goes through `_get_run_or_raise` and surfaces `UnknownRunError`;
+        # `status` used to be the one verb that did not, so a missing run
+        # replied with a raw `KeyError` instead of the typed error every
+        # other verb gives for the identical situation.
+        _get_run_or_raise(store, run_id)
         kwargs: Dict[str, Any] = {}
         if "window" in payload:
             kwargs["throughput_window_s"] = float(payload["window"])
@@ -359,19 +495,27 @@ def build_handlers(
 
 
 def dispatch(envelope: Mapping[str, Any], handlers: Mapping[str, ProtocolHandler]) -> Dict[str, Any]:
-    """Route one JSON envelope to its verb handler; never raises.
+    """Route one JSON envelope to its verb handler; never raises ``Exception``.
 
     Validates envelope shape and ``protocol_version`` first (see the module
     docstring), then looks up ``verb`` in ``handlers`` (typically
     :func:`build_handlers`'s return value -- a caller MAY pass a narrowed or
     wrapped subset, e.g. to expose only worker-safe verbs to an untrusted
     process). Every failure -- malformed envelope, unknown verb, version
-    mismatch, or any exception the handler itself raises -- is caught and
-    rendered as ``{"ok": False, "error": {"type": ..., "message": ...}}``;
-    success is always ``{"ok": True, "result": ...}``. This function itself
-    never raises, so a consumer's own entry point never needs a bare
-    ``try/except`` around it to stay "loud, never a traceback" for an
-    untrusted worker on the other end.
+    mismatch, or any :class:`Exception` the handler itself raises -- is
+    caught and rendered as ``{"ok": False, "error": {"type": ...,
+    "message": ...}}``; success is always ``{"ok": True, "result": ...}``.
+    This function catches ``Exception`` only, deliberately: a
+    :class:`BaseException` that is not an :class:`Exception` (``SystemExit``,
+    ``KeyboardInterrupt``, ``GeneratorExit``) still propagates, on the
+    reasoning that those signal the PROCESS should stop, not that this one
+    request failed -- swallowing them here would make an operator's Ctrl-C
+    or a deliberate shutdown look like a normal protocol error instead of
+    interrupting the process. So "never raises" means never raises for a
+    malformed envelope or a handler's own logic failure -- the ordinary
+    "loud, never a traceback for an untrusted worker" contract this module
+    exists to provide -- not an unconditional guarantee for every Python
+    exception.
     """
     try:
         validated = _validate_envelope(envelope)

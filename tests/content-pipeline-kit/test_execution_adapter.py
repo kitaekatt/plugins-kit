@@ -150,8 +150,10 @@ def test_require_compatible_adapter_refuses_on_mismatch():
 def test_require_compatible_adapter_not_invoked_automatically_by_prepare_or_finalize(tmp_path):
     """A-min.2's prepare_run/finalize_run behavior and tests are unchanged --
     this check is a NEW, opt-in call the protocol layer makes, not something
-    those two functions run on the caller's behalf."""
-    from content_pipeline.execution.controller import finalize_run
+    those two functions run on the caller's behalf. Covers BOTH functions
+    named in the test's own name -- a prior version of this test called only
+    finalize_run, claiming coverage of prepare_run it did not have."""
+    from content_pipeline.execution.controller import finalize_run, prepare_run
     from content_pipeline.pipeline.workunit import FlatChunkStrategy
 
     store = ExecutionStore(tmp_path / "run.db")
@@ -166,3 +168,12 @@ def test_require_compatible_adapter_not_invoked_automatically_by_prepare_or_fina
     )
     applied = finalize_run(store, "run-1", adapter)
     assert applied == []
+
+    # Same mismatch, same non-automatic-check claim, for prepare_run: it
+    # runs to completion and returns the ready wave (u0, still PENDING --
+    # no gates/freshness were configured to skip it) rather than raising
+    # before ever computing one, which is what would happen if the check
+    # were wired in automatically.
+    flat_strategy = FlatChunkStrategy(select=lambda store: [])
+    wave = prepare_run(store, "run-1", flat_strategy, [])
+    assert [u.unit_id for u in wave] == ["u0"]
