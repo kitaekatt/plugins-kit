@@ -37,11 +37,18 @@ Public surface:
   :class:`CostBudget` / :class:`BudgetExceededError` -- the budget guards.
 - :func:`submit_validated` / :class:`SubmitResult` -- the validate-until-valid
   loop, taking validators from ``validate.contract``.
+- :func:`evaluate_submission` / :class:`ValidationSpec` /
+  :class:`EvaluationResult` -- the pure parse-then-validate judgment
+  ``submit_validated`` drives its loop with, extracted so an out-of-process
+  worker can reuse the exact same verdict logic without the retry/backend/
+  cache machinery around it.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -523,10 +530,35 @@ class ResponseCache:
         )
 
     def store(self, key: str, response: LLMResponse) -> bool:
-        """Persist ``response`` under ``key``; skip empty bodies.
+        """Persist ``response`` under ``key`` atomically; skip empty bodies.
 
         Returns True when a row was written, False when the response was
         empty (and therefore skipped).
+
+        Writes go through a same-directory temp file plus ``os.replace``
+        rather than a direct ``write_text``, so a reader (a concurrent
+        ``lookup``, or a second writer) never observes a partially written
+        file -- it sees either the prior complete entry or the new complete
+        one, never a truncated or interleaved one. Two details are
+        load-bearing, not stylistic:
+
+        - The temp file is created in ``self.cache_dir`` (not a system temp
+          directory) because ``os.replace`` is only atomic within one
+          filesystem/device; a cross-device replace can fail or, worse,
+          silently fall back to a non-atomic copy on some platforms.
+        - ``os.replace`` (not ``os.rename``) is required for Windows, where
+          ``rename`` raises ``FileExistsError`` on an existing target instead
+          of replacing it; ``os.replace`` overwrites unconditionally on every
+          platform this runs on.
+
+        A write failure (temp-file write or the replace itself) removes the
+        temp file and re-raises, so a crash never leaves a stray ``.tmp``
+        file next to the cache, and the caller sees the original failure
+        rather than a swallowed one.
+
+        Does not change the cache KEY -- :func:`build_cache_key` is untouched
+        and cache-key stability across this change is a settled decision
+        (plan D3). This is a write-path hardening only.
         """
         if not response.text or not response.text.strip():
             return False
@@ -539,11 +571,45 @@ class ResponseCache:
             "cache_hit_tokens": response.cache_hit_tokens,
             "wall_ms": response.wall_ms,
         }
-        self._path(key).write_text(
-            json.dumps(payload, ensure_ascii=True, sort_keys=True),
-            encoding="utf-8",
+        target = self._path(key)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=str(self.cache_dir)
         )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+            self._replace_with_retry(tmp_path, target)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
         return True
+
+    @staticmethod
+    def _replace_with_retry(tmp_path: Path, target: Path) -> None:
+        """``os.replace(tmp_path, target)`` with a short retry on Windows.
+
+        Windows briefly denies ``ReplaceFile`` when another thread/process is
+        mid-replace on the same target -- an ``os.replace`` under genuine
+        concurrent writers to one cache key can raise a transient
+        ``PermissionError`` even though each individual replace is atomic.
+        POSIX ``rename`` has no such window (it never fails on a
+        same-directory target already open elsewhere), so this only matters
+        on Windows, but the retry is harmless everywhere. A handful of short
+        sleeps is enough for the other writer's replace to finish; a
+        persistent failure (e.g. a genuinely locked file) still raises after
+        the budget is spent.
+        """
+        last_exc: Optional[PermissionError] = None
+        for attempt in range(10):
+            try:
+                os.replace(tmp_path, target)
+                return
+            except PermissionError as exc:
+                last_exc = exc
+                time.sleep(0.01 * (attempt + 1))
+        assert last_exc is not None
+        raise last_exc
 
 
 # ---------------------------------------------------------------------------
@@ -677,6 +743,86 @@ class SubmitResult:
         return self.payload is not None and not contract.is_rejecting(self.rejections)
 
 
+@dataclass(frozen=True)
+class ValidationSpec:
+    """The parse/validate contract one submission is judged against.
+
+    Groups the consumer-supplied ``parse_fn``, ``validators``, ``context``,
+    and ``block_soft`` policy so :func:`evaluate_submission` takes a single
+    argument instead of four independently-threaded pieces of a caller's
+    contract. This is the SAME contract :func:`submit_validated` drives its
+    loop with (plan D1) -- it builds one ``ValidationSpec`` from its own
+    parameters and calls :func:`evaluate_submission` with it, rather than
+    reimplementing the parse/validate step inline. A ``RunAdapter``'s
+    eventual typed ``ValidationSpec`` field (plan A-min.3,
+    ``execution/adapter.py``, not built here) widens this shape for the
+    out-of-process worker protocol; it does not replace it.
+    """
+
+    parse_fn: Callable[[str], Any]
+    validators: Sequence[contract.Validator]
+    context: Any = None
+    block_soft: bool = True
+
+
+@dataclass
+class EvaluationResult:
+    """Outcome of one pure :func:`evaluate_submission` call.
+
+    - ``parsed`` -- True when ``parse_fn`` succeeded (even if the validators
+      then rejected the parsed payload); False when ``parse_fn`` raised.
+    - ``payload`` -- the parsed value when ``parsed`` is True, ``None``
+      otherwise. Distinguishing ``parsed`` from "payload is falsy" matters
+      because a legitimate parse result can itself be ``None`` or empty.
+    - ``rejections`` -- validator rejections when ``parsed`` is True (empty
+      means accepted); a single ``parse_error`` rejection when ``parsed`` is
+      False.
+    """
+
+    parsed: bool
+    payload: Any
+    rejections: List[contract.Rejection]
+
+
+def evaluate_submission(text: str, spec: ValidationSpec) -> EvaluationResult:
+    """Judge one candidate response against ``spec`` -- parse, then validate.
+
+    Extracted from :func:`submit_validated`'s per-attempt body (plan D1) so a
+    worker in another process can evaluate a submission WITHOUT the
+    surrounding retry/backend/cache machinery: this function is PURE. It
+    makes no backend calls, no cache reads or writes, reads no clock, touches
+    no filesystem, and makes no network call -- it only calls
+    ``spec.parse_fn`` and runs ``spec.validators`` through
+    :func:`~content_pipeline.validate.contract.run_rules`, exactly as
+    ``submit_validated`` does today. Because it is the SAME call sequence
+    (same ``parse_fn``, same ``run_rules`` -- which already sorts
+    deterministically by ``(kind, detail)``), feedback strings and rejection
+    ORDERING are byte-identical to ``submit_validated``'s prior inline logic;
+    that equivalence is what the existing ``submit_validated`` tests pin.
+
+    A raise from ``parse_fn`` is recorded as one ``parse_error`` HARD
+    rejection -- a malformed response is a model defect exactly like a
+    validation rejection, matching ``submit_validated``'s documented parse
+    handling.
+    """
+    try:
+        payload = spec.parse_fn(text)
+    except Exception as exc:  # noqa: BLE001 -- parse_fn is caller code
+        return EvaluationResult(
+            parsed=False,
+            payload=None,
+            rejections=[
+                contract.Rejection(
+                    kind="parse_error",
+                    severity=contract.Severity.HARD,
+                    detail=str(exc),
+                )
+            ],
+        )
+    rejections = contract.run_rules(payload, spec.context, spec.validators)
+    return EvaluationResult(parsed=True, payload=payload, rejections=rejections)
+
+
 def _default_feedback(original_user: str, response_text: str, feedback: str) -> str:
     """Append the rejection feedback to the original prompt (cache-busting).
 
@@ -729,6 +875,12 @@ def submit_validated(
 
     feedback_fn = build_feedback or _default_feedback
     base_options = options or BackendOptions()
+    spec = ValidationSpec(
+        parse_fn=parse_fn,
+        validators=validators,
+        context=context,
+        block_soft=block_soft,
+    )
 
     responses: List[LLMResponse] = []
     payload: Any = None  # last SUCCESSFULLY parsed payload; never clobbered
@@ -752,19 +904,10 @@ def submit_validated(
         )
         responses.append(resp)
 
-        try:
-            attempt_payload = parse_fn(resp.text)
-        except Exception as exc:  # noqa: BLE001 -- parse_fn is caller code
-            rejections = [
-                contract.Rejection(
-                    kind="parse_error",
-                    severity=contract.Severity.HARD,
-                    detail=str(exc),
-                )
-            ]
-        else:
-            payload = attempt_payload
-            rejections = contract.run_rules(attempt_payload, context, validators)
+        evaluation = evaluate_submission(resp.text, spec)
+        rejections = evaluation.rejections
+        if evaluation.parsed:
+            payload = evaluation.payload
             if not contract.is_rejecting(rejections, block_soft=block_soft):
                 break
 
@@ -805,4 +948,7 @@ __all__ = [
     "call_llm",
     "SubmitResult",
     "submit_validated",
+    "ValidationSpec",
+    "EvaluationResult",
+    "evaluate_submission",
 ]

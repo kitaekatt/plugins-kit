@@ -5,6 +5,10 @@ loop behavior on the generic surface.
 Everything runs on MockBackend -- no network, no subprocess.
 """
 
+import json
+import os
+import threading
+
 import pytest
 
 from content_pipeline.llm import platform
@@ -13,14 +17,17 @@ from content_pipeline.llm.platform import (
     BackendOptions,
     BudgetExceededError,
     CostBudget,
+    EvaluationResult,
     HaltError,
     LLMResponse,
     ResponseCache,
+    ValidationSpec,
     build_cache_key,
     call_llm,
     check_request_fits,
     estimate_cost,
     estimate_request_tokens,
+    evaluate_submission,
     response_cost,
     submit_validated,
 )
@@ -385,3 +392,195 @@ def test_submit_validated_rejects_bad_max_attempts():
             backend=MockBackend(responses=["x"]), system="s", user="u",
             model="m", parse_fn=lambda t: t, validators=[], max_attempts=0,
         )
+
+
+# --- evaluate_submission (pure, extracted from submit_validated) -------------
+
+
+def test_evaluate_submission_accepts_when_parse_and_validators_pass():
+    spec = ValidationSpec(parse_fn=lambda t: t, validators=[_accept_validator])
+    result = evaluate_submission("OK payload", spec)
+    assert isinstance(result, EvaluationResult)
+    assert result.parsed is True
+    assert result.payload == "OK payload"
+    assert result.rejections == []
+
+
+def test_evaluate_submission_reports_validator_rejection():
+    spec = ValidationSpec(parse_fn=lambda t: t, validators=[_reject_until_ok])
+    result = evaluate_submission("bad", spec)
+    assert result.parsed is True
+    assert result.payload == "bad"  # parsed payload retained even when rejected
+    assert len(result.rejections) == 1
+    assert result.rejections[0].kind == "needs_ok"
+
+
+def test_evaluate_submission_parse_error_yields_single_rejection():
+    def parse(text):
+        raise ValueError("cannot parse")
+
+    spec = ValidationSpec(parse_fn=parse, validators=[_accept_validator])
+    result = evaluate_submission("junk", spec)
+    assert result.parsed is False
+    assert result.payload is None
+    assert len(result.rejections) == 1
+    assert result.rejections[0].kind == "parse_error"
+    assert result.rejections[0].severity == Severity.HARD
+    assert "cannot parse" in result.rejections[0].detail
+
+
+def test_evaluate_submission_rejection_ordering_matches_run_rules():
+    # run_rules sorts by (kind, detail); evaluate_submission must not reorder.
+    def validator_b(candidate, context):
+        return [Rejection(kind="z_kind", detail="z detail")]
+
+    def validator_a(candidate, context):
+        return [Rejection(kind="a_kind", detail="a detail")]
+
+    spec = ValidationSpec(parse_fn=lambda t: t, validators=[validator_b, validator_a])
+    result = evaluate_submission("x", spec)
+    assert [r.kind for r in result.rejections] == ["a_kind", "z_kind"]
+
+
+def test_evaluate_submission_context_is_forwarded_to_validators():
+    seen = []
+
+    def validator(candidate, context):
+        seen.append(context)
+        return []
+
+    spec = ValidationSpec(parse_fn=lambda t: t, validators=[validator], context="ctx-1")
+    evaluate_submission("x", spec)
+    assert seen == ["ctx-1"]
+
+
+def test_evaluate_submission_is_pure_no_backend_no_io_needed():
+    # Constructed with no backend, no cache_dir, no clock dependency: a
+    # worker in another process can call this with nothing but (text, spec).
+    spec = ValidationSpec(parse_fn=lambda t: {"v": t}, validators=[_accept_validator])
+    result = evaluate_submission("hello", spec)
+    assert result.parsed is True
+    assert result.rejections == []
+    assert result.payload == {"v": "hello"}
+
+
+def test_evaluate_submission_matches_submit_validated_single_attempt_feedback():
+    # Byte-compatibility check: running evaluate_submission directly on the
+    # same text submit_validated would see produces the same rejection
+    # feedback string submit_validated renders internally.
+    spec = ValidationSpec(parse_fn=lambda t: t, validators=[_reject_until_ok])
+    direct = evaluate_submission("bad", spec)
+
+    backend = MockBackend(responses=["bad", "OK"])
+    seen_feedback = []
+
+    def feedback(original_user, response_text, feedback_text):
+        seen_feedback.append(feedback_text)
+        return f"{original_user}\n{feedback_text}"
+
+    submit_validated(
+        backend=backend, system="s", user="u", model="test/model",
+        parse_fn=lambda t: t, validators=[_reject_until_ok],
+        build_feedback=feedback, max_attempts=2,
+    )
+    from content_pipeline.validate import contract as contract_mod
+
+    rendered = contract_mod.format_rejections(direct.rejections)
+    assert rendered == seen_feedback[0]
+
+
+# --- ResponseCache.store atomicity --------------------------------------------
+
+
+def test_store_atomic_write_leaves_no_temp_file_on_success(tmp_path):
+    cache = ResponseCache(tmp_path)
+    resp = LLMResponse(text="hello", model="m")
+    assert cache.store("k", resp) is True
+    entries = list(tmp_path.iterdir())
+    assert [p.name for p in entries] == ["k.json"]
+
+
+def test_store_interrupted_write_leaves_no_partial_or_corrupt_entry(tmp_path, monkeypatch):
+    # Prove the atomicity claim: a write that dies PARTWAY THROUGH must not
+    # corrupt or truncate the pre-existing entry, and must not leave a stray
+    # temp file behind.
+    cache = ResponseCache(tmp_path)
+    good = LLMResponse(text="first version", model="m")
+    assert cache.store("k", good) is True
+    original_bytes = (tmp_path / "k.json").read_bytes()
+
+    real_fdopen = os.fdopen
+
+    class ExplodingFile:
+        """Wraps the real temp-file handle but crashes mid-write.
+
+        Writes half the intended bytes to the REAL underlying file (so a
+        naive non-atomic writer would leave a truncated target), flushes
+        them to disk, then raises -- simulating a process crash after some
+        bytes landed but before the write completed.
+        """
+
+        def __init__(self, fd):
+            self._real = real_fdopen(fd, "w", encoding="utf-8")
+
+        def write(self, data):
+            half = len(data) // 2
+            self._real.write(data[:half])
+            self._real.flush()
+            raise OSError("simulated crash mid-write")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self._real.close()
+            return False
+
+    def fake_fdopen(fd, mode="r", encoding=None):
+        assert mode == "w"
+        return ExplodingFile(fd)
+
+    monkeypatch.setattr(platform.os, "fdopen", fake_fdopen)
+
+    updated = LLMResponse(text="second version, must not land", model="m")
+    with pytest.raises(OSError):
+        cache.store("k", updated)
+
+    # The visible cache entry is byte-identical to before the failed write --
+    # the half-written temp file never became the target.
+    assert (tmp_path / "k.json").read_bytes() == original_bytes
+    # And it is still valid, complete JSON for the ORIGINAL response.
+    data = json.loads((tmp_path / "k.json").read_text(encoding="utf-8"))
+    assert data["text"] == "first version"
+    # No leftover .tmp file: cleanup ran even though the write raised.
+    leftovers = [p.name for p in tmp_path.iterdir() if p.name != "k.json"]
+    assert leftovers == []
+
+
+def test_store_concurrent_writers_never_produce_a_corrupt_file(tmp_path):
+    cache = ResponseCache(tmp_path)
+    # Large, distinguishable payloads: a non-atomic write interleaved by a
+    # thread-scheduler pause mid-write would produce a spliced/corrupt file
+    # that fails to parse as JSON, or parses to a value neither writer sent.
+    contents = [f"writer-{i}-" + ("x" * 20000) for i in range(8)]
+    responses = [LLMResponse(text=c, model="m") for c in contents]
+    errors = []
+
+    def write(resp):
+        try:
+            cache.store("shared-key", resp)
+        except Exception as exc:  # pragma: no cover - surfaced via errors
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write, args=(r,)) for r in responses]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors
+    raw = (tmp_path / "shared-key.json").read_text(encoding="utf-8")
+    data = json.loads(raw)  # raises if the file is truncated/interleaved
+    assert data["text"] in contents  # exactly one writer's payload won
+    leftovers = [p.name for p in tmp_path.iterdir() if p.name != "shared-key.json"]
+    assert leftovers == []
