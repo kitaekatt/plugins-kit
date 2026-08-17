@@ -22,7 +22,13 @@ Submodules:
   halt state) that never contains prompts, unit payloads, or outputs.
 - ``wave`` -- :func:`~content_pipeline.execution.wave.ready_wave`, which
   units are currently claimable for a run under a flat or graph work-unit
-  strategy.
+  strategy, plus :func:`~content_pipeline.execution.wave.graph_block_reason`
+  for diagnosing why a graph strategy's wave is empty. For a graph strategy,
+  a wave returned by ``prepare_run`` OR ``ready_wave`` directly, an empty
+  wave is NOT proof the run is complete -- a caller looping either one must
+  interleave ``controller.finalize_run`` and consult
+  ``controller.unfinished_units``; see ``wave``'s module docstring, "Looping
+  ``ready_wave`` alone does not drain a graph run to completion".
 - ``controller`` -- :func:`~content_pipeline.execution.controller.prepare_run`
   / :func:`~content_pipeline.execution.controller.finalize_run` /
   :func:`~content_pipeline.execution.controller.unfinished_units` /

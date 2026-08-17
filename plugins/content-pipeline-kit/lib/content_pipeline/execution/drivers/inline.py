@@ -5,6 +5,29 @@
 :func:`~content_pipeline.execution.wave.ready_wave`) one at a time, produces
 its text one of two ways, and accepts it into the store:
 
+**Graph-strategy caller, read before looping ``run_wave``:** ``run_wave``
+only claims and accepts the units already IN the wave it is given -- it does
+not compute the next one. For a graph strategy, a caller that loops
+``ready_wave`` -> ``run_wave`` -> ``ready_wave`` -> ... without ever calling
+:func:`~content_pipeline.execution.controller.finalize_run` in between will
+see the wave go permanently empty after the first accept, because the
+successor's predecessor is ACCEPTED but not yet applied -- not because the
+run is done. The correct loop interleaves ``finalize_run`` on an empty wave
+and checks :func:`~content_pipeline.execution.controller.unfinished_units`
+to tell "complete" from "blocked"::
+
+    while True:
+        wave = ready_wave(store, run_id, strategy)
+        if not wave:
+            if not unfinished_units(store, run_id):
+                break  # genuinely complete
+            finalize_run(store, run_id, adapter)  # unblock and retry
+            continue
+        run_wave(store, run_id, wave, adapter, generate=..., backend=...)
+
+See ``execution.wave``'s module docstring, "Looping ``ready_wave`` alone
+does not drain a graph run to completion", for the full explanation.
+
 - ``generate`` -- a plain ``Callable[[WorkUnit], str]`` the caller supplies
   directly (no ``LLMBackend`` involved at all -- useful for tests and for
   consumers whose generation step is not an LLM call).

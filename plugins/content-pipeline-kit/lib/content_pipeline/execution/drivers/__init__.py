@@ -8,6 +8,16 @@ one from ``PENDING`` to a terminal or halted state through
 all a driver must satisfy -- HOW a unit's text gets produced is not part of
 it, and varies by driver:
 
+**Graph-strategy caller, read before looping:** for a graph strategy, an
+empty wave from ``ready_wave`` is NOT proof the run is complete -- it also
+means "blocked on a predecessor that is ACCEPTED but not yet applied". A
+caller driving one of these drivers in a loop must interleave
+:func:`~content_pipeline.execution.controller.finalize_run` between waves
+and use :func:`~content_pipeline.execution.controller.unfinished_units` to
+tell "complete" apart from "blocked". See ``execution.wave``'s module
+docstring, "Looping ``ready_wave`` alone does not drain a graph run to
+completion", for the full explanation and the required loop shape.
+
 - :mod:`~content_pipeline.execution.drivers.inline` (A-min.2) -- concurrency
   one: claims a unit, produces its text synchronously in the calling process
   (either a plain callable or an ``LLMBackend`` call), and accepts it.

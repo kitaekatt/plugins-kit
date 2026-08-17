@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import pytest
 
-from content_pipeline.execution.model import UnitState
+from content_pipeline.execution.model import AttemptKind, UnitState
 from content_pipeline.execution.store import ExecutionStore
 from content_pipeline.execution.wave import (
     UnsafeGraphParallelismError,
+    graph_block_reason,
     is_graph_strategy,
     ready_wave,
 )
@@ -46,6 +47,39 @@ class _ExplodingStore:
 
     def list_units(self, run_id):  # pragma: no cover - must never run
         raise AssertionError("store was read despite max_wave_size > 1 against a graph strategy")
+
+
+class _ReadSpyStore:
+    """Wraps a real ``ExecutionStore``, counting calls to ``snapshot``,
+    ``list_units``, and ``list_attempts`` while delegating everything else
+    (including the read methods themselves) to the real store.
+
+    Used to pin that the graph path reads through ``snapshot`` -- ONE
+    read-transaction call -- rather than a separate ``list_units`` +
+    ``list_attempts`` pair, which would reopen the exact torn-read window
+    ``snapshot`` exists to close (see ``wave.py``'s module docstring).
+    """
+
+    def __init__(self, real: ExecutionStore) -> None:
+        self._real = real
+        self.snapshot_calls = 0
+        self.list_units_calls = 0
+        self.list_attempts_calls = 0
+
+    def snapshot(self, run_id):
+        self.snapshot_calls += 1
+        return self._real.snapshot(run_id)
+
+    def list_units(self, run_id):
+        self.list_units_calls += 1
+        return self._real.list_units(run_id)
+
+    def list_attempts(self, run_id, unit_id=None):
+        self.list_attempts_calls += 1
+        return self._real.list_attempts(run_id, unit_id)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
 
 
 FLAT_STRATEGY = FlatChunkStrategy(select=lambda store: [])
@@ -128,11 +162,23 @@ def test_graph_readiness_releases_successor_once_predecessor_is_applied(tmp_path
     assert len(wave) == 1
 
 
-def test_graph_readiness_withholds_successor_when_peer_accepts_between_reads(tmp_path):
+def test_graph_readiness_withholds_successor_after_peer_accepts_without_applying_between_two_reads(tmp_path):
     """Multi-process-relevant case: a peer's ``accept_unit`` alone (no apply)
-    landing between two ``ready_wave`` reads must not release the successor.
-    Guards against a regression that treats "unit state changed since I last
-    looked" as equivalent to "predecessor is applied"."""
+    landing between two SEPARATE ``ready_wave`` calls must not release the
+    successor on the second call. Guards against a regression that treats
+    "unit state changed since I last looked" as equivalent to "predecessor
+    is applied".
+
+    NOTE: this is single-threaded and reaches a store state identical to
+    ``test_graph_readiness_withholds_successor_until_predecessor_is_applied``
+    above -- it does NOT exercise a torn read within one ``ready_wave`` call
+    (that atomicity guarantee is pinned separately by
+    ``test_graph_readiness_reads_the_store_exactly_once_via_snapshot``, which
+    proves the graph path never opens the two-read window a torn read would
+    require). This test's only added value over the simpler one is
+    confirming the withholding re-evaluates correctly across two INDEPENDENT
+    ``ready_wave`` calls, not just one.
+    """
     store = _seeded_store(tmp_path)
 
     first = ready_wave(store, "run-1", GRAPH_STRATEGY)
@@ -144,6 +190,55 @@ def test_graph_readiness_withholds_successor_when_peer_accepts_between_reads(tmp
 
     second = ready_wave(store, "run-1", GRAPH_STRATEGY)
     assert second == []
+
+
+def test_graph_readiness_re_withholds_after_apply_started_follows_apply_succeeded(tmp_path):
+    """Attempts ordered [claim, accept, apply_succeeded, apply_started] --
+    a LATER APPLY_STARTED after an APPLY_SUCCEEDED must RE-withhold the
+    successor, because the true last apply-kind attempt is APPLY_STARTED
+    (apply_unknown), not APPLY_SUCCEEDED.
+
+    This pins two things the shipped code already gets right and a wrong
+    implementation can get wrong independently:
+    - the check must be "LAST apply-kind attempt is APPLY_SUCCEEDED", not
+      "ANY attempt is APPLY_SUCCEEDED" (kills an ``any()``-based mutant);
+    - ``_last_apply_kind`` must scan attempts in their true chronological
+      (forward) order, not reversed (kills a ``reversed(attempts)`` mutant,
+      which would report the OLDER of the two apply-kind attempts as "last").
+    """
+    store = _seeded_store(tmp_path)
+    r0 = store.claim_unit("run-1", "u0", "worker-1")
+    store.accept_unit("run-1", "u0", r0.fencing_token)
+    store.record_apply_succeeded("run-1", "u0")
+    store.record_apply_started("run-1", "u0")
+
+    attempts = store.list_attempts("run-1", "u0")
+    assert [a.kind for a in attempts] == [
+        AttemptKind.CLAIM,
+        AttemptKind.ACCEPT,
+        AttemptKind.APPLY_SUCCEEDED,
+        AttemptKind.APPLY_STARTED,
+    ]
+
+    wave = ready_wave(store, "run-1", GRAPH_STRATEGY)
+    assert wave == []
+
+
+def test_graph_readiness_reads_the_store_exactly_once_via_snapshot(tmp_path):
+    """Pins the commit's headline atomicity mechanism: the graph path must
+    read units and attempts together via ONE ``store.snapshot`` call, never
+    via separate ``list_units`` + ``list_attempts`` calls (which would
+    reopen the torn-read window ``snapshot`` exists to close -- see the
+    module docstring)."""
+    store = _seeded_store(tmp_path)
+    spy = _ReadSpyStore(store)
+
+    wave = ready_wave(spy, "run-1", GRAPH_STRATEGY)
+
+    assert [u.unit_id for u in wave] == ["u0"]
+    assert spy.snapshot_calls == 1
+    assert spy.list_units_calls == 0
+    assert spy.list_attempts_calls == 0
 
 
 def test_graph_readiness_skips_over_unit_whose_predecessor_is_still_pending(tmp_path):
@@ -189,6 +284,70 @@ def test_graph_readiness_blocked_permanently_by_terminally_failed_predecessor(tm
     wave_again = ready_wave(store, "run-1", GRAPH_STRATEGY)
     assert wave_again == []
     assert store.get_unit("run-1", "u0").state is UnitState.FAILED
+
+
+# -- graph_block_reason -----------------------------------------------------
+
+
+def test_graph_block_reason_none_for_flat_strategy(tmp_path):
+    store = _seeded_store(tmp_path)
+    assert graph_block_reason(store, "run-1", FLAT_STRATEGY) is None
+
+
+def test_graph_block_reason_none_when_ready(tmp_path):
+    store = _seeded_store(tmp_path)
+    assert graph_block_reason(store, "run-1", GRAPH_STRATEGY) is None
+
+
+def test_graph_block_reason_none_when_no_pending_unit(tmp_path):
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    r0 = store.claim_unit("run-1", "u0", "worker-1")
+    store.accept_unit("run-1", "u0", r0.fencing_token)
+    store.record_apply_succeeded("run-1", "u0")
+    assert graph_block_reason(store, "run-1", GRAPH_STRATEGY) is None
+
+
+def test_graph_block_reason_names_unapplied_accepted_predecessor(tmp_path):
+    store = _seeded_store(tmp_path)
+    r0 = store.claim_unit("run-1", "u0", "worker-1")
+    store.accept_unit("run-1", "u0", r0.fencing_token)
+
+    reason = graph_block_reason(store, "run-1", GRAPH_STRATEGY)
+    assert reason is not None
+    assert "u1" in reason
+    assert "u0" in reason
+    assert "finalize_run" in reason
+
+
+def test_graph_block_reason_names_apply_unknown_predecessor(tmp_path):
+    store = _seeded_store(tmp_path)
+    r0 = store.claim_unit("run-1", "u0", "worker-1")
+    store.accept_unit("run-1", "u0", r0.fencing_token)
+    store.record_apply_started("run-1", "u0")
+
+    reason = graph_block_reason(store, "run-1", GRAPH_STRATEGY)
+    assert reason is not None
+    assert "apply_unknown" in reason
+    assert "reconcile" in reason
+
+
+def test_graph_block_reason_names_terminally_failed_predecessor(tmp_path):
+    store = _seeded_store(tmp_path)
+    r0 = store.claim_unit("run-1", "u0", "worker-1")
+    store.fail_unit("run-1", "u0", r0.fencing_token, terminal=True)
+
+    reason = graph_block_reason(store, "run-1", GRAPH_STRATEGY)
+    assert reason is not None
+    assert "FAILED" in reason
+
+
+def test_graph_block_reason_names_other_predecessor_state(tmp_path):
+    store = _seeded_store(tmp_path)
+    store.claim_unit("run-1", "u0", "worker-1")  # left CLAIMED
+
+    reason = graph_block_reason(store, "run-1", GRAPH_STRATEGY)
+    assert reason is not None
+    assert "claimed" in reason
 
 
 # -- max_wave_size vs. graph strategies -----------------------------------------

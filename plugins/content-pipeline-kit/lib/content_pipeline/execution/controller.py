@@ -233,29 +233,46 @@ class UnappliedPredecessorError(ExecutionError):
     unit whose apply has not yet succeeded (user decision, 2026-08-17; plan
     item ``amin2-readiness-keys-on-accepted``).
 
-    ``execution.wave``'s ``_graph_ready_wave`` releases a successor unit as
-    soon as its predecessor reaches ``UnitState.ACCEPTED`` -- but ACCEPTED
-    only means the text was accepted into the store (D1's submit-time
-    verdict), not that ``finalize_run`` has actually applied it
-    (``AttemptKind.APPLY_SUCCEEDED``). A caller who runs ``prepare_run``,
-    then ``run_wave`` (which accepts a unit), then ``prepare_run`` again
-    WITHOUT calling ``finalize_run`` in between would otherwise see the
-    successor become claimable -- and possibly generated -- before its
-    predecessor's payload has been applied at all, silently defeating the
-    one-unit-wave guarantee D1 exists to provide. Raised naming the run and
-    the offending unit id before computing or returning a wave, so no
-    caller ever observes a wave computed in that state.
+    ACCEPTED only means the text was accepted into the store (D1's
+    submit-time verdict), not that ``finalize_run`` has actually applied it
+    (``AttemptKind.APPLY_SUCCEEDED``). As of 2026-08-17, ``execution.wave``'s
+    ``_graph_ready_wave`` is ITSELF apply-aware -- it returns ``[]`` rather
+    than releasing a successor over an unapplied ``ACCEPTED`` predecessor --
+    so this check is no longer the only thing standing between a caller and
+    that failure mode. It stays as a loud, NAMED refusal at ``prepare_run``'s
+    door rather than relying solely on ``ready_wave``'s silent ``[]``, which
+    a caller cannot distinguish from "run complete" (see
+    ``execution.wave``'s module docstring, "Looping ``ready_wave`` alone
+    does not drain a graph run to completion"). A caller who runs
+    ``prepare_run``, then ``run_wave`` (which accepts a unit), then
+    ``prepare_run`` again WITHOUT calling ``finalize_run`` in between hits
+    this exception instead of silently getting a wave computed against
+    stale, unapplied state. Raised naming the run and the offending unit id
+    before computing or returning a wave, so no caller ever observes a wave
+    computed in that state.
+
+    Distinct from ``apply_unknown`` (an ``APPLY_STARTED`` attempt with no
+    following ``APPLY_SUCCEEDED``, e.g. a crash mid-apply): this exception's
+    message does not say "apply never started", because that would
+    misdescribe ``apply_unknown``, which needs a materially different
+    recovery -- ``finalize_run`` with an ``adapter.reconcile`` hook, not
+    merely "run finalize_run" (which alone raises ``ApplyUnknownError`` for
+    that case). See :class:`ApplyUnknownError`.
     """
 
     def __init__(self, run_id: str, unit_id: str) -> None:
         self.run_id = run_id
         self.unit_id = unit_id
         super().__init__(
-            f"run {run_id!r}: unit {unit_id!r} is ACCEPTED but not yet "
-            "applied (no APPLY_SUCCEEDED attempt); prepare_run refuses to "
-            "compute a wave until finalize_run has applied it -- otherwise "
-            "a successor could become ready before this unit's payload has "
-            "landed (D1's one-unit-wave guarantee)"
+            f"run {run_id!r}: unit {unit_id!r} is ACCEPTED but its last "
+            "apply-kind attempt is not APPLY_SUCCEEDED (either no apply "
+            "attempt at all, or an apply_unknown APPLY_STARTED with no "
+            "following APPLY_SUCCEEDED -- check list_attempts to tell them "
+            "apart); prepare_run refuses to compute a wave until "
+            "finalize_run has applied it (with an adapter.reconcile hook if "
+            "it is apply_unknown) -- otherwise a successor could become "
+            "ready before this unit's payload has landed (D1's "
+            "one-unit-wave guarantee)"
         )
 
 
@@ -323,18 +340,22 @@ def _validate_no_unapplied_accepted(
     because the two queries ran on different connections at different
     times). ``snapshot`` closes that particular tear.
 
-    NOT closed by this alone, and out of scope for this function to close:
-    the window between this call returning and the caller's SUBSEQUENT
-    :func:`~content_pipeline.execution.wave.ready_wave` call, which opens
-    its OWN fresh connection and can observe a peer's ``accept_unit`` that
-    lands after this snapshot but before it runs. Closing that would require
-    either a transaction spanning both calls (a `prepare_run` restructuring
-    that changes its transaction/locking shape for every caller, including
-    A-min.2's) or a `wave.py` signature change to accept a pre-fetched
-    snapshot (`wave.py` is frozen for A-min.3). Flagged for a dedicated
-    review round rather than narrowed unilaterally here (2026-08-17 grok-4.6
-    review of 8fff1cc, tracked alongside the "second unguarded door" in
-    ``ready_wave`` itself).
+    What this guard does NOT close, and what remains after
+    ``execution.wave``'s own 2026-08-17 apply-awareness fix (the "second
+    unguarded door" this docstring used to flag as still open): the HARMFUL
+    direction -- a peer's ``accept_unit`` landing in the window between this
+    snapshot and the caller's subsequent ``ready_wave`` call wrongly
+    releasing that unit's successor -- is now CLOSED, because ``ready_wave``
+    itself re-derives apply-state from its own fresh ``snapshot`` and
+    returns ``[]`` rather than releasing a successor over an unapplied
+    predecessor. What remains is only the BENIGN direction: a peer's
+    ``record_apply_succeeded`` landing just after this function's own
+    snapshot but before it finishes can cause a false ``UnappliedPredecessorError``
+    refusal here even though the predecessor is (by the time the exception
+    is raised, or a moment later) actually applied. That is a spurious
+    refusal, not a wrongly-released successor -- fail-safe rather than
+    fail-open -- so it is left as-is: a caller that retries after such a
+    refusal succeeds once the peer's write is visible.
     """
     _run, units, attempts = store.snapshot(run_id)
     attempts_by_unit: dict = {}
@@ -399,15 +420,17 @@ def prepare_run(
     ``ACCEPTED`` but not yet applied (no ``AttemptKind.APPLY_SUCCEEDED``
     attempt), raising :class:`UnappliedPredecessorError`. ``ACCEPTED`` means
     only that the text was accepted into the store at submit time (D1); it
-    does not mean ``finalize_run`` has applied it. Without this check, a
-    caller who runs ``prepare_run`` -> ``run_wave`` -> ``prepare_run`` again
-    WITHOUT an intervening ``finalize_run`` would see
-    ``execution.wave``'s ``_graph_ready_wave`` release the successor as soon
-    as its predecessor reaches ``ACCEPTED`` -- letting the successor be
-    claimed and generated before the predecessor's payload has landed,
-    silently defeating the same one-unit-wave guarantee the order check
-    above protects. A flat strategy is unaffected for the same reason as
-    above: no ordering claim, no check.
+    does not mean ``finalize_run`` has applied it. ``execution.wave``'s
+    ``_graph_ready_wave`` is itself apply-aware (2026-08-17) and returns
+    ``[]`` rather than releasing a successor over an unapplied predecessor,
+    so a caller who runs ``prepare_run`` -> ``run_wave`` -> ``prepare_run``
+    again WITHOUT an intervening ``finalize_run`` cannot silently get a
+    successor claimed early through THAT path -- but this check still hits
+    first, as a loud named exception, rather than leaving the caller to
+    puzzle out a bare ``[]`` that looks identical to "run complete" (see
+    ``execution.wave``'s module docstring, "Looping ``ready_wave`` alone
+    does not drain a graph run to completion"). A flat strategy is
+    unaffected for the same reason as above: no ordering claim, no check.
 
     For each matched ``PENDING`` unit, in the order ``store.list_units``
     returns (ordinal order):

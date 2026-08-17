@@ -103,9 +103,12 @@ def test_prepare_run_up_to_date_unit_0_releases_unit_1_in_a_graph_run(tmp_path):
     """Finding 1, the exact wedge: prepare_run + GraphWalkStrategy + an
     up-to-date unit 0 must release unit 1, not wedge it forever. Before the
     fix, the terminal skip landed unit 0 in UnitState.FAILED, and
-    wave._graph_ready_wave only treats ACCEPTED (or no predecessor) as
+    wave._graph_ready_wave only treated ACCEPTED (or no predecessor) as
     satisfied -- so unit 1 could never become claimable through this path,
-    for the life of the run."""
+    for the life of the run. (Historical note: this describes the pre-fix
+    behavior at the time SKIPPED was introduced, before _graph_ready_wave
+    also became apply-aware for ACCEPTED predecessors -- see
+    execution.wave's module docstring.)"""
     store = _seeded_store(tmp_path, unit_ids=("u0", "u1"))
     work_units = [WorkUnit(id="u0"), WorkUnit(id="u1")]
     graph_strategy = GraphWalkStrategy(order=lambda s: ["u0", "u1"])
