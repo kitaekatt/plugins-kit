@@ -20,17 +20,40 @@ Submodules:
 - ``status`` -- :func:`~content_pipeline.execution.status.compute_status`, a
   read-only bounded digest (counts, ages, throughput, capped failure groups,
   halt state) that never contains prompts, unit payloads, or outputs.
+- ``wave`` -- :func:`~content_pipeline.execution.wave.ready_wave`, which
+  units are currently claimable for a run under a flat or graph work-unit
+  strategy.
+- ``controller`` -- :func:`~content_pipeline.execution.controller.prepare_run`
+  / :func:`~content_pipeline.execution.controller.finalize_run` /
+  :func:`~content_pipeline.execution.controller.unfinished_units` /
+  ``pause_run`` / ``resume_run``, the prepare/finalize lifecycle, plus the
+  local ``RunAdapter``-shaped seam ``finalize_run`` calls through.
+- ``drivers`` -- driver implementations that execute a prepared wave through
+  the store; ``drivers.inline`` is the A-min.2 concurrency-one driver.
 
 Deliberately re-exports NOTHING here, matching the root package's strict-DAG
 discipline -- ``from content_pipeline.execution.store import ExecutionStore``,
-not ``from content_pipeline.execution import ExecutionStore``. This package
-may import ``content_pipeline`` stdlib-adjacent nothing else: it depends on no
-other subpackage, so a consumer can adopt the run store without pulling in
-``llm``, ``store``, or ``vcs``.
+not ``from content_pipeline.execution import ExecutionStore``.
+
+**Not zero-dependency as a whole package, as of A-min.2.** ``model.py``,
+``store.py``, and ``status.py`` remain zero-dependency (stdlib plus
+``content_pipeline.execution`` itself) -- a consumer can still adopt just the
+durable run store without pulling in anything else. But ``wave.py`` imports
+``content_pipeline.pipeline.workunit`` (the work-unit strategy shapes),
+``controller.py`` additionally imports ``content_pipeline.pipeline.single_pass``
+(the ``Gate`` / ``run_gates`` seam) and ``content_pipeline.freshness.classify``,
+and ``drivers/inline.py`` imports ``content_pipeline.llm.platform`` (to call
+through to ``LLMBackend`` / ``submit_validated``) and
+``content_pipeline.validate.contract``. A consumer that wants only the
+store/status surface can still import ``execution.store`` and
+``execution.status`` directly without triggering those heavier imports --
+each submodule's own dependency footprint is what matters, not this
+package's aggregate.
 
 Out of scope for this phase (see the plan of record,
 ``docs/planning/content-pipeline-kit/session-recipients-plan.md``, phase
-A-min.1): prepare/finalize orchestration, the worker protocol, a
-``RunAdapter``, and any driver. Those are later A-min sub-phases built on top
-of this store, not inside it.
+A-min.3): the versioned JSON worker protocol, the real ``RunAdapter``
+protocol (mountable handlers, adapter identity/version-gated resume), and the
+background-session / workflow drivers. A-min.2 ships only the prepare/finalize
+controller and the additive inline driver on top of the A-min.1 store.
 """
