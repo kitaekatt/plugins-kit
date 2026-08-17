@@ -136,7 +136,6 @@ from typing import Any, Callable, List, Optional, Sequence
 from content_pipeline.execution.adapter import RunAdapter
 from content_pipeline.execution.model import (
     AttemptKind,
-    AttemptRecord,
     ExecutionError,
     SKIP_ERROR_PREFIX,
     TERMINAL_STATES,
@@ -144,7 +143,7 @@ from content_pipeline.execution.model import (
     UnitState,
 )
 from content_pipeline.execution.store import ExecutionStore
-from content_pipeline.execution.wave import is_graph_strategy, ready_wave
+from content_pipeline.execution.wave import _last_apply_kind, is_graph_strategy, ready_wave
 from content_pipeline.freshness.classify import FreshnessState, needs_generation
 from content_pipeline.llm.platform import HaltError
 from content_pipeline.pipeline.single_pass import Gate, run_gates
@@ -468,15 +467,6 @@ def prepare_run(
 # ---------------------------------------------------------------------------
 # finalize_run
 # ---------------------------------------------------------------------------
-
-
-def _last_apply_kind(attempts: Sequence[AttemptRecord]) -> Optional[AttemptKind]:
-    """The most recent apply-related attempt kind, or ``None`` if never applied."""
-    last: Optional[AttemptKind] = None
-    for attempt in attempts:
-        if attempt.kind in (AttemptKind.APPLY_STARTED, AttemptKind.APPLY_SUCCEEDED):
-            last = attempt.kind
-    return last
 
 
 def finalize_run(

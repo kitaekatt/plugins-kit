@@ -3,9 +3,11 @@
 Pins the A-min.2 ready-wave contract: flat readiness is every PENDING unit in
 ordinal order (capped by ``max_wave_size``); graph readiness is strictly
 sequential (empty or exactly one unit -- the lowest-ordinal PENDING unit whose
-predecessor is ACCEPTED); a terminally FAILED predecessor blocks the chain
-permanently; and ``max_wave_size > 1`` against a graph strategy raises
-``UnsafeGraphParallelismError`` eagerly, before any store read.
+predecessor is ACCEPTED *and applied* -- its last apply-kind attempt is
+``AttemptKind.APPLY_SUCCEEDED`` -- or SKIPPED); a terminally FAILED predecessor
+blocks the chain permanently; and ``max_wave_size > 1`` against a graph
+strategy raises ``UnsafeGraphParallelismError`` eagerly, before any store
+read.
 """
 
 from __future__ import annotations
@@ -95,14 +97,53 @@ def test_graph_readiness_first_unit_ready_when_pending(tmp_path):
     assert [u.unit_id for u in wave] == ["u0"]
 
 
-def test_graph_readiness_yields_lowest_ordinal_pending_after_accept(tmp_path):
+def test_graph_readiness_withholds_successor_until_predecessor_is_applied(tmp_path):
+    """Decided rule (2026-08-17): a bare ACCEPTED predecessor is not enough --
+    ``ACCEPTED`` only means the text was accepted into the store at submit
+    time (D1), not that ``finalize_run`` has applied it. Readiness must be
+    apply-aware, or ``ready_wave -> run_wave(accept) -> ready_wave`` hands
+    back a successor over an unapplied predecessor even though ``prepare_run``
+    already refuses this exact case loudly via ``UnappliedPredecessorError``.
+    """
     store = _seeded_store(tmp_path)
     r0 = store.claim_unit("run-1", "u0", "worker-1")
     store.accept_unit("run-1", "u0", r0.fencing_token)
+    # Deliberately no record_apply_succeeded -- the predecessor is accepted
+    # but not yet applied.
+
+    wave = ready_wave(store, "run-1", GRAPH_STRATEGY)
+    assert wave == []
+
+
+def test_graph_readiness_releases_successor_once_predecessor_is_applied(tmp_path):
+    """Companion to the withholding test above: once the predecessor's apply
+    has actually succeeded, the successor becomes ready."""
+    store = _seeded_store(tmp_path)
+    r0 = store.claim_unit("run-1", "u0", "worker-1")
+    store.accept_unit("run-1", "u0", r0.fencing_token)
+    store.record_apply_succeeded("run-1", "u0")
 
     wave = ready_wave(store, "run-1", GRAPH_STRATEGY)
     assert [u.unit_id for u in wave] == ["u1"]
     assert len(wave) == 1
+
+
+def test_graph_readiness_withholds_successor_when_peer_accepts_between_reads(tmp_path):
+    """Multi-process-relevant case: a peer's ``accept_unit`` alone (no apply)
+    landing between two ``ready_wave`` reads must not release the successor.
+    Guards against a regression that treats "unit state changed since I last
+    looked" as equivalent to "predecessor is applied"."""
+    store = _seeded_store(tmp_path)
+
+    first = ready_wave(store, "run-1", GRAPH_STRATEGY)
+    assert [u.unit_id for u in first] == ["u0"]
+
+    # A peer worker claims and accepts u0 -- but never applies it.
+    r0 = store.claim_unit("run-1", "u0", "worker-2")
+    store.accept_unit("run-1", "u0", r0.fencing_token)
+
+    second = ready_wave(store, "run-1", GRAPH_STRATEGY)
+    assert second == []
 
 
 def test_graph_readiness_skips_over_unit_whose_predecessor_is_still_pending(tmp_path):
@@ -174,10 +215,11 @@ def test_ordinals_survive_holes_in_a_run(tmp_path):
     store.register_units("run-1", ["u0", "u1"])
     r0 = store.claim_unit("run-1", "u0", "worker-1")
     store.accept_unit("run-1", "u0", r0.fencing_token)
+    store.record_apply_succeeded("run-1", "u0")
     store.register_units("run-1", ["u2", "u3"])
-    # A hole in the PENDING set: ordinal 0 (u0) is ACCEPTED, so it is absent
-    # from any PENDING-filtered result even though ordinals 1-3 are
-    # contiguous and PENDING. Original ordinals must survive regardless.
+    # A hole in the PENDING set: ordinal 0 (u0) is ACCEPTED (and applied), so
+    # it is absent from any PENDING-filtered result even though ordinals 1-3
+    # are contiguous and PENDING. Original ordinals must survive regardless.
 
     flat_wave = ready_wave(store, "run-1", FLAT_STRATEGY)
     assert [(u.unit_id, u.ordinal) for u in flat_wave] == [

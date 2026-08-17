@@ -37,17 +37,37 @@ explicit context hook still encodes an order (via ``order`` /
 ``predecessors_of``) that the flat shape deliberately asserts away, so the
 graph path is the correct behavior even for the ``context_of=None`` case.
 
-Every reach into the store's shape uses the A-min.1 read surface only
-(:meth:`~content_pipeline.execution.store.ExecutionStore.list_units`); this
-module makes no change to ``execution.store`` and depends on none of its
-in-flight additions.
+The graph path additionally requires apply-awareness (2026-08-17, closing the
+"second unguarded door" alongside ``prepare_run``'s own
+``UnappliedPredecessorError`` refusal): an ``ACCEPTED`` predecessor satisfies
+its successor only once its last apply-kind attempt is
+``AttemptKind.APPLY_SUCCEEDED``. ``ACCEPTED`` means only that the text was
+accepted into the store at submit time (D1); it does not mean
+``finalize_run`` has applied it. Without this, ``ready_wave`` ->
+``run_wave`` (accept) -> ``ready_wave`` would release the successor before
+its predecessor's payload has landed, even though ``prepare_run`` refuses
+the same case loudly via ``UnappliedPredecessorError``. Readiness is a
+query, not a gate: this function returns ``[]`` rather than raising --
+``prepare_run`` is where the named exception lives, as the diagnostic that
+tells a caller WHY nothing was released.
+
+The graph path reads units and attempts together via
+:meth:`~content_pipeline.execution.store.ExecutionStore.snapshot` (one read
+transaction), so a peer's write landing between "read units" and "read
+attempts" cannot be seen by one read and not the other.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional, Sequence
 
-from content_pipeline.execution.model import ExecutionError, UnitRecord, UnitState
+from content_pipeline.execution.model import (
+    AttemptKind,
+    AttemptRecord,
+    ExecutionError,
+    UnitRecord,
+    UnitState,
+)
 from content_pipeline.pipeline.workunit import GraphWalkStrategy, WorkUnitStrategy
 
 
@@ -110,18 +130,35 @@ def _flat_ready_wave(store, run_id: str, max_wave_size: Optional[int]) -> List[U
     return pending
 
 
+def _last_apply_kind(attempts: Sequence[AttemptRecord]) -> Optional[AttemptKind]:
+    """The most recent apply-related attempt kind, or ``None`` if never applied."""
+    last: Optional[AttemptKind] = None
+    for attempt in attempts:
+        if attempt.kind in (AttemptKind.APPLY_STARTED, AttemptKind.APPLY_SUCCEEDED):
+            last = attempt.kind
+    return last
+
+
 def _graph_ready_wave(store, run_id: str) -> List[UnitRecord]:
-    units = sorted(store.list_units(run_id), key=lambda u: u.ordinal)
+    _run, all_units, attempts = store.snapshot(run_id)
+    units = sorted(all_units, key=lambda u: u.ordinal)
+    attempts_by_unit: Dict[str, List[AttemptRecord]] = {}
+    for a in attempts:
+        attempts_by_unit.setdefault(a.unit_id, []).append(a)
+
     predecessor_state: Optional[UnitState] = None
+    predecessor_id: Optional[str] = None
     for unit in units:
         if unit.state is UnitState.PENDING:
-            if predecessor_state is None or predecessor_state in (
-                UnitState.ACCEPTED,
-                UnitState.SKIPPED,
-            ):
+            if predecessor_state is None or predecessor_state is UnitState.SKIPPED:
                 return [unit]
+            if predecessor_state is UnitState.ACCEPTED:
+                predecessor_attempts = attempts_by_unit.get(predecessor_id, [])
+                if _last_apply_kind(predecessor_attempts) is AttemptKind.APPLY_SUCCEEDED:
+                    return [unit]
             return []
         predecessor_state = unit.state
+        predecessor_id = unit.unit_id
     return []
 
 
