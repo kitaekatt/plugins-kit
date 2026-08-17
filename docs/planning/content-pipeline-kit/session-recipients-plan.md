@@ -67,6 +67,14 @@ where this probe could invalidate it: A-min is justified independently of the
 premise (durable runs and status benefit the existing OpenRouter lane), and B1
 is the first premise-dependent code, gated by B2 before publishing as working.
 
+**Recorded decision, 2026-08-17: the capacity premise will not be verified.** The
+user decided not to run the capacity-classification probe. Phases B and C
+proceed on the premise as an **accepted, unverified assumption**: the
+`--bg`-draws-the-session-pool half stays as stated above -- documentation, never
+observed live -- and B2 item 1 stays specified but unscheduled. The consequence
+recorded against P2, that B does not ship if the premise is wrong, is unchanged;
+it is the risk this decision knowingly carries.
+
 ## Architectural assessment
 
 Carried forward from the code-level analysis; every line citation here was
@@ -230,6 +238,10 @@ cheap because fencing exists anyway.
   worker's lease while `claude agents --json` reports the session `working` or
   `blocked`; a `failed`/`stopped`/missing session's unit becomes reclaimable
   only after lease expiry. Identity is the Claude session ID, never the PID.
+  Per P13 the reading must come from `claude agents --json` and never from
+  `~/.claude/jobs/<id>/state.json`, whose own `state` field was observed
+  reporting `working` for a session `agents --json` reported as `blocked` --
+  which would renew a stalled worker's lease indefinitely.
 - **Workflow lane (C):** there is **no renewer** -- nothing occupies the
   dispatcher role, and asking a reasoning agent to heartbeat is unreliable. A
   workflow-lane lease is therefore a whole-runtime timeout: sized to a full
@@ -454,18 +466,25 @@ dispatcher exits without launching; session-ID reconciliation from
 required fields validated loudly. Per P4 the reconciler **filters
 `kind == "background"` first** (the listing includes interactive sessions,
 including the orchestrator's own) and then requires `kind`, `id`, `sessionId`,
-`state`; `pid` and `status` belong to interactive records and must never be
-required of a worker. Settled workers are visible only under `--all`, and
+`state`. `pid` and `status` must never be required of a worker, and -- correcting
+the first probe's reading -- neither may serve as a background-versus-interactive
+tell: a background record observed on 2026-08-17 carried `pid`, `status`, and
+`waitingFor` alongside `id` and `state` (P4). `kind` is the only discriminator.
+`waitingFor` is read where present, because `waitingFor: "permission prompt"` is
+what separates a permission stall (P5) from the question stall of P12; it is
+treated as an optional field, since it and `status` were each seen on a single
+record. Settled workers are visible only under `--all`, and
 `startedAt` is epoch milliseconds. Lease renewal per D5; typed failure mapping
 reusing `classify_halt_text` markers; pause/resume. Two corrections that follow
-from the 2026-08-17 probe and are load-bearing rather than cosmetic: command
+from the first 2026-08-17 probe and are load-bearing rather than cosmetic: command
 construction uses the **top-level** verbs `claude stop|logs|rm|respawn <id>`,
 never `claude agents <verb> <id>`, which exits 0 having done nothing (P3), so the
 preflight asserts each verb behaves rather than trusting an undocumented surface;
 and `claude logs <id>` is a **live-daemon-only** channel (it fails with
 `connect ENOENT \\.\pipe\cc-daemon-*-control` once the daemon has exited), so
 halt-text classification for a settled unit reads the session transcript or the
-per-job state, not `claude logs`. Per P11 the launcher's exit code and banner are
+per-job state -- the latter for its text fields only, per P13 -- and not
+`claude logs`. Per P11 the launcher's exit code and banner are
 never evidence a worker started: every dispatch is confirmed by polling
 `agents --json` for a transition out of the initial state, and a `failed` within
 the first seconds is classified as launch misconfiguration rather than work
@@ -473,13 +492,27 @@ failure. `~/.claude/jobs/<id>/state.json` (carrying `needs`, `detail`,
 `output.result`, `tokens`) and `~/.claude/daemon.log` are richer than
 `agents --json` but are undocumented internal state; they may be read as
 **optional enrichment behind a tolerant parse**, never as the required surface.
+For status specifically the constraint is stronger than that, and it is a
+correction rather than a caution: per P13, `state.json`'s own `state` field was
+observed reporting `working` for a session `agents --json` reported as
+`blocked`, so **no decision about whether a worker is progressing may read
+`state.json`**. Status detection keys on `agents --json` only. `state.json`
+remains readable for the `needs` prompt text, which `agents --json` never
+exposes at all, and for nothing that drives lease renewal, reclaim, or halt.
 Worker assets: `agents/pipeline-worker.md` and
 `skills/execute-work-unit/SKILL.md` --
 one agent claims one unit, reads its prepared request through the consumer
 command, produces an answer, submits through the same command, revises from
 compact rejection feedback until accepted or exhausted, and exits. The launch
 prompt carries only run and unit identifiers; unit content never appears in
-command lines or the orchestrator's context. An orchestration skill
+command lines or the orchestrator's context. **The launch prompt also names the
+exact invocations the worker may run**, and in particular constrains result
+submission to one exact pre-allowlisted consumer-command invocation rather than
+describing a desired outcome and leaving the worker latitude in how to reach it.
+This is a B1 prompt-design requirement, not consumer setup advice: the
+2026-08-17 probe stalled on a shell redirect (`echo ... > file`) that the worker
+composed itself to satisfy an instruction phrased as an outcome, and no
+allowlist author would have enumerated it (P5). An orchestration skill
 (`skills/background-pipeline/SKILL.md`) drives prepare, dispatch, status at
 batch boundaries, and finalize. `max_agents` (default 4) and `batch_size`
 (default 25) are configurable -- both pass the plugin-opinion razor: protecting
@@ -511,7 +544,11 @@ lifecycle verbs are emitted top-level and never as `claude agents <verb>`; launc
 parsing; a launcher that exits 0 on a doomed dispatch, proving the driver waits
 for an observed state transition; agents-JSON reconciliation including
 `kind`-filtering an interactive record out of the listing, unknown-field
-tolerance, and missing-required-field loudness; session-ID-not-PID identity;
+tolerance, missing-required-field loudness, and a background record carrying
+`pid`/`status`/`waitingFor` still reconciling as a worker; a fixture in which
+`~/.claude/jobs/<id>/state.json` reports `working` while `agents --json` reports
+`blocked`, proving the driver classifies the worker as stalled and stops
+renewing its lease; session-ID-not-PID identity;
 strict N; duplicate-launch suppression; blocked/missing/stopped/done-without-submit
 states; expiry and reclaim; fenced late submission recorded as superseded;
 post-halt valid-fence acceptance; failure classification; no unit content in
@@ -530,8 +567,12 @@ published as working before B2 passes**.
 No planned architecture; narrowly scoped fixes and recorded public constraints
 only. Named pass/fail items:
 
-1. **Capacity classification probe (make-or-break). Open, and the only item
-   still needing a quota spend.** Confirm live that `--bg` work draws the
+1. **Capacity classification probe (make-or-break). Specified but not
+   scheduled, by the recorded 2026-08-17 decision not to verify P2.** Phases B
+   and C proceed on the capacity premise as an accepted, unverified assumption,
+   so this item no longer gates the release and the quota spend below is not
+   being asked for. The specification is kept intact, unexecuted, because it is
+   what a later decision to verify would run. Confirm live that `--bg` work draws the
    session pool and not the headless allowance. A measurement method exists as
    of the 2026-08-17 probe (P9) and did not before: read
    `~/.claude/plugins/data/plugins-kit/claude-ui-kit/rate-limits.json` from an
@@ -549,35 +590,75 @@ only. Named pass/fail items:
    authorization to spend a measurable batch across two clean windows.** Fail =
    the premise is wrong and B does not ship; the plan returns to the user with
    the evidence.
-2. **Permission-mode behavior (make-or-break, with fallback). Half settled.** A
-   `--bg` session is interactive-supervised, not `-p --permission-mode
-   bypassPermissions`. Settled 2026-08-17 (P5): `--permission-mode` exists with
-   its choice list and composes with `--bg`, and `claude agents` carries
-   permission and settings-source flags as dispatch defaults, so the fallback
-   below is buildable. Still open, and cheap: one `--bg` session launched with
-   the project's `settings.json` in force and **without** any bypass flag, given a
-   prompt running exactly one consumer-shaped command covered by
-   `permissions.allow`; pass = it completes, fail = `agents --json` shows
-   `state: "blocked"` with a permission question in the job's `needs`. P12 makes
-   the stakes concrete: a blocked session has been observed sitting 19 days with
-   nothing timing it out, so a stalled worker is held only by our own lease. This
-   is the highest information per unit of quota available and should run first.
+2. **Permission-mode behavior (make-or-break, with fallback). Executed
+   2026-08-17; verdict PARTIAL, and the fail criterion recorded here was
+   incomplete.** A `--bg` session is interactive-supervised, not `-p
+   --permission-mode bypassPermissions`. The flag surface was settled by the
+   first probe (P5). The behavioral half was then run as two worker-shaped `--bg`
+   sessions, both stopped and removed afterwards, with these results:
+   - **Settings inheritance is observed, not inferred.** Under `--permission-mode
+     manual`, allowlisted `Read` and `Bash(ls:*)` ran unattended inside the `--bg`
+     session while a non-allowlisted write blocked -- a clean discrimination.
+     The entries that proved it are **user-scope**; project-scope
+     `permissions.allow` inheritance remains **inferred** from that result,
+     because exercising a project entry would have mutated the repository.
+   - **The stall is real.** Under `manual` the session stalled with nothing
+     timing it out.
+   - **The pass arm is not load-bearing on its own.** The flagless arm completed
+     an unallowlisted Bash write unattended, but this machine's user
+     `settings.json` carries `"defaultMode": "auto"`, and the command was
+     harmless. `auto`'s behavior on a command it classifies as dangerous is
+     **untested**; `auto` is plausibly a risk classifier rather than a blanket
+     allow, and a worker running arbitrary consumer commands will eventually
+     cross that threshold, where the stall would look exactly like the `manual`
+     arm. `auto` is not a general solution and the plan does not rely on it.
+   - **The fail criterion this item previously recorded was incomplete.** It read
+     "`agents --json` shows `state: "blocked"` with a permission question in the
+     job's `needs`", but `agents --json` exposes no `needs` field anywhere in
+     `--all` output, so a fail cannot be stated in terms of it. The corrected
+     criterion: fail = `agents --json` reports the
+     background record as `state: "blocked"` with `status: "waiting"` and
+     `waitingFor: "permission prompt"`. The prompt text is available only from
+     `~/.claude/jobs/<id>/state.json`, which per P13 may be read for that text
+     and for nothing that determines progress.
+   P12 makes the stakes concrete and was re-confirmed live by the second probe:
+   the session blocked since 2026-07-29 is still blocked, with nothing timing it
+   out, so a stalled worker is held only by our own lease.
    **Fallback design, shipped as documented consumer setup:** a pre-authorized
-   allowlist covering the consumer command invocations the worker performs,
-   verified by that single-unit probe before any batch.
+   allowlist covering the consumer command invocations the worker performs. The
+   mechanism is confirmed sound -- allowlist entries genuinely are honored inside
+   `--bg` -- but the fallback as previously written was incomplete on two points:
+   - The allowlist must cover the worker's actual command **strings**, not command
+     families. The 2026-08-17 stall was on a redirect the worker composed itself.
+     The mitigation is therefore in B1's prompt design (see B1), not in setup
+     documentation alone.
+   - "Verified by that single-unit probe before any batch" does not generalize:
+     unit 1 exercises only unit 1's commands. Re-framed as **verification against
+     the full enumerated invocation set**, or -- the cheaper option, since the
+     lease design already exists -- accept a mid-run permission stall as an
+     expected event and define its reclaim path.
 3. **Worker registration. Settled, reduced to a composition check.** Both halves
    confirmed 2026-08-17 (P6): background sessions load plugin skills, and
    `--append-system-prompt-file` / `--system-prompt-file` / `--agent` / `--agents`
    exist. What remains is verifying those flags actually compose with `--bg`
    rather than being silently dropped -- and per P11 that must be judged by
-   observing the worker's behavior, not the launcher's exit code. Fold into the
-   item-2 single-unit probe. Still to be recorded either way: what exactly is in
-   the launch prompt.
+   observing the worker's behavior, not the launcher's exit code. This was to
+   fold into the item-2 single-unit probe; the 2026-08-17 probe that executed
+   item 2 launched neither flag, so the composition check is still **open** and
+   needs its own single-unit launch. Still to be recorded either way: what
+   exactly is in the launch prompt.
 4. **Verbatim `agents --json` schema. Settled** as of 2026-08-17 (P4): the
    `kind` discriminator, the two field sets, and the presence of interactive
    records are read verbatim, and the reconciler's required-field list is fixed
    to `kind`, `id`, `sessionId`, `state` behind a `kind == "background"` filter.
-   The residue is not a schema question but a stability one: the lifecycle verbs
+   Amended 2026-08-17 by a second probe: a background record was read carrying
+   `pid`, `status`, and `waitingFor` alongside `id` and `state`, refuting the
+   field-set exclusivity recorded from the first probe, so `kind` is the sole
+   discriminator and the optional `waitingFor` is what tells a permission stall
+   from a question stall. The same probe fixes the **channel**, which is a
+   contract term and not merely a schema one: `agents --json` is the authoritative
+   status surface and `~/.claude/jobs/<id>/state.json` is not (P13). The residue
+   is not a schema question but a stability one: the lifecycle verbs
    (P3) are hidden from `--help`, which probing cannot settle, so B1's preflight
    carries a version-drift check instead.
 5. Authentication-failure behavior, concurrency enforcement, and a full
@@ -587,7 +668,10 @@ only. Named pass/fail items:
 
 **Exit criterion.** A main agent supervises via occasional bounded digests,
 identifies a failure pattern, alters N or a batch, and halts safely without
-ingesting unit content. Items 1 and 2 pass, or the phase stops and reports.
+ingesting unit content. Item 2 passes on its corrected criterion, or the phase
+stops and reports. Item 1 no longer gates the exit, by the recorded 2026-08-17
+decision not to verify P2; the premise it would have tested is carried
+unverified instead.
 
 ### Phase C -- Workflows
 
@@ -683,28 +767,34 @@ table: several rows below were doc-derived, read as settled, and were refuted th
 first time anything was run. A read-only CLI probe on 2026-08-17 against Claude
 Code 2.1.233 (the plan was written against 2.1.232) exercised P3-P6 and P9 and
 surfaced P11-P12; it modified no repository file, and its three accidental
-trivial background sessions were stopped and removed. P2, the load-bearing
-premise, was deliberately left untested by that probe.
+trivial background sessions were stopped and removed. A second probe on
+2026-08-17, against the same version, executed B2 item 2: it launched two
+worker-shaped `--bg` sessions, stopped and removed both, left the repository
+unmodified, settled the behavioral half of P5, corrected P4, and surfaced P13.
+P2, the load-bearing premise, was left untested by the first probe and, by a
+recorded user decision of 2026-08-17, is not to be tested at all.
 
 | # | Assumption | Established by | Tested by | If wrong |
 |---|---|---|---|---|
-| P1 | `-p` draws a small headless allowance, then metered credits | User's direct observation; docs conflict (Help Center says the separate credit was paused) | Not directly tested; it is the premise. B2 item 1 tests its actionable half | The effort loses its motivation; A-min still stands on its own |
-| P2 | `--bg` sessions draw the interactive session pool | Docs (`agent-view`, partly summarized fetch); **never observed**. The 2026-08-17 probe neither supported nor contradicted it: no batch was run, and a bg transcript's `usage` blocks carry no pool-attribution field (regex sweep of a 976-record bg transcript for `rate\|limit\|quota` found only tool parameters) | **B2 item 1, pass/fail -- still untested.** A measurement instrument exists as of 2026-08-17 (P9), but exercising it costs a measurable batch | B does not ship; escalate with evidence |
+| P1 | `-p` draws a small headless allowance, then metered credits | User's direct observation; docs conflict (Help Center says the separate credit was paused) | Not directly tested; it is the premise. B2 item 1 would test its actionable half, but that item is unscheduled per the recorded 2026-08-17 decision on P2 | The effort loses its motivation; A-min still stands on its own |
+| P2 | `--bg` sessions draw the interactive session pool | Docs (`agent-view`, partly summarized fetch); **never observed**. The 2026-08-17 probe neither supported nor contradicted it: no batch was run, and a bg transcript's `usage` blocks carry no pool-attribution field (regex sweep of a 976-record bg transcript for `rate\|limit\|quota` found only tool parameters) | **Not to be tested. Recorded user decision, 2026-08-17: P2 will not be verified**, and Phases B and C proceed on the capacity premise as an accepted, unverified assumption. B2 item 1 stays specified and a measurement instrument exists as of 2026-08-17 (P9), but neither is scheduled and exercising the probe would cost a measurable batch. This row therefore stays **unverified** for the life of the plan, and the consequence in the next column is the risk knowingly carried | B does not ship; escalate with evidence |
 | P3 | `claude --bg` surface: positional prompt, prints short session ID, rejects `-p`; `claude agents --json` exists; the lifecycle verbs are **top-level** `claude stop\|logs\|rm\|respawn\|attach <id>`, hidden from `claude --help` | Observed 2026-08-17 on Claude Code 2.1.233: `claude --help` (positional prompt, `--bg`), `claude --bg -p "..."` (refused with a verbatim conflict message, no spawn), a `--bg` launch banner (`backgrounded * a47add3f`, 8-hex id), `claude agents --help` (no `Commands:` section), and `claude <verb> --help` for each verb. The earlier `claude agents <verb>` shape was doc-derived and is **refuted**: `claude agents stop\|logs\|rm\|respawn\|list --help` each print the plain `agents` help and **exit 0**, ignoring the positional | B2 items 3-5; B1 preflight asserts the verbs behave, since they are undocumented and carry no stability guarantee | Driver command construction changes; contained in B1. The refuted form fails **silently at exit 0**, so the preflight is not optional |
-| P4 | `agents --json` records are discriminated by `kind`: `kind: "background"` carries `id`, `cwd`, `kind`, `startedAt` (epoch ms), `sessionId`, `name`, `state`; `kind: "interactive"` carries `pid`, `cwd`, `kind`, `startedAt`, `sessionId`, `name`, `status`. No record carries both `id`/`state` and `pid`/`status`. `--all` adds settled background sessions | Observed 2026-08-17: `claude agents --json --all` output read verbatim, one record of each kind. **Refutes** the previously recorded five-field shape (`id`, session id, `pid`, `state`, `status`), which came from a summarized doc fetch and did not record the `kind` discriminator at all. `state` values seen: `blocked`, `failed`, `done`, `stopped` | B2 item 4; reconciler is schema-tolerant from the start and filters on `kind` first | Reconciler required-field list adjusts; loud validation prevents silent misreads. Omitting the `kind` filter makes the orchestrator's own interactive session look like a worker |
-| P5 | `--bg` permission behavior (flag or settings inheritance); workers can avoid unattended permission prompts | Flags observed 2026-08-17: `--permission-mode <mode>` (choices `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan`) composes with `--bg` (two sessions spawned), `claude agents` exposes `--permission-mode`/`--dangerously-skip-permissions`/`--allow-dangerously-skip-permissions`/`--settings`/`--setting-sources` as dispatch defaults, and a real bg session recorded `--permission-mode auto` in its respawn flags. **The behavioral half is untested**: no probe ran an allowlisted consumer command unprompted inside a `--bg` session. That background sessions inherit project `settings.json` allowlists by the ordinary mechanism is inferred, not observed | **B2 item 2, pass/fail, with allowlist fallback** | Lane stalls `blocked`; fallback is documented consumer allowlist setup, and the flags that fallback needs are confirmed to exist and compose |
+| P4 | `agents --json` records are discriminated by `kind`: `kind: "background"` carries `id`, `cwd`, `kind`, `startedAt` (epoch ms), `sessionId`, `name`, `state`, and may also carry `pid`, `status`, and `waitingFor`; `kind: "interactive"` carries `pid`, `cwd`, `kind`, `startedAt`, `sessionId`, `name`, `status`. `kind` is the only discriminator; the field sets are not mutually exclusive. `--all` adds settled background sessions | Observed 2026-08-17: `claude agents --json --all` output read verbatim, one record of each kind. **Refutes** the previously recorded five-field shape (`id`, session id, `pid`, `state`, `status`), which came from a summarized doc fetch and did not record the `kind` discriminator at all. `state` values seen: `blocked`, `failed`, `done`, `stopped`. A second probe on 2026-08-17 **refutes this row's own earlier exclusivity claim** ("No record carries both `id`/`state` and `pid`/`status`"): a background record was read verbatim carrying `pid`, `id`, `status: "waiting"`, `waitingFor: "permission prompt"`, and `state: "blocked"` together. `status` and `waitingFor` were absent from the first probe's recorded field set; `waitingFor: "permission prompt"` is the discriminator that separates a permission stall (P5) from a question stall (P12). Each was seen on **one record**, so that they are stable schema fields is **inferred, not observed**. Also observed: no `needs` field appears anywhere in `--all` output (a grep over the full output returned zero matches) | B2 item 4; reconciler is schema-tolerant from the start and filters on `kind` first | Reconciler required-field list adjusts; loud validation prevents silent misreads. Omitting the `kind` filter makes the orchestrator's own interactive session look like a worker, and discriminating on the presence of `pid`/`status` instead of on `kind` misclassifies a background record |
+| P5 | `--bg` permission behavior (flag or settings inheritance); workers can avoid unattended permission prompts | Flags observed 2026-08-17: `--permission-mode <mode>` (choices `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan`) composes with `--bg` (two sessions spawned), `claude agents` exposes `--permission-mode`/`--dangerously-skip-permissions`/`--allow-dangerously-skip-permissions`/`--settings`/`--setting-sources` as dispatch defaults, and a real bg session recorded `--permission-mode auto` in its respawn flags. **Behavioral half executed 2026-08-17 by a second probe; verdict PARTIAL.** OBSERVED: under `--permission-mode manual`, allowlisted `Read` and `Bash(ls:*)` ran unattended inside a `--bg` session while a non-allowlisted Bash write blocked, so **user-scope `permissions.allow` inheritance is observed, not inferred**; the blocked session stalled with nothing timing it out; a flagless `--bg` session completed the same non-allowlisted Bash write unattended on a machine whose user `settings.json` sets `"defaultMode": "auto"`. INFERRED, and flagged as such: that **project-scope** `permissions.allow` is inherited (only user-scope entries were exercised, since a project entry would have mutated the repository); that the flagless pass is caused by `defaultMode: auto` rather than by `--bg` never prompting. NOT TESTED: `acceptEdits`, `dontAsk`, `bypassPermissions`, `plan`, and -- the most consequential gap -- whether `auto` stalls on a command it classifies as dangerous. The probe's write was harmless, `auto` is plausibly a risk classifier rather than a blanket allow, and such a stall would be indistinguishable from the `manual` arm, so **`auto` is not established as a general solution** | **B2 item 2, executed; the fallback carries the lane.** Two revisions follow: the allowlist must cover actual command strings (the stall was on a redirect the worker composed itself, which becomes a B1 prompt-design requirement), and single-unit verification does not generalize to a batch | Lane stalls `blocked`; fallback is documented consumer allowlist setup plus a constrained worker prompt, and the flags that fallback needs are confirmed to exist and compose. Detection of the stall must key on `agents --json` (P13) |
 | P6 | Background sessions load plugin agents/skills; a per-unit trusted system channel exists (`--append-system-prompt-file` or equivalent) | **Confirmed** 2026-08-17 on both halves. Channel: `--append-system-prompt-file` and `--system-prompt-file` parse-probed (each errored with `argument missing`, so the option exists); both are hidden from the `--help` option list but named in `--bare`'s help text. Also present: top-level `--agent <agent>`, `--agents <json>`, and `claude agents --plugin-dir`. Loading: a background-session transcript (system records carrying `"sessionKind": "bg"`) used the `Skill` tool with plugin-namespaced skills (`awesome-kit:task`, `bootstrap:bootstrap`, `git-kit:git-code-review`, several `skills-kit:*`). That these flags compose with `--bg` is **inferred from `--permission-mode`'s behavior, not observed** | B2 item 3, reduced to preflighting composition -- and per P11 that must be judged from worker behavior, not the launcher's exit code | Worker persona delivery redesigned inside B1 |
 | P7 | Workflow limits: 16 concurrent agents, 1000/run; in-session-only resume with ordering-based cache invalidation; `agent()` accepts a JSON schema; no per-agent wall-clock timeout | Docs (`workflows`) | C2 | Lane construction constants and lease sizing change; contained in C1 |
 | P8 | Live-session workflow `agent()` calls count as ordinary session usage | Docs (`workflows`, `costs`) | C2 capacity check | C does not ship |
 | P9 | No programmatic *API* exposes remaining session-pool capacity, but a supported *observable* does: `.rate_limits` in the statusline hook payload, which claude-ui-kit mirrors to a documented file contract at `~/.claude/plugins/data/plugins-kit/claude-ui-kit/rate-limits.json` | **Refutes** the earlier "search of docs found none", whose counter-evidence was inside this repository. Observed 2026-08-17: `plugins/claude-ui-kit/scripts/statusline.sh` reads `.rate_limits.five_hour.used_percentage`, `.seven_day.used_percentage`, and both `resets_at`, and states in comment that the statusline hook payload is the only place Claude Code surfaces `.rate_limits`; `claude-ui-kit/skills/statusline/references/components.md` documents the fields; the live snapshot file on this machine held `five_hour.used_percentage: 10`, `seven_day.used_percentage: 8`, `captured_at` 2026-08-17. Two observed caveats: granularity is whole percent, and only an interactive session rendering a statusline refreshes the file (whether a `--bg` session refreshes it is unverified) | Instrument for B2 item 1; B1's reactive-halt fallback stays the contract either way | Quota foresight improves; nothing breaks. If the observable proves too coarse or too stale, B2 item 1 falls back to the exhaust-the-headless-allowance formulation |
 | P10 | A saved workflow under `claude -p /name` has unproven capacity classification | Docs silent | Not tested; the path is rejected (see "Explicitly not doing") | Irrelevant unless the path is revisited |
 | P11 | `claude --bg` backgrounds the session **before validating its own flags**: it prints the success banner and exits 0, and a bad flag surfaces only asynchronously as `state: "failed"` in `agents --json` and as a settle line in `~/.claude/daemon.log` | Observed 2026-08-17: `claude --bg --permission-mode bogus "x"` printed `backgrounded * d7217a10` and exited 0; `~/.claude/daemon.log` then recorded `bg settled d7217a10 (crashed): exit 1 before init -- error: option '--permission-mode <mode>' argument 'bogus' is invalid`; `claude agents --json` later showed that id as `state: "failed"`. Second instance of the hazard the `codex_dispatch_is_silent_on_failure` insight records for codex dispatch -- judge a dispatch by its observable outcome, never by `$?` | B1 startup preflight and B2 item 5: every launch is confirmed by polling `agents --json` out of the initial state, and a `failed` inside the first seconds is classified as launch misconfiguration, not work failure | If some launches do validate synchronously after all, the conservative reading costs only an extra poll per launch. Trusting the exit code instead would make a misconfigured batch indistinguishable from a running one |
-| P12 | A `--bg` session can sit in `state: "blocked"` indefinitely with nobody attached; no platform lease, deadline, or auto-fail was observed | Observed 2026-08-17: `claude agents --json --all` listed a background session in `state: "blocked"` since 2026-07-29 -- 19 days -- and its `~/.claude/jobs/<id>/state.json` carried an unanswered question in `needs`. That block was a question rather than a permission prompt, so it demonstrates the failure geometry, not the permission-prompt case itself (which is P5) | Standing; it is why D5 leases and reclaim exist. B2 item 5 exercises reclaim live | Makes the lease-and-reclaim design **required**, not defensive. If a platform-side timeout does exist and was merely not observed, the lease is redundant but harmless |
+| P12 | A `--bg` session can sit in `state: "blocked"` indefinitely with nobody attached; no platform lease, deadline, or auto-fail was observed | Observed 2026-08-17: `claude agents --json --all` listed a background session in `state: "blocked"` since 2026-07-29 -- 19 days -- and its `~/.claude/jobs/<id>/state.json` carried an unanswered question in `needs`. That block was a question rather than a permission prompt, so it demonstrates the failure geometry, not the permission-prompt case itself (which is P5). Re-confirmed live by a second probe on 2026-08-17: the same session is still `blocked`, still with nothing timing it out. The permission-prompt case was separately observed by that probe and stalled likewise (P5) | Standing; it is why D5 leases and reclaim exist. B2 item 5 exercises reclaim live | Makes the lease-and-reclaim design **required**, not defensive. If a platform-side timeout does exist and was merely not observed, the lease is redundant but harmless |
+| P13 | `claude agents --json` is the authoritative status channel for a background session; `~/.claude/jobs/<id>/state.json` can disagree with it and under-report a stall, and must never drive a status decision | Observed 2026-08-17: for one background session, `agents --json` reported `state: "blocked"`, `status: "waiting"`, `waitingFor: "permission prompt"` while `~/.claude/jobs/<id>/state.json` simultaneously and persistently reported `state: "working"` with a non-null `needs`, still reading `"working"` at stop time. Separately observed on the same probe: `agents --json` exposes no `needs` field anywhere in `--all` output, so the prompt text exists only in the internal file. Whether the disagreement is a lag, a different field meaning, or a defect is **not established** -- only that the two channels disagreed about one session at one time | Standing constraint on B1's reconciler and on D5 lease renewal; B2 item 4 records the channel choice alongside the schema. B1's tests carry a disagreeing-channel fixture | A reconciler keying on `state.json`'s `state` scores a permanently stalled worker as healthily progressing and renews its lease forever -- silent, and the worst failure mode available. Reading `state.json` for the `needs` text only, behind a tolerant parse, stays safe |
 
-Phase order guarantees no expensive unwind: A-min depends on none of P1-P12;
-B1 code depends on P3-P6 and P11-P12 but is not published as working until B2
+Phase order guarantees no expensive unwind: A-min depends on none of P1-P13;
+B1 code depends on P3-P6 and P11-P13 but is not published as working until B2
 tests them; C1 depends on P7-P8 and is gated by C2. P2 remains the one
-unvalidated premise the whole of B rests on.
+unvalidated premise the whole of B rests on, and by the recorded 2026-08-17
+decision it stays that way: it is carried, not tested.
 
 ## Breaking changes and migration
 
@@ -780,7 +870,12 @@ user can weigh it, and none changes a decision:
    pre-authorized -- is itself one of the unverified platform behaviors. If
    `--bg` inherits project `settings.json` allowlists, the "fallback" is simply
    the design, and the gate item resolves to documented setup rather than a
-   platform blocker. The gate is kept pass/fail either way.
+   platform blocker. The gate is kept pass/fail either way. Settled in part on
+   2026-08-17 (P5): user-scope `permissions.allow` inheritance by a `--bg`
+   session is observed, so for enumerated invocations the fallback is indeed the
+   design; project-scope inheritance remains inferred, and what stays open is
+   the fallback's completeness -- a worker left latitude in how to run a step
+   composes invocations no allowlist author enumerated.
 2. **Default reconciliation for deliver modes is a design intention, not a
    verified capability.** The claim that marker-protected writes make "did this
    land" mechanically checkable was not verified against
