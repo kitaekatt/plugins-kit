@@ -26,10 +26,13 @@ Submodules:
 - ``controller`` -- :func:`~content_pipeline.execution.controller.prepare_run`
   / :func:`~content_pipeline.execution.controller.finalize_run` /
   :func:`~content_pipeline.execution.controller.unfinished_units` /
-  ``pause_run`` / ``resume_run``, the prepare/finalize lifecycle, plus the
-  local ``RunAdapter``-shaped seam ``finalize_run`` calls through.
+  ``record_halt`` / ``pause_run`` / ``resume_run``, the prepare/finalize
+  lifecycle plus the driver-shared D4 halt response, and the local
+  ``RunAdapter``-shaped seam both ``drivers.inline.run_wave`` and
+  ``finalize_run`` call through.
 - ``drivers`` -- driver implementations that execute a prepared wave through
-  the store; ``drivers.inline`` is the A-min.2 concurrency-one driver.
+  the store; ``drivers.inline`` is the A-min.2 concurrency-one driver, and
+  imports ``controller`` for ``RunAdapter``/``record_halt``.
 
 Deliberately re-exports NOTHING here, matching the root package's strict-DAG
 discipline -- ``from content_pipeline.execution.store import ExecutionStore``,
@@ -43,8 +46,11 @@ durable run store without pulling in anything else. But ``wave.py`` imports
 ``controller.py`` additionally imports ``content_pipeline.pipeline.single_pass``
 (the ``Gate`` / ``run_gates`` seam) and ``content_pipeline.freshness.classify``,
 and ``drivers/inline.py`` imports ``content_pipeline.llm.platform`` (to call
-through to ``LLMBackend`` / ``submit_validated``) and
-``content_pipeline.validate.contract``. A consumer that wants only the
+through to ``LLMBackend`` / ``submit_validated``) and ``controller.py``
+itself (for the shared ``RunAdapter`` seam and ``record_halt``), which pulls
+in ``controller.py``'s own dependencies transitively (including
+``content_pipeline.validate.contract``, for ``RunAdapter.validators``'
+type). A consumer that wants only the
 store/status surface can still import ``execution.store`` and
 ``execution.status`` directly without triggering those heavier imports --
 each submodule's own dependency footprint is what matters, not this

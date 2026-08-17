@@ -13,6 +13,24 @@ its text one of two ways, and accepts it into the store:
   validate-until-valid loop). Exactly one of ``generate``/``backend`` must be
   given.
 
+The adapter is one object
+----------------------------
+
+The consumer's data contract -- how to reconstruct a ``WorkUnit`` by id
+(``unit_for``), how to build the backend-path prompt (``system_for``/
+``user_for``), how to recover a payload from accepted text (``parse_fn``),
+and what counts as valid (``validators``) -- is supplied as a single
+:class:`~content_pipeline.execution.controller.RunAdapter`, not five loose
+keyword arguments. This is the same object
+:func:`~content_pipeline.execution.controller.finalize_run` calls through,
+and the sharing is the point: D1 requires finalize to re-parse a unit's
+accepted text with the SAME ``parse_fn`` this driver submitted it under, and
+one shared field makes that hold by construction -- a caller cannot
+accidentally pass a different ``parse_fn`` to each call, because there is
+only one field to pass it in. See ``controller.py``'s module docstring, "The
+``RunAdapter``-shaped seam", for the full field list and which A-min.3
+responsibilities are still absent from it.
+
 Cache-key stability (D3 / invariant 7) -- READ BEFORE TOUCHING THIS MODULE
 ----------------------------------------------------------------------------
 
@@ -38,12 +56,18 @@ A :class:`~content_pipeline.llm.platform.HaltError` caught while producing a
 unit's text (from either path -- ``generate`` may raise it directly, and
 ``submit_validated``/``call_llm`` raise it internally) is handled as:
 
-1. ``store.set_halt(run_id, kind=exc.kind, detail=exc.detail)``.
-2. The triggering unit is returned to ``PENDING`` (not terminally failed) via
+1. The store-side response --
+   :func:`~content_pipeline.execution.controller.record_halt`: sets the halt,
+   then returns the triggering unit to ``PENDING`` (not terminally failed) via
    ``store.fail_unit(..., terminal=False, error=...)`` -- it is unfinished
    work, not a permanent failure, and stays eligible for a future wave once
-   the run resumes.
-3. The loop stops: no further unit in this wave is claimed.
+   the run resumes. This half is shared with every other driver (D4 semantics
+   must be byte-identical across all of them), so it lives in ``controller.py``
+   rather than being re-derived here.
+2. The loop stops: no further unit in this wave is claimed. This half stays
+   local to this driver -- "stop claiming" means something different for a
+   driver with a different concurrency model, so only the concurrency-one
+   ``break`` below lives in this module.
 
 Setting the halt does **not** retroactively affect any unit already accepted
 earlier in this same call, and does not prevent a DIFFERENT, already-in-flight
@@ -85,11 +109,11 @@ from __future__ import annotations
 
 from typing import Any, Callable, List, Optional, Sequence
 
+from content_pipeline.execution.controller import RunAdapter, record_halt
 from content_pipeline.execution.model import ExecutionError, RunHaltedError, UnitRecord
 from content_pipeline.execution.store import DEFAULT_LEASE_SECONDS, ExecutionStore
 from content_pipeline.llm.platform import HaltError, LLMBackend, submit_validated
 from content_pipeline.pipeline.workunit import WorkUnit
-from content_pipeline.validate import contract
 
 DEFAULT_INLINE_WORKER_ID = "inline"
 
@@ -113,47 +137,48 @@ class UnacceptedSubmissionError(ExecutionError):
         )
 
 
-def _default_unit_for(unit_id: str) -> WorkUnit:
-    return WorkUnit(id=unit_id)
-
-
 def run_wave(
     store: ExecutionStore,
     run_id: str,
     wave: Sequence[UnitRecord],
+    adapter: Optional[RunAdapter] = None,
     *,
-    unit_for: Callable[[str], WorkUnit] = _default_unit_for,
     worker_id: str = DEFAULT_INLINE_WORKER_ID,
     generate: Optional[Callable[[WorkUnit], str]] = None,
     backend: Optional[LLMBackend] = None,
     model: str = "",
-    system_for: Optional[Callable[[WorkUnit], str]] = None,
-    user_for: Optional[Callable[[WorkUnit], str]] = None,
-    parse_fn: Optional[Callable[[str], Any]] = None,
-    validators: Sequence[contract.Validator] = (),
     lease_seconds: float = DEFAULT_LEASE_SECONDS,
     at: Optional[float] = None,
     **submit_kwargs: Any,
 ) -> List[str]:
     """Claim, generate, and accept each unit of ``wave``, serially (concurrency 1).
 
+    ``adapter`` carries the consumer's data contract -- see the module
+    docstring's "The adapter is one object" section. Defaults to a bare
+    ``RunAdapter()`` (its ``unit_for`` default reconstructs a payload-less
+    ``WorkUnit`` from the id alone), the right shape for a ``generate``
+    callable that needs neither a real ``unit_for`` nor any backend-path
+    field.
+
     Exactly one of ``generate`` or ``backend`` must be supplied. The
-    ``backend`` path additionally requires ``parse_fn`` and ``user_for``
-    (``system_for`` defaults to an empty system prompt). ``**submit_kwargs``
-    forwards to :func:`~content_pipeline.llm.platform.submit_validated`
-    (and, through it, to ``call_llm`` -- e.g. ``cache_dir``, ``pricing``,
-    ``max_attempts``).
+    ``backend`` path additionally requires ``adapter.parse_fn`` and
+    ``adapter.user_for`` (``adapter.system_for`` defaults to an empty system
+    prompt). ``**submit_kwargs`` forwards to
+    :func:`~content_pipeline.llm.platform.submit_validated` (and, through it,
+    to ``call_llm`` -- e.g. ``cache_dir``, ``pricing``, ``max_attempts``).
 
     Returns the ids of units accepted during this call, in the order they
     were processed. Stops early (returning what was accepted so far) on a
     caught :class:`~content_pipeline.llm.platform.HaltError` -- see the
     module docstring's "Halt handling" section.
     """
+    if adapter is None:
+        adapter = RunAdapter()
     if (generate is None) == (backend is None):
         raise ValueError("run_wave requires exactly one of `generate` or `backend`")
-    if backend is not None and (parse_fn is None or user_for is None):
+    if backend is not None and (adapter.parse_fn is None or adapter.user_for is None):
         raise ValueError(
-            "the `backend` path requires both `parse_fn` and `user_for`"
+            "the `backend` path requires both `adapter.parse_fn` and `adapter.user_for`"
         )
 
     accepted: List[str] = []
@@ -169,36 +194,28 @@ def run_wave(
             # "A halt already set..." section. Stop claiming; return what was
             # accepted so far, same contract as the HaltError path below.
             break
-        work_unit = unit_for(unit.unit_id)
+        work_unit = adapter.unit_for(unit.unit_id)
 
         try:
             if generate is not None:
                 text = generate(work_unit)
             else:
-                system = system_for(work_unit) if system_for is not None else ""
-                user = user_for(work_unit)  # type: ignore[misc]
+                system = adapter.system_for(work_unit) if adapter.system_for is not None else ""
+                user = adapter.user_for(work_unit)  # type: ignore[misc]
                 result = submit_validated(
                     backend=backend,  # type: ignore[arg-type]
                     system=system,
                     user=user,
                     model=model,
-                    parse_fn=parse_fn,  # type: ignore[arg-type]
-                    validators=validators,
+                    parse_fn=adapter.parse_fn,  # type: ignore[arg-type]
+                    validators=adapter.validators,
                     **submit_kwargs,
                 )
                 if not result.accepted:
                     raise UnacceptedSubmissionError(unit.unit_id, result.rejections)
                 text = result.responses[-1].text
         except HaltError as exc:
-            store.set_halt(run_id, kind=exc.kind, detail=exc.detail, at=at)
-            store.fail_unit(
-                run_id,
-                unit.unit_id,
-                claim.fencing_token,
-                error=f"halt:{exc.kind}",
-                terminal=False,
-                at=at,
-            )
+            record_halt(store, run_id, unit.unit_id, claim.fencing_token, exc, at=at)
             break
 
         store.accept_unit(run_id, unit.unit_id, claim.fencing_token, text=text, at=at)

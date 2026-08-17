@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from content_pipeline.execution.controller import RunAdapter
 from content_pipeline.execution.model import StaleFenceError, UnitState
 from content_pipeline.execution.store import ExecutionStore
 from content_pipeline.execution.wave import ready_wave
@@ -226,16 +227,19 @@ def test_d3_driver_produces_the_same_real_cache_key_as_the_untracked_path(tmp_pa
     #    build_cache_key (via submit_validated -> call_llm) -- neither
     #    build_cache_key call is stubbed.
     tracked_backend = MockBackend(responses=["GENERATED-TEXT"])
-    accepted = run_wave(
-        store,
-        "run-1",
-        wave,
-        backend=tracked_backend,
-        model=model,
+    adapter = RunAdapter(
         system_for=lambda wu: system,
         user_for=lambda wu: user,
         parse_fn=lambda text: text,
         validators=[],
+    )
+    accepted = run_wave(
+        store,
+        "run-1",
+        wave,
+        adapter,
+        backend=tracked_backend,
+        model=model,
         cache_dir=cache_dir,
     )
     assert accepted == ["u0"]

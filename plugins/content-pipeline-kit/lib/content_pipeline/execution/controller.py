@@ -14,25 +14,58 @@ Two entry points bracket a run:
   validator ever runs again.
 
 Also here: :func:`unfinished_units` (every unit without a terminal state, a
-SET with holes preserved, the halt-triggering unit included) and the thin
+SET with holes preserved, the halt-triggering unit included), the thin
 ``pause_run`` / ``resume_run`` wrappers over ``store.set_halt`` /
 ``store.clear_halt`` (D4 -- an operator pause is just another halt kind; no
-new store method exists for it).
+new store method exists for it), and :func:`record_halt` -- the D4 halt
+response (``set_halt`` then return the triggering unit to ``PENDING``) shared
+by every driver, so a driver never re-derives it (see "Halt handling is a
+driver-shared helper" below).
 
 The ``RunAdapter``-shaped seam
 -------------------------------
 
-:class:`RunAdapter` here is a **local, minimal** dataclass of callables
-(``parse_fn``, ``apply``, optional ``reconcile``) -- NOT the versioned JSON
-worker protocol A-min.3 ships (``execution/adapter.py`` /
-``execution/protocol.py`` do not exist yet; do not build them here). It exists
-only so :func:`finalize_run` has something typed to call.
+:class:`RunAdapter` here is a **local, minimal** dataclass of callables -- NOT
+the versioned JSON worker protocol A-min.3 ships (``execution/adapter.py`` /
+``execution/protocol.py`` do not exist yet; do not build them here). It is the
+one object that carries a consumer's full contract with both
+:func:`~content_pipeline.execution.drivers.inline.run_wave` (production:
+``unit_for``, ``system_for``, ``user_for``, ``parse_fn``, ``validators``) and
+:func:`finalize_run` (``parse_fn``, ``apply``, ``reconcile``) -- ``parse_fn``
+is a single field shared by both call sites, not two independently-supplied
+copies, which is what makes D1's "finalize re-parses with the SAME function
+the driver submitted under" requirement hold BY CONSTRUCTION rather than by
+the caller remembering to pass the same callable twice (see
+``drivers/inline.py``'s module docstring, "The adapter is one object").
+
+Of A-min.3's five documented ``RunAdapter`` responsibilities (plan of record,
+phase A-min.3: reconstruct unit by ID, build a prepared request, provide the
+``ValidationSpec``, apply a payload, optionally reconcile), this local seam
+covers "reconstruct unit by ID" (``unit_for``) and "apply a payload"
+(``parse_fn`` + ``apply``, with ``reconcile`` for the ``apply_unknown`` case).
+Still absent: a first-class "build a prepared request" step (today split
+across ``system_for``/``user_for``, not a single request object) and a typed
+``ValidationSpec`` field (today ``validators``, a bare sequence). Both are
+widenings -- new fields, not signature changes -- when A-min.3 lands.
 
 ``parse_fn`` MUST be deterministic and store-independent for tracked runs:
 finalize re-runs it on text recorded at submit time, potentially long after
 and in a different process, so any dependence on ambient state (clock,
 filesystem, network) would make a replay diverge from what the worker that
 recorded the text actually saw (plan D1's adapter contract).
+
+Halt handling is a driver-shared helper
+------------------------------------------
+
+:func:`record_halt` implements D4's halt response once, here, rather than
+inside a driver: ``store.set_halt`` followed by returning the triggering unit
+to ``PENDING`` via ``store.fail_unit(..., terminal=False)``. It does not stop
+a driver's own claim loop -- that control flow is the driver's, since only the
+driver knows what "stop claiming" means for its own concurrency model (a
+``break`` for the inline driver's serial loop; something else for a background
+dispatcher). Extracted from ``drivers/inline.py`` so the two planned drivers
+(phases B and C) that need byte-identical D4 semantics inherit this instead of
+re-deriving it.
 
 The gate seam: a direct import, not a re-derived shape
 --------------------------------------------------------
@@ -94,7 +127,8 @@ sensibly instead of hashing indistinguishable text, and so a reader of
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from itertools import zip_longest
 from typing import Any, Callable, List, Optional, Sequence
 
 from content_pipeline.execution.model import (
@@ -107,13 +141,22 @@ from content_pipeline.execution.model import (
     UnitState,
 )
 from content_pipeline.execution.store import ExecutionStore
-from content_pipeline.execution.wave import ready_wave
+from content_pipeline.execution.wave import is_graph_strategy, ready_wave
 from content_pipeline.freshness.classify import FreshnessState, needs_generation
+from content_pipeline.llm.platform import HaltError
 from content_pipeline.pipeline.single_pass import Gate, run_gates
 from content_pipeline.pipeline.workunit import WorkUnit, WorkUnitStrategy
+from content_pipeline.validate import contract
 
 DEFAULT_PREPARE_WORKER_ID = "prepare"
 DEFAULT_FINALIZE_WORKER_ID = "finalize"
+
+
+def _default_unit_for(unit_id: str) -> WorkUnit:
+    """The ``RunAdapter.unit_for`` default: a bare ``WorkUnit`` carrying only
+    the id, no payload or context -- sufficient for a ``generate`` callable
+    that needs neither."""
+    return WorkUnit(id=unit_id)
 
 
 class ApplyUnknownError(ExecutionError):
@@ -157,22 +200,87 @@ class MissingAcceptedTextError(ExecutionError):
         )
 
 
+class GraphOrderMismatchError(ExecutionError):
+    """``prepare_run`` refuses a graph-strategy run whose ``strategy.order()``
+    disagrees with the store's registration order (user decision, 2026-08-17).
+
+    ``store.register_units`` assigns ordinals in argument order;
+    ``GraphWalkStrategy.order`` independently claims to own the traversal
+    order. Nothing coupled the two before this check, and ``execution.wave``'s
+    ``_graph_ready_wave`` linearizes purely by registered ordinal -- so a
+    consumer who registers units in a different order than ``order()`` walks
+    them gets a successor unit generated before its predecessor is applied,
+    silently, with plausible-looking output. That defeats the one-unit-wave
+    guarantee a graph strategy exists to provide. Raised naming the FIRST
+    position at which the two sequences diverge, so a caller can find the
+    mismatched registration call rather than guessing.
+    """
+
+    def __init__(
+        self,
+        run_id: str,
+        position: int,
+        expected: Optional[str],
+        actual: Optional[str],
+    ) -> None:
+        self.run_id = run_id
+        self.position = position
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"run {run_id!r}: graph order and registration order diverge at "
+            f"position {position} -- strategy.order() says {expected!r}, "
+            f"but the unit registered at that ordinal is {actual!r}"
+        )
+
+
 @dataclass
 class RunAdapter:
-    """The local, minimal seam :func:`finalize_run` calls through.
+    """The local, minimal seam :func:`~content_pipeline.execution.drivers.inline.run_wave`
+    and :func:`finalize_run` both call through -- see the module docstring's
+    "The ``RunAdapter``-shaped seam" section for which A-min.3 responsibility
+    each field covers and which are still absent.
 
-    - ``parse_fn`` -- ``text -> payload``. Called mechanically on the
-      durably recorded ``accepted_text``; never re-validates (D1).
+    Production fields (consumed by ``drivers.inline.run_wave``):
+
+    - ``unit_for`` -- ``unit_id -> WorkUnit``. Reconstructs the work unit a
+      driver claimed, by id. Defaults to a bare ``WorkUnit(id=unit_id)``, the
+      right shape for a ``generate`` callable that needs neither payload nor
+      context.
+    - ``system_for`` / ``user_for`` -- optional ``WorkUnit -> str``. Build the
+      backend-path prompt; ``user_for`` is required (and ``system_for``
+      defaults to an empty system prompt) whenever ``run_wave`` is given a
+      ``backend`` rather than a plain ``generate`` callable.
+    - ``validators`` -- passed straight through to ``submit_validated``'s
+      validate-until-valid loop.
+
+    Finalize fields (consumed by :func:`finalize_run`):
+
+    - ``parse_fn`` -- ``text -> payload``. Called mechanically on the durably
+      recorded ``accepted_text``; never re-validates (D1). THE SAME callable
+      a ``backend``-path ``run_wave`` call submitted under, by construction --
+      not a second, independently-supplied copy (D1's re-parse requirement).
     - ``apply`` -- ``(unit_id, payload) -> None``. The consumer's delivery
       side effect (e.g. a ``deliver.*`` write).
     - ``reconcile`` -- optional ``unit_id -> bool``. Answers "did this
       unit's apply already land" for a unit found ``apply_unknown``. Absent
       means finalize refuses to proceed past any ``apply_unknown`` unit
       (D6, fail closed).
+
+    Every field defaults so a consumer exercising only one of the two call
+    sites (e.g. a ``generate``-only ``run_wave`` call that never finalizes)
+    supplies only what it uses; a call site that actually needs a field it
+    was not given fails at the point of use (a ``None`` called as a function,
+    or ``run_wave``'s own explicit ``ValueError`` for the backend path's
+    required ``user_for``/``parse_fn``), not at construction time.
     """
 
-    parse_fn: Callable[[str], Any]
-    apply: Callable[[str, Any], None]
+    unit_for: Callable[[str], WorkUnit] = _default_unit_for
+    system_for: Optional[Callable[[WorkUnit], str]] = None
+    user_for: Optional[Callable[[WorkUnit], str]] = None
+    parse_fn: Optional[Callable[[str], Any]] = None
+    validators: Sequence[contract.Validator] = field(default_factory=tuple)
+    apply: Optional[Callable[[str, Any], None]] = None
     reconcile: Optional[Callable[[str], bool]] = None
 
 
@@ -203,12 +311,31 @@ def _record_terminal_skip(
     )
 
 
+def _validate_graph_order(
+    store: ExecutionStore,
+    run_id: str,
+    strategy: WorkUnitStrategy,
+    graph_source: Any,
+) -> None:
+    """Refuse loudly when ``strategy.order()`` disagrees with registration
+    order -- see :class:`GraphOrderMismatchError` and the "why" note on
+    :func:`prepare_run`."""
+    order_ids = [str(node_id) for node_id in strategy.order(graph_source)]  # type: ignore[attr-defined]
+    registered_ids = [
+        u.unit_id for u in sorted(store.list_units(run_id), key=lambda u: u.ordinal)
+    ]
+    for position, (expected, actual) in enumerate(zip_longest(order_ids, registered_ids)):
+        if expected != actual:
+            raise GraphOrderMismatchError(run_id, position, expected, actual)
+
+
 def prepare_run(
     store: ExecutionStore,
     run_id: str,
     strategy: WorkUnitStrategy,
     work_units: Sequence[WorkUnit],
     *,
+    graph_source: Any = None,
     gates: Sequence[Gate] = (),
     freshness_of: Optional[Callable[[WorkUnit], FreshnessState]] = None,
     include_stale: bool = True,
@@ -224,6 +351,31 @@ def prepare_run(
     ``WorkUnit.id`` matching the store's ``unit_id``. A ``PENDING`` unit with
     no matching entry in ``work_units`` is left untouched (out of scope for
     this prepare call -- e.g. a caller preparing one chunk of a larger run).
+
+    When ``strategy`` is a graph strategy
+    (:func:`~content_pipeline.execution.wave.is_graph_strategy`), this call
+    FIRST validates that ``strategy.order(graph_source)`` -- the traversal
+    order the strategy itself claims to own -- agrees with the ids
+    ``store.register_units`` recorded, in ordinal order. ``graph_source`` is
+    the CONSUMER's own store (whatever object the caller's
+    ``GraphWalkStrategy.order``/``payload_of``/``context_of`` callables
+    expect -- see ``pipeline/workunit.py``), NOT the ``ExecutionStore`` this
+    function's own ``store`` parameter is. On any divergence this raises
+    :class:`GraphOrderMismatchError` naming the first mismatched position
+    before touching a single unit's state.
+
+    Why this check exists: ``execution.wave``'s ``_graph_ready_wave``
+    linearizes a graph strategy's wave purely from registered ordinal --
+    it never consults ``strategy.order()`` at all. ``GraphWalkStrategy.order``'s
+    own docstring says "the caller owns the traversal order", and
+    ``store.register_units`` assigns ordinals "in argument order" -- two
+    independent claims about the same sequence, with nothing coupling them
+    before this check. A consumer who registers units in a different order
+    than ``order()`` walks them gets a successor generated before its
+    predecessor is applied, silently, with plausible-looking output --
+    exactly the failure the one-unit-wave machinery exists to prevent. A flat
+    strategy carries no such ordering claim (the flat shape asserts units are
+    independent), so it is unaffected: no validation, no behavior change.
 
     For each matched ``PENDING`` unit, in the order ``store.list_units``
     returns (ordinal order):
@@ -245,6 +397,9 @@ def prepare_run(
     skips above have landed, so a just-skipped unit is not reported as
     claimable to a caller reading the returned wave.
     """
+    if is_graph_strategy(strategy):
+        _validate_graph_order(store, run_id, strategy, graph_source)
+
     by_id = {wu.id: wu for wu in work_units}
     for unit in store.list_units(run_id):
         if unit.state is not UnitState.PENDING:
@@ -382,6 +537,45 @@ def unfinished_units(store: ExecutionStore, run_id: str) -> List[UnitRecord]:
 
 
 # ---------------------------------------------------------------------------
+# record_halt
+# ---------------------------------------------------------------------------
+
+
+def record_halt(
+    store: ExecutionStore,
+    run_id: str,
+    unit_id: str,
+    fencing_token: int,
+    exc: HaltError,
+    *,
+    at: Optional[float] = None,
+) -> None:
+    """D4's halt response, shared by every driver: ``set_halt`` the run, then
+    return the triggering unit to ``PENDING`` (not a terminal failure) via
+    ``fail_unit(terminal=False)`` -- it is unfinished work, not a permanent
+    failure, and stays eligible for a future wave once the run resumes.
+
+    Does not stop the caller's own claim loop; a driver calls this from its
+    ``except HaltError`` handler and is responsible for not claiming further
+    units afterward (see ``drivers/inline.py``'s "Halt handling" section for
+    the concurrency-one shape of that responsibility -- a later driver with a
+    different concurrency model satisfies the same "stop claiming" contract
+    differently, but the store-side response captured here is byte-identical
+    for all of them, per the module docstring's "Halt handling is a
+    driver-shared helper" section).
+    """
+    store.set_halt(run_id, kind=exc.kind, detail=exc.detail, at=at)
+    store.fail_unit(
+        run_id,
+        unit_id,
+        fencing_token,
+        error=f"halt:{exc.kind}",
+        terminal=False,
+        at=at,
+    )
+
+
+# ---------------------------------------------------------------------------
 # pause_run / resume_run
 # ---------------------------------------------------------------------------
 
@@ -402,11 +596,13 @@ def resume_run(store: ExecutionStore, run_id: str) -> None:
 
 __all__ = [
     "ApplyUnknownError",
+    "GraphOrderMismatchError",
     "MissingAcceptedTextError",
     "RunAdapter",
     "prepare_run",
     "finalize_run",
     "unfinished_units",
+    "record_halt",
     "pause_run",
     "resume_run",
 ]

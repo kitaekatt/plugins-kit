@@ -14,6 +14,7 @@ import pytest
 
 from content_pipeline.execution.controller import (
     ApplyUnknownError,
+    GraphOrderMismatchError,
     MissingAcceptedTextError,
     RunAdapter,
     finalize_run,
@@ -106,7 +107,7 @@ def test_prepare_run_up_to_date_unit_0_releases_unit_1_in_a_graph_run(tmp_path):
     for the life of the run."""
     store = _seeded_store(tmp_path, unit_ids=("u0", "u1"))
     work_units = [WorkUnit(id="u0"), WorkUnit(id="u1")]
-    graph_strategy = GraphWalkStrategy(order=lambda s: [])
+    graph_strategy = GraphWalkStrategy(order=lambda s: ["u0", "u1"])
 
     from content_pipeline.freshness.classify import FreshnessState
 
@@ -150,6 +151,69 @@ def test_prepare_run_returns_ready_wave_computed_after_skips_land(tmp_path):
     # transient view only prepare_run's own return value carries.
     again = ready_wave(store, "run-1", FLAT_STRATEGY)
     assert [u.unit_id for u in again] == ["u0", "u2"]
+
+
+# -- prepare_run: graph order validated against registration order (2026-08-17) --
+
+
+def test_prepare_run_graph_order_matching_registration_passes(tmp_path):
+    """strategy.order() and registration agree -- prepare_run proceeds
+    exactly as it did before this check existed."""
+    store = _seeded_store(tmp_path, unit_ids=("u0", "u1", "u2"))
+    work_units = [WorkUnit(id="u0"), WorkUnit(id="u1"), WorkUnit(id="u2")]
+    graph_strategy = GraphWalkStrategy(order=lambda s: ["u0", "u1", "u2"])
+
+    wave = prepare_run(store, "run-1", graph_strategy, work_units)
+
+    assert [u.unit_id for u in wave] == ["u0"]
+
+
+def test_prepare_run_graph_order_permuted_registration_raises_naming_first_divergence(tmp_path):
+    """The exact silent defect this check exists to catch: units registered
+    in an order different from what strategy.order() claims. Before this
+    check, prepare_run would proceed anyway -- wave._graph_ready_wave
+    linearizes purely by registered ordinal and never consults order() at
+    all, so a successor could be generated before its predecessor is
+    applied, silently. Registration order is u0, u1, u2 (see _seeded_store);
+    the strategy's order says u1 comes first -- diverging at position 0
+    (expected "u1" per the strategy, but the unit registered at ordinal 0
+    is "u0")."""
+    store = _seeded_store(tmp_path, unit_ids=("u0", "u1", "u2"))
+    work_units = [WorkUnit(id="u0"), WorkUnit(id="u1"), WorkUnit(id="u2")]
+    graph_strategy = GraphWalkStrategy(order=lambda s: ["u1", "u0", "u2"])
+
+    with pytest.raises(GraphOrderMismatchError) as exc_info:
+        prepare_run(store, "run-1", graph_strategy, work_units)
+
+    assert exc_info.value.position == 0
+    assert exc_info.value.expected == "u1"
+    assert exc_info.value.actual == "u0"
+
+
+def test_prepare_run_graph_order_uses_the_caller_supplied_graph_source(tmp_path):
+    """order() is called with graph_source -- the CONSUMER's own store, not
+    the ExecutionStore -- and prepare_run must pass it through unchanged."""
+    store = _seeded_store(tmp_path, unit_ids=("u0", "u1"))
+    work_units = [WorkUnit(id="u0"), WorkUnit(id="u1")]
+    consumer_store = {"nodes": ["u0", "u1"]}
+    graph_strategy = GraphWalkStrategy(order=lambda s: s["nodes"])
+
+    wave = prepare_run(
+        store, "run-1", graph_strategy, work_units, graph_source=consumer_store
+    )
+
+    assert [u.unit_id for u in wave] == ["u0"]
+
+
+def test_prepare_run_flat_strategy_any_registration_order_unaffected(tmp_path):
+    """A flat strategy carries no ordering claim -- no validation ever runs,
+    regardless of registration order or work_units order."""
+    store = _seeded_store(tmp_path, unit_ids=("u2", "u0", "u1"))
+    work_units = [WorkUnit(id="u0"), WorkUnit(id="u1"), WorkUnit(id="u2")]
+
+    wave = prepare_run(store, "run-1", FLAT_STRATEGY, work_units)
+
+    assert [u.unit_id for u in wave] == ["u2", "u0", "u1"]
 
 
 # -- unfinished_units ----------------------------------------------------------
