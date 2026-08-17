@@ -24,7 +24,9 @@ session pool.
 The build is four phases. **A-min** adds, without breaking anything: a durable
 SQLite run store with claims, leases, and fencing; a prepare/finalize run
 lifecycle; a versioned worker protocol with a consumer `RunAdapter`; and an
-additive tracked inline driver over the existing backends. **B** ships a
+additive tracked inline driver over the existing backends; A-min.4 then closes
+the library defects that only running it against real consumers exposed. **B**
+ships a
 background-session driver plus a one-unit worker agent, gated by live platform
 qualification. **C** ships one reviewed independent-wave workflow over the same
 protocol, gated the same way. **A-cleanup** then performs the legacy halt/resume
@@ -258,6 +260,19 @@ genuinely dead workflow agent occupies its slot for the whole window before
 reclaim. That is the accepted price of having no liveness channel in that lane;
 the background lane, which has one, does not pay it.
 
+**Later empirical finding, 2026-08-17 -- evidence, not a change to this
+decision.** The requirement above that a workflow-lane lease be
+consumer-configured per run is confirmed by measurement, and the shipped default
+is shown to be actively wrong rather than merely unopinionated. One agentic unit
+driven through the protocol by a background session consumed 213s of the 300s
+`DEFAULT_LEASE_SECONDS` (`execution/store.py:87`) -- 71% on the cheap case, no
+retry and no contention -- while that consumer's own agent timeout is 900s
+(`agent_io.py:395`). Composed with this decision's workflow lane, a
+healthy-but-slow unit on defaults loses its lease mid-flight, is reclaimed and
+duplicated, and is then failed by the bounded reclaim count while working
+correctly. The remedy is the default, tracked as A-min.4 item 2; the lane
+semantics settled here stand unaltered.
+
 **Rejected alternative.** Worker-emitted heartbeats through the protocol's
 `renew` verb. Rejected for the workflow lane (unreliable from a reasoning
 agent); retained as the mechanism the *dispatcher* uses in the background lane.
@@ -281,6 +296,19 @@ lets resume proceed would let a duplicate apply happen silently.
 
 **Rejected alternative.** Warn-and-continue. Rejected: it converts a named
 window into a silent one.
+
+**Later empirical finding, 2026-08-17 -- evidence, not a change to this
+decision.** A read-only scoping pass over two real consumers shows the
+fail-closed floor and the "where the design supports it" hedge are both load
+bearing, and that cheap reconciliation is a property of the **write shape**
+rather than of the VCS involved. One consumer's apply is a deterministic
+read-modify-write of a single keyed CSV row, so "did this apply land" is
+answerable by comparing that row's values against the payload's expected values
+-- no version control query at all, and that consumer therefore need not fail
+closed. The localization consumer's apply is a whole-file rewrite and has no such
+marker, so it does fail closed. Noted against the same finding: version control
+open-for-edit state is **not** a usable marker, since a file can be open with
+stale or partial content.
 
 ### D7. Deprecation is keyed to evidence, not to a release count
 
@@ -453,7 +481,116 @@ prompts correctly, that its apply is idempotent enough for its side effects, or
 that its chosen database path survives its deployment model. This gate spends
 no Claude platform quota and does not depend on the capacity premise.
 
+**Cleared 2026-08-17**, read from the run store rather than from a report. The
+localization consumer mounted `glossary translate` on the run plane (a
+`RunAdapter` plus a protocol mount plus a subprocess harness) and drove three
+atoms through `prepare -> claim -> read -> submit -> status -> finalize` across
+**19 separate OS processes** sharing only the SQLite file; translations landed;
+total spend $0.00076; a second `finalize` returned an empty applied list, so
+invariant 3 was observed rather than assumed. What the pass does **not**
+establish, and must not be reported as establishing: apply idempotency beyond
+that no-op -- this consumer's apply is a keyed read-modify-write of a sandboxed
+side-copy -- and nothing at all about the Claude-session transports, which
+A-min.4's light tests address separately.
+
+#### A-min.4 -- corrections carried from the 2026-08-17 live gate and light tests
+
+Library-level defects found by exercising A-min's shipped surfaces against two
+real consumers. They are A-min work rather than B or C work because each sits in
+an A-min surface (the protocol's invocation carrier, the run store's lease
+default, `create-run`, the adapter contract), but items 1, 2 and 5 are
+prerequisites for the B and C drivers, which spawn worker processes and would
+each rediscover them.
+
+1. **The envelope's carrier, not the envelope.** Passing the protocol envelope
+   as an argv string is unsafe on Windows when the payload contains both escaped
+   quotes and a `|`: through a `.bat` wrapper, cmd.exe un-quotes the pipe and the
+   wrapper dies at exit 255. YAML block scalars use `|`, so a realistically
+   structured payload (~84KB observed) trips it while a one-line mapping never
+   can. `one envelope in, one out` is sound; argv is the wrong carrier. Ship a
+   carrier that does not re-parse: accept the envelope on **stdin** (the shape
+   `cli.scaffold.dispatch` could adopt), or by `@file` path, with the argv form
+   documented as unsafe behind a shell wrapper. B1 and C1 both compose worker
+   command lines and both depend on this; it also interacts badly with P5's
+   requirement that an allowlist cover exact command strings, since an unstable
+   quoting is an unstable string.
+2. **The default lease is wrong for an agentic unit.** `DEFAULT_LEASE_SECONDS`
+   is 300s (`execution/store.py:87`). Measured 2026-08-17: one first-pass-dialog
+   unit driven by a background session consumed 213s of it -- 71%, on the cheap
+   case (no retry, no contention, a healthy session), with a 10.8KB system and
+   66KB user prompt. That consumer's own agent timeout is 900s
+   (`agent_io.py:395`). Under D5's workflow lane there is no renewer and repeated
+   expiry fails the unit after a bounded count, so a healthy-but-slow unit on
+   defaults is reclaimed, duplicated, and then failed while working correctly.
+   D5's substance is unchanged -- the lease is consumer-configured per run -- but
+   the shipped **default** is actively wrong for the agentic case rather than
+   merely unopinionated. Resolve by one of: raising the default, refusing to
+   start a workflow-lane run without an explicit lease, or deriving it from the
+   adapter.
+3. **`create-run` accepts an unclaimable `adapter_version`.** It validates
+   nothing against the mounted adapter's own reported identity, so a run can be
+   created in a permanently unclaimable state; every later verb then fails with
+   an adapter-version mismatch whose message talks about resuming, for a run that
+   never ran. The D1 guard is right to refuse rather than guess; the defect is
+   creatability. Compounding it, `create-run`'s stdout echoes id, driver, backend
+   and model but **not** `adapter_version`, so a caller cannot see what was
+   stored. Fix both: default or validate the value at creation, and echo it.
+4. **Empty text with spent tokens is indistinguishable from no response.** A
+   reasoning model can consume its whole output budget before emitting text and
+   return `text=""` with nonzero `output_tokens`. The adapter hard-rejects it
+   correctly (D1 as designed), but nothing in `LLMResponse` separates that from a
+   provider returning nothing, so a caller who set `max_tokens` too low sees what
+   looks like a validation bug. Surface a hint when `text == ""` and
+   `output_tokens > 0`. This bites harder on the session-pool lanes, where budget
+   behavior is less visible than an OpenRouter token count.
+5. **A worker needs the consumer's environment, not just its database path.** A
+   consumer can resolve its project root from an environment variable rather than
+   from cwd, and on Windows may require a native-style path there; a driver that
+   propagates only `--db` produces a worker that silently resolves against the
+   wrong root. This is the A-min gate's database-path question one level out. The
+   `RunAdapter` contract must state what environment a worker is guaranteed, and
+   B1 and C1 driver design must decide it explicitly rather than letting each
+   consumer discover it. Cheap to get wrong and silent when wrong.
+
+**Shippable:** yes; additive plus one carrier addition. Item 1 and item 2 land
+before the B and C drivers.
+
 ### Phase B -- Claude background sessions
+
+**Framing correction, 2026-08-17: the transport is established before the
+driver exists.** This phase was written on the assumption that the background
+transport is first exercised by B1's driver and first judged at the B2 gate. It
+was instead exercised directly, because A-min.3's protocol is mountable and
+process-agnostic: a real `claude --bg` session claimed a unit, read the prepared
+request, produced the answer **as its own agent output** -- the Claude agent was
+the model, with no external API call -- and submitted it, across separate
+subprocess invocations of a consumer's protocol mount, unattended (P14). Two
+consumers were driven this way, one of them a genuinely agentic unit whose
+freehand output parsed and validated through a parser written against a
+different harness.
+
+The consequences for this phase, stated exactly:
+
+- **B1 is a convenience layer over a proven transport**, not the step at which
+  the transport is found out about. Dispatch, slot bounding, reconciliation,
+  lease renewal and classification are still entirely unbuilt and unexercised.
+- **B2's gate is narrower than written, not discharged.** These were
+  **transport-only** light tests: no cell exercised an apply with a real VCS side
+  effect, the first-pass-dialog cells were scoped to claim/read/submit with no
+  `apply` and no `finalize`, and the localization cells applied only to a
+  sandboxed side-copy. **Apply idempotency against a real external side effect
+  remains untested and is the one question no light test answered.** Nothing was
+  established about concurrency at N > 1, reclaim after expiry, fenced late
+  submission, authentication failure, halt classification from a settled session,
+  or permission posture beyond the single machine's `auto` default (P5).
+- **The gate consumer choice is settled by evidence.** first-pass-dialog was
+  excluded from the A-min gate for spending Claude quota by construction; it is
+  the natural B gate consumer, since a background session is its transport
+  anyway, and it is the one that stresses apply idempotency against a version
+  control side effect.
+- **A-min.4 items 1, 2 and 5 are prerequisites**: the driver composes worker
+  command lines (item 1), sizes leases for agentic units (item 2), and decides a
+  worker's environment (item 5).
 
 #### B1 -- Background driver and one-unit worker
 
@@ -665,15 +802,50 @@ only. Named pass/fail items:
    lifecycle: two live units, one validation rejection/revision, one deliberate
    worker kill and reclaim, pause/resume, and a status query from a fresh
    orchestrator context.
+6. **Apply through finalize, against a consumer with a real external side
+   effect.** Added 2026-08-17 because the light tests of P14 covered the
+   transport only: no cell exercised an apply with a version control side
+   effect, so finalize's `apply_started`/`apply_succeeded` recording, D6's
+   fail-closed behavior, and reconciliation have never been observed against
+   anything but a sandboxed side-copy. This is the gate item the transport
+   evidence does not touch, and it is why first-pass-dialog is the B gate
+   consumer.
 
 **Exit criterion.** A main agent supervises via occasional bounded digests,
 identifies a failure pattern, alters N or a batch, and halts safely without
 ingesting unit content. Item 2 passes on its corrected criterion, or the phase
 stops and reports. Item 1 no longer gates the exit, by the recorded 2026-08-17
 decision not to verify P2; the premise it would have tested is carried
-unverified instead.
+unverified instead. Item 6 is the substantive remainder: what P14 established is
+that a background session can carry a unit through the protocol, and the gate
+must now prove the parts around that -- bounded concurrent dispatch, reclaim,
+halt, and an apply whose side effect leaves the world outside the run store.
 
 ### Phase C -- Workflows
+
+**Framing correction, 2026-08-17: this transport is established too, and two
+constraints on C1 arrived with it.** A real Workflow agent claimed a unit, read
+the prepared request, produced the answer as its own output, and submitted it;
+for the localization consumer `finalize` then applied it. Both consumers were
+driven this way (P14). The same boundary applies as in Phase B: these were
+**transport-only** light tests, no cell exercised an apply with a real VCS side
+effect, and apply idempotency against such a side effect remains untested.
+
+Three findings bind C1's design rather than C2's gate:
+
+- **The Workflow tool is invocable only from a top-level session** (P15). A
+  workflow-lane driver cannot be invoked from inside a worker or a nested agent,
+  so whatever orchestrates a wave is the top-level session itself. C1 must not be
+  designed around a driver that spawns its own workflow.
+- **Workflow agents have no `auto` permission mode** (P16): they run fixed at
+  `acceptEdits` and inherit the launching session's allowlist. The background
+  lane's clean unattended run is therefore not evidence about this lane, even
+  though one workflow agent did in fact run the consumer protocol commands
+  unattended. The invocation-string discipline P5 imposes on B1's prompt design
+  applies here with equal force.
+- **The default lease is wrong for this lane specifically** (A-min.4 item 2):
+  the workflow lane is the one with no renewer, so a 300s default against a
+  measured 213s agentic unit is the composition D5 already warns about.
 
 #### C1 -- One reviewed independent-wave workflow
 
@@ -717,8 +889,14 @@ D5 after the bounded reclaim count; pause/resume across orchestrator
 exit/re-entry proving SQLite authority; aggregate return shape; concurrency
 matching the bound; confirmation that workflow `agent()` calls draw the session
 pool (the C-side capacity check); comparison of worker instruction fidelity
-against the background lane. Exit: observed behavior matches the durable
-protocol and the workflow returns no accumulated content.
+against the background lane. Added 2026-08-17: an apply through `finalize`
+against a side effect outside the run store, for the same reason as B2 item 6 --
+P14's light tests were transport-only and no cell exercised an apply with a real
+VCS side effect. Exit: observed behavior matches the durable protocol and the
+workflow returns no accumulated content. What P14 already establishes -- that a
+workflow agent can carry one unit through the protocol -- is no longer part of
+what this gate must prove; the lane construction, the concurrency bound, the
+lease-expiry path and the apply are.
 
 ### Phase A-cleanup -- legacy corrections, after the capability
 
@@ -774,13 +952,23 @@ unmodified, settled the behavioral half of P5, corrected P4, and surfaced P13.
 P2, the load-bearing premise, was left untested by the first probe and, by a
 recorded user decision of 2026-08-17, is not to be tested at all.
 
+Four **transport light tests** on 2026-08-17 -- two consumers crossed with the
+background-session and Workflow transports, each result read from the run store
+rather than from an agent's report -- added P14-P16. They were scoped
+**transport-only**: no cell exercised an apply with a real version control side
+effect, the first-pass-dialog cells stopped at submit with no `apply` and no
+`finalize`, and the localization cells applied only to a sandboxed side-copy, so
+apply idempotency against a real external side effect stays untested and is the
+one question none of them answered. They also touched P2 not at all: no capacity
+attribution is observable from them, and none was sought.
+
 | # | Assumption | Established by | Tested by | If wrong |
 |---|---|---|---|---|
 | P1 | `-p` draws a small headless allowance, then metered credits | User's direct observation; docs conflict (Help Center says the separate credit was paused) | Not directly tested; it is the premise. B2 item 1 would test its actionable half, but that item is unscheduled per the recorded 2026-08-17 decision on P2 | The effort loses its motivation; A-min still stands on its own |
 | P2 | `--bg` sessions draw the interactive session pool | Docs (`agent-view`, partly summarized fetch); **never observed**. The 2026-08-17 probe neither supported nor contradicted it: no batch was run, and a bg transcript's `usage` blocks carry no pool-attribution field (regex sweep of a 976-record bg transcript for `rate\|limit\|quota` found only tool parameters) | **Not to be tested. Recorded user decision, 2026-08-17: P2 will not be verified**, and Phases B and C proceed on the capacity premise as an accepted, unverified assumption. B2 item 1 stays specified and a measurement instrument exists as of 2026-08-17 (P9), but neither is scheduled and exercising the probe would cost a measurable batch. This row therefore stays **unverified** for the life of the plan, and the consequence in the next column is the risk knowingly carried | B does not ship; escalate with evidence |
 | P3 | `claude --bg` surface: positional prompt, prints short session ID, rejects `-p`; `claude agents --json` exists; the lifecycle verbs are **top-level** `claude stop\|logs\|rm\|respawn\|attach <id>`, hidden from `claude --help` | Observed 2026-08-17 on Claude Code 2.1.233: `claude --help` (positional prompt, `--bg`), `claude --bg -p "..."` (refused with a verbatim conflict message, no spawn), a `--bg` launch banner (`backgrounded * a47add3f`, 8-hex id), `claude agents --help` (no `Commands:` section), and `claude <verb> --help` for each verb. The earlier `claude agents <verb>` shape was doc-derived and is **refuted**: `claude agents stop\|logs\|rm\|respawn\|list --help` each print the plain `agents` help and **exit 0**, ignoring the positional | B2 items 3-5; B1 preflight asserts the verbs behave, since they are undocumented and carry no stability guarantee | Driver command construction changes; contained in B1. The refuted form fails **silently at exit 0**, so the preflight is not optional |
 | P4 | `agents --json` records are discriminated by `kind`: `kind: "background"` carries `id`, `cwd`, `kind`, `startedAt` (epoch ms), `sessionId`, `name`, `state`, and may also carry `pid`, `status`, and `waitingFor`; `kind: "interactive"` carries `pid`, `cwd`, `kind`, `startedAt`, `sessionId`, `name`, `status`. `kind` is the only discriminator; the field sets are not mutually exclusive. `--all` adds settled background sessions | Observed 2026-08-17: `claude agents --json --all` output read verbatim, one record of each kind. **Refutes** the previously recorded five-field shape (`id`, session id, `pid`, `state`, `status`), which came from a summarized doc fetch and did not record the `kind` discriminator at all. `state` values seen: `blocked`, `failed`, `done`, `stopped`. A second probe on 2026-08-17 **refutes this row's own earlier exclusivity claim** ("No record carries both `id`/`state` and `pid`/`status`"): a background record was read verbatim carrying `pid`, `id`, `status: "waiting"`, `waitingFor: "permission prompt"`, and `state: "blocked"` together. `status` and `waitingFor` were absent from the first probe's recorded field set; `waitingFor: "permission prompt"` is the discriminator that separates a permission stall (P5) from a question stall (P12). Each was seen on **one record**, so that they are stable schema fields is **inferred, not observed**. Also observed: no `needs` field appears anywhere in `--all` output (a grep over the full output returned zero matches) | B2 item 4; reconciler is schema-tolerant from the start and filters on `kind` first | Reconciler required-field list adjusts; loud validation prevents silent misreads. Omitting the `kind` filter makes the orchestrator's own interactive session look like a worker, and discriminating on the presence of `pid`/`status` instead of on `kind` misclassifies a background record |
-| P5 | `--bg` permission behavior (flag or settings inheritance); workers can avoid unattended permission prompts | Flags observed 2026-08-17: `--permission-mode <mode>` (choices `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan`) composes with `--bg` (two sessions spawned), `claude agents` exposes `--permission-mode`/`--dangerously-skip-permissions`/`--allow-dangerously-skip-permissions`/`--settings`/`--setting-sources` as dispatch defaults, and a real bg session recorded `--permission-mode auto` in its respawn flags. **Behavioral half executed 2026-08-17 by a second probe; verdict PARTIAL.** OBSERVED: under `--permission-mode manual`, allowlisted `Read` and `Bash(ls:*)` ran unattended inside a `--bg` session while a non-allowlisted Bash write blocked, so **user-scope `permissions.allow` inheritance is observed, not inferred**; the blocked session stalled with nothing timing it out; a flagless `--bg` session completed the same non-allowlisted Bash write unattended on a machine whose user `settings.json` sets `"defaultMode": "auto"`. INFERRED, and flagged as such: that **project-scope** `permissions.allow` is inherited (only user-scope entries were exercised, since a project entry would have mutated the repository); that the flagless pass is caused by `defaultMode: auto` rather than by `--bg` never prompting. NOT TESTED: `acceptEdits`, `dontAsk`, `bypassPermissions`, `plan`, and -- the most consequential gap -- whether `auto` stalls on a command it classifies as dangerous. The probe's write was harmless, `auto` is plausibly a risk classifier rather than a blanket allow, and such a stall would be indistinguishable from the `manual` arm, so **`auto` is not established as a general solution** | **B2 item 2, executed; the fallback carries the lane.** Two revisions follow: the allowlist must cover actual command strings (the stall was on a redirect the worker composed itself, which becomes a B1 prompt-design requirement), and single-unit verification does not generalize to a batch | Lane stalls `blocked`; fallback is documented consumer allowlist setup plus a constrained worker prompt, and the flags that fallback needs are confirmed to exist and compose. Detection of the stall must key on `agents --json` (P13) |
+| P5 | `--bg` permission behavior (flag or settings inheritance); workers can avoid unattended permission prompts | Flags observed 2026-08-17: `--permission-mode <mode>` (choices `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan`) composes with `--bg` (two sessions spawned), `claude agents` exposes `--permission-mode`/`--dangerously-skip-permissions`/`--allow-dangerously-skip-permissions`/`--settings`/`--setting-sources` as dispatch defaults, and a real bg session recorded `--permission-mode auto` in its respawn flags. **Behavioral half executed 2026-08-17 by a second probe; verdict PARTIAL.** OBSERVED: under `--permission-mode manual`, allowlisted `Read` and `Bash(ls:*)` ran unattended inside a `--bg` session while a non-allowlisted Bash write blocked, so **user-scope `permissions.allow` inheritance is observed, not inferred**; the blocked session stalled with nothing timing it out; a flagless `--bg` session completed the same non-allowlisted Bash write unattended on a machine whose user `settings.json` sets `"defaultMode": "auto"`. INFERRED, and flagged as such: that **project-scope** `permissions.allow` is inherited (only user-scope entries were exercised, since a project entry would have mutated the repository); that the flagless pass is caused by `defaultMode: auto` rather than by `--bg` never prompting. NOT TESTED: `acceptEdits`, `dontAsk`, `bypassPermissions`, `plan`, and -- the most consequential gap -- whether `auto` stalls on a command it classifies as dangerous. The probe's write was harmless, `auto` is plausibly a risk classifier rather than a blanket allow, and such a stall would be indistinguishable from the `manual` arm, so **`auto` is not established as a general solution**. Amended 2026-08-17 by the transport light tests (P14): a `--bg` session ran a consumer's real protocol invocations unattended with no stall, which widens the evidence from the probe's synthetic commands to actual worker commands but **not** past the `auto` case -- that session also recorded `permission-mode: auto`, this machine's default, so a consumer whose default is stricter is still untested, and so is whether `auto` itself stalls on a command it classifies as dangerous | **B2 item 2, executed; the fallback carries the lane.** Two revisions follow: the allowlist must cover actual command strings (the stall was on a redirect the worker composed itself, which becomes a B1 prompt-design requirement), and single-unit verification does not generalize to a batch | Lane stalls `blocked`; fallback is documented consumer allowlist setup plus a constrained worker prompt, and the flags that fallback needs are confirmed to exist and compose. Detection of the stall must key on `agents --json` (P13) |
 | P6 | Background sessions load plugin agents/skills; a per-unit trusted system channel exists (`--append-system-prompt-file` or equivalent) | **Confirmed** 2026-08-17 on both halves. Channel: `--append-system-prompt-file` and `--system-prompt-file` parse-probed (each errored with `argument missing`, so the option exists); both are hidden from the `--help` option list but named in `--bare`'s help text. Also present: top-level `--agent <agent>`, `--agents <json>`, and `claude agents --plugin-dir`. Loading: a background-session transcript (system records carrying `"sessionKind": "bg"`) used the `Skill` tool with plugin-namespaced skills (`awesome-kit:task`, `bootstrap:bootstrap`, `git-kit:git-code-review`, several `skills-kit:*`). That these flags compose with `--bg` is **inferred from `--permission-mode`'s behavior, not observed** | B2 item 3, reduced to preflighting composition -- and per P11 that must be judged from worker behavior, not the launcher's exit code | Worker persona delivery redesigned inside B1 |
 | P7 | Workflow limits: 16 concurrent agents, 1000/run; in-session-only resume with ordering-based cache invalidation; `agent()` accepts a JSON schema; no per-agent wall-clock timeout | Docs (`workflows`) | C2 | Lane construction constants and lease sizing change; contained in C1 |
 | P8 | Live-session workflow `agent()` calls count as ordinary session usage | Docs (`workflows`, `costs`) | C2 capacity check | C does not ship |
@@ -789,12 +977,18 @@ recorded user decision of 2026-08-17, is not to be tested at all.
 | P11 | `claude --bg` backgrounds the session **before validating its own flags**: it prints the success banner and exits 0, and a bad flag surfaces only asynchronously as `state: "failed"` in `agents --json` and as a settle line in `~/.claude/daemon.log` | Observed 2026-08-17: `claude --bg --permission-mode bogus "x"` printed `backgrounded * d7217a10` and exited 0; `~/.claude/daemon.log` then recorded `bg settled d7217a10 (crashed): exit 1 before init -- error: option '--permission-mode <mode>' argument 'bogus' is invalid`; `claude agents --json` later showed that id as `state: "failed"`. Second instance of the hazard the `codex_dispatch_is_silent_on_failure` insight records for codex dispatch -- judge a dispatch by its observable outcome, never by `$?` | B1 startup preflight and B2 item 5: every launch is confirmed by polling `agents --json` out of the initial state, and a `failed` inside the first seconds is classified as launch misconfiguration, not work failure | If some launches do validate synchronously after all, the conservative reading costs only an extra poll per launch. Trusting the exit code instead would make a misconfigured batch indistinguishable from a running one |
 | P12 | A `--bg` session can sit in `state: "blocked"` indefinitely with nobody attached; no platform lease, deadline, or auto-fail was observed | Observed 2026-08-17: `claude agents --json --all` listed a background session in `state: "blocked"` since 2026-07-29 -- 19 days -- and its `~/.claude/jobs/<id>/state.json` carried an unanswered question in `needs`. That block was a question rather than a permission prompt, so it demonstrates the failure geometry, not the permission-prompt case itself (which is P5). Re-confirmed live by a second probe on 2026-08-17: the same session is still `blocked`, still with nothing timing it out. The permission-prompt case was separately observed by that probe and stalled likewise (P5) | Standing; it is why D5 leases and reclaim exist. B2 item 5 exercises reclaim live | Makes the lease-and-reclaim design **required**, not defensive. If a platform-side timeout does exist and was merely not observed, the lease is redundant but harmless |
 | P13 | `claude agents --json` is the authoritative status channel for a background session; `~/.claude/jobs/<id>/state.json` can disagree with it and under-report a stall, and must never drive a status decision | Observed 2026-08-17: for one background session, `agents --json` reported `state: "blocked"`, `status: "waiting"`, `waitingFor: "permission prompt"` while `~/.claude/jobs/<id>/state.json` simultaneously and persistently reported `state: "working"` with a non-null `needs`, still reading `"working"` at stop time. Separately observed on the same probe: `agents --json` exposes no `needs` field anywhere in `--all` output, so the prompt text exists only in the internal file. Whether the disagreement is a lag, a different field meaning, or a defect is **not established** -- only that the two channels disagreed about one session at one time | Standing constraint on B1's reconciler and on D5 lease renewal; B2 item 4 records the channel choice alongside the schema. B1's tests carry a disagreeing-channel fixture | A reconciler keying on `state.json`'s `state` scores a permanently stalled worker as healthily progressing and renews its lease forever -- silent, and the worst failure mode available. Reading `state.json` for the `needs` text only, behind a tolerant parse, stays safe |
+| P14 | Both session-pool transports can carry a prepared unit through the A-min worker protocol unattended, in fresh processes sharing only the run store, with the Claude agent itself acting as the model (it reads the prepared request and produces the output, with no external API call) | Observed 2026-08-17 across four light tests -- two consumers (a one-line glossary mapping and a genuinely agentic dialog unit with a 10.8KB system and 66KB user prompt) crossed with `claude --bg` and the Workflow tool -- each verified from the run store, not from an agent's report. Established with them: the fencing token survives a round trip through a separate session; agent-authored freehand output passed a `parse_fn` written against a different harness; `claude --bg -p` is a hard usage error, the prompt goes positionally (re-confirming P3). **Scope is transport-only**: no cell exercised an apply with a real version control side effect, the dialog cells stopped at submit with no `apply` and no `finalize`, and the glossary cells applied only to a sandboxed side-copy. Nothing was observed about concurrency above one worker, reclaim, halt, or authentication failure | B2 items 5-6 and C2, which now test the machinery **around** the transport rather than the transport | Observed, so the exposure inverts: what is unproven is the driver machinery and the apply, not the transport. If the result fails to generalize past one worker, B1's bounded dispatch and C1's lane construction are where it would show, and both are gated |
+| P15 | The Workflow tool is invocable only from a top-level session -- not from a subagent | Observed 2026-08-17 by a light test that tried and could not: `Workflow` is absent from a subagent's live tool list and from the full deferred-tool index. The test refused to substitute an ordinary agent call and label it a workflow | C1 design (normative, not a gate item); C2 exercises the resulting shape | A workflow-lane driver cannot spawn its own workflow; whatever orchestrates a wave must be the top-level session. Designing C around a self-spawning driver would fail at integration |
+| P16 | Workflow agents run fixed at `acceptEdits` and inherit the launching session's tool allowlist; there is no `auto` permission mode for them | Docs (`workflows`), plus one 2026-08-17 observation that cuts the other way: a workflow agent ran the consumer's protocol invocations to completion with no prompt and no human input. That run failed at the adapter-version guard before submit, so only claim and read were exercised, and a different consumer machine's allowlist posture is untested. **Inferred, not observed**, that the clean run generalizes | C2, alongside the instruction-fidelity comparison | The background lane's unattended result is not evidence about this lane: the two lanes have structurally different permission postures. The mitigation is the same as P5's -- pre-allowlist the exact invocation strings and constrain the worker prompt to them -- and, if D5's lease sizing assumed an unattended posture for this lane, that assumption needs rechecking |
 
-Phase order guarantees no expensive unwind: A-min depends on none of P1-P13;
-B1 code depends on P3-P6 and P11-P13 but is not published as working until B2
-tests them; C1 depends on P7-P8 and is gated by C2. P2 remains the one
-unvalidated premise the whole of B rests on, and by the recorded 2026-08-17
-decision it stays that way: it is carried, not tested.
+Phase order guarantees no expensive unwind: A-min depends on none of P1-P16;
+B1 code depends on P3-P6 and P11-P14 but is not published as working until B2
+tests them; C1 depends on P7-P8 and P14-P16 and is gated by C2. P2 remains the
+one unvalidated premise the whole of B rests on, and by the recorded 2026-08-17
+decision it stays that way: it is carried, not tested. P14-P16 are the first
+rows established by running the shipped protocol rather than by probing the
+platform, and P14 in particular moves risk out of the gates and into the driver
+machinery around the transport -- it does not remove risk from either gate.
 
 ## Breaking changes and migration
 
@@ -902,7 +1096,11 @@ Genuinely open -- not settled by this plan, and none blocks A-min:
    contract; a codec would relax the `parse_fn` determinism requirement and can
    be added compatibly later.
 2. What idempotency guarantee can the first real consumer provide for apply,
-   and does its deliver mode fall inside D6's shipped reconciliation?
+   and does its deliver mode fall inside D6's shipped reconciliation? Partly
+   answered 2026-08-17 for two consumers (see the finding recorded under D6):
+   the answer tracks the write shape, cheap for a keyed per-row write and absent
+   for a whole-file rewrite. Still open in general, and still unexercised
+   against a real external side effect -- B2 item 6.
 3. Who owns the default database location convention and a cleanup command --
    the library documents a recipe today; does a consumer pattern justify more?
 4. Does status need cost aggregation beyond nullable per-attempt usage, and
