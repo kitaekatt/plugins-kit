@@ -1,6 +1,6 @@
 [project]
 name = "content-pipeline-kit"
-version = "0.8.0"
+version = "0.9.0"
 description = "Library for LLM-in-the-loop batch content pipelines: attributed store, two-tier freshness, one-validator-many-sites, provider tiers, convergence gate, delivery modes, VCS seam, round-trip, audit."
 requires-python = ">=3.10"
 
