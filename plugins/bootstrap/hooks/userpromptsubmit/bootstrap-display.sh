@@ -17,7 +17,21 @@
 
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MARKETPLACE_NAME="$(basename "$(cd "$PLUGIN_ROOT/../.." && pwd)")"
-DATA_DIR="${HOME}/.claude/plugins/data/${MARKETPLACE_NAME}/bootstrap"
+# Honors CLAUDE_BOOTSTRAP_DATA_ROOT for the same reason session-bootstrap.sh does:
+# this hook reads the display handshake files the engine wrote, so it must look in
+# whichever tree that engine was pointed at.
+BOOTSTRAP_DATA_ROOT="${CLAUDE_BOOTSTRAP_DATA_ROOT:-${HOME}/.claude/plugins/data}"
+DATA_DIR="${BOOTSTRAP_DATA_ROOT}/${MARKETPLACE_NAME}/bootstrap"
+
+# claude-plugin-test stand-down -- the cached copy yields to the dev tree's copy
+# for the whole session. Same rationale as session-bootstrap.sh: both copies load
+# and both would otherwise run, and this hook also carries the harvest and the
+# SessionStart rescue, so a cached copy left running would relaunch a PRODUCTION
+# pass from inside a session meant to be isolated.
+if [ -n "${CLAUDE_PLUGIN_TEST:-}" ] && case "$PLUGIN_ROOT" in
+    */.claude/plugins/cache/*) true ;; *) false ;; esac; then
+    exit 0
+fi
 PENDING="${DATA_DIR}/bootstrap_display.pending"
 
 # --- Capture hook input (UserPromptSubmit JSON on stdin) ---

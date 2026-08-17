@@ -31,8 +31,18 @@ EXIT_BOOTSTRAP_MISSING = 3
 
 
 def data_dir(plugin: str, marketplace: str = "plugins-kit") -> Path:
-    """The per-plugin bootstrap data directory."""
-    return Path(os.path.expanduser("~")) / ".claude" / "plugins" / "data" / marketplace / plugin
+    """The per-plugin bootstrap data directory.
+
+    CLAUDE_BOOTSTRAP_DATA_ROOT redirects the whole tree for one session (set by
+    the claude-plugin-test launcher). Honoring it here is load-bearing rather
+    than cosmetic: reexec_under_plugin_venv resolves the venv through this
+    function, so a guard that ignored the redirect would re-exec every
+    shared-lib script into the PRODUCTION venv inside a test session -- running
+    the installed release's code while appearing to test the working copy.
+    """
+    root = os.environ.get("CLAUDE_BOOTSTRAP_DATA_ROOT")
+    base = Path(root) if root else Path(os.path.expanduser("~")) / ".claude" / "plugins" / "data"
+    return base / marketplace / plugin
 
 
 def is_provisioned(plugin: str, marketplace: str = "plugins-kit") -> bool:

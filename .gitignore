@@ -23,3 +23,7 @@ plugins/unreal-kit/skills/ue-python-api/stubs/unreal.py
 # !dev/tasks/ exception; awesome-kit:task's "dev/tasks is version-controlled"
 # contract does not apply to this repo.
 dev/
+
+# Synthetic dev-layout registry written by scripts/claude_plugin_test.py
+# (session-scoped; never committed -- see that script for why it lives here)
+plugins/installed_plugins.json

@@ -264,3 +264,84 @@ def list_enabled_plugins(config: dict, registry_path: str, base_dir: str, enable
                 results.append(plugin_info)
 
     return results, cache_changed
+
+
+def load_enabled_refs(project_dir=None, home=None, include_registry=True):
+    """Build the set of enabled plugin refs from Claude Code settings (+ registry).
+
+    Reads settings files in precedence order (later overrides earlier):
+      1. <home>/.claude/settings.json               (user scope)
+      2. <home>/.claude/settings.local.json         (user local overrides)
+      3. <project_dir>/.claude/settings.json        (project scope)
+      4. <project_dir>/.claude/settings.local.json  (project local overrides)
+
+    A plugin is enabled if its enabledPlugins entry has a final value of True.
+    An uninstall REMOVES the key rather than setting it False, so an absent ref
+    reads as not-enabled under either shape.
+
+    Scope is handled naturally: user-scoped plugins appear in user settings
+    (always included); project-scoped plugins appear in project settings
+    (included only when that project is the active project_dir).
+
+    Args:
+        project_dir: Project whose scoped settings participate. None for user
+            scope only.
+        home: Home directory override. Defaults to $HOME / expanduser, which is
+            how tests isolate.
+        include_registry: When True (the default, and what the engine needs),
+            union in every ref recorded in installed_plugins.json, so a machine
+            whose enablement is recorded only in the registry still resolves.
+            Pass False when settings must be AUTHORITATIVE: the registry records
+            what was INSTALLED and is not always pruned on uninstall, so a
+            caller deciding what to LOAD -- rather than what to provision --
+            would otherwise resurrect uninstalled plugins.
+
+    Returns:
+        Set of normalized refs (plugin@marketplace), or None when no source
+        existed at all. None means "cannot determine", NOT "nothing enabled";
+        callers must not treat it as an empty set.
+    """
+    def _normalize(ref):
+        marketplace, name = parse_plugin_ref(ref)
+        return f"{name}@{marketplace}" if marketplace else name
+
+    if home is None:
+        home = os.environ.get("HOME") or os.path.expanduser("~")
+    claude_home = os.path.join(home, ".claude")
+
+    settings_paths = [
+        os.path.join(claude_home, "settings.json"),
+        os.path.join(claude_home, "settings.local.json"),
+    ]
+    if project_dir:
+        project_claude = os.path.join(project_dir, ".claude")
+        settings_paths.append(os.path.join(project_claude, "settings.json"))
+        settings_paths.append(os.path.join(project_claude, "settings.local.json"))
+
+    merged_enabled = {}
+    any_source_found = False
+    for path in settings_paths:
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+            ep = data.get("enabledPlugins", {})
+            if isinstance(ep, dict):
+                merged_enabled.update(ep)
+                any_source_found = True
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            pass
+
+    refs = {_normalize(ref) for ref, val in merged_enabled.items() if val}
+
+    if include_registry:
+        registry_path = os.path.join(claude_home, "plugins", "installed_plugins.json")
+        try:
+            with open(registry_path, "r") as f:
+                registry = json.load(f)
+            for ref in registry.get("plugins", {}):
+                refs.add(_normalize(ref))
+            any_source_found = True
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            pass
+
+    return refs if any_source_found else None

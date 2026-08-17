@@ -1835,70 +1835,20 @@ def _bootstrap_stale_advice(running_version, plugin_name, marketplace_name, regi
 def _load_enabled_refs(project_dir=None):
     """Build the set of enabled plugin refs from Claude Code settings + production registry.
 
-    Reads settings files in precedence order (later overrides earlier):
-      1. ~/.claude/settings.json         (user scope)
-      2. ~/.claude/settings.local.json   (user local overrides)
-      3. <project_dir>/.claude/settings.json        (project scope)
-      4. <project_dir>/.claude/settings.local.json  (project local overrides)
-
-    A plugin is enabled if its enabledPlugins entry has a final value of True.
-    Also includes all plugins found in the production installed_plugins.json registry.
-
-    Scope is handled naturally: user-scoped plugins appear in user settings (always
-    included); project-scoped plugins appear in project settings (included only when
-    that project is the active --project-dir).
+    Thin delegate to plugin_resolve.load_enabled_refs, which is the single
+    implementation of the settings precedence walk. The engine wants the
+    registry unioned in (include_registry=True, the default): a machine whose
+    enablement is recorded only in installed_plugins.json must still provision.
+    Callers deciding what to LOAD want include_registry=False instead -- see
+    that function's docstring.
 
     Returns:
         Set of normalized refs (plugin@marketplace), or None if no sources exist
         (falls back to no filter to preserve the original behavior).
     """
-    from .plugin_resolve import parse_plugin_ref
+    from .plugin_resolve import load_enabled_refs
 
-    def _normalize(ref):
-        marketplace, name = parse_plugin_ref(ref)
-        return f"{name}@{marketplace}" if marketplace else name
-
-    # Collect settings files in ascending precedence
-    home = os.environ.get("HOME") or os.path.expanduser("~")
-    claude_home = os.path.join(home, ".claude")
-    settings_paths = [
-        os.path.join(claude_home, "settings.json"),
-        os.path.join(claude_home, "settings.local.json"),
-    ]
-    if project_dir:
-        project_claude = os.path.join(project_dir, ".claude")
-        settings_paths.append(os.path.join(project_claude, "settings.json"))
-        settings_paths.append(os.path.join(project_claude, "settings.local.json"))
-
-    merged_enabled = {}
-    any_settings_found = False
-    for path in settings_paths:
-        try:
-            with open(path, "r") as f:
-                data = json.load(f)
-            ep = data.get("enabledPlugins", {})
-            if isinstance(ep, dict):
-                merged_enabled.update(ep)
-                any_settings_found = True
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            pass
-
-    refs = {_normalize(ref) for ref, val in merged_enabled.items() if val}
-
-    # Also include all plugins in the production registry as a secondary source.
-    # Use the same home resolution as above so test isolation via HOME env var works.
-    prod_registry_path = os.path.join(home, ".claude", "plugins", "installed_plugins.json")
-    try:
-        with open(prod_registry_path, "r") as f:
-            registry = json.load(f)
-        for ref in registry.get("plugins", {}):
-            refs.add(_normalize(ref))
-        any_settings_found = True
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        pass
-
-    # If no sources found at all, return None to preserve original (no-filter) behavior
-    return refs if any_settings_found else None
+    return load_enabled_refs(project_dir=project_dir)
 
 
 def _load_layered_manifests(project_dir, data_dir=None):

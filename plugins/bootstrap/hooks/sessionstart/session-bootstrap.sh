@@ -37,7 +37,41 @@ done
 # and cache layout (~/.claude/plugins/cache/<marketplace>/bootstrap/<version>/).
 MARKETPLACE_NAME="$(basename "$(cd "$PLUGIN_ROOT/../.." && pwd)")"
 BOOTSTRAP_LABEL="${MARKETPLACE_NAME}:bootstrap"
-PLUGIN_DATA="${HOME}/.claude/plugins/data/${MARKETPLACE_NAME}/bootstrap"
+# CLAUDE_BOOTSTRAP_DATA_ROOT redirects everything bootstrap owns -- venvs,
+# _shared_libs, logs, stamps, cooldowns, config -- to an alternate tree for the
+# lifetime of one session. The engine derives per-plugin dirs and the shared-lib
+# root from the --data-dir it is handed (see _plugin_data_dir), so redirecting
+# here redirects the whole tree with no engine change. Set by the
+# claude-plugin-test launcher; unset everywhere else, so a normal session is
+# byte-for-byte unaffected.
+BOOTSTRAP_DATA_ROOT="${CLAUDE_BOOTSTRAP_DATA_ROOT:-${HOME}/.claude/plugins/data}"
+PLUGIN_DATA="${BOOTSTRAP_DATA_ROOT}/${MARKETPLACE_NAME}/bootstrap"
+
+# --- claude-plugin-test stand-down ---
+# In a session launched by scripts/claude_plugin_test.py, the plugin is loaded
+# from the working copy via --plugin-dir, but the marketplace-installed copy
+# COEXISTS rather than being shadowed -- so this hook fires twice, once from the
+# dev tree and once from the cache. Measured: the two engines then contend and
+# one stands down on the lock, which starved the dev pass (the whole point of
+# the session) while a full PRODUCTION pass ran against real shared state.
+#
+# So the CACHED copy yields and the dev-tree copy owns the session. The test is
+# on PLUGIN_ROOT rather than on any flag the launcher sets, because the launcher
+# cannot address the two copies separately -- both inherit the same environment.
+# Deliberately one-directional: it only ever suppresses the cache copy inside an
+# explicitly-requested test session, so an unset CLAUDE_PLUGIN_TEST leaves every
+# normal session byte-for-byte unchanged, and a missed variable degrades to
+# today's behavior rather than to a session with no bootstrap at all.
+if [ -n "${CLAUDE_PLUGIN_TEST:-}" ] && case "$PLUGIN_ROOT" in
+    */.claude/plugins/cache/*) true ;; *) false ;; esac; then
+    if [ -z "$FLAG_CONSOLE" ]; then
+        echo '{"continue": true, "suppressOutput": true}'
+    else
+        echo "${BOOTSTRAP_LABEL}: stand-down (claude-plugin-test session; dev tree owns this session)"
+    fi
+    HOOK_OUTPUT_EMITTED=1
+    exit 0
+fi
 
 # Set trap after BOOTSTRAP_LABEL is defined so variable expands correctly
 # In console mode, no JSON safety net needed — plain text output.
