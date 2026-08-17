@@ -2,7 +2,7 @@
 
 The artifact-keyed single source of truth for the `skill` artifact. Both
 md-domain lanes read this file: the audit lane applies it as detection
-criteria, the generation lane applies it as production targets. There is one
+criteria, the producing lane applies it as production targets. There is one
 statement of each standard here; neither lane restates it.
 
 The `skill` artifact has **two subject shapes**, and the `audit_skill` lane

@@ -1,17 +1,43 @@
-# The generation lane
+# The producing lane (author and generate)
 
-The ONE generation procedure, parameterized by artifact. It generalizes the folded
-claude-md-authoring technique to all four artifacts and reads the SAME standards
-docs the audit lane reads -- in the PRODUCING direction (make it compliant)
-rather than the DETECTING direction (find the violation).
+The ONE producing procedure, shared by TWO verbs and parameterized by artifact.
+It reads the SAME standards docs the audit lane reads -- in the PRODUCING
+direction (make it compliant) rather than the DETECTING direction (find the
+violation).
 
-**In framework terms this lane is GENERATION.** Generation is the verb: creating
-a document that does not exist. When the artifact already exists it is
-REGENERATION -- the same verb, same procedure, same standards. EXISTENCE DECIDES
-and nothing else does: there is no separate judgment to make, no flag to pass and
-no label to choose per run. The preservation half of regeneration is already
-carried by the summarize-and-reference rule and its loss-free-deletion guard in
-Step 4, which is what keeps a regeneration from spending existing value.
+**Two verbs, one procedure, told apart by INPUT PROVENANCE.**
+
+- **AUTHOR** takes content the USER supplies -- a conversation, a pile of notes,
+  an audit remediation -- and makes it meet the standards. Its claims cannot be
+  re-checked against anything, because there is no source to re-read. It crosses
+  `skill`, `claude-md` and `project-doc`.
+- **GENERATE** takes COVERAGE produced by an `analyze` run and writes it up, so
+  each claim carries the `file:line` evidence it came from and a later run can
+  re-derive it. It crosses `claude-md` ALONE: nothing analyzes a codebase and
+  emits skill or project-doc candidates, so there is no coverage to generate from.
+
+Both then run the same five steps below, against the same standards doc for the
+artifact. Provenance is not a stylistic label -- it is what decides how much
+REGENERATION is allowed to keep.
+
+**REGENERATION is `generate` over a document that already exists.** EXISTENCE
+DECIDES and nothing else does: no flag to pass, no label to choose per run. What
+a regeneration may KEEP is governed by the retention contract in
+`../standards/claude-md-standards.md` section 6.4 -- verified content kept with
+refreshed anchors, MARKED content kept verbatim, unverified content REPORTED
+rather than deleted. Over a document carrying no markings at all the run proposes
+them and writes nothing.
+
+An earlier revision of this paragraph said the preservation half of regeneration
+"is already carried by the summarize-and-reference rule and its loss-free-deletion
+guard in Step 4". That was too weak to carry the weight: those rules govern
+whether a RESTATEMENT loses value, not whether an unverifiable fact survives a
+rewrite at all. Section 6.4 is the authority now; Step 4's guard still applies on
+top of it.
+
+**Authoring has no retention question.** There is no source to verify against and
+no coverage to compare with, so an author run over an existing document is an
+ordinary edit held to the standards.
 
 **Single-invocation by default.** One run of this procedure writes ONE document,
 and generating N documents is N runs of it. There is no pre-image, no
@@ -48,25 +74,62 @@ table:
 
 | Lane id | Standards doc | Validation |
 |---|---|---|
-| `generate_skill` | `../standards/skill-standards.md` | `python -m skills_kit_lib.audit <path>` |
+| `author_skill` | `../standards/skill-standards.md` | `python -m skills_kit_lib.audit <path>` |
+| `author_claude_md` | `../standards/claude-md-standards.md` | `python -m skills_kit_lib.audit <path>` |
+| `author_project_doc` | `../standards/project-doc-standards.md` | no mechanical validator -- self-check against the standards doc |
 | `generate_claude_md` | `../standards/claude-md-standards.md` | `python -m skills_kit_lib.audit <path>` |
-| `generate_project_doc` | `../standards/project-doc-standards.md` | no mechanical validator -- self-check against the standards doc |
-| `generate_references` | -- | no lane; see below |
+| `author_references` | -- | no lane; see below |
 
-**There is no `generate_references` lane.** Cross-references are an emergent
-property of the other three artifacts, not a generated artifact. A request to
+**There is no `author_references` lane.** Cross-references are an emergent
+property of the other three artifacts, not an authored one. A request to
 "fix my broken references" is remediation on the `audit_references` lane; a
-request to "add a reference" is generating whichever artifact carries it. Route
+request to "add a reference" is authoring whichever artifact carries it. Route
 there rather than improvising.
 
-## Procedure: author or refine an md artifact (generate, or regenerate when it exists)
+**There is no `generate_skill` or `generate_project_doc` lane either**, for the
+reason given above: no analysis emits coverage for those artifacts. A user who
+says "generate a skill" is asking for `author_skill`. Take the intent, name the
+lane you are taking, and proceed -- do not refuse on the wording, and do not
+invent a coverage input to justify the token.
+
+## Procedure: produce an md artifact (author, generate, or regenerate)
 
 **Goal.** Produce an artifact that is schema-valid where a schema exists,
 compliant with its standards doc, correctly placed, and shaped in the file's
 native form.
 
 **Precondition.** A fact, convention, insight, contract, or document body needs a
-home, and the artifact type has been named (or can be resolved in step 1).
+home; the artifact type has been named (or can be resolved in step 1); and the
+VERB is settled, because the verb names the input. For `author` the input is
+whatever the user supplied. For `generate` the input is a COVERAGE REPORT -- if
+there is none, run `analyze` first and say so. Never proceed on an empty input
+and present the result as generated: a document with no coverage behind it is an
+authored document, and calling it generated claims a re-checkability it does not
+have.
+
+### The regeneration gate -- run this BEFORE writing anything
+
+Fires when the verb is `generate` AND the target document already exists.
+
+1. **Read the existing document and split it into units** -- records inside the
+   `claude_md:` block, and marked or unmarked prose sections outside it.
+2. **Classify every unit** VERIFIED / RETAINED / UNVERIFIED per
+   `../standards/claude-md-standards.md` section 6.4. VERIFIED means this run's
+   coverage re-derives it from current code; RETAINED means it carries a
+   retention marking; UNVERIFIED is everything else.
+3. **If the document carries NO retention marking of either form, STOP AND
+   PROPOSE.** Report each unit with its classification and name the UNVERIFIED
+   units you propose marking `retain`. Write nothing at all this run. This is the
+   normal state of every hand-written CLAUDE.md, and honouring the table without
+   this gate would delete all of it.
+4. **Otherwise proceed**, carrying RETAINED units through VERBATIM (they are not
+   re-worded, re-ordered into a different record, or "improved"), refreshing
+   VERIFIED units' anchors, and reporting UNVERIFIED units for the user to rule
+   on rather than dropping them silently.
+
+The gate is DETECTED, not configured -- there is no flag to skip or force it. A
+document this lane generated cannot reach step 3, because every unverifiable unit
+it kept was marked when it was written.
 
 **The fact may arrive pre-derived.** This lane is agnostic about where content
 came from: a conversation with the user, an audit remediation, or a batch handed

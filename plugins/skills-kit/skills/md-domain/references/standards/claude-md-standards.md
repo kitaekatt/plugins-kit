@@ -621,7 +621,7 @@ FAIL findings (CCP cross-file duplication, ADP forward dependency, schema valida
 
 ## 6. Generation-direction notes
 
-The standards facts the generation lane produces against. The lane's *procedure* (which file to touch, when to invoke cohesion-principles, how to validate) lives in `../lanes/generation-lane.md`; what follows is the artifact contract it satisfies.
+The standards facts the producing lane (author and generate) produces against. The lane's *procedure* (which file to touch, when to invoke cohesion-principles, how to validate) lives in `../lanes/generation-lane.md`; what follows is the artifact contract it satisfies.
 
 ### 6.1 The `claude_md:` block
 
@@ -648,3 +648,30 @@ A classic CLAUDE.md carries a `claude_md:` YAML block. It is the load-bearing st
 **Same fact in two CLAUDE.mds.** Putting the fact in both the root and the subsystem CLAUDE.md feels like it guarantees the reader sees it. It does not: two copies drift independently and CCP/SSOT is broken (this is exactly what C-1 / C-2 / `B_ccp_cross_file_duplication` detect from the other direction). The placement algorithm yields exactly one home; if sibling scopes also need the fact, bubble it up to the common parent -- still one copy.
 
 The other recurring generation defects, stated as standards rather than procedure: a root CLAUDE.md with no `claude_md:` block; a missing `scope.excludes`; an insight record with fewer than 3 keywords; line-only anchors in a code-directory file (prefer a symbol anchor; drop the number unless the gotcha is sub-function -- section 3.4).
+
+### 6.4 Retention marking (regeneration)
+
+REGENERATION is `generate x claude-md` over a document that already exists. It keeps only what it can justify, and every unit of existing content falls into exactly one of three dispositions:
+
+| Disposition | Condition | Outcome |
+|---|---|---|
+| VERIFIED | re-derived from current code by this run's coverage | kept, anchors refreshed |
+| RETAINED | carries an explicit retention marking | kept VERBATIM, never re-worded |
+| UNVERIFIED | neither of the above | reported; removed only on the user's say-so |
+
+**The marking has two forms, because prose has no key to hang a field on.**
+
+- Inside the `claude_md:` block, a record carries `retain: true`. It is valid on any record in `insights`, `conventions`, or `glossary`.
+- Outside the block, an HTML comment on its own line marks the section that follows it -- from that line to the next heading of the same or shallower level:
+
+```
+<!-- md-domain: retain -->
+```
+
+**`retain: true` means "keep this even though it cannot be re-derived from code".** It is not a quality claim, not a correctness claim, and not a pin against a human editing the file. It instructs the regenerator and nothing else. Content that CAN be re-derived does not need it; marking such content is harmless and pointless.
+
+**The first pass over an unmarked document PROPOSES markings and writes nothing.** A hand-written CLAUDE.md carries no markings by construction, so a regenerator applying the table above literally would delete all of it -- which is the failure this section exists to prevent. The first run therefore reports, per unit: what it verified, what it could not, and which unverifiable units it proposes to mark `retain`. The user marks them, or accepts the proposed set; only a subsequent run writes. A document this lane has already generated cannot land in that state, because every unverifiable unit it kept was marked at the time it was written.
+
+**The proposal round is DETECTED, never configured.** It fires when the document exists and carries no retention marking of either form. There is deliberately no flag to skip it and none to force it: a flag would make the user restate something the lane can observe directly, and would become a second source of truth free to disagree with the file. See the plugin-opinion razor's preference for detecting an observable fact over configuring a preference.
+
+**An UNVERIFIED unit is never silently dropped.** Reporting it is the point -- an unverifiable claim in a CLAUDE.md is either stale (delete it), a fact about intent rather than code (mark it), or a defect in the analysis (fix the analysis). Deleting it without saying so destroys the signal that distinguishes the three.

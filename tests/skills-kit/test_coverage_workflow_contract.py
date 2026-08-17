@@ -396,9 +396,14 @@ class TestDiscoveryFailureRefusal:
 class TestCoverageRegisteredWithCriteria:
     """Registration and its criteria binding are one atomic go-live contract."""
 
-    def test_skill_md_advertises_the_coverage_invocation(self):
+    def test_skill_md_advertises_the_analyze_invocation(self):
+        """The VERB is `analyze`; `coverage` survives only as the output noun."""
         skill_md = (MD_DOMAIN / "SKILL.md").read_text(encoding="utf-8")
-        assert "/md-domain coverage" in skill_md
+        assert "/md-domain analyze" in skill_md
+        assert "/md-domain coverage" not in skill_md, (
+            "`coverage` is the output of `analyze`, not a dispatch verb -- a "
+            "`/md-domain coverage` example would advertise a verb that does not exist"
+        )
 
     def test_skill_md_registers_coverage_code_subtree(self):
         skill_md = (MD_DOMAIN / "SKILL.md").read_text(encoding="utf-8")

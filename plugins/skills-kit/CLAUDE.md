@@ -1,10 +1,10 @@
 # skills-kit plugin orientation
 
-Plugin-level orientation for `plugins-kit:skills-kit`. The plugin's artifact is **markdown generally** -- every md file a project accumulates: SKILL.md, CLAUDE.md, project docs, READMEs, and skill references (see "Total ownership" below). It is organized around a **verb x artifact matrix** over that `md` artifact -- two verbs (**audit**, **generate**) crossed with four artifacts (`skill` = SKILL.md, `claude-md` = CLAUDE.md, `project-doc`, `references`) -- and since 2026-07-29 that matrix is expressed as DATA inside a single skill rather than as topology. `skill` and `claude-md` are the *typed* specializations (the ones with a formal schema contract), not the whole surface: the domain also audits project docs and cross-references, and the framework claims ownership of every md role.
+Plugin-level orientation for `plugins-kit:skills-kit`. The plugin's artifact is **markdown generally** -- every md file a project accumulates: SKILL.md, CLAUDE.md, project docs, READMEs, and skill references (see "Total ownership" below). It is organized around a **verb x artifact matrix** over that `md` artifact -- **audit** and **author** crossed with the artifacts (`skill` = SKILL.md, `claude-md` = CLAUDE.md, `project-doc`, `references`), plus **generate** (claude-md only, written from analysis-produced coverage) and **analyze** (report-only, subject is CODE) -- and since 2026-07-29 that matrix is expressed as DATA inside a single skill rather than as topology. Author and generate differ by INPUT PROVENANCE, not output: see md-domain/CLAUDE.md `author_and_generate_split_on_provenance`. `skill` and `claude-md` are the *typed* specializations (the ones with a formal schema contract), not the whole surface: the domain also audits project docs and cross-references, and the framework claims ownership of every md role.
 
 The plugin ships **four skills**:
 
-- **`md-domain`** (`/md-domain`) -- the single front door. One dispatch table (verb x artifact -> lane record), two shared verb lanes, four per-artifact standards docs, the placement spine, and all the audit machinery.
+- **`md-domain`** (`/md-domain`) -- the single front door. One dispatch table (verb x artifact -> lane record), three shared verb procedures (audit; one producing lane serving both author and generate; analyze), four per-artifact standards docs, the placement spine, and all the audit machinery.
 - **`knowledge-encoding`** -- encoding a newly discovered insight into a persistent home.
 - **`update-documentation`** -- end-of-session review of what the work implies for the docs.
 - **`materialized-output`** -- designing a tool that produces a materialized insight.
@@ -64,7 +64,9 @@ claude_md:
         - skills/md-domain/CLAUDE.md -- shape decisions about the skill itself.
         - references/standards/ -- the per-artifact "what good looks like", each
           read in BOTH directions (detecting for audit, producing for generation).
-        - references/lanes/ -- the two shared verb procedures.
+        - references/lanes/ -- the three shared verb procedures (audit-lane,
+          generation-lane serving BOTH author and generate, coverage-lane which
+          is the analyze procedure named for its output).
         - references/cohesion-principles.md -- the placement spine; read for WHERE
           a fact lives. Every lane and standards doc defers here.
         - references/audit-framework.{md,yaml} -- audit-family glossary + registry

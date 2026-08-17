@@ -63,16 +63,19 @@ EXPECTED_LANES = {
     "audit_claude_md": {"verb": "audit", "artifact": "claude-md"},
     "audit_project_doc": {"verb": "audit", "artifact": "project-doc"},
     "audit_references": {"verb": "audit", "artifact": "references"},
-    "generate_skill": {"verb": "generate", "artifact": "skill"},
+    "author_skill": {"verb": "author", "artifact": "skill"},
+    "author_claude_md": {"verb": "author", "artifact": "claude-md"},
+    "author_project_doc": {"verb": "author", "artifact": "project-doc"},
     "generate_claude_md": {"verb": "generate", "artifact": "claude-md"},
-    "generate_project_doc": {"verb": "generate", "artifact": "project-doc"},
     "coverage_code_subtree": {
-        "verb": "coverage",
+        # The verb is `analyze`; the lane id, its procedure, its standards doc
+        # and its scripts are all named for the OUTPUT (coverage) instead.
+        "verb": "analyze",
         "subject": "code_subtree",
         # The lane id stays `coverage_code_subtree` (a stable identifier), but
         # the table's human-readable key names the real unit: one directory's
         # own direct code files, never a subtree.
-        "table_key": "coverage (one directory)",
+        "table_key": "analyze (one directory)",
     },
 }
 
@@ -165,11 +168,31 @@ class TestDispatchTable:
             assert record.get("subject") == expected["subject"]
             assert "artifact" not in record
 
-    def test_generate_references_lane_is_absent(self):
+    def test_author_references_lane_is_absent(self):
         assert not any(
-            r.get("verb") == "generate" and r.get("artifact") == "references"
+            r.get("verb") == "author" and r.get("artifact") == "references"
             for r in LANE_RECORDS
-        ), "generate x references must have no lane -- cross-references are emergent"
+        ), "author x references must have no lane -- cross-references are emergent"
+
+    def test_generate_is_claude_md_only(self):
+        """`generate` consumes coverage, and only `analyze` produces any."""
+        arts = {r.get("artifact") for r in LANE_RECORDS if r.get("verb") == "generate"}
+        assert arts == {"claude-md"}, (
+            "generate must take claude-md alone -- nothing analyzes a codebase and "
+            f"emits skill or project-doc coverage; got {sorted(arts)}"
+        )
+
+    def test_producing_verbs_declare_their_input_provenance(self):
+        """author vs generate is decided by provenance, so each must state it."""
+        expected = {"author": "user_supplied", "generate": "coverage"}
+        for record in LANE_RECORDS:
+            verb = record.get("verb")
+            if verb not in expected:
+                continue
+            assert record.get("input_provenance") == expected[verb], (
+                f"{record['id']}: input_provenance must be {expected[verb]!r} -- "
+                "the two producing verbs are told apart by it, not by wording"
+            )
 
     def test_markdown_table_matches_the_lane_records(self):
         """The human-readable table and the machine-readable records must agree."""
@@ -194,9 +217,9 @@ class TestDispatchTable:
             assert rows[key] == f"`{lane_id}`", (
                 f"dispatch table row `{key}` points at {rows[key]}, not `{lane_id}`"
             )
-        assert "generate x references" in rows
-        assert "no lane" in rows["generate x references"], (
-            "the generate x references row gained a lane id"
+        assert "author x references" in rows
+        assert "no lane" in rows["author x references"], (
+            "the author x references row gained a lane id"
         )
 
 
@@ -262,17 +285,26 @@ class TestBoundPathsResolve:
                 f"{record['id']}: no detect/classify lane"
             )
 
-    def test_coverage_lane_is_report_only(self):
-        record = next(r for r in LANE_RECORDS if r["verb"] == "coverage")
+    def test_analyze_lane_is_report_only(self):
+        record = next(r for r in LANE_RECORDS if r["verb"] == "analyze")
         assert "workflow_remediate" not in record
         assert record["verdicts"] == ["GAPS-FOUND", "COVERAGE-ASSESSED"]
 
-    def test_generation_lanes_bind_standards_and_procedure(self):
-        for record in LANE_RECORDS:
-            if record["verb"] != "generate":
-                continue
+    def test_producing_lanes_bind_standards_and_procedure(self):
+        """author and generate SHARE one producing procedure."""
+        producing = [r for r in LANE_RECORDS if r["verb"] in ("author", "generate")]
+        assert producing, "no producing lanes found"
+        for record in producing:
             assert record["procedure"] == "references/lanes/generation-lane.md"
             assert record["standards"].startswith("references/standards/")
+
+    def test_regeneration_declares_the_propose_markings_gate(self):
+        """Regeneration must never silently overwrite an unmarked document."""
+        record = next(r for r in LANE_RECORDS if r["verb"] == "generate")
+        assert record.get("regeneration") == "propose-markings-first", (
+            "generate_claude_md must declare the propose-markings-first gate -- "
+            "without it the first regeneration of a hand-written CLAUDE.md guts it"
+        )
 
 
 # ---------------------------------------------------------------------------

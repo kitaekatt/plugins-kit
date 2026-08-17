@@ -466,4 +466,96 @@ claude_md:
         default basic" ruling is SUPERSEDED by this record -- the flag still
         wins, but silence now prompts instead of defaulting.
       added: "2026-08-08"
+    - id: author_and_generate_split_on_provenance
+      keywords: [author verb, generate verb, input provenance, user supplied, coverage fed, re-checkable, four verbs, why generate is claude-md only, producing lane shared, auditable content]
+      summary: AUTHOR and GENERATE are separate verbs distinguished by INPUT PROVENANCE, not by output. Author takes user-supplied content; generate takes analyze-produced coverage, so its claims carry evidence a later run can re-derive. That is also why generate is claude-md-only.
+      detail: |
+        The owner's distinction, and the reason it is not cosmetic: content the
+        user feeds in is NOT inherently auditable -- there is no source to
+        re-read -- while coverage produced by analysis is, because every
+        candidate carries `file:line` anchors. So the two producing paths make
+        different PROMISES about the document, even though they run the same five
+        steps and answer to the same standards doc. A single `generate` verb
+        covering both silently overstated the weaker case.
+        CONSEQUENCE 1 -- `generate` is `claude-md`-only. Nothing analyzes a
+        codebase and emits skill or project-doc candidates, so there is no
+        coverage to generate those from; they are AUTHORED. The former
+        generate_skill / generate_project_doc lanes were renamed rather than
+        deleted, and "generate a new skill" is kept as an author_skill
+        invocation_phrasing on purpose: a user's word is intent, not a lane
+        selector. If an analysis is ever built for those artifacts they gain a
+        generate lane; until then nothing may improvise a coverage input.
+        CONSEQUENCE 2 -- one procedure, two verbs. generation-lane.md serves
+        both, because splitting it would duplicate confirm/place/apply/shape/
+        validate for a difference that lives entirely in the intake. Only the
+        coverage intake and the regeneration gate are generate-specific.
+        CONSEQUENCE 3 -- audit gains a second possible depth. An authored
+        document can only be audited against its STANDARDS; a generated one can
+        additionally be checked against its SOURCE. That deeper audit is NOT
+        built -- the distinction is recorded in the standards, and a provenance
+        verifier is a flagged follow-up, not a shipped capability. Do not read
+        the verb split as implying it exists.
+      origin: |
+        Surface: the bare /md-domain greeting listed five audit entries and no
+        producing entry, and a user who wanted to generate had nothing to point
+        at. Finding: pursuing that gap, the owner rejected folding user-fed
+        writing into `generate` on the ground that "the information being fed in
+        is not inherently auditable, while coverage produced by analysis is".
+        Follow-up: the audit-against-source depth in consequence 3.
+      added: "2026-08-17"
+    - id: producing_verbs_are_offered_not_footnoted
+      keywords: [greeting, menu, generate not listed, deliberately omits, falsified, type-first menu, document types, do not re-collapse, discoverability]
+      summary: The greeting groups entries by DOCUMENT TYPE and names authoring and generation per type. An earlier revision omitted them on the reasoning that nobody arrives wanting to "run generate"; a user did, which falsified it. Do not re-collapse them into a footnote.
+      detail: |
+        The retired text was a documented deliberate omission, which is why it
+        survived: SKILL.md carried it under "Three things the greeting
+        deliberately omits", reasoning that "nobody arrives wanting to run
+        generate -- they arrive wanting a document written". A single
+        counterexample refutes a claim of that shape, and one arrived. The
+        producing verbs now appear per artifact and SKILL.md carries a
+        do-not-re-collapse note pointing here.
+        THE MENU IS NOW TYPE-FIRST, by owner direction: group by the DOCUMENT
+        TYPE being worked on (skills / CLAUDE.md / project docs / across-all),
+        then list what can be done to that type. The prior shape was verb-first
+        and widest-first, which reads well only if you already know the verb set
+        -- the exact thing a first-time user does not have.
+        WHAT REMAINS DELIBERATELY OMITTED, and why these are not the same
+        mistake: narrow selectors (a single file, `list`, `--density`) are
+        refinements WITHIN a chosen verb, not entry points; review mode and the
+        skill roster are withheld because offering them would MISROUTE -- review
+        belongs to the code-review skills' front door, and an inventory renders
+        no verdict so it is not an audit. Those are routing arguments, not
+        rare-intent arguments, so the falsification above does not touch them.
+      origin: |
+        Surface: a user invoked /md-domain bare, saw no generate entry, and asked
+        whether the skill was written correctly. Finding: the omission was
+        deliberate and documented, and its stated rationale was false as written.
+        Follow-up: the type-first menu shape, and the do-not-re-collapse note in
+        SKILL.md.
+      added: "2026-08-17"
+    - id: analyze_is_the_verb_coverage_is_the_output
+      keywords: [analyze verb, coverage noun, rename, coverage_code_subtree, legacy identifier, named for output, no coverage verb, partial rename avoided]
+      summary: The verb formerly called `coverage` is `analyze`; `coverage` is retained as the name of what it PRODUCES. Every file and id keeping the word coverage is named for the output, so no file rename was needed and none should be done later.
+      detail: |
+        The owner's framing: `analyze` describes what you DO to produce coverage,
+        and coverage is the artifact. So the rename touches the dispatch surface
+        only -- the verb token in the table, grammar, greeting and the lane
+        record's `verb:` field. `coverage_code_subtree`, `coverage-lane.md`,
+        `coverage-standards.md`, `discover_coverage.py`, `coverage-detect.js` and
+        the `code_subtree` composition all keep their names because each is named
+        for the output or is a stable identifier.
+        THAT CONTAINMENT WAS THE POINT. A sweeping rename would have touched the
+        framework registry, the discover scripts, the workflow and their tests --
+        and `the_subject_is_one_directory_not_a_subtree` already warns that a
+        PARTIAL rename is the worse failure. Naming the files for the output
+        makes the full rename unnecessary rather than merely deferred.
+        The still-deferred rename is a different one: `code_subtree` is imprecise
+        for a single-directory subject. It stays deferred, and it stays recorded
+        in that insight -- do not bundle it into a later verb change either.
+      origin: |
+        Surface: the verb `coverage` named a noun, which made "run coverage then
+        generate" read as two nouns rather than a verb chain. Finding: the owner
+        chose `analyze` as the verb and directed that coverage remain the output
+        noun. Follow-up: none -- the file names are correct as they stand.
+      added: "2026-08-17"
 ```

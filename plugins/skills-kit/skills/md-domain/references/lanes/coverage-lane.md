@@ -1,17 +1,28 @@
-# The coverage lane
+# The analyze lane (produces coverage)
 
-The coverage procedure. Unlike `audit` and `generate`, this one is NOT
-parameterized by artifact -- it has exactly one subject shape, and its subject is
-CODE.
+The ANALYZE procedure. Unlike `audit` and `author`, this one is NOT parameterized
+by artifact -- it has exactly one subject shape, and its subject is CODE.
 
-**What kind of operation this is.** Coverage is not a peer of `audit`. It renders
+**The verb is `analyze`; `coverage` is what it PRODUCES.** This file, the lane id
+`coverage_code_subtree`, `coverage-standards.md`, `discover_coverage.py` and
+`coverage-detect.js` all keep the word `coverage` because they are named for the
+output, not the verb. Do not read those names as a surviving `coverage` verb;
+there is none, and `/md-domain coverage` is not a dispatch.
+
+**What kind of operation this is.** Analysis is not a peer of `audit`. It renders
 no compliance verdict, so it is not an audit; it creates no document, so it is not
-generation either. It is the DISCOVERY step that feeds generation and
+production either. It is the DISCOVERY step that feeds `generate` and
 regeneration: it reads code, discovers facts, and names the destination each fact
 belongs in. Being re-homed under that family changes nothing about what it may do
 -- REPORT-ONLY IS A PROPERTY OF THIS ENTRY POINT, not an accident of the verb
 being listed separately. The lane binds no remediate workflow and never writes,
 whoever calls it and whatever the family is called.
+
+**Its output is what makes GENERATION different from AUTHORING.** A document
+written from coverage carries the `file:line` evidence behind each claim, so a
+later run can re-derive it; a document authored from supplied content cannot be
+re-checked against anything. That is the whole of the distinction, and it is why
+this lane's report is worth persisting rather than consuming and discarding.
 
 **Status as of 2026-08-08: filled and registered.** The assessment criteria live
 in `references/standards/coverage-standards.md`, callers pass that document's
@@ -133,8 +144,9 @@ composition, for the bottom-up constraint. This lane never widens a target on th
 caller's behalf.
 
 Announce the run by name and scope before Step 2, per SKILL.md's "Naming and
-scope announcement": the analysis name (`Coverage analysis`), the directory, the
-direct-code-file count, and the size of the ambient chain.
+scope announcement": the analysis name (`Code analysis` -- the menu label, echoed
+verbatim), the directory, the direct-code-file count, and the size of the ambient
+chain.
 
 ### Step 2 -- Discover (mechanical)
 
@@ -255,7 +267,7 @@ Then STOP. No Q&A, no edits, no follow-up pass.
 ## Handing the report to generation
 
 Stopping is where THIS lane ends, not where the work has to. A caller holding a
-coverage report may invoke the generation lane to write any candidate up. That
+coverage report may invoke the producing lane (as `generate`) to write any candidate up. That
 is a separate run of a separate lane, and it takes nothing away from report-only:
 this lane still writes nothing, whoever calls it and whatever they do next.
 

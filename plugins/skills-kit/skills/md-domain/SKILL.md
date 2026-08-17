@@ -3,20 +3,28 @@ _schema_version: 1
 name: md-domain
 author: christina
 skill-type: domain-skill
-description: Use when auditing or generating project markdown -- SKILL.md, CLAUDE.md, project docs, cross-refs -- or analyzing code for missing ambient CLAUDE.md coverage. Do NOT use for knowledge-encoding or update-documentation.
+description: Use when auditing, authoring, generating, or analyzing markdown -- SKILL.md, CLAUDE.md, docs. Do NOT use for knowledge-encoding or update-documentation.
 disable-model-invocation: false
 user-invocable: true
-argument-hint: "[audit|generate|coverage] [skill|claude-md|project-doc|references|<directory>] [<path>|--diff] [--review] [--density] [--json] [--advanced] [fast]"
+argument-hint: "[audit|author|generate|analyze] [skill|claude-md|project-doc|references|<directory>] [<path>|--diff] [--coverage <dir>] [--review] [--density] [--json] [--advanced] [fast]"
 ---
 
 # md-domain
 
-The single front door for three dispatch verbs over project markdown. **Audit**
-and **generate** cross four artifacts (`skill`, `claude-md`, `project-doc`,
-`references`); **coverage** assesses one `code_subtree` for facts missing from
-its ambient CLAUDE.md chain. Coverage is report-only and is not
-artifact-parameterized. This replaces the former `md-audit` / `md-authoring`
-routers and the member skills they dispatched into.
+The single front door for four dispatch verbs over project markdown:
+
+- **audit** -- check an existing document against its standards. Report a verdict.
+- **analyze** -- read ONE directory's own code and report **coverage**: candidate
+  facts, each carrying the `file:line` evidence it was derived from. Report-only.
+- **author** -- write a document from content YOU supply, held to the artifact's
+  standards.
+- **generate** -- write a document FROM coverage, so every claim traces back to
+  code a later run can re-read.
+
+`audit` crosses four artifacts (`skill`, `claude-md`, `project-doc`,
+`references`) and `author` crosses three (cross-references are not authored).
+`analyze` and `generate` are not artifact-parameterized. This replaces the former
+`md-audit` / `md-authoring` routers and the member skills they dispatched into.
 
 **Coverage's subject is ONE DIRECTORY'S OWN DIRECT code files -- never a
 subtree.** Assessing a directory never descends into its subdirectories: each of
@@ -25,87 +33,116 @@ code plus its children's finished CLAUDE.md files. The lane id
 `coverage_code_subtree` and the composition name `code_subtree` are legacy
 identifiers for that single-directory subject; the unit is the directory.
 
-The three are dispatch entries, not three things of the same kind. Auditing is
-making sure something is accurate and compliant. Generation is creating a
-document that does not exist -- and regeneration where the document already
-exists. Coverage is the DISCOVERY step that feeds generation and
-regeneration: it reads one directory's code, discovers facts about it, and writes
-nothing.
+**AUTHOR and GENERATE differ by where the content came from, not by what they
+produce.** Author takes what you give it -- a conversation, a pile of notes, an
+audit remediation -- and makes it meet the standards. Generate takes coverage
+produced by `analyze` and writes it up, so each claim carries the evidence a
+later run can re-check. Both produce a document held to the same per-artifact
+standards. Only a generated document can ALSO be checked back against its source,
+and that is the whole of the difference.
 
-One skill, one dispatch table, three procedures. Audit and generate share
-per-artifact standards; coverage has its own criteria and procedure. The "what
-good looks like" documents live in `references/standards/`,
-the "how to run it" procedures live in `references/lanes/`, and the placement
-spine they all defer to lives in `references/cohesion-principles.md`.
+**That is why `generate` exists for `claude-md` alone.** `analyze` reads code,
+and code is what a CLAUDE.md is about. Nothing analyzes a codebase and emits
+skill or project-doc candidates, so those two artifacts are authored. If an
+analysis is ever built for them, they gain a generate lane; until then, do not
+improvise one.
+
+**REGENERATION is `generate` over a document that already exists.** Existence
+decides, not a flag. Content the run can re-verify against current code is kept;
+content it cannot is kept only where explicitly MARKED to retain. On the first
+pass over a document carrying no markings the lane PROPOSES them and writes
+nothing -- otherwise the first regeneration of every hand-written CLAUDE.md
+would silently gut it. Marking syntax: `references/standards/claude-md-standards.md`
+section 6.4.
+
+One skill, one dispatch table, three procedures -- audit, producing (shared by
+author and generate), and analysis. Audit, author and generate share the
+per-artifact standards docs; analyze has its own criteria. The "what good looks
+like" documents live in `references/standards/`, the "how to run it" procedures
+live in `references/lanes/`, and the placement spine they all defer to lives in
+`references/cohesion-principles.md`.
 
 ## Invocation
 
 - **Bare** -- `/md-domain` greets with the menu below; pick a verb + artifact.
 - **Argument-dispatched** -- `/md-domain audit skill <path>`,
-  `/md-domain generate claude-md`, `/md-domain audit references [flags]`, and
-  `/md-domain coverage <directory> [--advanced]` jump straight into that lane.
+  `/md-domain author claude-md`, `/md-domain generate claude-md <directory>`,
+  `/md-domain audit references [flags]`, and
+  `/md-domain analyze <directory> [--advanced]` jump straight into that lane.
 - **Natural language** -- routed by the verb and subject named. Each lane
   record below declares the `invocation_phrasings` that should reach it.
 - **Review mode** -- append `--review` to an `audit` dispatch on `skill`,
   `claude-md`, or `project-doc` to audit a CHANGE rather than a file. See
   "Review mode" below.
-- **Coverage mode** -- name a directory or pass `--diff`; there is no whole-repo
-  default. Coverage reads that directory's own direct code files -- not its
-  subdirectories -- and reports without editing code or markdown.
+- **Analyze mode** -- name a directory or pass `--diff`; there is no whole-repo
+  default. Analysis reads that directory's own direct code files -- not its
+  subdirectories -- and reports coverage without editing code or markdown.
+- **Generate mode** -- name a directory. Generate needs coverage: it uses this
+  session's, or reads persisted reports named by `--coverage <dir>`, or runs
+  `analyze` first and says so. Over a document that already exists it is
+  REGENERATION and the retention rules apply.
 
 ### Bare-invocation greeting
 
 ```
 How can I help you with your project markdown?
 
-Just tell me what you want, in your own words. Widest first:
+Tell me what you want in your own words. Grouped by what you want to work on:
 
-  "audit everything"                   every analysis below, across the repo
-  "audit all the skills"               Skill audit
-  "audit the CLAUDE.md files"          CLAUDE.md audit
-  "audit the docs"                     Project-doc audit
-  "check for broken skill references"  Cross-reference audit
+SKILLS -- a SKILL.md and its reference documents
+  "audit this skill"              Skill audit -- against its type contract
+  "audit all the skills"          Skill audit, across the repo
+  "write me a new skill"          Skill authoring -- I write it to the standards
 
-  "check <directory> for coverage"     Coverage analysis. Reads the code files
-                                       sitting directly IN that directory -- not
-                                       its subdirectories, each of which is its
-                                       own run -- and reports which facts its
-                                       CLAUDE.md chain should carry so a code
-                                       review can act on them. Reports only,
-                                       never edits. Ask me to write the results
-                                       up afterwards and I generate that
-                                       CLAUDE.md -- a separate step you choose,
-                                       per candidate.
+CLAUDE.md
+  "audit the CLAUDE.md files"     CLAUDE.md audit
+  "write a CLAUDE.md for <dir>"   CLAUDE.md authoring -- from what you tell me
+  "analyze <dir>"                 Code analysis. Reads the code sitting directly
+                                  IN that directory -- not its subdirectories,
+                                  each of which is its own run -- and reports
+                                  COVERAGE: the facts its CLAUDE.md chain should
+                                  carry, each with the evidence behind it.
+                                  Reports only, never edits.
+  "generate <dir>'s CLAUDE.md"    CLAUDE.md generation -- writes the document out
+                                  of that coverage, so every claim traces back to
+                                  code. I analyze first if we have none yet.
+  "regenerate <dir>'s CLAUDE.md"  The same, over a document that already exists.
+                                  What I can re-verify is kept; what I cannot is
+                                  kept only where it is marked to retain. On a
+                                  document with no markings yet I propose them
+                                  and change nothing.
+  "give <dir> and everything      The whole-tree form: analyze then generate per
+   under it CLAUDE.md files"      directory, DEEPEST FIRST, because a parent is
+                                  composed from its own code plus its children's
+                                  finished documents. Committing to a directory
+                                  commits to everything beneath it.
 
-  "give <dir> and everything under     The whole-tree form: one coverage run and
-   it CLAUDE.md files"                 one generation per directory, DEEPEST
-                                       FIRST, because a parent is composed from
-                                       its own code plus its children's finished
-                                       documents. Committing to a directory
-                                       commits to everything beneath it.
+PROJECT DOCS -- READMEs, design records, references under docs/
+  "audit the docs"                Project-doc audit
+  "write a design doc / README"   Project-doc authoring
+
+ACROSS ALL THREE
+  "check for broken references"   Cross-reference audit
+  "audit everything"              every audit above, across the repo
+
+AUTHORING vs GENERATION is about where the content comes from. Authoring takes
+what you give me and makes it meet the standards. Generation builds the document
+out of analysis, so it can be checked back against the code later.
 
 Before starting I name the analysis and its exact scope, because what a run
 READS is what makes it cheap or expensive.
-
-Generation is not a separate mode -- ask me to write a skill, a CLAUDE.md, or a
-doc and I apply these same standards in the producing direction.
 
 Or can I help you with something else?
 ```
 
 Show the menu and stop; do not load a lane or a standards doc until the user picks.
 
-Three things the greeting deliberately omits, so do not read their absence as
+Two things the greeting deliberately omits, so do not read their absence as
 scope.
 
 **Narrow selectors** -- a single file, a `list` index, `--density`,
 `--advanced` -- are real and documented under "Argument grammar"; a user who
 names one file is served normally.
-
-**The generation lanes** still exist in the dispatch table; the greeting frames
-generation as a direction the standards are read in rather than a verb to pick,
-because nobody arrives wanting to "run generate" -- they arrive wanting a
-document written.
 
 **Review mode and the skill roster are NOT offered.** Both capabilities remain
 -- review mode is how `git-kit` and `p4-kit` dispatch these lanes over a diff,
@@ -114,6 +151,14 @@ a user. Reviewing a diff is an audit of a change, which is the code-review
 skills' job; md-domain informs that review and does not front-door it. An
 inventory renders no verdict, so it is not an audit at all. Offering either
 here invites a user to run the wrong skill.
+
+**The producing verbs ARE offered, and must stay offered.** An earlier revision
+omitted them, reasoning that "nobody arrives wanting to run generate -- they
+arrive wanting a document written". A user arrived wanting to run generate, which
+falsified it: the menu gave them nothing to point at, and the only mention was a
+footnote below the whole audit list. Authoring and generation now appear per
+artifact. Do not re-collapse them into a footnote -- see `CLAUDE.md`,
+`producing_verbs_are_offered_not_footnoted`.
 
 The right-hand labels are the canonical analysis names that "Naming and scope
 announcement" below requires you to echo. The left column is only the entry
@@ -140,9 +185,10 @@ not menu decoration:
 
 ## Dispatch table
 
-For audit and generate, route by verb AND artifact. Coverage has one
-non-artifact subject -- `code_subtree`. In every case load the selected
-procedure plus its standards doc -- exactly those two, never the whole tree.
+For audit and author, route by verb AND artifact. `generate` takes only
+`claude-md`; `analyze` has one non-artifact subject, `code_subtree`. In every
+case load the selected procedure plus its standards doc -- exactly those two,
+never the whole tree.
 
 | Verb x artifact or subject | Lane id | Procedure | Standards doc |
 |---|---|---|---|
@@ -150,28 +196,41 @@ procedure plus its standards doc -- exactly those two, never the whole tree.
 | audit x claude-md | `audit_claude_md` | `references/lanes/audit-lane.md` | `references/standards/claude-md-standards.md` |
 | audit x project-doc | `audit_project_doc` | `references/lanes/audit-lane.md` | `references/standards/project-doc-standards.md` |
 | audit x references | `audit_references` | `references/lanes/audit-lane.md` (references special case) | `references/standards/references-standards.md` |
-| generate x skill | `generate_skill` | `references/lanes/generation-lane.md` | `references/standards/skill-standards.md` |
+| author x skill | `author_skill` | `references/lanes/generation-lane.md` | `references/standards/skill-standards.md` |
+| author x claude-md | `author_claude_md` | `references/lanes/generation-lane.md` | `references/standards/claude-md-standards.md` |
+| author x project-doc | `author_project_doc` | `references/lanes/generation-lane.md` | `references/standards/project-doc-standards.md` |
+| author x references | -- (no lane) | -- | -- |
 | generate x claude-md | `generate_claude_md` | `references/lanes/generation-lane.md` | `references/standards/claude-md-standards.md` |
-| generate x project-doc | `generate_project_doc` | `references/lanes/generation-lane.md` | `references/standards/project-doc-standards.md` |
-| generate x references | -- (no lane) | -- | -- |
-| coverage (one directory) | `coverage_code_subtree` | `references/lanes/coverage-lane.md` | `references/standards/coverage-standards.md` |
+| analyze (one directory) | `coverage_code_subtree` | `references/lanes/coverage-lane.md` | `references/standards/coverage-standards.md` |
 
-**`generate x references` has no lane, deliberately.** Cross-references are not a
-generated artifact -- they are an emergent property of the other three. There is
-nothing to generate; a request to "fix my broken references" is a REMEDIATION of
-the `audit_references` lane, and a request to "add a reference" is generating
-whichever artifact carries it (`generate_skill` / `generate_claude_md` /
-`generate_project_doc`). Say so and route there rather than improvising a lane.
+**The analyze lane's files are named for its OUTPUT, not its verb.** The lane id
+`coverage_code_subtree`, `coverage-lane.md`, `coverage-standards.md`,
+`discover_coverage.py`, `coverage-detect.js` and the composition `code_subtree`
+all keep the word `coverage` because coverage is what `analyze` produces. The
+verb was renamed; the artifact it emits was not. (`code_subtree` remains a legacy
+identifier for a single-directory subject, as stated above.)
 
-**Coverage then generation is a CHAIN, not a composite verb.** "Find what's
+**`author x references` has no lane, deliberately.** Cross-references are not an
+authored artifact -- they are an emergent property of the other three. There is
+nothing to write; a request to "fix my broken references" is a REMEDIATION of the
+`audit_references` lane, and a request to "add a reference" is authoring
+whichever artifact carries it (`author_skill` / `author_claude_md` /
+`author_project_doc`). Say so and route there rather than improvising a lane.
+
+**`generate` has no `skill` or `project-doc` lane, for the same reason.** Nothing
+analyzes a codebase and emits skill or project-doc candidates, so there is no
+coverage to generate from. Those artifacts are AUTHORED. A request to "generate a
+skill" is `author_skill`; say so rather than improvising a coverage input.
+
+**Analysis then generation is a CHAIN, not a composite verb.** "Find what's
 missing and write it up" is the natural end-to-end request, and it is served by
-running `coverage` and then `generate x claude-md` -- two dispatches, in order,
-with the user's decision in between. There is deliberately no `coverage+generate`
-verb: coverage is report-only, and a single verb that discovered and wrote in one
+running `analyze` and then `generate x claude-md` -- two dispatches, in order,
+with the user's decision in between. There is deliberately no `analyze+generate`
+verb: analysis is report-only, and a single verb that discovered and wrote in one
 motion would make the report a formality rather than a decision point.
 
-Route it as a chain: run coverage, present the report, and offer to write up the
-candidates the user picks. Each destination is its own generation run, taking
+Route it as a chain: run the analysis, present the coverage, and offer to write up
+the candidates the user picks. Each destination is its own generation run, taking
 that destination's candidates together, with `destination` treated as a
 pre-resolved placement. Caller-side mechanics are in `coverage-lane.md`
 ("Handing the report to generation"); the intake side is `generation-lane.md`'s
@@ -184,7 +243,7 @@ its second input IS those documents:
 
 ```
 for each directory, deepest first:
-    coverage (its own direct code) -> generate (that directory)
+    analyze (its own direct code) -> generate (that directory)
 ```
 
 Two properties follow, and both are constraints rather than conveniences.
@@ -292,13 +351,15 @@ lanes:
     change_driver: >-
       Changes when the scanner's detection surface changes -- a new
       reference syntax, a new escape convention, or a new false-positive class.
-  - id: generate_skill
-    verb: generate
+  - id: author_skill
+    verb: author
     artifact: skill
     standards: references/standards/skill-standards.md
     procedure: references/lanes/generation-lane.md
     verdicts: [COMPLIANT, NON-COMPLIANT]
+    input_provenance: user_supplied
     invocation_phrasings:
+      - "write me a new skill"
       - "generate a new skill"
       - "refine this SKILL.md"
       - "what type should this skill be"
@@ -306,27 +367,29 @@ lanes:
     change_driver: >-
       Changes when the SKILL.md type contract changes (same driver as
       audit_skill -- one standards doc read in the producing direction).
-  - id: generate_claude_md
-    verb: generate
+  - id: author_claude_md
+    verb: author
     artifact: claude-md
     standards: references/standards/claude-md-standards.md
     procedure: references/lanes/generation-lane.md
-    workflow_generate: workflow/claude-md-generate.js
     verdicts: [COMPLIANT, NON-COMPLIANT]
+    input_provenance: user_supplied
     invocation_phrasings:
       - "write a claude_md block"
-      - "generate a CLAUDE.md for this directory"
+      - "write a CLAUDE.md for this directory"
       - "add an insight record to CLAUDE.md"
+      - "turn what I just told you into a CLAUDE.md"
       - "write review notes for this code directory"
     change_driver: >-
       Changes when the CLAUDE.md standards change (same driver as
       audit_claude_md, producing direction).
-  - id: generate_project_doc
-    verb: generate
+  - id: author_project_doc
+    verb: author
     artifact: project-doc
     standards: references/standards/project-doc-standards.md
     procedure: references/lanes/generation-lane.md
     verdicts: [COMPLIANT, NON-COMPLIANT]
+    input_provenance: user_supplied
     invocation_phrasings:
       - "write a project document / design doc"
       - "where should this doc live"
@@ -335,8 +398,26 @@ lanes:
     change_driver: >-
       Changes when the project-doc standards change (same driver as
       audit_project_doc, producing direction).
+  - id: generate_claude_md
+    verb: generate
+    artifact: claude-md
+    standards: references/standards/claude-md-standards.md
+    procedure: references/lanes/generation-lane.md
+    workflow_generate: workflow/claude-md-generate.js
+    verdicts: [COMPLIANT, NON-COMPLIANT]
+    input_provenance: coverage
+    regeneration: propose-markings-first
+    invocation_phrasings:
+      - "generate this directory's CLAUDE.md from the analysis"
+      - "regenerate the CLAUDE.md for this directory"
+      - "write up the coverage we just produced"
+      - "give this directory and everything under it CLAUDE.md files"
+    change_driver: >-
+      Changes when the CLAUDE.md standards change, when the coverage intake
+      contract changes, or when the retention/verification rules for
+      regeneration change.
   - id: coverage_code_subtree
-    verb: coverage
+    verb: analyze
     subject: code_subtree
     standards: references/standards/coverage-standards.md
     procedure: references/lanes/coverage-lane.md
@@ -346,24 +427,32 @@ lanes:
     report_only: true
     depth_modes: [basic, advanced]
     invocation_phrasings:
+      - "analyze this directory"
       - "analyze this code directory for missing CLAUDE.md guidance"
-      - "run coverage analysis on this directory"
-      - "find what this directory's CLAUDE.md is missing and write it up"
+      - "run a coverage analysis on this directory"
+      - "find what this directory's CLAUDE.md is missing"
       - "find code-derived facts that should be ambient"
     change_driver: Changes when coverage criteria, depth semantics, or the report-only procedure change.
 ```
 
 ## Argument grammar
 
-Audit/generate positional form: `<verb> <artifact> [selector] [flags]`.
-Coverage form: `coverage (<directory> | --diff) [--json] [--advanced]`.
+Audit/author positional form: `<verb> <artifact> [selector] [flags]`.
+Analyze form: `analyze (<directory> | --diff) [--json] [--advanced]`.
+Generate form: `generate claude-md <directory> [--coverage <dir>]`.
 Verb and subject may be inferred from natural language; when a required part is
 ambiguous, ask rather than guessing.
 
-- **Verb** -- `audit` | `generate` | `coverage`. Absent and
-  unrecoverable from phrasing -> show the menu.
-- **Artifact** (audit / generate only) -- `skill` | `claude-md` | `project-doc`
-  | `references`.
+- **Verb** -- `audit` | `author` | `generate` | `analyze`. Absent and
+  unrecoverable from phrasing -> show the menu. **"generate a skill" and
+  "generate a README" route to `author`**, because no analysis produces coverage
+  for those artifacts; take the intent, not the token.
+- **Artifact** (audit / author only) -- `skill` | `claude-md` | `project-doc`
+  | `references` (`references` is audit-only). `generate` takes `claude-md` and
+  nothing else.
+- **`--coverage <dir>`** -- generate-only. A directory of persisted coverage
+  reports (JSON) to write up, as emitted by `analyze --json`. Absent, generate
+  uses the coverage from this session, and runs `analyze` first if there is none.
 - **Selector** (audit lanes) -- `(none)` audits the cwd artifact if present;
   `list` emits a numbered list from the lane's discover script and stops;
   `<path>` targets a file or directory; `<numbers>` selects by index from the
@@ -371,12 +460,12 @@ ambiguous, ask rather than guessing.
   optional output path or `-` for stdout) for corpus inventory. The grammar puts
   them under `audit skill` because they share its subject; an inventory renders
   no verdict, so it is NOT an audit -- announce it as its own operation.
-- **Coverage subject** -- a named directory or `--diff`. There is NO whole-repo
+- **Analyze subject** -- a named directory or `--diff`. There is NO whole-repo
   default: if neither is present, say so and stop rather than choosing the cwd.
-- **`--diff` / `--json`** -- both coverage-only. `--diff` resolves changed code
+- **`--diff` / `--json`** -- both analyze-only. `--diff` resolves changed code
   into per-directory subjects; `--json` emits the coverage report as structured
   JSON.
-- **`--advanced`** -- coverage-only exhaustive reads plus invariant-discovery
+- **`--advanced`** -- analyze-only exhaustive reads plus invariant-discovery
   and verification passes. Without an explicit depth, prompt interactively; a
   non-interactive dispatch takes basic and discloses `defaults: depth=basic`.
 - **`fast` / `--fast` / `--yes` / `-y`** -- non-interactive: skip the Q&A round
@@ -423,7 +512,7 @@ filter, pre-image materialization, the two documented limits) live in
 ```yaml
 domain_skill:
   _schema_version: "1"
-  identity: The single front door for three dispatch verbs over project markdown -- auditing and generating SKILL.md (and its reference documents), CLAUDE.md, project documents, and skill cross-references, plus report-only coverage analysis over one directory's direct code.
+  identity: The single front door for four dispatch verbs over project markdown -- auditing SKILL.md (and its reference documents), CLAUDE.md, project documents and skill cross-references; authoring any of those from content the user supplies; generating a CLAUDE.md from analysis-produced coverage so its claims stay re-checkable; and report-only analysis of one directory's direct code.
   companions:
     siblings: []
     note: |
@@ -436,10 +525,10 @@ domain_skill:
       end-of-session-review triggers.
   scope:
     covers:
-      - dispatching audit, generation, or coverage intent to exactly one lane
+      - dispatching audit, author, generate, or analyze intent to exactly one lane
       - owning the four per-artifact standards docs (what good looks like for skill / claude-md / project-doc / references)
       - owning coverage-standards.md for the code_subtree composition (one directory's direct code, not a subtree)
-      - owning three procedures (shared audit, shared generation -- new documents and regeneration of existing ones -- and report-only coverage discovery)
+      - owning three procedures (shared audit; ONE producing procedure serving both author and generate, including regeneration and its retention rules; and report-only analysis)
       - owning the placement spine (cohesion-principles) and the shared audit framework, configuration, and content-shape references
     excludes:
       - encoding a newly discovered insight into a persistent location (use knowledge-encoding)
@@ -448,20 +537,26 @@ domain_skill:
       - invoking the skills being audited or generated
   orientation:
     summary: |
-      One skill, one dispatch table, three procedures. Audit and generate select an artifact,
-      then load its standards plus the verb procedure. Coverage selects code_subtree
-      and loads coverage-lane.md plus coverage-standards.md. Audit uses
-      DETECT -> Q&A gate -> REMEDIATE, generate uses confirm -> place -> apply -> shape ->
-      validate, and coverage uses discover -> assess -> report and STOP. Coverage never
-      remediates code or markdown. Placement -- which file a fact belongs in -- defers to
+      One skill, one dispatch table, three procedures. Audit and author select an artifact,
+      then load its standards plus the verb procedure; generate takes claude-md and nothing
+      else. Analyze selects code_subtree and loads coverage-lane.md plus
+      coverage-standards.md. Audit uses DETECT -> Q&A gate -> REMEDIATE; author and generate
+      SHARE confirm -> place -> apply -> shape -> validate, with generate adding a coverage
+      intake in front and, on regeneration, a retention pass; analyze uses
+      discover -> assess -> report and STOP and never remediates code or markdown.
+      Author and generate differ ONLY by input provenance -- user-supplied versus
+      analysis-produced coverage -- and that difference is what makes a generated document
+      re-checkable against its source. Placement -- which file a fact belongs in -- defers to
       references/cohesion-principles.md; it is never re-derived in a lane or standards doc.
     behavioral_guardrails:
       - Announce every run by its canonical analysis name plus the concrete file scope BEFORE starting (see "Naming and scope announcement"). Echo the menu's name verbatim rather than paraphrasing it, name every analysis a dispatch runs rather than only the headline one, and give scope as a count plus roots -- never as "the corpus". The names are the user's only handle on which analysis they authorized.
-      - Route by verb AND subject. Audit and generate require an artifact; coverage accepts only code_subtree and is not artifact-parameterized. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the generation lane's producing direction when the user asked for a verdict.
+      - Route by verb AND subject. Audit and author require an artifact; generate takes claude-md only; analyze accepts only code_subtree and is not artifact-parameterized. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the producing direction when the user asked for a verdict.
+      - Author and generate are chosen by INPUT PROVENANCE, never by the word the user typed. Content the user supplies is authored; coverage from an analyze run is generated. "Generate a skill" and "generate a README" are author dispatches, because no analysis produces coverage for those artifacts -- say which lane you are taking and why, rather than silently honouring or silently overriding the token.
+      - Regeneration never destroys what it cannot re-verify. Generating over a document that already exists keeps content it can verify against current code, keeps marked content unconditionally, and on a document carrying no markings PROPOSES them and writes nothing. Detect that state; do not ask the user to configure it, and never take an unmarked legacy document as licence to overwrite.
       - One lane at a time. On a bare invocation show the menu and wait; do not co-load standards docs or verb procedures. A typical invocation loads this SKILL.md plus one lane plus one standards doc.
-      - Detection and remediation are separate phases for audit. The audit pass produces a verdict; it does not silently mutate the subject. Remediation is dispatched after the Q&A gate, as its own work. Coverage has no remediation phase and must stop after reporting.
-      - An affirmative verdict is never emitted over inputs the run did not have. Coverage refuses DISCOVERY-FAILED directories, and that refusal is computed from an inventory the report carries in full, not asserted by the assessment.
-      - Audit findings carry a four-disposition classification (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL), assigned instance-level by the lane's detect classifier -- the taxonomy `bucket` is only the default. Report contract, in this order and with no hedging - SERIOUS summarized at the TOP (never auto-fixed), FIX as an applied count landing in a reviewable CL (review mode - PROPOSED, never applied), IMPROVE as a count plus one-line pitches (opt-in discussion), SILENT omitted entirely. The references lane retains the legacy AUTO / DISCUSS / SPECIAL lanes. Coverage uses only GAPS-FOUND / COVERAGE-ASSESSED and never remediates.
+      - Detection and remediation are separate phases for audit. The audit pass produces a verdict; it does not silently mutate the subject. Remediation is dispatched after the Q&A gate, as its own work. Analyze has no remediation phase and must stop after reporting.
+      - An affirmative verdict is never emitted over inputs the run did not have. Analyze refuses DISCOVERY-FAILED directories, and that refusal is computed from an inventory the report carries in full, not asserted by the assessment.
+      - Audit findings carry a four-disposition classification (FIX / SERIOUS / IMPROVE / SILENT; K -> SPECIAL), assigned instance-level by the lane's detect classifier -- the taxonomy `bucket` is only the default. Report contract, in this order and with no hedging - SERIOUS summarized at the TOP (never auto-fixed), FIX as an applied count landing in a reviewable CL (review mode - PROPOSED, never applied), IMPROVE as a count plus one-line pitches (opt-in discussion), SILENT omitted entirely. The references lane retains the legacy AUTO / DISCUSS / SPECIAL lanes. Analyze uses only GAPS-FOUND / COVERAGE-ASSESSED and never remediates.
       - Defer placement to references/cohesion-principles.md -- which CLAUDE.md, which skill, whether content graduates. Do not re-derive the placement algorithm inside a lane, a standards doc, or from memory. A placement already resolved upstream (an audit remediation naming the destination, an orchestrator directive) is followed, not re-derived.
       - Summarize-and-reference, do not restate. Keep a fact in its SSOT and reference it elsewhere; the compact form is a reminder plus a reference, and only when the fact fits about a dozen tokens -- beyond that, reference only. See cohesion-principles `summarize_and_reference` and its loss-free-deletion guard.
       - Size is a SIGNAL, not a verdict. An over-threshold file prompts a CRP evaluation (do sections serve different reading tasks?), never an automatic split -- and a split is offered (IMPROVE) only with a named extraction candidate, else it stays SILENT.
@@ -526,12 +621,12 @@ domain_skill:
         summary: The references lane's A-K classification taxonomy -- detection signals, default remediations, the scanner-rule disposition table, and the background-agent brief template for cross-reference findings.
       - id: generation_lane
         path: references/lanes/generation-lane.md
-        keywords: [generation procedure, confirm artifact, placement, apply standards, shape content, validate, single invocation, produce compliant]
-        summary: The ONE generation procedure, parameterized by artifact -- confirm the artifact, resolve placement via cohesion-principles, apply the artifact's standards doc in the PRODUCING direction, shape per the authoring-patterns cluster, validate. Single-invocation; no fan-out machinery.
+        keywords: [producing procedure, author lane, generate lane, confirm artifact, placement, apply standards, shape content, validate, coverage intake, regeneration, retention marking, propose markings, input provenance]
+        summary: The ONE producing procedure, shared by author and generate and parameterized by artifact -- confirm the artifact, resolve placement via cohesion-principles, apply the artifact's standards doc in the PRODUCING direction, shape per the authoring-patterns cluster, validate. Also the coverage intake that distinguishes generate from author, and the retention rules regeneration runs under.
       - id: coverage_lane
         path: references/lanes/coverage-lane.md
-        keywords: [coverage procedure, one directory, direct code, non-recursive, ambient chain, report only, gaps found, coverage assessed, refs.criteria, analysis depth, no remediation]
-        summary: The coverage procedure for the non-artifact code_subtree subject -- intent and depth gate, mechanical discovery, criteria-bound assessment, report shape, and STOP. It reads code and never remediates.
+        keywords: [analyze procedure, coverage procedure, one directory, direct code, non-recursive, ambient chain, report only, gaps found, coverage assessed, refs.criteria, analysis depth, no remediation]
+        summary: The ANALYZE procedure for the non-artifact code_subtree subject -- intent and depth gate, mechanical discovery, criteria-bound assessment, the coverage report shape, and STOP. It reads code and never remediates. Named for its output (coverage), not its verb.
       - id: authoring_patterns
         path: references/authoring-patterns/
         keywords: [content shape, three surfaces, yaml header markdown embedded yaml, structure asserts, area ownership, area config, actions pattern, query tool pattern, how to shape a fact]
@@ -582,9 +677,10 @@ domain_skill:
 
 - **Where a fact lives (the placement spine)** -- `references/cohesion-principles.md`.
 - **How to run an audit** -- `references/lanes/audit-lane.md`.
-- **How to generate** -- `references/lanes/generation-lane.md`.
-- **How to run coverage analysis** -- `references/lanes/coverage-lane.md`.
+- **How to author or generate a document** -- `references/lanes/generation-lane.md`.
+- **How to run an analysis** -- `references/lanes/coverage-lane.md`.
 - **What earns a coverage candidate** -- `references/standards/coverage-standards.md`.
+- **Retention marking for regeneration** -- `references/standards/claude-md-standards.md`, section 6.4.
 - **What this domain does NOT do, and who owns it instead** -- `references/capability-boundaries.md`.
 - **Encoding a newly discovered insight into a persistent home** -- `knowledge-encoding` (in skills-kit).
 - **End-of-session review of what the work implies for the docs** -- `update-documentation` (in skills-kit).
