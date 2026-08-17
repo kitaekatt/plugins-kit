@@ -33,6 +33,22 @@ Submodules:
 - ``drivers`` -- driver implementations that execute a prepared wave through
   the store; ``drivers.inline`` is the A-min.2 concurrency-one driver, and
   imports ``controller`` for ``RunAdapter``/``record_halt``.
+- ``adapter`` -- :class:`~content_pipeline.execution.adapter.RunAdapter` (A-min.3):
+  the consumer's full five-responsibility worker-facing contract (reconstruct
+  unit by id, build a prepared request, provide a ``ValidationSpec``, apply a
+  payload, optionally reconcile an ``apply_unknown``), plus
+  ``require_compatible_adapter`` for D1's incompatible-resume refusal. This is
+  the canonical home of ``RunAdapter`` as of A-min.3 -- ``controller.py``
+  imports and re-exports it unchanged (widened in place, not duplicated; see
+  that module's "RunAdapter-shaped seam" docstring section).
+- ``protocol`` -- :func:`~content_pipeline.execution.protocol.build_handlers` /
+  :func:`~content_pipeline.execution.protocol.dispatch` (A-min.3): the
+  versioned JSON worker protocol (``prepare | claim | read | submit | fail |
+  renew | status | pause | resume | finalize``) as mountable handlers a
+  consumer wires onto its own entry point. Ships no runnable tool of its own
+  -- the no-console-script boundary holds; ``cli.scaffold.dispatch`` remains
+  the human-facing helper, this is the machine-facing equivalent for a JSON
+  envelope.
 
 Deliberately re-exports NOTHING here, matching the root package's strict-DAG
 discipline -- ``from content_pipeline.execution.store import ExecutionStore``,
@@ -50,16 +66,20 @@ through to ``LLMBackend`` / ``submit_validated``) and ``controller.py``
 itself (for the shared ``RunAdapter`` seam and ``record_halt``), which pulls
 in ``controller.py``'s own dependencies transitively (including
 ``content_pipeline.validate.contract``, for ``RunAdapter.validators``'
-type). A consumer that wants only the
-store/status surface can still import ``execution.store`` and
-``execution.status`` directly without triggering those heavier imports --
+type). ``adapter.py`` additionally imports ``content_pipeline.llm.platform``
+directly (for ``ValidationSpec``), and ``protocol.py`` imports ``adapter.py``,
+``controller.py``, ``status.py``, ``store.py``, ``llm.platform``
+(``evaluate_submission``), ``pipeline.single_pass`` (``Gate``, for its
+``prepare`` verb's policy parameters), and ``validate.contract``. A consumer
+that wants only the store/status surface can still import ``execution.store``
+and ``execution.status`` directly without triggering those heavier imports --
 each submodule's own dependency footprint is what matters, not this
 package's aggregate.
 
 Out of scope for this phase (see the plan of record,
 ``docs/planning/content-pipeline-kit/session-recipients-plan.md``, phase
-A-min.3): the versioned JSON worker protocol, the real ``RunAdapter``
-protocol (mountable handlers, adapter identity/version-gated resume), and the
-background-session / workflow drivers. A-min.2 ships only the prepare/finalize
-controller and the additive inline driver on top of the A-min.1 store.
+A-min.3): the background-session / workflow drivers (phases B and C). A-min.3
+ships the worker protocol, the full ``RunAdapter`` (mountable handlers,
+adapter identity/version-gated resume), pure evaluation, and cache hardening
+on top of the A-min.1 store and A-min.2 prepare/finalize controller.
 """

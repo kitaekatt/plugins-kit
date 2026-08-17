@@ -14,16 +14,35 @@ nothing here re-implements them.
 onto its own entry point via ``cli.scaffold.dispatch`` -- this module ships no
 console script and no ``main()``, matching the package-wide no-console-script
 boundary (``plugins/content-pipeline-kit/CLAUDE.md``).
+
+The ``protocol`` command (A-min.3) -- an argv shell around one JSON envelope
+--------------------------------------------------------------------------------
+When ``adapter`` is supplied, :func:`build_commands` additionally registers a
+single ``"protocol"`` command: its ONE positional argument is a JSON-encoded
+worker-protocol envelope (``execution.protocol``'s ``{"protocol_version":
+..., "verb": ..., "payload": {...}}`` shape), and its result is whatever
+:func:`~content_pipeline.execution.protocol.dispatch` returns. This still
+honors the placement rule -- ``json.loads`` plus one call to
+``protocol.dispatch`` is argv-shaping, not execution logic; every verb's
+actual behavior (claim math, evaluation, apply) lives in ``execution/``, same
+as every other command here. ``**protocol_policy`` forwards to
+:func:`~content_pipeline.execution.protocol.build_handlers` (``strategy``,
+``gates``, ``freshness_of``, etc.) -- see that function's docstring for which
+verbs need which of them.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+import json
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from content_pipeline.cli.scaffold import Command
 from content_pipeline.execution.model import UsageRecord
 from content_pipeline.execution.status import compute_status
 from content_pipeline.execution.store import ExecutionStore
+
+if TYPE_CHECKING:  # pragma: no cover -- type-check only; see build_commands' deferred import
+    from content_pipeline.execution.adapter import RunAdapter
 
 
 def _split_flags(args: List[str]) -> Tuple[List[str], Dict[str, str]]:
@@ -64,11 +83,25 @@ def _usage_record(flags: Dict[str, str]) -> Optional[UsageRecord]:
     )
 
 
-def build_commands(store: ExecutionStore) -> Dict[str, Command]:
+def build_commands(
+    store: ExecutionStore,
+    *,
+    adapter: Optional["RunAdapter"] = None,
+    **protocol_policy: Any,
+) -> Dict[str, Command]:
     """Build the ``{name: Command}`` registry for ``cli.scaffold.dispatch``.
 
     ``store`` is the caller's already-open :class:`ExecutionStore`; this
     factory closes over it so each handler needs no separate wiring step.
+
+    ``adapter`` -- an optional
+    :class:`~content_pipeline.execution.adapter.RunAdapter` -- registers the
+    ``"protocol"`` command when supplied (see the module docstring's
+    "The ``protocol`` command" section); omitted (the default), this
+    function's return value is byte-identical to A-min.1/A-min.2's
+    store-only command set. ``**protocol_policy`` is forwarded to
+    :func:`~content_pipeline.execution.protocol.build_handlers` and is
+    ignored when ``adapter`` is ``None``.
     """
 
     def create_run(args: List[str]) -> Any:
@@ -170,7 +203,7 @@ def build_commands(store: ExecutionStore) -> Dict[str, Command]:
         digest = compute_status(store, run_id, **kwargs)
         return digest.to_dict()
 
-    return {
+    commands: Dict[str, Command] = {
         "create-run": Command(name="create-run", handler=create_run, help="Create a run."),
         "register-units": Command(
             name="register-units", handler=register_units, help="Register pending units."
@@ -183,6 +216,35 @@ def build_commands(store: ExecutionStore) -> Dict[str, Command]:
         "clear-halt": Command(name="clear-halt", handler=clear_halt, help="Clear a run's halt."),
         "status": Command(name="status", handler=status, help="Bounded run-status digest."),
     }
+
+    if adapter is not None:
+        # Deferred import: only the "protocol" command needs `execution.protocol`
+        # (and, transitively, `execution.adapter`, `llm.platform`,
+        # `pipeline.single_pass`) -- a caller with no adapter (the
+        # A-min.1/A-min.2 store-only shape) never pays for that import.
+        from content_pipeline.execution.protocol import build_handlers, dispatch as protocol_dispatch
+
+        handlers = build_handlers(store, adapter, **protocol_policy)
+
+        def protocol(args: List[str]) -> Any:
+            positional, _flags = _split_flags(args)
+            envelope_text = _require(positional, 0, "envelope (JSON)")
+            try:
+                envelope = json.loads(envelope_text)
+            except json.JSONDecodeError as exc:
+                return {
+                    "ok": False,
+                    "error": {"type": "MalformedEnvelopeError", "message": f"invalid JSON: {exc}"},
+                }
+            return protocol_dispatch(envelope, handlers)
+
+        commands["protocol"] = Command(
+            name="protocol",
+            handler=protocol,
+            help="Dispatch one JSON worker-protocol envelope (execution.protocol).",
+        )
+
+    return commands
 
 
 __all__ = ["build_commands"]

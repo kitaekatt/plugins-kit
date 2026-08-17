@@ -22,31 +22,31 @@ response (``set_halt`` then return the triggering unit to ``PENDING``) shared
 by every driver, so a driver never re-derives it (see "Halt handling is a
 driver-shared helper" below).
 
-The ``RunAdapter``-shaped seam
--------------------------------
+The ``RunAdapter``-shaped seam -- now widened in ``execution.adapter`` (A-min.3)
+---------------------------------------------------------------------------------
 
-:class:`RunAdapter` here is a **local, minimal** dataclass of callables -- NOT
-the versioned JSON worker protocol A-min.3 ships (``execution/adapter.py`` /
-``execution/protocol.py`` do not exist yet; do not build them here). It is the
-one object that carries a consumer's full contract with both
-:func:`~content_pipeline.execution.drivers.inline.run_wave` (production:
-``unit_for``, ``system_for``, ``user_for``, ``parse_fn``, ``validators``) and
-:func:`finalize_run` (``parse_fn``, ``apply``, ``reconcile``) -- ``parse_fn``
-is a single field shared by both call sites, not two independently-supplied
+:class:`RunAdapter` used to be defined HERE as a "local, minimal" dataclass of
+callables, ahead of the versioned JSON worker protocol A-min.3 ships. As of
+A-min.3 it lives in :mod:`content_pipeline.execution.adapter` -- widened in
+place with the two responsibilities this module's docstring used to call
+"still absent" (a first-class ``build_request`` step and a typed
+``ValidationSpec`` via ``validation_spec_for``), plus ``adapter_version`` for
+D1's incompatible-resume refusal. This module imports and re-exports it
+unchanged, so every existing import (``from content_pipeline.execution.controller
+import RunAdapter``) and every existing call site --
+:func:`~content_pipeline.execution.drivers.inline.run_wave` (``unit_for``,
+``system_for``, ``user_for``, ``parse_fn``, ``validators``) and
+:func:`finalize_run` (``parse_fn``, ``apply``, ``reconcile``) -- keeps working
+with no signature change, exactly as that module's own docstring promised
+("widenings -- new fields, not signature changes"). ``parse_fn`` remains a
+single field shared by both call sites, not two independently-supplied
 copies, which is what makes D1's "finalize re-parses with the SAME function
 the driver submitted under" requirement hold BY CONSTRUCTION rather than by
 the caller remembering to pass the same callable twice (see
-``drivers/inline.py``'s module docstring, "The adapter is one object").
-
-Of A-min.3's five documented ``RunAdapter`` responsibilities (plan of record,
-phase A-min.3: reconstruct unit by ID, build a prepared request, provide the
-``ValidationSpec``, apply a payload, optionally reconcile), this local seam
-covers "reconstruct unit by ID" (``unit_for``) and "apply a payload"
-(``parse_fn`` + ``apply``, with ``reconcile`` for the ``apply_unknown`` case).
-Still absent: a first-class "build a prepared request" step (today split
-across ``system_for``/``user_for``, not a single request object) and a typed
-``ValidationSpec`` field (today ``validators``, a bare sequence). Both are
-widenings -- new fields, not signature changes -- when A-min.3 lands.
+``drivers/inline.py``'s module docstring, "The adapter is one object", and
+``execution/adapter.py``'s module docstring for the full five-responsibility
+mapping and the new ``execution/protocol.py`` mountable-handler layer built
+on top of it).
 
 ``parse_fn`` MUST be deterministic and store-independent for tracked runs:
 finalize re-runs it on text recorded at submit time, potentially long after
@@ -127,10 +127,10 @@ sensibly instead of hashing indistinguishable text, and so a reader of
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from itertools import zip_longest
 from typing import Any, Callable, List, Optional, Sequence
 
+from content_pipeline.execution.adapter import RunAdapter
 from content_pipeline.execution.model import (
     AttemptKind,
     AttemptRecord,
@@ -146,17 +146,9 @@ from content_pipeline.freshness.classify import FreshnessState, needs_generation
 from content_pipeline.llm.platform import HaltError
 from content_pipeline.pipeline.single_pass import Gate, run_gates
 from content_pipeline.pipeline.workunit import WorkUnit, WorkUnitStrategy
-from content_pipeline.validate import contract
 
 DEFAULT_PREPARE_WORKER_ID = "prepare"
 DEFAULT_FINALIZE_WORKER_ID = "finalize"
-
-
-def _default_unit_for(unit_id: str) -> WorkUnit:
-    """The ``RunAdapter.unit_for`` default: a bare ``WorkUnit`` carrying only
-    the id, no payload or context -- sufficient for a ``generate`` callable
-    that needs neither."""
-    return WorkUnit(id=unit_id)
 
 
 class ApplyUnknownError(ExecutionError):
@@ -265,56 +257,6 @@ class UnappliedPredecessorError(ExecutionError):
         )
 
 
-@dataclass
-class RunAdapter:
-    """The local, minimal seam :func:`~content_pipeline.execution.drivers.inline.run_wave`
-    and :func:`finalize_run` both call through -- see the module docstring's
-    "The ``RunAdapter``-shaped seam" section for which A-min.3 responsibility
-    each field covers and which are still absent.
-
-    Production fields (consumed by ``drivers.inline.run_wave``):
-
-    - ``unit_for`` -- ``unit_id -> WorkUnit``. Reconstructs the work unit a
-      driver claimed, by id. Defaults to a bare ``WorkUnit(id=unit_id)``, the
-      right shape for a ``generate`` callable that needs neither payload nor
-      context.
-    - ``system_for`` / ``user_for`` -- optional ``WorkUnit -> str``. Build the
-      backend-path prompt; ``user_for`` is required (and ``system_for``
-      defaults to an empty system prompt) whenever ``run_wave`` is given a
-      ``backend`` rather than a plain ``generate`` callable.
-    - ``validators`` -- passed straight through to ``submit_validated``'s
-      validate-until-valid loop.
-
-    Finalize fields (consumed by :func:`finalize_run`):
-
-    - ``parse_fn`` -- ``text -> payload``. Called mechanically on the durably
-      recorded ``accepted_text``; never re-validates (D1). THE SAME callable
-      a ``backend``-path ``run_wave`` call submitted under, by construction --
-      not a second, independently-supplied copy (D1's re-parse requirement).
-    - ``apply`` -- ``(unit_id, payload) -> None``. The consumer's delivery
-      side effect (e.g. a ``deliver.*`` write).
-    - ``reconcile`` -- optional ``unit_id -> bool``. Answers "did this
-      unit's apply already land" for a unit found ``apply_unknown``. Absent
-      means finalize refuses to proceed past any ``apply_unknown`` unit
-      (D6, fail closed).
-
-    Every field defaults so a consumer exercising only one of the two call
-    sites (e.g. a ``generate``-only ``run_wave`` call that never finalizes)
-    supplies only what it uses; a call site that actually needs a field it
-    was not given fails at the point of use (a ``None`` called as a function,
-    or ``run_wave``'s own explicit ``ValueError`` for the backend path's
-    required ``user_for``/``parse_fn``), not at construction time.
-    """
-
-    unit_for: Callable[[str], WorkUnit] = _default_unit_for
-    system_for: Optional[Callable[[WorkUnit], str]] = None
-    user_for: Optional[Callable[[WorkUnit], str]] = None
-    parse_fn: Optional[Callable[[str], Any]] = None
-    validators: Sequence[contract.Validator] = field(default_factory=tuple)
-    apply: Optional[Callable[[str, Any], None]] = None
-    reconcile: Optional[Callable[[str], bool]] = None
-
-
 # ---------------------------------------------------------------------------
 # prepare_run
 # ---------------------------------------------------------------------------
@@ -368,12 +310,38 @@ def _validate_no_unapplied_accepted(
     not yet succeeded -- see :class:`UnappliedPredecessorError` and the "why"
     note on :func:`prepare_run`. Derives applied-ness from
     ``store.list_attempts`` (invariant 3: never stored directly), the same
-    way :func:`finalize_run` does via :func:`_last_apply_kind`."""
-    for unit in store.list_units(run_id):
+    way :func:`finalize_run` does via :func:`_last_apply_kind`.
+
+    Reads ``units`` and ``attempts`` together via :meth:`ExecutionStore.snapshot`
+    (one read transaction) rather than a separate ``list_units`` call
+    followed by one ``list_attempts`` call per ACCEPTED unit -- the latter
+    shape let a peer process's write land BETWEEN this function's own reads
+    and be seen by one but not the other (e.g. a unit observed ACCEPTED here
+    whose APPLY_SUCCEEDED attempt was recorded a moment later, read anyway
+    because the two queries ran on different connections at different
+    times). ``snapshot`` closes that particular tear.
+
+    NOT closed by this alone, and out of scope for this function to close:
+    the window between this call returning and the caller's SUBSEQUENT
+    :func:`~content_pipeline.execution.wave.ready_wave` call, which opens
+    its OWN fresh connection and can observe a peer's ``accept_unit`` that
+    lands after this snapshot but before it runs. Closing that would require
+    either a transaction spanning both calls (a `prepare_run` restructuring
+    that changes its transaction/locking shape for every caller, including
+    A-min.2's) or a `wave.py` signature change to accept a pre-fetched
+    snapshot (`wave.py` is frozen for A-min.3). Flagged for a dedicated
+    review round rather than narrowed unilaterally here (2026-08-17 grok-4.6
+    review of 8fff1cc, tracked alongside the "second unguarded door" in
+    ``ready_wave`` itself).
+    """
+    _run, units, attempts = store.snapshot(run_id)
+    attempts_by_unit: dict = {}
+    for a in attempts:
+        attempts_by_unit.setdefault(a.unit_id, []).append(a)
+    for unit in units:
         if unit.state is not UnitState.ACCEPTED:
             continue
-        attempts = store.list_attempts(run_id, unit.unit_id)
-        if _last_apply_kind(attempts) is not AttemptKind.APPLY_SUCCEEDED:
+        if _last_apply_kind(attempts_by_unit.get(unit.unit_id, [])) is not AttemptKind.APPLY_SUCCEEDED:
             raise UnappliedPredecessorError(run_id, unit.unit_id)
 
 
