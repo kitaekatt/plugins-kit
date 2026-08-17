@@ -267,6 +267,39 @@ content_allocation:
           why: skill invocation is conditional on the trigger firing; common errors must be reachable on every session that could hit them. Gating a common error behind a skill creates a load-graph dependency on a trigger that may not fire.
           test: scan CLAUDE.md content for "for X, invoke /Y skill" pointers; for each, judge whether the underlying fact is a common agent error. If it is, the fact (or at least its trigger fingerprint) must be inline in CLAUDE.md.
 
+    - id: shallowest_true_depth
+      principle: Shallowest true depth -- hoist only as far as the wording stays true
+      placement_question: "Across a tree of CLAUDE.md files, what is the shallowest directory at which this fact is true of everything below it?"
+      placement_rule: "A fact lives at the shallowest directory where it is true of everything below it, and no shallower. This is CRP applied across a TREE of documents rather than to a single scope, and it is the depth authority for parent composition in lanes/generation-lane.md."
+      bubble_test: |
+        Hoist: a fact stated in a child's document moves to the common ancestor when it
+        can be WORDED so it is true as stated of everything below that ancestor.
+        Stay: if no such wording exists short of an exception list, it stays in the children.
+      worked_examples:
+        - fact: "tool scripts and stack-trace parsers both resolve paths through the shared resolver"
+          stated_in: one child directory's CLAUDE.md
+          correct: the common parent, reworded to name both subjects explicitly
+          wrong: leaving it in the one child (it governs the sibling too)
+        - fact: "this directory mirrors ../generated and the two must change together"
+          stated_in: one mirrored child
+          correct: stays in the child -- an honest parent-level wording would enumerate every non-mirrored sibling as an exception
+          wrong: hoisting it to the parent, where it becomes ambient for directories that touch neither side of the sync
+      audit_violations:
+        - name: fact hoisted past the depth its wording supports
+          test: read the hoisted sentence at its new home and ask whether it is true of every directory below it. If it needs an unstated exception list, it hoisted too far.
+        - name: fact stranded in one child though true of every sibling
+          test: a fact true of everything below the parent belongs at the parent even if only one child noticed it. Repetition is not required to trigger a hoist.
+        - name: destination nominated from below
+          test: a per-directory assessment naming a destination above itself. It read only its own directory, so it cannot know the fact holds of code it never opened; `fact-scoped-to-this-directory` in standards/coverage-standards.md forbids it.
+      note_on_wording: |
+        WORDING IS THE ONLY TEST; there is no separate repetition trigger. A fact stated
+        by one child may hoist, and a fact stated by many may not. The failure direction
+        it guards is real: a fact stated by 2 of 20 children and hoisted verbatim becomes
+        ambient for 18 directories it does not govern. The fix is to name the subjects
+        explicitly, so scope lives in the SENTENCE rather than in a separate mechanism.
+        The judgment happens at the PARENT, comparing documents it has actually read --
+        never nominated from below.
+
   placement_algorithm:
     description: |
       When placing a new fact, apply the principles in this order. CCP narrows by

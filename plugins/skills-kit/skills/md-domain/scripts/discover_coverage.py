@@ -45,11 +45,11 @@ belongs to the assessment step, not here.
 
 Every exclusion is RECORDED and reported, never silently applied.
 
-This module also hosts `walk_tree`, a RECURSIVE tree-descent primitive shared
-by discover_hierarchy.py and discover_composition.py. It is never used to
-build a coverage subject -- `walk_directory` above stays the non-recursive
-unit this module's own subject is defined over. `walk_tree` lives here rather
-than in either consumer because it descends using the same structural
+This module also hosts `walk_tree`, a RECURSIVE tree-descent primitive used by
+discover_composition.py. It is never used to build a coverage subject --
+`walk_directory` above stays the non-recursive unit this module's own subject
+is defined over. `walk_tree` lives here rather than in its consumer because it
+descends using the same structural
 exclusions this module owns (`_skip_reason`, `NOISE_DIR_NAMES`,
 `SKIP_NESTED_REPO`, `MAX_DEPTH`), the same precedent `MAX_DEPTH` already set
 before this move: one home for a shared constant or primitive, so the verbs
@@ -143,9 +143,9 @@ EXTENSIONLESS_NON_CODE = {
 }
 
 # Depth ceiling for the RECURSIVE walk (`walk_tree`, below). `walk_directory`
-# above is one level deep and never consults it; discover_hierarchy.py and
-# discover_composition.py import `walk_tree` from here so all three verbs
-# cannot disagree about how deep a tree is read.
+# above is one level deep and never consults it; discover_composition.py
+# imports `walk_tree` from here so the two callers cannot disagree about how
+# deep a tree is read.
 MAX_DEPTH = 12
 
 # Skip reasons, reported verbatim.
@@ -296,9 +296,9 @@ def walk_tree(root: Path) -> tuple[list[Path], list[Path], list[dict], int]:
     RECURSIVE, unlike `walk_directory` above -- and that is deliberate rather
     than a relapse into the retired recursive-subject model. This primitive
     answers a different question than a coverage subject does: "does at least
-    one code file exist at or beneath this directory", which two callers need
-    (the hierarchy verb's leaf enumeration, and the composition subject set in
-    `discover_composition.py`) and neither of which is a coverage subject. A
+    one code file exist at or beneath this directory", which the composition
+    subject set in `discover_composition.py` needs and which is not itself a
+    coverage subject. A
     coverage subject stays exactly `walk_directory`'s non-recursive unit; this
     function is never used to build one -- see the module docstring's first
     bullet.
@@ -406,7 +406,7 @@ def root_exclusion(root: Path) -> str | None:
     asked for it), but it is always REPORTED; a root derived from a diff is
     filtered before it gets here.
 
-    Deliberately NAME-ONLY, and imported as such by discover_hierarchy.py: it
+    Deliberately NAME-ONLY: it
     runs no subprocess and touches no VCS. The ignored-root case is decided in
     build_subject, where an ignore query is already being spent on the
     directory's entries.

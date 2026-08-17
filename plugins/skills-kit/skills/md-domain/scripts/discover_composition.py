@@ -24,8 +24,8 @@ children belong. Two different subject sets, never to be conflated:
 
 This is the PRODUCER for the composition rule: a cheap EXISTENCE check down
 each subtree, never a re-read of it. It is pure path arithmetic over one
-recursive walk (`discover_coverage.walk_tree`, shared with
-discover_hierarchy.py): the walk returns the leaves (directories directly
+recursive walk (`discover_coverage.walk_tree`): the walk returns the leaves
+(directories directly
 holding code), and the composition set is those leaves plus every one of
 their ancestors up to the named root. No second filesystem pass.
 

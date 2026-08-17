@@ -8,7 +8,7 @@ discover_coverage.py), and conflating the two sets is the bug the plan calls
 out by name.
 
 `discover_composition.py` is pure path arithmetic over one recursive walk
-(`discover_coverage.walk_tree`, shared with discover_hierarchy.py): the walk
+(`discover_coverage.walk_tree`): the walk
 returns the leaves (directories directly holding code) and the composition set
 is those leaves plus every one of their ancestors up to the named root. These
 tests pin:
@@ -19,7 +19,7 @@ tests pin:
   * a subtree with no code anywhere is neither;
   * VCS-ignored code does not pull its ancestors into the composition set --
     this is the regression test for the defect fixed while moving `walk_tree`
-    (discover_hierarchy.py's copy never consulted `ignored_paths` at all);
+    (the pre-move copy never consulted `ignored_paths` at all);
   * an ignored directory is itself excluded, even when it directly holds code;
   * the rule is FILESYSTEM-defined, not defined over any generation output --
     a parent is a composition subject regardless of what its children would
@@ -42,7 +42,6 @@ SCRIPTS_DIR = (
     REPO_ROOT / "plugins" / "skills-kit" / "skills" / "md-domain" / "scripts"
 )
 COVERAGE_PATH = SCRIPTS_DIR / "discover_coverage.py"
-HIERARCHY_PATH = SCRIPTS_DIR / "discover_hierarchy.py"
 COMPOSITION_PATH = SCRIPTS_DIR / "discover_composition.py"
 VCS_IGNORE_PATH = SCRIPTS_DIR / "vcs_ignore.py"
 
@@ -56,7 +55,6 @@ def _load(name: str, path: Path):
 
 cov = _load("comp_discover_coverage", COVERAGE_PATH)
 vcs = _load("comp_discover_vcs_ignore", VCS_IGNORE_PATH)
-hier = _load("comp_discover_hierarchy", HIERARCHY_PATH)
 comp = _load("comp_discover_composition", COMPOSITION_PATH)
 
 
@@ -190,7 +188,7 @@ class TestCoverageVsCompositionSubjectSets:
 
 class TestVcsIgnoreExcludesFromComposition:
     """The regression coverage for the defect fixed while moving `walk_tree`:
-    discover_hierarchy.py's original copy never consulted `ignored_paths` at
+    the original pre-move copy never consulted `ignored_paths` at
     all, so code inside an ignored directory could pull its ancestors into
     scope. `walk_tree` now applies the project's VCS ignore rules DURING the
     descent, which prunes an ignored subtree before it is entered.
@@ -382,10 +380,10 @@ class TestCli:
         assert "NONE" in result.stdout
 
 
-class TestHierarchyStillWorksAfterTheMove:
-    """discover_hierarchy.py no longer defines its own `walk_tree`; it imports
-    the one now living in discover_coverage.py. Its leaf-enumeration contract
-    must be unchanged.
+class TestWalkTreeStillWorksAfterTheMove:
+    """`walk_tree` is no longer defined in a caller's own copy; it lives in
+    discover_coverage.py and is imported from there. Its leaf-enumeration
+    contract must be unchanged.
     """
 
     def test_leaf_enumeration_reaches_every_depth(self, tmp_path):
@@ -396,21 +394,20 @@ class TestHierarchyStillWorksAfterTheMove:
         _write(root / "ui" / "panel.js")
         _write(root / "docs" / "notes.md")
 
-        leaves, _, _, _ = hier.walk_tree(root)
+        leaves, _, _, _ = cov.walk_tree(root)
 
         assert {Path(p).name for p in leaves} == {"repo", "engine", "solver", "ui"}
 
-    def test_hierarchy_walk_tree_now_also_applies_vcs_ignore(self, git_repo):
-        """The defect fix reaches discover_hierarchy.py too, since it imports
-        the same primitive: an ignored directory's code must not produce a
-        leaf there either.
+    def test_walk_tree_now_also_applies_vcs_ignore(self, git_repo):
+        """The defect fix lives in the shared primitive: an ignored directory's
+        code must not produce a leaf.
         """
         _write(git_repo / ".gitignore", "build/\n")
         _write(git_repo / "engine" / "build" / "generated.c")
         _git(git_repo, "add", "-A")
         _git(git_repo, "commit", "-qm", "add gitignore")
 
-        leaves, _, _, _ = hier.walk_tree(git_repo)
+        leaves, _, _, _ = cov.walk_tree(git_repo)
 
         assert str(git_repo / "engine" / "build") not in [str(p) for p in leaves]
         assert str(git_repo / "engine") not in [str(p) for p in leaves]

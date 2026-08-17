@@ -230,8 +230,8 @@ claude_md:
         the registration/go-live pairing above.
       added: "2026-08-08"
     - id: hierarchy_is_the_resolution_phase_over_a_tree
-      keywords: [hierarchy verb, claude_md_tree, placement resolution, tree unit, report only, INPUTS-INCOMPLETE, computed verdict, sibling blindness, depth invisible per leaf, one home per fact, opt-in phase]
-      summary: The hierarchy lane's subject is a TREE, and its verdicts are COMPUTED from an inventory the lane builds itself. It is the resolution phase between coverage (discovery) and generation (writing) -- not a fourth peer verb, not a coverage flag, and not an audit lane.
+      keywords: [hierarchy verb, claude_md_tree, placement resolution, tree unit, report only, INPUTS-INCOMPLETE, computed verdict, sibling blindness, depth invisible per leaf, one home per fact, opt-in phase, RETIRED, lane deleted, shallowest_true_depth re-homed, provenance only]
+      summary: "RETIRED 2026-08-17 -- the lane, its two reference documents, its discover script, its workflow and its contract test are deleted; this record is provenance only. Both justifications for a tree-scale unit are supplied by parent composition in generation-lane.md. `shallowest-true-depth` survived the delete, re-homed into cohesion-principles.md."
       detail: |
         WHY A NEW UNIT RATHER THAN A WIDER SELECTOR. Two properties of the
         existing lanes force it, and both are correct behaviour rather than
@@ -311,12 +311,34 @@ claude_md:
         computed from an inventory the pass builds itself rather than asserted,
         and a plan spanning an ordering constraint must still be presented rather
         than applied.
-        STATUS: the lane ships but its criteria describe the retired model. It is
-        redundant rather than reducible -- do not narrow it to a
-        "repetition detector", because the parent already observes repetition
-        among its own children. Retiring it versus leaving it dormant is a
-        cosmetic call that gates nothing; the hazard while it remains is a caller
-        getting a confident answer built on retired assumptions.
+        STATUS: RETIRED 2026-08-17, by owner decision after reviewing the evidence
+        above. Deleted: the lane record, the dispatch row, the greeting entry, the
+        argument grammar (`hierarchy` verb, `--reports`), the `claude_md_tree`
+        composition in audit-framework.yaml, both reference documents
+        (hierarchy-standards.md, hierarchy-lane.md), scripts/discover_hierarchy.py,
+        workflow/hierarchy-detect.js, and tests/skills-kit/test_hierarchy_lane_contract.py.
+        The earlier reading -- "retiring it versus leaving it dormant is a cosmetic
+        call that gates nothing" -- was overtaken by a front-door rewrite. Once the
+        greeting is rebuilt around the surviving verbs, a lane whose criteria
+        describe a retired model stops being dormant and becomes reachable, so the
+        hazard this record already named (a caller getting a confident answer built
+        on retired assumptions) turns live rather than latent.
+        CARRIED OUT BEFORE THE DELETE, and not to be lost again:
+          - `shallowest-true-depth` (HR-2), the one criterion hierarchy-standards.md
+            itself said "remains sound IN SUBSTANCE", is re-homed as
+            `shallowest_true_depth` in references/cohesion-principles.md under
+            `principles_applied_to_placement`, carrying the wording test and the
+            never-nominated-from-below rule. generation-lane.md's parent-composition
+            step cites it there; it previously cited hierarchy-standards.md:78-92,
+            which would have become a dangling reference.
+          - The computed-verdict discipline and the report-only entry point are
+            sound independent of the retired model. They live on in the coverage
+            lane (DISCOVERY-FAILED computed from a self-built inventory) and must
+            not be regressed.
+        NOT deleted: `walk_tree`. It lives in discover_coverage.py and
+        discover_composition.py still consumes it; only discover_hierarchy.py's
+        consumption went away. The two test classes that exercised it through the
+        hierarchy module were re-pointed at discover_coverage.py rather than dropped.
       origin: |
         Surface: tree-scale CLAUDE.md work was being done by hand-rolled merge
         plans, with the depth and de-duplication judgments living in a

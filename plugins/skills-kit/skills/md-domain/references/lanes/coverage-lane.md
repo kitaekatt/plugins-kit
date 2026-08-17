@@ -319,8 +319,8 @@ name.**
 
 `--json` emits the report as structured JSON: one or more subjects, each with a
 `root` and a `candidates` list. Writing those to a caller-chosen directory is
-what makes a set of per-directory runs into an input for a tree-scale resolution
-(`hierarchy-lane.md`). There is no registry and no state directory: the report
+what lets a set of per-directory runs be handed to generation later rather than
+consumed immediately. There is no registry and no state directory: the report
 this lane already emits IS the durable representation, and where it lives is
 the caller's choice.
 

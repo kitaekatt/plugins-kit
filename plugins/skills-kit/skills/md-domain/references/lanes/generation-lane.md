@@ -140,9 +140,9 @@ actually been read. It is never nominated from below: an assessment that read on
 its own directory cannot know whether the fact holds of code it never opened, and
 `fact-scoped-to-this-directory` forbids it proposing a destination anywhere else
 (`../standards/coverage-standards.md:103-119`). Depth itself is
-`shallowest-true-depth` -- the shallowest directory where the fact is true of
-everything below it, and no shallower
-(`../standards/hierarchy-standards.md:78-92`).
+`shallowest_true_depth` -- the shallowest directory where the fact is true of
+everything below it, and no shallower -- in `../cohesion-principles.md`,
+under `principles_applied_to_placement`.
 
 **WORDING is the only test; there is no separate repetition trigger.** A fact
 found in a single child's document may hoist, provided it passes the test below.

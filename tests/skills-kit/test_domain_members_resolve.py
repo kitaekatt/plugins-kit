@@ -74,11 +74,6 @@ EXPECTED_LANES = {
         # own direct code files, never a subtree.
         "table_key": "coverage (one directory)",
     },
-    "hierarchy_claude_md_tree": {
-        "verb": "hierarchy",
-        "subject": "claude_md_tree",
-        "table_key": "hierarchy (claude_md_tree)",
-    },
 }
 
 # Lane-record keys whose value is a path relative to the md-domain skill dir.

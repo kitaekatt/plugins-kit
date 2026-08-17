@@ -39,7 +39,6 @@ SCRIPTS_DIR = (
     REPO_ROOT / "plugins" / "skills-kit" / "skills" / "md-domain" / "scripts"
 )
 DISCOVER_PATH = SCRIPTS_DIR / "discover_coverage.py"
-HIERARCHY_PATH = SCRIPTS_DIR / "discover_hierarchy.py"
 VCS_IGNORE_PATH = SCRIPTS_DIR / "vcs_ignore.py"
 
 
@@ -52,7 +51,6 @@ def _load(name: str, path: Path):
 
 cov = _load("cov_discover", DISCOVER_PATH)
 vcs = _load("cov_vcs_ignore", VCS_IGNORE_PATH)
-hier = _load("cov_hier_discover", HIERARCHY_PATH)
 
 
 def _write(path: Path, text: str = "x\n") -> None:
@@ -873,11 +871,11 @@ class TestIgnoredPathsShapeTheSubject:
         assert subject["skipped"] == []
 
 
-class TestHierarchyStillRecurses:
-    """discover_hierarchy.py imports the shared exclusions from
-    discover_coverage.py but has its OWN walk, and that walk MUST keep
-    recursing: its job is to enumerate every code-bearing directory in a tree.
-    Making the coverage subject non-recursive must not reach it.
+class TestWalkTreeStillRecurses:
+    """`walk_tree` is the RECURSIVE primitive discover_composition.py consumes,
+    and it MUST keep recursing: its job is to enumerate every code-bearing
+    directory in a tree. Making the coverage SUBJECT non-recursive
+    (`walk_directory`) must not reach it.
     """
 
     def _tree(self, tmp_path):
@@ -892,15 +890,15 @@ class TestHierarchyStillRecurses:
     def test_leaf_enumeration_reaches_every_depth(self, tmp_path):
         root = self._tree(tmp_path)
 
-        leaves, _, _, _ = hier.walk_tree(root)
+        leaves, _, _, _ = cov.walk_tree(root)
 
         assert {Path(p).name for p in leaves} == {"repo", "engine", "solver", "ui"}
 
-    def test_coverage_and_hierarchy_now_disagree_on_purpose(self, tmp_path):
-        """The contrast IS the fix: one unit is a directory, the other a tree."""
+    def test_walk_tree_and_walk_directory_disagree_on_purpose(self, tmp_path):
+        """The contrast IS the fix: one unit is a tree, the other a directory."""
         root = self._tree(tmp_path)
 
-        leaves, _, _, _ = hier.walk_tree(root)
+        leaves, _, _, _ = cov.walk_tree(root)
         code_files, _, _, _ = cov.walk_directory(root)
 
         assert len(leaves) == 4

@@ -556,9 +556,9 @@ const APPLY_SCHEMA = {
 
 // ---------------------------------------------------------------------------
 // Wave computation. Derived HERE from the subject set rather than taken from the
-// caller, for the same reason discover_hierarchy.py enumerates its own leaves: a
-// caller-supplied ordering cannot notice what the caller already forgot, and the
-// ordering is the one thing whose violation is invisible in the output.
+// caller: a caller-supplied ordering cannot notice what the caller already
+// forgot, and the ordering is the one thing whose violation is invisible in the
+// output.
 // ---------------------------------------------------------------------------
 const norm = (p) => String(p).replace(/\\/g, '/').replace(/\/+$/, '')
 const subjectRoots = subjects.map((s) => norm(s.root))
