@@ -451,10 +451,30 @@ route billing away from the subscription pool); bounded dispatch with at most N
 occupied slots; launcher election via a run-level lease so an accidental second
 dispatcher exits without launching; session-ID reconciliation from
 `claude agents --json` built **schema-tolerant** -- unknown fields ignored,
-required fields (`id`, session identity, state) validated loudly, because the
-JSON schema was never read verbatim; lease renewal per D5; typed failure mapping
-reusing `classify_halt_text` markers against `claude logs`; pause/resume. Worker
-assets: `agents/pipeline-worker.md` and `skills/execute-work-unit/SKILL.md` --
+required fields validated loudly. Per P4 the reconciler **filters
+`kind == "background"` first** (the listing includes interactive sessions,
+including the orchestrator's own) and then requires `kind`, `id`, `sessionId`,
+`state`; `pid` and `status` belong to interactive records and must never be
+required of a worker. Settled workers are visible only under `--all`, and
+`startedAt` is epoch milliseconds. Lease renewal per D5; typed failure mapping
+reusing `classify_halt_text` markers; pause/resume. Two corrections that follow
+from the 2026-08-17 probe and are load-bearing rather than cosmetic: command
+construction uses the **top-level** verbs `claude stop|logs|rm|respawn <id>`,
+never `claude agents <verb> <id>`, which exits 0 having done nothing (P3), so the
+preflight asserts each verb behaves rather than trusting an undocumented surface;
+and `claude logs <id>` is a **live-daemon-only** channel (it fails with
+`connect ENOENT \\.\pipe\cc-daemon-*-control` once the daemon has exited), so
+halt-text classification for a settled unit reads the session transcript or the
+per-job state, not `claude logs`. Per P11 the launcher's exit code and banner are
+never evidence a worker started: every dispatch is confirmed by polling
+`agents --json` for a transition out of the initial state, and a `failed` within
+the first seconds is classified as launch misconfiguration rather than work
+failure. `~/.claude/jobs/<id>/state.json` (carrying `needs`, `detail`,
+`output.result`, `tokens`) and `~/.claude/daemon.log` are richer than
+`agents --json` but are undocumented internal state; they may be read as
+**optional enrichment behind a tolerant parse**, never as the required surface.
+Worker assets: `agents/pipeline-worker.md` and
+`skills/execute-work-unit/SKILL.md` --
 one agent claims one unit, reads its prepared request through the consumer
 command, produces an answer, submits through the same command, revises from
 compact rejection feedback until accepted or exhausted, and exits. The launch
@@ -467,12 +487,17 @@ interactive quota versus maximizing throughput is a genuine power-user
 preference. Storage engine, fresh-per-unit contexts, and single-dispatcher
 election are correctness decisions and earn no settings.
 
-**How the supervisor learns quota** (settled, because there is no supported
-programmatic API for session-pool remaining capacity): the batch-boundary
-decision is made from (a) the bounded status digest, and (b) whatever the live
-orchestrating session can observe -- `/usage` or status-line rate-limit data
-when available to it. The **fallback, which is also the guaranteed-correct
-path, is reactive**: a rate-limit halt classified from a worker failure sets
+**How the supervisor learns quota** (settled; there is no programmatic API for
+session-pool remaining capacity, but per P9 there is an observable): the
+batch-boundary decision is made from (a) the bounded status digest, and (b)
+whatever the live orchestrating session can observe -- `/usage`, or the
+status-line rate-limit snapshot claude-ui-kit mirrors to
+`~/.claude/plugins/data/plugins-kit/claude-ui-kit/rate-limits.json`, which is a
+documented file contract rather than an import edge. That snapshot is
+whole-percent granular and refreshes only while an interactive session renders a
+statusline, so it is coarse foresight, not a meter a driver can steer by. The
+**fallback, which is also the guaranteed-correct path, is reactive**: a
+rate-limit halt classified from a worker failure sets
 the run halt, in-flight work settles under D4, and the run parks durably as
 "resume when replenished". Quota foresight is an optimization; the halt path is
 the contract.
@@ -481,10 +506,13 @@ the contract.
 `skills/content-pipeline-domain/references/`, exports, docs. llm-scripting-kit
 changes only if B2 disproves its billing comments.
 
-**Tests.** Fake `claude` executable: command construction; launch parsing;
-agents-JSON reconciliation including unknown-field tolerance and
-missing-required-field loudness; session-ID-not-PID identity; strict N;
-duplicate-launch suppression; blocked/missing/stopped/done-without-submit
+**Tests.** Fake `claude` executable: command construction, including that the
+lifecycle verbs are emitted top-level and never as `claude agents <verb>`; launch
+parsing; a launcher that exits 0 on a doomed dispatch, proving the driver waits
+for an observed state transition; agents-JSON reconciliation including
+`kind`-filtering an interactive record out of the listing, unknown-field
+tolerance, and missing-required-field loudness; session-ID-not-PID identity;
+strict N; duplicate-launch suppression; blocked/missing/stopped/done-without-submit
 states; expiry and reclaim; fenced late submission recorded as superseded;
 post-halt valid-fence acceptance; failure classification; no unit content in
 argv. No automated test consumes live quota.
@@ -502,28 +530,56 @@ published as working before B2 passes**.
 No planned architecture; narrowly scoped fixes and recorded public constraints
 only. Named pass/fail items:
 
-1. **Capacity classification probe (make-or-break).** Confirm live that `--bg`
-   work draws the session pool and not the headless allowance -- by observing
-   pool consumption via `/usage`/status-line across a controlled batch, or by
-   running a batch after the headless allowance is exhausted and observing it
-   proceed un-metered. Fail = the premise is wrong and B does not ship; the
-   plan returns to the user with the evidence.
-2. **Permission-mode behavior (make-or-break, with fallback).** A `--bg`
-   session is interactive-supervised, not `-p --permission-mode
-   bypassPermissions`. Establish whether `--bg` accepts a permission-mode flag
-   or inherits project `settings.json` allowlists. If workers can hit a
-   permission prompt with nobody attached, they sit `blocked` until lease
-   expiry -- and since all workers run the same consumer commands, the whole
-   lane stalls the same way. **Fallback design, shipped as documented consumer
-   setup:** a pre-authorized allowlist covering the consumer command
-   invocations the worker performs, verified by a single-unit probe before any
-   batch.
-3. **Worker registration.** Do background sessions load plugin agents/skills;
-   does the launch mechanism deliver the worker persona (agent selection,
-   `--append-system-prompt-file` or equivalent); what exactly is in the launch
-   prompt.
-4. **Verbatim `agents --json` schema** on supported platforms; adjust the
-   reconciler's required-field list to what is actually stable.
+1. **Capacity classification probe (make-or-break). Open, and the only item
+   still needing a quota spend.** Confirm live that `--bg` work draws the
+   session pool and not the headless allowance. A measurement method exists as
+   of the 2026-08-17 probe (P9) and did not before: read
+   `~/.claude/plugins/data/plugins-kit/claude-ui-kit/rate-limits.json` from an
+   attended interactive session, run the batch, read again. The instrument is
+   whole-percent granular, so the batch must be large enough to move the
+   five-hour pool by several percentage points to clear granularity and ordinary
+   drift -- that is the cost, and there is no cheaper version of it. The
+   supervising interactive session must stay alive and active throughout,
+   because only a rendering statusline refreshes the file, and the comparison arm
+   (the same work under `-p`) needs a separate five-hour window with no other
+   heavy work in it, or the delta is not attributable. The cheaper alternative
+   formulation -- exhaust the headless allowance under `-p`, then run one `--bg`
+   unit and observe it proceed -- spends less but inherits P1, which rests only
+   on the user's observation. **The ask this item carries to the user is
+   authorization to spend a measurable batch across two clean windows.** Fail =
+   the premise is wrong and B does not ship; the plan returns to the user with
+   the evidence.
+2. **Permission-mode behavior (make-or-break, with fallback). Half settled.** A
+   `--bg` session is interactive-supervised, not `-p --permission-mode
+   bypassPermissions`. Settled 2026-08-17 (P5): `--permission-mode` exists with
+   its choice list and composes with `--bg`, and `claude agents` carries
+   permission and settings-source flags as dispatch defaults, so the fallback
+   below is buildable. Still open, and cheap: one `--bg` session launched with
+   the project's `settings.json` in force and **without** any bypass flag, given a
+   prompt running exactly one consumer-shaped command covered by
+   `permissions.allow`; pass = it completes, fail = `agents --json` shows
+   `state: "blocked"` with a permission question in the job's `needs`. P12 makes
+   the stakes concrete: a blocked session has been observed sitting 19 days with
+   nothing timing it out, so a stalled worker is held only by our own lease. This
+   is the highest information per unit of quota available and should run first.
+   **Fallback design, shipped as documented consumer setup:** a pre-authorized
+   allowlist covering the consumer command invocations the worker performs,
+   verified by that single-unit probe before any batch.
+3. **Worker registration. Settled, reduced to a composition check.** Both halves
+   confirmed 2026-08-17 (P6): background sessions load plugin skills, and
+   `--append-system-prompt-file` / `--system-prompt-file` / `--agent` / `--agents`
+   exist. What remains is verifying those flags actually compose with `--bg`
+   rather than being silently dropped -- and per P11 that must be judged by
+   observing the worker's behavior, not the launcher's exit code. Fold into the
+   item-2 single-unit probe. Still to be recorded either way: what exactly is in
+   the launch prompt.
+4. **Verbatim `agents --json` schema. Settled** as of 2026-08-17 (P4): the
+   `kind` discriminator, the two field sets, and the presence of interactive
+   records are read verbatim, and the reconciler's required-field list is fixed
+   to `kind`, `id`, `sessionId`, `state` behind a `kind == "background"` filter.
+   The residue is not a schema question but a stability one: the lifecycle verbs
+   (P3) are hidden from `--help`, which probing cannot settle, so B1's preflight
+   carries a version-drift check instead.
 5. Authentication-failure behavior, concurrency enforcement, and a full
    lifecycle: two live units, one validation rejection/revision, one deliberate
    worker kill and reclaim, pause/resume, and a status query from a fresh
@@ -620,22 +676,35 @@ Every Claude Code behavioral claim this plan depends on. None was verified by
 reading platform source; "docs" means code.claude.com documentation, in some
 cases read through a summarized fetch rather than verbatim.
 
+The `Established by` column distinguishes **direct observation** (a named command
+run on a named date, or a file read on this machine) from **documentation** and
+from **inference over an observation**. That distinction is the point of the
+table: several rows below were doc-derived, read as settled, and were refuted the
+first time anything was run. A read-only CLI probe on 2026-08-17 against Claude
+Code 2.1.233 (the plan was written against 2.1.232) exercised P3-P6 and P9 and
+surfaced P11-P12; it modified no repository file, and its three accidental
+trivial background sessions were stopped and removed. P2, the load-bearing
+premise, was deliberately left untested by that probe.
+
 | # | Assumption | Established by | Tested by | If wrong |
 |---|---|---|---|---|
 | P1 | `-p` draws a small headless allowance, then metered credits | User's direct observation; docs conflict (Help Center says the separate credit was paused) | Not directly tested; it is the premise. B2 item 1 tests its actionable half | The effort loses its motivation; A-min still stands on its own |
-| P2 | `--bg` sessions draw the interactive session pool | Docs (`agent-view`, partly summarized fetch); never observed | **B2 item 1, pass/fail** | B does not ship; escalate with evidence |
-| P3 | `claude --bg` surface: positional prompt, prints short session ID, rejects `-p`, `agents --json`/`logs`/`stop`/`respawn`/`rm` exist | `claude --help` and `claude agents --help` observed locally on Claude Code 2.1.232; docs corroborate | B2 items 3-5 | Driver command construction changes; contained in B1 |
-| P4 | `agents --json` field shape (`id`, session id, `pid`, `state`, `status`) | Summarized doc fetch only | B2 item 4; reconciler is schema-tolerant from the start | Reconciler required-field list adjusts; loud validation prevents silent misreads |
-| P5 | `--bg` permission behavior (flag or settings inheritance); workers can avoid unattended permission prompts | Established nowhere | **B2 item 2, pass/fail, with allowlist fallback** | Lane stalls `blocked`; fallback is documented consumer allowlist setup |
-| P6 | Background sessions load plugin agents/skills; a per-unit trusted system channel exists (`--append-system-prompt-file` or equivalent) | Docs, indirect; unverified | B2 item 3 | Worker persona delivery redesigned inside B1 |
+| P2 | `--bg` sessions draw the interactive session pool | Docs (`agent-view`, partly summarized fetch); **never observed**. The 2026-08-17 probe neither supported nor contradicted it: no batch was run, and a bg transcript's `usage` blocks carry no pool-attribution field (regex sweep of a 976-record bg transcript for `rate\|limit\|quota` found only tool parameters) | **B2 item 1, pass/fail -- still untested.** A measurement instrument exists as of 2026-08-17 (P9), but exercising it costs a measurable batch | B does not ship; escalate with evidence |
+| P3 | `claude --bg` surface: positional prompt, prints short session ID, rejects `-p`; `claude agents --json` exists; the lifecycle verbs are **top-level** `claude stop\|logs\|rm\|respawn\|attach <id>`, hidden from `claude --help` | Observed 2026-08-17 on Claude Code 2.1.233: `claude --help` (positional prompt, `--bg`), `claude --bg -p "..."` (refused with a verbatim conflict message, no spawn), a `--bg` launch banner (`backgrounded * a47add3f`, 8-hex id), `claude agents --help` (no `Commands:` section), and `claude <verb> --help` for each verb. The earlier `claude agents <verb>` shape was doc-derived and is **refuted**: `claude agents stop\|logs\|rm\|respawn\|list --help` each print the plain `agents` help and **exit 0**, ignoring the positional | B2 items 3-5; B1 preflight asserts the verbs behave, since they are undocumented and carry no stability guarantee | Driver command construction changes; contained in B1. The refuted form fails **silently at exit 0**, so the preflight is not optional |
+| P4 | `agents --json` records are discriminated by `kind`: `kind: "background"` carries `id`, `cwd`, `kind`, `startedAt` (epoch ms), `sessionId`, `name`, `state`; `kind: "interactive"` carries `pid`, `cwd`, `kind`, `startedAt`, `sessionId`, `name`, `status`. No record carries both `id`/`state` and `pid`/`status`. `--all` adds settled background sessions | Observed 2026-08-17: `claude agents --json --all` output read verbatim, one record of each kind. **Refutes** the previously recorded five-field shape (`id`, session id, `pid`, `state`, `status`), which came from a summarized doc fetch and did not record the `kind` discriminator at all. `state` values seen: `blocked`, `failed`, `done`, `stopped` | B2 item 4; reconciler is schema-tolerant from the start and filters on `kind` first | Reconciler required-field list adjusts; loud validation prevents silent misreads. Omitting the `kind` filter makes the orchestrator's own interactive session look like a worker |
+| P5 | `--bg` permission behavior (flag or settings inheritance); workers can avoid unattended permission prompts | Flags observed 2026-08-17: `--permission-mode <mode>` (choices `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan`) composes with `--bg` (two sessions spawned), `claude agents` exposes `--permission-mode`/`--dangerously-skip-permissions`/`--allow-dangerously-skip-permissions`/`--settings`/`--setting-sources` as dispatch defaults, and a real bg session recorded `--permission-mode auto` in its respawn flags. **The behavioral half is untested**: no probe ran an allowlisted consumer command unprompted inside a `--bg` session. That background sessions inherit project `settings.json` allowlists by the ordinary mechanism is inferred, not observed | **B2 item 2, pass/fail, with allowlist fallback** | Lane stalls `blocked`; fallback is documented consumer allowlist setup, and the flags that fallback needs are confirmed to exist and compose |
+| P6 | Background sessions load plugin agents/skills; a per-unit trusted system channel exists (`--append-system-prompt-file` or equivalent) | **Confirmed** 2026-08-17 on both halves. Channel: `--append-system-prompt-file` and `--system-prompt-file` parse-probed (each errored with `argument missing`, so the option exists); both are hidden from the `--help` option list but named in `--bare`'s help text. Also present: top-level `--agent <agent>`, `--agents <json>`, and `claude agents --plugin-dir`. Loading: a background-session transcript (system records carrying `"sessionKind": "bg"`) used the `Skill` tool with plugin-namespaced skills (`awesome-kit:task`, `bootstrap:bootstrap`, `git-kit:git-code-review`, several `skills-kit:*`). That these flags compose with `--bg` is **inferred from `--permission-mode`'s behavior, not observed** | B2 item 3, reduced to preflighting composition -- and per P11 that must be judged from worker behavior, not the launcher's exit code | Worker persona delivery redesigned inside B1 |
 | P7 | Workflow limits: 16 concurrent agents, 1000/run; in-session-only resume with ordering-based cache invalidation; `agent()` accepts a JSON schema; no per-agent wall-clock timeout | Docs (`workflows`) | C2 | Lane construction constants and lease sizing change; contained in C1 |
 | P8 | Live-session workflow `agent()` calls count as ordinary session usage | Docs (`workflows`, `costs`) | C2 capacity check | C does not ship |
-| P9 | No supported programmatic API exposes remaining session-pool capacity | Search of docs found none | Standing; B1's reactive-halt fallback is the contract either way | If an API exists, quota foresight improves; nothing breaks |
+| P9 | No programmatic *API* exposes remaining session-pool capacity, but a supported *observable* does: `.rate_limits` in the statusline hook payload, which claude-ui-kit mirrors to a documented file contract at `~/.claude/plugins/data/plugins-kit/claude-ui-kit/rate-limits.json` | **Refutes** the earlier "search of docs found none", whose counter-evidence was inside this repository. Observed 2026-08-17: `plugins/claude-ui-kit/scripts/statusline.sh` reads `.rate_limits.five_hour.used_percentage`, `.seven_day.used_percentage`, and both `resets_at`, and states in comment that the statusline hook payload is the only place Claude Code surfaces `.rate_limits`; `claude-ui-kit/skills/statusline/references/components.md` documents the fields; the live snapshot file on this machine held `five_hour.used_percentage: 10`, `seven_day.used_percentage: 8`, `captured_at` 2026-08-17. Two observed caveats: granularity is whole percent, and only an interactive session rendering a statusline refreshes the file (whether a `--bg` session refreshes it is unverified) | Instrument for B2 item 1; B1's reactive-halt fallback stays the contract either way | Quota foresight improves; nothing breaks. If the observable proves too coarse or too stale, B2 item 1 falls back to the exhaust-the-headless-allowance formulation |
 | P10 | A saved workflow under `claude -p /name` has unproven capacity classification | Docs silent | Not tested; the path is rejected (see "Explicitly not doing") | Irrelevant unless the path is revisited |
+| P11 | `claude --bg` backgrounds the session **before validating its own flags**: it prints the success banner and exits 0, and a bad flag surfaces only asynchronously as `state: "failed"` in `agents --json` and as a settle line in `~/.claude/daemon.log` | Observed 2026-08-17: `claude --bg --permission-mode bogus "x"` printed `backgrounded * d7217a10` and exited 0; `~/.claude/daemon.log` then recorded `bg settled d7217a10 (crashed): exit 1 before init -- error: option '--permission-mode <mode>' argument 'bogus' is invalid`; `claude agents --json` later showed that id as `state: "failed"`. Second instance of the hazard the `codex_dispatch_is_silent_on_failure` insight records for codex dispatch -- judge a dispatch by its observable outcome, never by `$?` | B1 startup preflight and B2 item 5: every launch is confirmed by polling `agents --json` out of the initial state, and a `failed` inside the first seconds is classified as launch misconfiguration, not work failure | If some launches do validate synchronously after all, the conservative reading costs only an extra poll per launch. Trusting the exit code instead would make a misconfigured batch indistinguishable from a running one |
+| P12 | A `--bg` session can sit in `state: "blocked"` indefinitely with nobody attached; no platform lease, deadline, or auto-fail was observed | Observed 2026-08-17: `claude agents --json --all` listed a background session in `state: "blocked"` since 2026-07-29 -- 19 days -- and its `~/.claude/jobs/<id>/state.json` carried an unanswered question in `needs`. That block was a question rather than a permission prompt, so it demonstrates the failure geometry, not the permission-prompt case itself (which is P5) | Standing; it is why D5 leases and reclaim exist. B2 item 5 exercises reclaim live | Makes the lease-and-reclaim design **required**, not defensive. If a platform-side timeout does exist and was merely not observed, the lease is redundant but harmless |
 
-Phase order guarantees no expensive unwind: A-min depends on none of P1-P10;
-B1 code depends on P3-P6 but is not published as working until B2 tests them;
-C1 depends on P7-P8 and is gated by C2.
+Phase order guarantees no expensive unwind: A-min depends on none of P1-P12;
+B1 code depends on P3-P6 and P11-P12 but is not published as working until B2
+tests them; C1 depends on P7-P8 and is gated by C2. P2 remains the one
+unvalidated premise the whole of B rests on.
 
 ## Breaking changes and migration
 
