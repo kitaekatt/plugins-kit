@@ -86,6 +86,41 @@ def test_halt_triggering_unit_returns_to_pending_and_is_in_the_unfinished_set(tm
     assert [u.unit_id for u in unfinished_units(store, "run-1")] == ["u0", "u1"]
 
 
+# -- a halt already set by the time the loop reaches the NEXT unit's claim -------
+
+
+def test_run_wave_returns_accepted_units_instead_of_raising_when_halt_is_already_set_at_next_claim(
+    tmp_path,
+):
+    """Defect (finding 2): a peer sets the halt WHILE unit 0's own generation
+    is in flight, and unit 0's generate still returns text (no HaltError
+    raised for THIS call). D4 means unit 0's accept still lands (a valid
+    fence is never blocked by halt). But the loop's second iteration then
+    calls store.claim_unit for unit 1 against an ALREADY-halted run, which
+    raises RunHaltedError -- a case the old code never caught, so it
+    propagated out of run_wave and the caller lost the units already
+    accepted in this call. run_wave must catch it, stop claiming, and return
+    what was accepted -- exactly the module's documented contract."""
+    store = _seeded_store(tmp_path, unit_ids=("u0", "u1"))
+    wave = _wave(store, ["u0", "u1"])
+
+    def generate(work_unit):
+        if work_unit.id == "u0":
+            # Simulate a peer process halting the run out-of-band, mid
+            # generation, WITHOUT this call raising HaltError itself.
+            store.set_halt("run-1", "rate_limit", "a peer worker hit the limit")
+            return "text-u0"
+        raise AssertionError("u1's generate must never run: claiming must have stopped")
+
+    accepted = run_wave(store, "run-1", wave, generate=generate)
+
+    assert accepted == ["u0"]
+    assert store.get_unit("run-1", "u0").state is UnitState.ACCEPTED
+    u1 = store.get_unit("run-1", "u1")
+    assert u1.state is UnitState.PENDING
+    assert u1.claimed_by is None
+
+
 # -- resume without replay -------------------------------------------------------
 
 

@@ -61,13 +61,31 @@ reclaimed on lease expiry), and ``submit_validated`` returning a rejected
 :class:`~content_pipeline.llm.platform.SubmitResult` is surfaced via
 :class:`UnacceptedSubmissionError` rather than silently accepting empty or
 invalid text.
+
+A halt already set when this loop reaches the NEXT unit's claim
+------------------------------------------------------------------
+
+The ``HaltError`` handling above covers a halt raised BY this call's own
+``generate``/``submit_validated``. It does not cover a halt that is already
+set by the time this loop reaches ``store.claim_unit`` for a later unit in
+the same ``wave`` -- a peer process calling ``store.set_halt`` directly, or
+this call's own previous iteration setting the halt and still returning text
+for that unit. ``store.claim_unit`` raises
+:class:`~content_pipeline.execution.model.RunHaltedError` in that case (D4:
+halt blocks new claims). :func:`run_wave` catches it around the claim,
+stopping the loop the same way the ``HaltError`` path does, and returns
+whatever was accepted so far -- it does not re-raise or swallow the halt
+silently: the run is already durably marked halted (by whoever set it), so
+returning the partial ``accepted`` list is the correct, documented behavior
+for this path, matching the module's contract of "stop claiming, return what
+was accepted."
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable, List, Optional, Sequence
 
-from content_pipeline.execution.model import ExecutionError, UnitRecord
+from content_pipeline.execution.model import ExecutionError, RunHaltedError, UnitRecord
 from content_pipeline.execution.store import DEFAULT_LEASE_SECONDS, ExecutionStore
 from content_pipeline.llm.platform import HaltError, LLMBackend, submit_validated
 from content_pipeline.pipeline.workunit import WorkUnit
@@ -140,7 +158,17 @@ def run_wave(
 
     accepted: List[str] = []
     for unit in wave:
-        claim = store.claim_unit(run_id, unit.unit_id, worker_id, lease_seconds=lease_seconds, at=at)
+        try:
+            claim = store.claim_unit(
+                run_id, unit.unit_id, worker_id, lease_seconds=lease_seconds, at=at
+            )
+        except RunHaltedError:
+            # Already halted by the time this loop reached this unit's claim
+            # (a peer's set_halt, or our own previous iteration setting the
+            # halt while still returning text) -- see the module docstring's
+            # "A halt already set..." section. Stop claiming; return what was
+            # accepted so far, same contract as the HaltError path below.
+            break
         work_unit = unit_for(unit.unit_id)
 
         try:

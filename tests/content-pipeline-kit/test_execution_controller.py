@@ -1,10 +1,11 @@
 """Tests for content_pipeline.execution.controller.
 
-Pins the A-min.2 prepare/finalize lifecycle: terminal skips recorded via the
-existing store API only (claim + terminal fail_unit, ``skip:...`` error
-strings), unfinished_units as a set with holes and the halt-triggering unit
-included, deterministic serial finalize order, finalize idempotence, and
-apply_unknown refusal absent a reconciliation hook.
+Pins the A-min.2 prepare/finalize lifecycle: terminal skips recorded via
+claim + terminal fail_unit(terminal_state=UnitState.SKIPPED), ``skip:...``
+error strings, unfinished_units as a set with holes and the halt-triggering
+unit included, deterministic serial finalize order, finalize idempotence,
+apply_unknown refusal absent a reconciliation hook, and the fail-closed
+refusal of an ACCEPTED unit with no recorded accepted_text.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import pytest
 
 from content_pipeline.execution.controller import (
     ApplyUnknownError,
+    MissingAcceptedTextError,
     RunAdapter,
     finalize_run,
     pause_run,
@@ -24,7 +26,7 @@ from content_pipeline.execution.model import UnitState
 from content_pipeline.execution.store import ExecutionStore
 from content_pipeline.execution.wave import ready_wave
 from content_pipeline.pipeline.single_pass import Gate
-from content_pipeline.pipeline.workunit import FlatChunkStrategy, WorkUnit
+from content_pipeline.pipeline.workunit import FlatChunkStrategy, GraphWalkStrategy, WorkUnit
 
 
 def _new_store(tmp_path) -> ExecutionStore:
@@ -55,7 +57,7 @@ def test_prepare_run_records_terminal_skip_for_non_sticky_gate(tmp_path):
 
     assert [u.unit_id for u in wave] == ["u1"]
     u0 = store.get_unit("run-1", "u0")
-    assert u0.state is UnitState.FAILED
+    assert u0.state is UnitState.SKIPPED
     attempts = store.list_attempts("run-1", "u0")
     fail_attempt = [a for a in attempts if a.error]
     assert fail_attempt[-1].error == "skip:gate:single_speaker:two speakers"
@@ -76,7 +78,7 @@ def test_prepare_run_records_terminal_skip_for_sticky_gate_and_marks_unsupported
     assert marked == [("u0", "no source")]
     attempts = store.list_attempts("run-1", "u0")
     assert attempts[-1].error == "skip:unsupported:missing_data:no source"
-    assert store.get_unit("run-1", "u0").state is UnitState.FAILED
+    assert store.get_unit("run-1", "u0").state is UnitState.SKIPPED
 
 
 def test_prepare_run_records_terminal_skip_for_up_to_date_freshness(tmp_path):
@@ -95,6 +97,35 @@ def test_prepare_run_records_terminal_skip_for_up_to_date_freshness(tmp_path):
     assert attempts[-1].error == "skip:up_to_date"
 
 
+def test_prepare_run_up_to_date_unit_0_releases_unit_1_in_a_graph_run(tmp_path):
+    """Finding 1, the exact wedge: prepare_run + GraphWalkStrategy + an
+    up-to-date unit 0 must release unit 1, not wedge it forever. Before the
+    fix, the terminal skip landed unit 0 in UnitState.FAILED, and
+    wave._graph_ready_wave only treats ACCEPTED (or no predecessor) as
+    satisfied -- so unit 1 could never become claimable through this path,
+    for the life of the run."""
+    store = _seeded_store(tmp_path, unit_ids=("u0", "u1"))
+    work_units = [WorkUnit(id="u0"), WorkUnit(id="u1")]
+    graph_strategy = GraphWalkStrategy(order=lambda s: [])
+
+    from content_pipeline.freshness.classify import FreshnessState
+
+    def freshness_of(wu):
+        return FreshnessState.FRESH if wu.id == "u0" else FreshnessState.MISSING
+
+    wave = prepare_run(
+        store, "run-1", graph_strategy, work_units, freshness_of=freshness_of
+    )
+
+    assert [u.unit_id for u in wave] == ["u1"]
+    assert store.get_unit("run-1", "u0").state is UnitState.SKIPPED
+
+    # Not a transient artifact of this one call: a fresh ready_wave read
+    # against the durable store confirms unit 1 stays claimable.
+    again = ready_wave(store, "run-1", graph_strategy)
+    assert [u.unit_id for u in again] == ["u1"]
+
+
 def test_prepare_run_leaves_unmatched_pending_units_untouched(tmp_path):
     # "u1" has no corresponding WorkUnit -- out of scope for this prepare call.
     store = _seeded_store(tmp_path, unit_ids=("u0", "u1"))
@@ -103,7 +134,7 @@ def test_prepare_run_leaves_unmatched_pending_units_untouched(tmp_path):
 
     prepare_run(store, "run-1", FLAT_STRATEGY, work_units, gates=[gate])
 
-    assert store.get_unit("run-1", "u0").state is UnitState.FAILED
+    assert store.get_unit("run-1", "u0").state is UnitState.SKIPPED
     assert store.get_unit("run-1", "u1").state is UnitState.PENDING
 
 
@@ -297,3 +328,115 @@ def test_finalize_run_apply_unknown_reconciled_as_not_landed_reapplies(tmp_path)
 
     assert applied == ["u0"]
     assert apply_calls == ["u0"]
+
+
+# -- finalize_run: fail closed on a None accepted_text (finding 3) ---------------
+
+
+def test_finalize_run_refuses_accepted_unit_with_no_recorded_text(tmp_path):
+    """Defect (finding 3): accept_unit permits omitting `text` (cli/run.py's
+    `accept` never passes it; a pre-0.7.2 row may also have migrated to
+    NULL). Without a guard, finalize_run called parse_fn(None) and applied
+    whatever an identity parse_fn returned -- a unit marked applied with no
+    payload, fail-OPEN against D6's posture. finalize_run must refuse with a
+    typed error naming the unit, and must never call apply."""
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    claim = store.claim_unit("run-1", "u0", "w")
+    store.accept_unit("run-1", "u0", claim.fencing_token)  # no text= -- accepted_text stays NULL
+
+    assert store.get_unit("run-1", "u0").accepted_text is None
+
+    apply_calls = []
+    adapter = RunAdapter(
+        parse_fn=lambda text: text,  # an identity parse_fn: would happily "parse" None
+        apply=lambda uid, payload: apply_calls.append((uid, payload)),
+    )
+
+    with pytest.raises(MissingAcceptedTextError) as exc_info:
+        finalize_run(store, "run-1", adapter)
+
+    assert exc_info.value.unit_id == "u0"
+    assert apply_calls == []  # apply must never have been called
+    kinds = [a.kind.value for a in store.list_attempts("run-1", "u0")]
+    assert "apply_started" not in kinds  # no apply-attempt row left behind either
+
+
+# -- finding 4: pin the idempotence SCAN RULE, not just its current output -------
+#
+# _last_apply_kind must resolve by attempt INSERTION ORDER (list_attempts
+# orders by the attempts table's autoincrement id), never by `at=` alone.
+# The tests below would still pass against a wrong "any APPLY_SUCCEEDED in
+# the log wins" implementation, so each one is built to fail against that
+# wrong implementation specifically -- see the inline comments.
+
+
+def test_finalize_run_treats_started_succeeded_started_as_apply_unknown(tmp_path):
+    """A crash during RE-apply: started, succeeded, started (no closing
+    succeeded) must read as apply_unknown, NOT as applied. A wrong "any
+    APPLY_SUCCEEDED in the log wins" implementation would see the
+    APPLY_SUCCEEDED row and treat this unit as already applied -- silently
+    skipping the crashed re-apply instead of refusing."""
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    claim = store.claim_unit("run-1", "u0", "w")
+    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
+    store.record_apply_started("run-1", "u0", at=1.0)
+    store.record_apply_succeeded("run-1", "u0", at=2.0)
+    store.record_apply_started("run-1", "u0", at=3.0)  # crashed before a second succeeded
+
+    adapter = RunAdapter(parse_fn=lambda t: t, apply=lambda uid, payload: None)
+    with pytest.raises(ApplyUnknownError):
+        finalize_run(store, "run-1", adapter)
+
+
+def test_finalize_run_treats_two_starts_then_one_succeeded_as_applied(tmp_path):
+    """Two apply_started (e.g. a retried finalize pass whose first attempt
+    never got as far as recording its own apply_started a second time before
+    crashing -- any sequence with more STARTED than SUCCEEDED rows before the
+    trailing SUCCEEDED) followed by ONE apply_succeeded must read as applied
+    -- the same idempotence skip as a clean started/succeeded pair, keyed off
+    the LAST attempt, not a count comparison."""
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    claim = store.claim_unit("run-1", "u0", "w")
+    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
+    store.record_apply_started("run-1", "u0", at=1.0)
+    store.record_apply_started("run-1", "u0", at=2.0)
+    store.record_apply_succeeded("run-1", "u0", at=3.0)
+
+    apply_calls = []
+    adapter = RunAdapter(
+        parse_fn=lambda t: t, apply=lambda uid, payload: apply_calls.append(uid)
+    )
+    applied = finalize_run(store, "run-1", adapter)
+
+    assert applied == []  # already applied; not replayed
+    assert apply_calls == []
+
+
+def test_finalize_run_scan_resolves_by_insertion_order_when_timestamps_are_equal(tmp_path):
+    """Both the started and succeeded rows share the SAME `at=` -- the scan
+    must still resolve by insertion order (list_attempts orders by the
+    attempts table's autoincrement id), not by re-sorting on `at`, which
+    would make the outcome undefined (or implementation-dependent) for a
+    tied timestamp. A max-by-timestamp implementation could pick either row
+    when both share `at`; this pins that started-then-succeeded (in
+    insertion order) reads as applied regardless of the tie."""
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    claim = store.claim_unit("run-1", "u0", "w")
+    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
+    same_at = 100.0
+    store.record_apply_started("run-1", "u0", at=same_at)
+    store.record_apply_succeeded("run-1", "u0", at=same_at)
+
+    attempts = store.list_attempts("run-1", "u0")
+    apply_related = [a for a in attempts if a.kind.value.startswith("apply_")]
+    assert len(apply_related) == 2
+    assert apply_related[0].at == apply_related[1].at == same_at  # the tie, confirmed
+
+    apply_calls = []
+    adapter = RunAdapter(
+        parse_fn=lambda t: t, apply=lambda uid, payload: apply_calls.append(uid)
+    )
+    applied = finalize_run(store, "run-1", adapter)
+
+    assert applied == []  # already applied; not replayed despite the timestamp tie
+    assert apply_calls == []

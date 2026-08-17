@@ -51,27 +51,45 @@ consumer a second, subtly-different gate protocol to satisfy. This import is
 why this package's docstring can no longer claim "depends on no other
 subpackage" -- see ``execution/__init__.py``.
 
-Terminal skips: store-API-only, with a documented cost
-----------------------------------------------------------
+Terminal skips: a dedicated terminal state, ``UnitState.SKIPPED``
+----------------------------------------------------------------------
 
 A unit a gate or freshness check decides will never be generated is recorded
-as a **terminal failure** -- ``store.claim_unit`` then
-``store.fail_unit(terminal=True, error="skip:...")`` -- because A-min.2 adds
-no new store state for "skipped". Error-string convention, so
-``execution.status``'s failure-code classifier groups skips sensibly instead
-of hashing indistinguishable text:
+as a terminal **skip**, not a terminal **failure**: ``store.claim_unit`` then
+``store.fail_unit(terminal=True, terminal_state=UnitState.SKIPPED,
+error="skip:...")``. Landing in its own terminal state (rather than
+``UnitState.FAILED``, the original A-min.2 shape) is what fixes two defects
+that shape had:
+
+- ``execution.wave``'s graph-strategy readiness treats a ``FAILED``
+  predecessor as a permanent block. Before ``SKIPPED`` existed, a skipped
+  unit 0 (up-to-date / gated / unsupported) permanently wedged every
+  ordinally-later unit in a ``GraphWalkStrategy`` run -- they could never
+  become claimable. ``execution.wave`` now treats ``SKIPPED`` exactly like
+  ``ACCEPTED`` for this purpose: it satisfies a successor.
+- ``execution.status``'s digest counted a skip as a real failure --
+  inflating ``counts_by_state["failed"]``, ``failed_in_window``, and burning
+  a ``recent_failures`` slot with skip noise. With its own state,
+  ``counts_by_state["skipped"]`` carries it instead (a plain ``Counter`` over
+  unit state already tells the two apart, no status.py logic change needed
+  for that field); the attempt-level counts still needed an explicit
+  exclusion, since a skip is still recorded through the same
+  ``AttemptKind.FAIL`` write as a real failure -- see ``execution.status``.
+
+The error-string convention is unchanged (``model.SKIP_ERROR_PREFIX``, so
+``execution.status`` can recognize it without importing this module), and
+still exists so ``execution.status``'s failure-code classifier groups skips
+sensibly instead of hashing indistinguishable text, and so a reader of
+``list_attempts`` can tell a skip's reason apart from a real failure's:
 
 - ``"skip:gate:<gate-name>:<reason>"`` -- a non-sticky gate fired.
 - ``"skip:unsupported:<gate-name>:<reason>"`` -- a sticky gate fired (the
   unit is structurally unsupported, mirroring ``Disposition.UNSUPPORTED``).
 - ``"skip:up_to_date"`` -- freshness said no generation is needed.
 
-**Accepted, documented trade-off:** a skip is not a real failure, but it
-counts toward ``RunStatus.counts_by_state["failed"]`` and toward
-``recent_failures`` exactly like one, because the store has only one terminal
-failure state. The ``skip:`` prefix is what lets a reader (or a future
-status-layer enhancement) tell the two apart; nothing here hides the
-overlap.
+``UnitState`` is a ``str`` Enum over a ``TEXT`` column, so adding
+``SKIPPED`` needed no store migration -- see ``execution.model``'s
+``UnitState`` docstring.
 """
 
 from __future__ import annotations
@@ -83,6 +101,7 @@ from content_pipeline.execution.model import (
     AttemptKind,
     AttemptRecord,
     ExecutionError,
+    SKIP_ERROR_PREFIX,
     TERMINAL_STATES,
     UnitRecord,
     UnitState,
@@ -113,6 +132,28 @@ class ApplyUnknownError(ExecutionError):
             f"unit {unit_id!r} is apply_unknown (an APPLY_STARTED attempt with "
             "no following APPLY_SUCCEEDED) and the adapter supplies no "
             "reconcile hook; finalize refuses to proceed (D6, fail closed)"
+        )
+
+
+class MissingAcceptedTextError(ExecutionError):
+    """Finalize refuses an ACCEPTED unit with no recorded ``accepted_text`` (D6, fail closed).
+
+    ``store.accept_unit`` still permits omitting ``text`` (an optional
+    parameter -- see its docstring -- and a pre-0.7.2 row migrated to a
+    ``NULL`` ``accepted_text`` column). Calling ``adapter.parse_fn(None)``
+    and treating whatever it returns as a real payload would be fail-OPEN:
+    a unit could be marked applied with no payload ever having existed.
+    Raised before ``adapter.parse_fn`` is called and before
+    ``record_apply_started`` -- so ``adapter.apply`` is never invoked, and no
+    apply-attempt row is written, for a unit refused this way. Mirrors
+    :class:`ApplyUnknownError`'s refusal shape.
+    """
+
+    def __init__(self, unit_id: str) -> None:
+        self.unit_id = unit_id
+        super().__init__(
+            f"unit {unit_id!r} is ACCEPTED with no recorded accepted_text; "
+            "finalize refuses to apply a None payload (D6, fail closed)"
         )
 
 
@@ -149,9 +190,17 @@ def _record_terminal_skip(
     *,
     at: Optional[float] = None,
 ) -> None:
-    """Claim, then terminally fail with a ``skip:...`` error (see module docstring)."""
+    """Claim, then terminally SKIP with a ``skip:...`` error (see module docstring)."""
     claim = store.claim_unit(run_id, unit_id, worker_id, at=at)
-    store.fail_unit(run_id, unit_id, claim.fencing_token, error=error, terminal=True, at=at)
+    store.fail_unit(
+        run_id,
+        unit_id,
+        claim.fencing_token,
+        error=error,
+        terminal=True,
+        terminal_state=UnitState.SKIPPED,
+        at=at,
+    )
 
 
 def prepare_run(
@@ -210,9 +259,9 @@ def prepare_run(
             if gate.sticky:
                 if mark_unsupported is not None:
                     mark_unsupported(unit.unit_id, reason)
-                error = f"skip:unsupported:{gate.name}:{reason}"
+                error = f"{SKIP_ERROR_PREFIX}unsupported:{gate.name}:{reason}"
             else:
-                error = f"skip:gate:{gate.name}:{reason}"
+                error = f"{SKIP_ERROR_PREFIX}gate:{gate.name}:{reason}"
             _record_terminal_skip(store, run_id, unit.unit_id, worker_id, error, at=at)
             continue
 
@@ -220,7 +269,7 @@ def prepare_run(
             state = freshness_of(work_unit)
             if not needs_generation(state, include_stale=include_stale):
                 _record_terminal_skip(
-                    store, run_id, unit.unit_id, worker_id, "skip:up_to_date", at=at
+                    store, run_id, unit.unit_id, worker_id, f"{SKIP_ERROR_PREFIX}up_to_date", at=at
                 )
                 continue
 
@@ -274,6 +323,12 @@ def finalize_run(
     Never re-adjudicates a verdict (D1, invariant 5): ``adapter.parse_fn`` is
     called mechanically on the durably recorded ``accepted_text`` to recover
     the payload object; no validator runs again.
+
+    Fails closed on a ``None`` payload (D6): an ACCEPTED unit whose
+    ``accepted_text`` is ``None`` (``accept_unit`` permits omitting ``text``;
+    a pre-0.7.2 row may also have migrated to ``NULL``) raises
+    :class:`MissingAcceptedTextError` rather than calling
+    ``adapter.parse_fn(None)`` and applying whatever it returns.
     """
     applied: List[str] = []
     units = sorted(store.list_units(run_id), key=lambda u: u.ordinal)
@@ -295,6 +350,9 @@ def finalize_run(
                 store.record_apply_succeeded(run_id, unit.unit_id, at=at)
                 continue
             # Not landed: fall through to a fresh apply below.
+
+        if unit.accepted_text is None:
+            raise MissingAcceptedTextError(unit.unit_id)
 
         payload = adapter.parse_fn(unit.accepted_text)
         store.record_apply_started(run_id, unit.unit_id, at=at)
@@ -344,6 +402,7 @@ def resume_run(store: ExecutionStore, run_id: str) -> None:
 
 __all__ = [
     "ApplyUnknownError",
+    "MissingAcceptedTextError",
     "RunAdapter",
     "prepare_run",
     "finalize_run",

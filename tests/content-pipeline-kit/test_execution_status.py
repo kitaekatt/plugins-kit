@@ -124,6 +124,36 @@ def test_recent_failures_group_identical_errors(tmp_path):
     assert matching[0].count == 2
 
 
+def test_skipped_units_are_not_counted_as_failures_in_the_digest(tmp_path):
+    """Finding 1's status-layer symptom: a terminal skip (execution.
+    controller's terminal_state=UnitState.SKIPPED, error="skip:...") is
+    recorded through the same fail_unit(terminal=True, ...) write path as a
+    real failure. Before the fix it inflated counts_by_state["failed"],
+    failed_in_window, and burned a recent_failures slot, and skip:up_to_date
+    was indistinguishable from a real failure inside the bounded digest
+    (both hashed to opaque codes). counts_by_state["skipped"] must carry the
+    skip instead, "failed" must stay at the real-failure count only, and the
+    skip must not appear in failed_in_window or recent_failures."""
+    store = _store(tmp_path, unit_ids=("u0", "u1"))
+    claim0 = store.claim_unit("r1", "u0", "w1", at=0.0)
+    store.fail_unit(
+        "r1", "u0", claim0.fencing_token,
+        error="skip:up_to_date", terminal=True, terminal_state=UnitState.SKIPPED, at=1.0,
+    )
+    claim1 = store.claim_unit("r1", "u1", "w1", at=0.0)
+    store.fail_unit(
+        "r1", "u1", claim1.fencing_token, error="a real failure", terminal=True, at=1.0
+    )
+
+    digest = compute_status(store, "r1", now=10.0, throughput_window_s=100.0)
+
+    assert digest.counts_by_state["skipped"] == 1
+    assert digest.counts_by_state["failed"] == 1  # only the real failure
+    assert digest.failed_in_window == 1  # the skip does not inflate this
+    assert len(digest.recent_failures) == 1  # the skip does not burn a slot
+    assert digest.recent_failures[0].count == 1
+
+
 def test_halt_state_is_reported(tmp_path):
     store = _store(tmp_path)
     store.set_halt("r1", "rate_limit", "hit your limit")

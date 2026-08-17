@@ -878,6 +878,7 @@ class ExecutionStore:
         *,
         error: str = "",
         terminal: bool = False,
+        terminal_state: UnitState = UnitState.FAILED,
         usage: Optional[UsageRecord] = None,
         at: Optional[float] = None,
     ) -> None:
@@ -887,7 +888,20 @@ class ExecutionStore:
         Fencing is checked FIRST, same as :meth:`accept_unit`: a stale token
         always raises :class:`StaleFenceError` (and records a SUPERSEDED
         attempt first) regardless of the unit's current state.
+
+        ``terminal_state`` (A-min.2) selects WHICH terminal state a
+        ``terminal=True`` call lands the unit in. It defaults to
+        ``UnitState.FAILED`` -- so every existing caller, which never passes
+        this argument, writes exactly the row it always has -- and is the
+        seam ``execution.controller``'s terminal-skip path uses to land a
+        unit in ``UnitState.SKIPPED`` instead, without a near-duplicate
+        method. Ignored when ``terminal=False`` (a retry always returns to
+        PENDING, unchanged). Must be a member of ``TERMINAL_STATES``.
         """
+        if terminal and terminal_state not in TERMINAL_STATES:
+            raise ValueError(
+                f"terminal_state must be one of {TERMINAL_STATES}, got {terminal_state!r}"
+            )
         now = time.time() if at is None else at
         # See the matching comment in accept_unit: the stale branch must not
         # raise while still inside `self._writer()`, or its own rollback
@@ -918,7 +932,7 @@ class ExecutionStore:
                     conn.execute(
                         "UPDATE units SET state = ?, failed_at = ?, updated_at = ?, claimed_by = NULL, "
                         "claimed_at = NULL, lease_expires_at = NULL WHERE run_id = ? AND unit_id = ?",
-                        (UnitState.FAILED.value, now, now, run_id, unit_id),
+                        (terminal_state.value, now, now, run_id, unit_id),
                     )
                 else:
                     conn.execute(

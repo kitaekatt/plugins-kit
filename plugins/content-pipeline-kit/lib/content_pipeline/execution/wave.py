@@ -15,14 +15,21 @@ claimable for this run" -- for the two work-unit shapes
   predecessor (the previous unit by ordinal) is ``ACCEPTED``. The first unit
   (no predecessor) is vacuously ready when it is ``PENDING``.
 
+A predecessor in state ``SKIPPED`` (A-min.2 -- a gate or freshness check
+decided that unit will never be generated, see ``execution.controller``) is
+treated exactly like ``ACCEPTED``: it satisfies the successor. A skip is not a
+broken link, it is a unit the run intentionally will not produce, so it must
+not permanently block everything ordinally after it the way a ``FAILED``
+predecessor does below.
+
 Deliberate corner case, not spelled out by the plan of record: a terminally
 ``FAILED`` predecessor blocks the chain from ever becoming ready past it. Once
 the lowest-ordinal ``PENDING`` unit's predecessor is ``FAILED`` (a terminal
 state, per ``execution.model.TERMINAL_STATES``), that unit -- and by
 construction everything after it -- can never become ready again through this
-function, because ``FAILED`` never transitions back to ``ACCEPTED``. This is a
-fail-closed choice: a graph pipeline with a broken link stalls rather than
-skipping ahead.
+function, because ``FAILED`` never transitions back to ``ACCEPTED`` or
+``SKIPPED``. This is a fail-closed choice: a graph pipeline with a broken link
+stalls rather than skipping ahead.
 
 This module treats ANY ``GraphWalkStrategy`` instance as sequential/dependent,
 never conditioning on whether ``context_of`` is set. An ordered walk with no
@@ -108,7 +115,10 @@ def _graph_ready_wave(store, run_id: str) -> List[UnitRecord]:
     predecessor_state: Optional[UnitState] = None
     for unit in units:
         if unit.state is UnitState.PENDING:
-            if predecessor_state is None or predecessor_state is UnitState.ACCEPTED:
+            if predecessor_state is None or predecessor_state in (
+                UnitState.ACCEPTED,
+                UnitState.SKIPPED,
+            ):
                 return [unit]
             return []
         predecessor_state = unit.state

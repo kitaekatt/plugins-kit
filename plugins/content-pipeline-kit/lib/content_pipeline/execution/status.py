@@ -38,7 +38,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
-from content_pipeline.execution.model import AttemptKind, UnitState
+from content_pipeline.execution.model import AttemptKind, SKIP_ERROR_PREFIX, UnitState
 from content_pipeline.execution.store import ExecutionStore
 
 DEFAULT_THROUGHPUT_WINDOW_S = 300.0
@@ -172,6 +172,20 @@ def compute_status(
         if a.kind is not AttemptKind.FAIL:
             continue
         if a.at < window_start:
+            continue
+        # A terminal skip (execution.controller's "skip:..." error-string
+        # convention, A-min.2) is recorded through the same fail_unit(
+        # terminal=True, ...) write path as a real failure, but it is not
+        # one -- counts_by_state already tells the two apart via
+        # UnitState.SKIPPED (a plain Counter over unit state, so it picks up
+        # the new member with no code change here). failed_in_window and
+        # recent_failures are ATTEMPT-based, not state-based, so they need
+        # this explicit exclusion or a skip would burn a recent_failures slot
+        # and inflate the failure signal exactly like the defect this guards
+        # against. Checking the error text's prefix, not storing it, keeps
+        # invariant 6 intact: skip: is a library-owned constant, so deriving
+        # a count/exclusion from it is content-free and legal.
+        if a.error is not None and a.error.startswith(SKIP_ERROR_PREFIX):
             continue
         failed_in_window += 1
         fail_groups[_classify(a.error)].append(a)

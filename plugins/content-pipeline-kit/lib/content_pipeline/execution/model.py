@@ -58,15 +58,33 @@ from typing import Optional
 
 
 class UnitState(str, Enum):
-    """A unit's position in the state machine documented above."""
+    """A unit's position in the state machine documented above.
+
+    ``SKIPPED`` (A-min.2) is a second terminal state, added alongside
+    ``FAILED`` for a unit a gate or freshness check decided will never be
+    generated -- see ``execution.controller``'s "Terminal skips" section and
+    ``execution.wave``'s graph-predecessor semantics. ``UnitState`` is a
+    ``str`` Enum and the backing ``units.state`` column is ``TEXT``, so this
+    addition needs no schema migration -- a fresh string value round-trips
+    through the existing column exactly like any other member.
+    """
 
     PENDING = "pending"
     CLAIMED = "claimed"
     ACCEPTED = "accepted"
     FAILED = "failed"
+    SKIPPED = "skipped"
 
 
-TERMINAL_STATES = (UnitState.ACCEPTED, UnitState.FAILED)
+TERMINAL_STATES = (UnitState.ACCEPTED, UnitState.FAILED, UnitState.SKIPPED)
+
+# The error-string convention ``execution.controller`` uses for a terminal
+# skip's ``fail_unit(error=...)`` text (e.g. ``"skip:up_to_date"``,
+# ``"skip:gate:<name>:<reason>"``). Shared here, rather than only documented
+# in ``controller``'s module docstring, so ``execution.status`` can filter on
+# it without importing ``controller`` (which itself imports ``pipeline.
+# single_pass`` -- a dependency ``status`` deliberately does not carry).
+SKIP_ERROR_PREFIX = "skip:"
 
 
 class AttemptKind(str, Enum):
@@ -221,6 +239,7 @@ class StaleFenceError(ExecutionError):
 __all__ = [
     "UnitState",
     "TERMINAL_STATES",
+    "SKIP_ERROR_PREFIX",
     "AttemptKind",
     "UsageRecord",
     "RunRecord",

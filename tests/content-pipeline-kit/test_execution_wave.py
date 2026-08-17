@@ -122,6 +122,19 @@ def test_graph_readiness_empty_when_predecessor_claimed(tmp_path):
     assert wave == []
 
 
+def test_graph_readiness_yields_lowest_ordinal_pending_after_predecessor_skipped(tmp_path):
+    """Finding 1's fix: a SKIPPED predecessor unblocks its successor exactly
+    like an ACCEPTED one -- a skip is not a broken link, it is a unit the
+    run intentionally will not produce."""
+    store = _seeded_store(tmp_path)
+    r0 = store.claim_unit("run-1", "u0", "worker-1")
+    store.fail_unit("run-1", "u0", r0.fencing_token, terminal=True, terminal_state=UnitState.SKIPPED)
+
+    wave = ready_wave(store, "run-1", GRAPH_STRATEGY)
+    assert [u.unit_id for u in wave] == ["u1"]
+    assert len(wave) == 1
+
+
 def test_graph_readiness_blocked_permanently_by_terminally_failed_predecessor(tmp_path):
     store = _seeded_store(tmp_path)
     r0 = store.claim_unit("run-1", "u0", "worker-1")
