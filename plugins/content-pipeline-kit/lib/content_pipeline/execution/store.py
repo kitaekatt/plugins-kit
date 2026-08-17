@@ -69,6 +69,7 @@ from content_pipeline.execution.model import (
     AttemptRecord,
     ClaimResult,
     DuplicateUnitError,
+    NotAcceptedError,
     NotClaimedError,
     RunHaltedError,
     RunRecord,
@@ -209,6 +210,9 @@ _MIGRATIONS: List[List[str]] = [
     [
         "CREATE INDEX idx_attempts_run_unit ON attempts(run_id, unit_id);",
     ],
+    [
+        "ALTER TABLE units ADD COLUMN accepted_text TEXT;",
+    ],
 ]
 
 
@@ -240,6 +244,7 @@ def _row_to_unit(row: sqlite3.Row) -> UnitRecord:
         lease_expires_at=row["lease_expires_at"],
         accepted_at=row["accepted_at"],
         failed_at=row["failed_at"],
+        accepted_text=row["accepted_text"],
     )
 
 
@@ -780,6 +785,7 @@ class ExecutionStore:
         unit_id: str,
         fencing_token: int,
         *,
+        text: Optional[str] = None,
         usage: Optional[UsageRecord] = None,
         at: Optional[float] = None,
     ) -> None:
@@ -801,6 +807,14 @@ class ExecutionStore:
         rejected, duplicated-spend submission is a durable, visible fact
         instead of being silently discarded. Unit state is never touched by
         this path.
+
+        ``text``, when supplied, is written to ``accepted_text`` as part of
+        the same terminal UPDATE. When omitted (the default), the column is
+        left UNTOUCHED rather than written as NULL -- ``text`` is optional
+        precisely so an existing caller that never passes it goes on
+        producing byte-identical writes, and so a future caller cannot
+        accidentally blank out a previously recorded value by calling
+        :meth:`accept_unit` again without re-supplying it.
         """
         now = time.time() if at is None else at
         # Note: a stale-fence branch below records the SUPERSEDED attempt and
@@ -832,11 +846,18 @@ class ExecutionStore:
                 if state is not UnitState.CLAIMED:
                     raise NotClaimedError(f"{run_id!r}/{unit_id!r} is {state.value}, not claimed")
 
-                conn.execute(
-                    "UPDATE units SET state = ?, accepted_at = ?, updated_at = ? "
-                    "WHERE run_id = ? AND unit_id = ?",
-                    (UnitState.ACCEPTED.value, now, now, run_id, unit_id),
-                )
+                if text is not None:
+                    conn.execute(
+                        "UPDATE units SET state = ?, accepted_at = ?, updated_at = ?, "
+                        "accepted_text = ? WHERE run_id = ? AND unit_id = ?",
+                        (UnitState.ACCEPTED.value, now, now, text, run_id, unit_id),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE units SET state = ?, accepted_at = ?, updated_at = ? "
+                        "WHERE run_id = ? AND unit_id = ?",
+                        (UnitState.ACCEPTED.value, now, now, run_id, unit_id),
+                    )
                 self._record_attempt(
                     conn,
                     run_id,
@@ -917,6 +938,67 @@ class ExecutionStore:
                 )
         if stale is not None:
             raise StaleFenceError(run_id, unit_id, stale[0], stale[1])
+
+    def record_apply_started(
+        self, run_id: str, unit_id: str, *, at: Optional[float] = None
+    ) -> None:
+        """Record that finalize is about to call the adapter's apply (D6).
+
+        Requires the unit to be ACCEPTED; raises :class:`NotAcceptedError`
+        otherwise -- finalize only ever applies accepted units. No fencing
+        check: apply runs after acceptance, under the dispatcher's
+        documented single-writer discipline (see the module docstring), not
+        under worker-claim contention, so there is no competing fence to
+        validate against here the way there is in claim/accept/fail.
+        """
+        now = time.time() if at is None else at
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            unit_row = self._require_unit(conn, run_id, unit_id)
+            state = UnitState(unit_row["state"])
+            if state is not UnitState.ACCEPTED:
+                raise NotAcceptedError(
+                    f"{run_id!r}/{unit_id!r} is {state.value}, not accepted"
+                )
+            self._record_attempt(
+                conn,
+                run_id,
+                unit_id,
+                AttemptKind.APPLY_STARTED,
+                at=now,
+                fencing_token=unit_row["fencing_token"],
+            )
+
+    def record_apply_succeeded(
+        self, run_id: str, unit_id: str, *, at: Optional[float] = None
+    ) -> None:
+        """Record that the adapter's apply returned without raising (D6).
+
+        Same ACCEPTED requirement and no-fencing rationale as
+        :meth:`record_apply_started` -- see that docstring. Recording this
+        twice (e.g. a retried finalize pass) simply appends a second
+        attempt row; it is not itself the idempotence mechanism. Finalize
+        idempotence is derived by scanning the attempt log for an
+        APPLY_STARTED with no following APPLY_SUCCEEDED (``apply_unknown``,
+        per the model module docstring), not enforced by this method.
+        """
+        now = time.time() if at is None else at
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            unit_row = self._require_unit(conn, run_id, unit_id)
+            state = UnitState(unit_row["state"])
+            if state is not UnitState.ACCEPTED:
+                raise NotAcceptedError(
+                    f"{run_id!r}/{unit_id!r} is {state.value}, not accepted"
+                )
+            self._record_attempt(
+                conn,
+                run_id,
+                unit_id,
+                AttemptKind.APPLY_SUCCEEDED,
+                at=now,
+                fencing_token=unit_row["fencing_token"],
+            )
 
     # -- attempts ----------------------------------------------------------------
 

@@ -24,6 +24,7 @@ from content_pipeline.execution.model import (
     AlreadyClaimedError,
     AttemptKind,
     DuplicateUnitError,
+    NotAcceptedError,
     NotClaimedError,
     RunHaltedError,
     StaleFenceError,
@@ -802,3 +803,150 @@ def test_concurrent_first_open_does_not_lock(tmp_path):
             failures.append((trial, outputs))
 
     assert not failures, failures
+
+
+# -- accepted_text (A-min.2) -------------------------------------------------
+
+def test_accept_with_text_round_trips_through_a_store_reopen(tmp_path):
+    db_path = tmp_path / "run.db"
+    store = _seeded_store(tmp_path)
+    claim = store.claim_unit("run-1", "u0", "worker-a")
+    store.accept_unit("run-1", "u0", claim.fencing_token, text="the accepted body")
+
+    unit = store.get_unit("run-1", "u0")
+    assert unit.accepted_text == "the accepted body"
+
+    reopened = ExecutionStore(db_path)
+    reopened_unit = reopened.get_unit("run-1", "u0")
+    assert reopened_unit.accepted_text == "the accepted body"
+
+
+def test_accept_without_text_leaves_accepted_text_none(tmp_path):
+    store = _seeded_store(tmp_path)
+    claim = store.claim_unit("run-1", "u0", "worker-a")
+    store.accept_unit("run-1", "u0", claim.fencing_token)  # no text passed
+
+    unit = store.get_unit("run-1", "u0")
+    assert unit.accepted_text is None
+
+
+def test_migration_adds_accepted_text_column_to_an_existing_database(tmp_path):
+    """A store created against the OLD schema (before the accepted_text
+    migration step existed) must, on reopen, gain the new column AND still
+    read its pre-existing rows -- not just a fresh database."""
+    import content_pipeline.execution.store as store_mod
+
+    db_path = tmp_path / "run.db"
+    old_migrations = store_mod._MIGRATIONS[:-1]  # drop the accepted_text step
+    original_migrations = store_mod._MIGRATIONS
+    store_mod._MIGRATIONS = old_migrations
+    try:
+        old_store = ExecutionStore(db_path)
+        old_store.create_run(
+            "r1", driver="inline", backend="mock", model="m", adapter_version="1"
+        )
+        old_store.register_units("r1", ["u0"])
+        claim = old_store.claim_unit("r1", "u0", "worker-a")
+        old_store.accept_unit("r1", "u0", claim.fencing_token)
+    finally:
+        store_mod._MIGRATIONS = original_migrations
+
+    # Reopen with the real (current) migrations -- must apply the new step
+    # and still see the pre-existing row.
+    reopened = ExecutionStore(db_path)
+    unit = reopened.get_unit("r1", "u0")
+    assert unit is not None
+    assert unit.state is UnitState.ACCEPTED
+    assert unit.accepted_text is None
+
+    with sqlite3.connect(str(db_path)) as conn:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(units)")}
+    assert "accepted_text" in cols
+
+
+# -- apply attempts (A-min.2) -------------------------------------------------
+
+def test_record_apply_started_and_succeeded_append_attempts(tmp_path):
+    store = _seeded_store(tmp_path)
+    claim = store.claim_unit("run-1", "u0", "worker-a")
+    store.accept_unit("run-1", "u0", claim.fencing_token)
+
+    store.record_apply_started("run-1", "u0")
+    store.record_apply_succeeded("run-1", "u0")
+
+    kinds = [a.kind for a in store.list_attempts("run-1", "u0")]
+    assert kinds == [
+        AttemptKind.CLAIM,
+        AttemptKind.ACCEPT,
+        AttemptKind.APPLY_STARTED,
+        AttemptKind.APPLY_SUCCEEDED,
+    ]
+
+
+def test_record_apply_started_refuses_a_pending_unit(tmp_path):
+    store = _seeded_store(tmp_path)
+    with pytest.raises(NotAcceptedError):
+        store.record_apply_started("run-1", "u0")
+
+
+def test_record_apply_succeeded_refuses_a_pending_unit(tmp_path):
+    store = _seeded_store(tmp_path)
+    with pytest.raises(NotAcceptedError):
+        store.record_apply_succeeded("run-1", "u0")
+
+
+def test_record_apply_started_refuses_a_claimed_unit(tmp_path):
+    store = _seeded_store(tmp_path)
+    store.claim_unit("run-1", "u0", "worker-a")
+    with pytest.raises(NotAcceptedError):
+        store.record_apply_started("run-1", "u0")
+
+
+def test_record_apply_succeeded_refuses_a_claimed_unit(tmp_path):
+    store = _seeded_store(tmp_path)
+    store.claim_unit("run-1", "u0", "worker-a")
+    with pytest.raises(NotAcceptedError):
+        store.record_apply_succeeded("run-1", "u0")
+
+
+def test_record_apply_started_twice_appends_two_attempts_and_does_not_error(tmp_path):
+    """Apply-record idempotence is derived by scanning the attempt log
+    (per D6), not enforced by refusing a second call -- recording started
+    twice must simply append two attempts."""
+    store = _seeded_store(tmp_path)
+    claim = store.claim_unit("run-1", "u0", "worker-a")
+    store.accept_unit("run-1", "u0", claim.fencing_token)
+
+    store.record_apply_started("run-1", "u0")
+    store.record_apply_started("run-1", "u0")
+
+    started = [
+        a for a in store.list_attempts("run-1", "u0") if a.kind is AttemptKind.APPLY_STARTED
+    ]
+    assert len(started) == 2
+
+
+def test_record_apply_succeeded_twice_appends_two_attempts_and_does_not_error(tmp_path):
+    store = _seeded_store(tmp_path)
+    claim = store.claim_unit("run-1", "u0", "worker-a")
+    store.accept_unit("run-1", "u0", claim.fencing_token)
+
+    store.record_apply_succeeded("run-1", "u0")
+    store.record_apply_succeeded("run-1", "u0")
+
+    succeeded = [
+        a for a in store.list_attempts("run-1", "u0") if a.kind is AttemptKind.APPLY_SUCCEEDED
+    ]
+    assert len(succeeded) == 2
+
+
+def test_record_apply_unknown_run_raises(tmp_path):
+    store = _new_store(tmp_path)
+    with pytest.raises(UnknownRunError):
+        store.record_apply_started("no-such-run", "u0")
+
+
+def test_record_apply_unknown_unit_raises(tmp_path):
+    store = _seeded_store(tmp_path)
+    with pytest.raises(UnknownUnitError):
+        store.record_apply_started("run-1", "does-not-exist")
