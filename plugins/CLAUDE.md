@@ -120,7 +120,14 @@ to the script that imports them (e.g. `plugins/p4-kit/scripts/bootstrap_guard.py
 location. `tests/bootstrap/test_bootstrap_guard.py` asserts every copy matches
 the canonical, and the guard must never `import bootstrap_lib`. Current vendored
 copies: `git-kit/scripts`, `p4-kit/scripts`, `skills-kit/scripts`,
-`unreal-kit/lib`, `awesome-kit/skills/task/scripts`.
+`unreal-kit/lib`, `hue-kit/scripts`, `awesome-kit/skills/task/scripts`,
+`awesome-kit/skills/orchestrate/scripts`.
+
+**The test globs `plugins/**/bootstrap_guard.py`, so it is the authority on that
+list and this prose is not.** Sync by running the glob, never by working through
+the names above: two copies (`hue-kit`, `awesome-kit/skills/orchestrate`) were
+added without the list being updated, so an edit propagated by hand to the five
+documented copies left both stale and only the test caught it.
 
 `path_repair.py` follows the same vendoring discipline.
 
