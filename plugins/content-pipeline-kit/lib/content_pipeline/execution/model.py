@@ -31,6 +31,23 @@ fail is legal against them (``execution.store`` raises
 :class:`TerminalStateError`). This is the store-level primitive only --
 submit-time adjudication (parsing, validation, the accepted-verdict-is-final
 rule) belongs to the adapter/protocol layer added in a later phase.
+
+Accepted text and the apply tri-state (A-min.2)
+-------------------------------------------------
+
+``UnitRecord.accepted_text`` is the durable text recorded by
+:meth:`~content_pipeline.execution.store.ExecutionStore.accept_unit` at
+submit time (plan D1: "the verdict is recorded durably with the accepted
+text"). ``execution.controller.finalize_run`` re-parses it mechanically via
+the adapter's ``parse_fn`` -- it never re-validates and never flips a verdict.
+
+Whether a unit's apply has run is NOT a ``units`` column -- it is derived from
+the append-only attempts log via the :data:`AttemptKind.APPLY_STARTED` /
+:data:`AttemptKind.APPLY_SUCCEEDED` pair a finalize records around each
+adapter ``apply`` call (plan D6). A unit whose last apply-related attempt is
+``APPLY_STARTED`` with no following ``APPLY_SUCCEEDED`` is ``apply_unknown``;
+resuming finalize with any unit in that state refuses to proceed unless the
+adapter supplies a reconciliation hook (fail closed).
 """
 
 from __future__ import annotations
@@ -61,6 +78,8 @@ class AttemptKind(str, Enum):
     ACCEPT = "accept"
     FAIL = "fail"
     SUPERSEDED = "superseded"  # a fenced-out accept/fail: recorded, never applied (invariant 4)
+    APPLY_STARTED = "apply_started"  # finalize is about to call the adapter's apply (D6)
+    APPLY_SUCCEEDED = "apply_succeeded"  # the adapter's apply returned without raising (D6)
 
 
 @dataclass(frozen=True)
@@ -117,6 +136,7 @@ class UnitRecord:
     lease_expires_at: Optional[float] = None
     accepted_at: Optional[float] = None
     failed_at: Optional[float] = None
+    accepted_text: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +199,11 @@ class NotClaimedError(ExecutionError):
     """A renew/accept/fail was attempted against a unit that is not CLAIMED."""
 
 
+class NotAcceptedError(ExecutionError):
+    """An apply-started/apply-succeeded record was attempted against a unit
+    that is not ACCEPTED (finalize only ever applies accepted units, D1/D6)."""
+
+
 class StaleFenceError(ExecutionError):
     """The fencing token presented does not match the unit's current token."""
 
@@ -210,5 +235,6 @@ __all__ = [
     "AlreadyClaimedError",
     "TerminalStateError",
     "NotClaimedError",
+    "NotAcceptedError",
     "StaleFenceError",
 ]
