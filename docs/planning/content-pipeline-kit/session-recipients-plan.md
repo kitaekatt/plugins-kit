@@ -596,7 +596,21 @@ relocates under `execution/` with tested aliases preserved. (4) Documentation
 drift corrections as ordinary maintenance: `llm/__init__.py` and the build
 guide advertising three transports while Codex is routed, and the
 overconfident flat-zero billing comments in both plugins' Claude-CLI backends.
-(5) Removal of the untracked loop helpers only on D7's evidence key.
+(5) Removal of the untracked loop helpers only on D7's evidence key. (6)
+`Gate`/`run_gates` relocation: `pipeline/single_pass.py` is the module this
+phase's halt/resume corrections and untracked-loop deprecation (items 1 and 5)
+churn hardest, and it is also where `Gate`/`run_gates` live today, imported
+directly (not re-derived) by `execution/controller.py:147` -- verified the
+only importer outside `single_pass.py` itself. The direct-import reasoning in
+`controller.py`'s "The gate seam" docstring stays correct as stated: it argues
+against redefining an equivalent local shape, not against relocating the one
+true shape. So `Gate` and `run_gates` move to a leaf module,
+`pipeline/gate.py`, with `single_pass.py` re-exporting both names as aliases
+so `controller.py`'s import and any consumer's existing gate list keep
+resolving unchanged; the aliases are tested, per the compatibility-alias
+convention above. Not done earlier: the seam is correct as-is under A-min/B/C,
+and moving it before this phase's churn begins would be relocation for its
+own sake.
 
 **Shippable:** each item independently; none gates B or C.
 
