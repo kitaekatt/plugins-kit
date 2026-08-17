@@ -17,6 +17,7 @@ from content_pipeline.execution.controller import (
     GraphOrderMismatchError,
     MissingAcceptedTextError,
     RunAdapter,
+    UnappliedPredecessorError,
     finalize_run,
     pause_run,
     prepare_run,
@@ -214,6 +215,65 @@ def test_prepare_run_flat_strategy_any_registration_order_unaffected(tmp_path):
     wave = prepare_run(store, "run-1", FLAT_STRATEGY, work_units)
 
     assert [u.unit_id for u in wave] == ["u2", "u0", "u1"]
+
+
+# -- prepare_run: refuses an ACCEPTED-but-unapplied predecessor (2026-08-17) --
+# amin2-readiness-keys-on-accepted
+
+
+def test_prepare_run_second_call_raises_on_accepted_but_unapplied_predecessor(tmp_path):
+    """The exact defect: prepare_run -> run_wave (accepts u0) -> prepare_run
+    again WITHOUT an intervening finalize_run must refuse instead of silently
+    returning a wave with u1 ready -- ACCEPTED only means the text was
+    accepted at submit time (D1), not that finalize_run applied it."""
+    store = _seeded_store(tmp_path, unit_ids=("u0", "u1"))
+    work_units = [WorkUnit(id="u0"), WorkUnit(id="u1")]
+    graph_strategy = GraphWalkStrategy(order=lambda s: ["u0", "u1"])
+
+    prepare_run(store, "run-1", graph_strategy, work_units)
+    claim = store.claim_unit("run-1", "u0", "w")
+    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
+    # finalize_run is deliberately NOT called here.
+
+    with pytest.raises(UnappliedPredecessorError) as exc_info:
+        prepare_run(store, "run-1", graph_strategy, work_units)
+
+    assert exc_info.value.run_id == "run-1"
+    assert exc_info.value.unit_id == "u0"
+
+
+def test_prepare_run_proceeds_when_predecessor_was_finalized_between_waves(tmp_path):
+    """The contrasting case: finalize_run runs between waves, u0 reaches
+    APPLY_SUCCEEDED, and the second prepare_run call proceeds normally,
+    releasing u1."""
+    store = _seeded_store(tmp_path, unit_ids=("u0", "u1"))
+    work_units = [WorkUnit(id="u0"), WorkUnit(id="u1")]
+    graph_strategy = GraphWalkStrategy(order=lambda s: ["u0", "u1"])
+
+    prepare_run(store, "run-1", graph_strategy, work_units)
+    claim = store.claim_unit("run-1", "u0", "w")
+    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
+
+    adapter = RunAdapter(parse_fn=lambda t: t, apply=lambda uid, payload: None)
+    applied = finalize_run(store, "run-1", adapter)
+    assert applied == ["u0"]
+
+    wave = prepare_run(store, "run-1", graph_strategy, work_units)
+    assert [u.unit_id for u in wave] == ["u1"]
+
+
+def test_prepare_run_flat_strategy_unaffected_by_accepted_unapplied_unit(tmp_path):
+    """A flat strategy carries no ordering claim: the new check never runs,
+    regardless of an ACCEPTED-but-unapplied unit elsewhere in the run."""
+    store = _seeded_store(tmp_path, unit_ids=("u0", "u1"))
+    work_units = [WorkUnit(id="u0"), WorkUnit(id="u1")]
+
+    claim = store.claim_unit("run-1", "u0", "w")
+    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
+    # u0 is ACCEPTED and never applied; a flat prepare_run must not care.
+
+    wave = prepare_run(store, "run-1", FLAT_STRATEGY, work_units)
+    assert [u.unit_id for u in wave] == ["u1"]
 
 
 # -- unfinished_units ----------------------------------------------------------

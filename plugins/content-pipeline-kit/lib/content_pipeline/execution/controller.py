@@ -234,6 +234,37 @@ class GraphOrderMismatchError(ExecutionError):
         )
 
 
+class UnappliedPredecessorError(ExecutionError):
+    """``prepare_run`` refuses a graph-strategy run that has an ``ACCEPTED``
+    unit whose apply has not yet succeeded (user decision, 2026-08-17; plan
+    item ``amin2-readiness-keys-on-accepted``).
+
+    ``execution.wave``'s ``_graph_ready_wave`` releases a successor unit as
+    soon as its predecessor reaches ``UnitState.ACCEPTED`` -- but ACCEPTED
+    only means the text was accepted into the store (D1's submit-time
+    verdict), not that ``finalize_run`` has actually applied it
+    (``AttemptKind.APPLY_SUCCEEDED``). A caller who runs ``prepare_run``,
+    then ``run_wave`` (which accepts a unit), then ``prepare_run`` again
+    WITHOUT calling ``finalize_run`` in between would otherwise see the
+    successor become claimable -- and possibly generated -- before its
+    predecessor's payload has been applied at all, silently defeating the
+    one-unit-wave guarantee D1 exists to provide. Raised naming the run and
+    the offending unit id before computing or returning a wave, so no
+    caller ever observes a wave computed in that state.
+    """
+
+    def __init__(self, run_id: str, unit_id: str) -> None:
+        self.run_id = run_id
+        self.unit_id = unit_id
+        super().__init__(
+            f"run {run_id!r}: unit {unit_id!r} is ACCEPTED but not yet "
+            "applied (no APPLY_SUCCEEDED attempt); prepare_run refuses to "
+            "compute a wave until finalize_run has applied it -- otherwise "
+            "a successor could become ready before this unit's payload has "
+            "landed (D1's one-unit-wave guarantee)"
+        )
+
+
 @dataclass
 class RunAdapter:
     """The local, minimal seam :func:`~content_pipeline.execution.drivers.inline.run_wave`
@@ -329,6 +360,23 @@ def _validate_graph_order(
             raise GraphOrderMismatchError(run_id, position, expected, actual)
 
 
+def _validate_no_unapplied_accepted(
+    store: ExecutionStore,
+    run_id: str,
+) -> None:
+    """Refuse loudly when a graph run has an ``ACCEPTED`` unit whose apply has
+    not yet succeeded -- see :class:`UnappliedPredecessorError` and the "why"
+    note on :func:`prepare_run`. Derives applied-ness from
+    ``store.list_attempts`` (invariant 3: never stored directly), the same
+    way :func:`finalize_run` does via :func:`_last_apply_kind`."""
+    for unit in store.list_units(run_id):
+        if unit.state is not UnitState.ACCEPTED:
+            continue
+        attempts = store.list_attempts(run_id, unit.unit_id)
+        if _last_apply_kind(attempts) is not AttemptKind.APPLY_SUCCEEDED:
+            raise UnappliedPredecessorError(run_id, unit.unit_id)
+
+
 def prepare_run(
     store: ExecutionStore,
     run_id: str,
@@ -377,6 +425,20 @@ def prepare_run(
     strategy carries no such ordering claim (the flat shape asserts units are
     independent), so it is unaffected: no validation, no behavior change.
 
+    Still for a graph strategy, this call THEN refuses if any unit is
+    ``ACCEPTED`` but not yet applied (no ``AttemptKind.APPLY_SUCCEEDED``
+    attempt), raising :class:`UnappliedPredecessorError`. ``ACCEPTED`` means
+    only that the text was accepted into the store at submit time (D1); it
+    does not mean ``finalize_run`` has applied it. Without this check, a
+    caller who runs ``prepare_run`` -> ``run_wave`` -> ``prepare_run`` again
+    WITHOUT an intervening ``finalize_run`` would see
+    ``execution.wave``'s ``_graph_ready_wave`` release the successor as soon
+    as its predecessor reaches ``ACCEPTED`` -- letting the successor be
+    claimed and generated before the predecessor's payload has landed,
+    silently defeating the same one-unit-wave guarantee the order check
+    above protects. A flat strategy is unaffected for the same reason as
+    above: no ordering claim, no check.
+
     For each matched ``PENDING`` unit, in the order ``store.list_units``
     returns (ordinal order):
 
@@ -399,6 +461,7 @@ def prepare_run(
     """
     if is_graph_strategy(strategy):
         _validate_graph_order(store, run_id, strategy, graph_source)
+        _validate_no_unapplied_accepted(store, run_id)
 
     by_id = {wu.id: wu for wu in work_units}
     for unit in store.list_units(run_id):
@@ -598,6 +661,7 @@ __all__ = [
     "ApplyUnknownError",
     "GraphOrderMismatchError",
     "MissingAcceptedTextError",
+    "UnappliedPredecessorError",
     "RunAdapter",
     "prepare_run",
     "finalize_run",
