@@ -28,6 +28,10 @@ Public surface:
   cleanly instead of burning the rest of the corpus.
 - :func:`call_llm` -- the single entry point: budget guard, cache, retry,
   halt-mapping, cost accounting.
+- :func:`is_likely_reasoning_exhaustion` / :func:`describe_likely_reasoning_exhaustion`
+  -- distinguish an empty-but-token-spending response (reasoning model ran out
+  of ``max_tokens`` before emitting visible text) from a genuinely empty one.
+  Surfaced on :class:`LLMResponse` as ``likely_reasoning_exhausted``.
 - :func:`build_cache_key` / :class:`ResponseCache` -- the content-addressed
   cache (pluggable directory; empty responses never cached).
 - :func:`estimate_cost` / :func:`response_cost` / :func:`load_pricing` -- cost
@@ -97,6 +101,20 @@ class LLMResponse:
       price -- a total placed there would compute a fabricated dollar figure.
       For the same reason do NOT add it to ``input_tokens + output_tokens``;
       it is an alternative to them, not a component.
+    - ``likely_reasoning_exhausted`` -- True when ``text`` is empty (or
+      whitespace-only) while ``output_tokens`` is nonzero. That shape is the
+      signature of a reasoning model that spent its entire ``max_tokens``
+      budget on hidden reasoning before emitting any visible text -- it is a
+      STRONG INFERENCE from the token/text shape, not a certainty. It is
+      distinct from a genuinely empty response (``output_tokens == 0``, e.g.
+      the provider returned nothing at all), which leaves this False; only
+      the former is plausibly fixed by raising ``max_tokens``. Set
+      automatically by :func:`call_llm` (and therefore
+      :func:`submit_validated`) after each LIVE completion, via
+      :func:`is_likely_reasoning_exhaustion`; defaults to False so existing
+      construction sites (a cache hit, a hand-built ``LLMResponse`` in a
+      test) are unaffected. Use :func:`describe_likely_reasoning_exhaustion`
+      for a human-readable diagnostic naming the likely cause and remedy.
     """
 
     text: str
@@ -108,6 +126,7 @@ class LLMResponse:
     attempts: int = 1
     from_cache: bool = False
     total_tokens: int = 0
+    likely_reasoning_exhausted: bool = False
 
 
 @dataclass(frozen=True)
@@ -264,6 +283,55 @@ def classify_openai_exception(exc: BaseException) -> Optional[str]:
     if cause is not None and cause is not exc:
         return classify_openai_exception(cause)
     return None
+
+
+# ---------------------------------------------------------------------------
+# Reasoning-exhaustion diagnosability
+# ---------------------------------------------------------------------------
+#
+# A reasoning model given a low `max_tokens` can spend its ENTIRE output
+# budget on hidden reasoning and return `text == ""` with `output_tokens`
+# nonzero. `evaluate_submission` / `submit_validated` correctly reject that
+# (D1: submit-time adjudication is authoritative, fail-closed is right) --
+# this section does not change that. It only makes the empty-but-spent shape
+# distinguishable from a genuinely empty response (`output_tokens == 0`), so
+# a caller does not mistake a `max_tokens` tuning problem for a parser bug.
+
+
+def is_likely_reasoning_exhaustion(text: str, output_tokens: int) -> bool:
+    """True when ``text`` is empty/whitespace-only but ``output_tokens`` is nonzero.
+
+    That shape is the signature of a reasoning model that spent its entire
+    ``max_tokens`` budget on hidden reasoning tokens before emitting any
+    visible content. It is a STRONG INFERENCE from the token/text shape, not
+    a certainty -- other causes could in principle produce the same shape.
+
+    Distinguishing this from a genuinely empty response
+    (``output_tokens == 0``, e.g. the provider returned nothing at all) is
+    the whole point: only THIS case is plausibly fixed by raising
+    ``max_tokens``; a zero-token empty response needs a different remedy.
+    """
+    return output_tokens > 0 and not (text or "").strip()
+
+
+def describe_likely_reasoning_exhaustion(response: "LLMResponse") -> Optional[str]:
+    """Human-readable diagnostic for ``response.likely_reasoning_exhausted``.
+
+    Returns ``None`` when the flag is not set (including the
+    ``output_tokens == 0`` case, which is NOT this failure mode). Names the
+    likely cause and the remedy in plain terms without asserting either as
+    certain -- pair with the raw ``output_tokens`` value when logging, since
+    this function does not repeat it.
+    """
+    if not response.likely_reasoning_exhausted:
+        return None
+    return (
+        f"response text is empty but output_tokens={response.output_tokens} > 0 "
+        "-- the output budget appears to have been consumed before any "
+        "visible text was emitted (likely a reasoning model spending "
+        "max_tokens on hidden reasoning); consider raising max_tokens. This "
+        "is a strong inference, not a certainty."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -650,6 +718,13 @@ def call_llm(
        :class:`BudgetExceededError`).
     5. **Cache write** -- a non-empty live response is stored under its key.
 
+    Before step 4, a live response's ``likely_reasoning_exhausted`` is
+    (re)computed via :func:`is_likely_reasoning_exhaustion` -- see that
+    function and :func:`describe_likely_reasoning_exhaustion`. This does NOT
+    change what counts as a valid response or any rejection/ordering
+    behavior; it only makes an empty-but-token-spending completion
+    programmatically distinguishable from a genuinely empty one.
+
     ``sleep`` is invoked through the module-level ``time`` object so tests can
     monkeypatch ``platform.time.sleep``.
     """
@@ -698,6 +773,13 @@ def call_llm(
                 continue
             raise
     assert response is not None, last_exc  # loop either breaks or raises
+
+    response = replace(
+        response,
+        likely_reasoning_exhausted=is_likely_reasoning_exhaustion(
+            response.text, response.output_tokens
+        ),
+    )
 
     if pricing is not None:
         cost = response_cost(response.model, response, pricing=pricing)
@@ -935,6 +1017,8 @@ __all__ = [
     "HaltError",
     "classify_halt_text",
     "classify_openai_exception",
+    "is_likely_reasoning_exhaustion",
+    "describe_likely_reasoning_exhaustion",
     "load_pricing",
     "estimate_cost",
     "response_cost",

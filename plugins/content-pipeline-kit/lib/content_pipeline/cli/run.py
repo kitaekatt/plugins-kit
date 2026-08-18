@@ -15,25 +15,63 @@ onto its own entry point via ``cli.scaffold.dispatch`` -- this module ships no
 console script and no ``main()``, matching the package-wide no-console-script
 boundary (``plugins/content-pipeline-kit/CLAUDE.md``).
 
-The ``protocol`` command (A-min.3) -- an argv shell around one JSON envelope
+The ``protocol`` command (A-min.3) -- one JSON envelope, preferably on stdin
 --------------------------------------------------------------------------------
 When ``adapter`` is supplied, :func:`build_commands` additionally registers a
-single ``"protocol"`` command: its ONE positional argument is a JSON-encoded
-worker-protocol envelope (``execution.protocol``'s ``{"protocol_version":
-..., "verb": ..., "payload": {...}}`` shape), and its result is whatever
+single ``"protocol"`` command carrying one JSON-encoded worker-protocol
+envelope (``execution.protocol``'s ``{"protocol_version": ..., "verb": ...,
+"payload": {...}}`` shape); its result is whatever
 :func:`~content_pipeline.execution.protocol.dispatch` returns. This still
-honors the placement rule -- ``json.loads`` plus one call to
+honors the placement rule -- reading the envelope plus one call to
 ``protocol.dispatch`` is argv-shaping, not execution logic; every verb's
 actual behavior (claim math, evaluation, apply) lives in ``execution/``, same
 as every other command here. ``**protocol_policy`` forwards to
 :func:`~content_pipeline.execution.protocol.build_handlers` (``strategy``,
 ``gates``, ``freshness_of``, etc.) -- see that function's docstring for which
 verbs need which of them.
+
+**Three ways to supply the envelope, in preference order:**
+
+1. **stdin (preferred, documented default).** ``protocol`` with no positional
+   argument, or an explicit ``-``, reads the envelope from stdin as UTF-8
+   bytes. This is the form to document and to use.
+2. **``@<path>``.** A positional argument starting with ``@`` reads the
+   envelope from that file, also as UTF-8.
+3. **Positional argv (discouraged, kept for back-compat).** A positional
+   argument that is neither absent, ``-``, nor ``@``-prefixed is treated as
+   the literal envelope JSON, exactly as A-min.3 originally shipped it in
+   0.9.0. Kept working so existing callers do not break, but discouraged: see
+   below for why.
+
+**Why stdin is preferred, not merely tidier.** With the envelope in argv,
+every unit produces a DIFFERENT command string (the JSON payload varies per
+call), so a permission allowlist that must match exact command strings can
+never cover it -- each unit's invocation looks like a new, unreviewed
+command. On stdin, the command string invoked (mount, flags, ``protocol``,
+nothing else) is CONSTANT across every unit and becomes a single allowlist
+entry. Argv also breaks structurally on Windows: when a `.bat` wrapper sits
+anywhere in the invocation chain, `cmd.exe` re-parses the command line, and
+its quote-state tracking is confused by the escaped inner quotes JSON
+requires -- a `|` inside the envelope (as YAML block scalars like
+``reasoning: |`` produce) is then read as a pipe operator once the parser
+believes itself outside quotes, and the rest of the JSON becomes a bogus
+command (observed: exit 255, ``'\\n' is not recognized as an internal or
+external command``). stdin has no such re-parsing step.
+
+Envelope text is always decoded as UTF-8 explicitly (never the platform
+default -- the Windows console default is cp1252, which corrupts or crashes
+on the non-ASCII text a real envelope carries, e.g. zh-Hans payload values).
+An empty stdin, malformed JSON, or a missing ``@`` file each return a typed
+``{"ok": false, "error": {...}}`` reply -- the same shape
+:func:`~content_pipeline.execution.protocol.dispatch` already uses for a bad
+envelope -- rather than raising a bare traceback.
 """
 
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from content_pipeline.cli.scaffold import Command
@@ -105,16 +143,54 @@ def build_commands(
     """
 
     def create_run(args: List[str]) -> Any:
+        """Create a run. Echoes ``adapter_version`` in its result -- a value
+        the caller cannot see is a value it cannot check, and this is the
+        surface a caller uses to confirm what was actually stored (see
+        below).
+
+        ``adapter_version`` validation (defect 2): when this mount has an
+        ``adapter`` (the ``build_commands(..., adapter=...)`` case), a
+        supplied ``adapter_version`` that disagrees with the mounted
+        adapter's own ``adapter.adapter_version`` is REFUSED -- a run stored
+        with a version the live adapter does not report would fail every
+        subsequent protocol verb with ``AdapterVersionMismatchError`` (a run
+        that can never be claimed). When the positional ``adapter_version``
+        is omitted and an adapter is mounted, it defaults to the adapter's
+        own reported ``adapter_version``, since the adapter is the
+        authoritative source for its own identity. A mount with no adapter
+        (``adapter=None``, the A-min.1/A-min.2 store-only shape) performs
+        neither check nor default -- ``adapter_version`` stays a plain
+        required positional, since there is no live adapter to validate or
+        default against.
+        """
         positional, _flags = _split_flags(args)
         run_id = _require(positional, 0, "run_id")
         driver = _require(positional, 1, "driver")
         backend = _require(positional, 2, "backend")
         model = _require(positional, 3, "model")
-        adapter_version = _require(positional, 4, "adapter_version")
+        if len(positional) > 4:
+            adapter_version = positional[4]
+        elif adapter is not None:
+            adapter_version = adapter.adapter_version
+        else:
+            raise ValueError("missing required argument: adapter_version")
+        if adapter is not None and adapter_version != adapter.adapter_version:
+            raise ValueError(
+                f"adapter_version {adapter_version!r} does not match the mounted "
+                f"adapter's reported version {adapter.adapter_version!r}; refusing "
+                "to create a run this adapter could never claim -- see "
+                "execution.adapter.require_compatible_adapter"
+            )
         run = store.create_run(
             run_id, driver=driver, backend=backend, model=model, adapter_version=adapter_version
         )
-        return {"id": run.id, "driver": run.driver, "backend": run.backend, "model": run.model}
+        return {
+            "id": run.id,
+            "driver": run.driver,
+            "backend": run.backend,
+            "model": run.model,
+            "adapter_version": run.adapter_version,
+        }
 
     def register_units(args: List[str]) -> Any:
         positional, _flags = _split_flags(args)
@@ -228,7 +304,56 @@ def build_commands(
 
         def protocol(args: List[str]) -> Any:
             positional, _flags = _split_flags(args)
-            envelope_text = _require(positional, 0, "envelope (JSON)")
+            if not positional or positional[0] == "-":
+                # Preferred form (see module docstring): stdin, decoded as
+                # UTF-8 explicitly -- never the platform default, which on
+                # Windows is cp1252 and corrupts/crashes on non-ASCII
+                # envelope content.
+                raw = sys.stdin.buffer.read()
+                try:
+                    envelope_text = raw.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    return {
+                        "ok": False,
+                        "error": {
+                            "type": "MalformedEnvelopeError",
+                            "message": f"stdin is not valid UTF-8: {exc}",
+                        },
+                    }
+                if not envelope_text.strip():
+                    return {
+                        "ok": False,
+                        "error": {
+                            "type": "EmptyEnvelopeError",
+                            "message": "no envelope on stdin (input was empty)",
+                        },
+                    }
+            elif positional[0].startswith("@"):
+                path = positional[0][1:]
+                try:
+                    envelope_text = Path(path).read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    return {
+                        "ok": False,
+                        "error": {
+                            "type": "MissingEnvelopeFileError",
+                            "message": f"envelope file not found: {path!r}",
+                        },
+                    }
+                except OSError as exc:
+                    return {
+                        "ok": False,
+                        "error": {
+                            "type": "MissingEnvelopeFileError",
+                            "message": f"could not read envelope file {path!r}: {exc}",
+                        },
+                    }
+            else:
+                # Discouraged back-compat form: the literal envelope JSON as
+                # the positional argv token (0.9.0's original shape). See
+                # module docstring for why this is kept but not preferred.
+                envelope_text = positional[0]
+
             try:
                 envelope = json.loads(envelope_text)
             except json.JSONDecodeError as exc:
@@ -241,7 +366,12 @@ def build_commands(
         commands["protocol"] = Command(
             name="protocol",
             handler=protocol,
-            help="Dispatch one JSON worker-protocol envelope (execution.protocol).",
+            help=(
+                "Dispatch one JSON worker-protocol envelope (execution.protocol). "
+                "Reads stdin by default (preferred); '@<path>' reads a file; a "
+                "literal JSON positional argument is accepted for back-compat "
+                "but discouraged -- see this module's docstring."
+            ),
         )
 
     return commands

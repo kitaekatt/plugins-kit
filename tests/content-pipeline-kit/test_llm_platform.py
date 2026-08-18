@@ -25,9 +25,11 @@ from content_pipeline.llm.platform import (
     build_cache_key,
     call_llm,
     check_request_fits,
+    describe_likely_reasoning_exhaustion,
     estimate_cost,
     estimate_request_tokens,
     evaluate_submission,
+    is_likely_reasoning_exhaustion,
     response_cost,
     submit_validated,
 )
@@ -144,6 +146,62 @@ def test_call_llm_empty_response_reaches_live_path_again(tmp_path):
     assert r1.text == ""
     r2 = call_llm(backend, "s", "u", model="test/model", cache_dir=tmp_path)
     assert r2.text == "recovered"  # empty was not cached
+
+
+# --- reasoning-exhaustion diagnosability --------------------------------------
+#
+# Empty text + output_tokens > 0 (reasoning consumed the budget) must be
+# distinguishable from empty text + output_tokens == 0 (genuinely nothing
+# came back) -- that is the whole defect. Cover both shapes plus whitespace
+# and the normal case so the distinction, not just one side of it, is pinned.
+
+
+def test_call_llm_empty_text_with_output_tokens_flags_reasoning_exhaustion():
+    backend = MockBackend(responses=[{"text": "", "output_tokens": 201}])
+    r = call_llm(backend, "s", "u", model="test/model")
+    assert r.text == ""
+    assert r.output_tokens == 201
+    assert r.likely_reasoning_exhausted is True
+    hint = describe_likely_reasoning_exhaustion(r)
+    assert hint is not None
+    assert "max_tokens" in hint
+    assert "output_tokens=201" in hint
+
+
+def test_call_llm_empty_text_with_zero_output_tokens_is_not_flagged():
+    backend = MockBackend(responses=[{"text": "", "output_tokens": 0}])
+    r = call_llm(backend, "s", "u", model="test/model")
+    assert r.text == ""
+    assert r.output_tokens == 0
+    assert r.likely_reasoning_exhausted is False
+    assert describe_likely_reasoning_exhaustion(r) is None
+
+
+def test_call_llm_whitespace_only_text_with_output_tokens_flags_reasoning_exhaustion():
+    backend = MockBackend(responses=[{"text": "   \n\t  ", "output_tokens": 50}])
+    r = call_llm(backend, "s", "u", model="test/model")
+    assert r.likely_reasoning_exhausted is True
+
+
+def test_call_llm_normal_response_is_not_flagged():
+    backend = MockBackend(responses=[{"text": "hello", "output_tokens": 12}])
+    r = call_llm(backend, "s", "u", model="test/model")
+    assert r.likely_reasoning_exhausted is False
+    assert describe_likely_reasoning_exhaustion(r) is None
+
+
+def test_is_likely_reasoning_exhaustion_predicate_directly():
+    assert is_likely_reasoning_exhaustion("", 201) is True
+    assert is_likely_reasoning_exhaustion("   ", 5) is True
+    assert is_likely_reasoning_exhaustion("", 0) is False
+    assert is_likely_reasoning_exhaustion("text", 10) is False
+
+
+def test_llm_response_likely_reasoning_exhausted_defaults_false():
+    # Back-compat: existing construction sites (hand-built LLMResponse,
+    # ResponseCache.lookup reconstruction) must keep working unchanged.
+    r = LLMResponse(text="hi", model="m")
+    assert r.likely_reasoning_exhausted is False
 
 
 # --- cost --------------------------------------------------------------------
