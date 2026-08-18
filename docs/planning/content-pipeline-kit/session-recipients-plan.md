@@ -502,7 +502,15 @@ default, `create-run`, the adapter contract), but items 1, 2 and 5 are
 prerequisites for the B and C drivers, which spawn worker processes and would
 each rediscover them.
 
-1. **The envelope's carrier, not the envelope.** Passing the protocol envelope
+**Status 2026-08-18.** Items 1, 3 and 4 are RESOLVED in `f114930`; items 2
+and 5 remain OPEN and are the required remainder of this sub-phase. Both are
+B and C driver prerequisites, so neither may be carried into B1 or C1 as an
+assumption: a driver written before item 2 ships a lease default that fails a
+healthy unit, and a driver written before item 5 ships a worker whose
+environment is unspecified. Close both here, in A-min surfaces, rather than
+twice over in each lane.
+
+1. **The envelope's carrier, not the envelope.** **RESOLVED `f114930`.** Passing the protocol envelope
    as an argv string is unsafe on Windows when the payload contains both escaped
    quotes and a `|`: through a `.bat` wrapper, cmd.exe un-quotes the pipe and the
    wrapper dies at exit 255. YAML block scalars use `|`, so a realistically
@@ -514,7 +522,16 @@ each rediscover them.
    command lines and both depend on this; it also interacts badly with P5's
    requirement that an allowlist cover exact command strings, since an unstable
    quoting is an unstable string.
-2. **The default lease is wrong for an agentic unit.** `DEFAULT_LEASE_SECONDS`
+   *Shipped:* the envelope is read from stdin (no positional argument, or an
+   explicit `-`) or from `@<path>`, both decoded UTF-8 explicitly rather than
+   by platform default; the argv form still works and is documented as
+   discouraged. *Still unproven:* the tests call the handler in-process and
+   never cross a shell, so they establish that the stdin path preserves the
+   content that corrupts argv, not that the cmd.exe failure is fixed end to
+   end. That needs a `.bat`-wrapped invocation carrying a block-scalar
+   envelope on stdin against a consumer resolving the published shared lib --
+   i.e. after a release.
+2. **The default lease is wrong for an agentic unit.** **OPEN -- required.** `DEFAULT_LEASE_SECONDS`
    is 300s (`execution/store.py:87`). Measured 2026-08-17: one first-pass-dialog
    unit driven by a background session consumed 213s of it -- 71%, on the cheap
    case (no retry, no contention, a healthy session), with a 10.8KB system and
@@ -525,9 +542,15 @@ each rediscover them.
    D5's substance is unchanged -- the lease is consumer-configured per run -- but
    the shipped **default** is actively wrong for the agentic case rather than
    merely unopinionated. Resolve by one of: raising the default, refusing to
-   start a workflow-lane run without an explicit lease, or deriving it from the
-   adapter.
-3. **`create-run` accepts an unclaimable `adapter_version`.** It validates
+   start a workflow-lane run without an explicit lease, or deriving it from
+   the adapter. Which option is chosen is not purely mechanical: refusing to
+   start without an explicit lease would harden D5's `consumer-configured per
+   run` from guidance into enforcement, which is decision-adjacent and wants
+   the author's call rather than an implementer's. Raising the default and
+   deriving from the adapter are both additive and leave D5's substance
+   untouched. Whichever is chosen, the change is consumer-visible and must be
+   named at publish.
+3. **`create-run` accepts an unclaimable `adapter_version`.** **RESOLVED `f114930`.** It validates
    nothing against the mounted adapter's own reported identity, so a run can be
    created in a permanently unclaimable state; every later verb then fails with
    an adapter-version mismatch whose message talks about resuming, for a run that
@@ -535,7 +558,12 @@ each rediscover them.
    creatability. Compounding it, `create-run`'s stdout echoes id, driver, backend
    and model but **not** `adapter_version`, so a caller cannot see what was
    stored. Fix both: default or validate the value at creation, and echo it.
-4. **Empty text with spent tokens is indistinguishable from no response.** A
+   *Shipped:* create-run validates against the mounted adapter and refuses a
+   mismatch, defaults the value from the adapter when omitted, and echoes it.
+   This is a real behavior change, not purely additive -- a consumer that
+   deliberately passed a version its adapter does not report now gets a
+   refusal -- and must be named at publish.
+4. **Empty text with spent tokens is indistinguishable from no response.** **RESOLVED `f114930`.** A
    reasoning model can consume its whole output budget before emitting text and
    return `text=""` with nonzero `output_tokens`. The adapter hard-rejects it
    correctly (D1 as designed), but nothing in `LLMResponse` separates that from a
@@ -543,7 +571,11 @@ each rediscover them.
    looks like a validation bug. Surface a hint when `text == ""` and
    `output_tokens > 0`. This bites harder on the session-pool lanes, where budget
    behavior is less visible than an OpenRouter token count.
-5. **A worker needs the consumer's environment, not just its database path.** A
+   *Shipped:* `LLMResponse` gains a defaulted `likely_reasoning_exhausted`
+   field plus a predicate and a description helper, so an adapter branches on
+   a value rather than parsing a log line. It is computed in `call_llm`, so a
+   caller reaching past it to a backend must apply the predicate itself.
+5. **A worker needs the consumer's environment, not just its database path.** **OPEN -- required.** A
    consumer can resolve its project root from an environment variable rather than
    from cwd, and on Windows may require a native-style path there; a driver that
    propagates only `--db` produces a worker that silently resolves against the
@@ -552,8 +584,9 @@ each rediscover them.
    B1 and C1 driver design must decide it explicitly rather than letting each
    consumer discover it. Cheap to get wrong and silent when wrong.
 
-**Shippable:** yes; additive plus one carrier addition. Item 1 and item 2 land
-before the B and C drivers.
+**Shippable:** yes; additive plus one carrier addition, with the `create-run`
+refusal in item 3 the one behavior change to name. Items 2 and 5 land before
+the B and C drivers.
 
 ### Phase B -- Claude background sessions
 
