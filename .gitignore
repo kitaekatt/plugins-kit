@@ -18,11 +18,13 @@ CLAUDE.local.md
 .githooks/project-terms.txt
 .DS_Store
 plugins/unreal-kit/skills/ue-python-api/stubs/unreal.py
-# Includes dev/tasks/. Task folders are DELIBERATELY untracked in this repo --
-# see "Task folders are gitignored here" in CLAUDE.md. Do not add a
-# !dev/tasks/ exception; awesome-kit:task's "dev/tasks is version-controlled"
-# contract does not apply to this repo.
-dev/
+# dev/tasks is a directory junction (Windows) / symlink into the PRIVATE
+# kitaekatt/tasks repo, where this project's task folders live and are
+# version-controlled -- see "Task folders live in a private tasks repo" in
+# CLAUDE.md. This entry is load-bearing: it is what stops git traversing the
+# link and staging private task content into this PUBLIC repo. Do not add a
+# !dev/tasks exception.
+dev/tasks/
 
 # Synthetic dev-layout registry written by scripts/claude_plugin_test.py
 # (session-scoped; never committed -- see that script for why it lives here)

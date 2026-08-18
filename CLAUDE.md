@@ -649,39 +649,46 @@ python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootst
 python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/bootstrap --console --verbose
 ```
 
-## Task folders are gitignored here
+## Task folders live in a private tasks repo, linked in at `dev/tasks`
 
-`dev/` is gitignored, and that **includes `dev/tasks/`**. Task folders in this
-repo are working state, not repo content: they are local scratch for the agent
-and the developer driving it, and they do not belong in the history other
-people pull.
+`dev/tasks` in a working copy is **not a directory in this repo** -- it is a
+directory junction (Windows) or symlink pointing into the private
+`kitaekatt/tasks` repo, at that repo's `plugins-kit/` subdirectory. Task
+folders are version-controlled there, not here. This repo is public and task
+folders are working state; keeping them in a private repo gives them durability
+without putting them in the history other people pull.
 
-This is a deliberate deviation from `awesome-kit:task`'s model, which treats
-`dev/tasks/<stub>` as the DURABLE half of the system ("version control is the
-record") and `tmp/<stub>` as the ephemeral half. That contract does not apply
-to this repo. Consequences to know rather than rediscover:
+`.gitignore` carries `dev/tasks/`, and that entry is **load-bearing**: it is
+what stops this repo's git from traversing the link and staging private task
+content into a public repo. Do not remove it, and do not add a `!dev/tasks`
+negation.
 
-- A git-ignored task root is a SUPPORTED configuration as of awesome-kit
-  0.26.0, not a misconfiguration. Do not read such a folder as "uncommitted
-  work" -- it is scratch by design. Mechanics: `Skill(awesome-kit:task)`, the
-  GIT-IGNORED task root disposition. Before 0.26.0 `archive` here crashed
-  mid-write at `git add`; if you see that, the installed plugin predates the
-  fix.
-- **The corollary is sharper here than anywhere else: the folder is the only
-  copy.** Removing it is unrecoverable -- no commit, no reflog, nothing to
-  restore from. Relocate anything that must outlive the task to the repo it
-  describes and declare it with `update --durable-output` BEFORE archiving,
-  which is what the `durable_outputs` rule already requires.
-- **Do not add a `!dev/tasks/` negation to `.gitignore` to "fix" this.** It has
-  been done once and reverted. (Note also that a negation under a bare `dev/`
-  rule is inert: git cannot re-include a path inside an excluded directory, so
-  the exception silently does nothing until someone also rewrites `dev/` to
-  `dev/*` -- which is how the mistake looks like it worked.)
-- A task folder's contents are therefore **one clean tree away from gone**.
-  Anything that must outlive the task -- a spec, a decision record, a
-  reference -- belongs in its owning repo at authoring time, which is what the
-  task system's `durable_outputs` rule already requires. Follow that rule
-  strictly here, because the folder is not a backstop.
+Consequences to know rather than rediscover:
+
+- **One task set per project, shared by every clone of it.** Two clones of
+  plugins-kit link to the same directory, so a task folder is visible from
+  whichever checkout you are in. Task state follows the project, not the
+  checkout -- which also means two concurrent sessions in two clones can edit
+  the same task folder, exactly as two sessions in one tree already can.
+- **A fresh clone has no link.** Nothing in this repo creates it, so
+  `dev/tasks` is simply absent until the junction/symlink is made. An absent
+  task root is a missing link, not a missing task.
+- `awesome-kit:task`'s `dev/tasks` contract ("version control is the record")
+  applies again, which it did not while the task root was ignored. The
+  `durable_outputs` rule still holds for anything that must outlive the task --
+  a spec belongs in the repo it describes at authoring time, not because the
+  folder is fragile, but because a document nobody can find is not durable.
+- **The task CLI misreports this setup**, pending a fix in awesome-kit. It
+  discovers the tasks repo correctly (`git -C <folder> rev-parse
+  --show-toplevel`), then passes the *logical* path through the link as a
+  pathspec against the *resolved* root, so git exits 128 with "is outside
+  repository" and the caught error surfaces as `version-control state
+  unverified: ... is not in a git repo`. That is a note rather than a blocking
+  warning, so `list`/`work`/`validate` behave normally, but `archive` will not
+  run its commit-and-delete flow. Resolving the folder path before handing it
+  to git (`Path.resolve()`; it traverses a Windows junction correctly) fixes
+  all four call sites -- `validate.py` lines 118, 143, 157 and
+  `location_ops.py` line 411.
 
 ## Preferences
 
