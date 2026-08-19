@@ -24,6 +24,7 @@ from content_pipeline.execution.adapter import (
     PreparedRequest,
     RunAdapter,
     WorkerEnvironment,
+    WorkerEnvironmentDeclarationError,
     WorkerEnvironmentMismatchError,
     require_compatible_adapter,
     require_compatible_environment,
@@ -205,6 +206,80 @@ def test_default_worker_environment_check_is_a_no_op_regardless_of_recorded():
 def test_default_adapter_environment_field_is_a_no_op_worker_environment():
     adapter = RunAdapter()
     assert adapter.environment == WorkerEnvironment()
+
+
+# -- WorkerEnvironment: forbidden vs required/cwd overlap is refused ---------
+
+
+def test_overlap_between_required_and_forbidden_raises_at_construction(monkeypatch):
+    """The exact repro from the security report: a name in BOTH
+    required_vars and forbidden_vars must never reach snapshot() -- refuse
+    the declaration outright, before any environment is even read."""
+    monkeypatch.setenv("SECRET", "sk-leak-abc123")
+    with pytest.raises(WorkerEnvironmentDeclarationError) as exc_info:
+        WorkerEnvironment(required_vars=("SECRET",), forbidden_vars=("SECRET",))
+    err = exc_info.value
+    assert err.names == ("SECRET",)
+    message = str(err)
+    assert "SECRET" in message
+    assert "sk-leak-abc123" not in message
+
+
+def test_overlap_between_cwd_vars_and_forbidden_raises_at_construction():
+    """The overlap check must cover cwd_vars too, not just required_vars --
+    a cwd_var is captured by snapshot() exactly like a required_var."""
+    with pytest.raises(WorkerEnvironmentDeclarationError) as exc_info:
+        WorkerEnvironment(cwd_vars=("PWD",), forbidden_vars=("PWD",))
+    assert exc_info.value.names == ("PWD",)
+
+
+def test_overlap_of_several_names_names_all_of_them():
+    with pytest.raises(WorkerEnvironmentDeclarationError) as exc_info:
+        WorkerEnvironment(
+            required_vars=("SECRET", "TOKEN"),
+            cwd_vars=("PWD",),
+            forbidden_vars=("SECRET", "TOKEN", "PWD"),
+        )
+    err = exc_info.value
+    assert set(err.names) == {"SECRET", "TOKEN", "PWD"}
+    message = str(err)
+    for name in ("SECRET", "TOKEN", "PWD"):
+        assert name in message
+
+
+def test_non_overlapping_declaration_with_all_fields_still_constructs_and_snapshots(
+    monkeypatch,
+):
+    """Regression guard: a legitimate, non-overlapping declaration using all
+    three fields together must construct and snapshot exactly as before this
+    fix -- this is the normal, untouched case."""
+    monkeypatch.setenv("APP_ROOT", "D:\\dev\\proj")
+    monkeypatch.setenv("PWD", "D:\\dev\\proj")
+    monkeypatch.setenv("SECRET", "sk-leak-abc123")
+    monkeypatch.setattr(os, "getcwd", lambda: "D:\\dev\\proj")
+    env = WorkerEnvironment(
+        required_vars=("APP_ROOT",),
+        cwd_vars=("PWD",),
+        forbidden_vars=("SECRET",),
+        require_cwd=True,
+    )
+    snap = env.snapshot()
+    assert snap == {
+        "APP_ROOT": "D:\\dev\\proj",
+        "PWD": "D:\\dev\\proj",
+        "__cwd__": "D:\\dev\\proj",
+    }
+
+
+def test_snapshot_on_legitimate_declaration_never_contains_a_forbidden_value(
+    monkeypatch,
+):
+    monkeypatch.setenv("SECRET", "sk-leak-abc123")
+    monkeypatch.setenv("APP_ROOT", "D:\\dev\\proj")
+    env = WorkerEnvironment(required_vars=("APP_ROOT",), forbidden_vars=("SECRET",))
+    snap = env.snapshot()
+    assert "SECRET" not in snap
+    assert "sk-leak-abc123" not in snap.values()
 
 
 def test_required_var_exact_match_passes(monkeypatch):
@@ -479,6 +554,110 @@ def test_likely_path_flavour_mismatch_true_for_the_git_bash_case(monkeypatch):
         env.check({"PWD": FAKE_CWD}, run_id="run-1")
     assert exc_info.value.likely_path_flavour_mismatch is True
     assert "path flavour" in str(exc_info.value)
+
+
+# -- WorkerEnvironment.check: worker-side cwd_vars enforcement ---------------
+#
+# Closes the gap: previously `cwd_vars` was enforced ONLY at create-run time
+# (`require_creatable_environment`, in the ORCHESTRATOR's process). A worker
+# declaring only `cwd_vars` (no `required_vars`, `require_cwd=False`) got
+# zero worker-side enforcement -- the value was snapshotted and never
+# compared again. `check()` now also verifies, in the WORKER's own process,
+# that each declared `cwd_var`'s LIVE value resolves to THIS worker's own
+# `os.getcwd()` -- same resolved-location comparison
+# `require_creatable_environment` performs, reusing the same helpers, but
+# comparing against the worker's own cwd rather than a recorded snapshot.
+
+
+def test_worker_side_cwd_var_matching_own_cwd_passes(monkeypatch):
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    monkeypatch.setenv("PWD", FAKE_CWD)
+    env = WorkerEnvironment(cwd_vars=("PWD",))
+    env.check({}, run_id="run-1")  # must not raise
+
+
+def test_worker_side_cwd_var_trailing_separator_tolerated(monkeypatch):
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    monkeypatch.setenv("PWD", FAKE_CWD + "\\")
+    env = WorkerEnvironment(cwd_vars=("PWD",))
+    env.check({}, run_id="run-1")  # must not raise
+
+
+def test_worker_side_cwd_var_drive_letter_case_tolerated(monkeypatch):
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    monkeypatch.setenv("PWD", "d:\\dev\\spiritcrossing\\main")
+    env = WorkerEnvironment(cwd_vars=("PWD",))
+    env.check({}, run_id="run-1")  # must not raise
+
+
+def test_worker_side_cwd_var_pointing_elsewhere_is_refused(monkeypatch):
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    monkeypatch.setenv("PWD", "D:\\dev\\somewhere\\else")
+    env = WorkerEnvironment(cwd_vars=("PWD",))
+    with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
+        env.check({}, run_id="run-1")
+    err = exc_info.value
+    assert err.var_name == "PWD"
+    assert err.actual_value == "D:\\dev\\somewhere\\else"
+    assert err.worker_cwd == FAKE_CWD
+    message = str(err)
+    assert "PWD" in message
+    assert repr("D:\\dev\\somewhere\\else") in message
+    assert repr(FAKE_CWD) in message
+    assert "wrong directory" in message
+
+
+def test_worker_side_cwd_var_git_bash_posix_path_is_refused(monkeypatch):
+    """A Git Bash POSIX-style `PWD` (`/d/dev/x`) for a worker whose real cwd
+    is `D:\\dev\\x` (native) must still refuse -- it resolves against the
+    worker's own cwd to a DIFFERENT location, exactly the same reasoning as
+    the create-run anchor check's Git Bash probe."""
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    monkeypatch.setenv("PWD", "/d/dev/spiritcrossing/main")
+    env = WorkerEnvironment(cwd_vars=("PWD",))
+    with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
+        env.check({}, run_id="run-1")
+    assert exc_info.value.likely_path_flavour_mismatch is True
+
+
+def test_cwd_vars_only_declaration_gets_real_worker_side_enforcement(monkeypatch):
+    """Pin the exact configuration the finding was about: a `cwd_vars`-only
+    declaration (no `required_vars`, `require_cwd=False`) previously passed
+    `check()` unconditionally no matter what the worker's environment was --
+    it now gets the same worker-side enforcement as any other cwd_var."""
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    monkeypatch.setenv("PWD", "D:\\dev\\somewhere\\else")
+    env = WorkerEnvironment(cwd_vars=("PWD",), required_vars=(), require_cwd=False)
+    assert env.required_vars == ()
+    assert env.require_cwd is False
+    with pytest.raises(WorkerEnvironmentMismatchError):
+        env.check({}, run_id="run-1")
+
+
+def test_worker_side_cwd_var_unset_is_skipped_not_raised(monkeypatch):
+    """An unset/empty cwd_var has nothing to compare -- same skip behaviour
+    as `require_creatable_environment`'s own snapshot-side skip."""
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    monkeypatch.delenv("PWD", raising=False)
+    env = WorkerEnvironment(cwd_vars=("PWD",))
+    env.check({}, run_id="run-1")  # must not raise
+
+
+def test_worker_side_cwd_var_check_does_not_affect_required_vars_exact_match(monkeypatch):
+    """Regression: a name in BOTH `required_vars` and `cwd_vars` still gets
+    exact-string matching against the recorded snapshot for the
+    `required_vars` half, unaffected by the new resolved-location cwd_vars
+    check running alongside it."""
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    monkeypatch.setenv("PWD", FAKE_CWD + "\\")  # same location, different spelling
+    env = WorkerEnvironment(required_vars=("PWD",), cwd_vars=("PWD",))
+    # cwd_vars half passes (resolved-location), but required_vars half is
+    # exact string equality against the recorded snapshot and must still
+    # refuse on a spelling difference.
+    with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
+        env.check({"PWD": FAKE_CWD}, run_id="run-1")
+    assert exc_info.value.recorded_value == FAKE_CWD
+    assert exc_info.value.actual_value == FAKE_CWD + "\\"
 
 
 # -- resolve_expected_unit_seconds (item 2, A-min.4) --------------------------

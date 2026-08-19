@@ -182,6 +182,34 @@ def _same_location_different_flavour(recorded: str, actual: str) -> bool:
         return False
 
 
+class WorkerEnvironmentDeclarationError(ExecutionError):
+    """Raised by :meth:`WorkerEnvironment.__post_init__` when a name appears
+    in BOTH ``forbidden_vars`` and (``required_vars`` | ``cwd_vars``) -- an
+    incoherent declaration (a name that must simultaneously be captured/
+    matched and be absent from a worker). This is a distinct shape from
+    :class:`WorkerEnvironmentMismatchError`: that class reports a *runtime*
+    disagreement between a recorded snapshot and a live process; this one
+    reports a *construction-time* contradiction in the declaration itself,
+    knowable with no environment at all -- so it is raised eagerly rather
+    than deferred to point-of-use (a deliberate, narrow exception to this
+    class's usual "fields default so a call site fails at the point of use"
+    posture; do not "fix" this back to deferred validation).
+
+    Names every offending variable name, never a value -- there is no value
+    to name yet at construction time, and the whole point of the check is
+    that a forbidden variable's value must never surface anywhere.
+    """
+
+    def __init__(self, names: Sequence[str]) -> None:
+        self.names = tuple(names)
+        joined = ", ".join(repr(name) for name in self.names)
+        super().__init__(
+            f"WorkerEnvironment declares {joined} both forbidden and "
+            "required/cwd-tracked; a variable cannot be both captured (or "
+            "worker-side matched) and forbidden -- remove it from one side"
+        )
+
+
 class WorkerEnvironmentMismatchError(ExecutionError):
     """Raised by :meth:`WorkerEnvironment.check` (a worker-side environment
     mismatch) and by :func:`require_creatable_environment` (a create-run-time
@@ -192,6 +220,12 @@ class WorkerEnvironmentMismatchError(ExecutionError):
     and ``actual`` differ as raw strings but resolve to the same location
     under a best-effort Git-Bash-POSIX-to-native normalization -- it never
     changes the pass/fail outcome, only the message and this attribute.
+
+    ``worker_cwd`` is set only by :meth:`WorkerEnvironment.check`'s
+    ``cwd_vars`` loop (the worker-side self-check: is THIS worker in the
+    right place). When set, it takes the place ``recorded_value`` would
+    otherwise hold -- there is no "recorded" value in that comparison at
+    all, since it never consults the run's stored snapshot.
     """
 
     def __init__(
@@ -202,12 +236,14 @@ class WorkerEnvironmentMismatchError(ExecutionError):
         recorded_value: Optional[str] = None,
         actual_value: Optional[str] = None,
         forbidden: bool = False,
+        worker_cwd: Optional[str] = None,
     ) -> None:
         self.run_id = run_id
         self.var_name = var_name
         self.recorded_value = recorded_value
         self.actual_value = actual_value
         self.forbidden = forbidden
+        self.worker_cwd = worker_cwd
         self.likely_path_flavour_mismatch = False
 
         if forbidden:
@@ -215,6 +251,27 @@ class WorkerEnvironmentMismatchError(ExecutionError):
                 f"run {run_id!r} declares {var_name!r} forbidden in a worker "
                 "environment, but this process has it set; refusing to run a "
                 "worker with a forbidden environment variable present"
+            )
+        elif worker_cwd is not None:
+            # The worker-side cwd_vars check (WorkerEnvironment.check): this
+            # is NOT a recorded-snapshot-vs-live comparison like the other
+            # branches -- there is no "recorded" value here at all. `var_name`
+            # names a declared cwd_var, `actual_value` is ITS live value in
+            # this worker process, and `worker_cwd` is this SAME worker's own
+            # os.getcwd(). The two disagree by RESOLVED LOCATION.
+            self.likely_path_flavour_mismatch = _same_location_different_flavour(
+                worker_cwd, actual_value or ""
+            )
+            flavour_note = (
+                " (same location, different path flavour -- a Git Bash POSIX "
+                "path where a native Windows path was expected)"
+                if self.likely_path_flavour_mismatch
+                else ""
+            )
+            message = (
+                f"run {run_id!r} worker process has {var_name!r}={actual_value!r} "
+                f"but this worker's own cwd is {worker_cwd!r}{flavour_note}; the "
+                "worker is running in the wrong directory"
             )
         else:
             display_name = "cwd" if var_name == _RESERVED_CWD_KEY else var_name
@@ -249,18 +306,23 @@ class WorkerEnvironment:
     ``required_vars``).
 
     ``cwd_vars`` -- names whose value is meant to REPRESENT the working
-    directory (the canonical example: ``PWD``), used ONLY by
-    :func:`require_creatable_environment`'s create-run-time anchor check.
-    This is a SEPARATE, explicit declaration from ``required_vars``/
-    ``require_cwd`` on purpose: a var naming the cwd is expected to vary in
-    STRING FORM across environments that agree on location (native vs Git
-    Bash POSIX spelling of the same directory), so it must never be
-    compared by exact string equality the way ``required_vars`` is --
-    ``require_creatable_environment`` compares it to ``os.getcwd()`` by
-    RESOLVED LOCATION instead. A name may appear in both ``required_vars``
-    and ``cwd_vars`` (then it is ALSO worker-side exact-matched) or only in
-    ``cwd_vars`` (then it is captured by :meth:`snapshot` for the create-run
-    check alone, with no worker-side enforcement).
+    directory (the canonical example: ``PWD``), enforced in TWO places: by
+    :func:`require_creatable_environment`'s create-run-time anchor check (in
+    the ORCHESTRATOR's process, against ITS ``os.getcwd()``), and by
+    :meth:`check`'s worker-side loop (in the WORKER's own process, against
+    ITS OWN ``os.getcwd()`` -- not the recorded snapshot). This is a
+    SEPARATE, explicit declaration from ``required_vars``/``require_cwd`` on
+    purpose: a var naming the cwd is expected to vary in STRING FORM across
+    environments that agree on location (native vs Git Bash POSIX spelling
+    of the same directory), so it must never be compared by exact string
+    equality the way ``required_vars`` is -- both enforcement points compare
+    it to the enforcing process's own ``os.getcwd()`` by RESOLVED LOCATION
+    instead. A name may appear in both ``required_vars`` and ``cwd_vars``
+    (then it is ALSO worker-side exact-matched against the recorded
+    snapshot, in addition to the resolved-location self-check below) or
+    only in ``cwd_vars`` (then it gets the create-run anchor check AND the
+    worker-side resolved-location self-check, but never an exact-match
+    against a recorded value).
 
     An adapter that declares nothing (the default, every field empty/False)
     must behave exactly as before this feature existed: an empty
@@ -272,6 +334,18 @@ class WorkerEnvironment:
     require_cwd: bool = False
     cwd_vars: Tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        """Refuse an incoherent declaration eagerly, at construction time
+        (see :class:`WorkerEnvironmentDeclarationError`'s docstring for why
+        this is a deliberate exception to the module's usual
+        fail-at-point-of-use habit): a name in ``forbidden_vars`` that is
+        ALSO in ``required_vars`` or ``cwd_vars`` would otherwise have its
+        live value captured by :meth:`snapshot` and persisted -- exactly the
+        leak this declaration claims to forbid."""
+        overlap = set(self.forbidden_vars) & (set(self.required_vars) | set(self.cwd_vars))
+        if overlap:
+            raise WorkerEnvironmentDeclarationError(sorted(overlap))
+
     def snapshot(self) -> Dict[str, str]:
         """The current process's values for every declared ``required_var``
         AND every declared ``cwd_var`` (the union -- a ``cwd_var`` need not
@@ -280,7 +354,9 @@ class WorkerEnvironment:
         snapshot), plus ``os.getcwd()`` under a reserved key when
         ``require_cwd``. Never includes ``forbidden_vars`` -- their values
         are never recorded, only their presence is later checked (item 5's
-        decision)."""
+        decision). A name declared in BOTH ``forbidden_vars`` and
+        ``required_vars``/``cwd_vars`` cannot reach this method at all:
+        :meth:`__post_init__` refuses that declaration at construction."""
         names = set(self.required_vars) | set(self.cwd_vars)
         result: Dict[str, str] = {name: os.environ.get(name, "") for name in names}
         if self.require_cwd:
@@ -290,10 +366,22 @@ class WorkerEnvironment:
     def check(self, recorded: Mapping[str, str], *, run_id: str = "") -> None:
         """Refuse (:class:`WorkerEnvironmentMismatchError`) when the CURRENT
         process's environment disagrees with ``recorded`` (the run's stored
-        snapshot). Exact string equality throughout -- never resolved-
-        location equality (DECIDED, module docstring). A default
-        ``WorkerEnvironment()`` (nothing declared) is always a no-op,
-        regardless of ``recorded``'s content."""
+        snapshot). Exact string equality throughout for ``required_vars`` /
+        ``require_cwd`` -- never resolved-location equality (DECIDED, module
+        docstring). A default ``WorkerEnvironment()`` (nothing declared) is
+        always a no-op, regardless of ``recorded``'s content.
+
+        Deliberate asymmetry, worth restating so a later reader does not
+        "simplify" it away: ``required_vars`` (and ``require_cwd``) compare
+        this worker against the RECORDED SNAPSHOT -- did the environment
+        change since the run was created. ``cwd_vars``, below, compares this
+        worker against ITS OWN ``os.getcwd()`` -- is THIS worker in the right
+        place, regardless of what was recorded. Different questions, so
+        different comparisons: the former is exact string equality against
+        ``recorded``; the latter is resolved-location equality against this
+        process's own cwd, via the same ``_resolve_against_cwd`` helper
+        :func:`require_creatable_environment` uses at create-run time.
+        """
         for name in self.required_vars:
             recorded_value = recorded.get(name, "")
             actual_value = os.environ.get(name, "")
@@ -314,6 +402,31 @@ class WorkerEnvironment:
                     recorded_value=recorded_cwd,
                     actual_value=actual_cwd,
                 )
+        if self.cwd_vars:
+            # Worker-side cwd_vars enforcement (closes the gap: previously
+            # cwd_vars was only checked once, at create-run time, in the
+            # ORCHESTRATOR's process -- a worker declaring only cwd_vars
+            # (no required_vars, require_cwd=False) got zero worker-side
+            # enforcement). Same relationship require_creatable_environment
+            # enforces, now also enforced where the work actually happens:
+            # the declared var's LIVE value must resolve to THIS worker's
+            # own os.getcwd(). Reuses the same resolution helpers
+            # (_resolve_against_cwd / _normalize_native_path) rather than a
+            # second comparison, and skips an unset/empty value exactly as
+            # require_creatable_environment does (nothing to compare).
+            worker_cwd = os.getcwd()
+            resolved_worker_cwd = _normalize_native_path(worker_cwd)
+            for name in self.cwd_vars:
+                actual_value = os.environ.get(name, "")
+                if not actual_value:
+                    continue
+                if _resolve_against_cwd(worker_cwd, actual_value) != resolved_worker_cwd:
+                    raise WorkerEnvironmentMismatchError(
+                        run_id=run_id,
+                        var_name=name,
+                        actual_value=actual_value,
+                        worker_cwd=worker_cwd,
+                    )
         for name in self.forbidden_vars:
             if os.environ.get(name):
                 raise WorkerEnvironmentMismatchError(
@@ -555,6 +668,7 @@ __all__ = [
     "PreparedRequest",
     "RunAdapter",
     "WorkerEnvironment",
+    "WorkerEnvironmentDeclarationError",
     "WorkerEnvironmentMismatchError",
     "require_compatible_adapter",
     "require_compatible_environment",
