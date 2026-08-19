@@ -272,3 +272,99 @@ def test_create_run_with_matching_adapter_version_succeeds(store):
     run = store.get_run("r1")
     assert run is not None
     assert run.adapter_version == "v1"
+
+
+# -- item 5 (A-min.4): create-run snapshots and anchors the environment -------
+
+
+def test_create_run_without_adapter_records_no_environment(store):
+    commands = build_commands(store)
+    result = commands["create-run"].handler(["r1", "inline", "mock", "m", "v1"])
+    assert result["environment"] is None
+    assert store.get_run("r1").environment is None
+
+
+def test_create_run_with_adapter_declaring_nothing_records_an_empty_snapshot(store):
+    adapter = _adapter(adapter_version="v1")  # default WorkerEnvironment(): nothing declared
+    commands = build_commands(store, adapter=adapter)
+    result = commands["create-run"].handler(["r1", "inline", "mock", "m", "v1"])
+    assert result["environment"] == {}
+    assert store.get_run("r1").environment == {}
+
+
+def test_create_run_snapshots_a_required_var_matching_the_live_environment(store, monkeypatch):
+    import os as os_module
+
+    from content_pipeline.execution.adapter import WorkerEnvironment
+
+    # APP_ROOT is not a path-looking anchor check target unless it also
+    # matches os.getcwd() (require_creatable_environment); pin cwd to the
+    # same value so this test exercises the SNAPSHOT round-trip, not the
+    # create-time refusal (covered separately below).
+    monkeypatch.setattr(os_module, "getcwd", lambda: "D:\\dev\\proj")
+    monkeypatch.setenv("APP_ROOT", "D:\\dev\\proj")
+    adapter = RunAdapter(
+        user_for=lambda u: f"user:{u.id}",
+        parse_fn=lambda t: t,
+        apply=lambda uid, payload: None,
+        adapter_version="v1",
+        environment=WorkerEnvironment(required_vars=("APP_ROOT",)),
+    )
+    commands = build_commands(store, adapter=adapter)
+    result = commands["create-run"].handler(["r1", "inline", "mock", "m", "v1"])
+    assert result["environment"] == {"APP_ROOT": "D:\\dev\\proj"}
+    assert store.get_run("r1").environment == {"APP_ROOT": "D:\\dev\\proj"}
+
+
+def test_create_run_refuses_on_git_bash_pwd_flavour_mismatch(store, monkeypatch):
+    """DECIDED point 3: under Git Bash, PWD snapshots as a POSIX-style path
+    while os.getcwd() in the SAME process is native -- they never match as
+    strings, so create-run refuses in the human's own shell before any
+    worker ever runs, rather than let a worker resolve against the wrong
+    root."""
+    import os as os_module
+
+    from content_pipeline.execution.adapter import (
+        WorkerEnvironment,
+        WorkerEnvironmentMismatchError,
+    )
+
+    monkeypatch.setattr(os_module, "getcwd", lambda: "D:\\dev\\spiritcrossing\\main")
+    monkeypatch.setenv("PWD", "/d/dev/spiritcrossing/main")
+    adapter = RunAdapter(
+        user_for=lambda u: f"user:{u.id}",
+        parse_fn=lambda t: t,
+        apply=lambda uid, payload: None,
+        adapter_version="v1",
+        environment=WorkerEnvironment(cwd_vars=("PWD",)),
+    )
+    commands = build_commands(store, adapter=adapter)
+    with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
+        commands["create-run"].handler(["r1", "inline", "mock", "m", "v1"])
+    assert exc_info.value.likely_path_flavour_mismatch is True
+    # The refused run must never have been created.
+    assert store.get_run("r1") is None
+
+
+def test_create_run_a_content_root_var_that_differs_from_cwd_is_not_refused(store, monkeypatch):
+    """Companion to the git-bash-refusal test above: a declared required
+    var whose value legitimately differs from cwd (a real content root, not
+    a cwd_var) must NOT be refused at create-run time -- only cwd_vars are
+    ever compared against os.getcwd()."""
+    import os as os_module
+
+    from content_pipeline.execution.adapter import WorkerEnvironment
+
+    fake_cwd = "D:\\dev\\spiritcrossing\\main"
+    monkeypatch.setattr(os_module, "getcwd", lambda: fake_cwd)
+    monkeypatch.setenv("CONTENT_ROOT", fake_cwd + "\\plugins")
+    adapter = RunAdapter(
+        user_for=lambda u: f"user:{u.id}",
+        parse_fn=lambda t: t,
+        apply=lambda uid, payload: None,
+        adapter_version="v1",
+        environment=WorkerEnvironment(required_vars=("CONTENT_ROOT",)),  # not a cwd_var
+    )
+    commands = build_commands(store, adapter=adapter)
+    result = commands["create-run"].handler(["r1", "inline", "mock", "m", "v1"])
+    assert result["environment"] == {"CONTENT_ROOT": fake_cwd + "\\plugins"}

@@ -78,7 +78,11 @@ from __future__ import annotations
 import math
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
-from content_pipeline.execution.adapter import RunAdapter, require_compatible_adapter
+from content_pipeline.execution.adapter import (
+    RunAdapter,
+    require_compatible_adapter,
+    require_compatible_environment,
+)
 from content_pipeline.execution.controller import (
     finalize_run,
     pause_run,
@@ -93,7 +97,7 @@ from content_pipeline.execution.model import (
     UsageRecord,
 )
 from content_pipeline.execution.status import compute_status
-from content_pipeline.execution.store import DEFAULT_LEASE_SECONDS, ExecutionStore
+from content_pipeline.execution.store import ExecutionStore, lease_for
 from content_pipeline.freshness.classify import FreshnessState
 from content_pipeline.llm.platform import evaluate_submission
 from content_pipeline.pipeline.single_pass import Gate
@@ -235,6 +239,20 @@ def _resolve_lease_seconds(payload: Mapping[str, Any], default: float) -> float:
     within it, via ``min(requested, default)``. Also refuses a non-finite or
     non-positive value outright, so the failure is a loud, typed
     :class:`MalformedEnvelopeError` rather than a silently clamped one.
+
+    ``default`` here is still exactly "policy, closed over at mount time" --
+    restating rather than weakening the contract above (item 2, A-min.4):
+    it is no longer always the literal mount-time ``lease_seconds`` number,
+    it may now be a PER-UNIT ceiling the mount derived from the adapter's
+    declared ``expected_unit_seconds`` via
+    :func:`~content_pipeline.execution.store.lease_for` (see
+    :func:`build_handlers`'s ``lease_seconds=None`` "derive" behavior). The
+    original security rationale above was about an UNTRUSTED PAYLOAD setting
+    an unbounded lease; the adapter is trusted policy closed over at mount
+    time, same as a fixed ``lease_seconds`` always was, so a derived
+    per-unit ceiling is inside that rationale, not a regression of it -- the
+    payload STILL only ever shortens, never lengthens, whatever ``default``
+    this call was given.
     """
     if "lease_seconds" not in payload:
         return default
@@ -289,7 +307,7 @@ def build_handlers(
     mark_unsupported: Optional[Callable[[str, str], None]] = None,
     max_wave_size: Optional[int] = None,
     graph_source: Any = None,
-    lease_seconds: float = DEFAULT_LEASE_SECONDS,
+    lease_seconds: Optional[float] = None,
 ) -> Dict[str, ProtocolHandler]:
     """Build the ``{verb: handler}`` registry a consumer mounts on its own
     entry point and drives through :func:`dispatch`.
@@ -308,6 +326,16 @@ def build_handlers(
     whose consumer prepares from its own orchestrating process) may omit
     all of them; ``strategy`` staying ``None`` makes ``prepare`` raise a
     plain ``ValueError`` naming the gap instead of silently no-op'ing.
+
+    ``lease_seconds`` (item 2, A-min.4): ``None`` (the default) means DERIVE
+    the lease ceiling per unit, per ``claim``/``renew`` call, from
+    ``adapter.resolve_expected_unit_seconds(unit)`` via
+    :func:`~content_pipeline.execution.store.lease_for` -- an adapter that
+    declares no cost falls back to the unchanged 300s default, no warning.
+    An explicit ``lease_seconds`` still wins outright over derivation, same
+    as before this feature: trusted mount policy stays trusted, and D5's
+    "consumer-configured lease per run" stays GUIDANCE the mount may still
+    fix directly, never something derivation overrides.
     """
 
     def _require_compatible_run(run_id: str) -> None:
@@ -324,9 +352,29 @@ def build_handlers(
         only for ``read``/``submit``) and safe (every existing caller uses
         matching ``adapter_version`` on both sides, the A-min.1/A-min.2
         default included), so it is applied uniformly rather than reported
-        as a design question."""
+        as a design question.
+
+        Item 5 (A-min.4) adds ``require_compatible_environment`` alongside
+        ``require_compatible_adapter`` here, same rationale: this is the
+        single call site every WORKER verb (claim/read/submit/fail/renew)
+        passes through, so one line here covers all of them with no
+        per-verb work, refusing a worker process whose environment
+        disagrees with the run's create-time snapshot."""
         run = _get_run_or_raise(store, run_id)
         require_compatible_adapter(run, adapter)
+        require_compatible_environment(run, adapter)
+
+    def _lease_ceiling(unit_id: str) -> float:
+        """Item 2: the mount-fixed ``lease_seconds`` still wins outright
+        when set; ``None`` (the default) derives a per-unit ceiling from the
+        adapter's declared cost via
+        :func:`~content_pipeline.execution.store.lease_for`. Used by both
+        ``claim`` and ``renew`` so a slow unit's renewal is never capped
+        below what its own claim was allowed."""
+        if lease_seconds is not None:
+            return lease_seconds
+        unit = adapter.unit_for(unit_id)
+        return lease_for(adapter.resolve_expected_unit_seconds(unit))
 
     def _prepare(payload: Mapping[str, Any]) -> Any:
         run_id = _require(payload, "run_id")
@@ -360,7 +408,7 @@ def build_handlers(
         unit_id = _require(payload, "unit_id")
         worker_id = _require(payload, "worker_id")
         _require_compatible_run(run_id)
-        seconds = _resolve_lease_seconds(payload, lease_seconds)
+        seconds = _resolve_lease_seconds(payload, _lease_ceiling(unit_id))
         result = store.claim_unit(run_id, unit_id, worker_id, lease_seconds=seconds)
         return {
             "run_id": run_id,
@@ -439,7 +487,7 @@ def build_handlers(
         unit_id = _require(payload, "unit_id")
         _require_compatible_run(run_id)
         fencing_token = int(_require(payload, "fencing_token"))
-        seconds = _resolve_lease_seconds(payload, lease_seconds)
+        seconds = _resolve_lease_seconds(payload, _lease_ceiling(unit_id))
         lease_expires_at = store.renew_lease(run_id, unit_id, fencing_token, lease_seconds=seconds)
         return {"run_id": run_id, "unit_id": unit_id, "lease_expires_at": lease_expires_at}
 

@@ -134,7 +134,7 @@ from typing import Any, Callable, List, Optional, Sequence
 
 from content_pipeline.execution.controller import RunAdapter, record_halt
 from content_pipeline.execution.model import ExecutionError, RunHaltedError, UnitRecord
-from content_pipeline.execution.store import DEFAULT_LEASE_SECONDS, ExecutionStore
+from content_pipeline.execution.store import ExecutionStore, lease_for
 from content_pipeline.llm.platform import HaltError, LLMBackend, submit_validated
 from content_pipeline.pipeline.workunit import WorkUnit
 
@@ -170,7 +170,7 @@ def run_wave(
     generate: Optional[Callable[[WorkUnit], str]] = None,
     backend: Optional[LLMBackend] = None,
     model: str = "",
-    lease_seconds: float = DEFAULT_LEASE_SECONDS,
+    lease_seconds: Optional[float] = None,
     at: Optional[float] = None,
     **submit_kwargs: Any,
 ) -> List[str]:
@@ -194,6 +194,12 @@ def run_wave(
     were processed. Stops early (returning what was accepted so far) on a
     caught :class:`~content_pipeline.llm.platform.HaltError` -- see the
     module docstring's "Halt handling" section.
+
+    ``lease_seconds`` (item 2, A-min.4): ``None`` (the default) derives a
+    per-unit lease ceiling from ``adapter.resolve_expected_unit_seconds``
+    via :func:`~content_pipeline.execution.store.lease_for` -- an adapter
+    declaring no cost falls back to the unchanged 300s default, no warning.
+    An explicit value still wins outright over derivation.
     """
     if adapter is None:
         adapter = RunAdapter()
@@ -206,9 +212,15 @@ def run_wave(
 
     accepted: List[str] = []
     for unit in wave:
+        work_unit = adapter.unit_for(unit.unit_id)
+        effective_lease_seconds = (
+            lease_seconds
+            if lease_seconds is not None
+            else lease_for(adapter.resolve_expected_unit_seconds(work_unit))
+        )
         try:
             claim = store.claim_unit(
-                run_id, unit.unit_id, worker_id, lease_seconds=lease_seconds, at=at
+                run_id, unit.unit_id, worker_id, lease_seconds=effective_lease_seconds, at=at
             )
         except RunHaltedError:
             # Already halted by the time this loop reached this unit's claim
@@ -217,7 +229,6 @@ def run_wave(
             # "A halt already set..." section. Stop claiming; return what was
             # accepted so far, same contract as the HaltError path below.
             break
-        work_unit = adapter.unit_for(unit.unit_id)
 
         try:
             if generate is not None:

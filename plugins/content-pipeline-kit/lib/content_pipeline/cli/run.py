@@ -143,10 +143,10 @@ def build_commands(
     """
 
     def create_run(args: List[str]) -> Any:
-        """Create a run. Echoes ``adapter_version`` in its result -- a value
-        the caller cannot see is a value it cannot check, and this is the
-        surface a caller uses to confirm what was actually stored (see
-        below).
+        """Create a run. Echoes ``adapter_version`` and ``environment`` in
+        its result -- a value the caller cannot see is a value it cannot
+        check, and this is the surface a caller uses to confirm what was
+        actually stored (see below).
 
         ``adapter_version`` validation (defect 2): when this mount has an
         ``adapter`` (the ``build_commands(..., adapter=...)`` case), a
@@ -162,6 +162,17 @@ def build_commands(
         neither check nor default -- ``adapter_version`` stays a plain
         required positional, since there is no live adapter to validate or
         default against.
+
+        ``environment`` (item 5, A-min.4): when this mount has an
+        ``adapter``, its ``environment.snapshot()`` is taken automatically,
+        RIGHT HERE, in the orchestrator's own shell -- the anchor is only
+        correct taken at this point, not re-derived later by a worker. A
+        declared, path-looking required var that does not resolve to
+        ``os.getcwd()`` EXACTLY refuses the create entirely (DECIDED: this
+        is what catches a Git Bash ``PWD`` vs native ``os.getcwd()``
+        mismatch cheaply, in the human's own shell, before any worker ever
+        runs -- see ``execution.adapter.require_creatable_environment``). A
+        mount with no adapter records no snapshot, same as today.
         """
         positional, _flags = _split_flags(args)
         run_id = _require(positional, 0, "run_id")
@@ -181,8 +192,23 @@ def build_commands(
                 "to create a run this adapter could never claim -- see "
                 "execution.adapter.require_compatible_adapter"
             )
+
+        environment_snapshot: Optional[Dict[str, str]] = None
+        if adapter is not None:
+            # Deferred import: only an adapter-mounted create needs
+            # execution.adapter's environment machinery at all.
+            from content_pipeline.execution.adapter import require_creatable_environment
+
+            environment_snapshot = adapter.environment.snapshot()
+            require_creatable_environment(run_id, adapter.environment, environment_snapshot)
+
         run = store.create_run(
-            run_id, driver=driver, backend=backend, model=model, adapter_version=adapter_version
+            run_id,
+            driver=driver,
+            backend=backend,
+            model=model,
+            adapter_version=adapter_version,
+            environment=environment_snapshot,
         )
         return {
             "id": run.id,
@@ -190,6 +216,7 @@ def build_commands(
             "backend": run.backend,
             "model": run.model,
             "adapter_version": run.adapter_version,
+            "environment": run.environment,
         }
 
     def register_units(args: List[str]) -> Any:

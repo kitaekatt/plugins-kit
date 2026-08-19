@@ -54,7 +54,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Mapping, Optional
 
 
 class UnitState(str, Enum):
@@ -121,6 +121,14 @@ class RunRecord:
     There is deliberately no ``paused`` field: operator pause/resume is D4's
     A-min.2 concern (the plan assigns pause/halt run-control semantics
     together in phase A-min.2). A-min.1 ships only halt, and halt alone.
+
+    ``environment`` (item 5's anchor) is the environment snapshot taken at
+    create-run time (``execution.adapter.WorkerEnvironment.snapshot()``), in
+    the orchestrator's own shell where it is known correct. ``None`` means
+    no snapshot was recorded (an adapter-less create, or a mount whose
+    adapter declared nothing) -- treated as an empty recorded snapshot by
+    ``execution.adapter.require_compatible_environment``. Never enters the
+    status digest (invariant 6).
     """
 
     id: str
@@ -132,6 +140,7 @@ class RunRecord:
     halted_kind: Optional[str] = None
     halted_detail: Optional[str] = None
     halted_at: Optional[float] = None
+    environment: Optional[Mapping[str, str]] = None
 
     @property
     def halted(self) -> bool:

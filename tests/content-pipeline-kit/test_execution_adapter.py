@@ -14,6 +14,8 @@ inside ``prepare_run``/``finalize_run`` themselves.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from content_pipeline.execution import controller
@@ -21,7 +23,11 @@ from content_pipeline.execution.adapter import (
     AdapterVersionMismatchError,
     PreparedRequest,
     RunAdapter,
+    WorkerEnvironment,
+    WorkerEnvironmentMismatchError,
     require_compatible_adapter,
+    require_compatible_environment,
+    require_creatable_environment,
 )
 from content_pipeline.execution.model import RunRecord
 from content_pipeline.execution.store import ExecutionStore
@@ -177,3 +183,334 @@ def test_require_compatible_adapter_not_invoked_automatically_by_prepare_or_fina
     flat_strategy = FlatChunkStrategy(select=lambda store: [])
     wave = prepare_run(store, "run-1", flat_strategy, [])
     assert [u.unit_id for u in wave] == ["u0"]
+
+
+# -- WorkerEnvironment (item 5, A-min.4) --------------------------------------
+
+
+def test_default_worker_environment_snapshot_is_empty(monkeypatch):
+    monkeypatch.setenv("SOME_VAR", "x")
+    env = WorkerEnvironment()
+    assert env.snapshot() == {}
+
+
+def test_default_worker_environment_check_is_a_no_op_regardless_of_recorded():
+    """An adapter declaring nothing must behave exactly as today: `check`
+    never raises, no matter what `recorded` contains."""
+    env = WorkerEnvironment()
+    env.check({"PWD": "anything"}, run_id="run-1")  # must not raise
+    env.check({}, run_id="run-1")  # must not raise
+
+
+def test_default_adapter_environment_field_is_a_no_op_worker_environment():
+    adapter = RunAdapter()
+    assert adapter.environment == WorkerEnvironment()
+
+
+def test_required_var_exact_match_passes(monkeypatch):
+    monkeypatch.setenv("APP_ROOT", "D:\\dev\\proj")
+    env = WorkerEnvironment(required_vars=("APP_ROOT",))
+    env.check({"APP_ROOT": "D:\\dev\\proj"}, run_id="run-1")  # must not raise
+
+
+def test_required_var_mismatch_refuses(monkeypatch):
+    monkeypatch.setenv("APP_ROOT", "D:\\dev\\other")
+    env = WorkerEnvironment(required_vars=("APP_ROOT",))
+    with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
+        env.check({"APP_ROOT": "D:\\dev\\proj"}, run_id="fp-2026-08-18")
+    err = exc_info.value
+    assert err.run_id == "fp-2026-08-18"
+    assert err.var_name == "APP_ROOT"
+    assert err.recorded_value == "D:\\dev\\proj"
+    assert err.actual_value == "D:\\dev\\other"
+    # Different locations entirely -- never mislabeled as a flavour mismatch.
+    assert err.likely_path_flavour_mismatch is False
+
+
+def test_required_var_git_bash_pwd_flavour_mismatch_is_flagged(monkeypatch):
+    """The concrete case DECIDED point 3 targets: a POSIX-style Git Bash
+    PWD value that resolves to the same location as a recorded native
+    Windows path, but differs as a raw string. Comparison stays exact
+    string equality (still refuses) -- only the computed
+    `likely_path_flavour_mismatch` attribute changes."""
+    monkeypatch.setenv("PWD", "/d/dev/spiritcrossing/main")
+    env = WorkerEnvironment(required_vars=("PWD",))
+    with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
+        env.check({"PWD": "D:\\dev\\spiritcrossing\\main"}, run_id="fp-2026-08-18")
+    err = exc_info.value
+    assert err.likely_path_flavour_mismatch is True
+    assert "different path flavour" in str(err)
+
+
+def test_forbidden_var_present_refuses_without_leaking_its_value(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-super-secret-value")
+    env = WorkerEnvironment(forbidden_vars=("OPENROUTER_API_KEY",))
+    with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
+        env.check({}, run_id="run-1")
+    err = exc_info.value
+    assert err.forbidden is True
+    assert err.var_name == "OPENROUTER_API_KEY"
+    # The value itself must never appear in the message or on the error.
+    assert "sk-super-secret-value" not in str(err)
+    assert err.recorded_value is None
+    assert err.actual_value is None
+
+
+def test_forbidden_var_absent_passes(monkeypatch):
+    monkeypatch.delenv("SOME_FORBIDDEN_VAR", raising=False)
+    env = WorkerEnvironment(forbidden_vars=("SOME_FORBIDDEN_VAR",))
+    env.check({}, run_id="run-1")  # must not raise
+
+
+def test_forbidden_var_names_never_appear_in_snapshot(monkeypatch):
+    monkeypatch.setenv("SECRET_TOKEN", "s3cr3t")
+    env = WorkerEnvironment(forbidden_vars=("SECRET_TOKEN",))
+    snapshot = env.snapshot()
+    assert "SECRET_TOKEN" not in snapshot
+    assert "s3cr3t" not in str(snapshot)
+
+
+def test_require_cwd_mismatch_refuses(monkeypatch, tmp_path):
+    (tmp_path / "sub").mkdir()
+    monkeypatch.chdir(tmp_path / "sub")
+    env = WorkerEnvironment(require_cwd=True)
+    with pytest.raises(WorkerEnvironmentMismatchError):
+        env.check({"__cwd__": str(tmp_path)}, run_id="run-1")
+
+
+def test_require_cwd_match_passes(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    env = WorkerEnvironment(require_cwd=True)
+    recorded = env.snapshot()
+    env.check(recorded, run_id="run-1")  # must not raise
+
+
+def test_materialize_returns_pure_dict_math_no_subprocess(monkeypatch):
+    env = WorkerEnvironment(required_vars=("A", "B"), require_cwd=True)
+    recorded = {"A": "1", "B": "2", "__cwd__": "D:\\proj"}
+    overlay, cwd = env.materialize(recorded)
+    assert overlay == {"A": "1", "B": "2"}
+    assert cwd == "D:\\proj"
+
+
+def test_materialize_omits_required_vars_missing_from_recorded():
+    env = WorkerEnvironment(required_vars=("A", "B"))
+    overlay, cwd = env.materialize({"A": "1"})
+    assert overlay == {"A": "1"}
+    assert cwd is None
+
+
+# -- require_compatible_environment (protocol-mount enforcement half) --------
+
+
+def _run_with_env(environment):
+    return RunRecord(
+        id="run-1",
+        driver="inline",
+        backend="mock",
+        model="m",
+        adapter_version="",
+        created_at=0.0,
+        environment=environment,
+    )
+
+
+def test_require_compatible_environment_default_adapter_is_unaffected(monkeypatch):
+    """An adapter declaring nothing must be unaffected by whatever the run
+    recorded -- even a wildly different environment."""
+    monkeypatch.setenv("APP_ROOT", "D:\\dev\\here")
+    run = _run_with_env({"APP_ROOT": "D:\\dev\\elsewhere"})
+    require_compatible_environment(run, RunAdapter())  # must not raise
+
+
+def test_require_compatible_environment_passes_on_matching_environment(monkeypatch):
+    monkeypatch.setenv("APP_ROOT", "D:\\dev\\proj")
+    run = _run_with_env({"APP_ROOT": "D:\\dev\\proj"})
+    adapter = RunAdapter(environment=WorkerEnvironment(required_vars=("APP_ROOT",)))
+    require_compatible_environment(run, adapter)  # must not raise
+
+
+def test_require_compatible_environment_refuses_on_mismatch(monkeypatch):
+    monkeypatch.setenv("APP_ROOT", "D:\\dev\\wrong")
+    run = _run_with_env({"APP_ROOT": "D:\\dev\\proj"})
+    adapter = RunAdapter(environment=WorkerEnvironment(required_vars=("APP_ROOT",)))
+    with pytest.raises(WorkerEnvironmentMismatchError):
+        require_compatible_environment(run, adapter)
+
+
+def test_require_compatible_environment_treats_none_recorded_as_empty(monkeypatch):
+    monkeypatch.setenv("APP_ROOT", "D:\\dev\\proj")
+    run = _run_with_env(None)
+    adapter = RunAdapter(environment=WorkerEnvironment(required_vars=("APP_ROOT",)))
+    with pytest.raises(WorkerEnvironmentMismatchError):
+        require_compatible_environment(run, adapter)
+
+
+# -- require_creatable_environment (create-run anchor half) ------------------
+#
+# Verification-pass fix: create-run compares ONLY `cwd_vars` (never a
+# heuristic over `required_vars`), and BY RESOLVED LOCATION (ntpath-based,
+# no OS calls) rather than raw string equality -- so a trailing separator
+# or a drive-letter-case difference passes, while the Git Bash POSIX case
+# still refuses because it resolves to a genuinely DIFFERENT location once
+# joined against cwd. The six cases below are the probe that found the
+# original defect; FAKE_CWD is built from the REAL os.getcwd() so they hold
+# on any machine, not just one hardcoded path.
+
+FAKE_CWD = "D:\\dev\\spiritcrossing\\main"
+
+
+def test_probe_1_git_bash_posix_pwd_refuses(monkeypatch):
+    """The target bug: PWD is Git-Bash-POSIX-flavoured for the same
+    location as cwd. Must still refuse -- resolving it against cwd via
+    ntpath.join takes the drive from cwd and appends the POSIX segments
+    UNCHANGED, landing on a DIFFERENT location than cwd itself."""
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    snapshot = {"PWD": "/d/dev/spiritcrossing/main"}
+    env = WorkerEnvironment(cwd_vars=("PWD",))
+    with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
+        require_creatable_environment("fp-2026-08-18", env, snapshot)
+    err = exc_info.value
+    assert err.likely_path_flavour_mismatch is True
+    assert err.recorded_value == FAKE_CWD
+    assert err.actual_value == "/d/dev/spiritcrossing/main"
+
+
+def test_probe_1_resolved_value_lands_on_a_different_location_than_cwd(monkeypatch):
+    """Pin the ACTUAL resolved value, not just that a mismatch occurred --
+    confirms the Git Bash catch survives moving from exact-string to
+    resolved-location comparison rather than assuming it."""
+    from content_pipeline.execution.adapter import _resolve_against_cwd
+
+    resolved = _resolve_against_cwd(FAKE_CWD, "/d/dev/spiritcrossing/main")
+    assert resolved == "d:\\d\\dev\\spiritcrossing\\main"
+    assert resolved != _resolve_against_cwd(FAKE_CWD, FAKE_CWD)
+
+
+def test_probe_2_native_pwd_equal_to_cwd_passes(monkeypatch):
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    snapshot = {"PWD": FAKE_CWD}
+    env = WorkerEnvironment(cwd_vars=("PWD",))
+    require_creatable_environment("run-1", env, snapshot)  # must not raise
+
+
+def test_probe_3_pwd_equal_to_cwd_plus_trailing_separator_passes(monkeypatch):
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    snapshot = {"PWD": FAKE_CWD + "\\"}
+    env = WorkerEnvironment(cwd_vars=("PWD",))
+    require_creatable_environment("run-1", env, snapshot)  # must not raise
+
+
+def test_probe_4_pwd_equal_to_cwd_drive_letter_case_swapped_passes(monkeypatch):
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    snapshot = {"PWD": "d:\\dev\\spiritcrossing\\main"}
+    env = WorkerEnvironment(cwd_vars=("PWD",))
+    require_creatable_environment("run-1", env, snapshot)  # must not raise
+
+
+def test_probe_5_content_root_legitimately_different_from_cwd_passes(monkeypatch):
+    """A real content root that is NOT the cwd must never be refused --
+    it is not named in `cwd_vars`, so it is never compared to os.getcwd()
+    at all, no matter how path-like its value looks."""
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    snapshot = {"CONTENT_ROOT": FAKE_CWD + "\\plugins"}
+    env = WorkerEnvironment(cwd_vars=())  # CONTENT_ROOT not declared as a cwd_var
+    require_creatable_environment("run-1", env, snapshot)  # must not raise
+
+
+def test_probe_6_non_path_token_not_a_cwd_var_passes(monkeypatch):
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    snapshot = {"SOME_TOKEN": "sk-abc123"}
+    env = WorkerEnvironment(cwd_vars=())
+    require_creatable_environment("run-1", env, snapshot)  # must not raise
+
+
+def test_required_var_not_in_cwd_vars_is_never_compared_to_cwd(monkeypatch):
+    """Explicit coverage for the fix's core claim: a variable named in
+    `required_vars` but NOT in `cwd_vars` is never compared against
+    os.getcwd() by `require_creatable_environment`, even when its value
+    looks exactly like a path and even when it is a genuinely different
+    location from cwd."""
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    snapshot = {"CONTENT_ROOT": FAKE_CWD + "\\plugins"}
+    env = WorkerEnvironment(required_vars=("CONTENT_ROOT",), cwd_vars=())
+    require_creatable_environment("run-1", env, snapshot)  # must not raise
+
+
+def test_a_var_may_be_in_both_required_vars_and_cwd_vars(monkeypatch):
+    """A name may be declared in both -- worker-side exact match via
+    `required_vars` AND the create-time resolved-location anchor via
+    `cwd_vars` -- and the create-time check still passes on a same-location
+    spelling difference."""
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    snapshot = {"PWD": FAKE_CWD + "\\"}
+    env = WorkerEnvironment(required_vars=("PWD",), cwd_vars=("PWD",))
+    require_creatable_environment("run-1", env, snapshot)  # must not raise
+
+
+# -- likely_path_flavour_mismatch: only True for a GENUINE flavour mismatch --
+
+
+def test_likely_path_flavour_mismatch_false_for_trailing_separator_difference(monkeypatch):
+    """A trailing-separator difference is not a Git-Bash-flavour mismatch --
+    exercised via the worker-side `check()` (still exact string equality,
+    so this DOES raise) to inspect the flag on a real raised error."""
+    monkeypatch.setenv("PWD", FAKE_CWD)
+    env = WorkerEnvironment(required_vars=("PWD",))
+    with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
+        env.check({"PWD": FAKE_CWD + "\\"}, run_id="run-1")
+    assert exc_info.value.likely_path_flavour_mismatch is False
+    assert "path flavour" not in str(exc_info.value)
+
+
+def test_likely_path_flavour_mismatch_false_for_case_only_difference(monkeypatch):
+    monkeypatch.setenv("PWD", FAKE_CWD)
+    env = WorkerEnvironment(required_vars=("PWD",))
+    with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
+        env.check({"PWD": "d:\\dev\\spiritcrossing\\main"}, run_id="run-1")
+    assert exc_info.value.likely_path_flavour_mismatch is False
+    assert "path flavour" not in str(exc_info.value)
+
+
+def test_likely_path_flavour_mismatch_true_for_the_git_bash_case(monkeypatch):
+    monkeypatch.setenv("PWD", "/d/dev/spiritcrossing/main")
+    env = WorkerEnvironment(required_vars=("PWD",))
+    with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
+        env.check({"PWD": FAKE_CWD}, run_id="run-1")
+    assert exc_info.value.likely_path_flavour_mismatch is True
+    assert "path flavour" in str(exc_info.value)
+
+
+# -- resolve_expected_unit_seconds (item 2, A-min.4) --------------------------
+
+
+def test_resolve_expected_unit_seconds_undeclared_returns_none():
+    adapter = RunAdapter()
+    assert adapter.resolve_expected_unit_seconds(WorkUnit(id="u0")) is None
+    assert adapter.resolve_expected_unit_seconds(None) is None
+
+
+def test_resolve_expected_unit_seconds_falls_back_to_flat_value():
+    adapter = RunAdapter(expected_unit_seconds=213.0)
+    assert adapter.resolve_expected_unit_seconds(WorkUnit(id="u0")) == 213.0
+    assert adapter.resolve_expected_unit_seconds(None) == 213.0
+
+
+def test_resolve_expected_unit_seconds_prefers_per_unit_callable():
+    adapter = RunAdapter(
+        expected_unit_seconds=100.0,
+        unit_seconds_for=lambda u: 213.0 if u.id == "slow" else None,
+    )
+    assert adapter.resolve_expected_unit_seconds(WorkUnit(id="slow")) == 213.0
+    # Per-unit callable returns None for this unit -> falls back to the flat value.
+    assert adapter.resolve_expected_unit_seconds(WorkUnit(id="fast")) == 100.0
+
+
+def test_resolve_expected_unit_seconds_per_unit_callable_needs_a_unit():
+    """unit_seconds_for is only consulted when a unit is actually
+    available -- with unit=None it falls straight to expected_unit_seconds."""
+    adapter = RunAdapter(
+        expected_unit_seconds=100.0,
+        unit_seconds_for=lambda u: 999.0,
+    )
+    assert adapter.resolve_expected_unit_seconds(None) == 100.0

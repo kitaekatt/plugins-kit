@@ -55,13 +55,14 @@ submission is a visible, durable fact -- not a silently discarded one
 from __future__ import annotations
 
 import ctypes
+import json
 import sqlite3
 import sys
 import time
 import warnings
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Iterator, List, Mapping, Optional, Sequence, Tuple, Union
 
 from content_pipeline.execution.model import (
     AlreadyClaimedError,
@@ -86,6 +87,35 @@ from content_pipeline.execution.model import (
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 DEFAULT_LEASE_SECONDS = 300.0
 _ERROR_TRUNCATE = 500  # a defensive cap; error text is operational, not content
+
+# Item 2 (A-min.4): the adapter declares COST (expected_unit_seconds), this
+# module owns the LEASE FORMULA -- see execution.adapter.RunAdapter's own
+# comment for why the split is per-lane rather than one adapter-declared
+# lease. The factor rests on ONE measurement (213s, the CHEAP case: no
+# retry, no contention) and an asymmetric error (an undersized lease
+# destroys a healthy unit after two reclaim-then-fail cycles, D5's "workflow
+# lane has no renewer" gap; an oversized one merely holds a slot longer).
+# 2.0 x 213s = 426s sits comfortably under the consumer's own 900s ceiling
+# for the same operation. This is a single named module constant precisely
+# so a second measurement moves one number, not a design.
+LEASE_HEADROOM_FACTOR = 2.0
+
+
+def lease_for(expected_unit_seconds: Optional[float], *, default: float = DEFAULT_LEASE_SECONDS) -> float:
+    """The lease-duration formula for a unit whose adapter declared
+    ``expected_unit_seconds`` (see
+    :meth:`~content_pipeline.execution.adapter.RunAdapter.resolve_expected_unit_seconds`).
+
+    ``max(default, ...)`` is load-bearing: a declaration may only RAISE the
+    lease above ``default``, never shorten it below -- an adapter that
+    under-declares its own cost (or declares nothing, ``expected_unit_seconds
+    is None``) never makes today's behavior worse, it only ever adds
+    headroom. A non-positive or ``None`` declaration is treated as
+    "undeclared" and returns ``default`` unchanged, with no warning --
+    not knowing your unit cost is not an error (item 2's decision)."""
+    if expected_unit_seconds is None or expected_unit_seconds <= 0:
+        return default
+    return max(default, expected_unit_seconds * LEASE_HEADROOM_FACTOR)
 
 # ---------------------------------------------------------------------------
 # Network-path detection -- a loud warning, never a refusal
@@ -213,10 +243,23 @@ _MIGRATIONS: List[List[str]] = [
     [
         "ALTER TABLE units ADD COLUMN accepted_text TEXT;",
     ],
+    [
+        # Item 5 (A-min.4): the environment snapshot taken at create-run
+        # time (execution.adapter.WorkerEnvironment.snapshot()), stored as a
+        # small JSON object. NULL means no snapshot was recorded (an
+        # adapter-less create, or a mount whose adapter declared nothing).
+        "ALTER TABLE runs ADD COLUMN environment TEXT;",
+    ],
 ]
 
 
 def _row_to_run(row: sqlite3.Row) -> RunRecord:
+    # `environment` (item 5) may be absent from `row` when this method runs
+    # against a database whose migrations have not yet applied that step
+    # (see the migration-truncation test in test_execution_store.py) --
+    # tolerate a missing column the same way a genuinely older reader would
+    # have to, rather than raising a bare sqlite3.Row IndexError.
+    raw_environment = row["environment"] if "environment" in row.keys() else None
     return RunRecord(
         id=row["id"],
         driver=row["driver"],
@@ -227,6 +270,7 @@ def _row_to_run(row: sqlite3.Row) -> RunRecord:
         halted_kind=row["halted_kind"],
         halted_detail=row["halted_detail"],
         halted_at=row["halted_at"],
+        environment=json.loads(raw_environment) if raw_environment is not None else None,
     )
 
 
@@ -528,15 +572,40 @@ class ExecutionStore:
         model: str,
         adapter_version: str,
         created_at: Optional[float] = None,
+        environment: Optional[Mapping[str, str]] = None,
     ) -> RunRecord:
-        """Create a new run row. Raises on a duplicate ``run_id``."""
+        """Create a new run row. Raises on a duplicate ``run_id``.
+
+        ``environment`` (item 5) is the create-time snapshot
+        (``execution.adapter.WorkerEnvironment.snapshot()``); stored as JSON
+        text. When omitted (the default -- an adapter-less create, or a
+        mount whose adapter declared nothing), the INSERT never references
+        the ``environment`` column at all, the same "optional, so a caller
+        that never passes it writes exactly the row it always has" pattern
+        :meth:`accept_unit` already uses for ``text``.
+        """
         at = time.time() if created_at is None else created_at
         with self._writer() as conn:
-            conn.execute(
-                "INSERT INTO runs(id, driver, backend, model, adapter_version, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (run_id, driver, backend, model, adapter_version, at),
-            )
+            if environment is not None:
+                conn.execute(
+                    "INSERT INTO runs(id, driver, backend, model, adapter_version, created_at, "
+                    "environment) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        run_id,
+                        driver,
+                        backend,
+                        model,
+                        adapter_version,
+                        at,
+                        json.dumps(dict(environment)),
+                    ),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO runs(id, driver, backend, model, adapter_version, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (run_id, driver, backend, model, adapter_version, at),
+                )
         return self.get_run(run_id)  # type: ignore[return-value]
 
     def get_run(self, run_id: str) -> Optional[RunRecord]:
@@ -1046,6 +1115,8 @@ class ExecutionStore:
 __all__ = [
     "DEFAULT_BUSY_TIMEOUT_MS",
     "DEFAULT_LEASE_SECONDS",
+    "LEASE_HEADROOM_FACTOR",
+    "lease_for",
     "looks_like_network_path",
     "ExecutionStore",
 ]

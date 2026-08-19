@@ -12,6 +12,8 @@ byte-identity: the driver must present ``backend.name`` to the REAL
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from content_pipeline.execution.controller import RunAdapter
@@ -252,3 +254,84 @@ def test_d3_driver_produces_the_same_real_cache_key_as_the_untracked_path(tmp_pa
     tracked_key = cached_files[0].stem
 
     assert tracked_key == untracked_key
+
+
+# -- lease derivation from the adapter's declared cost (item 2, A-min.4) -----
+
+
+def test_run_wave_with_no_declared_cost_uses_the_300s_default(tmp_path):
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    wave = _wave(store, ["u0"])
+
+    seen = {}
+
+    def generate(work_unit):
+        seen["lease_expires_at"] = store.get_unit("run-1", work_unit.id).lease_expires_at
+        return "text"
+
+    before = time.time()
+    run_wave(store, "run-1", wave, generate=generate)  # RunAdapter() default
+    expires = seen["lease_expires_at"]
+    assert 300 - 2 <= expires - before <= 300 + 2
+
+
+def test_run_wave_derives_a_longer_lease_from_the_adapters_declared_cost(tmp_path):
+    """The clamp trap, driver side: the derived 426s ceiling must actually
+    reach `store.claim_unit` -- assert the value that LANDS on the unit
+    record while still claimed, not merely that the call succeeded."""
+    store = _seeded_store(tmp_path, unit_ids=("u0", "u1"))
+    wave = _wave(store, ["u0", "u1"])
+    adapter = RunAdapter(expected_unit_seconds=213.0)
+
+    seen_lease_expires_at = {}
+
+    def generate(work_unit):
+        # Observe the lease actually granted to THIS unit while it is still
+        # CLAIMED (before accept_unit clears lease_expires_at).
+        unit = store.get_unit("run-1", work_unit.id)
+        seen_lease_expires_at[work_unit.id] = unit.lease_expires_at
+        return "text"
+
+    before = time.time()
+    accepted = run_wave(store, "run-1", wave, adapter, generate=generate)
+    assert accepted == ["u0", "u1"]
+    for unit_id in ("u0", "u1"):
+        expires = seen_lease_expires_at[unit_id]
+        # 213.0 * 2.0 = 426.0
+        assert 426 - 2 <= expires - before <= 426 + 2
+
+
+def test_run_wave_explicit_lease_seconds_still_wins_over_a_derived_one(tmp_path):
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    wave = _wave(store, ["u0"])
+    adapter = RunAdapter(expected_unit_seconds=213.0)  # would derive 426s if not overridden
+
+    seen = {}
+
+    def generate(work_unit):
+        seen["lease_expires_at"] = store.get_unit("run-1", work_unit.id).lease_expires_at
+        return "text"
+
+    before = time.time()
+    run_wave(store, "run-1", wave, adapter, generate=generate, lease_seconds=100.0)
+    expires = seen["lease_expires_at"]
+    assert 100 - 2 <= expires - before <= 100 + 2
+
+
+def test_run_wave_per_unit_declared_cost_derives_a_different_lease_per_unit(tmp_path):
+    store = _seeded_store(tmp_path, unit_ids=("slow", "fast"))
+    wave = _wave(store, ["slow", "fast"])
+    adapter = RunAdapter(unit_seconds_for=lambda u: 213.0 if u.id == "slow" else 10.0)
+
+    seen = {}
+
+    def generate(work_unit):
+        seen[work_unit.id] = store.get_unit("run-1", work_unit.id).lease_expires_at
+        return "text"
+
+    before = time.time()
+    run_wave(store, "run-1", wave, adapter, generate=generate)
+    # slow: 213.0 * 2.0 = 426.0
+    assert 426 - 2 <= seen["slow"] - before <= 426 + 2
+    # fast: 10.0 * 2.0 = 20.0 -- floored at the 300.0 default (max(...) floor).
+    assert 300 - 2 <= seen["fast"] - before <= 300 + 2

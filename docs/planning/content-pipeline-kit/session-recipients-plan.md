@@ -273,6 +273,31 @@ duplicated, and is then failed by the bounded reclaim count while working
 correctly. The remedy is the default, tracked as A-min.4 item 2; the lane
 semantics settled here stand unaltered.
 
+**Remedy chosen, 2026-08-18: the lease is derived from the adapter, and this
+decision stays GUIDANCE.** Two alternatives were rejected. Raising
+`DEFAULT_LEASE_SECONDS` outright was rejected because one number cannot be right
+for both lanes: the background lane has a renewer, so its lease need only outlast
+a renew interval, while this lane's must cover a whole worst-case runtime.
+Refusing to start a workflow-lane run without an explicit lease was rejected
+because it would harden "consumer-configured per run" from the guidance it is
+here into ENFORCEMENT -- a change to the substance of this decision, and not one
+an implementer may make.
+
+What ships instead: a `RunAdapter` may declare its measured per-unit COST, never
+a lease, and the lane derives the lease from it (`store.lease_for`, headroom
+factor a named module constant). Declaring nothing yields exactly today's 300s
+with no warning -- not knowing your unit cost is not an error -- and a
+declaration may only RAISE a lease, never shorten it below the current default.
+An explicit mount-configured `lease_seconds` still wins outright, so the
+consumer-configures-per-run path settled above remains the authoritative one.
+
+The headroom factor rests on a single measurement, and the plan records that
+rather than implying more: 213s is explicitly the cheap case, so the worst case
+is unmeasured and strictly above it, and the error is asymmetric -- an undersized
+lease destroys a healthy unit after two reclaims. The consumer's own 900s ceiling
+for the same operation bounds it from above. A second measurement moves one
+constant.
+
 **Rejected alternative.** Worker-emitted heartbeats through the protocol's
 `renew` verb. Rejected for the workflow lane (unreliable from a reasoning
 agent); retained as the mechanism the *dispatcher* uses in the background lane.
@@ -342,6 +367,22 @@ reference:
 6. The status digest never contains prompts, unit payloads, or full outputs.
 7. A tracked inline run produces cache keys byte-identical to the untracked
    path for the same request (D3).
+8. A worker verb refuses when the process environment disagrees with the
+   environment recorded on the run at creation. Comparison is exact string
+   equality against the run's snapshot; a declared variable that resolves to
+   the same location in a different path flavour is still a refusal, and the
+   error says so. An adapter that declares no environment is unaffected.
+
+Invariant 8 is enforced at `_require_compatible_run`, the single call site every
+worker verb already passes through -- the same seam as D1's adapter-version
+refusal, and for the same reason: the failure it prevents is silent. A worker
+whose environment differs from the one its run was created in does not error, it
+resolves against the wrong root and produces plausible output. The environment
+is snapshotted at `create-run`, in the orchestrator's own process, because an
+adapter cannot certify its own environment: the consumer's mount constructs the
+adapter from config that itself resolves through that environment, so a
+worker-side self-check compares a value against something derived from it and
+always passes.
 
 ## Plan
 

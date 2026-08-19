@@ -827,3 +827,140 @@ def test_subprocesses_stale_token_submit_is_refused_with_no_process_local_contin
     )
     assert live_submit_reply["submit"]["ok"] is True
     assert live_submit_reply["submit"]["result"]["accepted"] is True
+
+
+# -- environment enforcement on worker verbs (item 5, A-min.4) ----------------
+
+
+def _run_with_env(store, run_id, environment, *, adapter_version=""):
+    store.create_run(
+        run_id, driver="inline", backend="mock", model="m", adapter_version=adapter_version,
+        environment=environment,
+    )
+
+
+def test_claim_refuses_when_worker_environment_mismatches(tmp_path, monkeypatch):
+    from content_pipeline.execution.adapter import WorkerEnvironment
+
+    monkeypatch.setenv("APP_ROOT", "D:\\dev\\wrong")
+    store = _new_store(tmp_path)
+    _run_with_env(store, "run-1", {"APP_ROOT": "D:\\dev\\proj"})
+    store.register_units("run-1", ["u0"])
+    adapter = RunAdapter(
+        user_for=lambda u: f"user:{u.id}",
+        parse_fn=lambda t: t,
+        apply=lambda uid, payload: None,
+        environment=WorkerEnvironment(required_vars=("APP_ROOT",)),
+    )
+    handlers = build_handlers(store, adapter, strategy=FLAT_STRATEGY)
+    result = dispatch(
+        _envelope("claim", {"run_id": "run-1", "unit_id": "u0", "worker_id": "w1"}), handlers
+    )
+    assert result["ok"] is False
+    assert result["error"]["type"] == "WorkerEnvironmentMismatchError"
+    # Nothing was actually claimed.
+    assert store.get_unit("run-1", "u0").state is UnitState.PENDING
+
+
+def test_claim_passes_when_worker_environment_matches(tmp_path, monkeypatch):
+    from content_pipeline.execution.adapter import WorkerEnvironment
+
+    monkeypatch.setenv("APP_ROOT", "D:\\dev\\proj")
+    store = _new_store(tmp_path)
+    _run_with_env(store, "run-1", {"APP_ROOT": "D:\\dev\\proj"})
+    store.register_units("run-1", ["u0"])
+    adapter = RunAdapter(
+        user_for=lambda u: f"user:{u.id}",
+        parse_fn=lambda t: t,
+        apply=lambda uid, payload: None,
+        environment=WorkerEnvironment(required_vars=("APP_ROOT",)),
+    )
+    handlers = build_handlers(store, adapter, strategy=FLAT_STRATEGY)
+    result = dispatch(
+        _envelope("claim", {"run_id": "run-1", "unit_id": "u0", "worker_id": "w1"}), handlers
+    )
+    assert result["ok"] is True
+
+
+def test_claim_unaffected_when_adapter_declares_no_environment(tmp_path, monkeypatch):
+    """An adapter declaring nothing must behave exactly as today, regardless
+    of what the run's recorded environment (if any) looks like."""
+    monkeypatch.setenv("APP_ROOT", "D:\\dev\\here")
+    store = _new_store(tmp_path)
+    _run_with_env(store, "run-1", {"APP_ROOT": "D:\\dev\\entirely-different"})
+    store.register_units("run-1", ["u0"])
+    handlers = build_handlers(store, _adapter(), strategy=FLAT_STRATEGY)
+    result = dispatch(
+        _envelope("claim", {"run_id": "run-1", "unit_id": "u0", "worker_id": "w1"}), handlers
+    )
+    assert result["ok"] is True
+
+
+# -- lease derivation from the adapter's declared cost (item 2, A-min.4) -----
+
+
+def test_claim_with_no_declared_cost_and_no_mount_lease_uses_the_300s_default(tmp_path):
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    handlers = build_handlers(store, _adapter(), strategy=FLAT_STRATEGY)
+    before = time.time()
+    result = dispatch(
+        _envelope("claim", {"run_id": "run-1", "unit_id": "u0", "worker_id": "w1"}), handlers
+    )
+    assert result["ok"] is True
+    # 300s default, not the 900s+ a mis-derivation would produce, and not
+    # some arbitrarily short value either.
+    expires = result["result"]["lease_expires_at"]
+    assert 300 - 2 <= expires - before <= 300 + 2
+
+
+def test_claim_derives_a_longer_lease_from_the_adapters_declared_cost(tmp_path):
+    """The clamp trap (protocol.py's `_resolve_lease_seconds` computes
+    `min(requested, default)`): the derived 426s ceiling must actually
+    REACH `store.claim_unit` -- assert the value that LANDS, not merely
+    that the call succeeded."""
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    base = _adapter()
+    adapter = RunAdapter(
+        user_for=base.user_for,
+        parse_fn=base.parse_fn,
+        validators=base.validators,
+        apply=base.apply,
+        expected_unit_seconds=213.0,
+    )
+    handlers = build_handlers(store, adapter, strategy=FLAT_STRATEGY)
+    before = time.time()
+    result = dispatch(
+        _envelope("claim", {"run_id": "run-1", "unit_id": "u0", "worker_id": "w1"}), handlers
+    )
+    assert result["ok"] is True
+    expires = result["result"]["lease_expires_at"]
+    # 213.0 * 2.0 = 426.0 -- must land close to 426s, not the 300s default.
+    assert 426 - 2 <= expires - before <= 426 + 2
+
+    # Confirm it actually reached the store's own record too, not just the
+    # dispatch reply.
+    unit = store.get_unit("run-1", "u0")
+    assert 426 - 2 <= unit.lease_expires_at - before <= 426 + 2
+
+
+def test_explicit_mount_lease_seconds_still_wins_over_a_derived_one(tmp_path):
+    """An explicit mount-time `lease_seconds` wins outright over derivation
+    -- trusted mount policy stays trusted even when the adapter also
+    declares a cost that would derive a different value."""
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    base = _adapter()
+    adapter = RunAdapter(
+        user_for=base.user_for,
+        parse_fn=base.parse_fn,
+        validators=base.validators,
+        apply=base.apply,
+        expected_unit_seconds=213.0,  # would derive 426s if not overridden
+    )
+    handlers = build_handlers(store, adapter, strategy=FLAT_STRATEGY, lease_seconds=100.0)
+    before = time.time()
+    result = dispatch(
+        _envelope("claim", {"run_id": "run-1", "unit_id": "u0", "worker_id": "w1"}), handlers
+    )
+    assert result["ok"] is True
+    expires = result["result"]["lease_expires_at"]
+    assert 100 - 2 <= expires - before <= 100 + 2

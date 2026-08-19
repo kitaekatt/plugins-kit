@@ -37,7 +37,10 @@ from content_pipeline.execution.model import (
 from content_pipeline.execution.status import compute_status
 from content_pipeline.execution.store import (
     DEFAULT_BUSY_TIMEOUT_MS,
+    DEFAULT_LEASE_SECONDS,
+    LEASE_HEADROOM_FACTOR,
     ExecutionStore,
+    lease_for,
     looks_like_network_path,
 )
 
@@ -950,3 +953,128 @@ def test_record_apply_unknown_unit_raises(tmp_path):
     store = _seeded_store(tmp_path)
     with pytest.raises(UnknownUnitError):
         store.record_apply_started("run-1", "does-not-exist")
+
+
+# -- environment snapshot (item 5, A-min.4) -----------------------------------
+
+
+def test_create_run_with_no_environment_round_trips_none(tmp_path):
+    store = _new_store(tmp_path)
+    run = store.create_run(
+        "run-1", driver="inline", backend="mock", model="m", adapter_version="1"
+    )
+    assert run.environment is None
+    assert store.get_run("run-1").environment is None
+
+
+def test_create_run_environment_round_trips_through_a_store_reopen(tmp_path):
+    store = _new_store(tmp_path)
+    store.create_run(
+        "run-1",
+        driver="inline",
+        backend="mock",
+        model="m",
+        adapter_version="1",
+        environment={"PWD": "D:\\dev\\proj"},
+    )
+    reopened = ExecutionStore(store.db_path)
+    run = reopened.get_run("run-1")
+    assert run.environment == {"PWD": "D:\\dev\\proj"}
+
+
+def test_migration_adds_environment_column_to_an_existing_database(tmp_path):
+    """Same pattern as test_migration_adds_accepted_text_column_to_an_existing_database:
+    a store created against the OLD schema (before the environment column
+    existed) must, on reopen, gain the new column AND still read its
+    pre-existing rows."""
+    import content_pipeline.execution.store as store_mod
+
+    db_path = tmp_path / "run.db"
+    old_migrations = store_mod._MIGRATIONS[:-1]  # drop the environment step
+    original_migrations = store_mod._MIGRATIONS
+    store_mod._MIGRATIONS = old_migrations
+    try:
+        old_store = ExecutionStore(db_path)
+        old_store.create_run(
+            "r1", driver="inline", backend="mock", model="m", adapter_version="1"
+        )
+    finally:
+        store_mod._MIGRATIONS = original_migrations
+
+    reopened = ExecutionStore(db_path)
+    run = reopened.get_run("r1")
+    assert run is not None
+    assert run.environment is None
+
+    with sqlite3.connect(str(db_path)) as conn:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+    assert "environment" in cols
+
+
+def test_older_reader_opening_a_migrated_database_does_not_break(tmp_path):
+    """Schema-DOWNGRADE tolerance, the opposite direction from the migration
+    test above: a database already migrated to the CURRENT (newer) schema
+    must still open and read cleanly under an OLDER _MIGRATIONS list that
+    knows nothing about the environment column -- the exact scenario an
+    older library version opening a newer database hits. Must not raise."""
+    import content_pipeline.execution.store as store_mod
+
+    db_path = tmp_path / "run.db"
+    # Fully migrate the database under the CURRENT (real) migrations first.
+    current_store = ExecutionStore(db_path)
+    current_store.create_run(
+        "r1",
+        driver="inline",
+        backend="mock",
+        model="m",
+        adapter_version="1",
+        environment={"PWD": "D:\\dev\\proj"},
+    )
+    current_store.register_units("r1", ["u0"])
+
+    # Now reopen under a TRUNCATED migrations list (as an older reader
+    # would ship) -- must not raise, and must still read the pre-existing
+    # rows (the newer `environment` column is simply invisible to it).
+    older_migrations = store_mod._MIGRATIONS[:-1]
+    original_migrations = store_mod._MIGRATIONS
+    store_mod._MIGRATIONS = older_migrations
+    try:
+        older_reader = ExecutionStore(db_path)
+        run = older_reader.get_run("r1")
+        assert run is not None
+        # The column physically exists on disk (this DB was already fully
+        # migrated before the truncated _MIGRATIONS list was installed) --
+        # `_row_to_run`'s `"environment" in row.keys()` guard reads it fine;
+        # the point of this test is that opening/reading raises nothing.
+        assert run.environment == {"PWD": "D:\\dev\\proj"}
+        units = older_reader.list_units("r1")
+        assert [u.unit_id for u in units] == ["u0"]
+    finally:
+        store_mod._MIGRATIONS = original_migrations
+
+
+# -- lease_for (item 2, A-min.4) -----------------------------------------------
+
+
+def test_lease_for_undeclared_returns_exactly_the_default():
+    assert lease_for(None) == DEFAULT_LEASE_SECONDS
+
+
+def test_lease_for_declared_but_small_is_floored_at_the_default():
+    assert lease_for(1.0) == DEFAULT_LEASE_SECONDS
+
+
+def test_lease_for_213_seconds_yields_426():
+    assert lease_for(213.0) == pytest.approx(213.0 * LEASE_HEADROOM_FACTOR)
+    assert lease_for(213.0) == pytest.approx(426.0)
+
+
+def test_lease_for_non_positive_declared_value_returns_default():
+    assert lease_for(0.0) == DEFAULT_LEASE_SECONDS
+    assert lease_for(-5.0) == DEFAULT_LEASE_SECONDS
+
+
+def test_lease_for_custom_default_is_honored():
+    assert lease_for(None, default=600.0) == 600.0
+    assert lease_for(1.0, default=600.0) == 600.0
+    assert lease_for(400.0, default=600.0) == 800.0
