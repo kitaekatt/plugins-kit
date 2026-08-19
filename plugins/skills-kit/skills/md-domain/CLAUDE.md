@@ -537,8 +537,10 @@ claude_md:
           - Regeneration as ONE sentence at the foot, not a menu entry. The owner
             ruled it "really just a short-cut for generate over a file that is
             already authored", and it is not a separate thing to pick -- but the
-            propose-markings-first behaviour stays stated, because it is the
-            safety catch on the only path that overwrites hand-written prose.
+            never-deletes behaviour stays stated, because it is the safety catch
+            on the only path that overwrites hand-written prose. (That catch was
+            originally propose-markings-first; it is now the Unverified-section
+            sort, which protects the same prose without a pre-write gate.)
           - `author`, never `write`, as the verb word in examples (owner's
             alignment); "write" survives only inside plain descriptions.
         The canonical analysis names are now COMPOSED (verb + artifact) rather

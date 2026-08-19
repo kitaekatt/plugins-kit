@@ -48,12 +48,13 @@ analysis is ever built for them, they gain a generate lane; until then, do not
 improvise one.
 
 **REGENERATION is `generate` over a document that already exists.** Existence
-decides, not a flag. Content the run can re-verify against current code is kept;
-content it cannot is kept only where explicitly MARKED to retain. On the first
-pass over a document carrying no markings the lane PROPOSES them and writes
-nothing -- otherwise the first regeneration of every hand-written CLAUDE.md
-would silently gut it. Marking syntax: `references/standards/claude-md-standards.md`
-section 6.4.
+decides, not a flag. It NEVER deletes and never blocks: every unit is SORTED --
+content a directed check confirms against the code is kept in place, content
+explicitly MARKED to retain is kept verbatim, and everything else MOVES verbatim
+into the document's `## Unverified` section carrying the reason its check failed.
+There is no proposal round, because relocation removes the hazard one existed to
+guard against. Dispositions and section format:
+`references/standards/claude-md-standards.md` section 6.4.
 
 One skill, one dispatch table, three procedures -- audit, producing (shared by
 author and generate), and analysis. Audit, author and generate share the
@@ -112,9 +113,10 @@ FOR EXAMPLE
   "give src/ and everything under it CLAUDE.md files"
                                          the whole-tree form, deepest first
 
-Generating over a document that already exists keeps what I can re-verify against
-the code and whatever you have marked to retain; on a document with no markings
-yet I propose them and change nothing.
+Generating over a document that already exists never deletes anything. What I can
+confirm against the code stays put, what you marked to retain stays verbatim, and
+whatever I could not confirm moves into an Unverified section with the reason --
+so nothing is lost and nothing has to be marked before I will run.
 
 Before starting I name the analysis and its exact scope, because what a run
 READS is what makes it cheap or expensive.
@@ -396,7 +398,7 @@ lanes:
     workflow_generate: workflow/claude-md-generate.js
     verdicts: [COMPLIANT, NON-COMPLIANT]
     input_provenance: coverage
-    regeneration: propose-markings-first
+    regeneration: sort-never-delete
     invocation_phrasings:
       - "generate this directory's CLAUDE.md from the analysis"
       - "regenerate the CLAUDE.md for this directory"
@@ -542,7 +544,7 @@ domain_skill:
       - Announce every run by its canonical analysis name plus the concrete file scope BEFORE starting (see "Naming and scope announcement"). Echo the menu's name verbatim rather than paraphrasing it, name every analysis a dispatch runs rather than only the headline one, and give scope as a count plus roots -- never as "the corpus". The names are the user's only handle on which analysis they authorized.
       - Route by verb AND subject. Audit and author require an artifact; generate takes claude-md only; analyze accepts only code_subtree and is not artifact-parameterized. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the producing direction when the user asked for a verdict.
       - Author and generate are chosen by INPUT PROVENANCE, never by the word the user typed. Content the user supplies is authored; coverage from an analyze run is generated. "Generate a skill" and "generate a README" are author dispatches, because no analysis produces coverage for those artifacts -- say which lane you are taking and why, rather than silently honouring or silently overriding the token.
-      - Regeneration never destroys what it cannot re-verify. Generating over a document that already exists keeps content it can verify against current code, keeps marked content unconditionally, and on a document carrying no markings PROPOSES them and writes nothing. Detect that state; do not ask the user to configure it, and never take an unmarked legacy document as licence to overwrite.
+      - Regeneration never deletes and never blocks. Generating over a document that already exists SORTS every unit: content a DIRECTED check confirms against the code it describes is kept in place, marked content is kept verbatim, and everything else moves verbatim into the document's `## Unverified` section with the reason its check failed (NOT LOCATED, or CONTRADICTED at a named file:line). Verify by reading the code the claim describes -- never by whether this run's coverage happened to re-derive it, because coverage is a non-idempotent sample and sorting on coincidence churns the document. There is no proposal round and no pre-write marking chore; `retain` is how a user resolves a unit OUT of the Unverified section, never a precondition to running. Report the section with a count every run.
       - One lane at a time. On a bare invocation show the menu and wait; do not co-load standards docs or verb procedures. A typical invocation loads this SKILL.md plus one lane plus one standards doc.
       - Detection and remediation are separate phases for audit. The audit pass produces a verdict; it does not silently mutate the subject. Remediation is dispatched after the Q&A gate, as its own work. Analyze has no remediation phase and must stop after reporting.
       - An affirmative verdict is never emitted over inputs the run did not have. Analyze refuses DISCOVERY-FAILED directories, and that refusal is computed from an inventory the report carries in full, not asserted by the assessment.

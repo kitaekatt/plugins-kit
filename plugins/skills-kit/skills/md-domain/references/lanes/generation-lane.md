@@ -107,29 +107,52 @@ and present the result as generated: a document with no coverage behind it is an
 authored document, and calling it generated claims a re-checkability it does not
 have.
 
-### The regeneration gate -- run this BEFORE writing anything
+### The regeneration sort -- how existing content survives a rewrite
 
 Fires when the verb is `generate` AND the target document already exists.
 
+**It never blocks and it never deletes.** There is no proposal round and no
+pre-write gate: an unmarked document is the NORMAL state of every CLAUDE.md
+written before this skill existed, and stopping on it would charge every
+adopting repo a corpus-wide marking chore before the lane would write anything.
+Sorting content into a preserved Unverified section removes the hazard a gate
+was protecting against. See `../standards/claude-md-standards.md` section 6.4,
+which is the authority for the dispositions and the section format.
+
 1. **Read the existing document and split it into units** -- records inside the
    `claude_md:` block, and marked or unmarked prose sections outside it.
-2. **Classify every unit** VERIFIED / RETAINED / UNVERIFIED per
-   `../standards/claude-md-standards.md` section 6.4. VERIFIED means this run's
-   coverage re-derives it from current code; RETAINED means it carries a
-   retention marking; UNVERIFIED is everything else.
-3. **If the document carries NO retention marking of either form, STOP AND
-   PROPOSE.** Report each unit with its classification and name the UNVERIFIED
-   units you propose marking `retain`. Write nothing at all this run. This is the
-   normal state of every hand-written CLAUDE.md, and honouring the table without
-   this gate would delete all of it.
-4. **Otherwise proceed**, carrying RETAINED units through VERBATIM (they are not
-   re-worded, re-ordered into a different record, or "improved"), refreshing
-   VERIFIED units' anchors, and reporting UNVERIFIED units for the user to rule
-   on rather than dropping them silently.
+2. **Check every unit by DIRECTED verification.** Read the code the claim
+   describes and confirm the claim still holds. A unit citing anchors is checked
+   at those `file:line` sites; a unit citing nothing -- the normal state of
+   hand-written prose -- has its subject located within this directory's own
+   direct code and checked there. Do NOT verify by asking whether this run's
+   coverage independently re-derived the unit: coverage is a non-idempotent
+   SAMPLE ("Idempotency is NOT claimed", `coverage-lane.md`), so sorting on
+   coincidence would demote true facts a sample missed and churn the document on
+   every run. This is the hoist verification pattern below, pointed at existing
+   units: bounded to the files the claim itself names, never the directory at
+   large.
+3. **Sort each unit** VERIFIED / RETAINED / UNVERIFIED per section 6.4, and
+   write all three:
+   - VERIFIED -- kept in place, anchors refreshed. A claim that holds with drift
+     is still VERIFIED: refresh the wording too, and report the reword.
+   - RETAINED -- kept in place VERBATIM. Not re-worded, not re-ordered into a
+     different record, not "improved".
+   - UNVERIFIED -- MOVED VERBATIM into the document's `## Unverified` section,
+     each entry carrying its check result: NOT LOCATED, or CONTRADICTED with the
+     contradicting `file:line`. A contradicted claim is never reported as merely
+     unchecked.
+4. **Report the Unverified section with a count** at the end of every run. A
+   silently growing Unverified section is this design's failure mode in place of
+   deletion, and reporting is what keeps it visible. Name any unit that moved
+   BACK out of the section because it now verifies.
 
-The gate is DETECTED, not configured -- there is no flag to skip or force it. A
-document this lane generated cannot reach step 3, because every unverifiable unit
-it kept was marked when it was written.
+The sort is DETECTED, not configured -- there is no flag to skip or force it,
+and none to restore the retired proposal round.
+
+**Marking is an OUTPUT here, not an input.** `retain` is how a user resolves a
+unit OUT of the Unverified section -- "true, about intent rather than code, stop
+asking" -- and is never something they must supply before the lane will run.
 
 **The fact may arrive pre-derived.** This lane is agnostic about where content
 came from: a conversation with the user, an audit remediation, or a batch handed

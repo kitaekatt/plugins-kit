@@ -298,12 +298,48 @@ class TestBoundPathsResolve:
             assert record["procedure"] == "references/lanes/generation-lane.md"
             assert record["standards"].startswith("references/standards/")
 
-    def test_regeneration_declares_the_propose_markings_gate(self):
-        """Regeneration must never silently overwrite an unmarked document."""
+    def test_regeneration_declares_the_never_delete_contract(self):
+        """Regeneration must never silently drop content from an unmarked document.
+
+        The protected property is unchanged: the first regeneration of a
+        hand-written CLAUDE.md must not gut it. What changed is the mechanism.
+        The retired `propose-markings-first` gate refused to write until the user
+        marked the corpus, which made every repo adopting the skill pay a
+        marking chore up front -- permanently, since a pre-existing CLAUDE.md
+        carries no markings by construction. `sort-never-delete` protects the
+        same prose by RELOCATING unverifiable units into the document's
+        `## Unverified` section verbatim instead of deleting them, which removes
+        the hazard the gate existed to guard against.
+        """
         record = next(r for r in LANE_RECORDS if r["verb"] == "generate")
-        assert record.get("regeneration") == "propose-markings-first", (
-            "generate_claude_md must declare the propose-markings-first gate -- "
-            "without it the first regeneration of a hand-written CLAUDE.md guts it"
+        assert record.get("regeneration") == "sort-never-delete", (
+            "generate_claude_md must declare the sort-never-delete contract -- "
+            "without it a regeneration may drop content it cannot verify"
+        )
+
+    def test_regeneration_gate_is_not_reintroduced(self):
+        """The retired pre-write gate must not come back under any name.
+
+        A gate that blocks writing until a user marks existing content is the
+        specific failure this contract replaced; it is cheap to reintroduce by
+        accident when someone re-reads section 6.4 out of context.
+        """
+        record = next(r for r in LANE_RECORDS if r["verb"] == "generate")
+        assert record.get("regeneration") != "propose-markings-first", (
+            "the propose-markings-first gate is retired -- see "
+            "claude-md-standards.md section 6.4, 'Do not reintroduce a pre-write gate'"
+        )
+
+        lane = (
+            MD_DOMAIN / "references" / "lanes" / "generation-lane.md"
+        ).read_text(encoding="utf-8")
+        assert "STOP AND" not in lane, (
+            "generation-lane.md must not instruct the regeneration sort to stop "
+            "and propose markings before writing"
+        )
+        assert "## Unverified" in lane, (
+            "generation-lane.md must name the Unverified section that unverifiable "
+            "units are relocated into"
         )
 
 

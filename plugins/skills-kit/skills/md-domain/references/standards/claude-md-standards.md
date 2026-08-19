@@ -649,15 +649,54 @@ A classic CLAUDE.md carries a `claude_md:` YAML block. It is the load-bearing st
 
 The other recurring generation defects, stated as standards rather than procedure: a root CLAUDE.md with no `claude_md:` block; a missing `scope.excludes`; an insight record with fewer than 3 keywords; line-only anchors in a code-directory file (prefer a symbol anchor; drop the number unless the gotcha is sub-function -- section 3.4).
 
-### 6.4 Retention marking (regeneration)
+### 6.4 Retention and sorting (regeneration)
 
-REGENERATION is `generate x claude-md` over a document that already exists. It keeps only what it can justify, and every unit of existing content falls into exactly one of three dispositions:
+REGENERATION is `generate x claude-md` over a document that already exists. **It never deletes existing content and never blocks on a marking chore.** Every unit of existing content is SORTED into exactly one of three dispositions, and all three survive the run:
 
 | Disposition | Condition | Outcome |
 |---|---|---|
-| VERIFIED | re-derived from current code by this run's coverage | kept, anchors refreshed |
-| RETAINED | carries an explicit retention marking | kept VERBATIM, never re-worded |
-| UNVERIFIED | neither of the above | reported; removed only on the user's say-so |
+| VERIFIED | a directed check confirms the claim against the code it describes | kept in place, anchors refreshed |
+| RETAINED | carries an explicit retention marking | kept in place, VERBATIM, never re-worded |
+| UNVERIFIED | neither of the above | MOVED to the Unverified section, verbatim, with its check result |
+
+Sorting replaces the earlier model, in which UNVERIFIED content was reported and the first pass over an unmarked document proposed markings and wrote nothing. That gate existed for one reason -- a regenerator applying a keep-only-what-you-can-justify table literally would delete every line of a hand-written CLAUDE.md. Relocation removes the hazard, so the gate that guarded against it is retired: **there is no proposal round.** A repo whose CLAUDE.md files predate this skill carries no markings BY CONSTRUCTION, and requiring their authors to mark a corpus before the tool will write anything charges them for a harm that can no longer occur.
+
+**Do not reintroduce a pre-write gate here.** The chicken-and-egg it created was not a transitional cost; it was permanent for every repo adopting the skill.
+
+#### Verification is a DIRECTED CHECK, not coincidence with this run's coverage
+
+A unit is VERIFIED when this run reads the code the claim describes and confirms the claim still holds. It is NOT verified merely by a fresh analysis happening to re-derive it.
+
+This distinction is load-bearing. Coverage is explicitly a SAMPLE and explicitly non-idempotent (`../lanes/coverage-lane.md`: "Idempotency is NOT claimed", "A report is a SAMPLE, not an inventory"). Sorting existing content on whether a sample coincided with it would demote true facts the sample happened to miss, promote them again on the next run, and churn the document on every regeneration.
+
+The mechanism is the one already specified for hoists in `../lanes/generation-lane.md` -- proposed, then verified against exactly the files the claim names, never the directory at large. Apply it to existing units:
+
+- **The unit cites anchors** -- read those `file:line` sites and check the proposition there. This is the cheap case and the common one for a generated document.
+- **The unit cites nothing** -- the normal state of hand-written prose. Locate the subject the claim is about within this directory's own direct code, then check it. If the subject cannot be located in this directory, the unit is UNVERIFIED; do not widen the search into subdirectories to rescue it, because a claim whose subject is not here is a placement question, not a verification one.
+
+A check has three outcomes, and only the first two are VERIFIED: the claim holds (keep, refresh anchors); the claim holds with drift (keep, refresh anchors AND the wording, reporting the reword); the claim is CONTRADICTED by the code. **A contradicted claim is not merely unverified** -- move it to the Unverified section and say the code contradicts it, which is the one result a reader must not mistake for "we could not check this".
+
+#### The Unverified section
+
+Unverified units move into a section of the SAME CLAUDE.md, so the content stays where its readers already look and no second file has to be discovered:
+
+```
+## Unverified
+
+Content below could not be confirmed against this directory's code by the last
+regeneration. It is preserved verbatim. Each entry names why the check failed.
+Resolve an entry by correcting it, deleting it, or marking it `retain`.
+```
+
+Rules for the section, all of which exist to stop it becoming a dumping ground:
+
+- Units move **verbatim**. Relocation is not licence to re-word, condense, or merge them.
+- Each unit carries its check result: not located, or contradicted (naming the contradicting `file:line`).
+- The section is a WORK QUEUE, not a resting place. It is drained by a human, and a unit leaves it by being corrected, deleted, or marked `retain`.
+- A unit that later verifies moves back out, into the body, and its Unverified entry is removed.
+- **The section is reported at the end of every regeneration**, with a count. A silently growing Unverified section is the failure mode this design has instead of deletion, and reporting is what keeps it visible.
+
+Demotion is not free even though nothing is destroyed: a correct claim moved under a heading that says "unverified" loses authority with every future reader. That cost is why verification is directed rather than sampled, and why a contradicted claim is distinguished from an unchecked one.
 
 **The marking has two forms, because prose has no key to hang a field on.**
 
@@ -670,8 +709,6 @@ REGENERATION is `generate x claude-md` over a document that already exists. It k
 
 **`retain: true` means "keep this even though it cannot be re-derived from code".** It is not a quality claim, not a correctness claim, and not a pin against a human editing the file. It instructs the regenerator and nothing else. Content that CAN be re-derived does not need it; marking such content is harmless and pointless.
 
-**The first pass over an unmarked document PROPOSES markings and writes nothing.** A hand-written CLAUDE.md carries no markings by construction, so a regenerator applying the table above literally would delete all of it -- which is the failure this section exists to prevent. The first run therefore reports, per unit: what it verified, what it could not, and which unverifiable units it proposes to mark `retain`. The user marks them, or accepts the proposed set; only a subsequent run writes. A document this lane has already generated cannot land in that state, because every unverifiable unit it kept was marked at the time it was written.
+**Marking is now an OUTPUT of the workflow rather than a precondition to it.** A user marks a unit as the way to resolve it out of the Unverified section -- "this is true, it is about intent rather than code, stop asking" -- which is the judgment `retain` was always for. It is never something a user must supply before regeneration will run.
 
-**The proposal round is DETECTED, never configured.** It fires when the document exists and carries no retention marking of either form. There is deliberately no flag to skip it and none to force it: a flag would make the user restate something the lane can observe directly, and would become a second source of truth free to disagree with the file. See the plugin-opinion razor's preference for detecting an observable fact over configuring a preference.
-
-**An UNVERIFIED unit is never silently dropped.** Reporting it is the point -- an unverifiable claim in a CLAUDE.md is either stale (delete it), a fact about intent rather than code (mark it), or a defect in the analysis (fix the analysis). Deleting it without saying so destroys the signal that distinguishes the three.
+**An UNVERIFIED unit is never silently dropped.** It is never dropped at all. An unverifiable claim in a CLAUDE.md is either stale (delete it), a fact about intent rather than code (mark it `retain`), or a defect in the analysis (fix the analysis); the Unverified section preserves the claim and the check result so a reader can tell which of the three they are looking at.
