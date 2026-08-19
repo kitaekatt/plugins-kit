@@ -129,6 +129,17 @@ class RunRecord:
     adapter declared nothing) -- treated as an empty recorded snapshot by
     ``execution.adapter.require_compatible_environment``. Never enters the
     status digest (invariant 6).
+
+    ``dispatcher_id`` / ``dispatcher_lease_expires_at`` / ``dispatcher_fence``
+    (B1) are the run-level LAUNCHER-ELECTION lease -- a distinct lease from a
+    per-unit claim lease. At most one background-lane dispatcher process may
+    hold it at a time, so an accidental second dispatcher exits without
+    launching duplicate work. ``dispatcher_fence`` is a monotonically
+    increasing counter bumped on every successful
+    :meth:`~content_pipeline.execution.store.ExecutionStore.acquire_dispatcher_lease`
+    call (fresh acquire OR the same dispatcher re-acquiring), so a stale
+    former holder's renew/release is rejected the same way a stale unit
+    fencing token is (see :class:`StaleDispatcherLeaseError`).
     """
 
     id: str
@@ -141,6 +152,9 @@ class RunRecord:
     halted_detail: Optional[str] = None
     halted_at: Optional[float] = None
     environment: Optional[Mapping[str, str]] = None
+    dispatcher_id: Optional[str] = None
+    dispatcher_lease_expires_at: Optional[float] = None
+    dispatcher_fence: int = 0
 
     @property
     def halted(self) -> bool:
@@ -187,6 +201,42 @@ class ClaimResult:
 
     fencing_token: int
     lease_expires_at: float
+
+
+@dataclass(frozen=True)
+class DispatchRecord:
+    """One row of the ``dispatches`` table (B1): a background-lane launch of
+    ``unit_id``, distinct from -- and layered on top of -- the unit's own
+    store-level claim (``UnitRecord.claimed_by`` / ``fencing_token``).
+
+    Per the author ruling this ships against: the DRIVER mints ``worker_id``
+    before launching the Claude session, and the worker claims the unit with
+    that id (so "one agent claims one unit" is enforced at the existing
+    per-unit fencing layer, unchanged). ``session_id`` -- the Claude session
+    id -- is recorded ALONGSIDE ``worker_id`` once known (it is not known at
+    launch time, since ``claude --bg`` prints it only after the process
+    spawns), never in place of it, and every later status decision about
+    this dispatch keys on ``session_id``, never on a PID.
+
+    ``settled_at`` / ``outcome`` are ``None`` while the dispatch is open (the
+    worker has not yet reached a terminal outcome from the dispatcher's point
+    of view). A guarded uniqueness constraint on
+    ``(run_id, unit_id) WHERE settled_at IS NULL`` (see the store module's
+    migration) enforces at most one OPEN dispatch per unit at the database
+    level -- a second ``record_dispatch`` call for a unit that already has an
+    open dispatch fails with a ``sqlite3.IntegrityError`` rather than
+    silently launching a duplicate worker.
+    """
+
+    id: int
+    run_id: str
+    unit_id: str
+    worker_id: str
+    session_id: Optional[str]
+    launched_at: float
+    settled_at: Optional[float]
+    outcome: Optional[str]
+    cli_version: Optional[str]
 
 
 class ExecutionError(Exception):
@@ -245,6 +295,44 @@ class StaleFenceError(ExecutionError):
         )
 
 
+class StaleDispatcherLeaseError(ExecutionError):
+    """A dispatcher-lease renew/release was attempted with a
+    ``(dispatcher_id, fence)`` pair that does not match the run's current
+    holder -- the run-level analogue of :class:`StaleFenceError`, checked
+    first (before any other validation) the same way."""
+
+    def __init__(
+        self,
+        run_id: str,
+        dispatcher_id: str,
+        fence: int,
+        current_dispatcher_id: Optional[str],
+        current_fence: int,
+    ) -> None:
+        self.run_id = run_id
+        self.dispatcher_id = dispatcher_id
+        self.fence = fence
+        self.current_dispatcher_id = current_dispatcher_id
+        self.current_fence = current_fence
+        super().__init__(
+            f"stale dispatcher lease for run {run_id!r}: presented "
+            f"({dispatcher_id!r}, {fence}), current "
+            f"({current_dispatcher_id!r}, {current_fence})"
+        )
+
+
+class NoOpenDispatchError(ExecutionError):
+    """``settle_dispatch`` was called for a ``(run_id, unit_id)`` with no
+    open (``settled_at IS NULL``) dispatch row to settle."""
+
+    def __init__(self, run_id: str, unit_id: str) -> None:
+        self.run_id = run_id
+        self.unit_id = unit_id
+        super().__init__(
+            f"no open dispatch for {run_id!r}/{unit_id!r} to settle"
+        )
+
+
 __all__ = [
     "UnitState",
     "TERMINAL_STATES",
@@ -255,6 +343,7 @@ __all__ = [
     "UnitRecord",
     "AttemptRecord",
     "ClaimResult",
+    "DispatchRecord",
     "ExecutionError",
     "UnknownRunError",
     "UnknownUnitError",
@@ -265,4 +354,6 @@ __all__ = [
     "NotClaimedError",
     "NotAcceptedError",
     "StaleFenceError",
+    "StaleDispatcherLeaseError",
+    "NoOpenDispatchError",
 ]

@@ -69,11 +69,14 @@ from content_pipeline.execution.model import (
     AttemptKind,
     AttemptRecord,
     ClaimResult,
+    DispatchRecord,
     DuplicateUnitError,
+    NoOpenDispatchError,
     NotAcceptedError,
     NotClaimedError,
     RunHaltedError,
     RunRecord,
+    StaleDispatcherLeaseError,
     StaleFenceError,
     TERMINAL_STATES,
     TerminalStateError,
@@ -250,6 +253,41 @@ _MIGRATIONS: List[List[str]] = [
         # adapter-less create, or a mount whose adapter declared nothing).
         "ALTER TABLE runs ADD COLUMN environment TEXT;",
     ],
+    [
+        # B1: the run-level dispatcher (launcher-election) lease -- a
+        # SEPARATE lease from a per-unit claim lease, held by at most one
+        # background-lane dispatcher process at a time. `dispatcher_fence`
+        # is a monotonically increasing counter, same shape as a unit's own
+        # `fencing_token`, bumped on every successful acquire (see
+        # `acquire_dispatcher_lease`).
+        "ALTER TABLE runs ADD COLUMN dispatcher_id TEXT;",
+        "ALTER TABLE runs ADD COLUMN dispatcher_lease_expires_at REAL;",
+        "ALTER TABLE runs ADD COLUMN dispatcher_fence INTEGER DEFAULT 0;",
+        # B1: one row per background-session LAUNCH of a unit, layered on
+        # top of (never replacing) the unit's own store-level claim. The
+        # partial unique index enforces "at most one OPEN dispatch per unit"
+        # at the database level -- a second `record_dispatch` for a unit
+        # that already has an open (settled_at IS NULL) dispatch fails with
+        # sqlite3.IntegrityError rather than silently launching a duplicate
+        # worker for it.
+        """
+        CREATE TABLE dispatches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            unit_id TEXT NOT NULL,
+            worker_id TEXT NOT NULL,
+            session_id TEXT,
+            launched_at REAL NOT NULL,
+            settled_at REAL,
+            outcome TEXT,
+            cli_version TEXT,
+            FOREIGN KEY (run_id, unit_id) REFERENCES units(run_id, unit_id)
+        );
+        """,
+        "CREATE INDEX idx_dispatches_run_unit ON dispatches(run_id, unit_id);",
+        "CREATE UNIQUE INDEX idx_dispatches_open_unique ON dispatches(run_id, unit_id) "
+        "WHERE settled_at IS NULL;",
+    ],
 ]
 
 
@@ -260,6 +298,9 @@ def _row_to_run(row: sqlite3.Row) -> RunRecord:
     # tolerate a missing column the same way a genuinely older reader would
     # have to, rather than raising a bare sqlite3.Row IndexError.
     raw_environment = row["environment"] if "environment" in row.keys() else None
+    # B1's dispatcher-lease columns: same tolerance as `environment` above,
+    # for a database whose migrations have not yet applied that step.
+    row_keys = row.keys()
     return RunRecord(
         id=row["id"],
         driver=row["driver"],
@@ -271,6 +312,11 @@ def _row_to_run(row: sqlite3.Row) -> RunRecord:
         halted_detail=row["halted_detail"],
         halted_at=row["halted_at"],
         environment=json.loads(raw_environment) if raw_environment is not None else None,
+        dispatcher_id=row["dispatcher_id"] if "dispatcher_id" in row_keys else None,
+        dispatcher_lease_expires_at=(
+            row["dispatcher_lease_expires_at"] if "dispatcher_lease_expires_at" in row_keys else None
+        ),
+        dispatcher_fence=(row["dispatcher_fence"] or 0) if "dispatcher_fence" in row_keys else 0,
     )
 
 
@@ -314,6 +360,20 @@ def _row_to_attempt(row: sqlite3.Row) -> AttemptRecord:
         fencing_token=row["fencing_token"],
         error=row["error"],
         usage=usage,
+    )
+
+
+def _row_to_dispatch(row: sqlite3.Row) -> DispatchRecord:
+    return DispatchRecord(
+        id=row["id"],
+        run_id=row["run_id"],
+        unit_id=row["unit_id"],
+        worker_id=row["worker_id"],
+        session_id=row["session_id"],
+        launched_at=row["launched_at"],
+        settled_at=row["settled_at"],
+        outcome=row["outcome"],
+        cli_version=row["cli_version"],
     )
 
 
@@ -1110,6 +1170,204 @@ class ExecutionStore:
             units = [_row_to_unit(r) for r in _fetch_unit_rows(conn, run_id)]
             attempts = [_row_to_attempt(r) for r in _fetch_attempt_rows(conn, run_id)]
         return run, units, attempts
+
+    # -- dispatcher (launcher-election) lease, B1 ---------------------------------
+    #
+    # A SEPARATE lease from a per-unit claim lease (`claim_unit`/`renew_lease`
+    # above): this one is held by at most one background-lane DISPATCHER
+    # process for the whole run, so an accidental second dispatcher exits
+    # without launching duplicate work. Same fencing shape as a unit's own
+    # `fencing_token` -- `dispatcher_fence` is bumped on every successful
+    # acquire and a stale (dispatcher_id, fence) pair on renew/release is
+    # rejected the same way a stale unit fence is (checked FIRST, before any
+    # other validation).
+
+    def acquire_dispatcher_lease(
+        self,
+        run_id: str,
+        dispatcher_id: str,
+        *,
+        lease_seconds: float,
+        at: Optional[float] = None,
+    ) -> Optional[int]:
+        """Attempt to become (or remain) ``run_id``'s dispatcher.
+
+        Succeeds -- returns the new ``dispatcher_fence`` -- when nobody
+        currently holds a live lease, the current holder's lease has
+        expired, or ``dispatcher_id`` already IS the current holder (a
+        same-dispatcher re-acquire always succeeds, whether or not its own
+        lease was still live; this is what lets the SAME dispatcher_id
+        re-acquire after its own lease expired, per the author ruling this
+        method ships against). Fails -- returns ``None``, never raises --
+        only when a DIFFERENT dispatcher_id holds a still-live lease; a
+        failed acquire is an ordinary, expected outcome for "an accidental
+        second dispatcher", not an error.
+        """
+        now = time.time() if at is None else at
+        with self._writer() as conn:
+            run_row = self._require_run(conn, run_id)
+            current_id = run_row["dispatcher_id"] if "dispatcher_id" in run_row.keys() else None
+            current_expires = (
+                run_row["dispatcher_lease_expires_at"]
+                if "dispatcher_lease_expires_at" in run_row.keys()
+                else None
+            )
+            current_fence = (
+                (run_row["dispatcher_fence"] or 0) if "dispatcher_fence" in run_row.keys() else 0
+            )
+            held_by_other_live = (
+                current_id is not None
+                and current_id != dispatcher_id
+                and current_expires is not None
+                and current_expires > now
+            )
+            if held_by_other_live:
+                return None
+            new_fence = current_fence + 1
+            new_expires = now + lease_seconds
+            conn.execute(
+                "UPDATE runs SET dispatcher_id = ?, dispatcher_lease_expires_at = ?, "
+                "dispatcher_fence = ? WHERE id = ?",
+                (dispatcher_id, new_expires, new_fence, run_id),
+            )
+        return new_fence
+
+    def renew_dispatcher_lease(
+        self,
+        run_id: str,
+        dispatcher_id: str,
+        fence: int,
+        *,
+        lease_seconds: float,
+        at: Optional[float] = None,
+    ) -> float:
+        """Extend the live dispatcher lease. Returns the new expiry.
+
+        Raises :class:`StaleDispatcherLeaseError` when ``(dispatcher_id,
+        fence)`` does not match the run's current holder -- checked first,
+        before anything else, same convention as :meth:`renew_lease`.
+        """
+        now = time.time() if at is None else at
+        with self._writer() as conn:
+            run_row = self._require_run(conn, run_id)
+            current_id = run_row["dispatcher_id"]
+            current_fence = run_row["dispatcher_fence"] or 0
+            if current_id != dispatcher_id or fence != current_fence:
+                raise StaleDispatcherLeaseError(
+                    run_id, dispatcher_id, fence, current_id, current_fence
+                )
+            new_expires = now + lease_seconds
+            conn.execute(
+                "UPDATE runs SET dispatcher_lease_expires_at = ? WHERE id = ?",
+                (new_expires, run_id),
+            )
+        return new_expires
+
+    def release_dispatcher_lease(
+        self, run_id: str, dispatcher_id: str, fence: int, *, at: Optional[float] = None
+    ) -> None:
+        """Voluntarily give up the dispatcher lease (a clean dispatcher exit).
+
+        Raises :class:`StaleDispatcherLeaseError` on a ``(dispatcher_id,
+        fence)`` mismatch, same as :meth:`renew_dispatcher_lease`.
+        ``dispatcher_fence`` itself is left unchanged (it is a monotonic
+        counter, never reset) -- only ``dispatcher_id`` and
+        ``dispatcher_lease_expires_at`` are cleared, so a later acquire by
+        anyone still gets a strictly higher fence than this one.
+        """
+        with self._writer() as conn:
+            run_row = self._require_run(conn, run_id)
+            current_id = run_row["dispatcher_id"]
+            current_fence = run_row["dispatcher_fence"] or 0
+            if current_id != dispatcher_id or fence != current_fence:
+                raise StaleDispatcherLeaseError(
+                    run_id, dispatcher_id, fence, current_id, current_fence
+                )
+            conn.execute(
+                "UPDATE runs SET dispatcher_id = NULL, dispatcher_lease_expires_at = NULL "
+                "WHERE id = ?",
+                (run_id,),
+            )
+
+    # -- dispatches (background-session launches), B1 -----------------------------
+
+    def record_dispatch(
+        self,
+        run_id: str,
+        unit_id: str,
+        worker_id: str,
+        *,
+        session_id: Optional[str] = None,
+        cli_version: Optional[str] = None,
+        at: Optional[float] = None,
+    ) -> int:
+        """Record a new background-session launch of ``unit_id``.
+
+        ``worker_id`` is minted by the DRIVER before launch (the author
+        ruling this ships against); ``session_id`` -- the Claude session id
+        -- is usually not yet known at this point (``claude --bg`` reports it
+        only after the process spawns) and may be attached later via
+        :meth:`settle_dispatch`. Raises ``sqlite3.IntegrityError`` if
+        ``unit_id`` already has an OPEN dispatch (the guarded uniqueness
+        index) -- the database-level half of "one agent claims one unit".
+        Returns the new ``dispatches.id``.
+        """
+        now = time.time() if at is None else at
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            self._require_unit(conn, run_id, unit_id)
+            cursor = conn.execute(
+                "INSERT INTO dispatches(run_id, unit_id, worker_id, session_id, launched_at, "
+                "cli_version) VALUES (?, ?, ?, ?, ?, ?)",
+                (run_id, unit_id, worker_id, session_id, now, cli_version),
+            )
+            dispatch_id = cursor.lastrowid
+        return dispatch_id
+
+    def settle_dispatch(
+        self,
+        run_id: str,
+        unit_id: str,
+        *,
+        outcome: str,
+        session_id: Optional[str] = None,
+        at: Optional[float] = None,
+    ) -> None:
+        """Close the currently OPEN dispatch for ``unit_id`` (most recent by
+        id, though the guarded uniqueness index means there is ever only
+        one). ``session_id``, when supplied, overwrites whatever was
+        recorded at :meth:`record_dispatch` time -- the "recorded alongside
+        once known" half of the identity contract. Raises
+        :class:`NoOpenDispatchError` when there is no open dispatch to
+        settle.
+        """
+        now = time.time() if at is None else at
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            self._require_unit(conn, run_id, unit_id)
+            row = conn.execute(
+                "SELECT id, session_id FROM dispatches WHERE run_id = ? AND unit_id = ? "
+                "AND settled_at IS NULL ORDER BY id DESC LIMIT 1",
+                (run_id, unit_id),
+            ).fetchone()
+            if row is None:
+                raise NoOpenDispatchError(run_id, unit_id)
+            new_session_id = session_id if session_id is not None else row["session_id"]
+            conn.execute(
+                "UPDATE dispatches SET settled_at = ?, outcome = ?, session_id = ? WHERE id = ?",
+                (now, outcome, new_session_id, row["id"]),
+            )
+
+    def open_dispatches(self, run_id: str) -> List[DispatchRecord]:
+        """Every currently OPEN (``settled_at IS NULL``) dispatch for
+        ``run_id``, ordinal by insertion order."""
+        with self._connect() as conn:
+            self._require_run(conn, run_id)
+            rows = conn.execute(
+                "SELECT * FROM dispatches WHERE run_id = ? AND settled_at IS NULL ORDER BY id",
+                (run_id,),
+            ).fetchall()
+        return [_row_to_dispatch(r) for r in rows]
 
 
 __all__ = [
