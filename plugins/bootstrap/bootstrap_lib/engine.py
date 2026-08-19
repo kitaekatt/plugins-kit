@@ -5320,6 +5320,26 @@ def _env_phase_login_items(ctx):
             )
 
 
+def _env_check_user_text(name, text):
+    """The user-facing phrasing of a contract script's own output.
+
+    Contract scripts conventionally prefix their output with their own name
+    ("repo-sync: ..."), and the engine composes its failure `message` as
+    "<name>: <detail>" -- so the name landed TWICE on the line the user reads
+    ("repo-sync: repo-sync: still not in sync: ..."). The agent line and the
+    bootstrap.log entry both keep the name, so the user's copy can drop it
+    entirely: the script's own message is what says what is wrong, and it is
+    expected to be self-describing.
+
+    Falls back to the original text when stripping would leave nothing.
+    """
+    prefix = f"{name}: "
+    out = str(text or "").lstrip()
+    while out.startswith(prefix):
+        out = out[len(prefix):].lstrip()
+    return out or str(text or "").strip()
+
+
 def _env_phase_env_checks(ctx):
     """env_checks: the generic check/fix contract (spec section 5).
 
@@ -5450,6 +5470,7 @@ def _env_phase_env_checks(ctx):
                 f"env_check {name}: needs manual attention - {'; '.join(parts)}",
                 type="env_check", name=name,
                 message=f"{name}: {'; '.join(parts)}",
+                user_msg=_env_check_user_text(name, '; '.join(parts)),
                 agent_msg=_with_instructions(f"{name}: {'; '.join(parts)}"),
                 persist_across_sessions=True,
             )
@@ -5515,6 +5536,7 @@ def _env_phase_env_checks(ctx):
                 f"env_check {name}: FAILED - {fix_detail}",
                 type="env_check", name=name,
                 message=f"{name}: {fix_detail}",
+                user_msg=_env_check_user_text(name, fix_detail),
                 agent_msg=_with_instructions(f"{name}: {fix_detail}"),
                 persist_across_sessions=True,
             )
@@ -6162,6 +6184,43 @@ def _extract_timestamp(line):
     return ""
 
 
+# Log blocks that are DIAGNOSTIC rather than user-facing: they report what the
+# engine did about itself, not what the machine needs. They stay in
+# bootstrap.log and in additionalContext (an agent driving --fix-all must be
+# able to tell a stand-down from a clean pass -- see _stand_down), but they are
+# stripped from the systemMessage so the user is never shown internal
+# scheduling. Matched as a header-label PREFIX, so both the timestamped
+# log-block header ("--- bootstrap lock <ts> ---") and the inline
+# caller-channel report ("--- bootstrap lock: stand-down: ... ---") are covered.
+_QUIET_LOG_BLOCK_PREFIXES = ("bootstrap lock",)
+
+
+def _user_visible_log(log_content):
+    """Drop the quiet diagnostic blocks from log content bound for the user.
+
+    A block runs from its ``--- ... ---`` header to the next header, so a
+    hidden header suppresses its body too. Content before any header is kept
+    (it belongs to no block).
+    """
+    if not log_content:
+        return ""
+    kept, hiding = [], False
+    for line in log_content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("--- "):
+            header = stripped[4:]
+            hiding = any(header.startswith(pre)
+                         for pre in _QUIET_LOG_BLOCK_PREFIXES)
+        if not hiding:
+            kept.append(line)
+    return "\n".join(kept).strip("\n")
+
+
+def _join_user_msg(*parts):
+    """Join the non-empty pieces of a systemMessage body with blank lines."""
+    return "\n\n".join(p for p in parts if p and p.strip())
+
+
 def emit_success_response(log_content, label="bootstrap", output_file=None,
                           recorder=None):
     """Emit hook JSON showing bootstrap log to user and agent.
@@ -6175,29 +6234,36 @@ def emit_success_response(log_content, label="bootstrap", output_file=None,
     if output_file:
         # Background mode: consumed by UserPromptSubmit hook.
         # `systemMessage` is user-facing, `additionalContext` is Claude-facing.
+        # Only the user's half is filtered: Claude keeps the quiet diagnostic
+        # blocks, and a pass whose ONLY content was quiet shows the user
+        # nothing at all rather than an empty header.
         body = f"{label} -> bootstrap complete:\n{log_content}"
+        user_log = _user_visible_log(log_content)
         response = {
             "continue": True,
             "suppressOutput": False,
-            "systemMessage": body,
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
                 "additionalContext": body,
             },
         }
+        if user_log:
+            response["systemMessage"] = f"{label} -> bootstrap complete:\n{user_log}"
         _write_atomic(output_file, json.dumps(response))
         _record_emit(recorder, "pending", response)
     else:
         # SessionStart hook: supports hookSpecificOutput with hookEventName
+        user_log = _user_visible_log(log_content)
         response = {
             "continue": True,
             "suppressOutput": False,
-            "systemMessage": f"{label}:\n{log_content}",
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": f"{label} -> bootstrap complete:\n{log_content}",
             },
         }
+        if user_log:
+            response["systemMessage"] = f"{label}:\n{user_log}"
         print(json.dumps(response))
         _record_emit(recorder, "stdout", response)
 
@@ -6412,10 +6478,14 @@ def _format_indexes(idxs):
     return ", ".join(f"#{i}" for i in idxs)
 
 
+# Suffix appended to an ASK item's user-facing line, naming the constraint the
+# user has to satisfy. "info" is deliberately ABSENT: "needs a detail from you"
+# restates what the item's own message already says and just made the line
+# longer, so an info item is shown bare. elevation/action stay because each
+# names a real constraint the message body does not carry.
 _ASK_REASON_BLURB = {
     "elevation": "needs admin access",
     "action": "needs you to do something",
-    "info": "needs a detail from you",
 }
 
 
@@ -6488,13 +6558,18 @@ def _auto_user_msg(auto):
 
 
 def _ask_user_msg(ask):
-    """systemMessage block for ASK items: named items (with why) + a will-ask line."""
-    lines = _ask_label_lines(ask)
-    body = "\n".join(f"{lbl} ({_ASK_REASON_BLURB.get(reason, 'needs your input')})"
-                     for lbl, reason in lines)
-    lead = ("Claude will ask before changing anything here -- nothing happens "
-            "unless you say so.")
-    return f"{body}\n{lead}" if body else lead
+    """systemMessage block for ASK items: one named item per line.
+
+    No trailing "Claude will ask before changing anything" line: it was a
+    constant, it said the same thing on every ASK message, and the
+    AskUserQuestion prompt that follows demonstrates it a beat later anyway.
+    An item whose reason has no blurb (info) is shown bare.
+    """
+    lines = []
+    for lbl, reason in _ask_label_lines(ask):
+        blurb = _ASK_REASON_BLURB.get(reason)
+        lines.append(f"{lbl} ({blurb})" if blurb else lbl)
+    return "\n".join(lines)
 
 
 def _ask_agent_directive(failures, ask_idxs):
@@ -6821,7 +6896,11 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
         response = {
             "continue": True,
             "suppressOutput": False,
-            "systemMessage": f"{label} -> Setup issues found. Fix in order:\n{log_content}\n\n{user_msg}",
+            "systemMessage": _join_user_msg(
+                f"{label} -> Setup issues found. Fix in order:\n"
+                f"{_user_visible_log(log_content)}".rstrip(),
+                user_msg,
+            ),
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
                 "additionalContext": f"{label} -> bootstrap complete:\n{log_content}\n\n{agent_msg}",
@@ -6835,7 +6914,7 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
         response = {
             "continue": True,
             "suppressOutput": False,
-            "systemMessage": f"{label}:\n{log_content}",
+            "systemMessage": f"{label}:\n{_user_visible_log(log_content)}".rstrip(),
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": agent_msg,

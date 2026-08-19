@@ -8,7 +8,11 @@ bootstrap log to the user as a single 40+ KB systemMessage.
 import os
 from datetime import datetime, timedelta, timezone
 
-from bootstrap_lib.engine import _read_new_log_entries
+from bootstrap_lib.engine import (
+    _read_new_log_entries,
+    _user_visible_log,
+    emit_success_response,
+)
 from bootstrap_lib.log import LOG_FILENAME
 
 
@@ -102,3 +106,56 @@ class TestReadNewLogEntries:
         _write_log(data_dir, log)
         out = _read_new_log_entries(data_dir, start_time=now)
         assert out == ""
+
+
+class TestUserVisibleLog:
+    """`_user_visible_log` strips the DIAGNOSTIC blocks from the user's copy.
+
+    The stand-down report ("bootstrap lock") says what the engine did about its
+    own scheduling -- it is not something the user can act on, and it displaced
+    the finding they actually needed to read. It stays in bootstrap.log and in
+    additionalContext, because an agent driving --fix-all must be able to tell
+    a stand-down from a clean pass (see _stand_down).
+    """
+
+    LOCK = (
+        "--- bootstrap lock 2026-08-19T15:19:08Z ---\n"
+        "stand-down: engine 0.84.0 yielded to running engine pass (pid 18032)\n"
+    )
+    REAL = (
+        "--- plugins-kit:bootstrap@0.84.0 2026-08-19T15:19:09Z ---\n"
+        "env: env_check repo-sync: FAILED\n"
+    )
+
+    def test_lock_block_and_its_body_are_dropped(self):
+        out = _user_visible_log(self.LOCK + self.REAL)
+        assert "bootstrap lock" not in out
+        assert "stand-down" not in out
+        assert "env_check repo-sync: FAILED" in out
+
+    def test_a_following_block_is_not_swallowed(self):
+        # The hidden region must end at the next header, not run to EOF.
+        out = _user_visible_log(self.REAL + self.LOCK + self.REAL)
+        assert out.count("env_check repo-sync: FAILED") == 2
+
+    def test_untimestamped_caller_channel_report_is_dropped(self):
+        # _stand_down also reports inline on the caller's channel, with no
+        # timestamp in the header.
+        out = _user_visible_log(
+            "--- bootstrap lock: stand-down: engine 0.84.0 yielded ---")
+        assert out == ""
+
+    def test_ordinary_log_is_untouched(self):
+        assert _user_visible_log(self.REAL) == self.REAL.rstrip("\n")
+
+    def test_quiet_only_pass_emits_no_system_message(self, data_dir, tmp_path):
+        # Nothing left for the user means NO systemMessage at all -- a bare
+        # "bootstrap complete:" header with an empty body is worse than silence.
+        out = tmp_path / "pending.json"
+        emit_success_response(self.LOCK, label="mkt:bootstrap@test",
+                              output_file=str(out))
+        import json
+        payload = json.loads(out.read_text())
+        assert "systemMessage" not in payload
+        ac = payload["hookSpecificOutput"]["additionalContext"]
+        assert "stand-down" in ac

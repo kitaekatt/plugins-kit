@@ -312,9 +312,10 @@ class TestPythonStubIntegration:
 
     def test_ask_user_msg_names_the_issues(self, tmp_path):
         """ASK failures (needing the user first): systemMessage NAMES each issue
-        and says Claude will ask -- there is no vague 'work through it manually'
-        third outcome; the two-outcome contract routes these through
-        AskUserQuestion (agent side) and names them (user side)."""
+        and nothing else -- there is no vague 'work through it manually' third
+        outcome, and no constant lead line; the two-outcome contract routes
+        these through AskUserQuestion (agent side) and names them (user
+        side)."""
         sys.path.insert(0, BOOTSTRAP_ROOT)
         from bootstrap_lib.engine import emit_failure_response
 
@@ -340,8 +341,8 @@ class TestPythonStubIntegration:
         # Each ASK issue is named in the USER-facing message.
         assert "repo-sync: still not in sync: env-config (dirty)" in sysmsg
         assert "sudoers: NOPASSWD rule missing" in sysmsg
-        # The two-outcome lead: Claude will ask, not "work through it manually".
-        assert "Claude will ask" in sysmsg
+        # No lead line, and no "work through it manually" third outcome.
+        assert "Claude will ask" not in sysmsg
         assert "manual attention" not in sysmsg
         # Agent side mandates AskUserQuestion.
         ac = payload["hookSpecificOutput"]["additionalContext"]

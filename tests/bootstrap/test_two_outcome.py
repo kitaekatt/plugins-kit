@@ -120,6 +120,28 @@ class TestTwoOutcomeEmission:
         assert "fixing these automatically" in sysmsg
         assert "Claude will ask" not in sysmsg
 
+    def test_ask_block_is_items_only(self, tmp_path):
+        # The ASK half of the systemMessage is the items and nothing else: the
+        # old constant lead ("Claude will ask before changing anything here")
+        # said the same thing on every message and the AskUserQuestion prompt
+        # demonstrates it a beat later, and the "info" reason blurb ("needs a
+        # detail from you") only restated the item's own message. Both were
+        # removed for being pure line-count; this is what stops them returning.
+        failures = [
+            {"type": "config", "name": "api-key", "agent_msg": "set OPENAI_API_KEY",
+             "message": "OPENAI_API_KEY is not set"},
+        ]
+        sysmsg, _ = _emit(failures, tmp_path)
+        assert "OPENAI_API_KEY is not set" in sysmsg
+        assert "Claude will ask" not in sysmsg
+        assert "needs a detail from you" not in sysmsg
+        # An elevation/action item keeps its blurb -- it names a constraint the
+        # item's own message does not carry.
+        sysmsg, _ = _emit(
+            [{"type": "tool", "name": "vpn", "install_state": "manual_install",
+              "message": "install the VPN client"}], tmp_path)
+        assert "install the VPN client (needs you to do something)" in sysmsg
+
     def test_all_ask_uses_askuserquestion_never_auto(self, tmp_path):
         failures = [
             {"type": "config", "name": "api-key", "agent_msg": "set OPENAI_API_KEY",
@@ -130,7 +152,7 @@ class TestTwoOutcomeEmission:
         sysmsg, ac = _emit(failures, tmp_path)
         assert "AskUserQuestion" in ac
         assert "are AUTO under" not in ac
-        assert "Claude will ask" in sysmsg
+        assert "OPENAI_API_KEY is not set" in sysmsg
         # No third-outcome language anywhere.
         assert "manual attention" not in (sysmsg + ac)
         assert "work through" not in (sysmsg + ac)
@@ -145,7 +167,7 @@ class TestTwoOutcomeEmission:
         assert "are AUTO under" in ac
         assert "AskUserQuestion" in ac
         assert "fixing these automatically" in sysmsg
-        assert "Claude will ask" in sysmsg
+        assert "OPENAI_API_KEY is not set" in sysmsg
 
     def test_auto_directive_meets_agent_directive_standards(self, tmp_path):
         # docs/reference/agent-directive-standards.md. This text reaches a
@@ -180,8 +202,8 @@ class TestTwoOutcomeEmission:
             "message": "hue-kit: no application key -- pairing needed",
         }]
         sysmsg, ac = _emit(failures, tmp_path)
-        assert "hue-kit wants to pair with your Hue bridge" in sysmsg
-        assert "Claude will ask" in sysmsg
+        assert ("hue-kit wants to pair with your Hue bridge "
+                "(needs you to do something)") in sysmsg
         assert "AskUserQuestion" in ac
         assert "manual attention" not in (sysmsg + ac)
 

@@ -876,3 +876,36 @@ class TestEngineNoWedge:
         assert len(result.failures) == 1
         assert result.failures[0]["name"] == "bad"
         assert log.read_text().splitlines() == ["good"]
+
+
+class TestEnvCheckUserText:
+    """The user's copy of a contract script's output carries the check name ONCE.
+
+    Contract scripts prefix their own output ("repo-sync: ..."), and the engine
+    composes its failure `message` as "<name>: <detail>", so the user's line
+    read "repo-sync: repo-sync: still not in sync: ...". The agent line and the
+    bootstrap.log entry keep the name; the user's copy drops it, because the
+    script's own message is what says what is wrong.
+    """
+
+    def test_self_prefixed_output_loses_the_redundant_name(self):
+        from bootstrap_lib.engine import _env_check_user_text
+        assert _env_check_user_text(
+            "repo-sync", "repo-sync: Git repositories not in sync: a, b"
+        ) == "Git repositories not in sync: a, b"
+
+    def test_repeated_prefixes_all_collapse(self):
+        from bootstrap_lib.engine import _env_check_user_text
+        assert _env_check_user_text(
+            "repo-sync", "repo-sync: repo-sync: still not in sync: a"
+        ) == "still not in sync: a"
+
+    def test_unprefixed_output_is_left_alone(self):
+        from bootstrap_lib.engine import _env_check_user_text
+        assert _env_check_user_text(
+            "sudoers", "NOPASSWD rule missing") == "NOPASSWD rule missing"
+
+    def test_prefix_only_output_keeps_something_to_show(self):
+        # Stripping must never leave the user an empty line.
+        from bootstrap_lib.engine import _env_check_user_text
+        assert _env_check_user_text("repo-sync", "repo-sync:") == "repo-sync:"

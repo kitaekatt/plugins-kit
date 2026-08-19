@@ -201,7 +201,8 @@ class TestFixAllUserMsg:
         msg = engine._ask_user_msg([manual, agg])
         assert "net-tools" in msg                    # label came from queue task
         assert "needs admin access" in msg           # elevation reason blurb
-        assert "Claude will ask" in msg              # the two-outcome ask lead
+        # Items only -- the constant "Claude will ask" lead was removed.
+        assert "Claude will ask" not in msg
         # No backwards index references leak into the user-facing copy.
         assert "#1" not in msg and "#2" not in msg
 
@@ -219,7 +220,7 @@ class TestFixAllUserMsg:
     def test_mixed_ask_reaches_system_message_without_index_refs(self, tmp_path):
         """End to end through emit_failure_response (background mode): both ASK
         items (a manual-install tool + the elevation aggregate) land named in
-        systemMessage with the ask lead and no index refs; the agent side
+        systemMessage with no lead line and no index refs; the agent side
         mandates AskUserQuestion."""
         agg = self._agg("windows", "C:/data", fix_all_cmd="cmd")
         manual = {"type": "tool", "name": "foo", "install_state": "manual_install"}
@@ -230,7 +231,7 @@ class TestFixAllUserMsg:
         payload = json.loads(out.read_text())
         sm = payload["systemMessage"]
         assert "net-tools" in sm
-        assert "Claude will ask" in sm
+        assert "Claude will ask" not in sm
         assert "manual attention" not in sm
         assert "#1" not in sm and "#2" not in sm
         assert "AskUserQuestion" in payload["hookSpecificOutput"]["additionalContext"]
