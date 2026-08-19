@@ -852,6 +852,12 @@ class OpenDispatch:
     precondition (:func:`supervise_tick`) compares the unit's CURRENT store
     state against these captured values, dropping the slot on any drift
     rather than renewing a claim this dispatcher does not own.
+
+    ``terminal_since`` is the ONLY mutable field: the time at which
+    :func:`supervise_tick` first observed this dispatch's unit in a terminal
+    state while its session was still alive. It is the clock for the
+    terminal-exit grace (see that function's ``working``/``running``
+    branch), and ``None`` until such an observation happens.
     """
 
     unit_id: str
@@ -860,6 +866,7 @@ class OpenDispatch:
     id: str  # the short id (agents --json "id"; also the claude jobs/<id> directory name)
     fencing_token: int
     claimed_by: Optional[str]
+    terminal_since: Optional[float] = None
 
 
 def dispatch_unit(
@@ -1063,6 +1070,14 @@ def _classify_and_maybe_halt(
 # Step 8 -- status classification, renewal, stall detection (D5, P12, P13)
 # ---------------------------------------------------------------------------
 
+# How long a dispatch whose unit is already TERMINAL may keep its slot while
+# its background session has not exited yet. Sized to swallow the ordinary
+# submit-then-exit window (seconds, at a 15s poll) many times over, so the
+# ordinary case still settles through the `done` branch; beyond it the
+# session is stopped and the dispatch settled, because nothing else in the
+# system can ever close it (see supervise_tick's working/running branch).
+DEFAULT_TERMINAL_EXIT_GRACE_SECONDS = 300.0
+
 
 @dataclass(frozen=True)
 class TickResult:
@@ -1082,6 +1097,7 @@ def supervise_tick(
     open_dispatches: Mapping[str, OpenDispatch],
     *,
     env: Optional[Mapping[str, str]] = None,
+    terminal_exit_grace_seconds: float = DEFAULT_TERMINAL_EXIT_GRACE_SECONDS,
     at: Optional[float] = None,
 ) -> TickResult:
     """ONE ``agents --json --all`` call serving every tracked open dispatch
@@ -1095,10 +1111,18 @@ def supervise_tick(
       ``worker_id``. Any drift means someone else reclaimed the unit --
       the slot is DROPPED (no renew, no store write) rather than renewing a
       claim this dispatcher does not own.
-    - ``working``/``running`` -- renew, via
+    - ``working``/``running`` with the unit still CLAIMED -- renew, via
       ``store.renew_lease(..., lease_seconds=lease_for(adapter.resolve_expected_unit_seconds(unit)))``
       -- byte-identical to what ``protocol.build_handlers``'s
       ``_lease_ceiling`` derives for the worker's own claim.
+    - ``working``/``running`` with the unit NO LONGER CLAIMED (it submitted
+      through the protocol and its session has not exited yet) -- renew
+      NOTHING, and give the session ``terminal_exit_grace_seconds`` to exit
+      on its own so the ordinary case still settles through the ``done``
+      branch. Past the grace, ``stop`` + ``rm`` the session and settle
+      (``outcome="session_lingering"``): nothing else in the system can ever
+      close this dispatch, so an unbounded wait here is an unbounded
+      :func:`dispatch_wave`.
     - ``blocked`` (any reason) -- STOP renewing, with NO grace (ruling 1: a
       background session has been observed blocked for 19 days with nothing
       timing it out, P12; renewing on ``blocked`` renews forever). The
@@ -1158,6 +1182,55 @@ def supervise_tick(
 
         state = session.state
         if state in ("working", "running"):
+            if current_unit.state is not UnitState.CLAIMED:
+                # The worker submitted through the protocol and its session
+                # has NOT exited yet -- the normal submit-then-exit window at
+                # a 15s poll, not a rare race. The unit is no longer CLAIMED,
+                # so store.renew_lease would raise NotClaimedError, and
+                # nothing here catches it: it would escape supervise_tick AND
+                # dispatch_wave, tearing down the wave and abandoning every
+                # other in-flight dispatch.
+                #
+                # So: renew nothing, and hold the dispatch open for a BOUNDED
+                # grace. Holding it is what keeps the slot honest while the
+                # session is alive -- max_agents caps LIVE sessions, and the
+                # wave's exit cleanup stops/rms only dispatches still open --
+                # and the ``done`` branch below settles it on the first tick
+                # after it exits, exactly as it does for a worker that
+                # submits and exits between two ticks.
+                #
+                # Bounding it is what keeps the WAVE alive. Nothing else can
+                # ever close this dispatch: the unit is terminal (ACCEPTED is
+                # the only state reachable here -- every other non-CLAIMED
+                # transition either clears ``claimed_by`` via ``fail_unit``
+                # or bumps the fence via ``claim_unit``, and is DROPPED by
+                # the guard above before reaching this branch), so it is
+                # never a dispatch candidate again, and ``accept_unit``
+                # leaves ``claimed_by`` and the fence INTACT, so the drift
+                # guard never drops it either. An unconditional wait here is
+                # therefore an unbounded dispatch_wave -- a silent hang, not
+                # a stall that anything reports.
+                if open_dispatch.terminal_since is None:
+                    open_dispatch.terminal_since = now
+                if now - open_dispatch.terminal_since < terminal_exit_grace_seconds:
+                    continue
+                # Grace spent. END the session here rather than leaving it:
+                # settling removes this dispatch from the caller's
+                # ``open_dispatches``, so the wave's own exit cleanup will no
+                # longer stop/rm it, and a still-live session would be
+                # leaked. Both calls are best-effort -- an unreachable
+                # daemon must not stop the settle below, which is what frees
+                # the slot and closes the dispatch row.
+                for _verb in (cli.stop, cli.rm):
+                    try:
+                        _verb(open_dispatch.id, env=env)
+                    except Exception:  # noqa: BLE001 -- best-effort cleanup
+                        pass
+                store.settle_dispatch(run_id, unit_id, outcome="session_lingering", at=now)
+                settled[unit_id] = "session_lingering"
+                # No classify_settled_failure: the unit is ACCEPTED. This is
+                # a session that overstayed, not a failure to explain.
+                continue
             work_unit = adapter.unit_for(unit_id)
             seconds = lease_for(adapter.resolve_expected_unit_seconds(work_unit))
             store.renew_lease(
@@ -1275,6 +1348,17 @@ DEFAULT_MAX_RECLAIMS_PER_UNIT = 2
 DEFAULT_DISPATCH_POLL_INTERVAL_S = 15.0
 DEFAULT_DISPATCHER_LEASE_SECONDS = 120.0
 
+# The wave-level liveness bound: how long dispatch_wave may observe NO
+# progress at all -- nothing dispatched, renewed, settled, or dropped --
+# before it aborts instead of polling forever. Deliberately generic: it is
+# not aimed at any one cause of a stuck open dispatch (the terminal-exit
+# grace above handles the one that is understood), it exists so that a cause
+# nobody has thought of yet ends as a reported abort rather than as a silent
+# hang. A live unit renews on every tick, so genuinely long work re-arms it
+# continuously and is never cut off; only a wave in which literally nothing
+# is happening can reach it.
+DEFAULT_WAVE_STALL_SECONDS = 900.0
+
 
 @dataclass(frozen=True)
 class DispatchReport:
@@ -1307,6 +1391,9 @@ def dispatch_wave(
     launch_confirm_seconds: float = DEFAULT_LAUNCH_CONFIRM_SECONDS,
     lease_seconds: Optional[float] = None,
     max_reclaims_per_unit: int = DEFAULT_MAX_RECLAIMS_PER_UNIT,
+    extra_launch_args: Sequence[str] = (),
+    terminal_exit_grace_seconds: float = DEFAULT_TERMINAL_EXIT_GRACE_SECONDS,
+    stall_timeout_seconds: float = DEFAULT_WAVE_STALL_SECONDS,
     at: Optional[float] = None,
     env: Optional[Mapping[str, str]] = None,
     cwd: Optional[str] = None,
@@ -1317,9 +1404,33 @@ def dispatch_wave(
     ``drivers.inline.run_wave``'s shape: ``store``/``run_id``/``wave``/``adapter``
     positional, policy keyword-only, an injectable ``at``.
 
-    ``max_agents`` and ``batch_size`` are the only two configurable settings
-    (both pass the plugin-opinion razor per the plan: protecting interactive
-    quota versus maximizing throughput is a genuine power-user preference).
+    ``max_agents`` and ``batch_size`` are the two configurable dispatch
+    settings (both pass the plugin-opinion razor per the plan: protecting
+    interactive quota versus maximizing throughput is a genuine power-user
+    preference).
+
+    ``extra_launch_args`` is the LAUNCH-ARGS SEAM: a sequence of ``claude``
+    flags forwarded verbatim, in order, to :func:`dispatch_unit` and thence
+    to :meth:`ClaudeCli.launch_bg`, which places them between ``--bg`` and
+    the positional prompt. It is how a consumer selects a worker agent --
+    e.g. ``extra_launch_args=("--agent", "pipeline-worker")`` for the agent
+    definition this plugin ships, or its own agent name -- and how any other
+    launch flag (a permission mode, a system-prompt file) reaches the
+    worker.
+
+    The default is empty and the driver NEVER adds a flag of its own, which
+    is deliberate rather than conservative: whether agent-selection flags
+    compose with ``--bg`` or are silently dropped is NOT established (the
+    flags are known to exist and background sessions are known to load
+    plugin skills; composition with ``--bg`` has never been observed, and
+    per P11 it could only be judged by a worker's behavior, never by the
+    launcher's exit code, which is 0 either way). Selecting an agent by
+    default would therefore ship a possible silent no-op. With the default
+    the launch argv is exactly ``[exe, "--bg", prompt]``, and the launch
+    prompt built by :func:`build_launch_prompt` is self-contained: it names
+    the run, unit, worker and answer path, enumerates the exact invocations
+    the worker may run, and carries the no-shell-construct rule. A worker
+    launched with no agent is governed by that prompt.
 
     Loop: :func:`preflight` -> acquire the run-level DISPATCHER lease (a
     second concurrent dispatcher EXITS WITHOUT LAUNCHING, returning a report
@@ -1330,7 +1441,22 @@ def dispatch_wave(
     (:func:`~content_pipeline.execution.status.compute_status`) is emitted
     every ``batch_size`` dispatches. On exit (including via an early abort):
     release the dispatcher lease; ``stop`` + ``rm`` every dispatch THIS CALL
-    opened and did not settle.
+    opened and did not settle, and SETTLE it (``outcome="wave_exit"``) --
+    an open dispatch row makes its unit permanently unreclaimable
+    (:func:`reclaimable_units` skips a unit that has one), so a dispatch
+    abandoned open on an abort path would strand its unit in every later
+    wave.
+
+    LIVENESS. The loop is bounded three ways, and the third exists because
+    the first two are per-cause: ``aborted_reason`` (launch
+    misconfiguration, lost dispatcher lease), the per-launch
+    ``launch_confirm_seconds``, and -- covering every cause of a dispatch
+    that nothing can close -- ``stall_timeout_seconds``, after which a wave
+    that has observed NO progress (nothing dispatched, renewed, settled, or
+    dropped) aborts with ``aborted_reason="wave_stalled"``. Renewal counts
+    as progress, so a genuinely long-running unit re-arms the bound on every
+    tick and is never cut off. Stall time is measured on ``clock_fn``, not
+    on ``at``, so pinning ``at`` for reproducible writes does not disarm it.
     """
     if cli is None:
         cli = ClaudeCli()
@@ -1373,9 +1499,13 @@ def dispatch_wave(
     def _now() -> float:
         return clock_fn() if at is None else at
 
+    last_progress_at = clock_fn()
+
     try:
         while True:
             tick_now = _now()
+            dispatched_before = len(dispatched)
+            exhausted_before = len(failed_exhausted)
             candidates = _select_dispatch_candidates(store, run_id, wave_unit_ids, at=tick_now)
             free_slots = max_agents - len(open_dispatches)
 
@@ -1397,6 +1527,7 @@ def dispatch_wave(
                             unit,
                             cli,
                             worker_command,
+                            extra_launch_args=extra_launch_args,
                             env=worker_env,
                             cwd=launch_cwd,
                             launch_confirm_seconds=launch_confirm_seconds,
@@ -1419,7 +1550,16 @@ def dispatch_wave(
             if not open_dispatches and not candidates:
                 break
 
-            tick = supervise_tick(store, run_id, cli, adapter, open_dispatches, env=env, at=_now())
+            tick = supervise_tick(
+                store,
+                run_id,
+                cli,
+                adapter,
+                open_dispatches,
+                env=env,
+                terminal_exit_grace_seconds=terminal_exit_grace_seconds,
+                at=_now(),
+            )
             for unit_id, outcome in tick.settled.items():
                 open_dispatches.pop(unit_id, None)
                 settled_all[unit_id] = outcome
@@ -1441,6 +1581,21 @@ def dispatch_wave(
                 aborted_reason = "dispatcher_lease_lost"
                 break
 
+            # The wave-level liveness bound (see the docstring's LIVENESS
+            # paragraph). Progress is anything that moved: a launch, a
+            # terminal failure, a renewal, a settlement, a drop.
+            if (
+                len(dispatched) != dispatched_before
+                or len(failed_exhausted) != exhausted_before
+                or tick.renewed
+                or tick.settled
+                or tick.dropped
+            ):
+                last_progress_at = clock_fn()
+            elif clock_fn() - last_progress_at >= stall_timeout_seconds:
+                aborted_reason = "wave_stalled"
+                break
+
             if not open_dispatches and (halted is not None or not candidates):
                 break
 
@@ -1456,6 +1611,16 @@ def dispatch_wave(
                 cli.rm(opened.id, env=env)
             except Exception:  # noqa: BLE001 -- best-effort cleanup on exit
                 pass
+            # Settle what was just stopped. An open dispatch row makes its
+            # unit permanently unreclaimable, so abandoning one here (only
+            # reachable on an abort path -- a normal exit leaves nothing
+            # open) would strand the unit in every later wave.
+            try:
+                store.settle_dispatch(run_id, unit_id, outcome="wave_exit", at=_now())
+            except Exception:  # noqa: BLE001 -- a finally block must never raise
+                pass
+            else:
+                settled_all.setdefault(unit_id, "wave_exit")
         try:
             store.release_dispatcher_lease(run_id, dispatcher_id, fence, at=_now())
         except StaleDispatcherLeaseError:

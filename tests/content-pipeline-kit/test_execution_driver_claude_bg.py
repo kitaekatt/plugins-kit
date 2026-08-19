@@ -1241,6 +1241,173 @@ def test_supervise_tick_renews_working_with_lease_for_formula(tmp_path):
     assert unit.lease_expires_at == expected
 
 
+def test_supervise_tick_renews_running_too_when_still_claimed(tmp_path):
+    """ACCEPT-DIRECTION check for the not-CLAIMED guard: the guard must not
+    refuse a genuinely working unit under EITHER live session state."""
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0, lease_seconds=50.0)
+    runner = FakeRunner()
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="running")]), "", 0),
+    )
+    cli = _cli(runner)
+
+    result = supervise_tick(store, "run-1", cli, RunAdapter(expected_unit_seconds=100.0), {"u0": od}, at=1010.0)
+    assert result.renewed == ("u0",)
+    assert store.get_unit("run-1", "u0").lease_expires_at == 1010.0 + claude_bg.lease_for(100.0)
+
+
+def test_supervise_tick_working_but_already_accepted_skips_renewal_only(tmp_path):
+    """The submit-then-exit window: the worker submitted through the protocol
+    and its session has not exited yet, so ``agents --json`` still reports
+    ``working`` while the unit is ACCEPTED.
+
+    MUTATION: drop the ``current_unit.state is not UnitState.CLAIMED`` guard
+    -- ``store.renew_lease`` raises ``NotClaimedError`` straight out of
+    ``supervise_tick`` -> red."""
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0, lease_seconds=50.0)
+    original_expiry = store.get_unit("run-1", "u0").lease_expires_at
+    store.accept_unit("run-1", "u0", od.fencing_token, text="answer", at=1001.0)
+
+    runner = FakeRunner()
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="working")]), "", 0),
+    )
+    cli = _cli(runner)
+
+    result = supervise_tick(store, "run-1", cli, RunAdapter(), {"u0": od}, at=1010.0)
+
+    # Renewal skipped -- and NOTHING else WITHIN THE GRACE: the session is
+    # alive, so it keeps its slot, and the dispatch stays open for the `done`
+    # branch to settle. The grace is what bounds that wait; see
+    # test_supervise_tick_ends_a_terminal_unit_whose_session_overstays_the_grace.
+    assert result.renewed == ()
+    assert result.settled == {}
+    assert result.dropped == ()
+    assert result.halted is None
+    assert store.get_unit("run-1", "u0").lease_expires_at == original_expiry
+    assert [d.unit_id for d in store.open_dispatches("run-1")] == ["u0"]
+
+    # Nothing is stranded by leaving it open: ACCEPTED is terminal, so the
+    # unit is never a reclaim candidate, at any time.
+    assert reclaimable_units(store, "run-1", at=original_expiry + 10_000) == []
+
+def test_supervise_tick_ends_a_terminal_unit_whose_session_overstays_the_grace(tmp_path):
+    """The bound on the branch above. Nothing else in the system can close
+    this dispatch -- the unit is terminal so it is never a candidate again,
+    and ``accept_unit`` leaves ``claimed_by``/the fence intact so the drift
+    guard never drops it -- so past ``terminal_exit_grace_seconds`` the tick
+    stops/rms the session itself and settles.
+
+    MUTATION: make the grace check an unconditional ``continue`` -- the
+    dispatch is never settled, the session is never stopped, and
+    ``dispatch_wave`` polls forever -> red."""
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0, lease_seconds=50.0)
+    store.accept_unit("run-1", "u0", od.fencing_token, text="answer", at=1001.0)
+
+    runner = FakeRunner()
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="working")]), "", 0),
+    )
+    runner.script(("claude", "stop"), ("", "", 0))
+    runner.script(("claude", "rm"), ("", "", 0))
+    cli = _cli(runner)
+
+    # First observation starts the clock; still inside the grace.
+    first = supervise_tick(
+        store, "run-1", cli, RunAdapter(), {"u0": od},
+        terminal_exit_grace_seconds=100.0, at=1010.0,
+    )
+    assert first.settled == {}
+    assert od.terminal_since == 1010.0
+
+    # One tick still inside it -- the grace runs from the FIRST observation,
+    # not from each one.
+    inside = supervise_tick(
+        store, "run-1", cli, RunAdapter(), {"u0": od},
+        terminal_exit_grace_seconds=100.0, at=1109.0,
+    )
+    assert inside.settled == {}
+    assert [d.unit_id for d in store.open_dispatches("run-1")] == ["u0"]
+
+    # Past it: the session is ended and the dispatch closed.
+    after = supervise_tick(
+        store, "run-1", cli, RunAdapter(), {"u0": od},
+        terminal_exit_grace_seconds=100.0, at=1110.0,
+    )
+    assert after.settled == {"u0": "session_lingering"}
+    assert after.renewed == ()
+    assert after.halted is None
+    assert store.open_dispatches("run-1") == []
+    argvs = [argv for argv, _kw in runner.calls]
+    assert ["claude", "stop", "short1"] in argvs
+    assert ["claude", "rm", "short1"] in argvs
+    # The unit itself is untouched: its accepted answer stands.
+    unit = store.get_unit("run-1", "u0")
+    assert unit.state is UnitState.ACCEPTED
+    assert unit.accepted_text == "answer"
+
+
+def test_supervise_tick_settles_a_lingering_session_even_when_stop_fails(tmp_path):
+    """``stop``/``rm`` are best-effort; an unreachable daemon must not keep
+    the dispatch open (that is the liveness defect all over again).
+
+    MUTATION: drop the try/except around the lifecycle calls -- the raised
+    error escapes the tick -> red."""
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0, lease_seconds=50.0)
+    store.accept_unit("run-1", "u0", od.fencing_token, text="answer", at=1001.0)
+
+    def _runner(argv, **kwargs):
+        argv = list(argv)
+        if argv[1:3] == ["agents", "--json"]:
+            return (
+                json.dumps([_bg_record(id="short1", session_id="sess-1", state="working")]),
+                "",
+                0,
+            )
+        raise OSError("the daemon is gone")
+
+    cli = ClaudeCli(executable="claude", runner=_runner)
+    od.terminal_since = 1000.0
+    result = supervise_tick(
+        store, "run-1", cli, RunAdapter(), {"u0": od},
+        terminal_exit_grace_seconds=100.0, at=1200.0,
+    )
+    assert result.settled == {"u0": "session_lingering"}
+    assert store.open_dispatches("run-1") == []
+
+def test_supervise_tick_settles_the_accepted_unit_once_its_session_exits(tmp_path):
+    """The other half: the slot IS released -- on the first tick after the
+    session exits, by the ``done`` branch, exactly as for a worker that
+    submits and exits between two ticks."""
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0, lease_seconds=50.0)
+    store.accept_unit("run-1", "u0", od.fencing_token, text="answer", at=1001.0)
+
+    runner = FakeRunner()
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="working")]), "", 0),
+    )
+    cli = _cli(runner)
+    assert supervise_tick(store, "run-1", cli, RunAdapter(), {"u0": od}, at=1010.0).settled == {}
+
+    runner2 = FakeRunner()
+    runner2.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="done")]), "", 0),
+    )
+    result = supervise_tick(store, "run-1", _cli(runner2), RunAdapter(), {"u0": od}, at=1020.0)
+    assert result.settled == {"u0": "accepted"}
+    assert store.open_dispatches("run-1") == []
+
+
 def test_supervise_tick_blocked_stops_renewing_with_no_grace(tmp_path):
     """MUTATION CHECK anchor: renewing unconditionally on `blocked` must be
     observed (the lease is still live past its original expiry) -> red."""
@@ -1680,3 +1847,76 @@ def test_dispatch_wave_happy_path_dispatches_and_observes_acceptance(tmp_path):
     assert "u0" in report.accepted
     unit = store.get_unit("run-1", "u0")
     assert unit.state is UnitState.ACCEPTED
+
+
+# ---------------------------------------------------------------------------
+# The launch-args seam: how a consumer selects a worker agent
+# ---------------------------------------------------------------------------
+
+
+def _dispatch_one_and_capture_launch_argv(tmp_path, **wave_kwargs):
+    """Run one happy-path dispatch and return the single `--bg` launch argv."""
+    store = _seeded_dispatch_store(tmp_path, unit_ids=("u0",))
+    wc = _worker_command(tmp_path)
+
+    runner = _healthy_runner()
+    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        [
+            ("[]", "", 0),
+            (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="working")]), "", 0),
+            (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="done")]), "", 0),
+        ],
+    )
+    cli = _cli(runner)
+    wave = store.list_units("run-1")
+
+    original_launch = cli.launch_bg
+
+    def fake_launch(prompt, **kwargs):
+        result = original_launch(prompt, **kwargs)
+        import re as _re
+
+        worker_id = _re.search(r"Worker id: (\S+)", prompt).group(1)
+        claim = store.claim_unit("run-1", "u0", worker_id, at=1000.0)
+        store.accept_unit("run-1", "u0", claim.fencing_token, text="answer", at=1001.0)
+        return result
+
+    cli.launch_bg = fake_launch  # type: ignore[assignment]
+
+    dispatch_wave(
+        store, "run-1", wave, RunAdapter(), cli=cli, worker_command=wc,
+        max_agents=1, at=1000.0, sleep_fn=lambda s: None, clock_fn=lambda: 1000.0,
+        **wave_kwargs,
+    )
+    launch_calls = [
+        argv for argv, _kwargs in runner.calls
+        if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]
+    ]
+    assert len(launch_calls) == 1, launch_calls
+    return launch_calls[0]
+
+
+def test_dispatch_wave_forwards_extra_launch_args_to_the_launcher(tmp_path):
+    """The seam: a consumer selects the shipped worker agent (or any other
+    launch flag) by passing `extra_launch_args` to `dispatch_wave`, which
+    reaches `ClaudeCli.launch_bg` unaltered and in order, ahead of the
+    positional prompt."""
+    argv = _dispatch_one_and_capture_launch_argv(
+        tmp_path, extra_launch_args=("--agent", "pipeline-worker")
+    )
+    assert argv[:4] == ["claude", "--bg", "--agent", "pipeline-worker"]
+    assert len(argv) == 5
+    assert argv[4].startswith("Run id: run-1\n")
+
+
+def test_dispatch_wave_default_launch_argv_is_byte_identical_without_the_seam(tmp_path):
+    """REFUSAL DIRECTION: passing no seam argument must launch exactly what
+    the driver launched before the seam existed -- [exe, "--bg", prompt] and
+    nothing else. The driver must never select an agent on its own: whether
+    `--agent` composes with `--bg` at all is not established."""
+    argv = _dispatch_one_and_capture_launch_argv(tmp_path)
+    assert argv[:2] == ["claude", "--bg"]
+    assert len(argv) == 3
+    assert argv[2].startswith("Run id: run-1\n")

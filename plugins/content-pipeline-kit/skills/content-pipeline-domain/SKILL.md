@@ -88,6 +88,10 @@ domain_skill:
         path: references/design-discipline.md
         keywords: [design philosophy, opt-in guardrails, human-always-wins, do-no-harm markers, first-class revert, write-only-on-diff, one-predicate freshness, one-rule-set-many-sites, advisory floor guards, known-good <10% gate, deterministic seeding, exact-path never-wildcard VCS, truthful audit stamping, altitude discipline, entity-level vs item-level, minimal pipeline needs none]
         summary: The opt-in design philosophy behind the library and the component that embodies each principle -- human-always-wins attribution, do-no-harm markers + first-class revert, write-only-on-diff, one-predicate freshness, one-rule-set-many-sites validation, advisory floor guards on a known-good <10% gate, deterministic seeding, exact-path-never-wildcard VCS, truthful audit stamping, altitude discipline. Every one opt-in; a minimal pipeline needs none.
+      - id: session_recipients
+        path: references/session-recipients.md
+        keywords: [session recipient, background session, claude --bg, workflow agent, protocol mount, build_handlers, WorkerCommand, RunAdapter, WorkerEnvironment, expected_unit_seconds, allowlist, enumerated invocations, reconciliation, apply_unknown, resume, session pool quota]
+        summary: What a session recipient (a Claude background/workflow session acting as one worker) is and how to wire a project's own run onto it -- mounting the protocol, the RunAdapter fields a background worker needs (environment, expected_unit_seconds), building a worker's pre-authorized invocation allowlist from a WorkerCommand, and the reconciliation hook required to resume a run safely past an apply_unknown unit.
 ```
 
 ## Requirements: the live LLM backends
