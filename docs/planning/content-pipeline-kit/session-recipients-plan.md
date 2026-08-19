@@ -285,9 +285,10 @@ an implementer may make.
 
 What ships instead: a `RunAdapter` may declare its measured per-unit COST, never
 a lease, and the lane derives the lease from it (`store.lease_for`, headroom
-factor a named module constant). Declaring nothing yields exactly today's 300s
+factor a named module constant). Declaring nothing yields exactly the 300s default
 with no warning -- not knowing your unit cost is not an error -- and a
-declaration may only RAISE a lease, never shorten it below the current default.
+declaration may only RAISE a lease, never shorten it below
+`DEFAULT_LEASE_SECONDS`.
 An explicit mount-configured `lease_seconds` still wins outright, so the
 consumer-configures-per-run path settled above remains the authoritative one.
 
@@ -543,9 +544,10 @@ default, `create-run`, the adapter contract), but items 1, 2 and 5 are
 prerequisites for the B and C drivers, which spawn worker processes and would
 each rediscover them.
 
-**Status 2026-08-18.** Items 1, 3 and 4 are RESOLVED in `f114930`; items 2
-and 5 remain OPEN and are the required remainder of this sub-phase. Both are
-B and C driver prerequisites, so neither may be carried into B1 or C1 as an
+**Status 2026-08-19. A-min.4 is CLOSED.** Items 1, 3 and 4 are RESOLVED in
+`f114930`; items 2 and 5 are RESOLVED in `6ca431c`, with two review findings
+fixed in `206f176`. Both were B and C driver prerequisites, so neither was
+carried into B1 or C1 as an
 assumption: a driver written before item 2 ships a lease default that fails a
 healthy unit, and a driver written before item 5 ships a worker whose
 environment is unspecified. Close both here, in A-min surfaces, rather than
@@ -572,7 +574,19 @@ twice over in each lane.
    end. That needs a `.bat`-wrapped invocation carrying a block-scalar
    envelope on stdin against a consumer resolving the published shared lib --
    i.e. after a release.
-2. **The default lease is wrong for an agentic unit.** **OPEN -- required.** `DEFAULT_LEASE_SECONDS`
+2. **The default lease is wrong for an agentic unit.** **RESOLVED `6ca431c`.**
+
+   *Shipped:* the adapter declares its measured per-unit COST
+   (`expected_unit_seconds`, plus an optional per-unit `unit_seconds_for`), and
+   the lane derives the lease via `store.lease_for` =
+   `max(default, cost * LEASE_HEADROOM_FACTOR)`. Declaring nothing yields the
+   300s default unchanged, and a declaration may only raise a lease, never
+   shorten one. `build_handlers(lease_seconds=None)` means derive; an explicit
+   mount value still wins outright, so D5 stays GUIDANCE -- the refuse-without-
+   an-explicit-lease option was considered and rejected. Full rationale in D5's
+   "Remedy chosen" paragraph. The original problem statement follows.
+
+   `DEFAULT_LEASE_SECONDS`
    is 300s (`execution/store.py:87`). Measured 2026-08-17: one first-pass-dialog
    unit driven by a background session consumed 213s of it -- 71%, on the cheap
    case (no retry, no contention, a healthy session), with a 10.8KB system and
@@ -616,7 +630,20 @@ twice over in each lane.
    field plus a predicate and a description helper, so an adapter branches on
    a value rather than parsing a log line. It is computed in `call_llm`, so a
    caller reaching past it to a backend must apply the predicate itself.
-5. **A worker needs the consumer's environment, not just its database path.** **OPEN -- required.** A
+5. **A worker needs the consumer's environment, not just its database path.** **RESOLVED `6ca431c`.**
+
+   *Shipped:* `RunAdapter` declares a `WorkerEnvironment` (`required_vars` /
+   `forbidden_vars` / `cwd_vars` / `require_cwd`); the snapshot is taken at
+   `create-run` in the orchestrator's own process and recorded on the run; and
+   `_require_compatible_run` -- the single call site every worker verb passes
+   through -- enforces it. Recorded as invariant 8. `206f176` then closed two
+   review findings: a name declared both forbidden and required had its VALUE
+   captured and persisted plaintext (now refused at construction), and
+   `cwd_vars` had no worker-side enforcement at all (now checked in the worker,
+   by resolved location rather than by spelling). The original problem statement
+   follows.
+
+   A
    consumer can resolve its project root from an environment variable rather than
    from cwd, and on Windows may require a native-style path there; a driver that
    propagates only `--db` produces a worker that silently resolves against the
@@ -662,9 +689,12 @@ The consequences for this phase, stated exactly:
   the natural B gate consumer, since a background session is its transport
   anyway, and it is the one that stresses apply idempotency against a version
   control side effect.
-- **A-min.4 items 1, 2 and 5 are prerequisites**: the driver composes worker
-  command lines (item 1), sizes leases for agentic units (item 2), and decides a
-  worker's environment (item 5).
+- **A-min.4 items 1, 2 and 5 were prerequisites and are all RESOLVED**
+  (`f114930`, `6ca431c`, `206f176`): the driver composes worker command lines
+  (item 1), sizes leases for agentic units (item 2), and decides a worker's
+  environment (item 5). B1 consumes these declarations rather than reinventing
+  them; note that no consumer has mounted either declaration yet, so B is where
+  they first meet a real workload.
 
 #### B1 -- Background driver and one-unit worker
 
@@ -917,9 +947,12 @@ Three findings bind C1's design rather than C2's gate:
   though one workflow agent did in fact run the consumer protocol commands
   unattended. The invocation-string discipline P5 imposes on B1's prompt design
   applies here with equal force.
-- **The default lease is wrong for this lane specifically** (A-min.4 item 2):
-  the workflow lane is the one with no renewer, so a 300s default against a
-  measured 213s agentic unit is the composition D5 already warns about.
+- **The default lease is wrong for this lane specifically** (A-min.4 item 2,
+  RESOLVED `6ca431c`): the workflow lane is the one with no renewer, so a 300s
+  default against a measured 213s agentic unit is the composition D5 already
+  warns about. A C-lane adapter must therefore DECLARE its per-unit cost, or
+  the run must set an explicit lease -- the derived default is the floor, not a
+  guarantee for this lane.
 
 #### C1 -- One reviewed independent-wave workflow
 
