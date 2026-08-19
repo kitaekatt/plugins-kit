@@ -1,6 +1,4 @@
-"""Tests for content_pipeline.execution.drivers.claude_bg -- B1 foundation
-(steps 1-4 only: the claude process seam, preflight, the store's dispatcher-
-lease/dispatch-tracking migration, and worker-environment composition).
+"""Tests for content_pipeline.execution.drivers.claude_bg -- B1, steps 1-11.
 
 No automated test in this module ever reaches a real subprocess for
 ``claude``: ``_no_real_claude_subprocess`` (autouse) replaces
@@ -11,6 +9,8 @@ supplies its own scripted ``runner`` via :class:`FakeRunner`.
 
 from __future__ import annotations
 
+import dataclasses
+import inspect
 import json
 import os
 import subprocess
@@ -22,14 +22,37 @@ from content_pipeline.execution.adapter import RunAdapter, WorkerEnvironment
 from content_pipeline.execution.drivers import claude_bg
 from content_pipeline.execution.drivers.claude_bg import (
     BILLING_DIVERTING_VARS,
+    AgentsJsonParseError,
     ClaudeCli,
     ClaudeExecutableNotFoundError,
+    DispatchReport,
+    LaunchMisconfigurationError,
+    OpenDispatch,
+    ParseResult,
     PreflightError,
+    SessionRecord,
+    WorkerCommand,
     WorkerEnvironmentBillingLeakError,
+    answer_path_for,
+    build_launch_prompt,
+    classify_settled_failure,
     compose_worker_environment,
+    dispatch_unit,
+    dispatch_wave,
+    enumerate_worker_invocations,
+    parse_agents_json,
     preflight,
+    reclaim_attempt_count,
+    reclaimable_units,
+    supervise_tick,
 )
-from content_pipeline.execution.model import NoOpenDispatchError, RunRecord, StaleDispatcherLeaseError
+from content_pipeline.execution.model import (
+    AttemptKind,
+    NoOpenDispatchError,
+    RunRecord,
+    StaleDispatcherLeaseError,
+    UnitState,
+)
 from content_pipeline.execution.store import ExecutionStore
 
 LIB_ROOT = os.path.normpath(
@@ -79,7 +102,16 @@ class FakeRunner:
             ):
                 best_match = (prefix, response)
         if best_match is not None:
-            return best_match[1]
+            response = best_match[1]
+            if isinstance(response, list):
+                # A SEQUENCE of responses for this prefix: advance through it
+                # on each matching call, staying on the last entry once
+                # exhausted (mutates the same list object stored in
+                # self.scripts, so state persists across calls).
+                if len(response) > 1:
+                    return response.pop(0)
+                return response[0]
+            return response
         if self.default is not None:
             return self.default
         raise AssertionError(f"FakeRunner: no script for argv {argv!r}")
@@ -175,12 +207,66 @@ def test_claude_cli_has_no_logs_method():
     assert not hasattr(ClaudeCli, "logs")
 
 
+_AGENTS_PERMITTED_SHAPES = ({"claude", "agents", "--json"}, {"claude", "agents", "--json", "--all"})
+
+
+def _assert_agents_token_invariant(calls):
+    """The shared assertion: every logged argv carrying the "agents" token
+    must be one of the two permitted shapes, and never adjacent to a
+    lifecycle verb."""
+    for argv, _kwargs in calls:
+        if "agents" in argv:
+            assert set(argv) in _AGENTS_PERMITTED_SHAPES, f"unexpected 'agents' argv shape: {argv!r}"
+            idx = argv.index("agents")
+            if idx + 1 < len(argv):
+                assert argv[idx + 1] not in ("stop", "logs", "rm", "respawn"), argv
+
+
+def _call_every_public_command_method(cli, *, dummy: str = "dummy-arg"):
+    """Dynamically discover and invoke every public, non-private METHOD
+    ``type(cli)`` defines (introspective -- no hand-maintained method list),
+    supplying a dummy positional string for every required positional
+    parameter and leaving every parameter with a default alone.
+
+    Deliberately does not special-case any method by name: a method added
+    to :class:`ClaudeCli` (or a subclass) LATER is discovered and called
+    automatically, which is the whole point (see
+    ``test_introspective_invariant_catches_a_method_the_enumerated_list_would_miss``).
+    ``resolve_executable`` (no argv, not a command) is skipped because it
+    takes no runner call at all -- calling it is harmless but adds nothing.
+    Dataclass FIELDS (``executable``, ``runner``) are excluded -- ``runner``
+    in particular is a plain function object at class scope (a dataclass
+    default), which ``inspect.isfunction`` would otherwise mistake for a
+    method and call unbound.
+    """
+    import dataclasses
+
+    field_names = {f.name for f in dataclasses.fields(type(cli))}
+    for name, member in inspect.getmembers(type(cli), predicate=inspect.isfunction):
+        if name.startswith("_") or name == "resolve_executable" or name in field_names:
+            continue
+        sig = inspect.signature(member)
+        args = []
+        params = list(sig.parameters.values())[1:]  # skip `self`
+        for param in params:
+            if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                continue
+            if param.default is not inspect.Parameter.empty:
+                continue
+            args.append(dummy)
+        getattr(cli, name)(*args)
+
+
 def test_module_wide_agents_token_invariant():
     """P3: the token "agents" appears in exactly ONE argv shape this module
     builds for real dispatch -- [exe, "agents", "--json"] or
     [exe, "agents", "--json", "--all"] -- and is never adjacent to a
-    lifecycle verb. Exercises every ClaudeCli command-building method
-    through one fake runner and scans every logged argv.
+    lifecycle verb.
+
+    Introspective (not a hand-enumerated call list): discovers and calls
+    every public ``ClaudeCli`` command-building method via
+    ``_call_every_public_command_method``, so a method added later is
+    covered with no list to maintain.
 
     MUTATION CHECK (performed manually, see the task report): changing
     ClaudeCli._lifecycle's argv to `[exe, "agents", verb, session_id]`
@@ -189,22 +275,51 @@ def test_module_wide_agents_token_invariant():
     """
     runner = FakeRunner(default=("", "", 0))
     cli = _cli(runner)
-    cli.launch_bg("hello")
-    cli.agents_json(all_sessions=True)
-    cli.agents_json(all_sessions=False)
-    cli.stop("s1")
-    cli.rm("s2")
-    cli.respawn("s3")
-    cli.version()
+    _call_every_public_command_method(cli)
+    _assert_agents_token_invariant(runner.calls)
 
-    permitted = ({"claude", "agents", "--json"}, {"claude", "agents", "--json", "--all"})
-    for argv, _kwargs in runner.calls:
-        if "agents" in argv:
-            assert set(argv) in permitted, f"unexpected 'agents' argv shape: {argv!r}"
-            # and it must never be adjacent to a lifecycle verb
-            idx = argv.index("agents")
-            if idx + 1 < len(argv):
-                assert argv[idx + 1] not in ("stop", "logs", "rm", "respawn"), argv
+
+def test_introspective_invariant_catches_a_method_the_enumerated_list_would_miss():
+    """Proof the introspective form catches something the hand-enumerated
+    form (the module's original shape, which called exactly
+    ``launch_bg``/``agents_json``/``stop``/``rm``/``respawn``/``version`` by
+    name) would silently miss: a NEW method added to a ``ClaudeCli``
+    subclass, never added to any hand-maintained call list, that violates
+    P3's invariant by emitting the forbidden `agents <lifecycle-verb>`
+    shape.
+
+    The old, hand-enumerated form calls a fixed set of method NAMES -- it
+    would never call ``evil_lifecycle`` at all, so it would report a clean
+    pass no matter what that method does. The introspective form discovers
+    it via ``inspect.getmembers`` and calls it automatically, so its
+    violation is caught with no test-author action.
+    """
+
+    class ExtendedClaudeCli(ClaudeCli):
+        def evil_lifecycle(self, session_id):
+            exe = self.resolve_executable()
+            return self._invoke([exe, "agents", "stop", session_id])
+
+    runner = FakeRunner(default=("", "", 0))
+    cli = ExtendedClaudeCli(executable="claude", runner=runner)
+    _call_every_public_command_method(cli)
+
+    with pytest.raises(AssertionError):
+        _assert_agents_token_invariant(runner.calls)
+
+    # And the old hand-enumerated shape (the six original method names)
+    # genuinely would NOT have caught it -- it never calls evil_lifecycle.
+    # Simulate the old form directly: only the six originally-named methods.
+    runner2 = FakeRunner(default=("", "", 0))
+    cli2 = ExtendedClaudeCli(executable="claude", runner=runner2)
+    cli2.launch_bg("hello")
+    cli2.agents_json(all_sessions=True)
+    cli2.agents_json(all_sessions=False)
+    cli2.stop("s1")
+    cli2.rm("s2")
+    cli2.respawn("s3")
+    cli2.version()
+    _assert_agents_token_invariant(runner2.calls)  # passes -- the old form never saw the violation
 
 
 # ===========================================================================
@@ -808,3 +923,760 @@ def test_without_the_overlay_a_real_worker_claim_is_refused(tmp_path):
     result = _run_claim_subprocess(mismatched_env, mismatched_cwd, db_path, "run-1", "u0", "worker-1")
     assert result["ok"] is False
     assert result["error"]["type"] == "WorkerEnvironmentMismatchError"
+
+
+# ===========================================================================
+# Shared fixtures for steps 5-11
+# ===========================================================================
+
+
+def _seeded_dispatch_store(tmp_path, *, unit_ids=("u0",)) -> ExecutionStore:
+    store = ExecutionStore(tmp_path / "run.db")
+    store.create_run("run-1", driver="claude_bg", backend="claude-bg", model="m", adapter_version="")
+    store.register_units("run-1", list(unit_ids))
+    return store
+
+
+def _worker_command(tmp_path) -> WorkerCommand:
+    answer_dir = tmp_path / "answers"
+    answer_dir.mkdir(exist_ok=True)
+    return WorkerCommand(argv=("python", "mytool.py", "run"), answer_dir=str(answer_dir))
+
+
+def _bg_record(*, id="a1b2c3d4", session_id="sess-1", state="working", **extra):
+    rec = {"kind": "background", "id": id, "sessionId": session_id, "state": state}
+    rec.update(extra)
+    return rec
+
+
+def _pending_unit(store, run_id, unit_id):
+    return next(u for u in store.list_units(run_id) if u.unit_id == unit_id)
+
+
+def _claim_and_open(store, run_id, unit_id, worker_id, session_id, short_id, *, at=1000.0, lease_seconds=100.0):
+    claim = store.claim_unit(run_id, unit_id, worker_id, lease_seconds=lease_seconds, at=at)
+    store.record_dispatch(run_id, unit_id, worker_id, session_id=session_id, at=at)
+    return OpenDispatch(
+        unit_id=unit_id,
+        worker_id=worker_id,
+        session_id=session_id,
+        id=short_id,
+        fencing_token=claim.fencing_token,
+        claimed_by=worker_id,
+    )
+
+
+# ===========================================================================
+# Step 5 -- launch prompt and the enumerated invocation set (P5)
+# ===========================================================================
+
+
+def test_enumerate_worker_invocations_are_exact_and_deterministic(tmp_path):
+    wc = _worker_command(tmp_path)
+    first = enumerate_worker_invocations(wc, "run-1", "u0", "worker-a")
+    second = enumerate_worker_invocations(wc, "run-1", "u0", "worker-a")
+    assert first == second
+
+    claim_cmd, read_cmd, submit_cmd, fail_cmd, write_cmd = first
+    for cmd in (claim_cmd, read_cmd, fail_cmd):
+        assert "run-1" in cmd and "u0" in cmd and "worker-a" in cmd
+    assert "claim" in claim_cmd
+    assert "read" in read_cmd
+    assert "submit" in submit_cmd and "--from-file" in submit_cmd
+    answer_path = answer_path_for(wc, "run-1", "u0")
+    assert answer_path in submit_cmd
+    assert "fail" in fail_cmd
+    assert answer_path in write_cmd
+
+
+def test_enumerate_worker_invocations_differ_per_unit(tmp_path):
+    wc = _worker_command(tmp_path)
+    a = enumerate_worker_invocations(wc, "run-1", "u0", "worker-a")
+    b = enumerate_worker_invocations(wc, "run-1", "u1", "worker-a")
+    assert a != b
+
+
+def test_answer_path_for_is_deterministic_and_unit_specific(tmp_path):
+    wc = _worker_command(tmp_path)
+    p1 = answer_path_for(wc, "run-1", "u0")
+    p2 = answer_path_for(wc, "run-1", "u0")
+    p3 = answer_path_for(wc, "run-1", "u1")
+    assert p1 == p2
+    assert p1 != p3
+    assert p1.startswith(wc.answer_dir)
+
+
+def test_build_launch_prompt_names_ids_and_carries_invocations_verbatim(tmp_path):
+    wc = _worker_command(tmp_path)
+    prompt = build_launch_prompt(wc, "run-1", "u0", "worker-a")
+    invocations = enumerate_worker_invocations(wc, "run-1", "u0", "worker-a")
+
+    assert "run-1" in prompt
+    assert "u0" in prompt
+    assert "worker-a" in prompt
+    for inv in invocations:
+        assert inv in prompt, f"invocation not carried verbatim: {inv!r}"
+    assert answer_path_for(wc, "run-1", "u0") in prompt
+
+
+# ===========================================================================
+# Step 7 -- the reconciler (tested ahead of step 6, which consumes it)
+# ===========================================================================
+
+
+def test_parse_agents_json_accepts_exactly_four_required_fields():
+    """ACCEPT case."""
+    body = json.dumps([_bg_record(id="i1", session_id="s1", state="working")])
+    result = parse_agents_json(body)
+    assert len(result.sessions) == 1
+    session = result.sessions[0]
+    assert session.id == "i1"
+    assert session.session_id == "s1"
+    assert session.state == "working"
+    assert result.ignored == 0
+
+
+def test_parse_agents_json_accepts_verbatim_2026_08_17_record():
+    """ACCEPT case: the verbatim P4 record carrying pid/status/waitingFor
+    alongside id/state."""
+    record = _bg_record(
+        id="p1", session_id="s1", state="blocked",
+        pid=12345, status="waiting", waitingFor="permission prompt",
+    )
+    result = parse_agents_json(json.dumps([record]))
+    session = result.sessions[0]
+    assert session.pid == 12345
+    assert session.status == "waiting"
+    assert session.waiting_for == "permission prompt"
+
+
+def test_parse_agents_json_accepts_unknown_future_fields():
+    """ACCEPT case: three unknown future fields."""
+    record = _bg_record(id="i1", session_id="s1", state="working")
+    record["totallyNewField"] = "x"
+    record["anotherOne"] = 42
+    record["thirdOne"] = None
+    result = parse_agents_json(json.dumps([record]))
+    assert len(result.sessions) == 1
+
+
+def test_parse_agents_json_epoch_ms_started_at_is_a_distinct_seconds_attribute():
+    """ACCEPT case: startedAt is epoch milliseconds."""
+    record = _bg_record(id="i1", session_id="s1", state="working", startedAt=1734000000000)
+    result = parse_agents_json(json.dumps([record]))
+    session = result.sessions[0]
+    assert session.started_at_ms == 1734000000000
+    assert session.started_at_seconds == 1734000000.0
+
+
+def test_parse_agents_json_accepts_settled_only_listing():
+    """ACCEPT case: a listing whose only background record is settled
+    (visible only under --all)."""
+    record = _bg_record(id="i1", session_id="s1", state="stopped")
+    result = parse_agents_json(json.dumps([record]))
+    assert result.sessions[0].state == "stopped"
+
+
+def test_parse_agents_json_accepts_empty_list():
+    """ACCEPT case: an idle machine (zero background records) is normal,
+    not an error."""
+    result = parse_agents_json("[]")
+    assert result.sessions == ()
+    assert result.ignored == 0
+
+
+def test_parse_agents_json_filters_interactive_record_with_no_id_first():
+    """MUTATION CHECK: swapping the filter/validate order would raise on
+    this fixture (the orchestrator's own interactive record, no id) instead
+    of silently ignoring it."""
+    interactive = {
+        "kind": "interactive", "pid": 111, "cwd": "/x", "startedAt": 1,
+        "sessionId": "sess-orch", "name": "n", "status": "running",
+    }
+    result = parse_agents_json(json.dumps([interactive]))
+    assert result.sessions == ()
+    assert result.ignored == 1
+
+
+def test_parse_agents_json_filters_record_with_no_kind_at_all():
+    no_kind = {"id": "x", "sessionId": "s", "state": "working"}
+    result = parse_agents_json(json.dumps([no_kind]))
+    assert result.sessions == ()
+    assert result.ignored == 1
+
+
+def test_parse_agents_json_raises_on_missing_required_field_for_background_record():
+    record = {"kind": "background", "id": "i1", "state": "working"}  # missing sessionId
+    with pytest.raises(AgentsJsonParseError):
+        parse_agents_json(json.dumps([record]))
+
+
+def test_parse_agents_json_raises_on_non_list():
+    with pytest.raises(AgentsJsonParseError):
+        parse_agents_json(json.dumps({"not": "a list"}))
+
+
+def test_parse_agents_json_raises_on_non_object_element():
+    with pytest.raises(AgentsJsonParseError):
+        parse_agents_json(json.dumps(["not-an-object"]))
+
+
+def test_parse_agents_json_raises_on_malformed_json():
+    with pytest.raises(AgentsJsonParseError):
+        parse_agents_json("not json at all")
+
+
+# ===========================================================================
+# Step 6 -- dispatch one unit, confirmed by an observed transition (P11)
+# ===========================================================================
+
+
+def test_dispatch_unit_confirms_via_observed_transition_not_via_banner(tmp_path):
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    runner = FakeRunner()
+    runner.script(("claude", "--bg"), ("backgrounded * a1b2c3d4", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="a1b2c3d4", session_id="sess-xyz", state="working")]), "", 0),
+    )
+    cli = _cli(runner)
+
+    unit = _pending_unit(store, "run-1", "u0")
+    # Simulate the worker itself claiming under the SAME worker_id the
+    # driver minted (the author ruling).
+    store.claim_unit("run-1", "u0", "worker-fixed", at=1000.0)
+
+    opened = dispatch_unit(
+        store, "run-1", unit, cli, wc,
+        worker_id="worker-fixed", sleep_fn=lambda s: None, clock_fn=lambda: 1000.0,
+    )
+    assert opened.session_id == "sess-xyz"
+    assert opened.id == "a1b2c3d4"
+    assert opened.worker_id == "worker-fixed"
+    assert opened.claimed_by == "worker-fixed"
+
+
+def test_dispatch_unit_duplicate_suppression_bites_before_any_launch_spend(tmp_path):
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    runner = FakeRunner(default=("backgrounded * aaaaaaaa", "", 0))
+    cli = _cli(runner)
+    unit = _pending_unit(store, "run-1", "u0")
+
+    store.record_dispatch("run-1", "u0", "worker-existing", at=1000.0)  # already an OPEN dispatch
+
+    with pytest.raises(Exception):  # sqlite3.IntegrityError, surfaced by record_dispatch
+        dispatch_unit(store, "run-1", unit, cli, wc, worker_id="worker-new", clock_fn=lambda: 1000.0)
+
+    launch_calls = [argv for argv, _kwargs in runner.calls if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]]
+    assert launch_calls == [], "launch_bg must never be reached once record_dispatch raises"
+
+
+def test_dispatch_unit_state_failed_within_window_is_launch_misconfiguration(tmp_path):
+    """MUTATION CHECK anchor: if dispatch_unit returned on the launch
+    banner/exit-code instead of the observed agents_json transition, this
+    exit-0-then-failed fake would be treated as a confirmed dispatch instead
+    of raising."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    runner = FakeRunner()
+    runner.script(("claude", "--bg"), ("backgrounded * badbad01", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="badbad01", session_id="sess-bad", state="failed")]), "", 0),
+    )
+    runner.script(("claude", "rm"), ("removed", "", 0))
+    cli = _cli(runner)
+    unit = _pending_unit(store, "run-1", "u0")
+
+    with pytest.raises(LaunchMisconfigurationError):
+        dispatch_unit(store, "run-1", unit, cli, wc, worker_id="worker-a", clock_fn=lambda: 1000.0)
+
+    assert store.open_dispatches("run-1") == []  # settled, not left open
+    rm_calls = [argv for argv, _kwargs in runner.calls if len(argv) >= 2 and argv[1] == "rm"]
+    assert rm_calls and rm_calls[0][2] == "badbad01"
+
+
+def test_dispatch_unit_never_appearing_is_launch_misconfiguration(tmp_path):
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    runner = FakeRunner()
+    runner.script(("claude", "--bg"), ("backgrounded * ffffffff", "", 0))
+    runner.script(("claude", "agents", "--json"), ("[]", "", 0))  # never shows up
+    cli = _cli(runner)
+    unit = _pending_unit(store, "run-1", "u0")
+
+    clock = {"t": 1000.0}
+    with pytest.raises(LaunchMisconfigurationError):
+        dispatch_unit(
+            store, "run-1", unit, cli, wc, worker_id="worker-a",
+            launch_confirm_seconds=5.0, poll_interval_s=1.0,
+            clock_fn=lambda: clock["t"],
+            sleep_fn=lambda s: clock.__setitem__("t", clock["t"] + s),
+        )
+    assert store.open_dispatches("run-1") == []
+
+
+# ===========================================================================
+# Step 8 -- status classification, renewal, stall detection (D5, P12, P13)
+# ===========================================================================
+
+
+def test_supervise_tick_renews_working_with_lease_for_formula(tmp_path):
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0, lease_seconds=50.0)
+    runner = FakeRunner()
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="working")]), "", 0),
+    )
+    cli = _cli(runner)
+    adapter = RunAdapter(expected_unit_seconds=100.0)
+
+    result = supervise_tick(store, "run-1", cli, adapter, {"u0": od}, at=1010.0)
+    assert result.renewed == ("u0",)
+    unit = store.get_unit("run-1", "u0")
+    expected = 1010.0 + claude_bg.lease_for(100.0)
+    assert unit.lease_expires_at == expected
+
+
+def test_supervise_tick_blocked_stops_renewing_with_no_grace(tmp_path):
+    """MUTATION CHECK anchor: renewing unconditionally on `blocked` must be
+    observed (the lease is still live past its original expiry) -> red."""
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0, lease_seconds=50.0)
+    original_expiry = store.get_unit("run-1", "u0").lease_expires_at
+    runner = FakeRunner()
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="blocked")]), "", 0),
+    )
+    cli = _cli(runner)
+    adapter = RunAdapter()
+
+    result = supervise_tick(store, "run-1", cli, adapter, {"u0": od}, at=1010.0)
+    assert result.renewed == ()
+    assert result.settled == {"u0": "blocked"}
+    unit = store.get_unit("run-1", "u0")
+    assert unit.lease_expires_at == original_expiry  # untouched -- never renewed
+
+    # Observed still expired past its original expiry -- and now reclaimable,
+    # because the dispatch was settled rather than left open forever.
+    assert original_expiry <= 1051.0
+    reclaimable = reclaimable_units(store, "run-1", at=1051.0)
+    assert [u.unit_id for u in reclaimable] == ["u0"]
+
+
+def test_supervise_tick_failed_classifies_rate_limit_and_halts(tmp_path, monkeypatch):
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0)
+    runner = FakeRunner()
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="failed")]), "", 0),
+    )
+    cli = _cli(runner)
+    adapter = RunAdapter()
+    monkeypatch.setattr(claude_bg, "classify_settled_failure", lambda *a, **k: "rate_limit")
+
+    result = supervise_tick(store, "run-1", cli, adapter, {"u0": od}, at=1010.0)
+    assert result.settled == {"u0": "failed"}
+    assert result.halted == "rate_limit"
+    run = store.get_run("run-1")
+    assert run.halted_kind == "rate_limit"
+    unit = store.get_unit("run-1", "u0")
+    assert unit.state is UnitState.PENDING  # D4: returned to PENDING, not terminally failed
+
+
+def test_supervise_tick_failed_ordinary_does_not_halt(tmp_path, monkeypatch):
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0)
+    runner = FakeRunner()
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="failed")]), "", 0),
+    )
+    cli = _cli(runner)
+    adapter = RunAdapter()
+    monkeypatch.setattr(claude_bg, "classify_settled_failure", lambda *a, **k: None)
+
+    result = supervise_tick(store, "run-1", cli, adapter, {"u0": od}, at=1010.0)
+    assert result.halted is None
+    run = store.get_run("run-1")
+    assert run.halted_kind is None
+
+
+def test_supervise_tick_done_accepted_settles_success_without_classifying(tmp_path, monkeypatch):
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0)
+    store.accept_unit("run-1", "u0", od.fencing_token, text="ok", at=1005.0)
+    runner = FakeRunner()
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="done")]), "", 0),
+    )
+    cli = _cli(runner)
+    adapter = RunAdapter()
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        claude_bg, "classify_settled_failure",
+        lambda *a, **k: calls.__setitem__("n", calls["n"] + 1),
+    )
+
+    result = supervise_tick(store, "run-1", cli, adapter, {"u0": od}, at=1010.0)
+    assert result.settled == {"u0": "accepted"}
+    assert calls["n"] == 0  # never classified -- success, not a failure
+
+
+def test_supervise_tick_done_unaccepted_settles_and_classifies(tmp_path, monkeypatch):
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0)
+    runner = FakeRunner()
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="done")]), "", 0),
+    )
+    cli = _cli(runner)
+    adapter = RunAdapter()
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        claude_bg, "classify_settled_failure",
+        lambda *a, **k: calls.__setitem__("n", calls["n"] + 1),
+    )
+
+    result = supervise_tick(store, "run-1", cli, adapter, {"u0": od}, at=1010.0)
+    assert result.settled == {"u0": "done_unaccepted"}
+    assert calls["n"] == 1
+
+
+def test_supervise_tick_missing_from_all_settles_and_classifies(tmp_path, monkeypatch):
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0)
+    runner = FakeRunner()
+    runner.script(("claude", "agents", "--json"), ("[]", "", 0))
+    cli = _cli(runner)
+    adapter = RunAdapter()
+    monkeypatch.setattr(claude_bg, "classify_settled_failure", lambda *a, **k: None)
+
+    result = supervise_tick(store, "run-1", cli, adapter, {"u0": od}, at=1010.0)
+    assert result.settled == {"u0": "missing"}
+
+
+def test_supervise_tick_drops_slot_on_fence_and_claimant_drift(tmp_path):
+    """MUTATION CHECK anchor: dropping the claimed_by/fence guard would let
+    this tick RENEW a lease belonging to a NEW claimant -- observable as the
+    original dispatcher's tick call succeeding and touching worker-b's
+    lease."""
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0, lease_seconds=5.0)
+    # Someone else reclaimed the unit (fence bumped, new claimant).
+    store.fail_unit("run-1", "u0", od.fencing_token, terminal=False, at=1005.0)
+    store.claim_unit("run-1", "u0", "worker-b", lease_seconds=50.0, at=1006.0)
+    other_lease_expiry = store.get_unit("run-1", "u0").lease_expires_at
+
+    runner = FakeRunner()
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="working")]), "", 0),
+    )
+    cli = _cli(runner)
+    adapter = RunAdapter()
+
+    result = supervise_tick(store, "run-1", cli, adapter, {"u0": od}, at=1010.0)
+    assert result.renewed == ()
+    assert result.dropped == ("u0",)
+    unit = store.get_unit("run-1", "u0")
+    assert unit.claimed_by == "worker-b"
+    assert unit.lease_expires_at == other_lease_expiry  # untouched by our (stale) dispatch
+
+
+# ===========================================================================
+# Step 9 -- reclaim selection and bounded reclaims
+# ===========================================================================
+
+
+def test_reclaimable_units_returns_expired_claimed_with_no_open_dispatch(tmp_path):
+    store = _seeded_dispatch_store(tmp_path, unit_ids=("u0", "u1"))
+    store.claim_unit("run-1", "u0", "worker-a", lease_seconds=10.0, at=1000.0)
+    store.claim_unit("run-1", "u1", "worker-b", lease_seconds=10.0, at=1000.0)
+    result = reclaimable_units(store, "run-1", at=1020.0)
+    assert {u.unit_id for u in result} == {"u0", "u1"}
+
+
+def test_reclaimable_units_excludes_units_with_an_open_dispatch(tmp_path):
+    store = _seeded_dispatch_store(tmp_path, unit_ids=("u0", "u1"))
+    store.claim_unit("run-1", "u0", "worker-a", lease_seconds=10.0, at=1000.0)
+    store.claim_unit("run-1", "u1", "worker-b", lease_seconds=10.0, at=1000.0)
+    store.record_dispatch("run-1", "u0", "worker-a", at=1000.0)
+    result = reclaimable_units(store, "run-1", at=1020.0)
+    assert {u.unit_id for u in result} == {"u1"}
+
+
+def test_reclaimable_units_excludes_units_not_yet_expired(tmp_path):
+    store = _seeded_dispatch_store(tmp_path)
+    store.claim_unit("run-1", "u0", "worker-a", lease_seconds=100.0, at=1000.0)
+    assert reclaimable_units(store, "run-1", at=1020.0) == []
+
+
+def test_reclaim_attempt_count_counts_expire_attempts(tmp_path):
+    store = _seeded_dispatch_store(tmp_path)
+    store.claim_unit("run-1", "u0", "worker-a", lease_seconds=5.0, at=1000.0)
+    store.claim_unit("run-1", "u0", "worker-b", lease_seconds=5.0, at=1010.0)  # 1st EXPIRE
+    store.claim_unit("run-1", "u0", "worker-c", lease_seconds=5.0, at=1020.0)  # 2nd EXPIRE
+    assert reclaim_attempt_count(store, "run-1", "u0") == 2
+
+
+# ===========================================================================
+# Step 10 -- halt classification for a settled unit (never `claude logs`)
+# ===========================================================================
+
+
+def test_classify_settled_failure_reads_transcript_tail_and_classifies(tmp_path):
+    projects_root = tmp_path / "projects"
+    project_dir = projects_root / "myproject"
+    project_dir.mkdir(parents=True)
+    transcript = project_dir / "sess-xyz.jsonl"
+    transcript.write_text(
+        '{"type": "assistant", "text": "irrelevant line"}\n'
+        '{"type": "error", "text": "hit your limit, try again later"}\n',
+        encoding="utf-8",
+    )
+    kind = classify_settled_failure("sess-xyz", projects_root=projects_root)
+    assert kind == claude_bg.HALT_RATE_LIMIT
+
+
+def test_classify_settled_failure_reads_job_state_text_fields_only(tmp_path):
+    """P13: `state.json`'s own `state` field is never read for status; only
+    detail/needs/output.result -- and this must still classify from those
+    even when `state` itself says something unrelated (a disagreeing
+    channel)."""
+    jobs_root = tmp_path / "jobs"
+    job_dir = jobs_root / "short1"
+    job_dir.mkdir(parents=True)
+    (job_dir / "state.json").write_text(
+        json.dumps({"state": "working", "detail": "authentication_error occurred"}),
+        encoding="utf-8",
+    )
+    kind = classify_settled_failure(
+        "sess-none", job_id="short1", jobs_root=jobs_root, projects_root=tmp_path / "no-such-projects"
+    )
+    assert kind == claude_bg.HALT_AUTH
+
+
+def test_classify_settled_failure_returns_none_for_ordinary_text(tmp_path):
+    projects_root = tmp_path / "projects"
+    project_dir = projects_root / "p"
+    project_dir.mkdir(parents=True)
+    (project_dir / "sess-xyz.jsonl").write_text(
+        '{"type": "assistant", "text": "all good"}\n', encoding="utf-8"
+    )
+    kind = classify_settled_failure("sess-xyz", projects_root=projects_root)
+    assert kind is None
+
+
+def test_classify_settled_failure_never_raises_when_nothing_exists(tmp_path):
+    kind = classify_settled_failure(
+        "sess-nowhere", job_id="none",
+        projects_root=tmp_path / "nope", jobs_root=tmp_path / "also-nope",
+    )
+    assert kind is None
+
+
+# ===========================================================================
+# Step 11 -- the loop
+# ===========================================================================
+
+
+def test_dispatch_wave_second_dispatcher_exits_without_launching(tmp_path):
+    """MUTATION CHECK anchor: skipping the dispatcher-lease acquire would let
+    two concurrent calls both launch."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    runner = _healthy_runner()
+    cli = _cli(runner)
+    wave = store.list_units("run-1")
+
+    store.acquire_dispatcher_lease("run-1", "someone-else", lease_seconds=120.0, at=1000.0)
+
+    report = dispatch_wave(
+        store, "run-1", wave, RunAdapter(), cli=cli, worker_command=wc,
+        at=1010.0, sleep_fn=lambda s: None, clock_fn=lambda: 1010.0,
+    )
+    assert report.dispatcher_acquired is False
+    assert report.dispatched == ()
+    assert report.aborted_reason == "dispatcher_lease_held_by_another_dispatcher"
+    launch_calls = [argv for argv, _kwargs in runner.calls if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]]
+    assert launch_calls == []
+
+
+def test_dispatch_wave_dispatcher_can_reacquire_its_own_expired_lease(tmp_path, monkeypatch):
+    """ACCEPT case: a dispatcher must be able to re-acquire its OWN expired
+    lease."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    monkeypatch.setattr(claude_bg, "_mint_worker_id", lambda: "fixed-dispatcher")
+    store.acquire_dispatcher_lease("run-1", "fixed-dispatcher", lease_seconds=10.0, at=1000.0)
+
+    runner = _healthy_runner()
+    cli = _cli(runner)
+    report = dispatch_wave(
+        store, "run-1", [], RunAdapter(), cli=cli, worker_command=wc,
+        at=1020.0, sleep_fn=lambda s: None, clock_fn=lambda: 1020.0,
+    )
+    assert report.dispatcher_acquired is True
+    run = store.get_run("run-1")
+    assert run.dispatcher_id is None  # released cleanly on exit
+
+
+def test_dispatch_wave_bounds_reclaims_and_terminally_fails_third_attempt(tmp_path):
+    """MUTATION CHECK anchor: removing the reclaim bound would let a third
+    dispatch be observed instead of a terminal failure."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    store.claim_unit("run-1", "u0", "worker-1", lease_seconds=1.0, at=1000.0)
+    store.claim_unit("run-1", "u0", "worker-2", lease_seconds=1.0, at=1002.0)  # 1st EXPIRE
+    store.claim_unit("run-1", "u0", "worker-3", lease_seconds=1.0, at=1004.0)  # 2nd EXPIRE
+
+    runner = _healthy_runner()
+    cli = _cli(runner)
+    report = dispatch_wave(
+        store, "run-1", [], RunAdapter(), cli=cli, worker_command=wc,
+        max_reclaims_per_unit=2, at=1010.0, sleep_fn=lambda s: None, clock_fn=lambda: 1010.0,
+    )
+    assert "u0" in report.failed_exhausted
+    assert "u0" not in report.dispatched
+    unit = store.get_unit("run-1", "u0")
+    assert unit.state is UnitState.FAILED
+    launch_calls = [argv for argv, _kwargs in runner.calls if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]]
+    assert launch_calls == []  # no third dispatch attempted
+
+
+def test_dispatch_wave_launch_misconfiguration_aborts_whole_loop(tmp_path):
+    store = _seeded_dispatch_store(tmp_path, unit_ids=("u0", "u1"))
+    wc = _worker_command(tmp_path)
+    runner = _healthy_runner()
+    runner.script(("claude", "--bg"), ("backgrounded * baaaaaad", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="baaaaaad", session_id="sess-bad", state="failed")]), "", 0),
+    )
+    runner.script(("claude", "rm"), ("removed", "", 0))
+    cli = _cli(runner)
+    wave = store.list_units("run-1")
+
+    report = dispatch_wave(
+        store, "run-1", wave, RunAdapter(), cli=cli, worker_command=wc,
+        max_agents=2, at=1000.0, sleep_fn=lambda s: None, clock_fn=lambda: 1000.0,
+    )
+    assert report.aborted_reason == "launch_misconfiguration"
+    assert report.dispatched == ()
+    launch_calls = [argv for argv, _kwargs in runner.calls if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]]
+    assert len(launch_calls) == 1  # the second candidate was never attempted
+
+
+def test_dispatch_wave_report_and_argv_never_carry_unit_content(tmp_path, monkeypatch):
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    SECRET = "TOP-SECRET-UNIT-PAYLOAD-XYZ"
+    adapter = RunAdapter(user_for=lambda u: SECRET, system_for=lambda u: "sys " + SECRET)
+    monkeypatch.setattr(claude_bg, "classify_settled_failure", lambda *a, **k: None)
+
+    runner = _healthy_runner()
+    runner.script(("claude", "--bg"), ("backgrounded * c0ffee01", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        [
+            ("[]", "", 0),
+            (json.dumps([_bg_record(id="c0ffee01", session_id="sess-1", state="working")]), "", 0),
+            (json.dumps([_bg_record(id="c0ffee01", session_id="sess-1", state="done")]), "", 0),
+        ],
+    )
+    cli = _cli(runner)
+    wave = store.list_units("run-1")
+
+    # Simulate the worker claiming (never accepting) between launch
+    # confirmation and the supervise tick's "done" observation -- so the
+    # unit's claimed_by matches the minted worker_id and the tick settles
+    # cleanly (done_unaccepted) instead of dropping the slot on drift.
+    original_launch = cli.launch_bg
+
+    def fake_launch(prompt, **kwargs):
+        result = original_launch(prompt, **kwargs)
+        import re as _re
+        worker_id = _re.search(r"Worker id: (\S+)", prompt).group(1)
+        store.claim_unit("run-1", "u0", worker_id, at=1000.0)
+        return result
+
+    cli.launch_bg = fake_launch  # type: ignore[assignment]
+
+    report = dispatch_wave(
+        store, "run-1", wave, adapter, cli=cli, worker_command=wc, max_agents=1,
+        at=1000.0, sleep_fn=lambda s: None, clock_fn=lambda: 1000.0,
+    )
+    for argv, _kwargs in runner.calls:
+        assert SECRET not in " ".join(argv)
+    serialized = json.dumps(dataclasses.asdict(report), default=str)
+    assert SECRET not in serialized
+
+
+def test_dispatch_wave_status_digest_equals_compute_status_and_carries_no_content(tmp_path):
+    from content_pipeline.execution.status import compute_status as real_compute_status
+
+    store = _seeded_dispatch_store(tmp_path, unit_ids=("u0",))
+    wc = _worker_command(tmp_path)
+    runner = _healthy_runner()
+    cli = _cli(runner)
+
+    report = dispatch_wave(
+        store, "run-1", [], RunAdapter(), cli=cli, worker_command=wc,
+        at=1000.0, sleep_fn=lambda s: None, clock_fn=lambda: 1000.0,
+    )
+    assert len(report.status_digests) >= 1
+    expected = real_compute_status(store, "run-1", now=1000.0).to_dict()
+    digest = report.status_digests[-1]
+    assert digest["run_id"] == expected["run_id"]
+    assert digest["total_units"] == expected["total_units"]
+    assert digest["counts_by_state"] == expected["counts_by_state"]
+    for forbidden in ("prompt", "payload", "text", "output"):
+        assert forbidden not in digest
+
+
+def test_dispatch_wave_happy_path_dispatches_and_observes_acceptance(tmp_path):
+    store = _seeded_dispatch_store(tmp_path, unit_ids=("u0",))
+    wc = _worker_command(tmp_path)
+
+    runner = _healthy_runner()
+    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        [
+            ("[]", "", 0),
+            (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="working")]), "", 0),
+            (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="done")]), "", 0),
+        ],
+    )
+    cli = _cli(runner)
+    wave = store.list_units("run-1")
+
+    original_launch = cli.launch_bg
+
+    def fake_launch(prompt, **kwargs):
+        result = original_launch(prompt, **kwargs)
+        import re as _re
+        match = _re.search(r"Worker id: (\S+)", prompt)
+        worker_id = match.group(1)
+        claim = store.claim_unit("run-1", "u0", worker_id, at=1000.0)
+        store.accept_unit("run-1", "u0", claim.fencing_token, text="answer", at=1001.0)
+        return result
+
+    cli.launch_bg = fake_launch  # type: ignore[assignment]
+
+    report = dispatch_wave(
+        store, "run-1", wave, RunAdapter(), cli=cli, worker_command=wc,
+        max_agents=1, at=1000.0, sleep_fn=lambda s: None, clock_fn=lambda: 1000.0,
+    )
+    assert "u0" in report.dispatched
+    assert "u0" in report.accepted
+    unit = store.get_unit("run-1", "u0")
+    assert unit.state is UnitState.ACCEPTED
