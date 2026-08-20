@@ -9,13 +9,14 @@
 
    `cat -A`'s `M-BM-7` is its rendering of the UTF-8 bytes ``C2 B7`` --
    U+00B7 MIDDLE DOT -- so the real banner text is
-   ``"backgrounded · ff97012c"``.
+   ``"backgrounded"`` + U+00B7 + ``" ff97012c"``.
 
 2. ``_default_runner`` called ``subprocess.run(..., capture_output=True,
    text=True)`` with no ``encoding=``, so on Windows the output was decoded
    with the locale codepage (cp1252) instead of UTF-8. Decoding the same
    ``C2 B7`` bytes as cp1252 yields TWO mojibaked characters
-   (``"Â·"``) instead of the one real character -- so a regex fix
+   (U+00C2 followed by U+00B7) instead of the one real character -- so a
+   regex fix
    ALONE is insufficient on Windows: this was demonstrated live during the
    defect investigation, where a shim matching a real middle dot did not
    fire, because the bytes never arrived correctly decoded in the first
@@ -42,13 +43,13 @@ from content_pipeline.execution.drivers.claude_bg import (
 # MIDDLE DOT) rendered byte-by-byte because the terminal recognized them as
 # a multi-byte UTF-8 sequence. Written as an escape, never as a literal
 # non-ASCII byte, per this repo's ASCII-only-tracked-files convention.
-REAL_BANNER = "backgrounded · ff97012c"
+REAL_BANNER = "backgrounded \u00b7 ff97012c"
 
 # The SAME bytes (C2 B7), misdecoded as cp1252 instead of UTF-8 -- exactly
 # what `_default_runner` used to hand back on Windows before the
-# `encoding="utf-8"` fix. 0xC2 -> U+00C2 (Â), 0xB7 -> U+00B7 (·) under
+# `encoding="utf-8"` fix. 0xC2 -> U+00C2 (<U+00C2>), 0xB7 -> U+00B7 (<U+00B7>) under
 # cp1252, so the one real character becomes two.
-MOJIBAKED_BANNER = "backgrounded Â· ff97012c"
+MOJIBAKED_BANNER = "backgrounded \u00c2\u00b7 ff97012c"
 
 # The historical form this module's other tests script everywhere; must
 # keep parsing so none of those fixtures need to change.
@@ -87,7 +88,7 @@ def test_default_runner_passes_utf8_encoding(monkeypatch):
     captured = {}
 
     class _FakeCompleted:
-        stdout = "backgrounded · ff97012c"
+        stdout = "backgrounded \u00b7 ff97012c"
         stderr = ""
         returncode = 0
 
@@ -102,4 +103,4 @@ def test_default_runner_passes_utf8_encoding(monkeypatch):
     assert captured["encoding"] == "utf-8"
     assert captured["errors"] == "replace"
     assert captured["text"] is True
-    assert (stdout, stderr, rc) == ("backgrounded · ff97012c", "", 0)
+    assert (stdout, stderr, rc) == ("backgrounded \u00b7 ff97012c", "", 0)

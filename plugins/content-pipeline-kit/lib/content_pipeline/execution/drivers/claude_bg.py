@@ -172,7 +172,8 @@ def _default_runner(
     place.
 
     ``errors="replace"`` (never ``"strict"``): a launch banner is
-    best-effort evidence (P11 -- discarded as proof of success), never a
+    best-effort evidence -- a launch is judged by an observed session-state
+    transition, never by the banner or the exit code -- and never a
     hard requirement, so a decoding error here must not raise and abort an
     otherwise-successful launch. A replaced character can at worst make
     :func:`_parse_launch_session_id` fail to find an id, which is already a
