@@ -15,9 +15,31 @@
    environment from the adapter's :class:`~content_pipeline.execution.adapter.WorkerEnvironment`
    declaration, fixed BEFORE the worker process starts (see that function's
    docstring for why this matters).
-5. :class:`WorkerCommand`, :func:`enumerate_worker_invocations`,
-   :func:`build_launch_prompt` -- the enumerated invocation set (P5) and the
-   launch prompt built from it.
+5. :class:`WorkerCommand`, :func:`envelope_path_for`, :func:`worker_envelopes_for`,
+   :func:`enumerate_worker_invocations`, :func:`build_launch_prompt` -- the
+   enumerated invocation set (P5, six entries: three ``protocol @<path>``
+   invocations plus three Write-tool targets) and the launch prompt built
+   from it. Every worker verb goes through ``cli.run.build_commands``'s
+   ``protocol`` command with a ``@<path>`` JSON envelope -- never the flag
+   form an earlier revision of this module emitted, which ``build_commands``
+   never registered as a command at all.
+
+   The worker's verbs are ``read``/``submit``/``fail``. ``claim`` is NOT one
+   of them: the DISPATCHER claims each unit itself, before the launch, and
+   the resulting fencing token rides the launch prompt (see
+   :func:`dispatch_unit` and :func:`build_launch_prompt`). A worker session
+   therefore has no way to claim anything, which is what stops a session
+   left alive by an earlier dispatch from re-claiming a unit that has since
+   been reclaimed and re-dispatched under a fresh ``worker_id``.
+
+   :func:`format_fenced_answer` / :func:`parse_fenced_answer` belong to the
+   same set: the answer ARTIFACT's own fence. The answer file's first line
+   declares the fencing token its text was produced under; ``cli.run``'s
+   ``--text-file=`` splice matches that declaration against the submit
+   envelope's own ``fencing_token`` and refuses on any mismatch. The path
+   stays generation-neutral (see :func:`answer_path_for`), so the token
+   lives in runtime FILE CONTENT and never in an enumerated command string
+   (P5).
 6. :func:`dispatch_unit` -- launch one unit, confirmed by an OBSERVED state
    transition (P11), never by the launcher's exit code or banner.
 7. :class:`SessionRecord`, :class:`ParseResult`, :func:`parse_agents_json` --
@@ -63,6 +85,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import textwrap
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -72,10 +95,13 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, 
 from content_pipeline.execution.adapter import RunAdapter
 from content_pipeline.execution.controller import record_halt
 from content_pipeline.execution.model import (
+    AlreadyClaimedError,
     AttemptKind,
     ExecutionError,
+    RunHaltedError,
     RunRecord,
     StaleDispatcherLeaseError,
+    TerminalStateError,
     UnitRecord,
     UnitState,
 )
@@ -561,10 +587,28 @@ class WorkerCommand:
     ``answer_dir`` is the directory (a native path) a worker writes its
     deterministic per-unit answer file into, via the Write tool -- see
     :func:`answer_path_for`.
+
+    ``envelope_dir`` is the directory (a native path) a worker's JSON
+    protocol envelopes live in -- see :func:`envelope_path_for`. Additive
+    and optional: ``None`` (the default) means "same directory as
+    ``answer_dir``", via :attr:`resolved_envelope_dir`, so an existing
+    caller that never sets this field keeps writing everything to one
+    directory exactly as before this field existed.
     """
 
     argv: Tuple[str, ...]
     answer_dir: str
+    envelope_dir: Optional[str] = None
+
+    @property
+    def resolved_envelope_dir(self) -> str:
+        """``envelope_dir`` when set, else ``answer_dir`` -- the directory a
+        caller should actually use for envelope paths. Kept as a property
+        (never resolved into a stored field) so a caller that mutates
+        ``answer_dir`` after construction -- there is none today, but the
+        class is otherwise immutable-by-convention -- never leaves this
+        derived value stale."""
+        return self.envelope_dir if self.envelope_dir is not None else self.answer_dir
 
 
 def _format_argv(argv: Sequence[str], **subs: str) -> Tuple[str, ...]:
@@ -585,76 +629,356 @@ def answer_path_for(worker_command: WorkerCommand, run_id: str, unit_id: str) ->
     ``submit --from-file`` invocation reads back. Deterministic in ``run_id``
     and ``unit_id`` alone -- computable before the run, which is what makes
     the invocation set enumerable ahead of time (the module docstring's whole
-    reason for existing)."""
+    reason for existing).
+
+    Deliberately carries NO ``worker_id`` and no generation counter, so two
+    successive dispatches of the same unit write the same file. The
+    generation is fenced in the file's CONTENT instead, by
+    :func:`format_fenced_answer` -- putting it in the path would make the
+    path un-computable before the run and destroy exactly the pre-run
+    enumerability this function exists for."""
     filename = (
         f"{_sanitize_path_component(run_id)}__{_sanitize_path_component(unit_id)}.answer.txt"
     )
     return os.path.join(worker_command.answer_dir, filename)
 
 
+# ---------------------------------------------------------------------------
+# The answer artifact's own fence -- content, never path
+# ---------------------------------------------------------------------------
+
+ANSWER_FENCE_PREFIX = "content-pipeline-fence:"
+
+
+class AnswerFenceError(ExecutionError):
+    """Base class for a refusal to read an answer artifact whose declared
+    fencing token cannot be trusted for the submission presenting it."""
+
+
+class MissingAnswerFenceError(AnswerFenceError):
+    """The answer artifact's first line is not a fence declaration.
+
+    Refused rather than treated as unfenced-and-fine: an artifact with no
+    declared generation is exactly the artifact a previous dispatch's
+    still-live session may have written, and accepting it would splice text
+    of unknown provenance into a currently-valid submit envelope."""
+
+    def __init__(self, first_line: str) -> None:
+        self.first_line = first_line
+        super().__init__(
+            "answer artifact does not begin with a fence line "
+            f"({ANSWER_FENCE_PREFIX!r} followed by the fencing token); its "
+            f"first line was {first_line!r}"
+        )
+
+
+class AnswerFenceMismatchError(AnswerFenceError):
+    """The answer artifact declares a DIFFERENT fencing token than the
+    submit envelope presenting it -- either a stale artifact under a current
+    envelope, or a current artifact under a stale envelope. Both are the
+    same defect seen from opposite ends: the text and the standing to submit
+    it came from different generations of the same unit."""
+
+    def __init__(self, declared: int, expected: int) -> None:
+        self.declared = declared
+        self.expected = expected
+        super().__init__(
+            f"answer artifact declares fencing token {declared!r} but the "
+            f"submission presents {expected!r}; refusing to submit text "
+            "produced under a different claim"
+        )
+
+
+def format_fenced_answer(fencing_token: int, text: str) -> str:
+    """The exact bytes a worker writes to :func:`answer_path_for`'s path.
+
+    One fence line, then the answer text verbatim::
+
+        content-pipeline-fence: 7
+        <the answer text, exactly as produced>
+
+    Only the FIRST line is ever interpreted, so the body may contain
+    anything at all -- including further lines that look like fence lines,
+    which :func:`parse_fenced_answer` returns untouched as part of the
+    answer."""
+    return f"{ANSWER_FENCE_PREFIX} {fencing_token}\n{text}"
+
+
+def parse_fenced_answer(raw: str, expected_token: int) -> str:
+    """The answer text out of ``raw``, or a typed refusal.
+
+    Splits on the FIRST newline only: the first line must be
+    :data:`ANSWER_FENCE_PREFIX` followed by an integer equal to
+    ``expected_token``, and everything after that newline is the answer,
+    returned byte-for-byte. Because only the first line is inspected, a body
+    that itself contains ``content-pipeline-fence:`` is ordinary text and is
+    neither re-parsed nor stripped.
+
+    Raises :class:`MissingAnswerFenceError` when the first line is not a
+    fence declaration at all, and :class:`AnswerFenceMismatchError` when it
+    declares a different token."""
+    first_line, separator, body = raw.partition("\n")
+    declaration = first_line.rstrip("\r").strip()
+    if not declaration.startswith(ANSWER_FENCE_PREFIX):
+        raise MissingAnswerFenceError(first_line)
+    token_text = declaration[len(ANSWER_FENCE_PREFIX):].strip()
+    try:
+        declared = int(token_text)
+    except ValueError as exc:
+        raise MissingAnswerFenceError(first_line) from exc
+    if declared != expected_token:
+        raise AnswerFenceMismatchError(declared, expected_token)
+    return body if separator else ""
+
+
+def envelope_path_for(
+    worker_command: WorkerCommand, run_id: str, unit_id: str, verb: str
+) -> str:
+    """The deterministic per-unit, per-verb JSON protocol-envelope path --
+    the file a ``read``/``submit``/``fail`` invocation's ``@<path>``
+    argument names (see ``cli.run.build_commands``'s ``protocol`` command).
+    Deterministic in ``(run_id, unit_id, verb)`` alone, mirroring
+    :func:`answer_path_for`'s determinism in ``(run_id, unit_id)`` -- the
+    same property that makes an enumerated invocation pre-allowlistable."""
+    filename = (
+        f"{_sanitize_path_component(run_id)}__{_sanitize_path_component(unit_id)}.{verb}.json"
+    )
+    return os.path.join(worker_command.resolved_envelope_dir, filename)
+
+
+_ENVELOPE_VERBS: Tuple[str, ...] = ("read", "submit", "fail")
+
+
+def _envelope_payload_text(verb: str, run_id: str, unit_id: str, worker_id: str) -> str:
+    """The literal JSON (``read``) or JSON-shaped TEMPLATE
+    (``submit``/``fail``) text for one verb's envelope.
+
+    ``read`` needs no fencing token (its payload does not consume one -- see
+    ``execution/protocol.py``'s ``_read``), so its text is ordinary, valid,
+    ready-to-use JSON. ``submit``/``fail`` DO need a fencing token, but that
+    value is not knowable when this function runs (P5's determinism
+    constraint: an enumerated invocation string must be computable from
+    ``(run_id, unit_id, worker_id)`` alone, before any unit is ever
+    claimed). So their text carries the literal, unquoted placeholder token
+    ``<FENCING_TOKEN>`` in place of a real value -- NOT valid JSON as
+    written, and not meant to be parsed until a worker substitutes the real
+    token, which its LAUNCH PROMPT names (the dispatcher claims the unit
+    before launching; see :func:`dispatch_unit`). See
+    :func:`worker_envelopes_for`'s docstring for who writes which of these
+    to disk and when.
+    """
+    if verb == "read":
+        envelope = {
+            "protocol_version": "1",
+            "verb": verb,
+            "payload": {"run_id": run_id, "unit_id": unit_id, "worker_id": worker_id},
+        }
+        return json.dumps(envelope, indent=2) + "\n"
+    # submit / fail: JSON-shaped template text, fencing_token a literal
+    # placeholder a worker fills in at runtime -- see docstring above.
+    return (
+        "{\n"
+        '  "protocol_version": "1",\n'
+        f"  \"verb\": {json.dumps(verb)},\n"
+        '  "payload": {\n'
+        f"    \"run_id\": {json.dumps(run_id)},\n"
+        f"    \"unit_id\": {json.dumps(unit_id)},\n"
+        f"    \"worker_id\": {json.dumps(worker_id)},\n"
+        '    "fencing_token": <FENCING_TOKEN>\n'
+        "  }\n"
+        "}\n"
+    )
+
+
+def worker_envelopes_for(
+    worker_command: WorkerCommand, run_id: str, unit_id: str, worker_id: str
+) -> Dict[str, Tuple[str, str]]:
+    """``{verb: (path, text)}`` for ``read``/``submit``/``fail`` -- the JSON
+    protocol-envelope path and content for each verb this unit's worker ever
+    needs. Pure function: no filesystem I/O here, deterministic in
+    ``(run_id, unit_id, worker_id)`` alone (P5), same as every other
+    function in this section.
+
+    There is deliberately no ``claim`` entry. The dispatcher claims the unit
+    itself before launching (:func:`dispatch_unit`), so a worker session has
+    no claim envelope to run and no way to take a claim -- which is what
+    stops a session left alive by an earlier dispatch from re-claiming a
+    unit that has since been reclaimed and re-dispatched.
+
+    A caller writes these to disk at two different TIMES, for two different
+    reasons, per the D5/P5 design this module ships against:
+
+    - ``read`` is written by the DISPATCHER, before the worker's session
+      ever launches (:func:`build_launch_prompt` does this) -- its text
+      needs no runtime information, so pre-writing it is what lets the
+      dispatcher pre-authorize the ``read`` invocation (P5).
+    - ``submit``/``fail`` are written by the WORKER itself, at runtime, via
+      the Write tool -- their text needs the fencing token, which is not
+      knowable when this function runs. The text this function returns for
+      them is a TEMPLATE (see :func:`_envelope_payload_text`): the worker's
+      only permitted edit is substituting the literal ``<FENCING_TOKEN>``
+      token for the real value its launch prompt names; nothing else in the
+      template may change.
+    """
+    return {
+        verb: (envelope_path_for(worker_command, run_id, unit_id, verb),
+               _envelope_payload_text(verb, run_id, unit_id, worker_id))
+        for verb in _ENVELOPE_VERBS
+    }
+
+
 def enumerate_worker_invocations(
     worker_command: WorkerCommand, run_id: str, unit_id: str, worker_id: str
-) -> Tuple[str, str, str, str, str]:
-    """The EXACT command strings a worker for this unit may run: ``claim``,
-    ``read``, ``submit --from-file <answer path>``, ``fail``, plus the
-    tool-level entry for writing the answer file (a Write-tool invocation
-    name, not a shell command -- writing the file is not a ``claude``
-    subprocess call).
+) -> Tuple[str, str, str, str, str, str]:
+    """The EXACT command/Write-tool-target strings a worker for this unit
+    may run or write, in order: ``read``, ``submit --text-file=<answer
+    path>``, ``fail``, the Write-tool target for the answer file, the
+    Write-tool target for the ``submit`` envelope, and the Write-tool target
+    for the ``fail`` envelope.
+
+    There is no ``claim`` entry: the dispatcher claims each unit before
+    launching its worker (:func:`dispatch_unit`), so ``read`` is a worker's
+    first invocation.
 
     Every returned string is deterministic given ``(run_id, unit_id,
-    worker_id)`` -- no unit content, no timestamp, no random component --
-    which is the property that makes a pre-authorized allowlist entry
-    possible for it (P5): the same five strings can be computed, and
-    allowlisted, before the worker ever runs.
+    worker_id)`` -- no unit content, no timestamp, no random component, and
+    (P5-critical) NO FENCING TOKEN, even though the dispatcher now knows the
+    token before the launch. Keeping it out of these strings is what makes a
+    pre-authorized allowlist entry possible: the same six strings can be
+    computed, and allowlisted, before the worker ever runs. The token
+    reaches the worker through the launch PROMPT and rides in file CONTENT
+    (the submit/fail envelopes it authors, and the answer artifact's fence
+    line), never in an invocation string.
+
+    Each of ``read``/``submit``/``fail`` is ``<argv> protocol @<envelope
+    path>`` (see ``cli.run.build_commands``'s ``protocol`` command and its
+    ``@<path>`` envelope-sourcing form) -- never the old flag form
+    (``claim --run-id ... --unit-id ...``), which
+    ``cli.run.build_commands`` never registered as a command at all (only
+    ``protocol`` is), so the flag form always failed as an unknown command
+    for every verb except ``claim`` (whose flags accidentally parsed as
+    positional argv and silently held the unit's lease forever without
+    ever reaching ``read``/``submit``).
     """
     subs = {"run_id": run_id, "unit_id": unit_id, "worker_id": worker_id}
     base = _format_argv(worker_command.argv, **subs)
-    common = ("--run-id", run_id, "--unit-id", unit_id, "--worker-id", worker_id)
+    envelopes = worker_envelopes_for(worker_command, run_id, unit_id, worker_id)
     answer_path = answer_path_for(worker_command, run_id, unit_id)
 
-    claim_cmd = shlex.join(base + ("claim",) + common)
-    read_cmd = shlex.join(base + ("read",) + common)
-    submit_cmd = shlex.join(base + ("submit",) + common + ("--from-file", answer_path))
-    fail_cmd = shlex.join(base + ("fail",) + common)
-    write_cmd = f"Write tool -> {answer_path}"
-    return (claim_cmd, read_cmd, submit_cmd, fail_cmd, write_cmd)
+    read_path, _ = envelopes["read"]
+    submit_path, _ = envelopes["submit"]
+    fail_path, _ = envelopes["fail"]
+
+    read_cmd = shlex.join(base + ("protocol", f"@{read_path}"))
+    submit_cmd = shlex.join(
+        base + ("protocol", f"@{submit_path}", f"--text-file={answer_path}")
+    )
+    fail_cmd = shlex.join(base + ("protocol", f"@{fail_path}"))
+    write_answer_cmd = f"Write tool -> {answer_path}"
+    write_submit_cmd = f"Write tool -> {submit_path}"
+    write_fail_cmd = f"Write tool -> {fail_path}"
+    return (
+        read_cmd,
+        submit_cmd,
+        fail_cmd,
+        write_answer_cmd,
+        write_submit_cmd,
+        write_fail_cmd,
+    )
 
 
 def build_launch_prompt(
-    worker_command: WorkerCommand, run_id: str, unit_id: str, worker_id: str
+    worker_command: WorkerCommand,
+    run_id: str,
+    unit_id: str,
+    worker_id: str,
+    fencing_token: int,
 ) -> str:
     """The ``claude --bg`` launch prompt for one unit.
 
-    Names the run id, unit id, and worker id; states the procedure as
-    INVOCATIONS to run, verbatim, never as an outcome to achieve -- the
-    2026-08-17 probe stalled on a shell redirect the worker composed itself
-    to satisfy an instruction phrased as an outcome (``echo ... > file``), and
-    no allowlist author would have enumerated it (P5). Unit content never
-    appears here: the worker fetches its own prepared request via the
-    ``read`` invocation at runtime.
+    Names the run id, unit id, worker id, answer path and FENCING TOKEN;
+    states the procedure as INVOCATIONS to run, verbatim, never as an
+    outcome to achieve -- the 2026-08-17 probe stalled on a shell redirect
+    the worker composed itself to satisfy an instruction phrased as an
+    outcome (``echo ... > file``), and no allowlist author would have
+    enumerated it (P5). Unit content never appears here: the worker fetches
+    its own prepared request via the ``read`` invocation at runtime.
+
+    ``fencing_token`` is the token the DISPATCHER's own claim returned
+    (:func:`dispatch_unit` claims before launching). It reaches the worker
+    here, in the prompt, and nowhere else -- never in an enumerated
+    invocation string, which must stay pre-computable for P5 allowlisting.
+    The worker substitutes it into the ``submit``/``fail`` envelope
+    templates and writes it as the fence line of its answer artifact.
+
+    This function has a side effect, deliberately: it pre-writes the
+    ``read`` JSON envelope file to ``worker_command.resolved_envelope_dir``
+    (creating the directory if needed) BEFORE the worker session ever
+    launches -- see :func:`worker_envelopes_for`'s docstring for why that
+    verb, and only that verb, is safe to pre-write. ``submit``/``fail`` are
+    never written here; the prompt instead instructs the worker to author
+    them itself, from the verbatim template text, substituting only the
+    fencing token named above.
     """
-    claim_cmd, read_cmd, submit_cmd, fail_cmd, write_cmd = enumerate_worker_invocations(
-        worker_command, run_id, unit_id, worker_id
-    )
+    (
+        read_cmd,
+        submit_cmd,
+        fail_cmd,
+        write_answer_cmd,
+        write_submit_cmd,
+        write_fail_cmd,
+    ) = enumerate_worker_invocations(worker_command, run_id, unit_id, worker_id)
     answer_path = answer_path_for(worker_command, run_id, unit_id)
+    envelopes = worker_envelopes_for(worker_command, run_id, unit_id, worker_id)
+
+    envelope_dir = worker_command.resolved_envelope_dir
+    os.makedirs(envelope_dir, exist_ok=True)
+    read_path, read_text = envelopes["read"]
+    Path(read_path).write_text(read_text, encoding="utf-8")
+
+    submit_template = textwrap.indent(envelopes["submit"][1], "     ")
+    fail_template = textwrap.indent(envelopes["fail"][1], "     ")
+
     return (
         f"Run id: {run_id}\n"
         f"Unit id: {unit_id}\n"
         f"Worker id: {worker_id}\n"
         f"Answer path: {answer_path}\n"
+        f"Fencing token: {fencing_token}\n"
+        "\n"
+        "This unit is already reserved for you by the dispatcher. The "
+        "fencing token above is your authority to submit it, and it is the "
+        "only place that value comes from -- there is no invocation below "
+        "that returns one.\n"
         "\n"
         "Perform exactly these invocations, in this order, and no others. "
         "Do not compose a redirect, pipe, or any other shell construct to "
         "satisfy any step below -- run the invocation exactly as written.\n"
         "\n"
-        f"1. Claim the unit:\n   {claim_cmd}\n"
-        f"2. Read the prepared request:\n   {read_cmd}\n"
-        "3. Produce your answer text and write it, verbatim, with the Write "
-        f"tool, to exactly this path (no other path):\n   {write_cmd}\n"
+        f"1. Read the prepared request:\n   {read_cmd}\n"
+        "2. Produce your answer text and write it, verbatim, with the Write "
+        f"tool, to exactly this path (no other path):\n   {write_answer_cmd}\n"
+        f"   The FIRST line of that file must be exactly:\n"
+        f"     {ANSWER_FENCE_PREFIX} {fencing_token}\n"
+        "   Your answer text follows on the next line, verbatim and "
+        "unaltered. That first line is how the submission proves the text "
+        "was produced under the token above; a file without it is refused.\n"
+        "3. Author your submission envelope: with the Write tool, write "
+        "EXACTLY the template below, substituting ONLY the literal token "
+        f"<FENCING_TOKEN> with {fencing_token}, to exactly this path (no "
+        f"other path):\n   {write_submit_cmd}\n"
+        f"   Template:\n{submit_template}\n"
         f"4. Submit your answer:\n   {submit_cmd}\n"
         "   If the submission is rejected with feedback, revise the answer "
-        "file (step 3) and repeat step 4.\n"
-        f"5. If you cannot complete the unit, report failure:\n   {fail_cmd}\n"
+        "file (step 2, fence line included) and repeat step 4 -- the "
+        "submission envelope from step 3 does not change and must not be "
+        "rewritten.\n"
+        "5. If you cannot complete the unit, author your failure envelope "
+        "the same way as step 3 -- write EXACTLY the template below, "
+        "substituting ONLY <FENCING_TOKEN>, to exactly this path (no other "
+        f"path):\n   {write_fail_cmd}\n"
+        f"   Template:\n{fail_template}\n"
+        f"   Then report failure:\n   {fail_cmd}\n"
     )
 
 
@@ -846,12 +1170,18 @@ class OpenDispatch:
     between ticks in its own process memory, re-derived from the store on
     every :func:`dispatch_unit` call and never itself the source of truth.
 
-    ``fencing_token`` / ``claimed_by`` are captured once, right after launch
-    confirmation, per the author ruling this module ships against: the
-    driver mints ``worker_id`` BEFORE launch, and every later renewal
-    precondition (:func:`supervise_tick`) compares the unit's CURRENT store
-    state against these captured values, dropping the slot on any drift
-    rather than renewing a claim this dispatcher does not own.
+    ``fencing_token`` / ``claimed_by`` are the DISPATCHER's own claim values,
+    not a post-launch read of the store: :func:`dispatch_unit` mints
+    ``worker_id`` and claims the unit itself BEFORE the launch, so these are
+    exact by construction. Every later renewal precondition
+    (:func:`supervise_tick`) compares the unit's CURRENT store state against
+    them, dropping the slot on any drift rather than renewing a claim this
+    dispatcher does not own. (They used to be read back from the store after
+    the launch-confirmation poll, which raced the worker's own claim: a
+    worker that claimed after confirmation left this holding a PRE-claim
+    fence, so the drift guard dropped the slot on the very first tick, the
+    dispatch row was never settled, and the unit became permanently
+    unreclaimable.)
 
     ``terminal_since`` is the ONLY mutable field: the time at which
     :func:`supervise_tick` first observed this dispatch's unit in a terminal
@@ -867,6 +1197,49 @@ class OpenDispatch:
     fencing_token: int
     claimed_by: Optional[str]
     terminal_since: Optional[float] = None
+
+
+def _release_claim_and_settle(
+    store: ExecutionStore,
+    run_id: str,
+    unit_id: str,
+    fencing_token: int,
+    *,
+    session_id: Optional[str] = None,
+    at: Optional[float],
+) -> None:
+    """Undo a dispatcher-held claim whose launch never produced a worker:
+    release the claim (a NON-terminal ``fail_unit``, returning the unit to
+    PENDING) and settle the open dispatch row (``outcome="launch_failed"``).
+
+    BOTH halves are required and BOTH are best-effort. Required, because a
+    unit left CLAIMED holds a live lease nobody will ever renew, and a unit
+    left with an OPEN dispatch row is excluded by :func:`reclaimable_units`
+    and is therefore unreclaimable FOREVER -- not merely until a lease
+    expires. Best-effort, because this only ever runs while an exception is
+    already in flight, and a cleanup failure must never replace the failure
+    that caused it.
+
+    ``outcome="launch_failed"`` is deliberately the SAME value the observed
+    ``state: "failed"`` / never-appeared branch uses, not a new synonym: to
+    every reader of a settled dispatch row the two cases are identical --
+    this dispatch never reached a confirmed background state and no worker
+    ever ran the unit. Nothing downstream branches on the distinction, and
+    the exception itself (which is re-raised, never swallowed) is where the
+    detail of what went wrong lives.
+    """
+    try:
+        store.fail_unit(
+            run_id, unit_id, fencing_token, error="launch_failed", terminal=False, at=at
+        )
+    except Exception:  # noqa: BLE001 -- best-effort: never mask the in-flight error
+        pass
+    try:
+        store.settle_dispatch(
+            run_id, unit_id, outcome="launch_failed", session_id=session_id, at=at
+        )
+    except Exception:  # noqa: BLE001 -- best-effort: never mask the in-flight error
+        pass
 
 
 def dispatch_unit(
@@ -892,6 +1265,33 @@ def dispatch_unit(
     ``store.record_dispatch`` is called BEFORE ``cli.launch_bg`` -- duplicate
     suppression (the guarded uniqueness index) must bite before any spend.
 
+    THE DISPATCHER CLAIMS. ``store.claim_unit`` is called here, before the
+    launch, and the token it returns is passed into
+    :func:`build_launch_prompt`. The worker never claims and has no claim
+    envelope to run, so a session left alive by an earlier dispatch of the
+    same unit cannot re-claim it after a reclaim has re-dispatched it under
+    a fresh ``worker_id``; that zombie's token is stale, so its ``submit``
+    and ``fail`` fail closed with ``StaleFenceError`` -- the duplicated
+    spend invariant 4 already accepts, not lost work.
+
+    On :class:`LaunchMisconfigurationError` the claim taken here is
+    RELEASED (a non-terminal ``store.fail_unit``, returning the unit to
+    PENDING), mirroring ``_terminally_fail_exhausted_unit``'s claim-then-fail
+    shape. A unit must never be left CLAIMED, holding a live lease, on
+    behalf of a worker that never started.
+
+    THAT RELEASE COVERS EVERY POST-CLAIM PATH, not just the confirmation
+    branch: no exception raised anywhere after the claim -- from
+    :func:`build_launch_prompt`'s filesystem writes, from
+    ``cli.launch_bg``'s executable resolution or spawn, from the
+    confirmation poll -- may leave the unit both CLAIMED and holding an
+    unsettled dispatch row, because that combination is unrecoverable
+    (:func:`reclaimable_units` skips a unit with an open dispatch, and no
+    other code path settles one). The claim is released and the dispatch
+    settled (``outcome="launch_failed"``, see
+    :func:`_release_claim_and_settle`), best-effort, and the ORIGINAL
+    exception is re-raised unchanged.
+
     The launcher's exit code and banner are discarded as evidence of
     success; this function instead polls ``agents --json --all`` (via
     :func:`parse_agents_json`) until the launched session's short id appears
@@ -903,63 +1303,96 @@ def dispatch_unit(
     ``rm``'d (best-effort; an ``rm`` failure never masks the
     misconfiguration).
 
-    On confirmation, reads ``store.get_unit`` to capture the claim fence and
-    ``claimed_by`` into the returned :class:`OpenDispatch` -- what
-    :func:`supervise_tick` later checks before EVER renewing this unit's
-    lease.
+    The returned :class:`OpenDispatch` carries the claim's OWN
+    ``fencing_token`` and ``worker_id`` -- what :func:`supervise_tick` later
+    checks before EVER renewing this unit's lease.
     """
     if worker_id is None:
         worker_id = _mint_worker_id()
 
     store.record_dispatch(run_id, unit.unit_id, worker_id, at=at)
 
-    prompt = build_launch_prompt(worker_command, run_id, unit.unit_id, worker_id)
-    launch_stdout, _launch_stderr, _launch_rc = cli.launch_bg(
-        prompt, extra_args=extra_launch_args, env=env, cwd=cwd
-    )
-    short_id = _parse_launch_session_id(launch_stdout)
+    try:
+        claim = store.claim_unit(run_id, unit.unit_id, worker_id, at=at)
+    except Exception:
+        # The dispatch row is already open, and an open dispatch makes its
+        # unit permanently unreclaimable (see `reclaimable_units`). Close it
+        # before letting the claim failure out, so a unit this dispatcher
+        # could not claim is not also stranded for every later wave.
+        try:
+            store.settle_dispatch(run_id, unit.unit_id, outcome="claim_failed", at=at)
+        except Exception:  # noqa: BLE001 -- never mask the claim failure below
+            pass
+        raise
 
-    matched: Optional[SessionRecord] = None
-    if short_id is not None:
-        deadline = clock_fn() + launch_confirm_seconds
-        while True:
-            poll_stdout, _poll_stderr, poll_rc = cli.agents_json(all_sessions=True, env=env)
-            if poll_rc == 0:
-                try:
-                    parsed = parse_agents_json(poll_stdout)
-                except AgentsJsonParseError:
-                    parsed = None
-                if parsed is not None:
-                    matched = next((s for s in parsed.sessions if s.id == short_id), None)
-            if matched is not None:
-                break
-            if clock_fn() >= deadline:
-                break
-            sleep_fn(poll_interval_s)
-
-    if matched is None or matched.state == "failed":
-        store.settle_dispatch(
-            run_id,
-            unit.unit_id,
-            outcome="launch_failed",
-            session_id=matched.session_id if matched is not None else None,
-            at=at,
+    # EVERYTHING after the claim runs guarded. `build_launch_prompt` does
+    # real filesystem I/O (makedirs + write of the read envelope) and
+    # `cli.launch_bg` resolves an executable and spawns a process, so either
+    # can raise for reasons that have nothing to do with this unit. An
+    # unguarded raise here would leave the unit CLAIMED with a live lease
+    # AND holding an open dispatch row -- which `reclaimable_units` excludes,
+    # so nothing could ever recover it: `dispatch_wave`'s exit cleanup only
+    # settles dispatches it is TRACKING, and this one never got that far.
+    try:
+        prompt = build_launch_prompt(
+            worker_command, run_id, unit.unit_id, worker_id, claim.fencing_token
         )
-        if matched is not None:
-            try:
-                cli.rm(matched.id, env=env)
-            except Exception:  # noqa: BLE001 -- best-effort cleanup, never masks the error below
-                pass
-        raise LaunchMisconfigurationError(run_id, unit.unit_id, worker_id, short_id)
+        launch_stdout, _launch_stderr, _launch_rc = cli.launch_bg(
+            prompt, extra_args=extra_launch_args, env=env, cwd=cwd
+        )
+        short_id = _parse_launch_session_id(launch_stdout)
 
-    unit_row = store.get_unit(run_id, unit.unit_id)
+        matched: Optional[SessionRecord] = None
+        if short_id is not None:
+            deadline = clock_fn() + launch_confirm_seconds
+            while True:
+                poll_stdout, _poll_stderr, poll_rc = cli.agents_json(all_sessions=True, env=env)
+                if poll_rc == 0:
+                    try:
+                        parsed = parse_agents_json(poll_stdout)
+                    except AgentsJsonParseError:
+                        parsed = None
+                    if parsed is not None:
+                        matched = next((s for s in parsed.sessions if s.id == short_id), None)
+                if matched is not None:
+                    break
+                if clock_fn() >= deadline:
+                    break
+                sleep_fn(poll_interval_s)
+
+        if matched is None or matched.state == "failed":
+            # Release the claim taken above before settling: no worker ever
+            # started, so leaving the unit CLAIMED with a live lease would
+            # make it unclaimable until that lease expired, for nothing.
+            # Best-effort so a store failure here never masks the
+            # misconfiguration.
+            _release_claim_and_settle(
+                store,
+                run_id,
+                unit.unit_id,
+                claim.fencing_token,
+                session_id=matched.session_id if matched is not None else None,
+                at=at,
+            )
+            if matched is not None:
+                try:
+                    cli.rm(matched.id, env=env)
+                except Exception:  # noqa: BLE001 -- best-effort, never masks the error below
+                    pass
+            raise LaunchMisconfigurationError(run_id, unit.unit_id, worker_id, short_id)
+    except LaunchMisconfigurationError:
+        raise  # already released and settled by the branch above
+    except BaseException:
+        _release_claim_and_settle(store, run_id, unit.unit_id, claim.fencing_token, at=at)
+        raise
+
     return OpenDispatch(
         unit_id=unit.unit_id,
         worker_id=worker_id,
         session_id=matched.session_id,
         id=matched.id,
-        fencing_token=unit_row.fencing_token if unit_row is not None else 0,
-        claimed_by=unit_row.claimed_by if unit_row is not None else None,
+        fencing_token=claim.fencing_token,
+        claimed_by=worker_id,
     )
 
 
@@ -1125,10 +1558,12 @@ def supervise_tick(
       :func:`dispatch_wave`.
     - ``blocked`` (any reason) -- STOP renewing, with NO grace (ruling 1: a
       background session has been observed blocked for 19 days with nothing
-      timing it out, P12; renewing on ``blocked`` renews forever). The
-      dispatch is settled (``outcome="blocked"``) so the unit becomes
-      reclaimable once its lease naturally expires (D5) -- this dispatcher
-      never calls ``fail_unit`` for it.
+      timing it out, P12; renewing on ``blocked`` renews forever). Best-effort
+      ``stop`` + ``rm`` first, then the dispatch is settled
+      (``outcome="blocked"``) so the unit becomes reclaimable once its lease
+      naturally expires (D5) -- this dispatcher never calls ``fail_unit``
+      for it. The ``stop``/``rm`` are hygiene only; their return codes are
+      not inspected, so they do not establish that the session ended.
     - ``failed``/``stopped`` -- stop renewing, settle, classify (step 10).
     - ``done`` with the unit ACCEPTED -- the happy path: settle
       ``outcome="accepted"``, no classification.
@@ -1238,6 +1673,25 @@ def supervise_tick(
             )
             renewed.append(unit_id)
         elif state == "blocked":
+            # End the session before settling, mirroring the
+            # session_lingering branch above: settling removes this dispatch
+            # from the caller's ``open_dispatches``, so the wave's own exit
+            # cleanup will no longer stop/rm it and a still-live session
+            # would be leaked. Both calls are best-effort and must never
+            # stop the settle below, which is what frees the slot and makes
+            # the unit reclaimable once its lease expires.
+            #
+            # This is HYGIENE, not a fix for anything: ``stop``/``rm``
+            # return ``(stdout, stderr, rc)`` and this loop ignores a
+            # NONZERO rc as well as an exception, so a session that refuses
+            # to die is still left running. Handling the return codes is a
+            # separate piece of work; do not read these two calls as a
+            # guarantee that the session is gone.
+            for _verb in (cli.stop, cli.rm):
+                try:
+                    _verb(open_dispatch.id, env=env)
+                except Exception:  # noqa: BLE001 -- best-effort cleanup
+                    pass
             store.settle_dispatch(run_id, unit_id, outcome="blocked", at=now)
             settled[unit_id] = "blocked"
             # No classify_settled_failure here: a stalled worker is not a
@@ -1447,6 +1901,26 @@ def dispatch_wave(
     abandoned open on an abort path would strand its unit in every later
     wave.
 
+    CLAIM REFUSALS ARE ROUTINE, NOT WAVE-FATAL. The dispatcher claims
+    (:func:`dispatch_unit`), so the store's typed refusals now surface here
+    instead of inside a worker process, and exactly three are handled --
+    everything else, including any unexpected exception type, still
+    propagates:
+
+    - :class:`~content_pipeline.execution.model.TerminalStateError` and
+      :class:`~content_pipeline.execution.model.AlreadyClaimedError` -- the
+      unit stopped being dispatchable between candidate selection and the
+      claim (the accepted invariant-4 race: a still-live prior worker
+      settling its unit under a still-current token, since neither
+      ``accept_unit`` nor ``fail_unit`` checks lease expiry). SKIP that unit
+      and continue with the rest of the wave; it appears in ``settled`` as
+      ``claim_failed``.
+    - :class:`~content_pipeline.execution.model.RunHaltedError` -- the RUN
+      is halted, so dispatching more is wrong. The wave ends GRACEFULLY,
+      identically to an observed halt: ``halted`` is set, no further unit is
+      dispatched, already-open dispatches wind down, and a
+      :class:`DispatchReport` is returned.
+
     LIVENESS. The loop is bounded three ways, and the third exists because
     the first two are per-cause: ``aborted_reason`` (launch
     misconfiguration, lost dispatcher lease), the per-launch
@@ -1491,6 +1965,7 @@ def dispatch_wave(
     dispatched: List[str] = []
     accepted: List[str] = []
     settled_all: Dict[str, str] = {}
+    claim_refused: Set[str] = set()
     failed_exhausted: List[str] = []
     halted: Optional[str] = None
     status_digests: List[Dict[str, Any]] = []
@@ -1506,7 +1981,17 @@ def dispatch_wave(
             tick_now = _now()
             dispatched_before = len(dispatched)
             exhausted_before = len(failed_exhausted)
-            candidates = _select_dispatch_candidates(store, run_id, wave_unit_ids, at=tick_now)
+            candidates = [
+                u
+                for u in _select_dispatch_candidates(store, run_id, wave_unit_ids, at=tick_now)
+                # A unit whose claim this wave already refused is not
+                # dispatchable BY THIS WAVE. Excluding it is what makes the
+                # skip terminate: an `AlreadyClaimedError` unit can still be
+                # re-selected next tick, and re-attempting it every tick
+                # would spin (a refusal is not progress, so only the stall
+                # bound would ever end the wave).
+                if u.unit_id not in claim_refused
+            ]
             free_slots = max_agents - len(open_dispatches)
 
             if halted is None and free_slots > 0 and candidates:
@@ -1539,6 +2024,34 @@ def dispatch_wave(
                     except LaunchMisconfigurationError:
                         aborted_reason = "launch_misconfiguration"
                         break
+                    except RunHaltedError as exc:
+                        # The RUN is halted, so no further claim can succeed
+                        # and dispatching more is simply wrong. End the wave
+                        # the SAME way an observed halt ends it (the
+                        # `halted` field, the `halted is None` dispatch
+                        # guard, the wind-down of already-open dispatches) --
+                        # never by tearing it down: `halted` is a reportable
+                        # outcome here, not an abort. `claim_failed` is the
+                        # dispatch row `dispatch_unit` already wrote before
+                        # re-raising.
+                        halted = halted or exc.kind
+                        settled_all.setdefault(unit.unit_id, "claim_failed")
+                        break
+                    except (TerminalStateError, AlreadyClaimedError):
+                        # A ROUTINE race, not an error: between candidate
+                        # selection and this claim, the unit went terminal
+                        # or was claimed by someone else -- exactly the
+                        # duplicate-spend case invariant 4 accepts. Before
+                        # the dispatcher claimed, this refusal happened
+                        # inside the worker and never reached the wave.
+                        # The unit is no longer dispatchable BY THIS WAVE;
+                        # skip it and keep going. `dispatch_unit` settled
+                        # its dispatch row as `claim_failed` before
+                        # re-raising, which is what makes it visible in the
+                        # report's `settled` map.
+                        claim_refused.add(unit.unit_id)
+                        settled_all.setdefault(unit.unit_id, "claim_failed")
+                        continue
                     open_dispatches[opened.unit_id] = opened
                     dispatched.append(opened.unit_id)
                     if len(dispatched) % batch_size == 0:
@@ -1642,8 +2155,12 @@ def dispatch_wave(
 
 
 __all__ = [
+    "ANSWER_FENCE_PREFIX",
     "BILLING_DIVERTING_VARS",
     "AgentsJsonParseError",
+    "AnswerFenceError",
+    "AnswerFenceMismatchError",
+    "MissingAnswerFenceError",
     "ClaudeCli",
     "ClaudeExecutableNotFoundError",
     "DispatchReport",
@@ -1663,7 +2180,9 @@ __all__ = [
     "dispatch_unit",
     "dispatch_wave",
     "enumerate_worker_invocations",
+    "format_fenced_answer",
     "parse_agents_json",
+    "parse_fenced_answer",
     "preflight",
     "reclaim_attempt_count",
     "reclaimable_units",

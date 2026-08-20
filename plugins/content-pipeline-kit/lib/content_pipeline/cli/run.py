@@ -36,12 +36,56 @@ verbs need which of them.
    argument, or an explicit ``-``, reads the envelope from stdin as UTF-8
    bytes. This is the form to document and to use.
 2. **``@<path>``.** A positional argument starting with ``@`` reads the
-   envelope from that file, also as UTF-8.
+   envelope from that file, also as UTF-8. This is the WORKER-LANE form: a
+   ``claude --bg`` worker session (``execution/drivers/claude_bg.py``'s
+   ``enumerate_worker_invocations``) has no practical way to compose a shell
+   redirect into stdin, but writing a small JSON file with the Write tool and
+   naming it in an otherwise-constant argv string is exactly what keeps a
+   pre-authorized allowlist entry possible (P5) -- see that module's
+   docstring.
 3. **Positional argv (discouraged, kept for back-compat).** A positional
    argument that is neither absent, ``-``, nor ``@``-prefixed is treated as
    the literal envelope JSON, exactly as A-min.3 originally shipped it in
    0.9.0. Kept working so existing callers do not break, but discouraged: see
    below for why.
+
+**``--text-file=<path>`` (worker-lane companion to ``@<path>``).** When
+present, this flag's file is read as UTF-8 and spliced into the decoded
+envelope's ``payload["text"]`` BEFORE the envelope reaches
+:func:`~content_pipeline.execution.protocol.dispatch` -- it never touches
+``execution/protocol.py`` itself, which still knows nothing about files; this
+module owns the splice, same as it owns envelope sourcing. It exists because
+a worker's ``submit`` envelope carries a fencing token only known at runtime
+(so it cannot be part of a pre-allowlisted, deterministic invocation string --
+P5) while the answer TEXT can be arbitrarily long and is exactly the kind of
+content that does not belong in a command line at all. Splitting the two --
+``@<path>`` for the small, worker-authored envelope; ``--text-file=`` for the
+large, freeform answer -- keeps both inputs out of argv while letting the
+overall invocation string stay constant across every unit. The flag MUST use
+the ``--key=value`` form (``_split_flags`` below only recognizes ``=``-joined
+flags as taking a value; ``--text-file <path>`` would parse as a bare boolean
+flag plus a stray positional, and the submission would see no text at all).
+A file argument that cannot be read (missing, not UTF-8) returns the same
+typed ``{"ok": false, "error": {...}}`` shape as a bad ``@<path>`` envelope
+file, never a bare traceback.
+
+**The spliced file is FENCED, and the fence is checked here.** The answer
+path is deliberately generation-neutral (see
+``execution/drivers/claude_bg.py``'s ``answer_path_for``: no ``worker_id``,
+because P5 allowlisting needs the path computable before the run), so two
+successive dispatches of one unit write the SAME file -- and a session left
+alive by an earlier dispatch can overwrite it while a newer worker is
+running. Fencing the envelope's TOKEN alone does not catch that: the newer
+worker's envelope is perfectly valid, and it would splice whatever text
+currently sits at the path. So the ARTIFACT declares its own generation:
+its first line is ``content-pipeline-fence: <token>``, and this splice
+matches that declaration against ``payload["fencing_token"]`` before
+handing anything to ``protocol.dispatch``
+(``claude_bg.parse_fenced_answer``). A stale artifact under a current
+envelope, a current artifact under a stale envelope, and an artifact with
+no fence line at all are each refused with a typed reply -- never spliced
+and never treated as unfenced-and-fine. Only the first line is interpreted,
+so answer text that itself contains the prefix passes through untouched.
 
 **Why stdin is preferred, not merely tidier.** With the envelope in argv,
 every unit produces a DIFFERENT command string (the JSON payload varies per
@@ -330,7 +374,7 @@ def build_commands(
         handlers = build_handlers(store, adapter, **protocol_policy)
 
         def protocol(args: List[str]) -> Any:
-            positional, _flags = _split_flags(args)
+            positional, flags = _split_flags(args)
             if not positional or positional[0] == "-":
                 # Preferred form (see module docstring): stdin, decoded as
                 # UTF-8 explicitly -- never the platform default, which on
@@ -388,6 +432,82 @@ def build_commands(
                     "ok": False,
                     "error": {"type": "MalformedEnvelopeError", "message": f"invalid JSON: {exc}"},
                 }
+
+            if "text-file" in flags:
+                # Worker-lane companion to '@<path>' (see module docstring):
+                # splice a UTF-8 file's content into payload["text"] BEFORE
+                # dispatch. Trusted argv, never the payload -- the path comes
+                # from the invocation string a mount owner pre-authorized,
+                # not from anything inside the envelope itself. Must use the
+                # '--text-file=<path>' form: _split_flags only recognizes an
+                # '='-joined flag as carrying a value.
+                text_path = flags["text-file"]
+                try:
+                    text_content = Path(text_path).read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    return {
+                        "ok": False,
+                        "error": {
+                            "type": "MissingTextFileError",
+                            "message": f"text file not found: {text_path!r}",
+                        },
+                    }
+                except OSError as exc:
+                    return {
+                        "ok": False,
+                        "error": {
+                            "type": "MissingTextFileError",
+                            "message": f"could not read text file {text_path!r}: {exc}",
+                        },
+                    }
+                except UnicodeDecodeError as exc:
+                    return {
+                        "ok": False,
+                        "error": {
+                            "type": "MalformedEnvelopeError",
+                            "message": f"text file {text_path!r} is not valid UTF-8: {exc}",
+                        },
+                    }
+                if isinstance(envelope, dict):
+                    payload = envelope.get("payload")
+                    if not isinstance(payload, dict):
+                        payload = {}
+                    # The answer artifact's own fence (see the module
+                    # docstring's "--text-file=" section): the file's first
+                    # line declares the fencing token its text was produced
+                    # under, and it must equal the token this envelope
+                    # presents. Deferred import so a mount that never uses
+                    # the worker lane never pays for the driver module.
+                    from content_pipeline.execution.drivers.claude_bg import (
+                        AnswerFenceError,
+                        parse_fenced_answer,
+                    )
+
+                    try:
+                        expected_token = int(payload["fencing_token"])
+                    except (KeyError, TypeError, ValueError):
+                        return {
+                            "ok": False,
+                            "error": {
+                                "type": "MissingAnswerFenceError",
+                                "message": (
+                                    "'--text-file=' requires the envelope to "
+                                    "carry an integer payload 'fencing_token' "
+                                    "to match the answer artifact's fence "
+                                    "line against"
+                                ),
+                            },
+                        }
+                    try:
+                        text_content = parse_fenced_answer(text_content, expected_token)
+                    except AnswerFenceError as exc:
+                        return {
+                            "ok": False,
+                            "error": {"type": type(exc).__name__, "message": str(exc)},
+                        }
+                    payload["text"] = text_content
+                    envelope["payload"] = payload
+
             return protocol_dispatch(envelope, handlers)
 
         commands["protocol"] = Command(
@@ -395,9 +515,12 @@ def build_commands(
             handler=protocol,
             help=(
                 "Dispatch one JSON worker-protocol envelope (execution.protocol). "
-                "Reads stdin by default (preferred); '@<path>' reads a file; a "
-                "literal JSON positional argument is accepted for back-compat "
-                "but discouraged -- see this module's docstring."
+                "Reads stdin by default (preferred); '@<path>' reads a file (the "
+                "worker-lane form) -- optionally paired with "
+                "'--text-file=<path>' to splice a UTF-8 file's content into "
+                "payload['text']; a literal JSON positional argument is "
+                "accepted for back-compat but discouraged -- see this "
+                "module's docstring."
             ),
         )
 

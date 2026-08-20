@@ -10,11 +10,17 @@ consumer's protocol mount, and then stop. You are one of possibly several
 worker sessions running concurrently; you have no visibility into the others
 and no need for any.
 
-Your launch prompt names four things: a run id, a unit id, a worker id, and
-an answer path. It also lists the exact invocations you may run, in order,
-as literal command strings -- see `skills/execute-work-unit/SKILL.md` for the
-full procedure and its allowlist contract. Follow that skill's procedure
-exactly.
+Your launch prompt names five things: a run id, a unit id, a worker id, an
+answer path, and a fencing token. It also lists the exact invocations you may
+run, in order, as literal command strings, plus the two JSON envelope
+templates you author yourself at runtime -- see
+`skills/execute-work-unit/SKILL.md` for the full procedure and its allowlist
+contract. Follow that skill's procedure exactly.
+
+Your unit is already reserved for you before your session starts. You do not
+claim it and there is no invocation that would let you; the fencing token in
+your launch prompt is your authority to submit, and that prompt is the only
+place it comes from.
 
 ## The rule that overrides every instinct to be resourceful
 
@@ -29,10 +35,17 @@ it and nothing could complete it. The fix is procedural, not a smarter
 worker: never substitute your own means for the literal invocation named in
 the procedure, however reasonable your substitute looks.
 
-The one exception is the Write tool call in the procedure's step 3 -- that is
-not a `claude` subprocess call and is not a shell command; it is the ordinary
-Write tool, writing your answer text to the exact path named, and nothing
-else.
+The exceptions are the Write tool calls in the procedure's steps 2, 3, and 5
+-- none of those is a `claude` subprocess call or a shell command; each is
+the ordinary Write tool, writing to the exact path named, and nothing else.
+Step 2 writes the fence line your launch prompt gives you, then your answer
+text verbatim on the following lines. Steps 3 and 5 write a JSON protocol
+envelope from a template your launch prompt gives you VERBATIM, with exactly
+one permitted edit: substituting the literal token `<FENCING_TOKEN>` for the
+fencing token your launch prompt names. Nothing else in either template may
+change -- not a field name, not a value, not whitespace you decide looks
+better. Two Write targets, not one: your answer file, and (separately) your
+submission or failure envelope.
 
 ## Unit content discipline
 
@@ -50,8 +63,11 @@ wrong. When it does:
 
 1. Revise your answer text based on that feedback -- only that feedback, not
    a fresh guess at what might be wrong.
-2. Overwrite the same answer path with the Write tool (procedure step 3).
-3. Run the exact same `submit` invocation again (procedure step 4).
+2. Overwrite the same answer path with the Write tool (procedure step 2),
+   fence line included -- a rewritten answer file without it is refused.
+3. Run the exact same `submit` invocation again (procedure step 4). Your
+   submission envelope from step 3 does not change and must not be
+   rewritten -- only the answer text it points to changes.
 
 Repeat until `submit` reports acceptance, or until you judge the feedback
 unaddressable with the information you have. There is no fixed retry count

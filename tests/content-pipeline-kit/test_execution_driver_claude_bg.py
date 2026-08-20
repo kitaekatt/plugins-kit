@@ -15,14 +15,17 @@ import json
 import os
 import subprocess
 import sys
+import textwrap
 
 import pytest
 
 from content_pipeline.execution.adapter import RunAdapter, WorkerEnvironment
 from content_pipeline.execution.drivers import claude_bg
 from content_pipeline.execution.drivers.claude_bg import (
+    ANSWER_FENCE_PREFIX,
     BILLING_DIVERTING_VARS,
     AgentsJsonParseError,
+    AnswerFenceMismatchError,
     ClaudeCli,
     ClaudeExecutableNotFoundError,
     DispatchReport,
@@ -39,18 +42,25 @@ from content_pipeline.execution.drivers.claude_bg import (
     compose_worker_environment,
     dispatch_unit,
     dispatch_wave,
+    envelope_path_for,
     enumerate_worker_invocations,
+    format_fenced_answer,
     parse_agents_json,
+    parse_fenced_answer,
     preflight,
     reclaim_attempt_count,
     reclaimable_units,
     supervise_tick,
+    worker_envelopes_for,
 )
 from content_pipeline.execution.model import (
+    AlreadyClaimedError,
     AttemptKind,
     NoOpenDispatchError,
+    RunHaltedError,
     RunRecord,
     StaleDispatcherLeaseError,
+    TerminalStateError,
     UnitState,
 )
 from content_pipeline.execution.store import ExecutionStore
@@ -819,8 +829,22 @@ def test_recheck_after_cwd_completion_is_a_check_not_a_second_subtraction(tmp_pa
 
 
 # -- the real subprocess protocol-mount verification (spec's sharpest test) --
+#
+# Invariant 8 coverage, RETARGETED. This used to drive the `claim` verb,
+# because `claim` was the worker's first invocation and therefore the first
+# thing `_require_compatible_run` refused a mismatched worker on. The
+# DISPATCHER claims now (see `dispatch_unit`), so `claim` is no longer a
+# worker verb at all and the environment refusal has to be demonstrated on
+# `read` -- the worker's actual first invocation -- with `submit` alongside
+# it, since the load-bearing property is that a mismatched worker can never
+# get OUTPUT ACCEPTED.
+#
+# What genuinely narrowed, and is asserted rather than assumed: a mismatched
+# worker now CONSUMES A SESSION and holds the dispatcher's lease until its
+# `read` is refused, where previously its `claim` was refused and the unit
+# stayed pending. No wrong-root output can be accepted either way.
 
-_SUBPROCESS_CLAIM_SCRIPT = r"""
+_SUBPROCESS_VERB_SCRIPT = r"""
 import json
 import sys
 
@@ -831,7 +855,8 @@ from content_pipeline.execution.protocol import PROTOCOL_VERSION, build_handlers
 from content_pipeline.execution.store import ExecutionStore
 from content_pipeline.pipeline.workunit import FlatChunkStrategy
 
-db_path, run_id, unit_id, worker_id = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+db_path, run_id, unit_id, worker_id, verb = sys.argv[2:7]
+extra = json.loads(sys.argv[7]) if len(sys.argv) > 7 else {}
 
 store = ExecutionStore(db_path)
 adapter = RunAdapter(
@@ -841,19 +866,23 @@ adapter = RunAdapter(
     environment=WorkerEnvironment(required_vars=("CONTENT_ROOT",), require_cwd=True),
 )
 handlers = build_handlers(store, adapter, strategy=FlatChunkStrategy(select=lambda s: []))
-envelope = {
-    "protocol_version": PROTOCOL_VERSION,
-    "verb": "claim",
-    "payload": {"run_id": run_id, "unit_id": unit_id, "worker_id": worker_id},
-}
+payload = {"run_id": run_id, "unit_id": unit_id, "worker_id": worker_id}
+payload.update(extra)
+envelope = {"protocol_version": PROTOCOL_VERSION, "verb": verb, "payload": payload}
 result = dispatch(envelope, handlers)
 print(json.dumps(result))
 """
 
 
-def _run_claim_subprocess(env, cwd, db_path, run_id, unit_id, worker_id):
+def _run_verb_subprocess(env, cwd, db_path, run_id, unit_id, worker_id, verb, **extra):
+    argv = [
+        sys.executable, "-c", _SUBPROCESS_VERB_SCRIPT, LIB_ROOT, str(db_path),
+        run_id, unit_id, worker_id, verb,
+    ]
+    if extra:
+        argv.append(json.dumps(extra))
     proc = subprocess.run(
-        [sys.executable, "-c", _SUBPROCESS_CLAIM_SCRIPT, LIB_ROOT, str(db_path), run_id, unit_id, worker_id],
+        argv,
         capture_output=True,
         text=True,
         env=env,
@@ -886,13 +915,13 @@ def _seed_environment_run(tmp_path):
     return store, db_path, worker_cwd, recorded_content_root
 
 
-def test_composed_environment_makes_a_real_worker_claim_succeed(tmp_path):
+def test_composed_environment_makes_a_real_worker_read_succeed(tmp_path):
     """The environment verification that matters: dispatch a run whose
     WorkerEnvironment declares required_vars=("CONTENT_ROOT",),
     require_cwd=True from a process whose CONTENT_ROOT differs from the
     run's snapshot, and observe -- through a REAL protocol.build_handlers
-    mount in a subprocess with the COMPOSED environment -- that its claim
-    verb SUCCEEDS."""
+    mount in a subprocess with the COMPOSED environment -- that the worker's
+    FIRST verb, `read`, SUCCEEDS and returns real prepared content."""
     store, db_path, worker_cwd, recorded_content_root = _seed_environment_run(tmp_path)
     run = store.get_run("run-1")
     adapter = RunAdapter(environment=WorkerEnvironment(required_vars=("CONTENT_ROOT",), require_cwd=True))
@@ -905,24 +934,55 @@ def test_composed_environment_makes_a_real_worker_claim_succeed(tmp_path):
     assert cwd == str(worker_cwd)
     assert child_env["CONTENT_ROOT"] == recorded_content_root
 
-    result = _run_claim_subprocess(child_env, cwd, db_path, "run-1", "u0", "worker-1")
+    result = _run_verb_subprocess(child_env, cwd, db_path, "run-1", "u0", "worker-1", "read")
     assert result["ok"] is True, result
+    assert result["result"]["user"] == "user:u0"
+
+    # ACCEPT DIRECTION, the whole point: a matching worker CAN get output
+    # accepted. The dispatcher claims first, as it does in production.
+    claim = store.claim_unit("run-1", "u0", "worker-1")
+    result = _run_verb_subprocess(
+        child_env, cwd, db_path, "run-1", "u0", "worker-1", "submit",
+        fencing_token=claim.fencing_token, text="the answer",
+    )
+    assert result["ok"] is True, result
+    assert result["result"]["accepted"] is True
+    assert store.get_unit("run-1", "u0").accepted_text == "the answer"
 
 
-def test_without_the_overlay_a_real_worker_claim_is_refused(tmp_path):
-    """The mirror: without the overlay (the raw dispatcher environment,
-    mismatched CONTENT_ROOT and cwd), claim returns
-    WorkerEnvironmentMismatchError. This is what proves the accept-case test
-    above tests anything at all."""
-    _store, db_path, _worker_cwd, _recorded_content_root = _seed_environment_run(tmp_path)
+def test_without_the_overlay_a_real_worker_is_refused_and_can_never_be_accepted(tmp_path):
+    """The mirror, and the property that actually matters after the
+    dispatcher took over claiming: without the overlay (the raw dispatcher
+    environment, mismatched CONTENT_ROOT and cwd), `read` is refused with
+    WorkerEnvironmentMismatchError -- and so is `submit`, even holding a
+    perfectly VALID fencing token. A mismatched worker can consume a session
+    now (it is launched against an already-claimed unit), but it can never
+    get output ACCEPTED, which is what invariant 8 is for."""
+    store, db_path, _worker_cwd, _recorded_content_root = _seed_environment_run(tmp_path)
 
     mismatched_env = dict(os.environ)
     mismatched_env["CONTENT_ROOT"] = str(tmp_path / "wrong_root")
     mismatched_cwd = str(tmp_path)  # not worker_cwd
 
-    result = _run_claim_subprocess(mismatched_env, mismatched_cwd, db_path, "run-1", "u0", "worker-1")
+    result = _run_verb_subprocess(
+        mismatched_env, mismatched_cwd, db_path, "run-1", "u0", "worker-1", "read"
+    )
     assert result["ok"] is False
     assert result["error"]["type"] == "WorkerEnvironmentMismatchError"
+
+    # The dispatcher's claim is real and its token is current -- the ONLY
+    # thing wrong is the worker's environment.
+    claim = store.claim_unit("run-1", "u0", "worker-1")
+    result = _run_verb_subprocess(
+        mismatched_env, mismatched_cwd, db_path, "run-1", "u0", "worker-1", "submit",
+        fencing_token=claim.fencing_token, text="wrong-root output",
+    )
+    assert result["ok"] is False
+    assert result["error"]["type"] == "WorkerEnvironmentMismatchError"
+
+    unit = store.get_unit("run-1", "u0")
+    assert unit.state is not UnitState.ACCEPTED
+    assert unit.accepted_text is None
 
 
 # ===========================================================================
@@ -940,7 +1000,13 @@ def _seeded_dispatch_store(tmp_path, *, unit_ids=("u0",)) -> ExecutionStore:
 def _worker_command(tmp_path) -> WorkerCommand:
     answer_dir = tmp_path / "answers"
     answer_dir.mkdir(exist_ok=True)
-    return WorkerCommand(argv=("python", "mytool.py", "run"), answer_dir=str(answer_dir))
+    envelope_dir = tmp_path / "envelopes"
+    envelope_dir.mkdir(exist_ok=True)
+    return WorkerCommand(
+        argv=("python", "mytool.py", "run"),
+        answer_dir=str(answer_dir),
+        envelope_dir=str(envelope_dir),
+    )
 
 
 def _bg_record(*, id="a1b2c3d4", session_id="sess-1", state="working", **extra):
@@ -977,16 +1043,35 @@ def test_enumerate_worker_invocations_are_exact_and_deterministic(tmp_path):
     second = enumerate_worker_invocations(wc, "run-1", "u0", "worker-a")
     assert first == second
 
-    claim_cmd, read_cmd, submit_cmd, fail_cmd, write_cmd = first
-    for cmd in (claim_cmd, read_cmd, fail_cmd):
-        assert "run-1" in cmd and "u0" in cmd and "worker-a" in cmd
-    assert "claim" in claim_cmd
-    assert "read" in read_cmd
-    assert "submit" in submit_cmd and "--from-file" in submit_cmd
+    assert len(first) == 6
+    (
+        read_cmd,
+        submit_cmd,
+        fail_cmd,
+        write_answer_cmd,
+        write_submit_cmd,
+        write_fail_cmd,
+    ) = first
+    for cmd in (read_cmd, submit_cmd, fail_cmd):
+        assert "protocol" in cmd and "@" in cmd
     answer_path = answer_path_for(wc, "run-1", "u0")
+    assert "submit" not in read_cmd  # no verb leaks across a different verb's path
+    assert "--text-file=" in submit_cmd
     assert answer_path in submit_cmd
-    assert "fail" in fail_cmd
-    assert answer_path in write_cmd
+    assert answer_path in write_answer_cmd
+    # The dispatcher claims (see dispatch_unit), so no worker invocation is
+    # a claim and no claim envelope is ever named.
+    for cmd in first:
+        assert "claim" not in cmd.lower()
+    assert envelope_path_for(wc, "run-1", "u0", "read") in read_cmd
+    assert envelope_path_for(wc, "run-1", "u0", "submit") in submit_cmd
+    assert envelope_path_for(wc, "run-1", "u0", "submit") in write_submit_cmd
+    assert envelope_path_for(wc, "run-1", "u0", "fail") in fail_cmd
+    assert envelope_path_for(wc, "run-1", "u0", "fail") in write_fail_cmd
+    # No invocation ever carries a fencing token -- it is not known until
+    # AFTER `claim` runs (P5's determinism constraint).
+    for cmd in first:
+        assert "fencing" not in cmd.lower()
 
 
 def test_enumerate_worker_invocations_differ_per_unit(tmp_path):
@@ -1008,7 +1093,7 @@ def test_answer_path_for_is_deterministic_and_unit_specific(tmp_path):
 
 def test_build_launch_prompt_names_ids_and_carries_invocations_verbatim(tmp_path):
     wc = _worker_command(tmp_path)
-    prompt = build_launch_prompt(wc, "run-1", "u0", "worker-a")
+    prompt = build_launch_prompt(wc, "run-1", "u0", "worker-a", 42)
     invocations = enumerate_worker_invocations(wc, "run-1", "u0", "worker-a")
 
     assert "run-1" in prompt
@@ -1017,6 +1102,43 @@ def test_build_launch_prompt_names_ids_and_carries_invocations_verbatim(tmp_path
     for inv in invocations:
         assert inv in prompt, f"invocation not carried verbatim: {inv!r}"
     assert answer_path_for(wc, "run-1", "u0") in prompt
+
+
+def test_launch_prompt_carries_the_real_fencing_token_and_no_claim_step(tmp_path):
+    """The token the DISPATCHER's claim returned reaches the worker here, in
+    the prompt -- and nowhere else. The prompt names it literally, offers no
+    claim step to obtain one, and still hands the worker the submit/fail
+    TEMPLATES with ``<FENCING_TOKEN>`` unsubstituted (the worker substitutes;
+    only the SOURCE of the value changed).
+
+    MUTATION: interpolate the token into the templates directly (in
+    ``_envelope_payload_text``) -- the template assertions here go red, and
+    so does ``test_no_enumerated_invocation_carries_a_fencing_token``, the
+    P5 anchor, since the templates feed the enumerated Write-tool targets'
+    own envelopes."""
+    wc = _worker_command(tmp_path)
+    token = 987654
+    prompt = build_launch_prompt(wc, "run-1", "u0", "worker-a", token)
+
+    assert str(token) in prompt
+    # No claim invocation, no claim envelope, and no instruction to claim.
+    assert "claim" not in prompt.lower()
+    assert not os.path.exists(envelope_path_for(wc, "run-1", "u0", "claim"))
+    # The read envelope IS pre-written; submit/fail are the worker's job.
+    assert os.path.exists(envelope_path_for(wc, "run-1", "u0", "read"))
+    assert not os.path.exists(envelope_path_for(wc, "run-1", "u0", "submit"))
+    assert not os.path.exists(envelope_path_for(wc, "run-1", "u0", "fail"))
+
+    # The templates still carry the placeholder verbatim.
+    envelopes = worker_envelopes_for(wc, "run-1", "u0", "worker-a")
+    for verb in ("submit", "fail"):
+        template = envelopes[verb][1]
+        assert "<FENCING_TOKEN>" in template
+        assert str(token) not in template
+        assert template in prompt or textwrap.indent(template, "     ") in prompt
+
+    # The fence line the worker must put on its answer artifact.
+    assert f"{ANSWER_FENCE_PREFIX} {token}" in prompt
 
 
 # ===========================================================================
@@ -1143,9 +1265,6 @@ def test_dispatch_unit_confirms_via_observed_transition_not_via_banner(tmp_path)
     cli = _cli(runner)
 
     unit = _pending_unit(store, "run-1", "u0")
-    # Simulate the worker itself claiming under the SAME worker_id the
-    # driver minted (the author ruling).
-    store.claim_unit("run-1", "u0", "worker-fixed", at=1000.0)
 
     opened = dispatch_unit(
         store, "run-1", unit, cli, wc,
@@ -1155,6 +1274,120 @@ def test_dispatch_unit_confirms_via_observed_transition_not_via_banner(tmp_path)
     assert opened.id == "a1b2c3d4"
     assert opened.worker_id == "worker-fixed"
     assert opened.claimed_by == "worker-fixed"
+
+
+def test_dispatch_unit_holds_the_claim_before_the_launch(tmp_path):
+    """Part D: the DISPATCHER claims, before ``cli.launch_bg`` -- observed
+    from INSIDE the fake launcher, which is the only place that ordering is
+    visible. The returned OpenDispatch carries that claim's OWN values, not
+    a post-confirmation read of the store.
+
+    MUTATION A: move ``store.claim_unit`` after ``cli.launch_bg`` -- the
+    in-launcher assertions go red (the unit is still PENDING at launch, and
+    the prompt has no real token to name).
+    MUTATION B: revert to capturing the fence from a post-confirm
+    ``store.get_unit`` -- ``test_..._capture_is_exact_when_a_worker_claims_
+    after_confirmation`` below goes red."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    runner = FakeRunner()
+    runner.script(("claude", "--bg"), ("backgrounded * a1b2c3d4", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="a1b2c3d4", session_id="sess-xyz", state="working")]), "", 0),
+    )
+    cli = _cli(runner)
+    unit = _pending_unit(store, "run-1", "u0")
+
+    observed = {}
+    original_launch = cli.launch_bg
+
+    def fake_launch(prompt, **kwargs):
+        row = store.get_unit("run-1", "u0")
+        observed["state"] = row.state
+        observed["claimed_by"] = row.claimed_by
+        observed["fencing_token"] = row.fencing_token
+        observed["prompt"] = prompt
+        return original_launch(prompt, **kwargs)
+
+    cli.launch_bg = fake_launch  # type: ignore[assignment]
+
+    opened = dispatch_unit(
+        store, "run-1", unit, cli, wc,
+        worker_id="worker-fixed", sleep_fn=lambda s: None, clock_fn=lambda: 1000.0, at=1000.0,
+    )
+
+    # Already CLAIMED, by the minted worker_id, at the moment of launch.
+    assert observed["state"] is UnitState.CLAIMED
+    assert observed["claimed_by"] == "worker-fixed"
+    # ... and the launch prompt names that claim's own token.
+    assert f"Fencing token: {observed['fencing_token']}" in observed["prompt"]
+
+    # The OpenDispatch carries the claim's own values.
+    assert opened.fencing_token == observed["fencing_token"]
+    assert opened.claimed_by == "worker-fixed"
+
+
+def test_dispatch_unit_captures_the_fence_by_construction_never_by_re_reading(tmp_path):
+    """MUTATION B's target, stated as the property rather than the race.
+
+    The capture used to be a ``store.get_unit`` read taken AFTER the
+    launch-confirmation poll, which raced the worker's own claim: a worker
+    that claimed after confirmation left the dispatcher holding a PRE-claim
+    fence, ``supervise_tick``'s drift guard dropped the slot, ``dropped``
+    does no store write, so the dispatch row was never settled and the unit
+    became permanently unreclaimable.
+
+    That race is closed by construction: the dispatcher holds the claim, so
+    the fence is the value it was handed, and nothing after the launch may
+    re-derive it. Asserted directly -- zero ``get_unit`` reads once the
+    launch has begun.
+
+    MUTATION B: reinstate the post-confirm ``unit_row = store.get_unit(...)``
+    capture -- the read count below goes to 1 -> red."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    runner = FakeRunner()
+    runner.script(("claude", "--bg"), ("backgrounded * a1b2c3d4", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="a1b2c3d4", session_id="sess-xyz", state="working")]), "", 0),
+    )
+    cli = _cli(runner)
+    unit = _pending_unit(store, "run-1", "u0")
+
+    launched = {"yet": False}
+    reads_after_launch = []
+    original_get_unit = store.get_unit
+
+    def _spy_get_unit(*args, **kwargs):
+        if launched["yet"]:
+            reads_after_launch.append(args)
+        return original_get_unit(*args, **kwargs)
+
+    store.get_unit = _spy_get_unit  # type: ignore[assignment]
+
+    original_launch = cli.launch_bg
+
+    def fake_launch(prompt, **kwargs):
+        launched["yet"] = True
+        return original_launch(prompt, **kwargs)
+
+    cli.launch_bg = fake_launch  # type: ignore[assignment]
+
+    opened = dispatch_unit(
+        store, "run-1", unit, cli, wc,
+        worker_id="worker-fixed", sleep_fn=lambda s: None, clock_fn=lambda: 1000.0, at=1000.0,
+    )
+
+    assert reads_after_launch == [], (
+        "dispatch_unit re-read the unit after launching; the fence/claimant "
+        "capture must be the dispatcher's own claim values, not a read that "
+        "races the worker"
+    )
+    row = original_get_unit("run-1", "u0")
+    assert opened.fencing_token == row.fencing_token
+    assert opened.claimed_by == row.claimed_by == "worker-fixed"
 
 
 def test_dispatch_unit_duplicate_suppression_bites_before_any_launch_spend(tmp_path):
@@ -1196,6 +1429,44 @@ def test_dispatch_unit_state_failed_within_window_is_launch_misconfiguration(tmp
     assert store.open_dispatches("run-1") == []  # settled, not left open
     rm_calls = [argv for argv, _kwargs in runner.calls if len(argv) >= 2 and argv[1] == "rm"]
     assert rm_calls and rm_calls[0][2] == "badbad01"
+
+
+def test_launch_misconfiguration_releases_the_dispatcher_held_claim(tmp_path):
+    """The dispatcher claims before launching, so a launch that never
+    reaches a confirmed state must give the claim back: no worker ever
+    started, and a unit left CLAIMED with a live lease on behalf of a
+    session that does not exist is unclaimable for the whole lease.
+
+    MUTATION: delete the ``store.fail_unit`` release in ``dispatch_unit``'s
+    misconfiguration branch -- the unit stays CLAIMED here -> red."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    runner = FakeRunner()
+    runner.script(("claude", "--bg"), ("backgrounded * badbad01", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="badbad01", session_id="sess-bad", state="failed")]), "", 0),
+    )
+    runner.script(("claude", "rm"), ("removed", "", 0))
+    cli = _cli(runner)
+    unit = _pending_unit(store, "run-1", "u0")
+
+    with pytest.raises(LaunchMisconfigurationError):
+        dispatch_unit(
+            store, "run-1", unit, cli, wc, worker_id="worker-a",
+            clock_fn=lambda: 1000.0, at=1000.0,
+        )
+
+    row = store.get_unit("run-1", "u0")
+    assert row.state is UnitState.PENDING, (
+        f"unit left {row.state!r} after a launch that never started a worker"
+    )
+    assert row.claimed_by is None
+    assert row.lease_expires_at is None
+    # ACCEPT DIRECTION: the release is a RETRY, never a terminal failure --
+    # the unit must be immediately dispatchable again.
+    assert store.open_dispatches("run-1") == []
+    assert [u.unit_id for u in store.list_units("run-1") if u.state is UnitState.PENDING] == ["u0"]
 
 
 def test_dispatch_unit_never_appearing_is_launch_misconfiguration(tmp_path):
@@ -1433,6 +1704,88 @@ def test_supervise_tick_blocked_stops_renewing_with_no_grace(tmp_path):
     assert original_expiry <= 1051.0
     reclaimable = reclaimable_units(store, "run-1", at=1051.0)
     assert [u.unit_id for u in reclaimable] == ["u0"]
+
+
+def test_supervise_tick_blocked_stops_and_rms_the_session(tmp_path):
+    """Part C, hygiene: the ``blocked`` branch ends the session before
+    settling, mirroring the ``session_lingering`` branch -- settling removes
+    the dispatch from ``open_dispatches``, so the wave's exit cleanup will
+    no longer stop/rm it and a live session would be leaked.
+
+    This is NOT the fix for the claim collision, and must not be read as
+    one: ``stop``/``rm`` return ``(stdout, stderr, rc)`` and this loop
+    ignores a nonzero rc as well as an exception, so a session that refuses
+    to die is still left running.
+
+    MUTATION 1: remove the two calls -> the argv assertions go red.
+    MUTATION 2: move them AFTER an unguarded ``settle_dispatch`` -> the
+    ordering assertion goes red."""
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0, lease_seconds=50.0)
+
+    order = []
+
+    def _runner(argv, **kwargs):
+        argv = list(argv)
+        if argv[1:3] == ["agents", "--json"]:
+            return (
+                json.dumps([_bg_record(id="short1", session_id="sess-1", state="blocked")]),
+                "",
+                0,
+            )
+        order.append(argv)
+        return ("", "", 0)
+
+    cli = ClaudeCli(executable="claude", runner=_runner)
+
+    original_settle = store.settle_dispatch
+
+    def _settle(*args, **kwargs):
+        order.append(["settle_dispatch"])
+        return original_settle(*args, **kwargs)
+
+    store.settle_dispatch = _settle  # type: ignore[assignment]
+
+    result = supervise_tick(store, "run-1", cli, RunAdapter(), {"u0": od}, at=1010.0)
+
+    assert result.settled == {"u0": "blocked"}
+    assert ["claude", "stop", "short1"] in order
+    assert ["claude", "rm", "short1"] in order
+    # ... both BEFORE the settle, which is what stops the wave's exit
+    # cleanup from being the only thing that could have ended the session.
+    assert order.index(["claude", "stop", "short1"]) < order.index(["settle_dispatch"])
+    assert order.index(["claude", "rm", "short1"]) < order.index(["settle_dispatch"])
+
+
+def test_supervise_tick_blocked_settles_even_when_stop_raises(tmp_path):
+    """The ACCEPT direction of the same change: ``stop``/``rm`` are
+    best-effort, so an unreachable daemon must not keep the dispatch open --
+    that is the liveness defect all over again. Mirrors
+    ``test_supervise_tick_settles_a_lingering_session_even_when_stop_fails``.
+
+    MUTATION: drop the try/except around the two lifecycle calls -- the
+    raised error escapes the tick -> red."""
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0, lease_seconds=50.0)
+
+    def _runner(argv, **kwargs):
+        argv = list(argv)
+        if argv[1:3] == ["agents", "--json"]:
+            return (
+                json.dumps([_bg_record(id="short1", session_id="sess-1", state="blocked")]),
+                "",
+                0,
+            )
+        raise OSError("the daemon is gone")
+
+    cli = ClaudeCli(executable="claude", runner=_runner)
+
+    result = supervise_tick(store, "run-1", cli, RunAdapter(), {"u0": od}, at=1010.0)
+    assert result.settled == {"u0": "blocked"}
+    assert store.open_dispatches("run-1") == []
+    # And the unit is still reclaimable once its lease expires -- the settle
+    # happened despite the failing lifecycle calls.
+    assert [u.unit_id for u in reclaimable_units(store, "run-1", at=1051.0)] == ["u0"]
 
 
 def test_supervise_tick_failed_classifies_rate_limit_and_halts(tmp_path, monkeypatch):
@@ -1743,6 +2096,12 @@ def test_dispatch_wave_launch_misconfiguration_aborts_whole_loop(tmp_path):
 
 
 def test_dispatch_wave_report_and_argv_never_carry_unit_content(tmp_path, monkeypatch):
+    """Invariant 6 as applied to the dispatcher's own surfaces: no UNIT
+    CONTENT in any argv or in the report. Deliberately not "nothing runtime"
+    -- the launch prompt names the fencing token the dispatcher's own claim
+    returned, so the launch argv legitimately carries a runtime value. What
+    it must never carry is the unit's system/user text, which is exactly
+    what SECRET stands in for here."""
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     SECRET = "TOP-SECRET-UNIT-PAYLOAD-XYZ"
@@ -1762,21 +2121,9 @@ def test_dispatch_wave_report_and_argv_never_carry_unit_content(tmp_path, monkey
     cli = _cli(runner)
     wave = store.list_units("run-1")
 
-    # Simulate the worker claiming (never accepting) between launch
-    # confirmation and the supervise tick's "done" observation -- so the
-    # unit's claimed_by matches the minted worker_id and the tick settles
-    # cleanly (done_unaccepted) instead of dropping the slot on drift.
-    original_launch = cli.launch_bg
-
-    def fake_launch(prompt, **kwargs):
-        result = original_launch(prompt, **kwargs)
-        import re as _re
-        worker_id = _re.search(r"Worker id: (\S+)", prompt).group(1)
-        store.claim_unit("run-1", "u0", worker_id, at=1000.0)
-        return result
-
-    cli.launch_bg = fake_launch  # type: ignore[assignment]
-
+    # The DISPATCHER claims before the launch now, so the fake worker only
+    # has to do nothing at all for the tick to settle cleanly
+    # (done_unaccepted) rather than drop the slot on drift.
     report = dispatch_wave(
         store, "run-1", wave, adapter, cli=cli, worker_command=wc, max_agents=1,
         at=1000.0, sleep_fn=lambda s: None, clock_fn=lambda: 1000.0,
@@ -1829,12 +2176,13 @@ def test_dispatch_wave_happy_path_dispatches_and_observes_acceptance(tmp_path):
     original_launch = cli.launch_bg
 
     def fake_launch(prompt, **kwargs):
+        """The fake WORKER: it does not claim (the dispatcher already did),
+        it reads its fencing token out of the launch prompt -- exactly the
+        channel a real worker gets it on -- and submits under it."""
         result = original_launch(prompt, **kwargs)
         import re as _re
-        match = _re.search(r"Worker id: (\S+)", prompt)
-        worker_id = match.group(1)
-        claim = store.claim_unit("run-1", "u0", worker_id, at=1000.0)
-        store.accept_unit("run-1", "u0", claim.fencing_token, text="answer", at=1001.0)
+        token = int(_re.search(r"Fencing token: (\d+)", prompt).group(1))
+        store.accept_unit("run-1", "u0", token, text="answer", at=1001.0)
         return result
 
     cli.launch_bg = fake_launch  # type: ignore[assignment]
@@ -1878,9 +2226,8 @@ def _dispatch_one_and_capture_launch_argv(tmp_path, **wave_kwargs):
         result = original_launch(prompt, **kwargs)
         import re as _re
 
-        worker_id = _re.search(r"Worker id: (\S+)", prompt).group(1)
-        claim = store.claim_unit("run-1", "u0", worker_id, at=1000.0)
-        store.accept_unit("run-1", "u0", claim.fencing_token, text="answer", at=1001.0)
+        token = int(_re.search(r"Fencing token: (\d+)", prompt).group(1))
+        store.accept_unit("run-1", "u0", token, text="answer", at=1001.0)
         return result
 
     cli.launch_bg = fake_launch  # type: ignore[assignment]
@@ -1920,3 +2267,286 @@ def test_dispatch_wave_default_launch_argv_is_byte_identical_without_the_seam(tm
     assert argv[:2] == ["claude", "--bg"]
     assert len(argv) == 3
     assert argv[2].startswith("Run id: run-1\n")
+
+
+# ---------------------------------------------------------------------------
+# The post-claim window: nothing may strand a unit CLAIMED with an open
+# dispatch row (that combination is unrecoverable -- `reclaimable_units`
+# skips a unit with an open dispatch, and `dispatch_wave`'s exit cleanup
+# only settles dispatches it is already tracking).
+# ---------------------------------------------------------------------------
+
+
+def _assert_unit_recovered(store, run_id="run-1", unit_id="u0"):
+    """The post-cleanup state a stranded unit must be in: not CLAIMED, no
+    lease, and NO open dispatch row -- i.e. a later wave can pick it up."""
+    row = store.get_unit(run_id, unit_id)
+    assert row.state is UnitState.PENDING, f"unit left {row.state!r} after a failed launch"
+    assert row.claimed_by is None
+    assert row.lease_expires_at is None
+    assert store.open_dispatches(run_id) == [], "dispatch row left OPEN -- unit is unreclaimable"
+    assert unit_id in [u.unit_id for u in store.list_units(run_id) if u.state is UnitState.PENDING]
+
+
+def test_prompt_build_failure_after_the_claim_does_not_strand_the_unit(tmp_path, monkeypatch):
+    """`build_launch_prompt` does real filesystem I/O (makedirs + a write of
+    the read envelope) AFTER the dispatcher has claimed, so it can raise for
+    reasons that have nothing to do with this unit.
+
+    MUTATION: drop the `except BaseException:` release/settle guard in
+    `dispatch_unit` -- the unit stays CLAIMED with an OPEN dispatch row and
+    both assertions in `_assert_unit_recovered` go red."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    runner = _healthy_runner()
+    cli = _cli(runner)
+    unit = _pending_unit(store, "run-1", "u0")
+
+    boom = OSError("no space left on device")
+
+    def _explode(*args, **kwargs):
+        raise boom
+
+    monkeypatch.setattr(claude_bg, "build_launch_prompt", _explode)
+
+    with pytest.raises(OSError) as excinfo:
+        dispatch_unit(
+            store, "run-1", unit, cli, wc, worker_id="worker-a",
+            clock_fn=lambda: 1000.0, at=1000.0,
+        )
+    assert excinfo.value is boom, "cleanup replaced the original exception"
+    _assert_unit_recovered(store)
+    launch_calls = [argv for argv, _k in runner.calls if len(argv) >= 2 and argv[1] == "--bg"]
+    assert launch_calls == []
+
+
+def test_launch_bg_failure_after_the_claim_does_not_strand_the_unit(tmp_path):
+    """`cli.launch_bg` resolves the executable (`ClaudeExecutableNotFoundError`)
+    and spawns a process (`subprocess.TimeoutExpired`), both after the claim.
+
+    MUTATION: drop the `except BaseException:` release/settle guard in
+    `dispatch_unit` -- red on `_assert_unit_recovered`."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    cli = _cli(_healthy_runner())
+    unit = _pending_unit(store, "run-1", "u0")
+
+    boom = ClaudeExecutableNotFoundError("claude not on PATH")
+
+    def _explode(prompt, **kwargs):
+        raise boom
+
+    cli.launch_bg = _explode  # type: ignore[assignment]
+
+    with pytest.raises(ClaudeExecutableNotFoundError) as excinfo:
+        dispatch_unit(
+            store, "run-1", unit, cli, wc, worker_id="worker-a",
+            clock_fn=lambda: 1000.0, at=1000.0,
+        )
+    assert excinfo.value is boom
+    _assert_unit_recovered(store)
+
+
+def test_post_claim_cleanup_failure_never_masks_the_original_exception(tmp_path, monkeypatch):
+    """The cleanup runs while an exception is already in flight, so a store
+    failure inside it must not replace the failure that caused it.
+
+    MUTATION: make either half of `_release_claim_and_settle` unguarded --
+    the RuntimeError below escapes instead of the original OSError -> red."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    cli = _cli(_healthy_runner())
+    unit = _pending_unit(store, "run-1", "u0")
+
+    boom = OSError("no space left on device")
+
+    def _explode(*args, **kwargs):
+        raise boom
+
+    monkeypatch.setattr(claude_bg, "build_launch_prompt", _explode)
+
+    def _cleanup_explodes(*args, **kwargs):
+        raise RuntimeError("store is gone too")
+
+    store.fail_unit = _cleanup_explodes  # type: ignore[assignment]
+    store.settle_dispatch = _cleanup_explodes  # type: ignore[assignment]
+
+    with pytest.raises(OSError) as excinfo:
+        dispatch_unit(
+            store, "run-1", unit, cli, wc, worker_id="worker-a",
+            clock_fn=lambda: 1000.0, at=1000.0,
+        )
+    assert excinfo.value is boom
+
+
+# ---------------------------------------------------------------------------
+# Claim refusals reach the WAVE now that the dispatcher claims. The routine
+# ones must not tear it down.
+# ---------------------------------------------------------------------------
+
+
+def _wave_store_with_refusing_claim(tmp_path, error, *, refuse_unit="u0", unit_ids=("u0", "u1")):
+    """A store whose `claim_unit` refuses exactly `refuse_unit`."""
+    store = _seeded_dispatch_store(tmp_path, unit_ids=unit_ids)
+    original_claim = store.claim_unit
+
+    def _claim(run_id, unit_id, worker_id, **kwargs):
+        if unit_id == refuse_unit:
+            raise error
+        return original_claim(run_id, unit_id, worker_id, **kwargs)
+
+    store.claim_unit = _claim  # type: ignore[assignment]
+    return store
+
+
+def _wave_with_one_healthy_launch(store, tmp_path, accept_unit_id, *, clock_fn=None, **kwargs):
+    """Run `dispatch_wave` with a runner that confirms one launch and a fake
+    worker that accepts `accept_unit_id` out of the launch prompt."""
+    wc = _worker_command(tmp_path)
+    runner = _healthy_runner()
+    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        [
+            ("[]", "", 0),
+            (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="working")]), "", 0),
+            (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="done")]), "", 0),
+        ],
+    )
+    cli = _cli(runner)
+    original_launch = cli.launch_bg
+
+    def fake_launch(prompt, **launch_kwargs):
+        result = original_launch(prompt, **launch_kwargs)
+        if accept_unit_id is not None:
+            import re as _re
+
+            token = int(_re.search(r"Fencing token: (\d+)", prompt).group(1))
+            store.accept_unit("run-1", accept_unit_id, token, text="answer", at=1001.0)
+        return result
+
+    cli.launch_bg = fake_launch  # type: ignore[assignment]
+
+    report = dispatch_wave(
+        store, "run-1", store.list_units("run-1"), RunAdapter(), cli=cli, worker_command=wc,
+        max_agents=2, at=1000.0, sleep_fn=lambda s: None,
+        clock_fn=clock_fn if clock_fn is not None else (lambda: 1000.0),
+        **kwargs,
+    )
+    return report, runner
+
+
+def test_dispatch_wave_terminal_state_claim_refusal_skips_the_unit_and_keeps_going(tmp_path):
+    """The reachable routine race: a reclaim candidate's still-live prior
+    worker settles it under a still-current token (neither `accept_unit` nor
+    `fail_unit` checks lease expiry) between candidate selection and the
+    dispatcher's claim, so `claim_unit` raises TerminalStateError. That is
+    invariant 4's accepted duplicate spend, not an error.
+
+    MUTATION: delete the `except (TerminalStateError, AlreadyClaimedError)`
+    handler -- the error propagates out of `dispatch_wave`, no report is
+    returned, and every other open dispatch is torn down -> red."""
+    store = _wave_store_with_refusing_claim(
+        tmp_path, TerminalStateError("'run-1'/'u0' is already accepted")
+    )
+    report, _runner = _wave_with_one_healthy_launch(store, tmp_path, "u1")
+
+    assert isinstance(report, DispatchReport)
+    assert report.dispatched == ("u1",)
+    assert "u1" in report.accepted
+    # VISIBLE, not silently dropped: `dispatch_unit` settled the refused
+    # unit's dispatch row as `claim_failed` before re-raising.
+    assert report.settled["u0"] == "claim_failed"
+    assert report.aborted_reason is None
+    assert store.open_dispatches("run-1") == []
+
+
+def test_dispatch_wave_already_claimed_refusal_skips_the_unit_and_keeps_going(tmp_path):
+    """MUTATION: delete the `except (TerminalStateError, AlreadyClaimedError)`
+    handler -> red (the error escapes `dispatch_wave`)."""
+    store = _wave_store_with_refusing_claim(
+        tmp_path, AlreadyClaimedError("'run-1'/'u0' is claimed")
+    )
+    report, runner = _wave_with_one_healthy_launch(store, tmp_path, "u1")
+
+    assert isinstance(report, DispatchReport)
+    assert report.dispatched == ("u1",)
+    assert report.settled["u0"] == "claim_failed"
+    assert report.aborted_reason is None
+    # The refused unit is not retried forever: one attempt, then the wave
+    # stops selecting it (otherwise the loop spins until the stall bound).
+    launch_calls = [
+        argv for argv, _k in runner.calls
+        if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]
+    ]
+    assert len(launch_calls) == 1
+
+
+def test_dispatch_wave_run_halted_claim_refusal_ends_the_wave_gracefully(tmp_path):
+    """A halted RUN must end the wave the same way an OBSERVED halt does --
+    the `halted` field and a readable report -- never as a tear-down.
+
+    MUTATION: re-raise instead of setting `halted` -- no report is returned
+    -> red. MUTATION 2: record it as `aborted_reason` instead of `halted` --
+    the `halted` assertion goes red."""
+    store = _wave_store_with_refusing_claim(
+        tmp_path, RunHaltedError("run-1", "rate_limit"), refuse_unit="u0", unit_ids=("u0",)
+    )
+    report, runner = _wave_with_one_healthy_launch(store, tmp_path, None)
+
+    assert isinstance(report, DispatchReport)
+    assert report.halted == "rate_limit"
+    assert report.dispatched == ()
+    assert report.settled["u0"] == "claim_failed"
+    launch_calls = [
+        argv for argv, _k in runner.calls
+        if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]
+    ]
+    assert launch_calls == []
+    assert store.open_dispatches("run-1") == []
+    # Graceful, not torn down: the dispatcher lease was released cleanly.
+    assert store.get_run("run-1").dispatcher_id is None
+
+
+def test_dispatch_wave_still_propagates_an_unexpected_exception(tmp_path):
+    """ACCEPT DIRECTION for the new handlers: they catch exactly
+    TerminalStateError / AlreadyClaimedError / RunHaltedError. A genuine
+    programming error must still surface.
+
+    MUTATION: widen either handler to `except Exception` -- this ValueError
+    is swallowed, no exception is raised -> red."""
+    store = _wave_store_with_refusing_claim(tmp_path, ValueError("a real bug"), unit_ids=("u0",))
+    with pytest.raises(ValueError):
+        _wave_with_one_healthy_launch(store, tmp_path, None)
+    # The `finally` still ran: the dispatcher lease is not left held.
+    assert store.get_run("run-1").dispatcher_id is None
+
+
+def test_dispatch_wave_does_not_retry_a_refused_claim_forever(tmp_path):
+    """A refused unit stops being a candidate FOR THIS WAVE. Without that,
+    an `AlreadyClaimedError` unit is re-selected every tick and re-attempted
+    every tick; a refusal is not progress, so the wave spins until the stall
+    bound (or forever, on a frozen clock).
+
+    Run on an ADVANCING clock with a short stall bound so the mutation fails
+    instead of hanging. MUTATION: drop the `claim_refused` filter on
+    `candidates` -- the wave aborts with `wave_stalled` -> red."""
+    store = _wave_store_with_refusing_claim(
+        tmp_path, AlreadyClaimedError("'run-1'/'u0' is claimed")
+    )
+    ticks = {"t": 1000.0}
+
+    def _advancing_clock():
+        ticks["t"] += 1.0
+        return ticks["t"]
+
+    report, runner = _wave_with_one_healthy_launch(
+        store, tmp_path, "u1", clock_fn=_advancing_clock, stall_timeout_seconds=10.0
+    )
+    assert report.aborted_reason is None, "the wave spun on a refused candidate"
+    assert report.dispatched == ("u1",)
+    launch_calls = [
+        argv for argv, _k in runner.calls
+        if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]
+    ]
+    assert len(launch_calls) == 1

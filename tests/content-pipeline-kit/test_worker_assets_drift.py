@@ -14,36 +14,39 @@ carry those strings verbatim has to be checked, not merely asserted in prose.
 The SKILL.md's own "Machine-checked contract" section documents this
 extraction format for a human reader; this module is where it is enforced.
 
-Separator portability -- established, not assumed: `answer_path_for`
-(``execution/drivers/claude_bg.py:582``) builds its path with
-``os.path.join``, which emits ``\\`` on Windows and ``/`` on macOS/Linux. The
-SKILL.md block is written with forward slashes throughout (the documentation
-spelling). Comparing it byte-for-byte against the function's OWN-platform
-output would make this test fail on every non-Windows machine, so
-``_normalize_sep`` is applied to BOTH sides -- the strings extracted from
-SKILL.md and the strings the function actually returns -- before every
-comparison below. Normalizing only the function's side would still leave a
-platform-dependent literal comparison against whatever happens to be in the
-file; normalizing both sides to the same canonical form is what makes the
-comparison platform-independent rather than platform-fragile.
+Separator portability -- established, not assumed: `answer_path_for` and
+`envelope_path_for` (``execution/drivers/claude_bg.py``) build their paths
+with ``os.path.join``, which emits ``\\`` on Windows and ``/`` on
+macOS/Linux. The SKILL.md block is written with forward slashes throughout
+(the documentation spelling). Comparing it byte-for-byte against the
+function's OWN-platform output would make this test fail on every
+non-Windows machine, so ``_normalize_sep`` is applied to BOTH sides -- the
+strings extracted from SKILL.md and the strings the function actually
+returns -- before every comparison below. Normalizing only the function's
+side would still leave a platform-dependent literal comparison against
+whatever happens to be in the file; normalizing both sides to the same
+canonical form is what makes the comparison platform-independent rather
+than platform-fragile.
 
 A second, coupled effect of the same root cause: ``enumerate_worker_invocations``
-builds its ``claim``/``read``/``submit``/``fail`` strings with
-``shlex.join`` (``claude_bg.py:615-618``), which quotes a token containing a
-backslash but leaves a plain forward-slash path unquoted -- so on Windows the
-function's raw ``submit`` string wraps the answer path in single quotes; on
-macOS/Linux it does not. The ``write`` string, by contrast, is a plain
-f-string (``claude_bg.py:619``), never shell-quoted at all -- it is a
-Write-tool target, not a subprocess argv, and re-tokenizing it with
-``shlex.split``/``shlex.join`` would itself corrupt it (``->`` is outside
-``shlex``'s unquoted-safe character set and would come back wrapped in
-quotes that were never there). So ``_normalize_sep`` does NOT round-trip
-through ``shlex`` at all: it swaps every backslash for a forward slash first
-(a plain string replace, safe for both command shapes), then strips any
-``'`` characters that remain. Stripping is safe here specifically because
-the quotes ``shlex.join`` adds exist ONLY to escape the backslash that the
-separator swap has, by that point, already removed, and none of these five
-invocation strings ever legitimately contains a literal apostrophe.
+builds its ``read``/``submit``/``fail`` strings (each ``<argv>
+protocol @<envelope path>``, ``submit`` additionally carrying
+``--text-file=<answer path>``) with ``shlex.join``, which quotes a token
+containing a backslash but leaves a plain forward-slash path unquoted -- so
+on Windows the function's raw strings wrap the ``@<path>``/
+``--text-file=<path>`` tokens in single quotes; on macOS/Linux they do not.
+The three ``write`` strings, by contrast, are plain f-strings, never
+shell-quoted at all -- each is a Write-tool target, not a subprocess argv,
+and re-tokenizing one with ``shlex.split``/``shlex.join`` would itself
+corrupt it (``->`` is outside ``shlex``'s unquoted-safe character set and
+would come back wrapped in quotes that were never there). So
+``_normalize_sep`` does NOT round-trip through ``shlex`` at all: it swaps
+every backslash for a forward slash first (a plain string replace, safe for
+both command shapes), then strips any ``'`` characters that remain.
+Stripping is safe here specifically because the quotes ``shlex.join`` adds
+exist ONLY to escape the backslash that the separator swap has, by that
+point, already removed, and none of these six invocation strings ever
+legitimately contains a literal apostrophe.
 """
 
 from __future__ import annotations
@@ -75,12 +78,13 @@ END_MARKER = "<!-- END ENUMERATED-INVOCATIONS -->"
 # calling `enumerate_worker_invocations` again and pasting its real output --
 # never hand-edited.
 EXAMPLE_ANSWER_DIR = "/path/to/answers"
+EXAMPLE_ENVELOPE_DIR = "/path/to/envelopes"
 EXAMPLE_ARGV = ("python", "mount.py", "run")
 EXAMPLE_RUN_ID = "RUN_ID"
 EXAMPLE_UNIT_ID = "UNIT_ID"
 EXAMPLE_WORKER_ID = "WORKER_ID"
 
-_LABEL_LINE_RE = re.compile(r"^(claim|read|submit|fail|write):\s(.+)$")
+_LABEL_LINE_RE = re.compile(r"^(read|submit|fail|write):\s(.+)$")
 
 
 def _normalize_sep(command: str) -> str:
@@ -126,7 +130,9 @@ def _extract_invocation_commands(block: str) -> list[str]:
 
 
 def _expected_invocations() -> tuple[str, ...]:
-    wc = WorkerCommand(argv=EXAMPLE_ARGV, answer_dir=EXAMPLE_ANSWER_DIR)
+    wc = WorkerCommand(
+        argv=EXAMPLE_ARGV, answer_dir=EXAMPLE_ANSWER_DIR, envelope_dir=EXAMPLE_ENVELOPE_DIR
+    )
     return enumerate_worker_invocations(
         wc, EXAMPLE_RUN_ID, EXAMPLE_UNIT_ID, EXAMPLE_WORKER_ID
     )
@@ -139,13 +145,25 @@ def test_skill_md_has_the_enumerated_invocations_markers():
     assert text.index(BEGIN_MARKER) < text.index(END_MARKER)
 
 
-def test_skill_md_block_extracts_exactly_five_labeled_commands():
+def test_skill_md_block_extracts_exactly_six_labeled_commands():
     block = _extract_block(_read_skill_text())
     commands = _extract_invocation_commands(block)
-    assert len(commands) == 5, (
-        f"expected exactly 5 labeled invocation lines in the SKILL.md block, "
+    assert len(commands) == 6, (
+        f"expected exactly 6 labeled invocation lines in the SKILL.md block, "
         f"found {len(commands)}: {commands!r}"
     )
+
+
+def test_skill_md_block_carries_no_claim_line():
+    """The dispatcher claims (see ``dispatch_unit``), so ``claim`` left the
+    worker's set entirely. Dropping it from ``_LABEL_LINE_RE``'s alternation
+    without also dropping it from the generated block would silently stop
+    covering a verb: the extractor would skip the line, and the bidirectional
+    set comparison below would still pass. This asserts the block's RAW text,
+    which that regex never touches."""
+    block = _extract_block(_read_skill_text())
+    assert "claim:" not in block
+    assert ".claim.json" not in block
 
 
 def test_every_skill_md_invocation_is_produced_by_the_function():
@@ -187,35 +205,36 @@ def test_skill_md_invocations_exactly_match_the_function_output():
 
 def test_normalization_holds_across_platform_separators():
     """Portability demonstration, not just an assertion: reconstruct the
-    ``submit``/``write``/``claim``/``read``/``fail`` invocations using the
-    EXACT construction ``enumerate_worker_invocations`` uses
-    (``claude_bg.py:610-620``: `common` flags, `shlex.join` for the four
-    subprocess commands, an f-string for `write`), but with the answer path
-    joined using EACH platform's separator explicitly -- rather than relying
-    on `os.path.join`'s native (host-determined) choice -- and show the
-    normalized comparison against SKILL.md holds for both. This does not
-    merely assert the fix works; it proves the fix holds for the OTHER
-    platform's spelling too, not just whichever OS happens to run this
-    suite."""
+    ``read``/``submit``/``fail``/``write``x3 invocations using the
+    EXACT construction ``enumerate_worker_invocations`` uses (``protocol
+    @<envelope path>`` for the three subprocess commands, ``shlex.join``,
+    plain f-strings for the three Write-tool targets), but with the answer
+    and envelope paths joined using EACH platform's separator explicitly --
+    rather than relying on ``os.path.join``'s native (host-determined)
+    choice -- and show the normalized comparison against SKILL.md holds for
+    both. This does not merely assert the fix works; it proves the fix
+    holds for the OTHER platform's spelling too, not just whichever OS
+    happens to run this suite."""
     block = _extract_block(_read_skill_text())
     skill_commands = _normalize_all(_extract_invocation_commands(block))
 
     base = EXAMPLE_ARGV
-    common = (
-        "--run-id", EXAMPLE_RUN_ID,
-        "--unit-id", EXAMPLE_UNIT_ID,
-        "--worker-id", EXAMPLE_WORKER_ID,
-    )
-    filename = f"{EXAMPLE_RUN_ID}__{EXAMPLE_UNIT_ID}.answer.txt"
+    stem = f"{EXAMPLE_RUN_ID}__{EXAMPLE_UNIT_ID}"
 
     for sep, label in (("\\", "Windows"), ("/", "POSIX")):
-        answer_path = EXAMPLE_ANSWER_DIR + sep + filename
+        answer_path = EXAMPLE_ANSWER_DIR + sep + f"{stem}.answer.txt"
+        read_path = EXAMPLE_ENVELOPE_DIR + sep + f"{stem}.read.json"
+        submit_path = EXAMPLE_ENVELOPE_DIR + sep + f"{stem}.submit.json"
+        fail_path = EXAMPLE_ENVELOPE_DIR + sep + f"{stem}.fail.json"
         variant = (
-            shlex.join(base + ("claim",) + common),
-            shlex.join(base + ("read",) + common),
-            shlex.join(base + ("submit",) + common + ("--from-file", answer_path)),
-            shlex.join(base + ("fail",) + common),
+            shlex.join(base + ("protocol", f"@{read_path}")),
+            shlex.join(
+                base + ("protocol", f"@{submit_path}", f"--text-file={answer_path}")
+            ),
+            shlex.join(base + ("protocol", f"@{fail_path}")),
             f"Write tool -> {answer_path}",
+            f"Write tool -> {submit_path}",
+            f"Write tool -> {fail_path}",
         )
         assert _normalize_all(variant) == skill_commands, (
             f"normalized comparison does not hold for the {label} "

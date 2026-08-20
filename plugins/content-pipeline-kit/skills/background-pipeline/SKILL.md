@@ -123,6 +123,12 @@ vocabulary a consumer will actually see:
   outstayed `terminal_exit_grace_seconds`; the dispatcher ended it with
   `stop` and `rm` and freed the slot. The unit's work is fine; only the
   session overstayed.
+- `claim_failed` -- the dispatcher could not claim the unit, so nothing was
+  launched for it. Routine: between candidate selection and the claim the
+  unit went terminal or was claimed by someone else (a still-live earlier
+  worker settling its own unit). The wave skips that unit and carries on
+  with the rest; a halted run reports `claim_failed` here too, alongside
+  `halted`.
 - `wave_exit` -- the wave stopped while this dispatch was still open, so the
   dispatcher closed it on the way out. Every dispatch this call opened is
   settled before `dispatch_wave` returns, including on an abort: a dispatch

@@ -192,6 +192,9 @@ class World:
         run_id = re.search(r"Run id: (\S+)", prompt).group(1)
         unit_id = re.search(r"Unit id: (\S+)", prompt).group(1)
         worker_id = re.search(r"Worker id: (\S+)", prompt).group(1)
+        # The dispatcher claims before launching, so the token is already in
+        # the prompt -- the only channel a real worker ever gets it on.
+        fencing_token = int(re.search(r"Fencing token: (\d+)", prompt).group(1))
         assert run_id == RUN_ID
         self._counter += 1
         # Hex: `_parse_launch_session_id`'s banner regex accepts hex only.
@@ -203,6 +206,7 @@ class World:
             "worker_id": worker_id,
             "short_id": short_id,
             "session_id": session_id,
+            "fencing_token": fencing_token,
             "at": self.clock.t,
         }
         self.launches.append(record)
@@ -326,16 +330,18 @@ def run_scenario(tmp_path, monkeypatch) -> Scenario:
     state = {"u0_first": None, "u0_fence_first": None}
 
     def on_launch(rec):
-        """Stand in for the launched WORKER's own protocol calls."""
+        """Stand in for the launched WORKER's own protocol calls.
+
+        The worker no longer claims -- the DISPATCHER did, before this
+        launch, and ``World.launch`` read the resulting token out of the
+        launch prompt."""
         unit_id = rec["unit_id"]
-        claim = store.claim_unit(RUN_ID, unit_id, rec["worker_id"], at=clock.t)
-        rec["fencing_token"] = claim.fencing_token
 
         if unit_id == "u0" and state["u0_first"] is None:
             # First worker for u0. Remember it so it can be killed, and so
             # its stale fence can be replayed as a late submission later.
             state["u0_first"] = rec
-            state["u0_fence_first"] = claim.fencing_token
+            state["u0_fence_first"] = rec["fencing_token"]
             # Timeline: this worker is killed mid-flight.
             world.schedule.append(
                 (T_KILL, "kill-u0-worker", lambda: _kill_u0_worker(rec))
@@ -344,7 +350,7 @@ def run_scenario(tmp_path, monkeypatch) -> Scenario:
             # The RECLAIM dispatch. The fence has just moved; the killed
             # worker's answer arrives now, too late.
             sc.fence_before_reclaim = state["u0_fence_first"]
-            sc.fence_after_reclaim = claim.fencing_token
+            sc.fence_after_reclaim = rec["fencing_token"]
             try:
                 store.accept_unit(
                     RUN_ID,
@@ -416,10 +422,8 @@ def run_scenario(tmp_path, monkeypatch) -> Scenario:
     clock.advance(POLL_INTERVAL)
 
     def on_launch_wave2(rec):
-        claim = store.claim_unit(RUN_ID, rec["unit_id"], rec["worker_id"], at=clock.t)
-        rec["fencing_token"] = claim.fencing_token
         store.accept_unit(
-            RUN_ID, rec["unit_id"], claim.fencing_token, text="u0 answer", at=clock.t
+            RUN_ID, rec["unit_id"], rec["fencing_token"], text="u0 answer", at=clock.t
         )
         world.set_state(rec["short_id"], "done")
 
@@ -491,12 +495,15 @@ def test_clause1_the_n_equals_2_bound_is_never_exceeded(tmp_path, monkeypatch):
     cli = ClaudeCli(executable="claude", runner=runner)
 
     def on_launch(rec):
-        claim = store.claim_unit(RUN_ID, rec["unit_id"], rec["worker_id"], at=clock.t)
+        # The DISPATCHER claimed before this launch; World.launch read the
+        # resulting token out of the launch prompt, the only channel a real
+        # worker ever gets it on.
+        token = rec["fencing_token"]
         unit_id, short_id = rec["unit_id"], rec["short_id"]
 
         def _finish():
             store.accept_unit(
-                RUN_ID, unit_id, claim.fencing_token, text="answer", at=clock.t
+                RUN_ID, unit_id, token, text="answer", at=clock.t
             )
             world.set_state(short_id, "done")
 
@@ -781,8 +788,10 @@ def test_a_blocked_unit_is_actually_re_dispatched_by_a_later_wave(tmp_path, monk
     monkeypatch.setattr(claude_bg, "classify_settled_failure", lambda *a, **k: None)
 
     def on_launch(rec):
-        claim = store.claim_unit(RUN_ID, rec["unit_id"], rec["worker_id"], at=clock.t)
-        rec["fencing_token"] = claim.fencing_token
+        # The DISPATCHER claimed before this launch; World.launch read the
+        # resulting token out of the launch prompt, the only channel a real
+        # worker ever gets it on.
+        token = rec["fencing_token"]
         if len(world.launches) == 1:
             # The first worker stalls on a question and never returns.
             world.schedule.append(
@@ -795,7 +804,7 @@ def test_a_blocked_unit_is_actually_re_dispatched_by_a_later_wave(tmp_path, monk
         else:
             # The replacement worker completes normally.
             store.accept_unit(
-                RUN_ID, rec["unit_id"], claim.fencing_token, text="answer", at=clock.t
+                RUN_ID, rec["unit_id"], token, text="answer", at=clock.t
             )
             world.set_state(rec["short_id"], "done")
 
@@ -867,10 +876,13 @@ def test_a_terminal_unit_whose_session_never_exits_does_not_hang_the_wave(
     cli = ClaudeCli(executable="claude", runner=runner)
 
     def on_launch(rec):
-        claim = store.claim_unit(RUN_ID, rec["unit_id"], rec["worker_id"], at=clock.t)
+        # The DISPATCHER claimed before this launch; World.launch read the
+        # resulting token out of the launch prompt, the only channel a real
+        # worker ever gets it on.
+        token = rec["fencing_token"]
         # Submitted through the protocol; the session stays "working".
         store.accept_unit(
-            RUN_ID, rec["unit_id"], claim.fencing_token, text="answer", at=clock.t
+            RUN_ID, rec["unit_id"], token, text="answer", at=clock.t
         )
 
     world.on_launch = on_launch
@@ -934,7 +946,9 @@ def test_a_wave_that_makes_no_progress_at_all_aborts_instead_of_spinning(
     cli = ClaudeCli(executable="claude", runner=runner)
 
     def on_launch(rec):
-        store.claim_unit(RUN_ID, rec["unit_id"], rec["worker_id"], at=clock.t)
+        # The DISPATCHER already claimed; this worker does nothing but sit
+        # there, which is the whole point of the stall scenario.
+        assert rec["fencing_token"] > 0
 
     world.on_launch = on_launch
 
@@ -976,12 +990,15 @@ def test_a_long_running_unit_is_never_cut_off_by_the_stall_bound(tmp_path, monke
     finish_at = T_START + 2000.0  # >> both bounds
 
     def on_launch(rec):
-        claim = store.claim_unit(RUN_ID, rec["unit_id"], rec["worker_id"], at=clock.t)
+        # The DISPATCHER claimed before this launch; World.launch read the
+        # resulting token out of the launch prompt, the only channel a real
+        # worker ever gets it on.
+        token = rec["fencing_token"]
         unit_id, short_id = rec["unit_id"], rec["short_id"]
 
         def _finish():
             store.accept_unit(
-                RUN_ID, unit_id, claim.fencing_token, text="answer", at=clock.t
+                RUN_ID, unit_id, token, text="answer", at=clock.t
             )
             world.set_state(short_id, "done")
 
@@ -1021,9 +1038,12 @@ def test_a_normal_submit_then_exit_still_settles_via_the_done_branch(
     cli = ClaudeCli(executable="claude", runner=runner)
 
     def on_launch(rec):
-        claim = store.claim_unit(RUN_ID, rec["unit_id"], rec["worker_id"], at=clock.t)
+        # The DISPATCHER claimed before this launch; World.launch read the
+        # resulting token out of the launch prompt, the only channel a real
+        # worker ever gets it on.
+        token = rec["fencing_token"]
         store.accept_unit(
-            RUN_ID, rec["unit_id"], claim.fencing_token, text="answer", at=clock.t
+            RUN_ID, rec["unit_id"], token, text="answer", at=clock.t
         )
         short_id = rec["short_id"]
         # Two full poll intervals of lingering -- well inside the grace.
