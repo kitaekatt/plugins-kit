@@ -2550,3 +2550,176 @@ def test_dispatch_wave_does_not_retry_a_refused_claim_forever(tmp_path):
         if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]
     ]
     assert len(launch_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# The SECOND claim site: `_terminally_fail_exhausted_unit`. Its claim can
+# refuse exactly as `dispatch_unit`'s can -- and an unguarded refusal there
+# escaped the loop, tore down every other open dispatch through the
+# `finally`, and returned no report. The refusals do NOT all mean the same
+# thing here: this path is driving an EXHAUSTED unit terminal, not
+# dispatching one.
+# ---------------------------------------------------------------------------
+
+
+def _exhausted_store_with_refusing_claim(tmp_path, error, *, unit_ids=("u0", "u1")):
+    """A store where `u0` is reclaim-EXHAUSTED (CLAIMED, lease expired, two
+    EXPIRE attempts) so the wave takes the `_terminally_fail_exhausted_unit`
+    path for it -- and whose `claim_unit` then refuses exactly `u0`.
+
+    The three setup claims run BEFORE the refusing wrapper is installed, so
+    the wrapper refuses only the dispatcher's own claim.
+    """
+    store = _seeded_dispatch_store(tmp_path, unit_ids=unit_ids)
+    store.claim_unit("run-1", "u0", "worker-1", lease_seconds=1.0, at=990.0)
+    store.claim_unit("run-1", "u0", "worker-2", lease_seconds=1.0, at=992.0)  # 1st EXPIRE
+    store.claim_unit("run-1", "u0", "worker-3", lease_seconds=1.0, at=994.0)  # 2nd EXPIRE
+
+    original_claim = store.claim_unit
+
+    def _claim(run_id, unit_id, worker_id, **kwargs):
+        if unit_id == "u0":
+            raise error
+        return original_claim(run_id, unit_id, worker_id, **kwargs)
+
+    store.claim_unit = _claim  # type: ignore[assignment]
+    return store
+
+
+def _advancing_clock_from(start=1000.0, step=1.0):
+    """A clock that MOVES. Every test on this path runs on one, with a short
+    `stall_timeout_seconds`, because the refused unit stays CLAIMED with an
+    expired lease in the store: any mutation that stops excluding it from
+    candidate selection re-attempts it every tick, and on a FROZEN clock that
+    is an unkillable hang -- a mutation that hangs pins nothing. On an
+    advancing clock the same mutation trips the stall bound and the test goes
+    red with `aborted_reason == "wave_stalled"`.
+    """
+    ticks = {"t": start}
+
+    def _clock():
+        ticks["t"] += step
+        return ticks["t"]
+
+    return _clock
+
+
+def test_exhausted_unit_terminal_state_refusal_is_benign_and_not_a_failure(tmp_path):
+    """`_terminally_fail_exhausted_unit` exists ONLY to drive an exhausted
+    unit terminal, so `TerminalStateError` -- "it is already terminal" -- is
+    the desired end state, not a failure. The wave keeps going, the unit is
+    NOT counted in `failed_exhausted`, and the outcome is visible.
+
+    MUTATION: drop the `except TerminalStateError` arm -- the error escapes
+    `dispatch_wave`, no report is returned, u1's dispatch is torn down by the
+    `finally` -> red. MUTATION 2: count it in `failed_exhausted` anyway ->
+    the `failed_exhausted` assertion goes red."""
+    store = _exhausted_store_with_refusing_claim(
+        tmp_path, TerminalStateError("'run-1'/'u0' is already accepted")
+    )
+    report, _runner = _wave_with_one_healthy_launch(
+        store, tmp_path, "u1", max_reclaims_per_unit=2,
+        clock_fn=_advancing_clock_from(), stall_timeout_seconds=10.0,
+    )
+
+    assert isinstance(report, DispatchReport)
+    assert report.dispatched == ("u1",)
+    assert "u1" in report.accepted
+    assert report.failed_exhausted == ()  # THIS wave failed nothing
+    assert report.settled["u0"] == "already_terminal"  # visible, not dropped
+    assert report.aborted_reason is None
+    assert store.open_dispatches("run-1") == []
+
+
+def test_exhausted_unit_already_claimed_refusal_skips_it_and_keeps_going(tmp_path):
+    """Someone re-claimed the abandoned unit with a live lease between
+    candidate selection and this claim, so it is not this dispatcher's to
+    fail. Skip it; the wave continues and still returns a report.
+
+    MUTATION: drop the `except AlreadyClaimedError` arm -> the error escapes
+    `dispatch_wave` -> red."""
+    store = _exhausted_store_with_refusing_claim(
+        tmp_path, AlreadyClaimedError("'run-1'/'u0' is claimed")
+    )
+    report, runner = _wave_with_one_healthy_launch(
+        store, tmp_path, "u1", max_reclaims_per_unit=2,
+        clock_fn=_advancing_clock_from(), stall_timeout_seconds=10.0,
+    )
+
+    assert isinstance(report, DispatchReport)
+    assert report.dispatched == ("u1",)
+    assert report.failed_exhausted == ()
+    assert report.settled["u0"] == "claim_refused"
+    assert report.aborted_reason is None
+    launch_calls = [
+        argv for argv, _k in runner.calls
+        if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]
+    ]
+    assert len(launch_calls) == 1  # u1 only; the exhausted unit is never launched
+
+
+def test_exhausted_unit_run_halted_refusal_ends_the_wave_gracefully(tmp_path):
+    """A halted RUN refuses this claim too, and it means the same thing here
+    as on the dispatch path: end the wave the way an OBSERVED halt ends it.
+
+    MUTATION: re-raise instead of setting `halted` -- no report is returned
+    -> red. MUTATION 2: record it as `aborted_reason` instead of `halted` ->
+    both those assertions go red."""
+    store = _exhausted_store_with_refusing_claim(tmp_path, RunHaltedError("run-1", "rate_limit"))
+    report, runner = _wave_with_one_healthy_launch(
+        store, tmp_path, None, max_reclaims_per_unit=2
+    )
+
+    assert isinstance(report, DispatchReport)
+    assert report.halted == "rate_limit"
+    assert report.aborted_reason is None
+    assert report.dispatched == ()
+    assert report.failed_exhausted == ()
+    launch_calls = [
+        argv for argv, _k in runner.calls
+        if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]
+    ]
+    assert launch_calls == []
+    assert store.open_dispatches("run-1") == []
+    # Graceful, not torn down: the dispatcher lease was released cleanly.
+    assert store.get_run("run-1").dispatcher_id is None
+
+
+def test_exhausted_unit_still_propagates_an_unexpected_exception(tmp_path):
+    """ACCEPT DIRECTION for the three new arms: they catch exactly
+    TerminalStateError / AlreadyClaimedError / RunHaltedError. A genuine
+    programming error on this path must still surface.
+
+    MUTATION: widen any arm to `except Exception` -- this ValueError is
+    swallowed, no exception is raised -> red."""
+    store = _exhausted_store_with_refusing_claim(tmp_path, ValueError("a real bug"))
+    with pytest.raises(ValueError):
+        _wave_with_one_healthy_launch(store, tmp_path, "u1", max_reclaims_per_unit=2)
+    # The `finally` still ran: the dispatcher lease is not left held.
+    assert store.get_run("run-1").dispatcher_id is None
+
+
+def test_exhausted_unit_refusal_is_not_retried_forever(tmp_path):
+    """The skip must be STRUCTURAL, not a spin: an exhausted unit stays
+    CLAIMED with an expired lease after a refusal, so it is re-selected by
+    `reclaimable_units` on every tick unless `claim_refused` excludes it. A
+    refusal is not progress, so a spin ends only at the stall bound.
+
+    Run on an ADVANCING clock with a short stall bound so the mutation fails
+    loudly instead of hanging. MUTATION: drop `claim_refused.add(...)` from
+    the `except AlreadyClaimedError` arm -- the wave aborts with
+    `wave_stalled` -> red."""
+    store = _exhausted_store_with_refusing_claim(
+        tmp_path, AlreadyClaimedError("'run-1'/'u0' is claimed")
+    )
+    report, runner = _wave_with_one_healthy_launch(
+        store, tmp_path, "u1", max_reclaims_per_unit=2,
+        clock_fn=_advancing_clock_from(), stall_timeout_seconds=10.0,
+    )
+    assert report.aborted_reason is None, "the wave spun on a refused exhausted unit"
+    assert report.dispatched == ("u1",)
+    launch_calls = [
+        argv for argv, _k in runner.calls
+        if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]
+    ]
+    assert len(launch_calls) == 1

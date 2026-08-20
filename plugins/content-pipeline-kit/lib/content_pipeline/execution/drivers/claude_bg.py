@@ -1785,7 +1785,29 @@ def _terminally_fail_exhausted_unit(
     """Beyond ``max_reclaims_per_unit``: reclaim once more (bumping the
     fence, same as any reclaim) and immediately fail terminally, mirroring
     ``execution.controller``'s ``_record_terminal_skip`` claim-then-fail
-    shape."""
+    shape.
+
+    THIS CLAIM CAN REFUSE, and its refusals are the caller's to interpret,
+    not this function's: ``dispatch_wave``'s dispatch loop handles
+    :class:`RunHaltedError`, :class:`TerminalStateError` and
+    :class:`AlreadyClaimedError` around the call (see the CLAIM REFUSALS
+    paragraph there), because what each one means is a control-flow decision
+    -- end the wave, skip the unit -- that only the loop can make. Every
+    other exception propagates unchanged.
+
+    NOTHING HERE OPENS A DISPATCH ROW, which is why -- unlike
+    :func:`dispatch_unit` -- there is no cleanup to guard: the unrecoverable
+    CLAIMED-plus-open-dispatch state (:func:`reclaimable_units` excludes it
+    forever) is structurally unreachable from this function. A unit is only
+    a candidate for this path via :func:`reclaimable_units`, which already
+    excludes units with an open dispatch, and no row is written between
+    there and here. If ``fail_unit`` below raises after a SUCCESSFUL claim,
+    the unit is left CLAIMED under this dispatcher's fresh token with no
+    dispatch row -- reclaimable again the moment that lease expires, so it
+    is recoverable and is deliberately left to propagate. (It is also all
+    but unreachable: the claim just bumped the fence, so no other actor
+    holds a token that could make the unit terminal or steal the claim
+    before the next statement.)"""
     claim = store.claim_unit(run_id, unit_id, dispatcher_id, at=at)
     store.fail_unit(
         run_id, unit_id, claim.fencing_token, error="reclaim_exhausted", terminal=True, at=at
@@ -1901,11 +1923,12 @@ def dispatch_wave(
     abandoned open on an abort path would strand its unit in every later
     wave.
 
-    CLAIM REFUSALS ARE ROUTINE, NOT WAVE-FATAL. The dispatcher claims
-    (:func:`dispatch_unit`), so the store's typed refusals now surface here
-    instead of inside a worker process, and exactly three are handled --
-    everything else, including any unexpected exception type, still
-    propagates:
+    CLAIM REFUSALS ARE ROUTINE, NOT WAVE-FATAL. The dispatcher claims -- on
+    BOTH paths that claim, :func:`dispatch_unit` and
+    :func:`_terminally_fail_exhausted_unit` -- so the store's typed refusals
+    now surface here instead of inside a worker process, and exactly three
+    are handled on each path; everything else, including any unexpected
+    exception type, still propagates:
 
     - :class:`~content_pipeline.execution.model.TerminalStateError` and
       :class:`~content_pipeline.execution.model.AlreadyClaimedError` -- the
@@ -1920,6 +1943,18 @@ def dispatch_wave(
       identically to an observed halt: ``halted`` is set, no further unit is
       dispatched, already-open dispatches wind down, and a
       :class:`DispatchReport` is returned.
+
+    THE EXHAUSTION PATH READS THEM DIFFERENTLY, because it is not trying to
+    dispatch a unit but to drive an already-exhausted one terminal.
+    ``RunHaltedError`` means the same thing there (end the wave gracefully),
+    but ``TerminalStateError`` is BENIGN -- the unit is already terminal,
+    which is precisely the end state that call was reaching for, so it needs
+    no further action and is NOT counted in ``failed_exhausted``; it appears
+    in ``settled`` as ``already_terminal``. ``AlreadyClaimedError`` means
+    someone re-claimed the unit with a live lease, so it is no longer
+    abandoned and is not this dispatcher's to fail; it is skipped and
+    appears in ``settled`` as ``claim_refused``. Neither leaves anything
+    stranded: that path opens no dispatch row.
 
     LIVENESS. The loop is bounded three ways, and the third exists because
     the first two are per-cause: ``aborted_reason`` (launch
@@ -2000,9 +2035,49 @@ def dispatch_wave(
                         unit.state is UnitState.CLAIMED
                         and reclaim_attempt_count(store, run_id, unit.unit_id) >= max_reclaims_per_unit
                     ):
-                        _terminally_fail_exhausted_unit(
-                            store, run_id, unit.unit_id, dispatcher_id=dispatcher_id, at=tick_now
-                        )
+                        try:
+                            _terminally_fail_exhausted_unit(
+                                store, run_id, unit.unit_id, dispatcher_id=dispatcher_id, at=tick_now
+                            )
+                        except RunHaltedError as exc:
+                            # Same meaning as the dispatch-path halt below:
+                            # the RUN is halted, so no claim can succeed and
+                            # there is nothing left to do this wave. End it
+                            # GRACEFULLY -- `halted` set, `aborted_reason`
+                            # left None -- exactly as an OBSERVED halt ends
+                            # it. No dispatch row was opened here, so unlike
+                            # the dispatch path there is none to report as
+                            # settled.
+                            halted = halted or exc.kind
+                            break
+                        except TerminalStateError:
+                            # NOT a failure here, unlike on the dispatch
+                            # path: this call exists ONLY to drive an
+                            # exhausted unit terminal, and the refusal says
+                            # it already IS terminal. The desired end state
+                            # holds, so the unit needs no further action --
+                            # and it must NOT be counted in
+                            # `failed_exhausted`, which records units THIS
+                            # wave failed. Recorded in `settled` so the
+                            # outcome is visible rather than silently
+                            # dropped.
+                            claim_refused.add(unit.unit_id)
+                            settled_all.setdefault(unit.unit_id, "already_terminal")
+                            continue
+                        except AlreadyClaimedError:
+                            # Someone re-claimed it with a live lease
+                            # between candidate selection and this claim, so
+                            # it is no longer an abandoned unit and is not
+                            # this dispatcher's to fail. Skip it, and record
+                            # it in `claim_refused` so it is excluded from
+                            # candidate selection FOR THE REST OF THIS WAVE:
+                            # its lease can expire mid-wave and make it
+                            # reclaimable again, and re-attempting it every
+                            # tick would spin (a refusal is not progress, so
+                            # only the stall bound would end the wave).
+                            claim_refused.add(unit.unit_id)
+                            settled_all.setdefault(unit.unit_id, "claim_refused")
+                            continue
                         failed_exhausted.append(unit.unit_id)
                         continue
                     try:

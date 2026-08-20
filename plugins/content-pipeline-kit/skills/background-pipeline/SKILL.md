@@ -129,6 +129,13 @@ vocabulary a consumer will actually see:
   worker settling its own unit). The wave skips that unit and carries on
   with the rest; a halted run reports `claim_failed` here too, alongside
   `halted`.
+- `already_terminal` -- an exhausted unit the dispatcher went to fail was
+  already terminal when it tried, so the end state it wanted holds and
+  nothing was done. Not a failure, and deliberately absent from
+  `failed_exhausted`, which records only units this wave itself failed.
+- `claim_refused` -- an exhausted unit the dispatcher went to fail had been
+  re-claimed with a live lease, so it is no longer abandoned and not this
+  dispatcher's to fail. Skipped for the rest of this wave.
 - `wave_exit` -- the wave stopped while this dispatch was still open, so the
   dispatcher closed it on the way out. Every dispatch this call opened is
   settled before `dispatch_wave` returns, including on an abort: a dispatch
