@@ -119,7 +119,9 @@ whatever I could not confirm moves into an Unverified section with the reason --
 so nothing is lost and nothing has to be marked before I will run.
 
 Before starting I name the analysis and its exact scope, because what a run
-READS is what makes it cheap or expensive.
+READS is what makes it cheap or expensive. If covering everything you asked for
+looks expensive, I tell you the number and let you decide what to drop -- I do
+not quietly cover less and call it the plan.
 
 Or can I help you with something else?
 ```
@@ -174,6 +176,55 @@ not menu decoration:
 - **Scope is part of the announcement, never implied.** "the corpus" is not a
   scope; the count and the roots are. When a selector expands to more files than
   the user likely pictured, say the number before starting, not after.
+- **Announce scope in BOTH directions.** The rule above fires when scope grows;
+  it must fire just as hard when scope SHRINKS. State what you excluded, the
+  count, and on whose authority -- see "Narrowing scope" below. A run covering
+  less than the user asked for is the more dangerous error: an over-large scope
+  announces itself in the bill, an under-large one never announces itself at all.
+
+### Narrowing scope (the user's decision, never yours)
+
+A request to cover a corpus means the corpus. When the honest scope looks
+expensive, that is a fact to REPORT, not a problem to solve by quietly covering
+less. Classify every exclusion before running, and treat the two classes
+differently:
+
+- **Mechanical exclusions are yours to take.** VCS-ignored, vendored,
+  third-party, generated, build output. The discovery scripts already apply
+  these and they involve no judgment about what the code contains. Report the
+  count; do not ask permission.
+- **Judgment exclusions are the USER'S to take.** "This directory probably holds
+  nothing worth carrying" is a PREDICTION OF THE ANALYSIS RESULT, and the way to
+  resolve it is to run the analysis. Excluding on that basis substitutes your
+  guess for the verdict the user asked for.
+
+**Cost is never a silent input to scope.** If the affordable scope is smaller
+than the requested one, say so with a number -- "N subjects at the pinned model
+and depth; here is what I would drop first" -- and let the user choose.
+Absorbing that tradeoff into a plan is how a full-corpus request quietly becomes
+a partial one, and the user never learns a choice was made.
+
+**A pre-filter is a substitute for the analysis, not a preparation for it.**
+Ranking or banding directories to decide which ones "deserve" a run moves the
+admission decision outside `references/standards/coverage-standards.md`, where
+nothing enforces it -- and the criteria that would have rejected the result are
+exactly the ones the pre-filter skipped. If you want a cheap ordering, say
+plainly that it is an ORDERING and that every subject remains in scope. The
+moment a band means "skip", it has become an unaccountable scope cut.
+
+### Enumerating subjects (do not hand-roll a file walk)
+
+Never write your own directory walk or file-extension filter to decide what the
+subjects are. The shared code/data extension set, the VCS-ignore pruning, the
+vendored/generated exclusions and the ancestor chain all live in the discovery
+scripts, and a hand-written filter does not fail loudly when it is wrong -- it
+silently returns a SMALLER corpus, which then reads as the whole corpus.
+
+- One directory: `scripts/discover_coverage.py <directory>` (or `--diff`).
+- Every subject under a root, for planning at tree scale:
+  `scripts/discover_composition.py <root> --json` and read `coverageSubjects`.
+  This is the cheap, model-free enumeration -- use it before estimating cost or
+  proposing any phasing, and quote its count as the scope.
 
 ## Dispatch table
 
@@ -542,6 +593,9 @@ domain_skill:
       references/cohesion-principles.md; it is never re-derived in a lane or standards doc.
     behavioral_guardrails:
       - Announce every run by its canonical analysis name plus the concrete file scope BEFORE starting (see "Naming and scope announcement"). Echo the menu's name verbatim rather than paraphrasing it, name every analysis a dispatch runs rather than only the headline one, and give scope as a count plus roots -- never as "the corpus". The names are the user's only handle on which analysis they authorized.
+      - Scope is the user's decision, and it is announced in BOTH directions. Mechanical exclusions (VCS-ignored, vendored, generated) are yours to take and to report as a count. A JUDGMENT exclusion -- "this directory probably holds nothing worth carrying" -- is a prediction of the analysis result, so the way to settle it is to RUN the analysis, not to drop the subject. Never let cost silently shrink scope: report the honest subject count with its cost and let the user choose what to drop. A banding or ranking pre-filter is a substitute for the analysis, not a preparation for it -- if it means "skip" rather than "order", it has moved the admission decision outside coverage-standards.md where nothing enforces it. See "Narrowing scope".
+      - Enumerate subjects with the discovery scripts, never a hand-rolled walk or extension filter. `scripts/discover_coverage.py <dir>` for one subject; `scripts/discover_composition.py <root> --json` -> `coverageSubjects` for every subject under a root, which is the cheap model-free enumeration to plan and cost from. A hand-written filter fails SILENTLY toward a smaller corpus, and that smaller corpus then reads as the whole one.
+      - When this work is handed to another agent -- a subagent, a background CLI, a workflow -- pass the artifact's standards document VERBATIM by absolute path. Do not summarize it into a brief. A paraphrase is not the criteria: the agent will satisfy the paraphrase. Worse, a brief that lists worked EXAMPLES of qualifying facts will have those examples beat its own abstract rules, so a brief that correctly forbids repo-wide facts while illustrating "good" facts with repo-wide project rules produces exactly the bloat it forbade. If a brief must exist, let it carry the task and the return shape, and let the standards document carry every criterion.
       - Route by verb AND subject. Audit and author require an artifact; generate takes claude-md only; analyze accepts only code_subtree and is not artifact-parameterized. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the producing direction when the user asked for a verdict.
       - Author and generate are chosen by INPUT PROVENANCE, never by the word the user typed. Content the user supplies is authored; coverage from an analyze run is generated. "Generate a skill" and "generate a README" are author dispatches, because no analysis produces coverage for those artifacts -- say which lane you are taking and why, rather than silently honouring or silently overriding the token.
       - Regeneration never deletes and never blocks. Generating over a document that already exists SORTS every unit: content a DIRECTED check confirms against the code it describes is kept in place, marked content is kept verbatim, and everything else moves verbatim into the document's `## Unverified` section with the reason its check failed (NOT LOCATED, or CONTRADICTED at a named file:line). Verify by reading the code the claim describes -- never by whether this run's coverage happened to re-derive it, because coverage is a non-idempotent sample and sorting on coincidence churns the document. There is no proposal round and no pre-write marking chore; `retain` is how a user resolves a unit OUT of the Unverified section, never a precondition to running. Report the section with a count every run.

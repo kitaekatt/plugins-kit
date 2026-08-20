@@ -189,7 +189,17 @@ them silently.
 Apply `references/standards/coverage-standards.md` verbatim. The caller MUST
 resolve that document to an ABSOLUTE path and pass it as `refs.criteria` to
 `workflow/coverage-detect.js`; never embed or paraphrase the criteria in the
-JavaScript workflow. Apply the depth selected at the intent gate: `basic` uses a
+JavaScript workflow.
+
+**The same rule holds for ANY carrier, not just the workflow.** If the
+assessment is handed to a subagent, a background CLI, or a hand-written brief,
+that carrier gets the standards document verbatim by absolute path too. A
+summary of the criteria is not the criteria, and worked examples inside a brief
+outrank the brief's own abstract rules -- a brief that forbids repo-wide facts
+while illustrating "good" facts with repo-wide project rules will produce
+repo-wide bloat. Criteria travel whole or they do not travel.
+
+Apply the depth selected at the intent gate: `basic` uses a
 bounded read and one assessment pass; `advanced` reads every source file
 completely, discovers invariants before assessment, and verifies surviving
 candidates after assessment.
