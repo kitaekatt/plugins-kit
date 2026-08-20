@@ -158,17 +158,46 @@ def _default_runner(
 ) -> Tuple[str, str, int]:
     """The production process boundary: an ordinary blocking subprocess call.
 
+    ``encoding="utf-8"`` is explicit and deliberate: without it, ``text=True``
+    lets Python fall back to ``locale.getpreferredencoding()``, which on
+    Windows is the ANSI codepage (cp1252 on this fleet), not UTF-8. The real
+    ``claude --bg`` banner contains a UTF-8-encoded U+00B7 MIDDLE DOT
+    (bytes ``C2 B7``); decoded as cp1252 that becomes two mojibaked
+    characters instead of one, which is what
+    :func:`_parse_launch_session_id` must tolerate as a SEPARATE defect (see
+    ``_BG_LAUNCH_BANNER_RE``'s docstring) -- fixing the encoding here does
+    not make that regex fix optional, and vice versa: a regex fix alone was
+    demonstrated live to still miss a real middle-dot banner on Windows
+    because the bytes never reached it correctly decoded in the first
+    place.
+
+    ``errors="replace"`` (never ``"strict"``): a launch banner is
+    best-effort evidence (P11 -- discarded as proof of success), never a
+    hard requirement, so a decoding error here must not raise and abort an
+    otherwise-successful launch. A replaced character can at worst make
+    :func:`_parse_launch_session_id` fail to find an id, which is already a
+    handled ``None`` case; it must never crash the dispatch.
+
+    The ``(stdout, stderr, returncode)`` contract is unchanged -- both
+    remain ``str`` (never ``bytes``), so ``run_cli_streaming`` and every
+    other caller of a ``runner`` in this shape keep working unmodified.
+
     Never exercised by this module's own test suite -- every test supplies
     its own ``runner`` (a fake, scripted callable); see
     ``tests/content-pipeline-kit/test_execution_driver_claude_bg.py``'s
     "no test reaches a real subprocess" guard, which patches THIS name to a
-    raising stub and asserts nothing in the suite still reaches it.
+    raising stub and asserts nothing in the suite still reaches it. The
+    encoding behavior itself is pinned by a test that patches
+    ``subprocess.run`` directly and inspects the kwargs this function
+    passes -- see ``test_default_runner_passes_utf8_encoding``.
     """
     proc = subprocess.run(
         list(argv),
         input=stdin,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=dict(env) if env is not None else None,
         cwd=cwd,
         timeout=timeout,
@@ -1142,15 +1171,34 @@ class LaunchMisconfigurationError(ExecutionError):
 DEFAULT_LAUNCH_CONFIRM_SECONDS = 60.0
 DEFAULT_LAUNCH_POLL_INTERVAL_S = 1.0
 
-_BG_LAUNCH_BANNER_RE = re.compile(r"backgrounded\s*\*\s*([0-9a-fA-F]+)")
+# SEPARATOR-AGNOSTIC by design: the real `claude --bg` banner (CLI 2.1.238)
+# uses U+00B7 MIDDLE DOT ("backgrounded · ff97012c"), not the literal
+# asterisk this regex used to require -- a live capture recorded exactly
+# that (`cat -A` showed `backgrounded M-BM-7 ff97012c$`, i.e. the UTF-8
+# bytes C2 B7 for U+00B7). On Windows, `_default_runner`'s subprocess call
+# used to decode that output with the locale codepage instead of UTF-8, so
+# the separator could also arrive MOJIBAKED (cp1252-decoding C2 B7 yields
+# two characters, "Â·"). Matching `\S+` for the separator, rather
+# than any specific character, tolerates the real banner, the mojibaked
+# form, and the historical `*` form, without caring what platform or
+# encoding produced it -- future banner-punctuation drift should not need
+# another regex change here.
+#
+# The id-length floor is 8, not "one or more": every observed short id
+# (this module's own test fixtures, and the live captures above) is 8 hex
+# characters. A shorter floor would risk matching a truncated or unrelated
+# hex-looking token as a session id; nothing in this module has ever
+# produced or consumed an id shorter than 8.
+_BG_LAUNCH_BANNER_RE = re.compile(r"backgrounded\s+\S+\s+([0-9a-fA-F]{8,})")
 
 
 def _parse_launch_session_id(stdout: str) -> Optional[str]:
     """Best-effort extraction of the short session id from a ``claude --bg``
-    launch banner (``"backgrounded * a47add3f"``, P3). Used only to know
-    WHICH ``agents --json`` record to watch -- never as evidence the launch
-    succeeded (P11: the banner and exit code are discarded as evidence of
-    success; a bad flag surfaces only asynchronously as ``state: "failed"``).
+    launch banner (e.g. ``"backgrounded · a47add3f"``, or historically
+    ``"backgrounded * a47add3f"``, P3). Used only to know WHICH ``agents
+    --json`` record to watch -- never as evidence the launch succeeded
+    (P11: the banner and exit code are discarded as evidence of success; a
+    bad flag surfaces only asynchronously as ``state: "failed"``).
     """
     if not stdout:
         return None
