@@ -1172,13 +1172,14 @@ DEFAULT_LAUNCH_CONFIRM_SECONDS = 60.0
 DEFAULT_LAUNCH_POLL_INTERVAL_S = 1.0
 
 # SEPARATOR-AGNOSTIC by design: the real `claude --bg` banner (CLI 2.1.238)
-# uses U+00B7 MIDDLE DOT ("backgrounded · ff97012c"), not the literal
+# separates the word "backgrounded" from the id with U+00B7 MIDDLE DOT,
+# not the literal
 # asterisk this regex used to require -- a live capture recorded exactly
 # that (`cat -A` showed `backgrounded M-BM-7 ff97012c$`, i.e. the UTF-8
 # bytes C2 B7 for U+00B7). On Windows, `_default_runner`'s subprocess call
 # used to decode that output with the locale codepage instead of UTF-8, so
 # the separator could also arrive MOJIBAKED (cp1252-decoding C2 B7 yields
-# two characters, "Â·"). Matching `\S+` for the separator, rather
+# two characters, "<U+00C2><U+00B7>"). Matching `\S+` for the separator, rather
 # than any specific character, tolerates the real banner, the mojibaked
 # form, and the historical `*` form, without caring what platform or
 # encoding produced it -- future banner-punctuation drift should not need
@@ -1194,7 +1195,7 @@ _BG_LAUNCH_BANNER_RE = re.compile(r"backgrounded\s+\S+\s+([0-9a-fA-F]{8,})")
 
 def _parse_launch_session_id(stdout: str) -> Optional[str]:
     """Best-effort extraction of the short session id from a ``claude --bg``
-    launch banner (e.g. ``"backgrounded · a47add3f"``, or historically
+    launch banner (``"backgrounded"``, U+00B7, then the id -- or historically
     ``"backgrounded * a47add3f"``, P3). Used only to know WHICH ``agents
     --json`` record to watch -- never as evidence the launch succeeded
     (P11: the banner and exit code are discarded as evidence of success; a
