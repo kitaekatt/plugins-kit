@@ -25,6 +25,11 @@ This module shares first-party SOURCE only. Third-party deps the package needs
 declared in its ``pyproject.toml`` -- NOT installed here. A separate static test
 (tests/bootstrap/test_dependency_completeness.py) catches missing declarations.
 
+For the full set of supported ways a consumer can reach a published shared
+library -- another plugin, the standalone Python above, or a project running
+its own interpreter -- see
+plugins/bootstrap/skills/bootstrap/references/library-consumption.md.
+
 Stdlib-only. Functions return ``SharedLibResult`` so the engine can map outcomes to
 its logging discipline (cached -> log_ok; published/linked -> action log; skipped ->
 log; failed -> action log + failure).

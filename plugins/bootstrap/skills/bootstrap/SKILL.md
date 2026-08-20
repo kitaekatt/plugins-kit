@@ -378,4 +378,13 @@ reference_skill:
       path: references/plugin-reload-lifecycle.md
       keywords: [reload-plugins, restart, restart IDE, hook reload, registration, SessionStart re-fire, plugin update, when to reload, when to restart, script content live, cache version dir, reload advisory, _reload_advice, harvest, single-session update, engine_ran_version, claude --resume, advise update, cooldown status, anomaly, two skip gates]
       summary: Measured rule for when a plugin change is live vs needs /reload-plugins vs needs a restart (the three layers code/registration/firing); informs the Step 4d reload nag. ALSO the operational guide for advising on a bootstrap update -- the single-session harvest, the two skip gates + --resume, which state files to read, and the anomaly checklist.
+    - id: library_consumption_ref
+      path: references/library-consumption.md
+      keywords: [shared library, shared_libs, shared_lib_imports, standalone python, foreign interpreter, project venv, sitecustomize, PYTHONPATH shim, off-fleet pip install, vendored copy, version declaration, min_version, capability probe, non-plugin consumer]
+      summary: >-
+        Every supported way a consumer can reach a published shared library --
+        plugin (shared_lib_imports), the standalone Python, or a project on its
+        own interpreter -- versus the one unsupported way (off-fleet pip
+        install), and the cross-cutting rule that no mode supports version
+        declaration.
 ```

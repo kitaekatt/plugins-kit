@@ -40,8 +40,7 @@ moment they have the context to make it.
 
 ## The three-part flow
 
-The pattern has three parts, each owned by a different file. All three are
-required -- any two without the third reproduce one of the failure modes above.
+The pattern has three parts, each owned by a different file.
 
 1. **Declare, do not install.** The project (or plugin) `bootstrap.json` lists
    the plugin in `plugins[]` with `install: "manual"`. The plugin is then a
@@ -50,6 +49,24 @@ required -- any two without the third reproduce one of the failure modes above.
    re-scopes it; it only keeps an ALREADY-installed copy up to date via
    `claude plugin update`. Install state is the user's; version freshness is
    bootstrap's.
+
+   This part is the one genuinely optional piece of the three. Since bootstrap
+   0.52.0, self-registration closes the freshness gap on its own: once a
+   developer installs the plugin by any means (including part 3 below, with no
+   `plugins[]` entry ever written), the engine appends an
+   `install: "manual"` entry for it to that machine's `bootstrap.local.json`,
+   so an undeclared-but-installed plugin that ships its own `bootstrap.json`
+   still gets kept up to date. What a hand-written declaration still buys, that
+   self-registration cannot, is DISCOVERABILITY on a machine where the plugin
+   is not yet installed: the entry names the plugin in a manifest a developer
+   browsing the project reads, and the engine emits an ok entry naming the
+   exact `claude plugin install` command. That entry is verbose-only, so a
+   declaration costs a machine that never exercises the specialty action
+   nothing at session start. Parts 2 and 3 are not optional -- skipping either
+   still reproduces one of the failure modes above. Full mechanics of what
+   self-registration writes, including the condition that the plugin must ship
+   its own `bootstrap.json`: `manifest-reference.md`'s "Self-registration"
+   section under `plugins` Entry Fields.
 
 2. **Preflight at the point of need.** The skill or action that requires the
    plugin checks for it BEFORE doing the work -- by testing the published
@@ -74,7 +91,11 @@ Two forms, in order of preference:
   lands at
   `~/.claude/plugins/data/<marketplace>/_shared_libs/<lib_name>/`, so the
   check is a directory-exists test. Prefer this when the requirement is a
-  shared lib rather than the plugin's commands or skills.
+  shared lib rather than the plugin's commands or skills. This is the same
+  published location every shared-library consumption mode reads from,
+  including a project that must run under its own interpreter -- see
+  [library-consumption.md](library-consumption.md) for the full set of modes
+  and which of them are supported.
 - **Guarded import** -- `try: import <lib>` / `except ImportError:` inside the
   code path that needs it. Use a LAZY import at the call site, never a
   top-level one: a top-level import turns a missing optional dependency into an
