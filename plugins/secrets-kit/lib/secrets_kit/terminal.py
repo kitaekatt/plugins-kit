@@ -42,15 +42,41 @@ _MANUAL_HINT = (
     "No terminal emulator could be launched. Run this yourself in a terminal:"
 )
 
+# `do script` returns once Terminal has STARTED the command, not when the
+# command finishes, so this bounds the ask-Terminal-to-open step only.
+_LAUNCH_TIMEOUT = 30
+
+
+def _MANUAL_HINT_FOR(argv: List[str]) -> str:
+    """The manual fallback, in the shape ``launch()`` already uses for it."""
+    return f"{_MANUAL_HINT}\n\n    " + " ".join(shlex.quote(a) for a in argv)
+
+
+def _last_line(text: str) -> str:
+    """The most informative line of a tool's stderr, for a one-line message."""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    return lines[-1] if lines else "no error output"
+
 
 def _hold_open_posix(argv: List[str]) -> str:
     """The command line to run, then wait so the window does not vanish.
 
     A window that closes the instant the verb finishes takes its output with
     it -- including the error the user needs when something went wrong.
+
+    The wait is `printf` + a bare `read`, NOT `read -p`. `-p` is a bash
+    extension; in zsh it means "read from a coprocess", so the line dies with
+    `read: -p: no coprocess` and the window drops straight back to a prompt.
+    zsh is the macOS login-shell default and Terminal's `do script` runs the
+    user's login shell, so on a stock Mac the hold-open never worked -- the
+    error the window exists to display scrolled past as ordinary shell noise,
+    and a user who had never seen the prompt reasonably concluded no window
+    had opened. printf + bare `read` is POSIX and behaves the same in sh,
+    bash and zsh.
     """
     inner = " ".join(shlex.quote(a) for a in argv)
-    return f'{inner}; echo; read -r -p "Press Enter to close this window..." _'
+    hold = 'printf %s "Press Enter to close this window..."; read -r _'
+    return f"{inner}; echo; {hold}"
 
 
 def _launch_windows(argv: List[str], title: str) -> str:
@@ -94,11 +120,31 @@ def _launch_macos(argv: List[str], title: str) -> str:
     # so its embedded quotes and backslashes have to survive one more level.
     escaped = command.replace("\\", "\\\\").replace('"', '\\"')
     script = f'tell application "Terminal" to do script "{escaped}"'
-    subprocess.Popen(
-        ["osascript", "-e", script, "-e", 'tell application "Terminal" to activate'],
-        start_new_session=True,
-        close_fds=True,
-    )
+    # WAIT on osascript rather than firing and forgetting. `do script` returns
+    # as soon as Terminal has started the command, so this does not block on
+    # the verb itself -- but it does surface the failures a bare Popen swallowed
+    # while this function still returned "a new Terminal window": Automation
+    # (TCC) permission denied, Terminal scriptable but not installed, an
+    # AppleScript syntax error from the nested escaping. Reporting success for
+    # a window that never opened sends the user hunting for a prompt that does
+    # not exist.
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", script, "-e", 'tell application "Terminal" to activate'],
+            capture_output=True,
+            text=True,
+            timeout=_LAUNCH_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        raise SecretsError(
+            "timed out asking Terminal to open a window",
+            _MANUAL_HINT_FOR(argv),
+        )
+    if proc.returncode != 0:
+        raise SecretsError(
+            f"could not open a Terminal window: {_last_line(proc.stderr)}",
+            _MANUAL_HINT_FOR(argv),
+        )
     return "a new Terminal window"
 
 

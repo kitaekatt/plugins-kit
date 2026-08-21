@@ -477,6 +477,16 @@ Read every line. If anything is unrelated to the feature, `git restore --staged 
 
 **Always use `uv run python` in shell scripts** — never bare `python` or `python3`. On Windows, the system PATH contains Microsoft Store stubs (`WindowsApps/python.exe`) that take precedence over any user PATH entry, causing bare `python`/`python3` to fail with "Permission denied" (exit 126) in Git Bash. On macOS, bare `python` often doesn't exist. Since bootstrap guarantees `uv` is available, `uv run python` is the standard way to invoke Python from any shell script in this project. It resolves the correct Python, activates the venv (giving access to installed packages), and works on all platforms.
 
+**Shell scripts must survive bash 3.2 and zsh.** `/bin/bash` on macOS is bash
+3.2 (no bash 4+ since the licence change, and none at all without Homebrew),
+and the macOS login shell is zsh. Two consequences bite hardest -- a
+possibly-empty `"${ARR[@]}"` is a FATAL `set -u` error before bash 4.4 (write
+`${ARR[@]+"${ARR[@]}"}` instead), and bash-only builtin flags such as `read -p`
+fail under zsh (`printf %s "..."; read -r _` is the portable hold-open). Both
+apply to this repo's own `scripts/*.sh` as much as to shipped plugin code, and
+neither surfaces as a test failure. A Windows session cannot self-check these
+-- verify on a Mac, or assert POSIX-only constructs in a test.
+
 **Plan non-trivial tasks**: Plan when both (a) the task is non-trivial, and (b) the implementation could go several reasonable directions. Share the plan, get a thumbs-up, then implement. Skip planning when the path is obvious or the user has already framed the approach — in those cases extra ceremony reads as procedural friction, not rigor. When you do plan, use plan mode (`EnterPlanMode`) as the sanctioned space to think and propose; don't ritualize the steps. The goal is alignment on intent, not a checklist.
 
 **Skill-based document placement** (package cohesion): when creating a document, ask "what skill does this belong to?" and place it by the CCP/CRP/ADP framework -- `plugins/skills-kit/skills/md-domain/references/cohesion-principles.md` is the SSOT for those principles and the placement algorithm. If no existing skill fits, create a stub skill and let the document live as a progressively-disclosed reference inside it.

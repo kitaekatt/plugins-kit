@@ -54,7 +54,60 @@ def test_posix_command_holds_the_window_open():
     """The window must outlive the verb, or its output dies with it."""
     rendered = term._hold_open_posix(["secrets-kit", "unlock"])
     assert rendered.startswith("secrets-kit unlock")
-    assert "read -r -p" in rendered
+    assert "read -r _" in rendered
+
+
+def test_macos_launch_reports_an_osascript_failure(monkeypatch):
+    """Regression: the launcher fired osascript and returned "a new Terminal
+    window" unconditionally. Only a spawn OSError was caught, so an osascript
+    that started and then FAILED -- Automation permission denied, an
+    AppleScript error from the nested escaping -- still reported success, and
+    the user went looking for a window that never opened."""
+    monkeypatch.setattr(term, "_current_platform", lambda: "darwin")
+
+    def failing(*a, **k):
+        return subprocess.CompletedProcess(
+            a[0] if a else [], 1, stdout="", stderr="execution error: Not authorized (-1743)")
+
+    monkeypatch.setattr(term.subprocess, "run", failing)
+
+    with pytest.raises(SecretsError) as excinfo:
+        term.launch(["secrets-kit", "unlock"])
+    assert "could not open a Terminal window" in str(excinfo.value)
+    assert "-1743" in str(excinfo.value)
+
+
+def test_macos_launch_returns_success_when_osascript_succeeds(monkeypatch):
+    monkeypatch.setattr(term, "_current_platform", lambda: "darwin")
+    monkeypatch.setattr(
+        term.subprocess, "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            a[0] if a else [], 0, stdout="tab 1 of window id 1", stderr=""),
+    )
+    assert term.launch(["secrets-kit", "unlock"]) == "a new Terminal window"
+
+
+def test_macos_launch_reports_an_osascript_timeout(monkeypatch):
+    monkeypatch.setattr(term, "_current_platform", lambda: "darwin")
+
+    def hang(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="osascript", timeout=term._LAUNCH_TIMEOUT)
+
+    monkeypatch.setattr(term.subprocess, "run", hang)
+    with pytest.raises(SecretsError) as excinfo:
+        term.launch(["secrets-kit", "unlock"])
+    assert "timed out" in str(excinfo.value)
+
+
+def test_posix_hold_open_avoids_the_bash_only_read_dash_p():
+    """Regression: `read -p` is a bash extension. zsh reads it as "from a
+    coprocess" and fails with `read: -p: no coprocess`, so the window fell
+    back to a prompt instead of waiting. zsh is the macOS login-shell default
+    and Terminal's `do script` runs the login shell, so this broke the
+    hold-open on every stock Mac."""
+    rendered = term._hold_open_posix(["secrets-kit", "unlock"])
+    assert "read -r -p" not in rendered
+    assert "Press Enter to close this window" in rendered
 
 
 def test_posix_command_quotes_paths_with_spaces():

@@ -78,6 +78,15 @@ actual `p4-kit` / `git-kit` `prepare_review.py` failure mode (fixed 2026-06-02).
 missing-shared-lib failure (the vendoring discipline that keeps it that way is
 the next section).
 
+**Answer "am I already in the venv?" with `sys.prefix`, never by comparing
+interpreter paths.** `uv` makes `.venv/bin/python` a symlink to the base
+interpreter, so a resolved-path comparison false-positives in the common case.
+The full causal chain and the PEP 405 reasoning are in the comment on
+`bootstrap_guard.reexec_under_plugin_venv`. Surfaced 2026-08-21 (`hue-kit
+discover` reporting `zeroconf` unprovisioned while it sat installed in that
+venv); fixed in bootstrap 0.86.3, pinned by
+`test_reexec_happens_when_venv_python_symlinks_to_the_running_base`.
+
 The SKILL.md-side companion (write the explicit venv path in skill examples
 rather than `uv run python`) is documented in the root CLAUDE.md insight
 `host_python_via_plugin_venv`. With the script-side re-exec in place, the
@@ -130,6 +139,63 @@ added without the list being updated, so an edit propagated by hand to the five
 documented copies left both stale and only the test caught it.
 
 `path_repair.py` follows the same vendoring discipline.
+
+## Plugin shell code runs under bash 3.2 and zsh
+
+The root CLAUDE.md rule "Shell scripts must survive bash 3.2 and zsh" applies
+here with one extra surface: besides the scripts a plugin RUNS, it also owns
+every shell line it GENERATES and hands to something else -- a hook, a
+launcher shim, a command passed to `osascript`'s `do script` or a terminal
+emulator's `-e`. Those run under the user's LOGIN shell, so a generated line
+gets zsh even when the generating script is bash.
+
+Both incidents behind that rule were ours:
+
+- bootstrap 0.86.1 -- the SessionStart wrapper used the plain `"${ARR[@]}"` on
+  an `ENGINE_FLAGS` that is empty on every unflagged SessionStart, immediately
+  before launching the engine, so on every Mac the engine was never launched
+  at all.
+- secrets-kit 0.8.2 -- the spawned passphrase window's hold-open used
+  `read -r -p`, so under zsh it died and the window dropped back to a prompt,
+  scrolling the error it existed to display past as ordinary shell noise. The
+  user reasonably concluded no window had opened.
+
+Beyond `read -p`, the same bash-only class: `mapfile` / `readarray`,
+`declare -A`, `${var^^}` / `${var,,}`, `&>>`, `wait -n`.
+
+Both cases are pinned by
+`tests/bootstrap/test_sessionstart_detach.py::test_possibly_empty_arrays_use_the_bash32_guard`
+and
+`tests/secrets-kit/test_terminal.py::test_posix_hold_open_avoids_the_bash_only_read_dash_p`.
+
+## A detached process must keep an error channel
+
+Session readiness is held by the hook's process exit AND stdout-pipe EOF, so a
+child inheriting that pipe blocks exactly like foreground work -- mechanics and
+measurement in
+[engine-internals.md](bootstrap/skills/bootstrap/references/engine-internals.md).
+Backgrounding with the fds redirected away is therefore correct. The trap is
+discarding **stderr** along with stdout.
+
+bootstrap dispatched provisioning with `2>&1` onto `/dev/null`; a fatal shell
+error inside it reached no log, no stderr and no display file, so the failure
+was indistinguishable from a clean pass -- and a healthy pass is also silent
+(bootstrap 0.86.1; mechanism in engine-internals.md).
+
+Three rules follow:
+
+- Send a detached child's stderr to a FILE, not `/dev/null`. A file costs
+  nothing against the measured constraint, because what holds the session is
+  inheriting the parent's PIPE, not holding an fd on disk.
+- Give the wrapper its own crash path, so a failure BEFORE the real program
+  starts still reports.
+- Never return an unconditional success string from a fire-and-forget spawn.
+  secrets-kit's macOS launcher reported "opened a new Terminal window" for any
+  `osascript` that merely STARTED, catching only a spawn `OSError` -- so an
+  Automation-permission denial read as success (fixed in secrets-kit 0.8.3).
+
+The general rule: **when success and failure are both silent they are
+indistinguishable, and the failure gets attributed to something else.**
 
 ## Duplicated seam types across a shared-lib boundary
 
