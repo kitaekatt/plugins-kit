@@ -19,6 +19,15 @@ PLUGIN_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # --- Parse flags ---
 FLAG_VERBOSE=""
 FLAG_CONSOLE=""
+# Every expansion of an array that can be EMPTY is written
+# ${ARR[@]+"${ARR[@]}"}, not the plain "${ARR[@]}". macOS ships bash 3.2 as
+# /bin/bash and has no newer bash unless someone installed one, and in bash
+# before 4.4 the plain form on an empty array is a `set -u` violation -- a
+# fatal "ARR[@]: unbound variable", not an empty word list. ENGINE_FLAGS is
+# empty on every unflagged SessionStart and CURL_FLAGS is empty on everything
+# that is not MinGW/MSYS, so the plain form aborted the wrapper on every Mac.
+# The guarded form expands to nothing when unset/empty and to the identical
+# properly-quoted word list otherwise, on bash 3.2 and 5.x alike.
 ENGINE_FLAGS=()
 for arg in "$@"; do
     case "$arg" in
@@ -252,6 +261,10 @@ flush_log() {
             echo "$entry"
         done
     } >> "$PLUGIN_DATA/bootstrap.log"
+    # Idempotent: entries are consumed, so a second flush writes nothing rather
+    # than repeating the block. Reachable now that the crash trap can flush
+    # after a normal pre-engine flush already ran.
+    SHELL_LOG_ENTRIES=()
 }
 
 # --- Read log_success_shell from config (pre-Python, so use grep) ---
@@ -285,7 +298,39 @@ fi
 # through SessionStart stdout. Console mode runs _provision synchronously in
 # the main shell (its engine `exec` at the end replaces the process, exactly
 # as before).
+# Truncated on every launch by the dispatch redirect below, so it is empty
+# after a healthy pass and holds exactly one failing run's output otherwise.
+_PROVISION_STDERR="$PLUGIN_DATA/provision_stderr.log"
+
+# --- Wrapper crash path (see the dispatch note at the bottom) ---
+# Reports a fatal SHELL error inside _provision -- one that stops the wrapper
+# before the engine is ever started, so none of the engine's own reporting can
+# run. Writes the same bootstrap_display.pending channel every other failure
+# path here uses, and points at the two artifacts that identify the fault.
+_provision_crash() {
+    local rc="$1"
+    log_entry "shell: FAILED - provisioning aborted before the engine started (exit $rc)"
+    flush_log
+    if [ -n "$FLAG_CONSOLE" ]; then
+        # Console mode already printed the error to the terminal.
+        return
+    fi
+    mkdir -p "$PLUGIN_DATA"
+    printf '{"continue": true, "suppressOutput": false, "systemMessage": "%s -> bootstrap could not start: the SessionStart wrapper exited %s before launching its engine. Nothing was provisioned this session. Shell error output: %s", "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "%s -> bootstrap FAILED before its engine started. The SessionStart wrapper (%s) exited %s during provisioning, so no dependency check, no personalization pass, and no engine log ran this session. This is a bug in the wrapper itself, not a remediable machine condition -- do NOT offer fix-all. Read the captured stderr at %s, and reproduce interactively with: bash %s --console --verbose"}}\n' \
+        "${BOOTSTRAP_LABEL}" "$rc" "$_PROVISION_STDERR" \
+        "${BOOTSTRAP_LABEL}" "$0" "$rc" "$_PROVISION_STDERR" "$0" \
+        > "$PLUGIN_DATA/bootstrap_display.pending"
+}
+
 _provision() {
+
+# A fatal shell error below leaves no other trace: flush_log holds its entries
+# in memory until the end, the engine that owns engine_output.log has not
+# started yet, and in normal mode this whole function runs detached with its
+# fds redirected away. Without this trap the failure is indistinguishable from
+# a clean pass -- bootstrap simply never runs and never says so, which is
+# exactly how the bash 3.2 empty-array abort survived unnoticed on macOS.
+trap '_prov_rc=$?; [ "$_prov_rc" -ne 0 ] && _provision_crash "$_prov_rc"' EXIT
 
 # --- Ensure required dirs are at front of PATH ---
 # ~/.local/bin: tools installed by bootstrap (uv, git wrappers, etc.)
@@ -409,7 +454,7 @@ if [ -z "$PYTHON" ]; then
     log_entry "python3: downloading $ARCHIVE"
     mkdir -p "$STANDALONE_DIR"
     _dl_tmp="$STANDALONE_DIR/$ARCHIVE"
-    if ! curl -LsSf "${CURL_FLAGS[@]}" "$URL" -o "$_dl_tmp" 2>/dev/null; then
+    if ! curl -LsSf ${CURL_FLAGS[@]+"${CURL_FLAGS[@]}"} "$URL" -o "$_dl_tmp" 2>/dev/null; then
         rm -f "$_dl_tmp" 2>/dev/null
         log_entry "python3: FAILED - download error"
         flush_log
@@ -551,7 +596,7 @@ if [ -z "$FLAG_CONSOLE" ]; then
         --hook-start-epoch "$HOOK_START_EPOCH" \
         --project-dir "$PWD" \
         --background \
-        "${ENGINE_FLAGS[@]}" > "$PLUGIN_DATA/engine_output.log" 2>&1 &
+        ${ENGINE_FLAGS[@]+"${ENGINE_FLAGS[@]}"} > "$PLUGIN_DATA/engine_output.log" 2>&1 &
 else
     # Console mode: synchronous, plain text to stdout
     exec "$PYTHON" "${PLUGIN_ROOT}/engine/bootstrap_engine.py" \
@@ -559,23 +604,32 @@ else
         --data-dir "$PLUGIN_DATA" \
         --hook-start-epoch "$HOOK_START_EPOCH" \
         --project-dir "$PWD" \
-        "${ENGINE_FLAGS[@]}"
+        ${ENGINE_FLAGS[@]+"${ENGINE_FLAGS[@]}"}
 fi
 
 }
 
 # --- Dispatch _provision (see the MEASURED note at its definition) ---
 # Normal mode: detached, ALL fds redirected -- </dev/null so the child never
-# holds the hook's stdin, >/dev/null 2>&1 so it never holds the stdout pipe
-# Claude Code waits on (the engine inside re-redirects its own output to
+# holds the hook's stdin, >/dev/null so it never holds the stdout pipe Claude
+# Code waits on (the engine inside re-redirects its own output to
 # engine_output.log; user-facing content flows via bootstrap_display.pending).
-# The backgrounded subshell does not inherit the EXIT trap (bash resets traps
-# in subshells), so the trap can't double-fire; the failure paths inside
-# _provision write bootstrap_display.pending explicitly, which is the channel
-# that actually reaches the user. Console mode: synchronous, same shell, so
-# output prints and the engine exec behaves exactly as it always has.
+# The backgrounded subshell does not inherit the shell-error EXIT trap set
+# above (bash resets inherited traps in subshells), so that trap can't
+# double-fire; _provision installs its own, and the failure paths inside it
+# write bootstrap_display.pending explicitly, which is the channel that
+# actually reaches the user.
+#
+# stderr goes to a FILE rather than /dev/null. A file costs nothing against
+# the measured constraint -- what holds session readiness is a child inheriting
+# the hook's stdout PIPE, not a child holding an fd on disk -- and it is the
+# difference between a diagnosable failure and a bootstrap that silently never
+# ran. Truncated per launch, so it is empty after a healthy pass.
+#
+# Console mode: synchronous, same shell, so output prints and the engine exec
+# behaves exactly as it always has.
 if [ -n "$FLAG_CONSOLE" ]; then
     _provision
 else
-    _provision </dev/null >/dev/null 2>&1 &
+    _provision </dev/null >/dev/null 2>"$_PROVISION_STDERR" &
 fi
