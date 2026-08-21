@@ -1103,30 +1103,49 @@ claude_md:
       origin: "2026-08-10 -- rename performed while adding CodexCliBackend alongside ClaudeCliBackend."
       added: "2026-08-10"
     - id: stale_editable_self_install
-      keywords: [editable install, __editable__ pth, venv runs old code, stale pth, plugin version change, silently old release, site-packages, venv_check, own package not shared lib]
-      summary: A plugin venv's editable self-install .pth is never re-pointed when the plugin version changes, so a plugin's OWN venv can silently execute code from a previous release. Unfixed.
+      keywords: [editable install, __editable__ pth, venv runs old code, stale pth, plugin version change, silently old release, site-packages, venv_check, scan_editable_installs, own package not shared lib, fixed, detected and remediated]
+      summary: RESOLVED. A plugin venv's editable self-install .pth used to keep pointing at the previous version's cache dir, so a plugin's OWN venv could silently execute a superseded release. bootstrap's venv_check now detects it on the recorded path and re-syncs; the durable lesson is the detection ARGUMENT, not an open defect.
       detail: |
-        Every plugin with a pyproject.toml gets an `__editable__.<name>-<ver>.pth`
-        in its provisioned venv. That file hard-codes the plugin CACHE directory
-        present when the venv was first created; nothing re-points it on a version
-        change, and the old cache dir still exists, so the import succeeds and
-        silently resolves old code. Observed simultaneously on one machine:
-        content-pipeline-kit pinned 0.6.0 while running 0.6.6, llm-scripting-kit
-        0.6.1 while running 0.7.0, skills-kit 0.35.0 while running 0.44.1.
-        Two .pth shapes exist and may not be equally affected -- a direct path
-        (content-pipeline-kit, llm-scripting-kit, p4-kit) versus a finder import
-        (bootstrap, skills-kit) -- so establish which before designing a fix.
-        SHARED LIBS ARE NOT AFFECTED, which is why this hid for so long: a
+        THE DEFECT, for context. Every plugin with a pyproject.toml gets an
+        `__editable__.<name>-<ver>.pth` in its provisioned venv recording the
+        plugin CACHE directory present when the venv was created. The venv lives
+        at a version-INDEPENDENT path while the source lives in a version-keyed
+        cache dir, so after an update the old dir still exists, the import
+        succeeds, and the venv serves the previous release's code. Observed
+        simultaneously on one machine 2026-08-10: content-pipeline-kit pinned
+        0.6.0 while running 0.6.6, llm-scripting-kit 0.6.1 while running 0.7.0,
+        skills-kit 0.35.0 while running 0.44.1.
+        THE FIX, verified at source and live 2026-08-21.
+        `bootstrap_lib/venv_check.py::scan_editable_installs` is called from
+        `check_venv` AFTER the import checks and fails the venv with
+        `stale editable install: <detail>`, remediated by
+        `uv sync --project <plugin_root>`. Both .pth shapes the old note said to
+        establish before designing a fix ARE handled by `_read_editable_paths`:
+        the DIRECT shape (bare filesystem paths) and the FINDER shape (an
+        `import __editable___<name>_finder` one-liner whose sibling module holds
+        a MAPPING dict). Detection is a CONTAINMENT test, not equality, because
+        build backends legitimately record `<project_dir>/lib` rather than the
+        project root. It FAILS CLOSED: an unparseable .pth is reported unreadable
+        and never treated as stale, so an unfamiliar shape yields a verbose note
+        instead of a rewritten venv. Pinned by
+        `tests/bootstrap/test_venv_check.py` (stale fails, current passes,
+        unreadable passes with a note, stale syncs and logs an action).
+        WHY IT NEEDED A PATH CHECK AT ALL, which is the reusable part: such a
+        venv passes every BEHAVIORAL check. The import succeeds -- it just
+        resolves the wrong source -- so only the recorded path reveals it. When a
+        defect's symptom is "the right answer from the wrong source", test the
+        wiring, not the behavior.
+        SHARED LIBS WERE NEVER AFFECTED, which is why this hid for so long: a
         shared-lib .pth does `sys.path.insert(0, ...)` and outranks the editable,
         which merely appends. A plugin's OWN package has no shared-lib entry in
-        its own venv, so nothing outranks the stale editable there. The tell is a
-        post-publish smoke test that only passes when you shadow the installed
-        copy with the dev tree -- that is the defect, not a test-rig quirk.
-        Do NOT clear a stale .pth by hand: it fixes one box, converges nobody, and
-        destroys the evidence (never_hand_repair_a_wedge). The fix belongs in
-        bootstrap's venv provisioning.
-      origin: "2026-08-10 -- found while verifying that a published bootstrap_lib.codex resolved from the INSTALLED copy; llm-scripting-kit's own venv was resolving its superseded 0.6.1 cache dir. (A first reading blamed a second repo clone, because the recorded path spelled ~/.claude as D:\\Dev\\claude-settings; that is the same directory through the symlink, so compare paths with realpath before concluding the root moved.)"
+        its own venv, so nothing outranked the stale editable there.
+        STILL TRUE AND STILL LOAD-BEARING: do NOT clear a stale .pth by hand. It
+        fixes one box, converges nobody, and destroys the evidence
+        (never_hand_repair_a_wedge). That rule is what kept this diagnosable
+        until the fix shipped, and it applies to whatever the next such wedge is.
+      origin: "2026-08-10 -- found while verifying that a published bootstrap_lib.codex resolved from the INSTALLED copy; llm-scripting-kit's own venv was resolving its superseded 0.6.1 cache dir. (A first reading blamed a second repo clone, because the recorded path spelled ~/.claude as D:\\Dev\\claude-settings; that is the same directory through the symlink, so compare paths with realpath before concluding the root moved.) RESOLVED 2026-08-21: two live bootstrap passes (bootstrap 0.86.0 -> 0.86.1, content-pipeline-kit 0.12.0 -> 0.13.0) each named the stale .pth and re-synced, both resulting .pth files were confirmed to point at the current version, and venv_check plus its tests were read to confirm both shapes are covered rather than only the two that happened to fire."
       added: "2026-08-10"
+      updated: "2026-08-21"
   conventions:
     - rule: Commit and push to dev freely without asking; only a PUBLISH (dev -> master) needs the user. Do not coordinate around other agent sessions' concurrent work.
       keywords: [commit freely, push freely, no permission, dev branch, only publishes gated, other agents, concurrent sessions, shared tree, git commit -- paths]
