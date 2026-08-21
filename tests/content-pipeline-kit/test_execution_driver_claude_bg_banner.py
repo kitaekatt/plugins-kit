@@ -34,6 +34,7 @@ import subprocess
 import pytest
 
 from content_pipeline.execution.drivers.claude_bg import (
+    ClaudeCli,
     _default_runner,
     _parse_launch_session_id,
 )
@@ -54,6 +55,32 @@ MOJIBAKED_BANNER = "backgrounded \u00c2\u00b7 ff97012c"
 # The historical form this module's other tests script everywhere; must
 # keep parsing so none of those fixtures need to change.
 ASTERISK_BANNER = "backgrounded * a47add3f"
+
+# Captured 2026-08-21 at the real process boundary -- through the SHIPPED
+# `launch_bg` / `_default_runner` path on claude CLI 2.1.238, via a standalone
+# one-shot probe (not the gate run; the gate itself stayed untouched). This is
+# the FULL multi-line (stdout, stderr, rc) triple the driver actually
+# receives from `subprocess.run`, unlike REAL_BANNER above, which is a
+# single-line `cat -A` rendering of just the banner line. Recorded verbatim
+# in dev/tasks/cpk-session-recipients/log.md, section "THE REAL BANNER,
+# captured at the process boundary". The separator is a single U+00B7 MIDDLE
+# DOT and it arrived un-mojibaked -- the UTF-8 `C2 B7` decoding fix works on
+# this machine's real subprocess call. Written as escapes constructed via
+# chr(), never as a literal non-ASCII byte, per this repo's
+# ASCII-only-tracked-files convention.
+REAL_LAUNCH_STDOUT = (
+    "backgrounded " + chr(0xB7) + " f77605d2\n"
+    "  claude agents             list sessions\n"
+    "  claude attach f77605d2    open in this terminal\n"
+    "  claude logs f77605d2      show recent output\n"
+    "  claude stop f77605d2      stop this session\n"
+)
+# `errors="replace"` doing its documented job on a byte `_default_runner`'s
+# UTF-8 decoding could not map cleanly -- not a defect, and not exercised by
+# `_parse_launch_session_id` (which only reads stdout), but pinned here for
+# fidelity to the real triple.
+REAL_LAUNCH_STDERR = "Starting background service" + chr(0xFFFD) + "\n"
+REAL_LAUNCH_RC = 0
 
 
 def test_parses_the_real_middle_dot_banner():
@@ -104,3 +131,27 @@ def test_default_runner_passes_utf8_encoding(monkeypatch):
     assert captured["errors"] == "replace"
     assert captured["text"] is True
     assert (stdout, stderr, rc) == ("backgrounded \u00b7 ff97012c", "", 0)
+
+
+def test_parses_the_real_full_multiline_stdout():
+    """The FULL multi-line stdout `_default_runner` actually hands back, not
+    just the banner line -- pins `_parse_launch_session_id` against the
+    real capture end to end (extra trailing lines, real session id)."""
+    assert _parse_launch_session_id(REAL_LAUNCH_STDOUT) == "f77605d2"
+
+
+def test_claude_cli_launch_bg_triple_parses_to_the_real_session_id():
+    """Routes the real capture through the actual `ClaudeCli.launch_bg` ->
+    `_parse_launch_session_id` path (the one `dispatch_unit` uses), via a
+    fake `runner` returning exactly the captured triple -- real code-path
+    coverage without inventing dispatch/store/agents-json scaffolding."""
+
+    def _fake_runner(argv, **kwargs):
+        return REAL_LAUNCH_STDOUT, REAL_LAUNCH_STDERR, REAL_LAUNCH_RC
+
+    cli = ClaudeCli(executable="claude", runner=_fake_runner)
+    stdout, stderr, rc = cli.launch_bg("do the thing")
+
+    assert rc == REAL_LAUNCH_RC
+    assert stderr == REAL_LAUNCH_STDERR
+    assert _parse_launch_session_id(stdout) == "f77605d2"
