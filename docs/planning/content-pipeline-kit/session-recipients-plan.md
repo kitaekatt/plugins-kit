@@ -960,27 +960,77 @@ Three findings bind C1's design rather than C2's gate:
 executes an already-prepared **independent** ready wave through the A-min
 protocol, plus its invocation skill. Lane construction is deterministic and
 restated here as normative: with `N = min(max_agents, 16, pending)`, lane k
-sequentially processes ordinals k, k+N, k+2N, ... of the wave; lanes run
-concurrently, so at most N fresh agent contexts exist, no long-lived worker
-accumulates unit content, and resume replay -- which is ordering-sensitive --
-sees a deterministic structure. Waves larger than N are handled by exactly this
-lane loop; there is no other loop shape. The script uses no `Date.now()` or
-`Math.random()`; batch identity comes from Python. Each agent claims one unit,
-works through the consumer command, and returns a schema-validated
-acknowledgement; the workflow returns one aggregate object. It owns no
-persistence, validation, merging, or finalization. Leases per D5's workflow
-lane: worst-case-runtime sizing, no mid-flight reclaim, repeated expiry fails
-the unit. Native workflow resume is never pipeline durability -- SQLite remains
-the cross-session source of truth.
+sequentially processes ordinals k, k+N, k+2N, ... of the wave. Ruled
+2026-08-21: this indexes **wave positions** -- the k-th, (k+N)-th, ... units of
+the ordinal-sorted wave -- not residues of the stored `UnitRecord.ordinal`;
+`N` is defined from `pending`, the wave's count, so the sentence already
+indexes the wave, and `_flat_ready_wave` preserves holey stored ordinals, so a
+residue reading is undefined for a holey wave and can silently leave lanes
+empty. Lanes run concurrently, so at most N fresh agent contexts exist, no
+long-lived worker accumulates unit content, and resume replay -- which is
+ordering-sensitive -- sees a deterministic structure. Waves larger than N are
+handled by exactly this lane loop; there is no other loop shape. The script
+uses no `Date.now()` or `Math.random()`; batch identity comes from Python.
+Each agent claims one unit, works through the consumer command, and returns a
+schema-validated acknowledgement; the workflow returns one aggregate object.
+Ruled 2026-08-21: self-claim is contract text, not a design preference -- P15
+alone does not force it, but the settled C1 shape above does, and it is also
+the only shape that works for waves larger than N, since a lease starts at
+claim and preclaiming a whole wave would expire healthy queued units under
+D5's headroom factor. The cost is stated, not papered over: the B lane's
+anti-zombie property (no claim envelope exists for a stalled session to
+re-claim through) is given up in this lane, so a C-lane agent holds a runnable
+claim command for the life of its session. The remedy is a worker-scoped claim
+envelope path, keyed on `(run_id, unit_id, worker_id)` rather than B's
+`(run_id, unit_id, verb)`; the residual -- a stale agent's claim command firing
+after a later batch's lease has already expired -- is bounded by fencing to
+duplicated spend, never side effects, and C2 must inspect attempt rows for
+exactly one CLAIM per worker id. It owns no persistence, validation, merging,
+or finalization. Leases per D5's workflow lane: worst-case-runtime sizing, no
+mid-flight reclaim, repeated expiry fails the unit. Ruled 2026-08-21: the reap
+this implies runs at the front of every wave-assembly call, not immediately
+after the prior wave returns -- `claim_unit` records an EXPIRE only when a
+claim lands on an expired lease, and D5's headroom-factor sizing guarantees
+the lease outlives the wave that just returned, so a reap positioned right
+after return is a guaranteed no-op. `_flat_ready_wave` returns only PENDING
+units, so an abandoned CLAIMED unit needs this explicit front-of-assembly
+reclaim step to re-enter a wave; the same step recovers a run whose
+orchestrating session itself died. Native workflow resume is never pipeline
+durability -- SQLite remains the cross-session source of truth:
+`resumeFromRunId` is ruled OUT for pipeline continuation, not merely unused,
+because it replays cached agent self-reports, and a cached `halted` replayed
+after `resume_run`, or a cached `claim_unavailable` replayed after lease
+expiry, would skip a now-valid claim; re-entry is always a fresh invocation --
+a new batch id and a wave reassembled from current SQLite state.
 
 **Files.** `workflows/run-ready-wave.js`, invocation skill, workflow-facing
-reference, `tests/content-pipeline-kit/test_workflow_contract.py`. Nothing
-moves from or to workflow-kit: plugin boundaries are hard boundaries.
+reference, `tests/content-pipeline-kit/test_workflow_contract.py`. Scope
+amendment approved 2026-08-21, out of the C1 design round: add
+`lib/content_pipeline/execution/workerpack.py` -- shared worker-pack and reap
+assets moved verbatim out of `execution/drivers/claude_bg.py`, with tested
+compatibility re-export aliases left behind so the B driver's `__all__` is
+unchanged, plus the C-specific claim-envelope and wave-args builders that live
+only in the new module. Two doc edits ride with it: register `workflow-lane.md`
+in `skills/content-pipeline-domain/SKILL.md`'s `index.references`, and repoint
+`session-recipients.md`'s "in a later release, a Workflow agent" sentence at
+that reference. The B-lane risk of the move is bounded by the aliases plus the
+untouched B suite as regression oracle. Nothing moves from or to workflow-kit:
+plugin boundaries are hard boundaries.
 
-**Tests (static + harness).** Metadata/args shape; deterministic lanes;
-forbidden nondeterminism; concurrency bound; one claim per agent; aggregate-only
-return; no unit content in workflow variables; every state mutation through the
-protocol.
+**Tests (static + harness).** The script is executed, not text-matched: a
+`node --check` parse gate, then a Node stub runtime (a fake `agent()` and
+`parallel()`) fed a JSON-STRING `args` global -- the runtime the compiler
+actually delivers -- asserting metadata/args normalization, deterministic
+wave-position lanes, forbidden nondeterminism, the concurrency bound, one
+claim per agent, aggregate-only return, no unit content in workflow variables,
+and every state mutation crossing the protocol. An arg-validation matrix (bad
+`maxAgents`, empty/oversized/duplicate-id/non-increasing-ordinal `units`) must
+THROW rather than silently no-op. A fixture-comparison test asserts the pack
+builder's `readCmd`/`submitCmd`/`failCmd` and claim path are byte-equal to the
+library's own worker-invocation output for the same inputs. Only C2 can prove:
+the real Workflow runtime's schema enforcement and concurrency cap, permission
+posture against a real allowlist, one-claim-per-agent as observed attempt-row
+behavior, and lease expiry against real agent runtimes.
 
 **Exit criterion.** The workflow is a thin recipient: deleting it leaves run
 truth intact; an inline or background process can inspect, resume, and finalize
@@ -993,7 +1043,9 @@ order. Not published as working before C2.
 
 Two live units; a validation revision; an expired claim failing the unit per
 D5 after the bounded reclaim count; pause/resume across orchestrator
-exit/re-entry proving SQLite authority; aggregate return shape; concurrency
+exit/re-entry -- exercised as the fresh path (new batch id, wave reassembled
+from current SQLite state), never `resumeFromRunId` -- proving SQLite
+authority; aggregate return shape; concurrency
 matching the bound; confirmation that workflow `agent()` calls draw the session
 pool (the C-side capacity check); comparison of worker instruction fidelity
 against the background lane. Added 2026-08-17: an apply through `finalize`

@@ -82,7 +82,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import textwrap
@@ -96,7 +95,6 @@ from content_pipeline.execution.adapter import RunAdapter
 from content_pipeline.execution.controller import record_halt
 from content_pipeline.execution.model import (
     AlreadyClaimedError,
-    AttemptKind,
     ExecutionError,
     NotClaimedError,
     RunHaltedError,
@@ -108,7 +106,35 @@ from content_pipeline.execution.model import (
 )
 from content_pipeline.execution.status import compute_status
 from content_pipeline.execution.store import ExecutionStore, lease_for
+from content_pipeline.execution.workerpack import (
+    ANSWER_FENCE_PREFIX,
+    AnswerFenceError,
+    AnswerFenceMismatchError,
+    DEFAULT_MAX_RECLAIMS_PER_UNIT,
+    MissingAnswerFenceError,
+    WorkerCommand,
+    _envelope_payload_text,
+    _format_argv,
+    _sanitize_path_component,
+    _terminally_fail_exhausted_unit,
+    answer_path_for,
+    enumerate_worker_invocations,
+    envelope_path_for,
+    format_fenced_answer,
+    parse_fenced_answer,
+    reclaim_attempt_count,
+    reclaimable_units,
+    worker_envelopes_for,
+)
 from content_pipeline.llm.platform import HALT_AUTH, HALT_RATE_LIMIT, HaltError, classify_halt_text
+
+# The names above live in workerpack.py and are re-imported here as
+# module-level aliases -- claude_bg.X is workerpack.X for every one of them
+# (tests/content-pipeline-kit/test_workerpack_aliases.py). They moved there
+# so the workflow lane (workflows/run-ready-wave.js and its Python pack
+# builder) can build a worker's invocation set and reap abandoned units
+# without importing this driver module. Do not redefine any of them below;
+# extend workerpack.py instead.
 
 # ---------------------------------------------------------------------------
 # Billing-diverting environment variables (shared by preflight's auth check
@@ -594,328 +620,11 @@ def compose_worker_environment(
 # ---------------------------------------------------------------------------
 
 
-def _sanitize_path_component(value: str) -> str:
-    """A filesystem-safe fragment for :func:`answer_path_for` -- every
-    non-alnum/``-``/``_`` character becomes ``_``. Deterministic, and never
-    empty for a non-empty ``value`` (``run_id``/``unit_id`` are non-empty by
-    convention -- see ``pipeline.workunit.WorkUnit``)."""
-    return "".join(ch if (ch.isalnum() or ch in "-_") else "_" for ch in value)
-
-
-@dataclass(frozen=True)
-class WorkerCommand:
-    """The consumer's declaration of how its protocol mount is invoked.
-
-    ``argv`` is a TEMPLATE, not a full invocation: a tuple of argv tokens
-    (e.g. ``("python", "mytool.py", "run")``) that :func:`enumerate_worker_invocations`
-    extends with a verb (``claim``/``read``/``submit``/``fail``) and a fixed
-    set of identifying flags. Any token containing the literal substrings
-    ``{run_id}``/``{unit_id}``/``{worker_id}`` is substituted first (a
-    consumer whose mount needs, say, a per-run ``--db`` path can embed
-    ``{run_id}`` in one of its own tokens). B1 ships NO default template --
-    the mount is the consumer's.
-
-    ``answer_dir`` is the directory (a native path) a worker writes its
-    deterministic per-unit answer file into, via the Write tool -- see
-    :func:`answer_path_for`.
-
-    ``envelope_dir`` is the directory (a native path) a worker's JSON
-    protocol envelopes live in -- see :func:`envelope_path_for`. Additive
-    and optional: ``None`` (the default) means "same directory as
-    ``answer_dir``", via :attr:`resolved_envelope_dir`, so an existing
-    caller that never sets this field keeps writing everything to one
-    directory exactly as before this field existed.
-    """
-
-    argv: Tuple[str, ...]
-    answer_dir: str
-    envelope_dir: Optional[str] = None
-
-    @property
-    def resolved_envelope_dir(self) -> str:
-        """``envelope_dir`` when set, else ``answer_dir`` -- the directory a
-        caller should actually use for envelope paths. Kept as a property
-        (never resolved into a stored field) so a caller that mutates
-        ``answer_dir`` after construction -- there is none today, but the
-        class is otherwise immutable-by-convention -- never leaves this
-        derived value stale."""
-        return self.envelope_dir if self.envelope_dir is not None else self.answer_dir
-
-
-def _format_argv(argv: Sequence[str], **subs: str) -> Tuple[str, ...]:
-    """Literal-substring substitution over every ``argv`` token -- never
-    :meth:`str.format`, which would raise on a token that happens to contain
-    an unrelated ``{...}`` (a Windows path, a JSON-shaped flag value)."""
-    out: List[str] = []
-    for token in argv:
-        for key, value in subs.items():
-            token = token.replace("{" + key + "}", value)
-        out.append(token)
-    return tuple(out)
-
-
-def answer_path_for(worker_command: WorkerCommand, run_id: str, unit_id: str) -> str:
-    """The deterministic per-unit answer-file path a worker writes its
-    submission text to, and that :func:`enumerate_worker_invocations`'s
-    ``submit --from-file`` invocation reads back. Deterministic in ``run_id``
-    and ``unit_id`` alone -- computable before the run, which is what makes
-    the invocation set enumerable ahead of time (the module docstring's whole
-    reason for existing).
-
-    Deliberately carries NO ``worker_id`` and no generation counter, so two
-    successive dispatches of the same unit write the same file. The
-    generation is fenced in the file's CONTENT instead, by
-    :func:`format_fenced_answer` -- putting it in the path would make the
-    path un-computable before the run and destroy exactly the pre-run
-    enumerability this function exists for."""
-    filename = (
-        f"{_sanitize_path_component(run_id)}__{_sanitize_path_component(unit_id)}.answer.txt"
-    )
-    return os.path.join(worker_command.answer_dir, filename)
-
-
-# ---------------------------------------------------------------------------
-# The answer artifact's own fence -- content, never path
-# ---------------------------------------------------------------------------
-
-ANSWER_FENCE_PREFIX = "content-pipeline-fence:"
-
-
-class AnswerFenceError(ExecutionError):
-    """Base class for a refusal to read an answer artifact whose declared
-    fencing token cannot be trusted for the submission presenting it."""
-
-
-class MissingAnswerFenceError(AnswerFenceError):
-    """The answer artifact's first line is not a fence declaration.
-
-    Refused rather than treated as unfenced-and-fine: an artifact with no
-    declared generation is exactly the artifact a previous dispatch's
-    still-live session may have written, and accepting it would splice text
-    of unknown provenance into a currently-valid submit envelope."""
-
-    def __init__(self, first_line: str) -> None:
-        self.first_line = first_line
-        super().__init__(
-            "answer artifact does not begin with a fence line "
-            f"({ANSWER_FENCE_PREFIX!r} followed by the fencing token); its "
-            f"first line was {first_line!r}"
-        )
-
-
-class AnswerFenceMismatchError(AnswerFenceError):
-    """The answer artifact declares a DIFFERENT fencing token than the
-    submit envelope presenting it -- either a stale artifact under a current
-    envelope, or a current artifact under a stale envelope. Both are the
-    same defect seen from opposite ends: the text and the standing to submit
-    it came from different generations of the same unit."""
-
-    def __init__(self, declared: int, expected: int) -> None:
-        self.declared = declared
-        self.expected = expected
-        super().__init__(
-            f"answer artifact declares fencing token {declared!r} but the "
-            f"submission presents {expected!r}; refusing to submit text "
-            "produced under a different claim"
-        )
-
-
-def format_fenced_answer(fencing_token: int, text: str) -> str:
-    """The exact bytes a worker writes to :func:`answer_path_for`'s path.
-
-    One fence line, then the answer text verbatim::
-
-        content-pipeline-fence: 7
-        <the answer text, exactly as produced>
-
-    Only the FIRST line is ever interpreted, so the body may contain
-    anything at all -- including further lines that look like fence lines,
-    which :func:`parse_fenced_answer` returns untouched as part of the
-    answer."""
-    return f"{ANSWER_FENCE_PREFIX} {fencing_token}\n{text}"
-
-
-def parse_fenced_answer(raw: str, expected_token: int) -> str:
-    """The answer text out of ``raw``, or a typed refusal.
-
-    Splits on the FIRST newline only: the first line must be
-    :data:`ANSWER_FENCE_PREFIX` followed by an integer equal to
-    ``expected_token``, and everything after that newline is the answer,
-    returned byte-for-byte. Because only the first line is inspected, a body
-    that itself contains ``content-pipeline-fence:`` is ordinary text and is
-    neither re-parsed nor stripped.
-
-    Raises :class:`MissingAnswerFenceError` when the first line is not a
-    fence declaration at all, and :class:`AnswerFenceMismatchError` when it
-    declares a different token."""
-    first_line, separator, body = raw.partition("\n")
-    declaration = first_line.rstrip("\r").strip()
-    if not declaration.startswith(ANSWER_FENCE_PREFIX):
-        raise MissingAnswerFenceError(first_line)
-    token_text = declaration[len(ANSWER_FENCE_PREFIX):].strip()
-    try:
-        declared = int(token_text)
-    except ValueError as exc:
-        raise MissingAnswerFenceError(first_line) from exc
-    if declared != expected_token:
-        raise AnswerFenceMismatchError(declared, expected_token)
-    return body if separator else ""
-
-
-def envelope_path_for(
-    worker_command: WorkerCommand, run_id: str, unit_id: str, verb: str
-) -> str:
-    """The deterministic per-unit, per-verb JSON protocol-envelope path --
-    the file a ``read``/``submit``/``fail`` invocation's ``@<path>``
-    argument names (see ``cli.run.build_commands``'s ``protocol`` command).
-    Deterministic in ``(run_id, unit_id, verb)`` alone, mirroring
-    :func:`answer_path_for`'s determinism in ``(run_id, unit_id)`` -- the
-    same property that makes an enumerated invocation pre-allowlistable."""
-    filename = (
-        f"{_sanitize_path_component(run_id)}__{_sanitize_path_component(unit_id)}.{verb}.json"
-    )
-    return os.path.join(worker_command.resolved_envelope_dir, filename)
-
-
-_ENVELOPE_VERBS: Tuple[str, ...] = ("read", "submit", "fail")
-
-
-def _envelope_payload_text(verb: str, run_id: str, unit_id: str, worker_id: str) -> str:
-    """The literal JSON (``read``) or JSON-shaped TEMPLATE
-    (``submit``/``fail``) text for one verb's envelope.
-
-    ``read`` needs no fencing token (its payload does not consume one -- see
-    ``execution/protocol.py``'s ``_read``), so its text is ordinary, valid,
-    ready-to-use JSON. ``submit``/``fail`` DO need a fencing token, but that
-    value is not knowable when this function runs (P5's determinism
-    constraint: an enumerated invocation string must be computable from
-    ``(run_id, unit_id, worker_id)`` alone, before any unit is ever
-    claimed). So their text carries the literal, unquoted placeholder token
-    ``<FENCING_TOKEN>`` in place of a real value -- NOT valid JSON as
-    written, and not meant to be parsed until a worker substitutes the real
-    token, which its LAUNCH PROMPT names (the dispatcher claims the unit
-    before launching; see :func:`dispatch_unit`). See
-    :func:`worker_envelopes_for`'s docstring for who writes which of these
-    to disk and when.
-    """
-    if verb == "read":
-        envelope = {
-            "protocol_version": "1",
-            "verb": verb,
-            "payload": {"run_id": run_id, "unit_id": unit_id, "worker_id": worker_id},
-        }
-        return json.dumps(envelope, indent=2) + "\n"
-    # submit / fail: JSON-shaped template text, fencing_token a literal
-    # placeholder a worker fills in at runtime -- see docstring above.
-    return (
-        "{\n"
-        '  "protocol_version": "1",\n'
-        f"  \"verb\": {json.dumps(verb)},\n"
-        '  "payload": {\n'
-        f"    \"run_id\": {json.dumps(run_id)},\n"
-        f"    \"unit_id\": {json.dumps(unit_id)},\n"
-        f"    \"worker_id\": {json.dumps(worker_id)},\n"
-        '    "fencing_token": <FENCING_TOKEN>\n'
-        "  }\n"
-        "}\n"
-    )
-
-
-def worker_envelopes_for(
-    worker_command: WorkerCommand, run_id: str, unit_id: str, worker_id: str
-) -> Dict[str, Tuple[str, str]]:
-    """``{verb: (path, text)}`` for ``read``/``submit``/``fail`` -- the JSON
-    protocol-envelope path and content for each verb this unit's worker ever
-    needs. Pure function: no filesystem I/O here, deterministic in
-    ``(run_id, unit_id, worker_id)`` alone (P5), same as every other
-    function in this section.
-
-    There is deliberately no ``claim`` entry. The dispatcher claims the unit
-    itself before launching (:func:`dispatch_unit`), so a worker session has
-    no claim envelope to run and no way to take a claim -- which is what
-    stops a session left alive by an earlier dispatch from re-claiming a
-    unit that has since been reclaimed and re-dispatched.
-
-    A caller writes these to disk at two different TIMES, for two different
-    reasons, per the D5/P5 design this module ships against:
-
-    - ``read`` is written by the DISPATCHER, before the worker's session
-      ever launches (:func:`build_launch_prompt` does this) -- its text
-      needs no runtime information, so pre-writing it is what lets the
-      dispatcher pre-authorize the ``read`` invocation (P5).
-    - ``submit``/``fail`` are written by the WORKER itself, at runtime, via
-      the Write tool -- their text needs the fencing token, which is not
-      knowable when this function runs. The text this function returns for
-      them is a TEMPLATE (see :func:`_envelope_payload_text`): the worker's
-      only permitted edit is substituting the literal ``<FENCING_TOKEN>``
-      token for the real value its launch prompt names; nothing else in the
-      template may change.
-    """
-    return {
-        verb: (envelope_path_for(worker_command, run_id, unit_id, verb),
-               _envelope_payload_text(verb, run_id, unit_id, worker_id))
-        for verb in _ENVELOPE_VERBS
-    }
-
-
-def enumerate_worker_invocations(
-    worker_command: WorkerCommand, run_id: str, unit_id: str, worker_id: str
-) -> Tuple[str, str, str, str, str, str]:
-    """The EXACT command/Write-tool-target strings a worker for this unit
-    may run or write, in order: ``read``, ``submit --text-file=<answer
-    path>``, ``fail``, the Write-tool target for the answer file, the
-    Write-tool target for the ``submit`` envelope, and the Write-tool target
-    for the ``fail`` envelope.
-
-    There is no ``claim`` entry: the dispatcher claims each unit before
-    launching its worker (:func:`dispatch_unit`), so ``read`` is a worker's
-    first invocation.
-
-    Every returned string is deterministic given ``(run_id, unit_id,
-    worker_id)`` -- no unit content, no timestamp, no random component, and
-    (P5-critical) NO FENCING TOKEN, even though the dispatcher now knows the
-    token before the launch. Keeping it out of these strings is what makes a
-    pre-authorized allowlist entry possible: the same six strings can be
-    computed, and allowlisted, before the worker ever runs. The token
-    reaches the worker through the launch PROMPT and rides in file CONTENT
-    (the submit/fail envelopes it authors, and the answer artifact's fence
-    line), never in an invocation string.
-
-    Each of ``read``/``submit``/``fail`` is ``<argv> protocol @<envelope
-    path>`` (see ``cli.run.build_commands``'s ``protocol`` command and its
-    ``@<path>`` envelope-sourcing form) -- never the old flag form
-    (``claim --run-id ... --unit-id ...``), which
-    ``cli.run.build_commands`` never registered as a command at all (only
-    ``protocol`` is), so the flag form always failed as an unknown command
-    for every verb except ``claim`` (whose flags accidentally parsed as
-    positional argv and silently held the unit's lease forever without
-    ever reaching ``read``/``submit``).
-    """
-    subs = {"run_id": run_id, "unit_id": unit_id, "worker_id": worker_id}
-    base = _format_argv(worker_command.argv, **subs)
-    envelopes = worker_envelopes_for(worker_command, run_id, unit_id, worker_id)
-    answer_path = answer_path_for(worker_command, run_id, unit_id)
-
-    read_path, _ = envelopes["read"]
-    submit_path, _ = envelopes["submit"]
-    fail_path, _ = envelopes["fail"]
-
-    read_cmd = shlex.join(base + ("protocol", f"@{read_path}"))
-    submit_cmd = shlex.join(
-        base + ("protocol", f"@{submit_path}", f"--text-file={answer_path}")
-    )
-    fail_cmd = shlex.join(base + ("protocol", f"@{fail_path}"))
-    write_answer_cmd = f"Write tool -> {answer_path}"
-    write_submit_cmd = f"Write tool -> {submit_path}"
-    write_fail_cmd = f"Write tool -> {fail_path}"
-    return (
-        read_cmd,
-        submit_cmd,
-        fail_cmd,
-        write_answer_cmd,
-        write_submit_cmd,
-        write_fail_cmd,
-    )
+# _sanitize_path_component, WorkerCommand, _format_argv, answer_path_for,
+# ANSWER_FENCE_PREFIX, AnswerFenceError, MissingAnswerFenceError,
+# AnswerFenceMismatchError, format_fenced_answer, parse_fenced_answer,
+# envelope_path_for, _envelope_payload_text, worker_envelopes_for, and
+# enumerate_worker_invocations moved to workerpack.py -- re-imported above.
 
 
 def build_launch_prompt(
@@ -1799,39 +1508,10 @@ def supervise_tick(
 # Step 9 -- reclaim selection and bounded reclaims (driver-local; wave.py is
 # untouched -- _flat_ready_wave returns only PENDING, so a unit whose worker
 # died sits CLAIMED forever and never re-enters a wave through that module)
+#
+# reclaimable_units and reclaim_attempt_count moved to workerpack.py --
+# re-imported above.
 # ---------------------------------------------------------------------------
-
-
-def reclaimable_units(store: ExecutionStore, run_id: str, *, at: Optional[float] = None) -> List[UnitRecord]:
-    """Units in ``CLAIMED`` whose lease has expired, with NO open dispatch,
-    ordinal order.
-
-    ``no open dispatch`` is the guard that keeps this driver-local: a unit
-    whose worker is still tracked (even if this dispatcher stopped renewing
-    it, e.g. a ``blocked`` session -- see :func:`supervise_tick`) is not
-    reclaimable until its dispatch has been settled, so a second launch is
-    never dispatched on top of a still-open one.
-    """
-    now = time.time() if at is None else at
-    open_unit_ids = {d.unit_id for d in store.open_dispatches(run_id)}
-    units = sorted(store.list_units(run_id), key=lambda u: u.ordinal)
-    return [
-        u
-        for u in units
-        if u.state is UnitState.CLAIMED
-        and u.lease_expires_at is not None
-        and u.lease_expires_at <= now
-        and u.unit_id not in open_unit_ids
-    ]
-
-
-def reclaim_attempt_count(store: ExecutionStore, run_id: str, unit_id: str) -> int:
-    """How many :data:`~content_pipeline.execution.model.AttemptKind.EXPIRE`
-    rows exist for this unit -- already durable via ``claim_unit``'s reclaim
-    path, so this needs no new schema; it just counts."""
-    return sum(
-        1 for a in store.list_attempts(run_id, unit_id) if a.kind is AttemptKind.EXPIRE
-    )
 
 
 def _select_dispatch_candidates(
@@ -1852,39 +1532,10 @@ def _select_dispatch_candidates(
     return sorted(combined.values(), key=lambda u: u.ordinal)
 
 
-def _terminally_fail_exhausted_unit(
-    store: ExecutionStore, run_id: str, unit_id: str, *, dispatcher_id: str, at: Optional[float]
-) -> None:
-    """Beyond ``max_reclaims_per_unit``: reclaim once more (bumping the
-    fence, same as any reclaim) and immediately fail terminally, mirroring
-    ``execution.controller``'s ``_record_terminal_skip`` claim-then-fail
-    shape.
-
-    THIS CLAIM CAN REFUSE, and its refusals are the caller's to interpret,
-    not this function's: ``dispatch_wave``'s dispatch loop handles
-    :class:`RunHaltedError`, :class:`TerminalStateError` and
-    :class:`AlreadyClaimedError` around the call (see the CLAIM REFUSALS
-    paragraph there), because what each one means is a control-flow decision
-    -- end the wave, skip the unit -- that only the loop can make. Every
-    other exception propagates unchanged.
-
-    NOTHING HERE OPENS A DISPATCH ROW, which is why -- unlike
-    :func:`dispatch_unit` -- there is no cleanup to guard: the unrecoverable
-    CLAIMED-plus-open-dispatch state (:func:`reclaimable_units` excludes it
-    forever) is structurally unreachable from this function. A unit is only
-    a candidate for this path via :func:`reclaimable_units`, which already
-    excludes units with an open dispatch, and no row is written between
-    there and here. If ``fail_unit`` below raises after a SUCCESSFUL claim,
-    the unit is left CLAIMED under this dispatcher's fresh token with no
-    dispatch row -- reclaimable again the moment that lease expires, so it
-    is recoverable and is deliberately left to propagate. (It is also all
-    but unreachable: the claim just bumped the fence, so no other actor
-    holds a token that could make the unit terminal or steal the claim
-    before the next statement.)"""
-    claim = store.claim_unit(run_id, unit_id, dispatcher_id, at=at)
-    store.fail_unit(
-        run_id, unit_id, claim.fencing_token, error="reclaim_exhausted", terminal=True, at=at
-    )
+# _terminally_fail_exhausted_unit moved to workerpack.py -- re-imported
+# above. It already took the reaper's worker id as a parameter
+# (``dispatcher_id``, keyword-only) before this move, so no signature
+# change was needed to generalize it for the reap-at-front C lane.
 
 
 # ---------------------------------------------------------------------------
@@ -1893,7 +1544,7 @@ def _terminally_fail_exhausted_unit(
 
 DEFAULT_MAX_AGENTS = 4
 DEFAULT_BATCH_SIZE = 25
-DEFAULT_MAX_RECLAIMS_PER_UNIT = 2
+# DEFAULT_MAX_RECLAIMS_PER_UNIT moved to workerpack.py -- re-imported above.
 DEFAULT_DISPATCH_POLL_INTERVAL_S = 15.0
 DEFAULT_DISPATCHER_LEASE_SECONDS = 120.0
 

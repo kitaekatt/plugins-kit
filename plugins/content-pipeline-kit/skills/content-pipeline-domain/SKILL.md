@@ -92,6 +92,10 @@ domain_skill:
         path: references/session-recipients.md
         keywords: [session recipient, background session, claude --bg, workflow agent, protocol mount, build_handlers, WorkerCommand, RunAdapter, WorkerEnvironment, expected_unit_seconds, allowlist, enumerated invocations, reconciliation, apply_unknown, resume, session pool quota]
         summary: What a session recipient (a Claude background/workflow session acting as one worker) is and how to wire a project's own run onto it -- mounting the protocol, the RunAdapter fields a background worker needs (environment, expected_unit_seconds), building a worker's pre-authorized invocation allowlist from a WorkerCommand, and the reconciliation hook required to resume a run safely past an apply_unknown unit.
+      - id: workflow_lane
+        path: references/workflow-lane.md
+        keywords: [workflow lane, run-ready-wave.js, Workflow tool, agent, parallel, self-claim, fencing token, claim envelope, worker-scoped, wave positions, holey ordinals, N lanes, lease, no renewer, allowlist, workflow-pipeline, build_wave_args, workerpack]
+        summary: How the workflow lane (native Workflow tool agent()/parallel(), run-ready-wave.js) differs from the background lane -- the agent claims its own unit and gets its fencing token from the claim reply rather than a launch prompt, there is no dispatcher or renewer so leases are sized once for the whole runtime, lane construction partitions wave positions (not stored-ordinal residues), the args/schema contracts, the allowlist recipe including claimCmd, and the self-claim residual stated honestly rather than as solved.
 ```
 
 ## Requirements: the live LLM backends

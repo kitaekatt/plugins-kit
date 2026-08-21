@@ -1,8 +1,9 @@
 # Session recipients
 
 A **session recipient** is a Claude Code session -- a background session
-(`claude --bg`) or, in a later release, a Workflow agent -- acting as one
-content-pipeline worker instead of a synchronous `LLMBackend.complete()` call.
+(`claude --bg`) or a native Workflow tool agent, see `workflow-lane.md` for
+that lane's own mount contract -- acting as one content-pipeline worker
+instead of a synchronous `LLMBackend.complete()` call.
 It exists because a headless `claude -p` call and a background/workflow
 session draw from different capacity pools: routing batch work through a
 background session lets a run spend from the larger interactive session pool
