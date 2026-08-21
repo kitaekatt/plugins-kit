@@ -113,6 +113,13 @@ lexicon:
   render: glossed
   test: Will other units be briefed from this output before anything re-derives it?
   gloss: a plan later units will execute against
+- id: authored-here
+  kind: skill
+  render: glossed
+  test: >-
+    Is the thing being reviewed something this context drafted itself, rather than the output
+    of a delegated unit?
+  gloss: the orchestrator drafted the artifact under review
 - id: conversational
   kind: skill
   render: glossed
@@ -191,8 +198,9 @@ shape:
     principle: P0.6
     text: >-
       Route the plan itself through this tree as its own unit -- a {plan-checkpoint} -- before
-      briefing anything from it. Planhood implies no other term: a plan is {load-bearing}
-      only when a wrong shared decision would survive the downstream units' own checks. Do
+      briefing anything from it. Planhood decides no shape: a settled checklist is {known},
+      an architecture decision is {open}. Treat an {open} {plan-checkpoint} as {load-bearing}
+      unless you can NAME the downstream check that would catch a wrong shared decision. Do
       not launch units briefed from a plan still in flight; a materially revised plan repeats
       this checkpoint; routing the plan is never itself a unit.
   - id: plan-create-or-review
@@ -216,6 +224,14 @@ shape:
       codex: >-
         With a single model family there is no second-family child -- dispatch the primary
         review alone.
+  - id: review-independence
+    principle: P0.7
+    text: >-
+      Authorship independence holds at every rung, not only the top: a review of a {load-bearing}
+      {authored-here} artifact is never dispatched to the authoring model -- the ladder carries
+      it as a criterion. A delegated unit's output is never {authored-here}. When the orchestrator
+      is itself the top model, the review seat is the {cross-check} child on its own conditions;
+      with no second family, dispatch the review anyway and announce it as non-independent.
 
 # ---------------------------------------------------------------------------
 # Backend
@@ -258,7 +274,10 @@ ladders:
   label: Claude
   guards:
   - There is no haiku rung.
-  - Any doubt resolves to the rung below.
+  - >-
+    Any doubt resolves to the rung below -- except doubt about whether a wrong shared decision
+    in an {open} {plan-checkpoint} would be caught, which resolves UP (the plan presumption
+    above).
   - Never down-tier a unit that meets the fable bar to harvest the discount.
   rungs:
   - id: top
@@ -268,10 +287,14 @@ ladders:
     - [novel, load-bearing]
     - [novel, unverifiable]
     - [load-bearing, unverifiable]
+    - [plan-checkpoint, load-bearing]
+    - [authored-here, load-bearing]
     terminal: false
     gate: >-
-      write "qualifies on <criterion>; opus would plausibly get it wrong because <reason>."
-      If that sentence is hard to write, the unit does not qualify.
+      write "qualifies on <criteria>; <why the rung below is the wrong seat>" -- "opus would
+      plausibly get it wrong because <reason>"; or, for a {plan-checkpoint}, "no downstream
+      check catches a wrong shared decision"; or, for an {authored-here} review, "opus authored
+      it". If none can be written, the unit does not qualify.
     notes:
     - id: pool-boundary
       text: >-
@@ -365,11 +388,14 @@ effort:
     agents inherit from their type or the session, and it is settable per call only through
     Workflow's `agent()` `opts.effort`. So a Claude-side effort decision is an input to TIER
     selection, not a knob to turn afterwards. Where it IS settable on fable, set `max` --
-    that rung requires {unverifiable}, so deliberation is the only quality control left.
+    work that reaches that rung is dangerous in more than one way, and deliberation is the
+    main quality control left.
   up_effort_note: >-
-    Try up-effort before up-tier -- opus at `xhigh` before reaching for fable at all. That
-    is the move for units that do NOT meet fable's conjunction; a unit already meeting the
-    two-of-three bar goes there directly.
+    Try up-effort before up-tier -- opus at `xhigh` before reaching for fable at all -- WHERE
+    effort is dialable (a CLI backend's effort setting, Workflow `agent()`). Via the Agent
+    tool there is no opus-at-`xhigh` rung between opus and fable: an Agent-tool opus dispatch
+    inherits the session's effort and does not count as the up-effort attempt. That move is
+    for units that do NOT meet fable's bar; a unit already meeting it goes there directly.
   raise_when:
   - ambiguous, or several plausible approaches where picking wrong is expensive
   - you cannot verify the result cheaply
@@ -407,10 +433,18 @@ announce:
     requires_backend: codex
     text: delegating per-file API migration to codex/gpt-5.6-luna (fan-out)
   - id: ex-plan-review
-    text: delegating plan review to fable (plan-checkpoint, novel, unverifiable)
+    text: delegating plan review to fable (plan-checkpoint, open, novel, unverifiable)
   - id: ex-plan-crosscheck
     requires_backend: codex
     text: delegating plan review second opinion to codex/gpt-5.6-sol (cross-check)
+  - id: ex-design
+    text: >-
+      delegating the schema decision the migration units build on to fable (plan-checkpoint,
+      open, load-bearing)
+  - id: ex-self-review
+    text: >-
+      delegating review of the orchestrator-drafted rollout plan to fable (authored-here,
+      open, load-bearing)
 
 # ===========================================================================
 # MACHINE HALF -- not derived from the principles. What this machine has and

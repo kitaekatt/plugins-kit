@@ -113,7 +113,22 @@ re-derives it?
 **Gloss:** "a plan later units will execute against"
 
 *Consequence:* a `plan-checkpoint` is routed through the tree like any unit --
-being a plan makes nothing `open`, `novel`, or `load-bearing` by itself.
+being a plan makes nothing `open` or `novel` by itself. An `open`
+`plan-checkpoint` is treated as `load-bearing` unless the downstream check that
+would catch a wrong shared decision can be named: that is a rebuttable
+presumption stated in the tree, not a property of planhood.
+
+### `authored-here` `[skill]` `render: glossed`
+The artifact under review was drafted inline by the orchestrator -- this
+context wrote it.
+**Test:** is the thing being reviewed something this context drafted itself,
+rather than the output of a delegated unit?
+**Gloss:** "the orchestrator drafted the artifact under review"
+
+*Consequence:* a review is independent only when the reviewer is not the
+author's model. `authored-here` names the artifacts that test applies to, so
+the ladder can route their review away from the orchestrating model by
+criterion. A delegated unit's output is never `authored-here`.
 
 ---
 
@@ -198,7 +213,9 @@ touches; it is one `mechanical` unit. A migration needing per-file judgment resi
 collapsing, so it is genuinely N units. Scale is not the discriminator and must never
 be read as one.
 
-*Top rung:* its gate is a two-of-three conjunction, so at least two escalation
-terms fire together by construction -- announce the ones that actually fired,
-which may be two or all three. The gate's additional demand (saying what the
+*Top rung:* its criteria are two of the three escalation terms, or a
+`load-bearing` `plan-checkpoint`, or a `load-bearing` `authored-here` review,
+so at least two terms fire together by construction -- announce the ones that
+actually fired, which may be two or all three, or the unit-class term plus
+`load-bearing`. The gate's additional demand (saying what the
 rung below would get wrong) stays internal and is not rendered on the line.

@@ -92,6 +92,18 @@ one-way-authorship rule in [CLAUDE.md](CLAUDE.md).
   demand, and because naming it stops `difficult` being smuggled in as a
   criterion.
 
+- **`authored-here` `render: glossed`.** Added 2026-08-21 with the P0.7
+  revision (review independence at every rung). A gpt-5.6-sol cross-check of
+  the first draft refuted "route the review to the rung above the author" as
+  unimplementable: under ordered elimination a rung is reached only through
+  its criteria, and authorship was not one. The term exists so that P2.2 can
+  carry `[authored-here, load-bearing]` as a real criterion, and so that the
+  announcement record can show how often review independence -- rather than
+  the escalation terms -- put a review on the top rung. Scoped deliberately to
+  artifacts the orchestrator drafted inline: a delegated unit's output is
+  never `authored-here`, which is what keeps "review of own work" from
+  reading as "review of every agent's output".
+
 - **`plan-checkpoint` `render: glossed`.** Added 2026-08-11 with P0.6-P0.8
   (the plan-is-a-unit shaping principles). A `[skill]` term rather than a
   criteria alias because the announcement telemetry must be able to show
@@ -143,6 +155,7 @@ adding or removing a term, but treat `orchestration.yaml`'s generated
 | `load-bearing` | glossed |
 | `unverifiable` | glossed |
 | `plan-checkpoint` | glossed |
+| `authored-here` | glossed |
 | `conversational` | glossed |
 | `abortable` | bare |
 | `fan-out` | glossed |

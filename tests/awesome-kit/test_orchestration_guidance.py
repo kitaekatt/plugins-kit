@@ -755,7 +755,7 @@ class TestNegativeGuards:
         with_codex, without = self._both(monkeypatch, tmp_path)
         for guard in (
             "There is no haiku rung.",
-            "Any doubt resolves to the rung below.",
+            "Any doubt resolves to the rung below",
             "Never down-tier a unit that meets the fable bar to harvest the discount.",
             "Never this rung:",
             "is never a rung criterion",
@@ -1130,7 +1130,7 @@ class TestRungRendering:
         monkeypatch.setattr(og, "DEFAULTS_PATH", _shipped_path())
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "Gate: write \"qualifies on <criterion>" in text
+        assert "Gate: write \"qualifies on <criteria>" in text
         assert "Announced as `(known, default)` or `(open, condensation)`" in text
 
     def test_terminal_rung_states_no_test_of_its_own(self, layered):

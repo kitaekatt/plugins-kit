@@ -185,15 +185,42 @@ review found significant issues each time. No rung calibration can fix a unit
 that is never classified, so the fix is upstream of every rung: the plan enters
 the tree explicitly.
 
-*Planhood implies no term.* A settled migration checklist is `known`; only an
-architecture decision is `open`. And downstream units consuming a plan proves
+*Planhood decides no shape.* A settled migration checklist is `known`; only an
+architecture decision is `open`. Downstream units consuming a plan proves
 DEPENDENCY, not propagation -- `load-bearing` asks whether the next step would
-catch a wrong answer, and unit-local checks often would. Call a plan
-`load-bearing` only when a wrong shared decision would survive the downstream
-units' own checks and contaminate several results or a costly commitment. (An
-earlier draft derived `load-bearing` "by construction" from planhood; a
-gpt-5.6-sol design review killed that, correctly -- automatic `load-bearing`
-plus commonplace `unverifiable` would have made the top rung routine.)
+catch a wrong answer.
+
+*Treat an `open` plan-checkpoint as `load-bearing` unless you can NAME the
+downstream check that would catch a wrong shared decision* (2026-08-21). This is
+a rebuttable presumption, not a derivation: an earlier draft
+derived `load-bearing` "by construction" from planhood and a gpt-5.6-sol design
+review killed that, correctly -- automatic `load-bearing` plus commonplace
+`unverifiable` would have made the top rung routine. The neutral form that
+replaced it ("call a plan load-bearing only when a wrong decision would survive
+the downstream checks") asked the right question but put the burden on
+escalation, and in practice the orchestrator answered it by assertion: the
+2026-08-21 transcript tally (P2.2) shows open design decisions announced as
+`(open, inference)` to opus with no downstream check ever named. Flipping the
+burden keeps the predicate and demands the evidence -- the same move P0.8 made
+for the cross-check child. A `known` plan-checkpoint is unaffected: it carries
+no presumption and routes on its own terms.
+
+*This is the one named exception to P2.5's "any doubt resolves to the rung
+below", and it is stated there as such.* A gpt-5.6-sol cross-check of this
+revision (2026-08-21) objected that the two rules conflict; they do, on
+purpose, and the conflict is resolved by naming which one wins where. The
+evidence for the exception is the evidence this principle already records:
+every time doubt about a shared decision was resolved downward and the user
+steered the review to the top rung by hand, the review found significant
+issues. Doubt about a shared decision is the one place the downward default has
+been observed to be wrong. The same cross-check judged the presumption
+"operationally equivalent to by-construction for open plans"; it is not -- a
+named downstream check rebuts it, and naming one is a concrete act the
+orchestrator can be held to -- but the magnitude of over-firing it causes is
+unmeasured, and the announcement record (which now carries `plan-checkpoint`
+and `open`) is the instrument. If the tally shows open plan-checkpoints
+reaching the top rung that a single opus pass would have got right, restore
+the neutral form.
 
 *Lifecycle and recursion boundary:* do not launch units briefed from a plan
 that has not resolved; a materially revised plan re-enters as a new candidate
@@ -212,11 +239,13 @@ emits:
     principle: P0.6
     text: >-
       Route the plan itself through this tree as its own unit -- a
-      {plan-checkpoint} -- before briefing anything from it. Planhood implies
-      no other term: a plan is {load-bearing} only when a wrong shared
-      decision would survive the downstream units' own checks. Do not launch
-      units briefed from a plan still in flight; a materially revised plan
-      repeats this checkpoint; routing the plan is never itself a unit.
+      {plan-checkpoint} -- before briefing anything from it. Planhood decides
+      no shape: a settled checklist is {known}, an architecture decision is
+      {open}. Treat an {open} {plan-checkpoint} as {load-bearing} unless you
+      can NAME the downstream check that would catch a wrong shared decision.
+      Do not launch units briefed from a plan still in flight; a materially
+      revised plan repeats this checkpoint; routing the plan is never itself a
+      unit.
 ```
 
 ### P0.7 -- Plan creation vs plan review, decided by brief transferability
@@ -237,10 +266,33 @@ without losing context that exists only in this conversation?**
   discovered mid-authoring) -> author the draft and delegate plan REVIEW of
   the artifact.
 
-*Authorship independence:* a model that created a plan is not an independent
-reviewer of it. When the top model created the plan, the review seat belongs to
-a different family (P0.8); the two-independent-reviews shape applies to an
-orchestrator-authored plan.
+*Authorship independence, at every rung:* a model that created an artifact is
+not an independent reviewer of it, and this was never a top-rung-only rule --
+it simply had no rendered form below the top rung, so an opus orchestrator
+reviewing its own plan with an opus agent satisfied every rendered test. The
+term `authored-here` (lexicon) names the artifacts this applies to -- a plan,
+design or specification the orchestrator drafted inline; a delegated unit's
+output is never `authored-here`, so this does not route every review of every
+agent's output upward. A review of a `load-bearing` `authored-here` artifact is
+never dispatched to the authoring model. On the Claude ladder that is carried
+by a P2.2 criterion row, `[authored-here, load-bearing]`, because under
+ordered elimination a rung is reached only through its criteria -- a first
+draft said "route it to the rung above the author" and a gpt-5.6-sol
+cross-check correctly refuted that as unimplementable. When the orchestrator
+is itself the top model there is no rung above: the review seat is the second
+family (P0.8's `cross-check` child, on its own conditions), and with no second
+family installed the review is dispatched anyway and announced as
+non-independent. Independence is the criterion, not a capability claim about
+the author, which is why P2.2's gate accepts "opus authored it" as the written
+reason.
+
+*Why this is the review half of the 2026-08-21 correction:* the user's two
+named under-served shapes were design and review. P0.6 carries design (an open
+plan-checkpoint); this carries review. The pool cost is bounded by
+`load-bearing` and by "authored here" -- it does not route every review of
+every delegated unit upward, only reviews of the orchestrator's own
+load-bearing artifacts, which is exactly the population P0.6's evidence
+("the review found significant issues each time") was drawn from.
 
 ```yaml
 emits:
@@ -255,6 +307,18 @@ emits:
       in this conversation? Yes -- delegate plan CREATION (question brief).
       No -- author the draft and delegate plan REVIEW of it. A model that
       created a plan is not an independent reviewer of it.
+  shape.tests[review-independence]:
+    order: 10
+    id: review-independence
+    principle: P0.7
+    text: >-
+      Authorship independence holds at every rung, not only the top: a review
+      of a {load-bearing} {authored-here} artifact is never dispatched to the
+      authoring model -- the ladder carries it as a criterion. A delegated
+      unit's output is never {authored-here}. When the orchestrator is itself
+      the top model, the review seat is the {cross-check} child on its own
+      conditions; with no second family, dispatch the review anyway and
+      announce it as non-independent.
 ```
 
 ### P0.8 -- A top-rung plan review defaults to a second family
@@ -501,12 +565,40 @@ emits:
       value: There is no haiku rung.
 ```
 
-### P2.2 -- fable: any TWO of `novel`, `load-bearing`, `unverifiable`
+### P2.2 -- fable: any TWO of `novel`, `load-bearing`, `unverifiable`; or `load-bearing` + (`plan-checkpoint` | `authored-here`)
 
-Two of the three must hold, in any combination. **`open` only** -- and the
-long-standing rule that fable is not an implementation tier now DERIVES from that
-rather than being asserted: implementation is `known` work, and this rung takes only
-`open` work.
+Two of the three must hold, in any combination -- or the unit is a `load-bearing`
+`plan-checkpoint`, or a review of a `load-bearing` `authored-here` artifact. **`open` only** -- and the long-standing rule that fable is not
+an implementation tier now DERIVES from that rather than being asserted:
+implementation is `known` work, and this rung takes only `open` work.
+
+*Why the plan-checkpoint row (2026-08-21):* the first selection telemetry
+arrived -- a tally of every dispatch announcement across this machine's session
+transcripts, with the policy's own worked examples excluded: **fable 23, opus
+117, sonnet 153, codex 56** distinct announced dispatches. The under-use is not
+in implementation (correctly opus/sonnet) but in exactly the shape this rung's
+unrendered "canonical shape" paragraph names: design decisions and plan reviews
+were announced to opus as `(open, inference)`, `(plan-checkpoint, known)`, or
+`(plan-checkpoint, known, load-bearing)`, and the orchestrator authored the
+rest inline. The mechanism is structural, not a calibration error: design and
+review are `inference` by the lexicon's own definition, and `open` +
+`inference` is an opus criterion that fires on its own, while reaching fable
+needed two self-assessed escalation terms PLUS a written sentence certifying
+that the orchestrator's own model would fail -- evaluated under "any doubt
+resolves to the rung below" and a P4.3 note that prescribed an up-effort step
+the Agent tool cannot perform. Every force pointed down. The row gives design
+a positive route that does not depend on the orchestrator certifying its own
+inadequacy; P0.6 supplies `load-bearing` as a rebuttable presumption for open
+plans; P0.7 gives review the same route by independence, carried by the
+`[authored-here, load-bearing]` row. The user's stated intent is preserved:
+moderation of this rung exists to protect the pool, not to keep design and
+review off it. Known limits, from the gpt-5.6-sol cross-check of this
+revision: the tally does not count plan-checkpoints or see inline work, so the
+magnitude of the shift is unmeasured; `known` plan-checkpoints announced to
+opus are unaffected by design (the rung is `open`-only); and an
+`open` plan-checkpoint that is routine but has no nameable downstream check
+will now reach this rung -- that is the presumption doing what it says, and
+the announcement record is where it gets checked.
 
 *Why two rather than all three, and why this is a deliberate over-correction:* the
 three conjuncts guard distinct axes -- `novel` that the work is LIKELY to be got
@@ -524,16 +616,22 @@ test run would have caught anyway. Two-of-three admits none of those, since all 
 fail two axes at once.
 
 *Standing as a tuning position, not a derived truth:* this is an intentional
-over-correction, chosen on the judgement that the rung was firing too rarely, against
-no selection telemetry (section 7). The direction is deliberate; the magnitude is a
+over-correction, chosen on the judgement that the rung was firing too rarely, at the
+time against no selection telemetry (section 7; the 2026-08-21 tally above is the
+first, and it confirmed the direction). The direction is deliberate; the magnitude is a
 guess. **Revisit when P4.5 announcements provide a rung tally** -- if the top rung
 then wins work that a single opus pass plus its ordinary check would have handled,
 the correct response is to restore the three-way conjunction rather than to patch
 around it with guards.
 
-The gate is procedural, not predicative: write *"qualifies on &lt;criterion&gt;; opus
-would plausibly get it wrong because &lt;reason&gt;."* If that sentence is hard to
-write, the unit does not qualify.
+The gate is procedural, not predicative: write *"qualifies on &lt;criteria&gt;;
+&lt;why the rung below is the wrong seat&gt;"*, where the reason takes one of
+three forms -- *"opus would plausibly get it wrong because &lt;reason&gt;"*; for
+a `plan-checkpoint`, *"no downstream check catches a wrong shared decision"*;
+for an `authored-here` review, *"opus authored it"* (P0.7). If none can be
+written, the unit does not qualify. The second and third forms exist because an
+opus orchestrator asked to certify opus's inadequacy has every reason not to;
+propagation and independence are facts about the dispatch, not self-assessments.
 
 *Why a procedure rather than three questions:* three self-assessed yes/no questions
 about work already framed as important are a weak gate -- there is a standing pull
@@ -588,11 +686,15 @@ emits:
       - [novel, load-bearing]
       - [novel, unverifiable]
       - [load-bearing, unverifiable]
+      - [plan-checkpoint, load-bearing]
+      - [authored-here, load-bearing]
     terminal: false
     gate: >-
-      write "qualifies on <criterion>; opus would plausibly get it wrong
-      because <reason>." If that sentence is hard to write, the unit does
-      not qualify.
+      write "qualifies on <criteria>; <why the rung below is the wrong
+      seat>" -- "opus would plausibly get it wrong because <reason>"; or,
+      for a {plan-checkpoint}, "no downstream check catches a wrong shared
+      decision"; or, for an {authored-here} review, "opus authored it". If
+      none can be written, the unit does not qualify.
     notes:
       - id: pool-boundary
         text: >-
@@ -610,6 +712,14 @@ emits:
 
 `open` + `inference`; or `known` + `novel` (the interface and acceptance are settled,
 so the novelty is in the building rather than the deciding).
+
+*Note (2026-08-21):* `open` + `inference` is the natural home of design and review
+by the lexicon's definition of `inference`, and it fires on its own -- which is why,
+before the P2.2 plan-checkpoint row and the P0.7 independence test existed, design
+decisions landed here by default. Under ordered elimination a `load-bearing` open
+plan-checkpoint, or a review of the orchestrator's own load-bearing artifact, is
+taken by the rung above before this one is consulted; what reaches this rung as
+`(open, inference)` is inference that is neither.
 
 *Note:* this rung absorbed the former standalone implementation block. Routing
 implementation by specification quality is now universal (section 0), so all that
@@ -671,9 +781,14 @@ emits:
 
 ### P2.5 -- Cross-cutting rules for this ladder
 
-- **Any doubt resolves to the rung below.** `render: required` -- debiasing, not
+- **Any doubt resolves to the rung below** -- with one named exception, doubt
+  about whether a wrong shared decision in an `open` `plan-checkpoint` would be
+  caught, which P0.6 resolves UP. `render: required` -- debiasing, not
   rationale. Moved here from P2.1 when the haiku rung was deleted; it was never
-  specific to that rung, and stating it ladder-wide is what it always meant.
+  specific to that rung, and stating it ladder-wide is what it always meant. The
+  exception is stated here rather than left implicit because a reader holding
+  both rules would otherwise find them in conflict (a 2026-08-21 cross-check
+  did); the rationale for it is in P0.6.
 - Never down-tier a unit that meets the fable bar to harvest the discount.
 - Judge by total tokens to a VERIFIED result, not by apparent difficulty. `render: principles-only`
 
@@ -681,7 +796,10 @@ emits:
 emits:
   ladders.agent.guards:
     - order: 2
-      value: Any doubt resolves to the rung below.
+      value: >-
+        Any doubt resolves to the rung below -- except doubt about whether a
+        wrong shared decision in an {open} {plan-checkpoint} would be caught,
+        which resolves UP (the plan presumption above).
     - order: 3
       value: Never down-tier a unit that meets the fable bar to harvest the discount.
 ```
@@ -985,14 +1103,21 @@ emits:
     parameter, agents inherit from their type or the session, and it is
     settable per call only through Workflow's `agent()` `opts.effort`. So a
     Claude-side effort decision is an input to TIER selection, not a knob to
-    turn afterwards. Where it IS settable on fable, set `max` -- that rung
-    requires {unverifiable}, so deliberation is the only quality control left.
+    turn afterwards. Where it IS settable on fable, set `max` -- work that
+    reaches that rung is dangerous in more than one way, and deliberation is
+    the main quality control left.
 ```
 
 ### P4.3 -- Try up-effort before up-tier
 
 Stays in the same pool and clears most units that look like they need a better model.
-Concretely: opus at `xhigh` before reaching for fable at all.
+Concretely: opus at `xhigh` before reaching for fable at all -- WHERE EFFORT IS
+DIALABLE. Via the Agent tool it is not (P4.2): an Agent-tool opus dispatch inherits
+the session's effort, so there is no opus-at-`xhigh` rung between opus and fable on
+that path, and an Agent-tool opus dispatch must not be counted as the up-effort
+attempt. Until 2026-08-21 the rendered note omitted this, so it read as a step the
+orchestrator had always already taken -- a pure downward force on the top rung
+with no mechanism behind it.
 
 *Sequencing against P2.2:* this applies to units that do NOT meet the top-rung
 bar. A unit that already meets the two-of-three conjunction goes to fable
@@ -1004,8 +1129,12 @@ three-way conjunction and left behind by the two-of-three revision.)
 emits:
   effort.up_effort_note: >-
     Try up-effort before up-tier -- opus at `xhigh` before reaching for fable at
-    all. That is the move for units that do NOT meet fable's conjunction; a
-    unit already meeting the two-of-three bar goes there directly.
+    all -- WHERE effort is dialable (a CLI backend's effort setting, Workflow
+    `agent()`). Via the Agent
+    tool there is no opus-at-`xhigh` rung between opus and fable: an Agent-tool
+    opus dispatch inherits the session's effort and does not count as the
+    up-effort attempt. That move is for units that do NOT meet fable's bar; a
+    unit already meeting it goes there directly.
 ```
 
 ### P4.4 -- Effort tests
@@ -1094,12 +1223,20 @@ emits:
   announce.examples[ex-plan-review]:
     order: 6
     id: ex-plan-review
-    text: delegating plan review to fable (plan-checkpoint, novel, unverifiable)
+    text: delegating plan review to fable (plan-checkpoint, open, novel, unverifiable)
   announce.examples[ex-plan-crosscheck]:
     order: 7
     id: ex-plan-crosscheck
     requires_backend: codex
     text: delegating plan review second opinion to codex/gpt-5.6-sol (cross-check)
+  announce.examples[ex-design]:
+    order: 8
+    id: ex-design
+    text: delegating the schema decision the migration units build on to fable (plan-checkpoint, open, load-bearing)
+  announce.examples[ex-self-review]:
+    order: 9
+    id: ex-self-review
+    text: delegating review of the orchestrator-drafted rollout plan to fable (authored-here, open, load-bearing)
 ```
 
 ---
@@ -1265,8 +1402,11 @@ argument it is marked supporting rather than load-bearing.
 - **`multi_agent_v2` is narrow** -- N=8 trivial items on codex-cli 0.146.0 (65s vs
   48s), token accounting inconclusive. Says nothing about independent long-running
   items.
-- **No usage telemetry** on which rungs get chosen -- what would settle P2.1. P4.5's
-  announcements are designed to produce it.
+- **Usage telemetry is a one-off tally, not a feed.** P4.5's announcements produced
+  the first tally on 2026-08-21 (a grep over one machine's session transcripts, policy
+  examples excluded: fable 23 / opus 117 / sonnet 153 / codex 56). It settled the
+  direction of P2.2 and P0.6; nothing records it continuously, and it does not see
+  work the orchestrator did inline without announcing.
 - **P4.1 (agent type) is unvalidated** -- no data on whether `Explore` outperforms a
   general-purpose agent at the same rung.
 - **P0.3's volume threshold is unquantified.** "Many" is undefined and nothing
