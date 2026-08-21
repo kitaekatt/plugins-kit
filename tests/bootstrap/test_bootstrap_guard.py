@@ -155,15 +155,69 @@ class TestReexecUnderPluginVenv:
         assert called == []
 
     def test_reexec_noop_when_already_under_venv(self, tmp_path, monkeypatch):
+        """Being inside the venv is decided by sys.prefix -- the signal Python
+        derives from the path the interpreter was INVOKED by."""
         mod = _load_canon()
         monkeypatch.setattr(mod.os.path, "expanduser", lambda p: str(tmp_path))
         py = self._fake_venv_python(tmp_path, "p4-kit")
         monkeypatch.delenv(mod._REEXEC_GUARD_ENV, raising=False)
         monkeypatch.setattr(mod.sys, "executable", str(py))
+        monkeypatch.setattr(mod.sys, "prefix", str(py.parent.parent))
         called = []
         monkeypatch.setattr(mod.os, "execv", lambda *a: called.append(a))
         mod.reexec_under_plugin_venv("p4-kit")
         assert called == []
+
+    def test_reexec_happens_when_venv_python_symlinks_to_the_running_base(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression: uv builds `.venv/bin/python` as a SYMLINK to the base
+        interpreter. Comparing resolved interpreter PATHS collapses both sides
+        onto that base and reports "already provisioned" while the process is
+        still running outside the venv -- with none of its site-packages. It
+        misfired exactly when the caller was the standalone python every plugin
+        launcher shim uses, so the common case, not a corner one. Observed as
+        hue-kit reporting `zeroconf` unprovisioned when it was installed."""
+        import pytest
+        mod = _load_canon()
+        monkeypatch.setattr(mod.os.path, "expanduser", lambda p: str(tmp_path))
+
+        base = tmp_path / "python-standalone" / "bin"
+        base.mkdir(parents=True)
+        base_py = base / "python3"
+        base_py.write_text("", encoding="utf-8")
+
+        venv_bin = (tmp_path / ".claude" / "plugins" / "data" / "plugins-kit"
+                    / "hue-kit" / ".venv" / "bin")
+        venv_bin.mkdir(parents=True)
+        venv_py = venv_bin / "python"
+        try:
+            venv_py.symlink_to(base_py)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable on this platform")
+
+        # Running the BASE interpreter directly: same file as venv_py once
+        # resolved, but sys.prefix says we are outside the venv.
+        monkeypatch.setattr(mod.sys, "executable", str(base_py))
+        monkeypatch.setattr(mod.sys, "prefix", str(base_py.parent.parent))
+        monkeypatch.setattr(mod.sys, "argv", ["hue_kit_cli.py", "discover"])
+        monkeypatch.delenv(mod._REEXEC_GUARD_ENV, raising=False)
+
+        # The precondition that made the old check wrong.
+        assert base_py.resolve() == venv_py.resolve()
+
+        captured = {}
+
+        def fake_execv(path, args):
+            captured["path"] = path
+            raise SystemExit(0)
+
+        monkeypatch.setattr(mod.os, "execv", fake_execv)
+        with pytest.raises(SystemExit):
+            mod.reexec_under_plugin_venv("hue-kit")
+        assert captured["path"] == str(venv_py), (
+            "must re-exec via the VENV path so pyvenv.cfg activates the venv"
+        )
 
     def test_reexec_execs_into_venv_when_needed(self, tmp_path, monkeypatch):
         import pytest

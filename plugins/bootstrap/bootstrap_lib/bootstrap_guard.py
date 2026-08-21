@@ -124,9 +124,24 @@ def reexec_under_plugin_venv(plugin: str, marketplace: str = "plugins-kit") -> N
     target = plugin_venv_python(plugin, marketplace)
     if target is None:
         return  # not provisioned; let require_bootstrap() report it
+    # "Already in the venv" is decided by sys.prefix, NOT by comparing
+    # interpreter paths. uv builds `.venv/bin/python` as a SYMLINK to the base
+    # interpreter, so resolving both sides collapses them to the same file and
+    # the comparison returns a false positive -- and it does so precisely when
+    # the caller is the standalone python that every plugin's launcher shim
+    # uses, i.e. in the common case rather than a corner one. The process then
+    # continues under the BASE interpreter with none of the venv's
+    # site-packages, and the provisioned dependency is reported missing even
+    # though bootstrap installed it correctly: the exact misleading
+    # "not provisioned" error this function exists to prevent.
+    #
+    # sys.prefix is the authoritative signal. Python sets it from the path the
+    # interpreter was INVOKED by (PEP 405 finds pyvenv.cfg next to argv[0]
+    # without resolving symlinks), so it says which environment is actually
+    # active rather than which file is executing.
     try:
-        if Path(sys.executable).resolve() == target.resolve():
-            return  # already the provisioned interpreter
+        if Path(sys.prefix).resolve() == target.parent.parent.resolve():
+            return  # already running inside the provisioned venv
     except OSError:
         return
     os.environ[_REEXEC_GUARD_ENV] = "1"
