@@ -5153,8 +5153,9 @@ def _env_phase_macos_hotkeys(ctx):
     the cache flush / process restarts (env-config
     apply_macos_keyboard_shortcuts), then a fresh export re-checks each
     fixed entry (the re-check is authoritative). An id absent from the
-    plist is a descriptive failure -- the fix only mutates existing hotkey
-    slots, it never fabricates one.
+    plist is repaired like a mismatch -- macOS records only hotkeys changed
+    from factory, so "missing" is the NORMAL state on a fresh machine, and
+    the fix creates the slot (see apply_symbolic_hotkeys).
     """
     if ctx.current_os != "macos":
         ctx.ok("macos_hotkeys: skipped (not macOS)")
@@ -5209,14 +5210,9 @@ def _env_phase_macos_hotkeys(ctx):
             data, entry["id"], entry["parameters"], entry.get("enabled", True))
         if status == "ok":
             ctx.ok(f"macos_hotkey {entry['id']}: ok - {_label(entry)}")
-        elif status == "missing":
-            ctx.fail(
-                f"macos_hotkey {entry['id']}: FAILED - {detail}",
-                type="env_macos_hotkey", name=str(entry["id"]),
-                message=f"{_label(entry)}: {detail} (the fix only remaps existing hotkeys)",
-                persist_across_sessions=True,
-            )
         else:
+            # "missing" and "mismatch" alike: the fix creates or edits the
+            # slot, and the authoritative re-check below decides.
             failing.append(entry)
     if not failing:
         return

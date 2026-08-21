@@ -548,9 +548,10 @@ def hotkey_state(data: Dict, hid, parameters, enabled) -> Tuple[str, str]:
 
     Returns ``(status, detail)`` with status one of ``"ok"``,
     ``"mismatch"``, ``"missing"``. Plist keys are strings; ``enabled``
-    compares as bool (the plist stores 0/1). A missing id is its own state:
-    the fix only mutates existing hotkey slots (env-config behavior) and
-    must fail descriptively rather than fabricate one.
+    compares as bool (the plist stores 0/1). ``"missing"`` stays a distinct
+    state from ``"mismatch"`` because the two need different repairs -- one
+    creates a slot, the other edits one -- but BOTH are fixable; see
+    ``apply_symbolic_hotkeys``.
     """
     hotkeys = data.get("AppleSymbolicHotKeys") or {}
     current = hotkeys.get(str(hid))
@@ -573,13 +574,22 @@ def apply_symbolic_hotkeys(data: Dict, entries: List[Dict]) -> Tuple[bool, str]:
 
     One export/import round-trip for the whole batch (env-config
     apply_macos_keyboard_shortcuts), followed by the cache flush + process
-    restarts. Every entry's id must already exist in the plist (the
-    handler pre-filters missing ids into failures).
+    restarts.
+
+    An id ABSENT from the plist gets a fresh slot rather than a failure.
+    macOS records only hotkeys that have been CHANGED from factory, so on a
+    freshly installed machine every id still at its default is missing by
+    construction -- the exact machine the fleet exists to converge. Refusing
+    to create the slot made those entries permanently unfixable and nagged
+    every session with a fix-all item no fix could clear. The created shape
+    is what System Settings itself writes.
     """
     hotkeys = data["AppleSymbolicHotKeys"]
     for entry in entries:
-        slot = hotkeys[str(entry["id"])]
-        slot.setdefault("value", {})["parameters"] = list(entry["parameters"])
+        slot = hotkeys.setdefault(str(entry["id"]), {})
+        value = slot.setdefault("value", {})
+        value["parameters"] = list(entry["parameters"])
+        value.setdefault("type", "standard")
         slot["enabled"] = bool(entry.get("enabled", True))
 
     tmpfile = None

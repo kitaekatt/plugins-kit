@@ -1119,18 +1119,25 @@ class TestMacosHotkeys:
         assert len(result.action_entries) == 1
         assert mac.hotkeys["AppleSymbolicHotKeys"]["30"]["enabled"] is False
 
-    def test_missing_id_is_a_failure_without_import(
+    def test_missing_id_is_created_and_imported(
         self, isolated_home, run_env_pass, monkeypatch
     ):
+        """Was asserted as a permanent failure until 0.86.2. An id absent
+        from the plist is the NORMAL state for any hotkey still at its
+        factory setting, so refusing to create it made the entry
+        unconvergeable rather than safe."""
         mac = FakeMac(hotkeys=CONVERGED_HOTKEYS).install(monkeypatch)
         entries = [{"id": 99, "parameters": [1, 2, 3], "enabled": True}]
         self._write_manifest(isolated_home, entries=entries)
 
         result = run_env_pass(current_os="macos")
 
-        assert len(result.failures) == 1
-        assert "id 99 not present" in result.failures[0]["message"]
-        assert mac.write_calls() == []
+        assert result.failures == []
+        assert mac.write_calls() != []
+        assert mac.hotkeys["AppleSymbolicHotKeys"]["99"] == {
+            "enabled": True,
+            "value": {"parameters": [1, 2, 3], "type": "standard"},
+        }
 
     def test_export_failure_is_a_failure(
         self, isolated_home, run_env_pass, monkeypatch
@@ -1147,6 +1154,41 @@ class TestMacosHotkeys:
         self, isolated_home, run_env_pass, monkeypatch
     ):
         mac = FakeMac(hotkeys=FACTORY_HOTKEYS).install(monkeypatch)
+        self._write_manifest(isolated_home)
+        assert run_env_pass(current_os="macos").failures == []
+        mac.calls.clear()
+
+        second = run_env_pass(current_os="macos")
+
+        assert second.failures == []
+        assert second.action_entries == []
+        assert mac.write_calls() == []
+
+    def test_missing_id_is_created_not_failed(
+        self, isolated_home, run_env_pass, monkeypatch
+    ):
+        """A fresh macOS records only hotkeys CHANGED from factory, so an id
+        at its default is absent by construction. Creating the slot is what
+        makes such an entry convergeable at all."""
+        mac = FakeMac(hotkeys=_hotkeys_plist({30: ([52, 21, 1179648], True)}))
+        mac.install(monkeypatch)
+        self._write_manifest(isolated_home)
+
+        result = run_env_pass(current_os="macos")
+
+        assert result.failures == []
+        created = mac.hotkeys["AppleSymbolicHotKeys"]["28"]
+        assert created["value"]["parameters"] == [48, 29, 1179648]
+        assert created["value"]["type"] == "standard"
+        assert created["enabled"] is True
+        # The untouched sibling survives the round-trip.
+        assert mac.hotkeys["AppleSymbolicHotKeys"]["30"]["value"][
+            "parameters"] == [52, 21, 1179648]
+
+    def test_created_hotkey_is_idempotent_on_second_pass(
+        self, isolated_home, run_env_pass, monkeypatch
+    ):
+        mac = FakeMac(hotkeys=_hotkeys_plist({})).install(monkeypatch)
         self._write_manifest(isolated_home)
         assert run_env_pass(current_os="macos").failures == []
         mac.calls.clear()
@@ -1181,6 +1223,14 @@ class TestHotkeyStateUnit:
         status, detail = hotkey_state(data, 28, [4, 5, 6], True)
         assert status == "mismatch"
         assert "[4, 5, 6]" in detail and "[1, 2, 3]" in detail
+
+    def test_absent_id_reports_missing(self):
+        """Still its own state -- it needs a different repair (create vs
+        edit) even though both are now fixable."""
+        data = _hotkeys_plist({29: ([1, 2, 3], True)})
+        status, detail = hotkey_state(data, 28, [1, 2, 3], True)
+        assert status == "missing"
+        assert "28" in detail
 
 
 # ---------------------------------------------------------------------------

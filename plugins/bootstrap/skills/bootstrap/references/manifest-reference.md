@@ -1398,8 +1398,11 @@ Remap symbolic hotkeys (the `com.apple.symbolichotkeys` domain).
 Check is one side-effect-free plist export compare. Fix is **one**
 export → mutate → import round-trip for the whole failing batch, then the cache
 flush / process restarts, then a fresh export re-checks each fixed entry (the
-re-check is authoritative). An `id` **absent** from the plist is a descriptive
-failure — the fix only mutates *existing* hotkey slots; it never fabricates one.
+re-check is authoritative). An `id` **absent** from the plist is repaired the
+same way a mismatch is: the fix **creates** the slot. macOS records only hotkeys
+that have been *changed* from factory, so a missing `id` is the normal state on a
+freshly installed machine rather than an anomaly — refusing to create it left
+those entries permanently unfixable.
 
 ### `login_items` — macOS only
 
