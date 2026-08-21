@@ -44,13 +44,15 @@ def _lane() -> str:
 
 
 def _lane_prompt_body() -> str:
-    """Just the lanePrompt template literal, excluding the file header.
+    """Just the batch brief builder, excluding the file header.
 
     Several contract phrases appear in BOTH the header comment and the prompt;
-    asserting over the whole file cannot tell the two apart.
+    asserting over the whole file cannot tell the two apart. The builder is
+    `batchPrompt`: it states the shared rules once and fences the per-subject
+    material after them. It ends where batch construction begins.
     """
     src = _detect()
-    return src[src.index("const lanePrompt"):src.index("phase('Coverage')")]
+    return src[src.index("const batchPrompt"):src.index("const hasUnknownExtensions")]
 
 
 class TestArtifactsExist:
@@ -100,7 +102,12 @@ class TestVerdictVocabulary:
         zero candidates and contradict the lane's own decision rules.
         """
         src = _detect()
-        assert "candidates.length ? 'GAPS-FOUND' : 'COVERAGE-ASSESSED'" in src
+        # `placed` is the candidate list AFTER anchor-membership rejection and
+        # the derived-destination pass. The verdict must derive from what
+        # SURVIVED validation, not from what arrived -- otherwise a subject whose
+        # every candidate was rejected still reports GAPS-FOUND over evidence
+        # that was thrown away.
+        assert "placed.length ? 'GAPS-FOUND' : 'COVERAGE-ASSESSED'" in src
         assert "verdict: derived" in src
 
 
@@ -140,7 +147,7 @@ class TestCriteriaWiring:
     def test_guard_precedes_any_agent_dispatch(self):
         """A refusal after fan-out would have already spent the tokens."""
         src = _detect()
-        assert src.index("throw new Error") < src.index("agent(lanePrompt")
+        assert src.index("throw new Error") < src.index("agent(batchPrompt")
 
     def test_refusal_names_the_rejected_design(self):
         """The guard exists to prevent improvising, not merely to be tidy."""
@@ -200,7 +207,7 @@ class TestAnalysisDepth:
     def test_detect_returns_the_depth_with_the_verdict(self):
         src = _detect()
         assert "verdict: derived, depth" in src
-        assert "return { perSubject: results, totals, ceiling, depth }" in src
+        assert "return { perSubject: results, totals, ceiling, depth, batchSize" in src
 
 
 class TestScopeCorrection:
@@ -313,8 +320,12 @@ class TestConversionContractCarriage:
     def test_reducer_preserves_the_candidate_objects(self):
         """The reducer must not rebuild candidates and drop the new fields."""
         src = _detect()
-        assert "const candidates = r.candidates || []" in src
-        assert "return { ...r, candidates, verdict: derived, depth, notes }" in src
+        assert "const incoming = r.candidates || []" in src
+        assert "const candidates = incoming.filter(" in src
+        assert (
+            "return { ...r, candidates: placed, verdict: derived, depth, notes, "
+            "codeFiles: undefined }"
+        ) in src
 
     def test_totals_report_the_tier_split(self):
         """CV-4 requires the classification to be REPORTED, not just recorded."""
@@ -355,12 +366,35 @@ class TestDiscoveryFailureRefusal:
     """
 
     def test_detect_never_dispatches_a_discovery_failure_to_the_agent(self):
+        """A PARTITION now, not a branch inside a per-subject thunk.
+
+        Batching made the distinction load-bearing: a discovery failure decided
+        inside the thunk would still occupy a slot in a batch. The subject is
+        partitioned out BEFORE the batches are cut, so it reaches `preDecided`
+        and is rejoined to the results after fan-out instead of consuming an
+        assessment slot.
+        """
         src = _detect()
         assert "hasNoCodeFiles(s) && hasUnknownExtensions(s)" in src
-        # The refusal branch must precede the agent() call inside the same
-        # per-subject thunk, so a discovery failure never reaches assessment.
-        thunk = src[src.index("subjects.map((s) => () => {"):src.index("}))")]
-        assert thunk.index("discoveryFailure(s)") < thunk.index("agent(lanePrompt")
+        assert "preDecided.push(discoveryFailure(s))" in src
+        assert (
+            src.index("preDecided.push(discoveryFailure(s))")
+            < src.index("dispatchable.slice(i, i + batchSize)")
+            < src.index("agent(batchPrompt")
+        )
+        assert "preDecided.concat(" in src
+
+    def test_discovery_failure_is_also_derivable_from_transcribed_counts(self):
+        """subjectsFile mode cannot see the subject fields.
+
+        The lane never reads the file, so the pre-dispatch partition above has
+        nothing to test in that mode. The SAME rule is applied in the reducer to
+        the counts the agent transcribed out of the record -- so the decision
+        stays mechanical and stays here, and only the transcription is trusted.
+        """
+        src = _detect()
+        assert "r.assessedFileCount === 0 && r.unknownExtensionCount > 0" in src
+        assert "verdict: 'DISCOVERY-FAILED'" in src
 
     def test_discovery_failure_verdict_is_not_one_of_the_two_coverage_verdicts(self):
         src = _detect()
@@ -370,8 +404,10 @@ class TestDiscoveryFailureRefusal:
         """It must skip the candidates.length ? GAPS-FOUND : COVERAGE-ASSESSED
         derivation entirely -- deriving over it would read as COVERAGE-ASSESSED."""
         src = _detect()
-        guard = src.index("if (r.verdict === 'DISCOVERY-FAILED') {")
-        derive = src.index("candidates.length ? 'GAPS-FOUND' : 'COVERAGE-ASSESSED'")
+        guard = src.index(
+            "if (r.verdict === 'DISCOVERY-FAILED' || r.verdict === 'BATCH-INCOMPLETE') {"
+        )
+        derive = src.index("placed.length ? 'GAPS-FOUND' : 'COVERAGE-ASSESSED'")
         assert guard < derive
 
     def test_discovery_failed_is_tallied_apart_from_both_verdicts(self):

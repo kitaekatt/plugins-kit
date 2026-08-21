@@ -212,6 +212,50 @@ class TestWalkDirectory:
         assert _reasons({"skipped": skipped}) == {cov.SKIP_VENDORED}
         assert _skipped_names({"skipped": skipped}) == {"node_modules", "vendor"}
 
+    def test_vendor_names_match_case_insensitively(self, tmp_path):
+        """`ThirdParty` is the Unreal convention and must skip like `third_party`.
+
+        A case-SENSITIVE set silently let ~342 vendored `ThirdParty`
+        directories through as real coverage subjects in a consuming UE repo.
+        Listing `build` and `Build` separately was the hand-rolled version of
+        this fold; the fold is the fix.
+        """
+        root = tmp_path / "src"
+        _write(root / "main.c")
+        # One casing per NAME: the test tree must be creatable on a
+        # case-insensitive filesystem, where `ThirdParty` and `THIRDPARTY` are
+        # the same directory.
+        for name in ("ThirdParty", "Build", "Vendor", "Node_Modules", "DIST"):
+            _write(root / name / "dep.c")
+
+        code_files, skipped, _, _ = cov.walk_directory(root)
+
+        assert {p.name for p in code_files} == {"main.c"}
+        assert _reasons({"skipped": skipped}) == {cov.SKIP_VENDORED}
+        assert _skipped_names({"skipped": skipped}) == {
+            "ThirdParty", "Build", "Vendor", "Node_Modules", "DIST",
+        }
+
+    def test_generated_names_match_case_insensitively(self, tmp_path):
+        root = tmp_path / "src"
+        _write(root / "main.c")
+        _write(root / "Generated" / "schema_pb2.py")
+
+        code_files, skipped, _, _ = cov.walk_directory(root)
+
+        assert {p.name for p in code_files} == {"main.c"}
+        assert _reasons({"skipped": skipped}) == {cov.SKIP_GENERATED}
+
+    def test_bower_components_is_a_package_manager_install_root(self, tmp_path):
+        root = tmp_path / "www"
+        _write(root / "app.js")
+        _write(root / "bower_components" / "jquery" / "jquery.js")
+
+        code_files, skipped, _, _ = cov.walk_directory(root)
+
+        assert {p.name for p in code_files} == {"app.js"}
+        assert _reasons({"skipped": skipped}) == {cov.SKIP_VENDORED}
+
     def test_generated_directories_are_skipped_and_reported(self, tmp_path):
         root = tmp_path / "src"
         _write(root / "main.c")
@@ -403,6 +447,160 @@ class TestExtensionCoverage:
         assert {p.name for p in code_files} == {"player.gd"}
         assert unknown.get(".uid") == 1
 
+    def test_unreal_asset_only_directory_is_an_empty_subject(self, tmp_path):
+        """`.uasset` is a compiled binary container, not an unknown LANGUAGE.
+
+        Left out of ASSET_BINARY_EXT it lands in unknownExtensions, which the
+        coverage lane reads as a discovery FAILURE -- so a UE Content tree
+        manufactures a phantom subject per art directory (1,318 of 3,071 on a
+        real project) and spends a full agent on each reading binary.
+        """
+        root = tmp_path / "Content" / "Activities"
+        _write(root / "BP_ActivityActor.uasset")
+        _write(root / "Overworld.umap")
+
+        code_files, _, _, unknown = cov.walk_directory(root)
+
+        assert code_files == []
+        assert unknown == {}
+
+    def test_unreal_asset_beside_source_leaves_the_source_a_subject(self, tmp_path):
+        root = tmp_path / "Source"
+        _write(root / "Actor.cpp")
+        _write(root / "Actor.uasset")
+
+        code_files, _, _, unknown = cov.walk_directory(root)
+
+        assert {p.name for p in code_files} == {"Actor.cpp"}
+        assert unknown == {}
+
+    def test_unrecognized_extension_still_surfaces_as_unknown(self, tmp_path):
+        """The safeguard must keep working for its real case.
+
+        Absorbing binary containers is not the same as deleting the signal: a
+        file in NEITHER set is still recorded, so the next missing code
+        extension surfaces instead of reading as an empty, well-formed subject.
+        """
+        root = tmp_path / "src"
+        _write(root / "thing.uasset")   # absorbed as a binary asset
+        _write(root / "thing.scmap")    # absorbed as a binary asset
+        _write(root / "thing.fbx")      # absorbed as a binary asset
+        _write(root / "thing.zig")      # genuinely unrecognized language
+
+        code_files, _, _, unknown = cov.walk_directory(root)
+
+        assert code_files == []
+        assert unknown == {".zig": 1}
+
+    def test_verified_binary_containers_are_absorbed(self, tmp_path):
+        """Each header-checked on a real project before being added.
+
+        `.pkf` audio peak cache (magic "k$!"), `.fbx` ("Kaydara FBX Binary"),
+        `.blend` ("BLENDER-v293").
+        """
+        root = tmp_path / "Content" / "Geometry"
+        _write(root / "SFX_Wind.pkf")
+        _write(root / "Pot.FBX")        # upper-case on disk; matching is lowered
+        _write(root / "Site_Ground.blend")
+
+        code_files, _, _, unknown = cov.walk_directory(root)
+
+        assert code_files == []
+        assert unknown == {}
+
+    def test_readable_data_is_not_absorbed_by_a_binary_looking_name(self, tmp_path):
+        """The `.afb`/`.collection` trap, re-armed with four more real cases.
+
+        Every one of these looked absorbable from its name and is plain text on
+        disk: `.tab` is tzdata's tab-separated country table, `.activity` is
+        YAML, `.manifest` is JSON, and `.archive` is UTF-16 JSON -- a
+        localization SOURCE, the same class as the protected `.po`/`.xlf`.
+        Absorbing any of them would hide readable data, which is a MISSED
+        SUBJECT: the unsafe direction.
+        """
+        root = tmp_path / "Content" / "TzData"
+        _write(root / "zone.tab")
+        _write(root / "Test.activity")
+        _write(root / "pool.manifest")
+        _write(root / "Game.archive")
+
+        _, _, _, unknown = cov.walk_directory(root)
+
+        assert unknown == {
+            ".tab": 1, ".activity": 1, ".manifest": 1, ".archive": 1,
+        }
+
+    def test_awk_scripts_are_code(self, tmp_path):
+        """A real scripting language: adding it can only ADD subjects.
+
+        All five `.awk` files on the measured project sit in ONE otherwise
+        code-free directory, so this flips that directory from a discovery
+        FAILURE into a genuine subject -- the classification actually changes.
+        """
+        root = tmp_path / "Content" / "TzData"
+        _write(root / "checklinks.awk")
+        _write(root / "zone.tab")  # readable data, still surfaced
+
+        code_files, _, _, unknown = cov.walk_directory(root)
+
+        assert {p.name for p in code_files} == {"checklinks.awk"}
+        assert unknown == {".tab": 1}
+
+    def test_scmap_only_directory_is_an_empty_subject(self, tmp_path):
+        """`.scmap` is a FlatBuffers setpiece companion: structured binary.
+
+        Being REGENERATED by a designer skill says how the file is produced, not
+        that it is readable -- the skill parses it through a dedicated reader,
+        which is exactly what an agent reading it as text cannot do. 527 files
+        on a real project, and the top residual cause of empty subjects once the
+        `.uasset` family was absorbed.
+        """
+        root = tmp_path / "Content" / "SetPieces"
+        _write(root / "SP_House_RoomMedium_Bedroom.scmap")
+
+        code_files, _, _, unknown = cov.walk_directory(root)
+
+        assert code_files == []
+        assert unknown == {}
+
+    def test_scmap_beside_source_leaves_the_source_a_subject(self, tmp_path):
+        root = tmp_path / "SetPieces"
+        _write(root / "SetPieceBuilder.cpp")
+        _write(root / "SP_Village_Guild.scmap")
+
+        code_files, _, _, unknown = cov.walk_directory(root)
+
+        assert {p.name for p in code_files} == {"SetPieceBuilder.cpp"}
+        assert unknown == {}
+
+    def test_localization_sources_stay_readable_while_output_is_absorbed(
+        self, tmp_path
+    ):
+        """`.locres` is compiled output; `.po`/`.xlf` are its text sources.
+
+        A live localization pipeline works on the sources, so absorbing them
+        would hide the very files somebody must read.
+        """
+        root = tmp_path / "Localization" / "Game"
+        _write(root / "Game.locres")
+        _write(root / "Game.po")
+        _write(root / "Game.xlf")
+
+        _, _, _, unknown = cov.walk_directory(root)
+
+        assert ".locres" not in unknown
+        assert unknown == {".po": 1, ".xlf": 1}
+
+    def test_unreal_descriptors_are_code_not_binary(self, tmp_path):
+        """.uplugin/.uproject are JSON module descriptors, so they are code."""
+        root = tmp_path / "Plugins" / "AppsFlyerSDK"
+        _write(root / "AppsFlyerSDK.uplugin", "{}\n")
+
+        code_files, _, _, unknown = cov.walk_directory(root)
+
+        assert {p.name for p in code_files} == {"AppsFlyerSDK.uplugin"}
+        assert unknown == {}
+
     def test_dotfiles_and_convention_files_do_not_read_as_unknown(self, tmp_path):
         """A code-free directory holding only repo convention files is an EMPTY
         subject, not a discovery failure. Path(".gitignore").suffix and
@@ -509,6 +707,117 @@ class TestExtensionCoverage:
         subject = cov.build_subject(repo / "engine")
 
         assert subject["unknownExtensions"] == {}
+
+
+class TestVendoredBundleRule:
+    """Checked-in third-party web bundles, caught by CONTENT rather than name.
+
+    The motivating leak was `WWW/Public/libraries/...` in a consuming repo:
+    vendored JS/CSS libraries with no `node_modules` and no `vendor` anywhere in
+    the path. The dangerous fix would be to add `lib`/`libs` to the name list --
+    that would eat first-party source such as `Tools/Scripts/libs/`, silently
+    SHRINKING the corpus, which is the same failure class this rule exists to
+    stop. So the rule demands positive evidence of vendoring instead, and the
+    false-positive guards below are the load-bearing half of it.
+    """
+
+    def test_directory_of_minified_bundles_is_skipped_and_reported(self, tmp_path):
+        root = tmp_path / "www"
+        _write(root / "app.js")
+        bundle = root / "libraries"
+        _write(bundle / "jquery.min.js")
+        _write(bundle / "bootstrap.min.css")
+        _write(bundle / "chart.bundle.js")
+
+        code_files, skipped, _, _ = cov.walk_directory(root)
+
+        assert {p.name for p in code_files} == {"app.js"}
+        assert _reasons({"skipped": skipped}) == {cov.SKIP_VENDORED_BUNDLE}
+        assert _skipped_names({"skipped": skipped}) == {"libraries"}
+
+    def test_first_party_libs_directory_is_not_skipped(self, tmp_path):
+        """`libs` carries no vendoring signal, so it must stay a subject."""
+        root = tmp_path / "Tools"
+        _write(root / "run.py")
+        _write(root / "libs" / "firstpass_ops" / "selector.py")
+
+        code_files, skipped, _, _ = cov.walk_directory(root)
+
+        assert {p.name for p in code_files} == {"run.py"}
+        assert skipped == []
+
+    def test_source_directory_that_vendors_one_bundle_is_not_skipped(self, tmp_path):
+        """A minority of minified files is not evidence the directory is vendored."""
+        root = tmp_path / "www"
+        _write(root / "index.html")
+        static = root / "static"
+        _write(static / "app.js")
+        _write(static / "widgets.js")
+        _write(static / "jquery.min.js")
+
+        _, skipped, _, _ = cov.walk_directory(root)
+
+        assert skipped == []
+        # And the directory itself still resolves to a real subject.
+        assert cov.root_exclusion(static) is None
+
+    def test_walk_tree_prunes_bundle_directories_too(self, tmp_path):
+        """The composition verb imports walk_tree from here; both must agree."""
+        root = tmp_path / "www"
+        _write(root / "app.js")
+        bundle = root / "libraries"
+        _write(bundle / "jquery.min.js")
+        _write(bundle / "plugins" / "select2.min.js")
+
+        leaves, _, skipped, _ = cov.walk_tree(root)
+
+        assert [str(p) for p in leaves] == [str(root.resolve())]
+        assert _reasons({"skipped": skipped}) == {cov.SKIP_VENDORED_BUNDLE}
+
+    def test_walk_tree_prunes_camelcase_thirdparty(self, tmp_path):
+        root = tmp_path / "Source"
+        _write(root / "main.cpp")
+        _write(root / "ThirdParty" / "crashpad" / "client.cpp")
+
+        leaves, _, skipped, _ = cov.walk_tree(root)
+
+        assert [str(p) for p in leaves] == [str(root.resolve())]
+        assert _reasons({"skipped": skipped}) == {cov.SKIP_VENDORED}
+
+    def test_thirdparty_prune_also_drops_first_party_build_glue(self, tmp_path):
+        """KNOWN AND INTENDED cost of the name rule, pinned so a change is loud.
+
+        `ThirdParty/entt` holds only `EnTT.Build.cs` -- first-party, team-
+        authored -- while the upstream library is the SIBLING `entt-3.15.0/`.
+        A path-segment name rule cannot tell the two apart, so the glue is
+        pruned along with the library. The plugin accepts that: the prune
+        removes far more phantom subjects than it costs, and reinstating a
+        directory is the consuming repo's call, not this module's. A maintainer
+        who wants different behaviour has to change this test on purpose.
+        """
+        root = tmp_path / "Source"
+        _write(root / "Module.Build.cs")
+        _write(root / "ThirdParty" / "entt" / "EnTT.Build.cs")
+        _write(root / "ThirdParty" / "entt-3.15.0" / "entt.hpp")
+
+        code_files, skipped, _, _ = cov.walk_directory(root)
+        leaves, _, _, _ = cov.walk_tree(root)
+
+        assert {p.name for p in code_files} == {"Module.Build.cs"}
+        # Reported once at the parent; the children are never enumerated.
+        assert _skipped_names({"skipped": skipped}) == {"ThirdParty"}
+        assert _reasons({"skipped": skipped}) == {cov.SKIP_VENDORED}
+        assert [str(p) for p in leaves] == [str(root.resolve())]
+
+    def test_named_bundle_root_is_reported_not_silently_scanned(self, tmp_path):
+        repo = _mkrepo(tmp_path / "repo")
+        bundle = repo / "libraries"
+        _write(bundle / "jquery.min.js")
+
+        subject = cov.build_subject(bundle)
+
+        assert subject["rootExclusion"] == cov.SKIP_VENDORED_BUNDLE
+        assert subject["codeFiles"]
 
 
 class TestRootExclusion:

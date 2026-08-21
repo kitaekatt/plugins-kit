@@ -54,7 +54,12 @@ CODE_DATA_EXT = {
     ".rs", ".java", ".kt", ".swift", ".m", ".mm", ".ts", ".tsx", ".js", ".jsx",
     ".mjs", ".cjs", ".lua", ".rb", ".php", ".scala", ".sql", ".yaml", ".yml",
     ".csv", ".json", ".toml", ".proto", ".fbs", ".gradle", ".cmake", ".tf",
-    ".sh", ".ps1", ".gd", ".tscn",
+    ".sh", ".ps1", ".gd", ".tscn", ".awk",
+    # Unreal descriptors: JSON text listing modules, plugins and dependencies --
+    # readable, and the most coverage-relevant file in the directory holding it.
+    # The engine's BINARY containers (.uasset/.umap/...) are the opposite case
+    # and live in discover_coverage.ASSET_BINARY_EXT.
+    ".uplugin", ".uproject",
 }
 # .md files that are docs, not review-notes; CLAUDE.md/local are the audited file.
 _MD_LIKE = {".md", ".mdx", ".rst", ".txt"}

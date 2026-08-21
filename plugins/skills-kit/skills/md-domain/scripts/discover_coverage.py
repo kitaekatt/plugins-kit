@@ -37,13 +37,18 @@ Three properties are load-bearing and easy to get wrong:
 
 Exclusions are STRUCTURAL only and are applied before any file is read: what the
 PROJECT'S VCS IGNORES (git or p4 ignore rules, and nothing at all when the tree
-is under neither -- see vcs_ignore.py), vendored and third-party directories,
-generated directories, and nested repositories. Deciding that a fact is "already
+is under neither -- see vcs_ignore.py), vendored and third-party directories
+(by case-insensitive NAME, and by the CONTENT signal of a directory whose direct
+code files are mostly minified/bundled web assets), generated directories, and
+nested repositories. Deciding that a fact is "already
 covered by an ambient claim that resolves" is NOT an exclusion -- establishing it
 requires reading the ambient document and usually the source it anchors to, so it
 belongs to the assessment step, not here.
 
-Every exclusion is RECORDED and reported, never silently applied.
+Every exclusion is RECORDED and reported, never silently applied. A NAME rule
+prunes at directory level, so first-party build glue parked under a
+vendored-named parent goes with it and its children are never enumerated -- a
+known, accepted false-positive class, described at VENDOR_DIR_NAMES.
 
 This module also hosts `walk_tree`, a RECURSIVE tree-descent primitive used by
 discover_composition.py. It is never used to build a coverage subject --
@@ -85,17 +90,55 @@ from project_root import find_project_root  # noqa: E402
 from vcs_ignore import detect_vcs, ignored_paths  # noqa: E402
 
 # Directory basenames that are vendored / third-party or build output. Matched
-# against a single path component. `build`/`Build` and `target` are ambiguous
-# (a real source dir may be named either), which is exactly why a skip is
-# reported rather than assumed correct -- the user can see it and re-scope.
+# against a single path component, CASE-INSENSITIVELY (see `_skip_reason`), so
+# one lowercase entry covers every casing convention a project might use:
+# `third_party`, `ThirdParty` (the Unreal convention), and `THIRDPARTY` are one
+# rule, not three. Listing both `build` and `Build` here used to be the
+# hand-rolled version of that fold; a case-sensitive list silently missed every
+# casing nobody had thought to enumerate, and ~342 vendored `ThirdParty`
+# directories arrived as real coverage subjects because of it. `build` and
+# `target` are ambiguous (a real source dir may be named either), which is
+# exactly why a skip is reported rather than assumed correct -- the user can see
+# it and re-scope. `node_modules` and `bower_components` are package-manager
+# INSTALL ROOTS: nothing hand-authored ever lives in one, so they carry no
+# false-positive risk at all.
+#
+# KNOWN FALSE-POSITIVE CLASS, accepted deliberately: a path-segment name rule
+# cannot tell a vendored library from FIRST-PARTY BUILD GLUE parked beside it
+# under the same vendored-named parent. The prune is at DIRECTORY level, so the
+# children of a matched directory are never enumerated and never reported
+# individually. The shape to recognize is a directory whose only direct files are
+# team-authored build scripts (`Foo.Build.cs`, provisioning scripts) sitting
+# under `ThirdParty/`, while the upstream source is a SIBLING subtree the same
+# rule excludes correctly. Reinstating such a directory is the consuming repo's
+# call -- name it explicitly, or move it out from under the vendored parent; this
+# module carries no first-party override. Pinned by
+# test_thirdparty_prune_also_drops_first_party_build_glue.
 VENDOR_DIR_NAMES = {
-    "node_modules", "vendor", "third_party", "thirdparty", "Pods",
-    "target", "dist", "build", "Build", "out",
+    "node_modules", "bower_components", "vendor", "third_party", "thirdparty",
+    "pods", "target", "dist", "build", "out",
 }
 
 # Directory basenames whose contents are generated. An existing modality already
-# covers generated content, so it is not this verb's subject.
+# covers generated content, so it is not this verb's subject. Matched
+# case-insensitively, like VENDOR_DIR_NAMES -- `Generated/` is at least as
+# common a convention as `generated/`.
 GENERATED_DIR_NAMES = {"generated", "__generated__", "gen", "autogen"}
+
+# Lowercased lookups for the two name sets above. Derived once rather than
+# lowered per candidate, and kept private so the published constants stay
+# readable in their conventional casing.
+_VENDOR_DIR_NAMES_LOWER = {name.lower() for name in VENDOR_DIR_NAMES}
+_GENERATED_DIR_NAMES_LOWER = {name.lower() for name in GENERATED_DIR_NAMES}
+
+# Filename suffixes that mark a MINIFIED or BUNDLED web asset -- build output of
+# some other project, checked in as-is. Matched case-insensitively against a
+# file NAME, not an extension, because the signal is the `.min`/`.bundle`
+# infix rather than `.js` itself.
+MINIFIED_BUNDLE_SUFFIXES = (
+    ".min.js", ".min.mjs", ".min.css", "-min.js", "-min.css",
+    ".bundle.js", ".bundle.css",
+)
 
 # Noise directories: pruned and counted, but not itemized in the report. These
 # are never anybody's source of insight and listing them would bury the skips
@@ -106,12 +149,26 @@ NOISE_DIR_NAMES = {
     "DerivedDataCache", ".idea", ".vs",
 }
 
-# Extensions that are never code: images, fonts, audio, video, archives, and
-# compiled binaries/lockfiles. Excluded from `unknownExtensions` so that signal
-# stays readable -- a 105-PNG directory should not drown out the one `.gd` file
-# CODE_DATA_EXT is missing. A MISSING entry here only causes NOISE (an ordinary
-# asset extension shows up in unknownExtensions), never a MISSED SUBJECT (a real
-# code extension is never added here) -- that is the safe direction to err in.
+# Extensions that are never code: images, fonts, audio, video, archives,
+# compiled binaries/lockfiles, and engine asset containers. Excluded from
+# `unknownExtensions` so that signal stays readable -- a 105-PNG directory
+# should not drown out the one `.gd` file CODE_DATA_EXT is missing.
+#
+# A MISSING entry here is still the SAFE DIRECTION: it can only cause noise,
+# never a missed subject, because a real code extension is never added here.
+# But THE COST OF THAT NOISE SCALES WITH THE CONSUMING PROJECT, and on an engine
+# project it is not cosmetic. A directory whose files are all unrecognized
+# reports codeFiles: [] with a non-empty unknownExtensions, which the coverage
+# lane must treat as a discovery FAILURE rather than as an empty subject -- so
+# every one of them becomes a subject an agent is spent on. Measured on a real
+# Unreal project: `.uasset` alone (30,593 files) manufactured 1,318 empty
+# subjects out of 3,071 -- roughly half the corpus, each a full agent reading
+# binary it cannot parse. ONE missing binary extension bought four figures of
+# phantom subjects. Adding an entry here is cheap; leaving one out is not.
+#
+# Add only formats that are genuinely UNREADABLE. Verify with `od -c` before
+# assuming: `.afb` and `.collection` look binary from the name and are plain
+# text, so they belong in unknownExtensions where a human can see them.
 ASSET_BINARY_EXT = {
     # images
     ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp",
@@ -127,7 +184,60 @@ ASSET_BINARY_EXT = {
     # compiled binaries / build byproducts / lockfiles
     ".exe", ".dll", ".so", ".dylib", ".pdb", ".pyc", ".pyd", ".class",
     ".o", ".obj", ".a", ".lib", ".lock",
+    # Unreal Engine asset containers: serialized binary, not a source language.
+    # `.uasset`/`.umap` are the editor's on-disk assets; the rest are cooked or
+    # packaged output. `.uplugin`/`.uproject` are deliberately NOT here -- they
+    # are JSON descriptors and live in CODE_DATA_EXT instead.
+    ".uasset", ".umap", ".upk", ".uexp", ".ubulk", ".ucas", ".utoc", ".pak",
+    # Compiled localization output. `.locres` is the BINARY artifact; its plain
+    # text SOURCES (`.po`, `.xlf`) stay readable and must never be added here --
+    # a localization pipeline works on exactly those two.
+    ".locres",
+    # Other binary containers, each verified by header on a real project:
+    # `.scmap` is a FlatBuffers setpiece companion (a designer skill parses it
+    # through a dedicated reader, which is what structured binary requires),
+    # `.bk2` is Bink video (magic "KB2n"), `.vox` is MagicaVoxel (magic
+    # "VOX "), `.hxd` is a binary font-editor working file, `.pkf` is an audio
+    # peak/waveform cache (magic "k$!").
+    ".scmap", ".bk2", ".vox", ".hxd", ".pkf",
+    # DCC formats, PROMOTED out of the unverified inventory below because they
+    # are present on a real project and were checked there: `.fbx` opens
+    # "Kaydara FBX Binary", `.blend` opens "BLENDER-v293". The rest of the DCC
+    # list stays unverified. NOTE the FBX ASCII variant uses the same extension
+    # and IS text; absorbing it is the accepted cost, since an FBX of either
+    # flavour is a mesh export rather than a coverage subject.
+    ".fbx", ".blend",
 }
+
+# REPORTED BUT UNVERIFIED on a real project of that type -- deliberately NOT in
+# the set above. A wrong entry here is a MISSED SUBJECT, the unsafe direction, so
+# these are recorded for the next maintainer who has such a repo to check them
+# against, rather than guessed at on their behalf. Apply the `od -c` rule before
+# promoting any of them.
+#   Unity:    .unity .prefab .asset .mat .anim .controller .meta -- text under
+#             "Force Text" serialization and binary otherwise, so the project's
+#             mode decides and this one genuinely cannot be settled from here.
+#   Godot:    .res .scn .import .ctex
+#   DCC / 3D: .max .ma .mb .dds .exr .hdr. (`.fbx` and `.blend` were on this
+#             list and have been PROMOTED into the set above, having been
+#             verified on a real project.) Note `.obj` is already in the set as
+#             a compiled OBJECT file; on a 3D repo that entry is accidentally
+#             right for the wrong reason.
+#   Documents and packages: .pdf .docx .xlsx .pptx .sqlite .db3 .parquet .jar
+#             .whl .apk .aab .ipa .nupkg .msi .dmg .iso
+#
+# PROPOSAL, not implemented -- recorded so it is discoverable rather than
+# rediscovered. A BINARY SNIFF (a NUL byte in the first 8 KB) as a fallback
+# before a file is counted into `unknownExtensions` would subsume this entire
+# constant: it catches every container above with no list at all, and it
+# correctly leaves `.afb` and `.collection` visible, both of which look binary
+# from the name and are plain text. What keeps it out of a constant edit is that
+# it changes the DISCOVERY-FAILURE path -- the one mechanism here whose misfires
+# are expensive in BOTH directions. Absorb a real source language and a whole
+# subtree reads as an empty, well-formed subject (the strongest verdict, over
+# something never read); fail to absorb and phantom subjects multiply. It also
+# reads bytes, which this module otherwise never does. It deserves its own
+# cross-check rather than riding along with a list edit.
 
 # Extensionless files that are never code, matched on NAME. `Path(".gitignore")`
 # and `Path("LICENSE")` both have an empty suffix, so without this every repo
@@ -150,6 +260,7 @@ MAX_DEPTH = 12
 
 # Skip reasons, reported verbatim.
 SKIP_VENDORED = "vendored"
+SKIP_VENDORED_BUNDLE = "vendored-bundle"
 SKIP_GENERATED = "generated"
 SKIP_SYMLINK_OUT = "symlink-outside-subtree"
 SKIP_NESTED_REPO = "nested-repo"
@@ -190,11 +301,55 @@ def ambient_chain(directory: Path) -> list[Path]:
     return chain
 
 
-def _skip_reason(dir_name: str) -> str | None:
-    if dir_name in VENDOR_DIR_NAMES:
+def _is_minified_bundle(name: str) -> bool:
+    """True when a FILE NAME looks like a minified or bundled web asset."""
+    return name.lower().endswith(MINIFIED_BUNDLE_SUFFIXES)
+
+
+def _vendored_bundle_dir(path: Path) -> bool:
+    """True when `path`'s DIRECT code files are dominated by minified bundles.
+
+    The name rules above cannot see a vendored web bundle dropped into a
+    directory called `libraries`, `static`, or `js`: the name carries no
+    signal and the broad name (`lib`, `libs`) is exactly the one that would
+    also eat first-party source. So this rule asks for POSITIVE EVIDENCE
+    instead -- a payload nobody hand-writes.
+
+    "Dominated" means at least one minified/bundled file AND at least half of
+    the directory's direct code files. The majority test is what keeps the rule
+    off first-party code: a source directory that merely VENDORS one
+    `jquery.min.js` alongside its own modules stays a subject, because its own
+    modules still outnumber the bundle. Only a directory that is essentially
+    nothing but other people's build output trips it.
+
+    Directory listing only -- no file is read, no subprocess is run.
+    """
+    try:
+        entries = list(path.iterdir())
+    except OSError:
+        return False
+    code = [e for e in entries if e.is_file() and is_code_file(e)]
+    if not code:
+        return False
+    minified = [e for e in code if _is_minified_bundle(e.name)]
+    return bool(minified) and len(minified) * 2 >= len(code)
+
+
+def _skip_reason(dir_name: str, path: Path | None = None) -> str | None:
+    """Return the structural exclusion `dir_name` matches, or None.
+
+    Name matching is CASE-INSENSITIVE: `ThirdParty` and `third_party` are the
+    same rule. `path`, when given, additionally enables the content-based
+    vendored-bundle rule; callers that only hold a path COMPONENT (diff_roots
+    walks `parts`) pass the name alone and get the name rules only.
+    """
+    lowered = dir_name.lower()
+    if lowered in _VENDOR_DIR_NAMES_LOWER:
         return SKIP_VENDORED
-    if dir_name in GENERATED_DIR_NAMES:
+    if lowered in _GENERATED_DIR_NAMES_LOWER:
         return SKIP_GENERATED
+    if path is not None and _vendored_bundle_dir(path):
+        return SKIP_VENDORED_BUNDLE
     return None
 
 
@@ -249,7 +404,7 @@ def walk_directory(
             if name in NOISE_DIR_NAMES or (name.startswith(".") and name != ".claude"):
                 noise_pruned += 1
                 continue
-            reason = _skip_reason(name)
+            reason = _skip_reason(name, entry)
             if reason is None and (entry / ".git").exists():
                 # Carries its own .git: a separate repository, whose ambient
                 # chain is not this one's.
@@ -348,7 +503,7 @@ def walk_tree(root: Path) -> tuple[list[Path], list[Path], list[dict], int]:
                 if name in NOISE_DIR_NAMES:
                     noise_pruned += 1
                     continue
-                reason = _skip_reason(name)
+                reason = _skip_reason(name, entry)
                 if reason is None and (entry / ".git").exists():
                     reason = SKIP_NESTED_REPO
                 if reason is None and entry in ignored:
@@ -406,12 +561,13 @@ def root_exclusion(root: Path) -> str | None:
     asked for it), but it is always REPORTED; a root derived from a diff is
     filtered before it gets here.
 
-    Deliberately NAME-ONLY: it
-    runs no subprocess and touches no VCS. The ignored-root case is decided in
-    build_subject, where an ignore query is already being spent on the
-    directory's entries.
+    STRUCTURAL ONLY: it matches the root's own name against the vendored and
+    generated name rules and inspects its direct entries for the
+    vendored-bundle rule. It still runs no subprocess and touches no VCS -- the
+    ignored-root case is decided in build_subject, where an ignore query is
+    already being spent on the directory's entries.
     """
-    reason = _skip_reason(root.name)
+    reason = _skip_reason(root.name, root)
     if reason is not None:
         return reason
     return None
@@ -505,7 +661,14 @@ def diff_roots(repo: Path, git_range: str | None) -> tuple[list[Path], list[str]
         # A diff-derived root gets the structural exclusions applied to it. An
         # explicitly named root is honoured-and-reported instead; nobody asked
         # for this one by name.
-        if any(_skip_reason(part) for part in parent.relative_to(toplevel).parts):
+        # Ancestors are tested by NAME (only a component is in hand); the
+        # parent itself also gets the content-based vendored-bundle rule, so a
+        # changed file inside a checked-in bundle directory is excluded here for
+        # the same reason walk_directory would have skipped it.
+        rel_parts = parent.relative_to(toplevel).parts
+        if any(_skip_reason(part) for part in rel_parts) or _skip_reason(
+            parent.name, parent
+        ):
             excluded += 1
             continue
         dirs.setdefault(parent.resolve(), None)

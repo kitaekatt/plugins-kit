@@ -85,6 +85,8 @@ never reaches.
 | verdicts | `GAPS-FOUND` / `COVERAGE-ASSESSED` |
 | standards | `references/standards/coverage-standards.md` |
 | analysis depth | `basic` / `advanced` |
+| input modes | inline `subjects[]`, or `subjectsFile` + `subjectCount` |
+| subjects per agent | `batchSize`, default 8 |
 | supported flags | `--diff`, `--json`, `--advanced` |
 
 ## Model pinning (not negotiable)
@@ -101,6 +103,235 @@ common case silently runs off-pin. Always go through the workflow.
 
 There is no remediate lane, so the `sonnet` + `low` remediation pin and
 `scripts/gen_workflow_js.py` do not apply here at all.
+
+## Feeding a wide run: input modes and batching
+
+A single-directory run needs none of this. It matters when a caller wants a whole
+tree covered, which is one subject per directory and can be four figures of them.
+
+### The two input modes
+
+`workflow/coverage-detect.js` takes its subjects one of two ways, and it is an
+error to pass neither.
+
+- **Inline `subjects[]`** -- the array `discover_coverage.py` returns, passed
+  straight through. Right for a run of a few directories.
+- **`subjectsFile` + `subjectCount`** -- an ABSOLUTE path to a **JSONL** file
+  holding one subject record per line (each line exactly the shape of an inline
+  entry), plus the number of lines in it. Right for a wide run. **Produce both
+  with the shipped producer, never by hand:**
+
+  ```
+  scripts/coverage_subjects.py build <dir> [<dir> ...] --out <file.jsonl>
+                               [--tree] [--overrides <file>]
+  ```
+
+  It prints the two Workflow args as JSON ready to paste, and the count it prints
+  is the length of the very list it serialized -- re-read and re-counted from the
+  written file before it publishes either, so a file and a count that disagree
+  cannot both survive. Without `--tree`, each named directory is exactly one
+  subject -- the lane's own unit.
+
+  `--tree` makes every directory under each named directory its own subject,
+  which is how a four-figure corpus is enumerated without a hand-maintained
+  list. It applies three prunes, and each is `discover_coverage`'s own rule
+  IMPORTED rather than restated, so a name added there reaches `--tree` with no
+  change to the producer:
+
+  - **Noise** (`NOISE_DIR_NAMES`) -- build output and tooling state:
+    `Intermediate`, `Saved`, `Binaries`, `DerivedDataCache`, `__pycache__`,
+    `.venv` and the rest, plus every dot-directory EXCEPT `.claude`, which holds
+    hand-authored team configuration and is a legitimate subject. Matched
+    case-sensitively, as that module matches it.
+  - **Structural** (`root_exclusion`) -- vendored, generated, and
+    content-detected vendored bundles.
+  - **VCS-ignored** (`ignored_paths`).
+
+  It then drops a directory with no direct code and nothing unrecognized.
+
+  **Do not rely on the VCS-ignore prune to catch build output.** It does on a git
+  repo whose `.gitignore` covers those directories; a Perforce workspace
+  typically ignores almost nothing (`p4 ignores` may return only `.p4root` and
+  `.p4config.txt`), so on Perforce the noise list is the only thing keeping
+  `Intermediate/` and `Binaries/` out of the subject set.
+
+  **`--overrides <file>` is how a directory the prunes exclude gets back in.**
+  A real corpus is almost always "these trees, PLUS these specific directories,
+  NOT recursively", and `--tree` is a whole-invocation flag -- so without this
+  the only way to reinstate an exception is to name it as a root, which
+  tree-walks it. That is not a smaller mistake than leaving it out: reinstating
+  9 first-party directories parked under vendored parents this way pulled in 116
+  vendored descendants, and the corpus GREW, which reads as more coverage. The
+  override file lists one directory per line, each added as a single subject,
+  non-recursively, regardless of any prune. Blank lines are ignored and `#`
+  starts a comment. The run reports three numbers -- N from the named roots, M
+  added by override, K redundant -- so the override population stays legible as
+  its own figure rather than folded into a total, and a stale entry that is
+  already a subject shows up as redundant instead of being silently inert. A
+  listed directory that does not exist, or that has nothing to assess, is an
+  ERROR that names it and writes no file.
+
+  **An override entry is a claim the caller is making AGAINST the plugin's own
+  prune, so it should carry its evidence somewhere the next reader can find.**
+  The plugin cannot know that `ThirdParty/SFDate` is first-party build glue and
+  should not be taught to -- that is local knowledge, and the override file is
+  where it arrives as input. Record why each entry is there: a comment on the
+  line, or a pointer to the audit that established it. Ours came from a
+  p4-history audit recorded in the consuming project, not in the plugin.
+
+  Two further consequences worth knowing before you read a subject list:
+
+  - **Naming an ignored directory opts its whole tree in.** Ignore-pruning
+    applies to DESCENDANTS the user did not name. If the root you point at is
+    itself ignored, the pruning is off for that walk -- otherwise
+    `build --tree ./Binaries` would return `Binaries` alone.
+  - **First-party build glue under a vendored parent is dropped**, inheriting the
+    accepted false-positive class `discover_coverage.py` documents: a
+    path-segment name rule cannot tell a vendored library from a team-authored
+    `Foo.Build.cs` sitting beside it under `ThirdParty/`. Reinstating one is the
+    consuming repo's call -- name that directory explicitly (it then has no
+    `rootExclusion`, because the rule matches a directory's own name and not its
+    ancestry), or move it out from under the vendored parent.
+
+The reason the second mode exists is a property of the carrier, not a preference:
+**a workflow script has no filesystem.** Everything it is given arrives through
+the ORCHESTRATOR'S context, so inline subjects cost the orchestrator roughly
+2.3 KB per directory -- megabytes over a wide corpus, spent in the one context
+that must stay lean. In `subjectsFile` mode the script holds only the path and a
+line range per batch; the AGENTS read their own slice, and agents do have
+filesystem tools.
+
+JSONL rather than a JSON array is what makes that work: a slice is a LINE RANGE,
+so an agent extracts exactly its own subjects (`sed -n 'START,ENDp'`, or a read
+with an offset and a limit) and never reads the whole file. A JSON array would
+force every agent to parse the entire corpus to find its own entries, which is
+the cost being avoided wearing a different hat.
+
+The path must be ABSOLUTE and the lane refuses a relative one. The agents that
+read it are separate processes whose working directory the lane does not control,
+so a relative path names a different file for each of them -- or none, which
+would read as an empty batch rather than as an error.
+
+`subjectCount` is required in this mode and the lane refuses without it: it
+cannot count the lines itself, and a guessed count either truncates the run or
+dispatches agents at empty line ranges.
+
+**Precedence: inline `subjects[]` WINS when both are supplied**, and the ignored
+file is named in a run note and in the log line -- never dropped silently. Inline
+data was handed to the lane directly, and it is the only mode in which the lane
+can see the subject fields, which is what lets the discovery-failure refusal run
+BEFORE any tokens are spent. When two inputs disagree, the one with the stronger
+guarantee wins.
+
+### Provenance: what each mode can actually verify
+
+Every record carries a `provenance` field, and the two values are not
+interchangeable.
+
+- **`harness-verified`** (inline mode). `root` and `codeFiles` are TRUSTED INPUT.
+  Identity and anchor membership are checked against data the agent never
+  supplied.
+- **`agent-attested`** (subjectsFile mode). The lane has no filesystem, so `root`
+  and `codeFiles` are ECHOED by the agent from the record it read. The subjectKey
+  still binds each result to a line the lane requested, and anchors are still
+  checked against the echoed list -- which catches the incidental mislabel,
+  because an agent that assessed A while labelling it B echoes B's file list and
+  anchors A's files. It does NOT catch a self-consistent fabrication: a run can
+  report a clean assessment of a directory nobody opened.
+
+The run summary says which mode was used and warns on the attested one. This is a
+real difference in what the report means, not a formality.
+
+#### Verifying an agent-attested run
+
+The caller has the subjects file; the lane does not. So the check the lane cannot
+do, the caller can, deterministically and without a model. **It ships with the
+plugin -- do not hand-roll it:**
+
+```
+scripts/coverage_subjects.py verify <report.json> <subjects.jsonl>
+```
+
+Exit 0 means verified; non-zero prints every failing subject and why. It makes
+exactly the three checks the lane structurally cannot:
+
+1. **Identity.** Every requested key `L1..LN` is present exactly once, with
+   `status` either `ASSESSED` or `NOT-ASSESSED`. A missing key is a subject
+   neither assessed nor accounted for; a key outside the file, a duplicate key,
+   or an inline-mode `S<n>` key means this is the wrong report for this file.
+2. **Roots.** Every returned `root` matches the root on the line its `subjectKey`
+   names. This is what catches an assessment filed under a directory it does not
+   describe, and a root invented outright.
+3. **Anchors.** Every candidate anchor names a file in that same line's
+   `codeFiles` and carries a line number, and every `destination` is that line's
+   root.
+
+It also fails when the subjects file was edited after `build` wrote it -- the
+sidecar records the count and a digest -- because a report verified against a
+different file than the run consumed is not verified at all.
+
+**Any run whose candidates will be promoted without a human reading them MUST
+pass this check, or must use inline mode instead.** A `verify` that was never run
+is the same gap as a criterion that was never reached.
+
+### Batching: what it preserves, and what it only bounds
+
+One agent per subject was deliberate CONTEXT ISOLATION: it is what stopped one
+directory's code from bleeding into another directory's candidate facts. It is
+also where the run's fixed cost lives -- every agent re-reads the same criteria
+documents, about 180 KB across the three of them, which on a small directory is
+most of what the agent spends. `batchSize` (default 8) puts several subjects
+through one agent so that read is paid once per batch instead of once per subject.
+
+**Batching does not preserve isolation. It BOUNDS contamination.** State it that
+way: an earlier revision of this lane claimed preservation and an adversarial
+review was right to reject the claim. Four mechanisms, of which only the last
+three are enforcement:
+
+1. **Sequential turns with a SCOPED reset.** The brief requires the subjects to
+   be assessed strictly one at a time, in order, discarding the previous
+   subject's code, ambient documents, and candidate facts before opening the
+   next. The criteria documents are explicitly exempt -- they are identical for
+   every subject, and keeping them is the whole economy. This is hygiene asked
+   for in a prompt. It is not a guarantee and cannot be made one.
+2. **Identity by harness-issued `subjectKey`.** Every requested subject is issued
+   a key (`S1`, `S2`, ... inline; `L<line>` in subjectsFile mode) and the agent
+   echoes it. Results are matched BY KEY, never by position. This is the
+   mechanism that stops the worst failure: positional matching over a batch that
+   omitted its middle subject shifts every later result one slot, and the inline
+   root overwrite then stamps the wrong directory onto real findings --
+   manufacturing the exact contamination the design exists to prevent. An
+   unreturned key becomes `BATCH-INCOMPLETE`; an unrequested or duplicated key is
+   discarded and counted.
+3. **Anchor MEMBERSHIP against the subject's own code-file list.** Every anchor
+   must name a file that is IN that subject's `codeFiles` and must carry a line
+   number. Not "under the root": a path-prefix test admitted an empty string, a
+   file that does not exist, a foreign file that shared a directory name, and any
+   bare filename at all. A candidate with a rejected anchor is DROPPED, counted
+   in `totals.isolationViolations`, and named in its subject's notes and in the
+   run summary. Paths are compared after normalizing separators, `.`/`..`, and
+   Unicode, case-folded only when a path is Windows-shaped.
+4. **`destination` is DERIVED, not accepted.** Generation groups by that field,
+   so a wrong value re-homes a fact into a document that never earned it. It is
+   overwritten from the subject and corrections are counted.
+
+A subject stripped of every candidate this way is reported as `COVERAGE-ASSESSED`
+with the drop named -- not as `GAPS-FOUND` over evidence that was thrown away.
+
+**The residual, stated plainly.** A fact REASONED from subject A's code but
+ANCHORED to a real, in-list file of subject B passes every check above. Anchors
+prove a file was named; they never prove a claim was derived from it. No amount
+of string work closes that, so batching bounds contamination to this case and
+**does not eliminate it**. A non-zero `isolationViolations` count is a signal to
+re-run the affected subjects at `batchSize` 1, not a number to tolerate -- and a
+zero count is not proof of clean provenance.
+
+`batchSize` therefore is a RISK dial as well as a cost dial. 8 is the default and
+the largest value this lane claims a story for; the fixed-cost saving is already
+flat by then. Use 1 -- the pre-batching behaviour -- for any run whose candidates
+will be promoted without a human reading them. `batchSize` does not change the
+candidate ceiling, which stays PER DIRECTORY: a batch of 8 may return up to 8 x
+the ceiling.
 
 ## The pipeline
 
@@ -369,6 +600,36 @@ verdict that means "verified absent" -- claims the opposite of what happened. In
 this state, report the unrecognized extensions and stop: name each extension and
 its count, state that discovery could not classify the directory, and do not
 assess or emit either verdict.
+
+**`BATCH-INCOMPLETE` is the batching-era sibling of the discovery failure.** A
+batch agent is asked for N result objects and may return fewer -- a key it
+omitted, a blank or malformed JSONL line, a line range past the end of the file.
+Each unreturned key is emitted as `BATCH-INCOMPLETE` with an empty candidate list
+and tallied apart from both verdicts. "The agent skipped it" and "the directory
+was assessed and nothing was found" are the two states this lane exists to keep
+apart, and folding the first into the second is the same fake pass the
+discovery-failure refusal prevents. Re-run those subjects, alone or at a smaller
+`batchSize`. Result objects the batch was NOT asked for are discarded and counted
+(`totals.extraReturned`, `totals.identityUnmatched`); a `root` returned twice is
+counted (`totals.duplicateRoots`) rather than resolved, because the lane cannot
+tell which of the two is real.
+
+**Every record carries a `status`, and it is the only safe gate.** `ASSESSED` or
+`NOT-ASSESSED`. It exists because an empty `candidates` list means two opposite
+things -- "assessed, nothing found" and "never read" -- and a consumer reading
+only `candidates` cannot tell them apart. `generation-lane.md`'s entry check is
+exactly such a consumer: it admits a subject that has either a `reportPath` or a
+non-empty `candidates` list and never looks at the verdict.
+
+So the caller's gate, and it belongs to the caller because neither lane applies
+it: **filter a persisted report to `status: ASSESSED` before handing any part of
+it to generation.** A run whose summary shows fewer COMPLETED than REQUESTED is
+not a finished report; finish it, or hand over only the assessed subjects and say
+which were left out.
+
+The run summary states `<completed> of <requested> requested directory/ies
+COMPLETED (<n> NOT assessed)` for the same reason -- a wide run must not read as
+whole because no single line looks wrong.
 
 **Neither verdict is ever `COMPLIANT` or `NON-COMPLIANT`, and neither alters a
 document verdict.** A CLAUDE.md can be COMPLIANT while its directory is

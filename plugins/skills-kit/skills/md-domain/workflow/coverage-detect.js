@@ -1,11 +1,11 @@
 // md-domain coverage verb -- DETECT workflow (the only phase; report-only).
 //
-// Fan-out assessment, one lane per (code directory, ambient CLAUDE.md chain). This
-// is the first lane in the skill whose subject is CODE rather than a markdown
-// file, which is why it has its own procedure rather than being a criterion inside
-// audit_claude_md: the per-file lanes enumerate CLAUDE.md files, and no criterion
-// can have a subject its lane cannot enumerate. The decisive case is a directory
-// with NO CLAUDE.md at all.
+// Fan-out assessment, one lane per BATCH of (code directory, ambient CLAUDE.md
+// chain) subjects. This is the first lane in the skill whose subject is CODE
+// rather than a markdown file, which is why it has its own procedure rather than
+// being a criterion inside audit_claude_md: the per-file lanes enumerate
+// CLAUDE.md files, and no criterion can have a subject its lane cannot
+// enumerate. The decisive case is a directory with NO CLAUDE.md at all.
 //
 // WHAT THIS IS FOR: md-domain is not a code-review tool. This verb reads code
 // only as a SOURCE OF INSIGHT for the CLAUDE.md that will be ambient for it. It
@@ -25,6 +25,61 @@
 // separate procedure cheap, and it is a property of this entry point rather than
 // of the verb being listed apart from audit and generate.
 //
+// ---------------------------------------------------------------------------
+// BATCHING, AND WHAT IT DOES AND DOES NOT GUARANTEE
+// ---------------------------------------------------------------------------
+//
+// One agent per subject was deliberate CONTEXT ISOLATION: it is what stopped one
+// directory's code from bleeding into another directory's candidate facts. It is
+// also where the run's fixed cost lives -- every agent re-reads the same criteria
+// documents (~180 KB), which on a small directory is most of what it spends.
+// Batching amortizes that read across the subjects in a batch.
+//
+// Read this next part literally, because an earlier revision of this file
+// overclaimed it and an adversarial review was right to reject it. Batching does
+// NOT preserve isolation. It BOUNDS contamination, by four mechanisms, of which
+// only the last three are enforcement:
+//
+//   1. Sequential turns with a SCOPED reset in the brief. Prompt-level: asked
+//      for, not enforced, and it cannot be. Treated as hygiene, not a guarantee.
+//   2. IDENTITY BY SCRIPT-ISSUED KEY. Every requested subject is issued a
+//      `subjectKey` here and the agent must echo it. Results are matched BY KEY,
+//      never by position. This closes the misattribution hole: a batch that
+//      returns A and C for a request of A,B,C now marks B not-assessed and files
+//      C's findings under C -- where positional zipping filed C's candidates
+//      under B's directory, manufacturing exactly the contamination the design
+//      exists to prevent, using the root overwrite that was meant as a safeguard.
+//   3. ANCHOR MEMBERSHIP AGAINST A FILE LIST. Every candidate anchor must name a
+//      file that is IN that subject's own codeFiles list and must carry a line
+//      number. Not "under the root" -- a path-prefix test let an empty string, a
+//      nonexistent file, a foreign file, and a same-named directory in another
+//      module all through. Membership in a concrete list has no such surface.
+//   4. DESTINATION DERIVED, NOT ACCEPTED. `destination` is overwritten from the
+//      subject's own identity, because generation groups by that field and the
+//      schema could only ask for it.
+//
+// WHAT REMAINS UNCLOSED, and it cannot be closed by string work: a fact REASONED
+// from subject A's code but ANCHORED to a real, in-list file of subject B passes
+// every check above. Anchors prove a file was named, never that a claim was
+// derived from it. The honest statement is: batching preserves the cost saving
+// and bounds contamination to that residual case; it does not eliminate it. See
+// `batchSize` for what that means in practice.
+//
+// TRUST DIFFERS BY INPUT MODE, and every record says which it got:
+//   - inline mode -- `root` and `codeFiles` are TRUSTED INPUT. Identity and
+//     anchor membership are checked against data the agent never supplied.
+//     Records are stamped provenance 'harness-verified'.
+//   - subjectsFile mode -- this lane has no filesystem, so `root` and
+//     `codeFiles` are ATTESTED BY THE AGENT (echoed from the record it read).
+//     The key still binds a result to a line THIS SCRIPT requested, and anchors
+//     are still checked against the echoed list -- which catches the incidental
+//     mislabel, because an agent that assessed A while labelling it B echoes B's
+//     file list and anchors A's files. It does NOT catch a self-consistent
+//     fabrication. Records are stamped provenance 'agent-attested', the mode is
+//     on the log line, and a caller needing verified provenance must use inline
+//     mode or re-verify the report against the subjects file afterwards -- the
+//     rule is in coverage-lane.md, "Verifying an agent-attested run".
+//
 // args = {
 //   subjects: [ { root: string,
 //                 codeFiles: string[],
@@ -38,6 +93,24 @@
 //     nearest PROJECT marker (.git/.hg/.svn/.p4config.txt) so a nested project
 //     never inherits the outer project's chain. Both
 //     are easy to get wrong by eye.)
+//   subjectsFile: string|undefined   // ABSOLUTE path to a JSONL file, ONE subject
+//     object per line, each line the same shape as an inline `subjects[]` entry.
+//     This is the wide-corpus input mode. A workflow script has no filesystem, so
+//     inline subjects must travel through the ORCHESTRATOR'S context to reach it
+//     -- ~2.3 KB per subject, which over a four-figure corpus is megabytes of
+//     payload routed through the one context that must stay lean. With
+//     subjectsFile the script holds only the path and a line range per batch, and
+//     the AGENTS read their own slice (agents do have filesystem tools). JSONL
+//     rather than a JSON array so a slice is a LINE RANGE: an agent extracts
+//     exactly its own subjects and never reads the whole file. The price of the
+//     mode is the weaker provenance described above.
+//   subjectCount: integer|undefined  // REQUIRED with subjectsFile: the number of
+//     lines in it. The script cannot count them itself, and guessing would either
+//     truncate the run or dispatch agents at empty ranges. An INACCURATE count is
+//     survivable rather than silent: too high and the surplus keys come back
+//     not-assessed, too low and the tail is never requested -- both visible in
+//     the requested-vs-completed split on the log line.
+//   batchSize: integer|undefined     // subjects per agent; default below
 //   ceiling: integer|undefined   // candidate cap PER SUBTREE; default below
 //   depth: 'basic'|'advanced'    // resolved by the lane's intent gate
 //   refs: { criteria: <abs path to the coverage standards doc>,
@@ -46,13 +119,21 @@
 //           pluginRoot: <abs path to plugins/skills-kit> }
 // }
 //
+// PRECEDENCE: inline `subjects[]` WINS over `subjectsFile` when both are
+// supplied, loudly (a run note and a log clause; never silently). Two reasons:
+// an inline array is data the caller literally handed this lane, and ignoring it
+// in favour of a file it also mentioned would be the more surprising of the two
+// choices; and inline is the mode with the stronger provenance. The mode is
+// SELECTED FIRST and only the selected mode is validated -- an ignored
+// subjectsFile must not be able to fail a run it takes no part in.
+//
 // Returns { perSubject, totals }. There is no `review` mode: review mode audits a
 // CHANGE to a document, and this verb's subject is a directory.
 
 export const meta = {
   name: 'md-domain-coverage-detect',
   description: 'Fan-out coverage assessment: which facts about this code directory belong in a CLAUDE.md and are not ambient for it (report-only, no edits)',
-  phases: [{ title: 'Coverage', detail: 'one lane per code directory' }],
+  phases: [{ title: 'Coverage', detail: 'one lane per batch of code directories' }],
 }
 
 // Candidate cap, applied PER SUBTREE (not per run). A per-run cap divided across
@@ -64,6 +145,22 @@ export const meta = {
 // requires a capped run to announce the cap.
 const DEFAULT_CEILING = 25
 
+// Subjects per agent. The fixed per-agent cost is the criteria read (~180 KB,
+// ~45K tokens); the variable cost is the directory's own code. At 1 the fixed
+// cost is paid once per subject; at 8 it is paid once per eight.
+//
+// The default is 8 and NOT higher, and the reason is the residual risk named at
+// the top of this file rather than the arithmetic: the checks bound
+// contamination to facts reasoned from one subject and anchored to another
+// subject's real files, and that residual grows with the number of subjects one
+// context holds at once. 8 is the largest batch this lane claims a defensible
+// story for. Raising it trades a shrinking cost saving (the fixed share is
+// already down to roughly a fourteenth of a basic subject at 8) against a
+// growing unverifiable one. Lower it -- to 1, which is the pre-batching
+// behaviour -- for any run whose candidates will be promoted without human
+// review.
+const DEFAULT_BATCH_SIZE = 8
+
 // args may arrive as an object or as a JSON string depending on how the
 // invoker passes it; normalize to an object.
 let input = args
@@ -71,10 +168,13 @@ if (typeof input === 'string') {
   try { input = JSON.parse(input) } catch (_) { input = null }
 }
 if (!input) {
-  throw new Error('coverage-detect.js requires args = { subjects, depth, refs }')
+  throw new Error('coverage-detect.js requires args = { subjects | subjectsFile, depth, refs }')
 }
 
 const ceiling = Number.isInteger(input.ceiling) ? input.ceiling : DEFAULT_CEILING
+const batchSize = Number.isInteger(input.batchSize) && input.batchSize > 0
+  ? input.batchSize
+  : DEFAULT_BATCH_SIZE
 
 const SUBJECT_FINDINGS_SCHEMA = {
   type: 'object',
@@ -82,12 +182,42 @@ const SUBJECT_FINDINGS_SCHEMA = {
   // `notes` is REQUIRED, not optional: it is where a ceiling hit reports how
   // many candidates were set aside, and an optional field lets a truncated run
   // validate while saying nothing about the truncation.
-  required: ['root', 'candidates', 'verdict', 'ceilingReached', 'notes'],
+  //
+  // `subjectKey` is REQUIRED and is the identity spine. It is issued by this
+  // script, not chosen by the agent, and results are matched by it. Position is
+  // never used: a batch that silently omits its middle subject would otherwise
+  // shift every later result one slot, which does not lose data -- it MISFILES
+  // it, and the root overwrite meant as a safeguard is what would do the
+  // misfiling.
+  //
+  // `codeFiles` is REQUIRED as an ECHO. In inline mode it is compared against
+  // the trusted list; in subjectsFile mode it is the only file list this lane
+  // can see, and anchors are checked against it. It is STRIPPED from the
+  // returned record after validation -- the workflow result travels back through
+  // the orchestrator, and re-inflating it there would hand back exactly the
+  // payload subjectsFile mode exists to remove.
+  //
+  // The trailing counts are transcription, not judgment: they let the
+  // discovery-failure refusal and the uncovered tally stay mechanical decisions
+  // made HERE, in a mode where this lane cannot read the subject record itself.
+  required: ['subjectKey', 'root', 'candidates', 'verdict', 'ceilingReached', 'notes', 'codeFiles', 'assessedFileCount', 'unknownExtensionCount', 'ambientChainCount'],
   properties: {
+    subjectKey: { type: 'string' },
     root: { type: 'string' },
     verdict: { type: 'string', enum: ['GAPS-FOUND', 'COVERAGE-ASSESSED'] },
     ceilingReached: { type: 'boolean' },
+    // Echoed verbatim from the subject record.
+    codeFiles: { type: 'array', items: { type: 'string' } },
+    // Transcribed from the subject record: codeFiles.length. Cross-checked
+    // against the echoed array, so a disagreement between the two is visible.
     assessedFileCount: { type: 'integer' },
+    // Transcribed from the subject record: the number of KEYS in
+    // unknownExtensions. Feeds the discovery-failure refusal.
+    unknownExtensionCount: { type: 'integer' },
+    // Transcribed from the subject record: ambientClaudeMdPaths.length. Feeds
+    // the uncovered tally, and ONLY when the input is unavailable -- see
+    // chainSizeForRoot below.
+    ambientChainCount: { type: 'integer' },
     candidates: {
       type: 'array',
       // Enforced here as well as asked for in the prompt. Without maxItems a
@@ -110,8 +240,9 @@ const SUBJECT_FINDINGS_SCHEMA = {
           // ALWAYS the assessed directory. Degenerate by design: an
           // assessment reads only its own directory's direct code, so it has no
           // basis to place a fact anywhere else. Kept as a field so reports
-          // written before this model stay loadable. A value naming anywhere
-          // else violates fact-scoped-to-this-directory.
+          // written before this model stay loadable, and DERIVED below rather
+          // than believed -- generation groups by this field, so a wrong value
+          // silently re-homes a fact into another directory's document.
           destination: { type: 'string' },
           why: { type: 'string' },
           // CV-4. FINDING-CONVERTIBLE means a reviewer could catch a violation:
@@ -123,8 +254,11 @@ const SUBJECT_FINDINGS_SCHEMA = {
           // documentation gap from the rare case where the code is defective.
           severeDeficiency: { type: 'boolean' },
           // CV-7's evidence floor. minItems:1 because an empty array satisfies a
-          // bare `required` while citing nothing.
-          anchors: { type: 'array', minItems: 1, items: { type: 'string' } },
+          // bare `required` while citing nothing. minLength:1 on the ITEM
+          // because an array holding one empty string satisfies minItems while
+          // citing nothing either -- which is how a prefix-based containment
+          // check passed 200 empty anchors in one batch.
+          anchors: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
           // `scope` ('LEAF-ONLY' | 'PROMOTE -> <dir>') and `sibling_overlap`
           // were REMOVED from this schema deliberately, and the removal is the
           // enforcement -- with additionalProperties:false above, an assessment
@@ -144,6 +278,25 @@ const SUBJECT_FINDINGS_SCHEMA = {
       },
     },
     notes: { type: 'array', items: { type: 'string' } },
+  },
+}
+
+// The batch envelope. It is an ARRAY OF THE PER-SUBJECT OBJECT and nothing else:
+// there is deliberately no batch-level candidate list, no shared notes array,
+// and no summary field. A batch-level container is the one shape that would let
+// a fact be reported without naming the directory it came from.
+//
+// There is NO minItems, deliberately. An empty array is legal and meaningful --
+// it is what a batch that could assess nothing has to be able to say -- and
+// requiring at least one entry made the wholly-skipped batch inexpressible, so
+// the not-assessed path below was unreachable through the very schema that
+// guards it.
+const BATCH_FINDINGS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['subjects'],
+  properties: {
+    subjects: { type: 'array', items: SUBJECT_FINDINGS_SCHEMA },
   },
 }
 
@@ -175,7 +328,156 @@ if (depth !== 'basic' && depth !== 'advanced') {
   )
 }
 
-const lanePrompt = (s) => {
+// ---------------------------------------------------------------------------
+// Input mode resolution. SELECT the mode first, then validate ONLY the selected
+// mode -- an ignored subjectsFile must not be able to fail a run it takes no
+// part in, which is what happened while the path check ran ahead of precedence.
+// ---------------------------------------------------------------------------
+
+const runNotes = []
+const rawSubjectsFile = typeof input.subjectsFile === 'string' && input.subjectsFile.trim() !== ''
+  ? input.subjectsFile.trim()
+  : null
+
+let subjectsFile = null
+let subjectCount = 0
+
+if (subjects.length) {
+  if (rawSubjectsFile) {
+    // Loudly, never silently -- see PRECEDENCE in the header.
+    runNotes.push(
+      `both inline subjects[] (${subjects.length}) and subjectsFile ("${rawSubjectsFile}") were ` +
+      'supplied; the inline subjects WIN, and the file was neither read nor ' +
+      'validated. Pass exactly one input mode.'
+    )
+  }
+  subjectCount = subjects.length
+} else if (rawSubjectsFile) {
+  // An ABSOLUTE path, and this is checked rather than assumed. The agents that
+  // read it are separate processes whose working directory this lane does not
+  // control, so a relative path names a different file for each of them -- or no
+  // file at all, which would read as an empty batch rather than as an error.
+  if (!/^([\\/]|[A-Za-z]:[\\/]|\\\\)/.test(rawSubjectsFile)) {
+    throw new Error(
+      `coverage-detect: subjectsFile must be an ABSOLUTE path; got "${rawSubjectsFile}". ` +
+      'The agents that read it do not share this lane working directory, so a ' +
+      'relative path resolves differently for each of them. See ' +
+      'references/lanes/coverage-lane.md, "Step 2 -- Discover".'
+    )
+  }
+  if (!Number.isInteger(input.subjectCount) || input.subjectCount < 1) {
+    throw new Error(
+      'coverage-detect: subjectsFile requires args.subjectCount (a positive ' +
+      'integer -- the number of lines in the file). This lane has no filesystem ' +
+      'and cannot count them; without the count it would either truncate the run ' +
+      'or dispatch agents at empty line ranges.'
+    )
+  }
+  subjectsFile = rawSubjectsFile
+  subjectCount = input.subjectCount
+} else {
+  throw new Error(
+    'coverage-detect: no subjects. Pass either args.subjects (inline, for small ' +
+    'runs) or args.subjectsFile (an ABSOLUTE path to a JSONL file, one subject ' +
+    'per line) together with args.subjectCount.'
+  )
+}
+
+const provenance = subjectsFile ? 'agent-attested' : 'harness-verified'
+
+// ---------------------------------------------------------------------------
+// Path canonicalization. Pure string work: this lane has no filesystem, so
+// nothing here touches disk, and "canonical" means "comparable", not "real".
+// ---------------------------------------------------------------------------
+
+const nfc = (s) => { try { return String(s).normalize('NFC') } catch (_) { return String(s) } }
+
+// A path is treated as Windows-shaped when it carries a drive letter, a UNC
+// prefix, or a backslash separator. Case-folding applies only then, and only
+// when EITHER side of a comparison is Windows-shaped: folding everywhere would
+// merge two files on a case-sensitive filesystem that differ only in case, which
+// is a real shape in POSIX trees.
+const windowsShaped = (p) =>
+  /^[A-Za-z]:[\\/]/.test(p) || /^\\\\/.test(p) || String(p).indexOf('\\') !== -1
+
+const canonicalSegments = (p) => {
+  const out = []
+  const parts = nfc(p).replace(/\\/g, '/').split('/')
+  for (let i = 0; i < parts.length; i++) {
+    const seg = parts[i]
+    if (seg === '') { if (i === 0) out.push('') ; continue }
+    if (seg === '.') continue
+    if (seg === '..') {
+      const last = out.length ? out[out.length - 1] : null
+      if (last !== null && last !== '' && last !== '..') { out.pop(); continue }
+      out.push('..')
+      continue
+    }
+    out.push(seg)
+  }
+  return out
+}
+
+const canonicalPath = (p, fold) => {
+  const joined = canonicalSegments(p).join('/')
+  return fold ? joined.toLowerCase() : joined
+}
+
+// Split "file:line" or "file:line:col" into its parts. A trailing line number is
+// REQUIRED: CV-7 asks for a file AND a line, and an anchor with no line number is
+// a guess at a location wearing a citation's clothes.
+//
+// Peeled from the END, one trailing number at a time, rather than matched in one
+// pass. A single greedy pattern with an optional column group binds the LAST
+// number to the line and swallows the real line into the filename, so
+// "f.cpp:12:4" parsed as the file "f.cpp:12" at line 4 and was then rejected as
+// naming no file in the list. Peeling also keeps a drive letter safe, because
+// "C:" is never a trailing digit group.
+const TRAILING_NUMBER = /^(.*):(\d+)$/
+const splitAnchor = (raw) => {
+  const first = TRAILING_NUMBER.exec(String(raw).trim())
+  if (!first) return null
+  const second = TRAILING_NUMBER.exec(first[1])
+  // Two trailing numbers means file:line:col; one means file:line.
+  const file = (second ? second[1] : first[1]).trim()
+  const line = Number(second ? second[2] : first[2])
+  if (!file || !Number.isInteger(line) || line < 1) return null
+  return { file, line }
+}
+
+// MEMBERSHIP, not containment. The anchor must name a file that is IN this
+// subject's own code-file list. A path-prefix test -- "does the anchor sit under
+// the root" -- was the previous rule, and it admitted an empty string, a file
+// that does not exist, a foreign file that happened to share a directory name,
+// and any bare filename whatsoever. A concrete list has none of those surfaces.
+//
+// An anchor may be spelled relatively (the agent quoting the path it opened
+// rather than the absolute one). A relative spelling is accepted only when it is
+// a trailing path-SEGMENT suffix of EXACTLY ONE entry: exactly-one stops
+// "Private/file.cpp" resolving against a second module's identically-named file,
+// and the segment boundary stops "f.py" matching "conf.py".
+const anchorRejectionReason = (raw, codeFiles) => {
+  const parsed = splitAnchor(raw)
+  if (!parsed) return 'no line number'
+  const fold = windowsShaped(parsed.file) || codeFiles.some(windowsShaped)
+  const a = canonicalPath(parsed.file, fold)
+  if (!a) return 'empty path'
+  const list = codeFiles.map((f) => canonicalPath(f, fold))
+  if (list.indexOf(a) !== -1) return null
+  const suffixHits = list.filter((f) => f.endsWith('/' + a))
+  if (suffixHits.length === 1) return null
+  if (suffixHits.length > 1) return 'ambiguous relative path'
+  return 'names no file in this subject own code-file list'
+}
+
+// ---------------------------------------------------------------------------
+// Prompt construction.
+// ---------------------------------------------------------------------------
+
+const FENCE = '\n\n----------------------------------------------------------------\n\n'
+
+// The per-subject block for an INLINE batch: the subject record, rendered.
+const subjectBlock = (s, key, ordinal, total) => {
   const chain = s.ambientClaudeMdPaths || []
   const chainClause = chain.length
     ? `The CLAUDE.md files AMBIENT for this directory, root-most first:\n${chain.map((p) => `  - ${p}`).join('\n')}\n\nRead every one. A fact already carried by an ambient claim that RESOLVES is NOT a candidate -- that suppression is applied HERE, at assessment time, because establishing it requires reading the ambient document and usually the source it anchors to.`
@@ -189,15 +491,8 @@ const lanePrompt = (s) => {
     ? `\nNOTE: this root is itself ${s.rootExclusion}. It is being assessed because the user named it explicitly; say so in notes.`
     : ''
 
-  const depthClause = depth === 'advanced'
-    ? `ANALYSIS DEPTH: advanced. Read every source file completely. First run an
-invariant-discovery pass and carry those invariants into assessment. After
-assessment, run a verification pass over every surviving candidate against the
-source. At this depth COVERAGE-ASSESSED means verified absent.`
-    : `ANALYSIS DEPTH: basic. Use a bounded, sampled read and one assessment pass.
-At this depth COVERAGE-ASSESSED means not found within budget.`
-
-  return `Assess the CLAUDE.md COVERAGE of ONE DIRECTORY.
+  return `SUBJECT ${ordinal} OF ${total}
+subjectKey: ${key}
 
 Directory: ${s.root}
 Code files (${(s.codeFiles || []).length}):
@@ -205,14 +500,152 @@ ${(s.codeFiles || []).map((p) => `  - ${p}`).join('\n')}
 
 ${chainClause}${exclusionClause}${rootClause}
 
+In this subject's result object set:
+  subjectKey: ${key}
+  root: ${s.root}
+  codeFiles: the list above, verbatim
+  assessedFileCount: ${(s.codeFiles || []).length}
+  unknownExtensionCount: ${Object.keys(s.unknownExtensions || {}).length}
+  ambientChainCount: ${chain.length}`
+}
+
+// The subject material for a subjectsFile batch: a LINE RANGE, not the subjects.
+// The whole point of this mode is that the subject payloads never travel through
+// the orchestrator, so they must not travel through this prompt either.
+const sliceBlock = (start, end) => {
+  const n = end - start + 1
+  return `YOUR SUBJECTS ARE IN A FILE, AND YOU READ ONLY YOUR OWN SLICE.
+
+File: ${subjectsFile}
+Format: JSONL -- one subject record per line, 1-based line numbers.
+Your slice: lines ${start} to ${end} inclusive (${n} subject${n === 1 ? '' : 's'}).
+
+Extract EXACTLY those lines, for example with:
+  sed -n '${start},${end}p' "${subjectsFile}"
+or by reading the file with offset ${start} and limit ${n}.
+
+DO NOT read the whole file. It holds ${subjectCount} subject records; reading it
+entire would cost more than the assessment you were dispatched to do, and would
+put ${subjectCount - n} other directories' code inventories into your context --
+which is precisely the contamination the slice exists to prevent.
+
+Each line is a JSON object with: root, codeFiles (the direct code files to
+assess -- NON-RECURSIVE), ambientClaudeMdPaths (root-most first, MAY be empty),
+rootExclusion, skipped, unknownExtensions.
+
+THE subjectKey FOR A RECORD IS THE LETTER L FOLLOWED BY ITS 1-BASED LINE NUMBER.
+The record on line ${start} has subjectKey L${start}, the next L${start + 1}, and
+so on through L${end}. Set it on every result object. Results are matched by that
+key and never by their position in your array, so returning fewer results, or
+returning them out of order, is safe -- but a key that is missing, wrong, or
+repeated loses that subject.
+
+Process the lines in FILE ORDER.
+
+OMIT rather than invent. If a line in your slice is blank, does not parse as
+JSON, or does not exist because the file is shorter than the range you were
+given, return NO result object for it. Do not synthesize a record, do not guess
+its root, and do not move another subject's result into its place. This lane
+marks an unreturned key NOT-ASSESSED, which is the honest outcome; a fabricated
+one would be reported as a clean pass over a directory nobody read.
+
+Read every path in ambientClaudeMdPaths for the subject you are on. A fact
+already carried by an ambient claim that RESOLVES is NOT a candidate. An EMPTY
+ambientClaudeMdPaths is not an error and not a skip -- it is the strongest form
+of the finding this verb exists to surface.
+
+Anything listed in that subject's skipped array is excluded structurally: do not
+assess it, and mention it in that subject's notes. If rootExclusion is set, say
+so in notes -- the directory is being assessed because the user named it.
+
+Per subject, copy into that subject's result object, from the record you read:
+  root: its root, verbatim
+  codeFiles: its codeFiles array, verbatim
+  assessedFileCount: the length of its codeFiles
+  unknownExtensionCount: the number of keys in its unknownExtensions
+  ambientChainCount: the length of its ambientClaudeMdPaths
+Copy them; do not estimate them and do not tidy them. This lane checks your
+evidence anchors against the codeFiles you echo, and derives mechanical decisions
+from those counts.
+
+If a subject has ZERO codeFiles and a NON-EMPTY unknownExtensions, that directory
+was never read -- nothing in it matched a known code, doc, or asset type. Do not
+assess it: return its echoed fields and an empty candidates list. That is enough
+for this lane to mark it a discovery failure rather than verified-absent.`
+}
+
+const depthClause = depth === 'advanced'
+  ? `ANALYSIS DEPTH: advanced. Read every source file completely. First run an
+invariant-discovery pass and carry those invariants into assessment. After
+assessment, run a verification pass over every surviving candidate against the
+source. At this depth COVERAGE-ASSESSED means verified absent.`
+  : `ANALYSIS DEPTH: basic. Use a bounded, sampled read and one assessment pass.
+At this depth COVERAGE-ASSESSED means not found within budget.`
+
+// The batch brief. Everything that is IDENTICAL for every subject is stated once
+// -- that is the whole economy of batching -- and the per-subject material is
+// fenced so the two can never be confused for each other.
+const batchPrompt = (batch) => {
+  const total = batch.keys.length
+  const subjectMaterial = batch.kind === 'inline'
+    ? batch.items.map((s, i) => subjectBlock(s, batch.keys[i], i + 1, total)).join(FENCE)
+    : sliceBlock(batch.start, batch.end)
+
+  return `Assess the CLAUDE.md COVERAGE of ${total} DIRECTORY/IES, ONE AT A TIME.
+
+HOW TO WORK THROUGH THIS BATCH -- read this before anything else.
+
+You have been given ${total} independent subjects. They are independent in the
+strong sense: each one is a separate assessment whose only inputs are its own
+directory's own direct code files and its own ambient CLAUDE.md chain. They share
+this brief and they share the criteria documents named below. They share NOTHING
+ELSE.
+
+Work strictly SEQUENTIALLY. Finish subject 1 completely -- open its files, apply
+the criteria, settle its candidates, write its result object -- before opening
+anything belonging to subject 2.
+
+Between subjects, RESET. The reset is scoped, and the scope matters in both
+directions:
+  - KEEP the criteria documents. They are the same for every subject; re-reading
+    them per subject is the cost this batch exists to avoid.
+  - DISCARD everything else from the previous subject: its source files, its
+    ambient documents, its candidate facts, and any pattern you inferred from
+    them. A fact you learned from subject K's files is NOT evidence about subject
+    K+1, however similar the two directories look, and similarity is exactly when
+    this goes wrong -- sibling directories in one codebase are the case where a
+    borrowed fact is most plausible and most likely to be false.
+
+Do not compare subjects with each other. Do not report that two subjects share a
+convention. Do not carry a candidate forward "because it applies here too". If a
+fact holds of two directories, each directory's own assessment must establish it
+from its own files, or it is not established.
+
+IDENTITY. Every subject carries a subjectKey issued by the harness. Echo it on
+that subject's result object. Results are matched BY KEY and never by position,
+so returning fewer results than there are subjects is safe and returning them out
+of order is safe -- but a wrong or missing key loses that subject.
+
+RETURN ONE RESULT OBJECT PER SUBJECT YOU ACTUALLY ASSESSED. If you could not
+assess one, OMIT it. Never pad the array, never invent a subject, and never file
+one subject's findings under another subject's key.
+
+ANCHORS ARE CHECKED AGAINST YOUR OWN FILE LIST. Every anchor you cite must name a
+file that appears in that subject's codeFiles, and must carry a line number
+("path/to/file.py:42"). Anything else -- a file in a sibling directory, a parent,
+a subdirectory, a file not in the list, or a path with no line number -- is
+rejected by the harness after you return, and the candidate carrying it is
+DROPPED and counted as an isolation violation. Cite the path you actually opened,
+in the spelling the list uses, rather than a tidied or shortened version.
+
 ${depthClause}
 
-WHAT YOU ARE LOOKING FOR -- read this before anything else.
+WHAT YOU ARE LOOKING FOR.
 
 md-domain is not a code-review tool. You are NOT reviewing this code. You are not
 looking for bugs, and you must not return a defect list. You are answering ONE
-question: which facts about this code belong in a CLAUDE.md that will be AMBIENT
-for it, and are not there today?
+question, once per subject: which facts about this code belong in a CLAUDE.md
+that will be AMBIENT for it, and are not there today?
 
 Finding defects is the job of a code review conducted AGAINST the CLAUDE.md this
 verb helps produce. If you find yourself enumerating what is wrong with the code,
@@ -231,15 +664,20 @@ CRITERIA. Apply the criteria in ${input.refs.criteria} verbatim. That document,
 not your judgment about what seems important, decides what earns ambient cost.
 The observation kinds it builds on are in ${input.refs.observationKinds || 'the claude-md standards doc'}
 (the GENERATION direction's list of what is worth writing up).
+Read those documents ONCE, now, before you open subject 1, and keep them for the
+whole batch. Do not re-read them between subjects, and do not compress them into
+a summary of your own -- the criteria are what they say, not what you remember of
+them.
 
 SCOPE, AND IT IS THE HARDEST RULE HERE. Every candidate must be a fact about
-THIS DIRECTORY'S OWN DIRECT code, and its destination is ALWAYS this directory.
-You are not choosing a placement. Set destination to the directory named above,
-verbatim, on every candidate.
+ITS OWN SUBJECT DIRECTORY'S OWN DIRECT code, and its destination is ALWAYS that
+directory. You are not choosing a placement. Set destination to that subject's
+directory, verbatim, on every candidate.
 
-REJECT a fact whose subject is a file in a subdirectory, a sibling, or a parent.
+REJECT a fact whose subject is a file in a subdirectory, a sibling, or a parent
+-- and, in this batch, a file belonging to any OTHER subject you were given.
 Each of those is assessed on its own terms and receives the fact from its own
-run. You read only this directory, so you cannot know whether such a fact holds
+run. You read only that directory, so you cannot know whether such a fact holds
 of code you never opened -- and a fact placed on that basis burdens every reader
 it does not apply to.
 
@@ -258,26 +696,34 @@ fact as though it were convertible; when the three do not all hold, say
 CONTEXT-ONLY.
 
 EVIDENCE (CV-7). Every candidate cites at least one file and line you OBSERVED
-in source, in anchors. A convention needs two or more observed instances or one
-authoritative source. Code outranks comments, guides, and rationale. Names,
-layout, and repeated patterns start an investigation; they are not evidence on
-their own. A fact you cannot anchor to observed source is DROPPED, not hedged
-and not reported with a guess at a location.
+in source, in anchors, and that file is one of that subject's own codeFiles. A
+convention needs two or more observed instances or one authoritative source.
+Code outranks comments, guides, and rationale. Names, layout, and repeated
+patterns start an investigation; they are not evidence on their own. A fact you
+cannot anchor to observed source is DROPPED, not hedged and not reported with a
+guess at a location.
 
-CEILING. Report at most ${ceiling} candidates FOR THIS DIRECTORY. If you would have exceeded it, set
-ceilingReached: true and say in notes how many you set aside. Never truncate
-silently.
+CEILING. Report at most ${ceiling} candidates PER SUBJECT -- the cap is per
+directory, not per batch, so a batch of ${total} may return up to ${ceiling}
+candidates for each of them. If a subject would have exceeded it, set
+ceilingReached: true on that subject and say in its notes how many were set
+aside. Never truncate silently.
 
 HONESTY. Your result is a SAMPLE, not an inventory -- two thorough reviewers over
 one corpus found largely different facts. Do not imply exhaustiveness.
 
-VERDICT. GAPS-FOUND if at least one candidate survives; COVERAGE-ASSESSED if the
-directory was assessed and none did. NEVER emit COMPLIANT or NON-COMPLIANT: those
-belong to the document lanes and answer a different question. A CLAUDE.md can be
-COMPLIANT while its directory is GAPS-FOUND at the same moment.
-
-Return the structured object.`
+VERDICT, per subject. GAPS-FOUND if at least one candidate survives;
+COVERAGE-ASSESSED if the directory was assessed and none did. NEVER emit
+COMPLIANT or NON-COMPLIANT: those belong to the document lanes and answer a
+different question. A CLAUDE.md can be COMPLIANT while its directory is
+GAPS-FOUND at the same moment.
+${FENCE}${subjectMaterial}${FENCE}Return the structured object: { subjects: [ ... ] }, one entry per subject you
+assessed, each carrying its own subjectKey.`
 }
+
+// ---------------------------------------------------------------------------
+// Batch construction.
+// ---------------------------------------------------------------------------
 
 // Structural refusal (never let a discovery failure read as a clean pass).
 // `codeFiles` empty AND `unknownExtensions` non-empty means the directory was
@@ -285,10 +731,20 @@ Return the structured object.`
 // that it was verified clean. Letting that reach the agent risks a
 // COVERAGE-ASSESSED verdict ("verified absent") over a directory nobody looked
 // at, so this subject never gets an agent dispatch at all: it is decided here,
-// mechanically, before any tokens are spent.
+// mechanically, before any tokens are spent, and it is filtered out BEFORE the
+// batches are cut so it cannot even occupy a slot in one.
+//
+// In subjectsFile mode this lane cannot see the fields, so the same rule is
+// applied in the reducer to the ECHOED record instead -- the decision is still
+// made here, on fields the agent copied rather than judged.
 const hasUnknownExtensions = (s) =>
   s.unknownExtensions && Object.keys(s.unknownExtensions).length > 0
 const hasNoCodeFiles = (s) => !Array.isArray(s.codeFiles) || s.codeFiles.length === 0
+
+const discoveryFailureNote = (entries) =>
+  `discovery failure: 0 recognized code files but unrecognized extensions ` +
+  `present (${entries}) -- CODE_DATA_EXT does not cover them, so this ` +
+  `directory was never read. This is NOT COVERAGE-ASSESSED.`
 
 const discoveryFailure = (s) => {
   const entries = Object.entries(s.unknownExtensions)
@@ -298,68 +754,257 @@ const discoveryFailure = (s) => {
     root: s.root,
     candidates: [],
     verdict: 'DISCOVERY-FAILED',
+    status: 'NOT-ASSESSED',
+    provenance: 'harness-verified',
     ceilingReached: false,
-    notes: [
-      `discovery failure: 0 recognized code files but unrecognized extensions ` +
-      `present (${entries}) -- CODE_DATA_EXT does not cover them, so this ` +
-      `directory was never read. This is NOT COVERAGE-ASSESSED.`,
-    ],
+    assessedFileCount: 0,
+    unknownExtensionCount: Object.keys(s.unknownExtensions).length,
+    ambientChainCount: (s.ambientClaudeMdPaths || []).length,
+    notes: [discoveryFailureNote(entries)],
   }
 }
 
-phase('Coverage')
-const perSubject = await parallel(subjects.map((s) => () => {
-  if (hasNoCodeFiles(s) && hasUnknownExtensions(s)) {
-    return Promise.resolve(discoveryFailure(s))
+const preDecided = []
+const batches = []
+
+if (subjectsFile) {
+  for (let start = 1; start <= subjectCount; start += batchSize) {
+    const end = Math.min(start + batchSize - 1, subjectCount)
+    const keys = []
+    for (let n = start; n <= end; n++) keys.push(`L${n}`)
+    batches.push({ kind: 'file', start, end, keys })
   }
+} else {
+  const dispatchable = []
+  for (const s of subjects) {
+    if (hasNoCodeFiles(s) && hasUnknownExtensions(s)) preDecided.push(discoveryFailure(s))
+    else dispatchable.push(s)
+  }
+  for (let i = 0; i < dispatchable.length; i += batchSize) {
+    const items = dispatchable.slice(i, i + batchSize)
+    batches.push({ kind: 'inline', items, keys: items.map((_, j) => `S${i + j + 1}`) })
+  }
+}
+
+const batchLabel = (b, i) => {
+  if (b.kind === 'file') return `coverage:batch${i + 1}:lines${b.start}-${b.end}`
+  const leaf = String(b.items[0].root).split(/[\\/]/).pop()
+  return b.items.length === 1 ? `coverage:${leaf}` : `coverage:${leaf}+${b.items.length - 1}`
+}
+
+// A subject the batch was asked for and did not return. It is NOT an assessment
+// result and must never be tallied as one: "the agent skipped it" and "the
+// directory was assessed and found clean" are the two things this lane exists to
+// keep apart.
+const batchIncomplete = (b, i) => ({
+  subjectKey: b.keys[i],
+  root: b.kind === 'inline'
+    ? String(b.items[i].root)
+    : `${subjectsFile}#${b.keys[i]}`,
+  candidates: [],
+  verdict: 'BATCH-INCOMPLETE',
+  status: 'NOT-ASSESSED',
+  provenance,
+  ceilingReached: false,
+  assessedFileCount: 0,
+  unknownExtensionCount: 0,
+  ambientChainCount: 0,
+  notes: [
+    `the batch agent returned no result object for subjectKey ${b.keys[i]}; it ` +
+    'was NOT assessed. This is neither GAPS-FOUND nor COVERAGE-ASSESSED, and a ' +
+    'consumer must not read its empty candidate list as assessed-null. Re-run ' +
+    'this subject, on its own or at a smaller batchSize.',
+  ],
+})
+
+// Match the batch's returned array back onto the subjects that were REQUESTED,
+// BY KEY. Never by position: a batch that omits its middle subject would
+// otherwise shift every later result one slot, and the inline root overwrite --
+// the thing documented as a safeguard -- would then stamp the wrong directory
+// onto real findings. Losing a subject is recoverable; misfiling one is the
+// contamination this whole design exists to prevent.
+let extraReturned = 0
+let identityUnmatched = 0
+const reconcileBatch = (b, r) => {
+  const returned = r && Array.isArray(r.subjects) ? r.subjects : []
+  const wanted = new Set(b.keys)
+  const byKey = new Map()
+  for (const rec of returned) {
+    const k = rec && typeof rec.subjectKey === 'string' ? rec.subjectKey : null
+    if (!k || !wanted.has(k) || byKey.has(k)) {
+      // Unkeyed, unrequested, or a duplicate key: discarded, never guessed at.
+      extraReturned++
+      if (k && !wanted.has(k)) identityUnmatched++
+      continue
+    }
+    byKey.set(k, rec)
+  }
+  return b.keys.map((k, i) => {
+    const rec = byKey.get(k)
+    if (!rec) return batchIncomplete(b, i)
+    // Inline: identity and the file list are TRUSTED INPUT, and the key is what
+    // makes "which input" unambiguous. subjectsFile: both are attested by the
+    // agent, and the record says so through `provenance`.
+    const trusted = b.kind === 'inline' ? b.items[i] : null
+    const root = trusted ? String(trusted.root) : String(rec.root || '')
+    const codeFiles = trusted
+      ? (trusted.codeFiles || [])
+      : (Array.isArray(rec.codeFiles) ? rec.codeFiles : [])
+    return { ...rec, subjectKey: k, root, codeFiles, provenance, status: 'ASSESSED' }
+  })
+}
+
+phase('Coverage')
+const batchResults = await parallel(batches.map((b, i) => () =>
   // Detection is this verb's judgment core, so the tier is pinned rather than
   // inherited. This matters more here than in the document lanes: a coverage run
-  // normally has exactly ONE subject, and the audit lane's single-subject
-  // shortcut runs inline at whatever model the session happens to be on. Going
-  // through the workflow regardless of count is what keeps the common case on-pin.
-  return agent(lanePrompt(s), {
-    label: `coverage:${String(s.root).split(/[\\/]/).pop()}`,
+  // may have exactly ONE subject, and the audit lane's single-subject shortcut
+  // runs inline at whatever model the session happens to be on. Going through
+  // the workflow regardless of count is what keeps the common case on-pin.
+  agent(batchPrompt(b), {
+    label: batchLabel(b, i),
     phase: 'Coverage',
     model: 'opus',
     effort: 'high',
-    schema: SUBJECT_FINDINGS_SCHEMA,
-  }).then((r) => ({ ...r, root: s.root }))
-}))
+    schema: BATCH_FINDINGS_SCHEMA,
+  }).then((r) => reconcileBatch(b, r))
+))
+
+const perSubject = preDecided.concat(...batchResults.filter(Boolean))
 
 // The verdict is DERIVED, never taken on trust. The schema can constrain the
 // verdict to two values but cannot express "GAPS-FOUND iff candidates is
 // non-empty", so a schema-valid response can carry GAPS-FOUND with zero
 // candidates (or the reverse) and contradict the decision rules the lane doc
-// states. Recomputing it here makes the rule true by construction.
+// states. Recomputing it here makes the rule true by construction. The same
+// argument covers `destination`, which generation groups by.
+let isolationViolations = 0
+let destinationCorrected = 0
+let fileListDisagreements = 0
 const results = perSubject.filter(Boolean).map((r) => {
-  const candidates = r.candidates || []
-  // A DISCOVERY-FAILED subject never reached the agent, so there is nothing to
-  // derive or re-derive: it is passed through unchanged, and it must NOT fall
-  // into the candidates.length ? GAPS-FOUND : COVERAGE-ASSESSED derivation
-  // below -- that would turn "never read" into "verified absent" right here.
-  if (r.verdict === 'DISCOVERY-FAILED') {
-    return { ...r, candidates, depth }
+  const incoming = r.candidates || []
+  // A DISCOVERY-FAILED or BATCH-INCOMPLETE subject never produced an assessment,
+  // so there is nothing to derive or re-derive: it is passed through unchanged,
+  // and it must NOT fall into the candidates.length ? GAPS-FOUND :
+  // COVERAGE-ASSESSED derivation below -- that would turn "never read" or "never
+  // returned" into "verified absent" right here.
+  if (r.verdict === 'DISCOVERY-FAILED' || r.verdict === 'BATCH-INCOMPLETE') {
+    return { ...r, candidates: incoming, depth }
   }
-  const derived = candidates.length ? 'GAPS-FOUND' : 'COVERAGE-ASSESSED'
+
   const notes = Array.isArray(r.notes) ? [...r.notes] : []
+  const codeFiles = Array.isArray(r.codeFiles) ? r.codeFiles : []
+
+  // Transcription cross-check. The count and the list are two statements about
+  // one fact, so a disagreement means one of them is wrong and neither can be
+  // preferred silently.
+  if (r.assessedFileCount !== codeFiles.length) {
+    fileListDisagreements++
+    notes.push(
+      `transcription disagreement: assessedFileCount ${r.assessedFileCount} but ` +
+      `${codeFiles.length} codeFiles echoed; the echoed list is what anchors were ` +
+      'checked against.'
+    )
+  }
+
+  // The discovery-failure refusal. In inline mode these subjects were filtered
+  // out before dispatch, so this fires in subjectsFile mode -- or on an inline
+  // subject whose transcription contradicts its own record, which is worth
+  // catching either way.
+  if (r.assessedFileCount === 0 && r.unknownExtensionCount > 0) {
+    notes.push(discoveryFailureNote(`${r.unknownExtensionCount} unrecognized extension(s)`))
+    return {
+      ...r, candidates: [], verdict: 'DISCOVERY-FAILED', status: 'NOT-ASSESSED',
+      depth, notes, codeFiles: undefined,
+    }
+  }
+
+  // Anchor membership. Runs BEFORE the verdict derivation, so a subject whose
+  // every candidate was rejected reads as COVERAGE-ASSESSED with the drop named
+  // in its notes rather than as GAPS-FOUND over evidence that was thrown away.
+  const leaked = []
+  const candidates = incoming.filter((c) => {
+    const anchors = Array.isArray(c.anchors) ? c.anchors : []
+    if (!anchors.length) { leaked.push('(no anchors)'); return false }
+    const bad = []
+    for (const a of anchors) {
+      const why = anchorRejectionReason(a, codeFiles)
+      if (why) bad.push(`${JSON.stringify(String(a))} [${why}]`)
+    }
+    if (!bad.length) return true
+    for (const b of bad) leaked.push(b)
+    return false
+  })
+  const dropped = incoming.length - candidates.length
+  if (dropped) {
+    isolationViolations += dropped
+    notes.push(
+      `isolation: ${dropped} candidate(s) DROPPED -- their evidence anchors do not ` +
+      `name a file in this subject own code-file list, with a line number ` +
+      `(${leaked.slice(0, 5).join(', ')}` +
+      `${leaked.length > 5 ? `, +${leaked.length - 5} more` : ''}). A fact that ` +
+      'cannot be anchored inside the assessed directory is a CV-3 violation and, ' +
+      'in a batch, the signature of cross-subject contamination.'
+    )
+  }
+
+  // `destination` is DERIVED. The schema could ask for it and additionalProperties
+  // could not check it, and generation groups by this field -- so a wrong value
+  // re-homes a fact into a document that never earned it.
+  let correctedHere = 0
+  const placed = candidates.map((c) => {
+    if (String(c.destination || '') === String(r.root)) return c
+    correctedHere++
+    return { ...c, destination: r.root }
+  })
+  if (correctedHere) {
+    destinationCorrected += correctedHere
+    notes.push(
+      `destination corrected on ${correctedHere} candidate(s): a directory other ` +
+      'than the assessed one was named. destination is degenerate by construction ' +
+      'and is derived from the subject, never accepted from the assessment.'
+    )
+  }
+
+  const derived = placed.length ? 'GAPS-FOUND' : 'COVERAGE-ASSESSED'
   if (r.verdict && r.verdict !== derived) {
     notes.push(
-      `verdict corrected: lane returned ${r.verdict} with ${candidates.length} candidate(s)`
+      `verdict corrected: lane returned ${r.verdict} with ${placed.length} candidate(s)`
     )
   }
   // A ceiling hit must never be silent, even if the lane forgot to say so.
   if (r.ceilingReached && !notes.some((n) => /ceiling|set aside|capped/i.test(n))) {
     notes.push(`candidate ceiling of ${ceiling} reached; results are capped, not complete`)
   }
-  return { ...r, candidates, verdict: derived, depth, notes }
+  // The echoed code-file list is DROPPED from the returned record. It has done
+  // its job (anchor membership), and the workflow result travels back through
+  // the orchestrator -- carrying it there would re-inflate exactly the payload
+  // subjectsFile mode exists to keep out of that context.
+  return { ...r, candidates: placed, verdict: derived, depth, notes, codeFiles: undefined }
 })
+
+// A root appearing twice means two result objects claim one directory. Counted
+// rather than resolved: this lane cannot tell which of the two is real.
+const rootSeen = new Map()
+for (const r of results) {
+  const k = String(r.root)
+  rootSeen.set(k, (rootSeen.get(k) || 0) + 1)
+}
+let duplicateRoots = 0
+for (const n of rootSeen.values()) if (n > 1) duplicateRoots += n - 1
 
 // The ambient chain is an INPUT fact, not something the lane reports back, so
 // the uncovered tally is computed from the subjects rather than the results --
 // reading it off the agent's object would count every directory as uncovered.
+// In subjectsFile mode there IS no input here to read, and only then does the
+// echoed count stand in for it.
 const chainSizeByRoot = new Map(
   subjects.map((s) => [String(s.root), (s.ambientClaudeMdPaths || []).length])
 )
+const chainSizeForRoot = (r) =>
+  chainSizeByRoot.has(String(r.root))
+    ? chainSizeByRoot.get(String(r.root))
+    : (subjectsFile ? r.ambientChainCount : 0)
 
 const totals = results.reduce((acc, r) => {
   acc.candidates += (r.candidates || []).length
@@ -373,22 +1018,25 @@ const totals = results.reduce((acc, r) => {
   // CONTEXT-ONLY.
   acc.findingConvertible += (r.candidates || []).filter((c) => c.tier === 'FINDING-CONVERTIBLE').length
   acc.contextOnly += (r.candidates || []).filter((c) => c.tier === 'CONTEXT-ONLY').length
-  // CV-7's evidence floor is schema-enforced (anchors required, minItems 1), so
-  // this is a carriage check rather than an adjudication: it counts candidates
-  // that arrived with no citable anchor, which should be structurally
-  // impossible and is worth seeing loudly if it ever is not.
+  // CV-7's evidence floor is schema-enforced (anchors required, minItems 1,
+  // minLength 1) AND membership-enforced above, so this is a carriage check
+  // rather than an adjudication.
   acc.unanchored += (r.candidates || []).filter((c) => !(c.anchors || []).length).length
   if (r.verdict === 'GAPS-FOUND') acc.gapsFound++
   if (r.verdict === 'COVERAGE-ASSESSED') acc.assessed++
   // Counted apart from both verdicts, deliberately: DISCOVERY-FAILED is
   // neither "gaps found" nor "assessed clean" -- it means the directory could
   // not be classified at all, and folding it into assessed would be exactly
-  // the fake pass this refusal exists to prevent.
+  // the fake pass this refusal exists to prevent. BATCH-INCOMPLETE is counted
+  // apart for the same reason: requested, not returned, not assessed.
   if (r.verdict === 'DISCOVERY-FAILED') acc.discoveryFailed++
+  if (r.verdict === 'BATCH-INCOMPLETE') acc.batchIncomplete++
+  if (r.status === 'ASSESSED') acc.completed++
   if (r.ceilingReached) acc.ceilingReached++
-  // Counted apart from the verdicts: a directory nothing covers is the finding
-  // this verb exists for, and folding it into gapsFound would hide it.
-  if (!chainSizeByRoot.get(String(r.root))) acc.uncovered++
+  // Counted apart from the verdicts, and ONLY over subjects actually assessed:
+  // a directory nothing covers is the finding this verb exists for, but a
+  // directory nobody read is not evidence that nothing covers it.
+  if (r.status === 'ASSESSED' && !chainSizeForRoot(r)) acc.uncovered++
   return acc
 }, {
   candidates: 0,
@@ -399,9 +1047,20 @@ const totals = results.reduce((acc, r) => {
   gapsFound: 0,
   assessed: 0,
   discoveryFailed: 0,
+  batchIncomplete: 0,
+  completed: 0,
   ceilingReached: 0,
   uncovered: 0,
 })
+totals.requested = subjectCount
+totals.notAssessed = results.length - totals.completed
+totals.isolationViolations = isolationViolations
+totals.destinationCorrected = destinationCorrected
+totals.fileListDisagreements = fileListDisagreements
+totals.duplicateRoots = duplicateRoots
+totals.extraReturned = extraReturned
+totals.identityUnmatched = identityUnmatched
+totals.provenance = provenance
 
 // The ceiling is per directory, so a wide run's aggregate is subjects x ceiling.
 // Stating the aggregate keeps a capped multi-directory run from reading as
@@ -424,9 +1083,32 @@ const discoveryFailedNote = totals.discoveryFailed
     `extensions with zero recognized code files, never read, not COVERAGE-ASSESSED`
   : ''
 const uncoveredNote = totals.uncovered
-  ? `, ${totals.uncovered} directory/ies with NO ambient CLAUDE.md at all`
+  ? `, ${totals.uncovered} assessed directory/ies with NO ambient CLAUDE.md at all`
   : ''
+const isolationNote = totals.isolationViolations
+  ? `, ${totals.isolationViolations} candidate(s) DROPPED for anchors that name no file in their own subject code-file list -- cross-subject contamination; re-run those subjects at batchSize 1`
+  : ''
+const incompleteNote = totals.batchIncomplete
+  ? `, ${totals.batchIncomplete} subject(s) BATCH-INCOMPLETE -- requested but not returned, NOT assessed`
+  : ''
+const destinationNote = totals.destinationCorrected
+  ? `, ${totals.destinationCorrected} candidate destination(s) corrected to their own subject`
+  : ''
+const disagreementNote = totals.fileListDisagreements
+  ? `, ${totals.fileListDisagreements} subject(s) disagreed with their own file count`
+  : ''
+const duplicateNote = totals.duplicateRoots
+  ? `, ${totals.duplicateRoots} duplicate root(s) returned`
+  : ''
+const extraNote = totals.extraReturned
+  ? `, ${totals.extraReturned} unrequested or unkeyed result object(s) discarded`
+  : ''
+const modeNote = subjectsFile ? `subjectsFile=${subjectsFile}` : 'inline'
+const provenanceWarning = provenance === 'agent-attested'
+  ? ' PROVENANCE: roots and code-file lists are AGENT-ATTESTED, not verified against the subjects file -- verify before promoting (coverage-lane.md, "Verifying an agent-attested run").'
+  : ''
+const runNoteClause = runNotes.length ? ` NOTE: ${runNotes.join(' ')}` : ''
 
-log(`Coverage (depth=${depth}): assessed ${results.length}/${subjects.length} directory/ies: ${totals.gapsFound} GAPS-FOUND, ${totals.assessed} COVERAGE-ASSESSED, ${totals.candidates} candidate(s)${tierNote}${severeNote}${evidenceNote}${uncoveredNote}${discoveryFailedNote}${ceilingNote}. Advisory and non-idempotent: re-runs may differ, and nothing is applied.`)
+log(`Coverage (depth=${depth}, ${modeNote}, provenance=${provenance}, ${batches.length} batch(es) of up to ${batchSize}): ${totals.completed} of ${totals.requested} requested directory/ies COMPLETED (${totals.notAssessed} NOT assessed): ${totals.gapsFound} GAPS-FOUND, ${totals.assessed} COVERAGE-ASSESSED, ${totals.candidates} candidate(s)${tierNote}${severeNote}${evidenceNote}${uncoveredNote}${discoveryFailedNote}${incompleteNote}${isolationNote}${destinationNote}${disagreementNote}${duplicateNote}${extraNote}${ceilingNote}. Advisory and non-idempotent: re-runs may differ, and nothing is applied.${provenanceWarning}${runNoteClause}`)
 
-return { perSubject: results, totals, ceiling, depth }
+return { perSubject: results, totals, ceiling, depth, batchSize, batches: batches.length, subjectsFile, provenance, notes: runNotes }
