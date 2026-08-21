@@ -35,7 +35,7 @@
     {
       "name": "bootstrap",
       "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
-      "version": "0.86.0",
+      "version": "0.86.2",
       "author": {
         "name": "Christina"
       },
@@ -164,7 +164,7 @@
     {
       "name": "content-pipeline-kit",
       "description": "Library + skills for LLM-in-the-loop batch content pipelines.",
-      "version": "0.11.0",
+      "version": "0.13.0",
       "author": {
         "name": "Christina"
       },
