@@ -1566,6 +1566,68 @@ def test_supervise_tick_working_but_already_accepted_skips_renewal_only(tmp_path
     # unit is never a reclaim candidate, at any time.
     assert reclaimable_units(store, "run-1", at=original_expiry + 10_000) == []
 
+
+def _accept_inside_the_renew_window(store, run_id, unit_id, fencing_token, *, at):
+    """A `unit_seconds_for` callback that performs the concurrent worker's
+    accept STRICTLY INSIDE the snapshot-then-renew window.
+
+    ``supervise_tick`` reads ``current_unit`` and checks the not-CLAIMED
+    guard, THEN calls ``adapter.unit_for`` and
+    ``adapter.resolve_expected_unit_seconds`` (which is what invokes this
+    callback), THEN calls ``store.renew_lease``. So this callback is the one
+    consumer-supplied seam that runs in the exact window the TOCTOU race
+    occupies -- no monkeypatching of the store, no fake that raises
+    ``NotClaimedError`` because a test told it to. The accept is the REAL
+    ``ExecutionStore.accept_unit`` and any ``NotClaimedError`` is raised by
+    the REAL ``ExecutionStore.renew_lease``."""
+
+    def _unit_seconds_for(_unit):
+        if store.get_unit(run_id, unit_id).state is UnitState.CLAIMED:
+            store.accept_unit(run_id, unit_id, fencing_token, text="answer", at=at)
+        return 100.0
+
+    return _unit_seconds_for
+
+
+def test_supervise_tick_accept_inside_the_renew_window_takes_the_grace_path(tmp_path):
+    """The TOCTOU race the snapshot guard cannot see: the unit IS CLAIMED at
+    the ``store.get_unit`` read, the worker's accept lands before
+    ``store.renew_lease``, and the store raises ``NotClaimedError`` from a
+    call nothing used to catch.
+
+    The outcome must be the SAME destination the snapshot case already
+    reaches -- renew nothing, settle nothing, hold the dispatch open for the
+    bounded grace -- not a second policy invented for the race."""
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0, lease_seconds=50.0)
+    original_expiry = store.get_unit("run-1", "u0").lease_expires_at
+
+    runner = FakeRunner()
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="working")]), "", 0),
+    )
+    cli = _cli(runner)
+    adapter = RunAdapter(
+        unit_seconds_for=_accept_inside_the_renew_window(
+            store, "run-1", "u0", od.fencing_token, at=1005.0
+        )
+    )
+
+    result = supervise_tick(store, "run-1", cli, adapter, {"u0": od}, at=1010.0)
+
+    assert result.renewed == ()
+    assert result.settled == {}
+    assert result.dropped == ()
+    assert result.halted is None
+    assert store.get_unit("run-1", "u0").state is UnitState.ACCEPTED
+    assert store.get_unit("run-1", "u0").lease_expires_at == original_expiry
+    assert [d.unit_id for d in store.open_dispatches("run-1")] == ["u0"]
+    # The grace clock starts on THIS tick, exactly as it does for the
+    # snapshot case, so the bound below applies to the race case too.
+    assert od.terminal_since == 1010.0
+
+
 def test_supervise_tick_ends_a_terminal_unit_whose_session_overstays_the_grace(tmp_path):
     """The bound on the branch above. Nothing else in the system can close
     this dispatch -- the unit is terminal so it is never a candidate again,
@@ -2195,6 +2257,64 @@ def test_dispatch_wave_happy_path_dispatches_and_observes_acceptance(tmp_path):
     assert "u0" in report.accepted
     unit = store.get_unit("run-1", "u0")
     assert unit.state is UnitState.ACCEPTED
+
+
+def test_dispatch_wave_returns_a_report_when_an_accept_lands_inside_the_renew_window(tmp_path):
+    """WHAT ESCAPES, not what the tick does internally: a `NotClaimedError`
+    out of `store.renew_lease` escapes `supervise_tick` AND `dispatch_wave`,
+    so the caller gets an exception instead of a `DispatchReport` and every
+    OTHER in-flight dispatch of the wave is abandoned.
+
+    Observed live 2026-08-21 (`... line 2191, in dispatch_wave ->
+    supervise_tick`, `... line 1721 -> store.renew_lease`,
+    `NotClaimedError: ... is accepted, not claimed`) on a unit that had been
+    correctly accepted and applied.
+
+    MUTATION: remove the `except NotClaimedError` around the renew -- the
+    error escapes the wave and this test errors instead of returning."""
+    store = _seeded_dispatch_store(tmp_path, unit_ids=("u0",))
+    wc = _worker_command(tmp_path)
+
+    runner = _healthy_runner()
+    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        [
+            ("[]", "", 0),
+            (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="working")]), "", 0),
+            (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="working")]), "", 0),
+            (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="done")]), "", 0),
+        ],
+    )
+    cli = _cli(runner)
+    wave = store.list_units("run-1")
+
+    # Unlike the happy path above, the fake worker does NOT accept at launch
+    # time: the accept is deferred into the supervise tick's renew window,
+    # which is where the race lives.
+    accepting_adapter = RunAdapter(
+        unit_seconds_for=lambda unit: _accept_in_window_via_open_dispatch(store, "run-1", "u0"),
+    )
+
+    report = dispatch_wave(
+        store, "run-1", wave, accepting_adapter, cli=cli, worker_command=wc,
+        max_agents=1, at=1000.0, sleep_fn=lambda s: None, clock_fn=lambda: 1000.0,
+    )
+
+    assert isinstance(report, DispatchReport)
+    assert "u0" in report.dispatched
+    assert report.settled.get("u0") == "accepted"
+    assert store.get_unit("run-1", "u0").state is UnitState.ACCEPTED
+
+
+def _accept_in_window_via_open_dispatch(store, run_id, unit_id):
+    """The wave owns the fencing token, so read it back off the unit -- the
+    same token the worker was handed in its launch prompt -- and accept
+    through the REAL store, inside the renew window."""
+    unit = store.get_unit(run_id, unit_id)
+    if unit.state is UnitState.CLAIMED:
+        store.accept_unit(run_id, unit_id, unit.fencing_token, text="answer", at=1001.0)
+    return 100.0
 
 
 # ---------------------------------------------------------------------------

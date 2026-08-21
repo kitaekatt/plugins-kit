@@ -98,6 +98,7 @@ from content_pipeline.execution.model import (
     AlreadyClaimedError,
     AttemptKind,
     ExecutionError,
+    NotClaimedError,
     RunHaltedError,
     RunRecord,
     StaleDispatcherLeaseError,
@@ -1600,7 +1601,10 @@ def supervise_tick(
       ``_lease_ceiling`` derives for the worker's own claim.
     - ``working``/``running`` with the unit NO LONGER CLAIMED (it submitted
       through the protocol and its session has not exited yet) -- renew
-      NOTHING, and give the session ``terminal_exit_grace_seconds`` to exit
+      NOTHING, whether that is seen in the snapshot read or arrives as a
+      ``NotClaimedError`` from ``renew_lease`` when the accept lands INSIDE
+      the read-then-renew window (same event, caught either way, one
+      destination), and give the session ``terminal_exit_grace_seconds`` to exit
       on its own so the ordinary case still settles through the ``done``
       branch. Past the grace, ``stop`` + ``rm`` the session and settle
       (``outcome="session_lingering"``): nothing else in the system can ever
@@ -1667,12 +1671,37 @@ def supervise_tick(
 
         state = session.state
         if state in ("working", "running"):
-            if current_unit.state is not UnitState.CLAIMED:
+            # Two ways to arrive at "do not renew this one". The SNAPSHOT
+            # case: ``current_unit`` was already not CLAIMED when it was
+            # read. The RACE case: it WAS CLAIMED at the read and the
+            # worker's accept lands before ``store.renew_lease``, which then
+            # raises ``NotClaimedError`` (observed live 2026-08-21, escaping
+            # supervise_tick and dispatch_wave both). They are the same
+            # event seen a few microseconds apart, so they take the SAME
+            # destination below rather than two policies.
+            renew_declined = current_unit.state is not UnitState.CLAIMED
+            if not renew_declined:
+                work_unit = adapter.unit_for(unit_id)
+                seconds = lease_for(adapter.resolve_expected_unit_seconds(work_unit))
+                try:
+                    store.renew_lease(
+                        run_id, unit_id, open_dispatch.fencing_token, lease_seconds=seconds, at=now
+                    )
+                except NotClaimedError:
+                    # The race. NARROW on purpose: only NotClaimedError, and
+                    # only around the renew. A StaleFenceError from the same
+                    # call means something re-claimed the unit and is a
+                    # different event with a different correct outcome, so
+                    # it still propagates; so does anything else.
+                    renew_declined = True
+                else:
+                    renewed.append(unit_id)
+            if renew_declined:
                 # The worker submitted through the protocol and its session
                 # has NOT exited yet -- the normal submit-then-exit window at
                 # a 15s poll, not a rare race. The unit is no longer CLAIMED,
-                # so store.renew_lease would raise NotClaimedError, and
-                # nothing here catches it: it would escape supervise_tick AND
+                # so store.renew_lease raises NotClaimedError; before that
+                # error was caught above it escaped supervise_tick AND
                 # dispatch_wave, tearing down the wave and abandoning every
                 # other in-flight dispatch.
                 #
@@ -1716,12 +1745,6 @@ def supervise_tick(
                 # No classify_settled_failure: the unit is ACCEPTED. This is
                 # a session that overstayed, not a failure to explain.
                 continue
-            work_unit = adapter.unit_for(unit_id)
-            seconds = lease_for(adapter.resolve_expected_unit_seconds(work_unit))
-            store.renew_lease(
-                run_id, unit_id, open_dispatch.fencing_token, lease_seconds=seconds, at=now
-            )
-            renewed.append(unit_id)
         elif state == "blocked":
             # End the session before settling, mirroring the
             # session_lingering branch above: settling removes this dispatch
