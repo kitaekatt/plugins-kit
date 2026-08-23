@@ -11,11 +11,19 @@ from pathlib import Path
 from typing import Any
 
 from .adapter import adapt_shape
-from .corpus import Corpus, Record, load_corpus, resolve_value_set
+from .corpus import (
+    ABSENT,
+    check_path_key_steps,
+    Corpus,
+    load_corpus,
+    Record,
+    resolve_path_value,
+    resolve_value_set,
+)
 from .errors import ADVISORY, Diagnostic, ERROR
-from .loader import load_profile
+from .loader import load_profile, resolve_field_path
 from .merge import flatten_type
-from .model import FieldSpec, Profile, STORED_INT, TypeSpec
+from .model import FieldSpec, Profile, split_path, STORED_INT, TypeSpec
 
 _MAX_LISTED_VALUES = 12
 
@@ -44,7 +52,6 @@ class Validator:
     # -- entry point ------------------------------------------------------
 
     def run(self) -> list[Diagnostic]:
-        self.diagnostics.extend(self.corpus.diagnostics)
         for type_spec in self.profile.types.values():
             flattened, merge_diagnostics = flatten_type(type_spec, self.corpus)
             self.diagnostics.extend(merge_diagnostics)
@@ -56,6 +63,11 @@ class Validator:
             for constraint_index, _ in enumerate(type_spec.constraints):
                 self._check_constraint(type_spec, constraint_index)
         self._check_views()
+        # Some checks above (a path crossing a map, via resolve_value_set)
+        # append to the corpus's own diagnostics as they run, so this is
+        # gathered last -- gathering it first would miss anything appended
+        # mid-pass.
+        self.diagnostics = self.corpus.diagnostics + self.diagnostics
         return self.diagnostics
 
     # -- reporting --------------------------------------------------------
@@ -300,7 +312,7 @@ class Validator:
     ) -> None:
         """A map value whose shape comes from the record its own key names."""
         assert spec.value is not None and spec.value.shape_from is not None
-        type_id, field_name = spec.value.shape_from.split(".")
+        type_id, *field_path = spec.value.shape_from.split(".")
         source_record = self.corpus.find(type_id, key if isinstance(key, str) else str(key))
         if source_record is None:
             self._report(
@@ -317,7 +329,11 @@ class Validator:
                 path,
             )
             return
-        fields, problems = adapt_shape(owner.adapter, source_record.data.get(field_name))
+        target = self.profile.types.get(type_id)
+        shape_value = resolve_path_value(target, source_record.data, field_path)
+        if shape_value is ABSENT:
+            shape_value = None
+        fields, problems = adapt_shape(owner.adapter, shape_value)
         for problem in problems:
             self._report(
                 "cannot take its shape from record '{0}' of type '{1}': {2}".format(
@@ -359,9 +375,9 @@ class Validator:
                     key_path,
                 )
                 continue
-            routed_type_id, routed_field = route.split(".")
+            routed_type_id = route.split(".", 1)[0]
             routed_type = self.profile.types[routed_type_id]
-            routed_spec = routed_type.every_possible_field().get(routed_field)
+            routed_spec = resolve_field_path(self.profile, route)
             if routed_spec is None:
                 continue
             if entry is not None:
@@ -420,11 +436,12 @@ class Validator:
     # -- constraints ------------------------------------------------------
 
     def _locate(self, path: str, value: Any) -> tuple[str, str | None]:
-        """The file and record a value of ``<type>.<field>`` came from."""
-        type_id, field_name = path.split(".")
+        """The file and record a value of a ``<type>.<segment>*`` path came from."""
+        type_id, *field_path = path.split(".")
+        target = self.profile.types.get(type_id)
         for record in self.corpus.of_type(type_id):
-            candidate = record.data.get(field_name)
-            if candidate is None and field_name not in record.data:
+            candidate = resolve_path_value(target, record.data, field_path)
+            if candidate is ABSENT:
                 candidate = record.identity
             if candidate == value or (isinstance(candidate, list) and value in candidate):
                 return record.file, record.label
@@ -525,12 +542,18 @@ class Validator:
 
     def _check_views(self) -> None:
         for view in self.profile.views.values():
+            target = self.profile.types.get(view.of)
+            for name in view.field_names():
+                check_path_key_steps(
+                    self.profile, target, split_path(name), name, self.corpus
+                )
             if view.covers is None:
                 continue
             covered = self.profile.views[view.covers]
-            shown = set(view.field_names())
+            shown = [split_path(name) for name in view.field_names()]
             for name in covered.field_names():
-                if name in shown:
+                candidate = split_path(name)
+                if any(_is_ancestor_or_self(prefix, candidate) for prefix in shown):
                     continue
                 self.diagnostics.append(
                     Diagnostic(
@@ -541,6 +564,13 @@ class Validator:
                         field=name,
                     )
                 )
+
+
+def _is_ancestor_or_self(prefix: list[str], candidate: list[str]) -> bool:
+    """``prefix`` covers ``candidate`` if it names the same path or an
+    ancestor of it -- a view naming 'weapon_stats' covers one naming
+    'weapon_stats.damage', because showing the map shows the key."""
+    return len(prefix) <= len(candidate) and candidate[: len(prefix)] == prefix
 
 
 def _is_int(value: Any) -> bool:

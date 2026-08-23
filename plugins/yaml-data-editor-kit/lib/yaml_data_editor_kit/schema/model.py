@@ -28,6 +28,13 @@ SOURCE_LAYOUTS = ("rows", "file_per_record", "keyed_map", "single")
 CONSTRAINT_KINDS = ("covers", "matches_files", "unique")
 
 
+def split_path(path: str) -> list[str]:
+    """Split a dotted path into its segments. The separator is '.' for both
+    anchored paths (``<type>.<segment>[.<segment>]*``) and field paths
+    (``<segment>[.<segment>]*``)."""
+    return path.split(".")
+
+
 @dataclass(frozen=True)
 class Ordered:
     """``ordered:`` -- position in this list carries meaning."""

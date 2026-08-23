@@ -130,6 +130,41 @@ fields:
     assert view.entries[1].when == "subscription"
 
 
+def test_a_view_entry_accepts_any_variant_that_adds_its_first_segment(
+    profile_dir, write
+) -> None:
+    write(
+        "profile/product.yaml",
+        """
+dialect: type/1
+id: product
+fields:
+  category: { type: enum, values: [subscription, rental] }
+variants:
+  on: category
+  when:
+    subscription:
+      duration: { type: int }
+    rental:
+      duration: { type: int }
+""",
+    )
+    write(
+        "profile/card.yaml",
+        """
+dialect: view/1
+id: product_card
+of: product
+form: card
+fields:
+  - { field: duration, when: rental }
+""",
+    )
+
+    view = load_profile(profile_dir).views["product_card"]
+    assert view.entries[0].when == "rental"
+
+
 def test_a_when_that_is_not_a_variant_value_is_refused(profile_dir, write) -> None:
     write("profile/product.yaml", TYPE_AND_SOURCE)
     write(

@@ -14,8 +14,8 @@ from typing import Any, Iterator
 
 import yaml
 
-from .errors import Diagnostic
-from .model import Profile, SourceSpec
+from .errors import ADVISORY, Diagnostic
+from .model import Profile, SourceSpec, TypeSpec
 
 
 @dataclass
@@ -283,7 +283,8 @@ def _keyed_map_records(
 
 
 def resolve_value_set(profile: Profile, corpus: Corpus, path: str) -> list[Any]:
-    """The legal-value set a ``<type>.<field>`` path names, in corpus order.
+    """The legal-value set a ``<type>.<segment>[.<segment>]*`` path names, in
+    corpus order.
 
     Two forms, and which one applies is decided by the data rather than by a
     second declaration: a field holding a list of scalars contributes each of
@@ -296,17 +297,19 @@ def resolve_value_set(profile: Profile, corpus: Corpus, path: str) -> list[Any]:
     ``unique`` constraint cannot see a duplicate a set has already discarded.
     """
     out: list[Any] = []
-    type_id, field_name = path.split(".")
+    type_id, *field_path = path.split(".")
     target = profile.types.get(type_id)
-    is_identity = target is not None and field_name == target.identified_by
+    is_identity = target is not None and field_path == [target.identified_by]
+    if not is_identity:
+        check_path_key_steps(profile, target, field_path, path, corpus)
     for record in corpus.of_type(type_id):
-        if is_identity and field_name not in record.data and record.identity is not None:
+        if is_identity and field_path[0] not in record.data and record.identity is not None:
             # A keyed_map carries the identity as the document key, not as a
             # field of the record body.
             out.append(record.identity)
             continue
-        value = record.data.get(field_name, _ABSENT)
-        if value is _ABSENT:
+        value = resolve_path_value(target, record.data, field_path)
+        if value is ABSENT:
             continue
         if isinstance(value, list):
             out.extend(value)
@@ -315,8 +318,117 @@ def resolve_value_set(profile: Profile, corpus: Corpus, path: str) -> list[Any]:
     return out
 
 
+def resolve_path_value(type_spec: TypeSpec | None, data: Any, field_path: list[str]) -> Any:
+    """Walk ``field_path`` through one record's ``data``, guided by
+    ``type_spec``'s declared shape so a map step (keyed by a literal path
+    segment) is told apart from a record step (a named field). Returns
+    ``ABSENT`` where the walk cannot reach a value.
+    """
+    if type_spec is None or not field_path or not isinstance(data, dict):
+        return ABSENT
+    field_spec = type_spec.every_possible_field().get(field_path[0])
+    if field_spec is None:
+        return ABSENT
+    value = data.get(field_path[0], ABSENT)
+    for segment in field_path[1:]:
+        if not isinstance(value, dict):
+            return ABSENT
+        if field_spec.kind == "map":
+            field_spec = field_spec.value
+        elif field_spec.kind == "record":
+            field_spec = field_spec.fields.get(segment)
+        else:
+            return ABSENT
+        if field_spec is None:
+            return ABSENT
+        value = value.get(segment, ABSENT)
+    return value
+
+
+def check_path_key_steps(
+    profile: Profile,
+    target: TypeSpec | None,
+    field_path: list[str],
+    path: str,
+    corpus: Corpus,
+) -> None:
+    """Walk ``field_path`` over ``target``'s DECLARATIONS (not data), checking
+    each map key step this path crosses -- once per path, not once per record.
+
+    A ref key is checked against the referenced type's actual identities,
+    which only the corpus (not the loader) can see. A bare 'id' key has no
+    declared legal set, so the step resolves the shape unchecked and is
+    reported as an ADVISORY -- the same channel an 'open:' field uses. An enum
+    key was already checked at load time when its set was inline; a
+    'values_from:'-sourced enum key is resolved here through the same corpus
+    value-set machinery used for field values.
+    """
+    if target is None or len(field_path) < 2:
+        return
+    field = target.every_possible_field().get(field_path[0])
+    if field is None:
+        return
+    consumed = field_path[0]
+    for segment in field_path[1:]:
+        if field is None:
+            return
+        if field.kind == "map":
+            key_spec = field.key
+            if key_spec is not None and key_spec.kind == "id":
+                corpus.diagnostics.append(
+                    Diagnostic(
+                        "steps into map '{0}' by key '{1}', which is a bare 'id' key "
+                        "with no declared legal set -- the key is unchecked; declare "
+                        "the key set to make it checkable".format(consumed, segment),
+                        _profile_file_for(target),
+                        field=path,
+                        severity=ADVISORY,
+                    )
+                )
+            elif key_spec is not None and key_spec.kind == "ref" and key_spec.to is not None:
+                if segment not in corpus.identities(key_spec.to):
+                    corpus.diagnostics.append(
+                        Diagnostic(
+                            "has key '{0}' at map '{1}', which names no record of type "
+                            "'{2}'".format(segment, consumed, key_spec.to),
+                            _profile_file_for(target),
+                            field=path,
+                        )
+                    )
+            elif (
+                key_spec is not None
+                and key_spec.kind == "enum"
+                and key_spec.values_from is not None
+            ):
+                legal = [
+                    str(value)
+                    for value in resolve_value_set(profile, corpus, key_spec.values_from)
+                ]
+                if segment not in legal:
+                    corpus.diagnostics.append(
+                        Diagnostic(
+                            "has key '{0}' at map '{1}', which is not a member of the "
+                            "declared set ({2})".format(segment, consumed, ", ".join(legal)),
+                            _profile_file_for(target),
+                            field=path,
+                        )
+                    )
+            field = field.value
+        elif field.kind == "record":
+            field = field.fields.get(segment)
+        else:
+            return
+        consumed = "{0}.{1}".format(consumed, segment)
+
+
+def _profile_file_for(target: TypeSpec | None) -> str:
+    if target is not None and target.document is not None:
+        return target.document.name
+    return "<profile>"
+
+
 class _Absent:
     """Sentinel distinguishing 'absent' from a legitimate ``None`` value."""
 
 
-_ABSENT = _Absent()
+ABSENT = _Absent()

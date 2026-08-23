@@ -24,6 +24,7 @@ from .model import (
     OpenSpec,
     Ordered,
     Profile,
+    SCALAR_KINDS,
     SOURCE_LAYOUTS,
     SourceSpec,
     STORED_INT,
@@ -390,10 +391,20 @@ def _parse_routes(raw: Any, where: str, document: Path) -> dict[str, str]:
 
 
 def _as_path(raw: Any, key: str, where: str, document: Path) -> str:
+    """An ANCHORED path: ``<type>.<segment>[.<segment>]*``.
+
+    Depth is unbounded -- the walk in ``resolve()`` is what bounds a path to
+    the nesting a profile actually declared. All this checks is shape: at
+    least one segment past the anchor, and no empty segment (which also
+    catches a leading or trailing dot).
+    """
     text = str(raw)
-    if text.count(".") != 1 or text.startswith(".") or text.endswith("."):
+    segments = text.split(".")
+    if len(segments) < 2 or any(not segment for segment in segments):
         raise ProfileError(
-            "{0}: '{1}: {2}' must be a '<type>.<field>' path".format(where, key, text),
+            "{0}: '{1}: {2}' must be a '<type>.<segment>[.<segment>]*' path".format(
+                where, key, text
+            ),
             document,
         )
     return text
@@ -668,7 +679,8 @@ def _resolve_type(profile: Profile, spec: TypeSpec) -> None:
         spot = "{0} constraint #{1}".format(where, index)
         for path in (constraint.from_path, constraint.to_path, constraint.ids):
             if path is not None:
-                _resolve_value_path(profile, path, spot, spec.document)
+                landed = _resolve_value_path(profile, path, spot, spec.document)
+                _check_terminates_at_set(landed, path, spot, spec.document)
 
 
 def _resolve_field(profile: Profile, field: FieldSpec, where: str, owner: TypeSpec) -> None:
@@ -680,18 +692,7 @@ def _resolve_field(profile: Profile, field: FieldSpec, where: str, owner: TypeSp
     if field.values_from is not None:
         _resolve_value_path(profile, field.values_from, where, document)
     if field.shape_from is not None:
-        type_id, field_name = field.shape_from.split(".")
-        target = profile.types.get(type_id)
-        if target is None:
-            raise ProfileError(
-                "{0}: 'shape_from' names unknown type '{1}'".format(where, type_id), document
-            )
-        if field_name not in target.every_possible_field():
-            raise ProfileError(
-                "{0}: 'shape_from' names '{1}', which is not a field of type "
-                "'{2}'".format(where, field_name, type_id),
-                document,
-            )
+        _resolve_value_path(profile, field.shape_from, where, document)
     if field.partial_of is not None:
         target = profile.types.get(field.partial_of)
         if target is None:
@@ -708,23 +709,181 @@ def _resolve_field(profile: Profile, field: FieldSpec, where: str, owner: TypeSp
         _resolve_field(profile, child, "{0}.{1}".format(where, name), owner)
 
 
+def resolve_field_path(profile: Profile, path: str) -> FieldSpec | None:
+    """Resolve an already-validated anchored path to the ``FieldSpec`` it lands
+    on (``None`` => the type's own identity, which may have no ``FieldSpec``).
+
+    For reuse by the validator once ``resolve()`` has already accepted the
+    path -- no fresh error text is produced, since a failure here would be a
+    bug in the loader, not a profile problem.
+    """
+    type_id, rest = path.split(".", 1)[0], path.split(".")[1:]
+    target = profile.types[type_id]
+    return _walk_declared_path(target, type_id, rest, path, "<internal>", None)
+
+
 def _resolve_value_path(
     profile: Profile, path: str, where: str, document: Path | None
-) -> None:
-    type_id, field_name = path.split(".")
+) -> FieldSpec | None:
+    """Resolve an ANCHORED path against its type's declarations.
+
+    Returns the ``FieldSpec`` the path lands on, or ``None`` when it lands on
+    the type's own identity.
+    """
+    segments = path.split(".")
+    type_id, rest = segments[0], segments[1:]
     target = profile.types.get(type_id)
     if target is None:
         raise ProfileError(
             "{0}: path '{1}' names unknown type '{2}'".format(where, path, type_id), document
         )
-    if field_name == target.identified_by:
-        return
-    if field_name not in target.every_possible_field():
+    return _walk_declared_path(target, type_id, rest, path, where, document)
+
+
+def _walk_declared_path(
+    target: TypeSpec,
+    type_id: str,
+    segments: list[str],
+    path: str,
+    where: str,
+    document: Path | None,
+) -> FieldSpec | None:
+    """Walk ``segments`` (everything after the anchor) over ``target``'s
+    declarations. Returns the landing ``FieldSpec``, or ``None`` when the walk
+    lands on the type's own identity -- which may have no ``FieldSpec`` of its
+    own (a keyed_map's identity is the document key, not a declared field).
+
+    There are exactly three legal steps: into a ``record``'s ``fields:``, into
+    a ``map`` as a KEY (landing on its ``value:``), and -- for the FIRST
+    segment only -- a field a ``variants:`` adds. Refused: continuing through
+    a ``ref``, a ``list``, or a ``shape_from`` value -- each would reach into
+    another type, which is a join and out of scope.
+    """
+    if not segments:
         raise ProfileError(
-            "{0}: path '{1}' names neither type '{2}'s identity nor one of its "
-            "fields".format(where, path, type_id),
+            "{0}: path '{1}' has no segment after the type".format(where, path), document
+        )
+    if segments == [target.identified_by] and target.identified_by is not None:
+        return None
+
+    first = segments[0]
+    field = target.every_possible_field().get(first)
+    if field is None:
+        raise ProfileError(
+            "{0}: path '{1}' names '{2}', which type '{3}' does not declare".format(
+                where, path, first, type_id
+            ),
             document,
         )
+    consumed = "{0}.{1}".format(type_id, first)
+    for segment in segments[1:]:
+        field = _step_into_field(field, segment, consumed, path, where, document)
+        consumed = "{0}.{1}".format(consumed, segment)
+    return field
+
+
+def _step_into_field(
+    field: FieldSpec, segment: str, consumed: str, path: str, where: str, document: Path | None
+) -> FieldSpec:
+    if field.kind == "ref":
+        raise ProfileError(
+            "{0}: path '{1}' cannot continue past '{2}', a ref -- reaching through a "
+            "ref reaches into another type, which is a join".format(where, path, consumed),
+            document,
+        )
+    if field.kind == "list":
+        raise ProfileError(
+            "{0}: path '{1}' cannot continue past '{2}', a list -- a path may end at "
+            "a list but not continue through one".format(where, path, consumed),
+            document,
+        )
+    if field.shape_from is not None:
+        raise ProfileError(
+            "{0}: path '{1}' cannot continue past '{2}', whose shape comes from "
+            "'shape_from:' -- that shape is read from data at validation time, so no "
+            "segment past it can be resolved when the profile loads".format(
+                where, path, consumed
+            ),
+            document,
+        )
+    if field.kind == "record":
+        next_field = field.fields.get(segment)
+        if next_field is None:
+            raise ProfileError(
+                "{0}: path '{1}' names '{2}', which is not a field of the record at "
+                "'{3}'".format(where, path, segment, consumed),
+                document,
+            )
+        return next_field
+    if field.kind == "map":
+        _check_key_membership(field.key, segment, consumed, path, where, document)
+        if field.value is None:
+            raise ProfileError(
+                "{0}: path '{1}' steps into the map at '{2}', which declares no "
+                "'value:'".format(where, path, consumed),
+                document,
+            )
+        return field.value
+    raise ProfileError(
+        "{0}: path '{1}' cannot continue past '{2}', a '{3}' -- only a record's "
+        "fields or a map's keyed value can be stepped into".format(
+            where, path, consumed, field.kind or "shape"
+        ),
+        document,
+    )
+
+
+def _check_key_membership(
+    key_spec: FieldSpec | None,
+    segment: str,
+    consumed: str,
+    path: str,
+    where: str,
+    document: Path | None,
+) -> None:
+    """Check a key step against the map's declared legal set.
+
+    Only a STATICALLY declared set (an inline 'values:' / mapping form) is
+    checkable at profile-load time -- the loader has no corpus, so a
+    'values_from:' enum or a 'ref' key's legal set (another type's actual
+    identities) cannot be resolved here. Those, like a bare 'id' key, resolve
+    the shape unchecked; membership against corpus data is the validator's
+    job, once a corpus exists.
+    """
+    if key_spec is None or key_spec.kind != "enum" or key_spec.values_from is not None:
+        return
+    legal = [str(v) for v in key_spec.enum_members]
+    if str(segment) in legal:
+        return
+    raise ProfileError(
+        "{0}: path '{1}' has key '{2}' at map '{3}', which is not a member of the "
+        "declared set ({4})".format(where, path, segment, consumed, ", ".join(legal)),
+        document,
+    )
+
+
+def _check_terminates_at_set(
+    field: FieldSpec | None, path: str, where: str, document: Path | None
+) -> None:
+    """A constraint's 'ids:' / 'from:' / 'to:' must land on a SET: an id
+    field, a list of scalars, or a list of refs. Landing on a single scalar is
+    an error -- a constraint over one value is not a constraint.
+    """
+    if field is None:
+        return  # the type's own identity: a set of one id, trivially legal.
+    if field.kind == "id":
+        return
+    if field.kind == "list" and field.of is not None and (
+        field.of.kind in SCALAR_KINDS or field.of.kind == "ref"
+    ):
+        return
+    raise ProfileError(
+        "{0}: path '{1}' must end at a set -- an id field, a list of scalars, or a "
+        "list of refs; a path ending at a single scalar is not a constraint".format(
+            where, path
+        ),
+        document,
+    )
 
 
 def _resolve_view(profile: Profile, view: ViewSpec) -> None:
@@ -732,15 +891,7 @@ def _resolve_view(profile: Profile, view: ViewSpec) -> None:
     target = profile.types.get(view.of)
     if target is None:
         raise ProfileError("{0}: 'of:' names unknown type '{1}'".format(where, view.of), document=view.document)
-    available = target.every_possible_field()
     for entry in view.entries:
-        if entry.field is not None and entry.field not in available:
-            raise ProfileError(
-                "{0}: names field '{1}', which type '{2}' does not declare".format(
-                    where, entry.field, view.of
-                ),
-                view.document,
-            )
         if entry.when is not None:
             if target.variants is None or entry.when not in target.variants.when:
                 raise ProfileError(
@@ -748,9 +899,52 @@ def _resolve_view(profile: Profile, view: ViewSpec) -> None:
                     "type '{3}'".format(where, entry.name, entry.when, view.of),
                     view.document,
                 )
+        if entry.field is not None:
+            segments = entry.field.split(".")
+            if any(not segment for segment in segments):
+                raise ProfileError(
+                    "{0}: entry '{1}' has an empty segment in 'field: {2}'".format(
+                        where, entry.name, entry.field
+                    ),
+                    view.document,
+                )
+            _walk_declared_path(
+                target,
+                view.of,
+                segments,
+                entry.field,
+                "{0} entry '{1}'".format(where, entry.name),
+                view.document,
+            )
+            is_identity_path = segments == [target.identified_by]
+            if not is_identity_path and segments[0] not in target.declared_fields():
+                _check_variant_scoping(target, segments[0], entry, where, view.document)
     if view.covers is not None and view.covers not in profile.views:
         raise ProfileError(
             "{0}: 'covers:' names unknown view '{1}'".format(where, view.covers), view.document
+        )
+
+
+def _check_variant_scoping(
+    target: TypeSpec, first_segment: str, entry: ViewEntry, where: str, document: Path | None
+) -> None:
+    """A view entry whose FIRST path segment names a field only ``variants:``
+    adds needs a matching ``when:`` -- otherwise it is an error, because where
+    the path is written is what decides whether that field is in scope.
+    """
+    adding_variants: list[Any] = []
+    if target.variants is not None:
+        for value, added in target.variants.when.items():
+            if first_segment in added:
+                adding_variants.append(value)
+    if entry.when is None or entry.when not in adding_variants:
+        variants = ", ".join(repr(value) for value in adding_variants)
+        raise ProfileError(
+            "{0}: entry '{1}' names '{2}', which is added by variants {{{3}}} -- an "
+            "entry naming it needs a 'when:' matching one of those variants".format(
+                where, entry.name, first_segment, variants
+            ),
+            document,
         )
 
 

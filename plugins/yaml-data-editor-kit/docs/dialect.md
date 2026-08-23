@@ -412,6 +412,13 @@ hand or by a build failure:
 - `matches_files` -- a declared id set equals a glob's filenames.
 - `unique` -- an id set has no duplicates within a scope.
 
+`ids:`, `from:` and `to:` take anchored paths and may be nested, because the id
+set a constraint governs is routinely a list under a nested record --
+`ids: app.templates.entities` names the load-order list inside a `templates`
+record. The path must END at a set: an `id` field, a list of scalars, or a list
+of refs. A path ending at a single scalar is an error, because a constraint over
+one value is not a constraint.
+
 `why:` is required on every constraint. A constraint whose reason nobody
 wrote down is one nobody can safely remove later.
 
@@ -431,6 +438,103 @@ editor warns, and the validator records the order in the anchor hash so a
 reorder registers as a change. `significance:` is required, because "this
 list is ordered" without saying what the order MEANS tells a later reader
 nothing.
+
+## Paths -- how a declaration addresses a value
+
+Several constructs name a value rather than declaring one: `values_from:`,
+`shape_from:`, `record_keys_from:`, a constraint's `ids:` / `from:` / `to:`, a
+`routes:` target, and a `view` entry's `field:`. They all take a PATH, and
+there are exactly two forms.
+
+- An **anchored path** starts at a type: `<type>.<segment>[.<segment>]*` --
+  `gear_manifest.slot_order`, `component_def.fields`, `app.templates.entities`.
+  The first segment is a type id, which is an anchor rather than a traversal;
+  every segment after it walks that type's declarations.
+- A **field path** starts at a record whose type the document already named:
+  `<segment>[.<segment>]*` -- `weapon_stats.damage` in a view `of: gear`. A
+  field path is an anchored path whose anchor `of:` already supplied.
+
+The separator is `.` in both. A field path also appears inside addresses that
+spell the type/record part with `/` -- a comment anchor, a lock selector -- and
+a language that spells one descent two ways is a language something has to
+translate between.
+
+### Walking a path
+
+Each segment after the anchor resolves against the declaration the previous
+segment produced. There are exactly three legal steps.
+
+- **Into a `record`** (an inline nested shape): the segment names one of its
+  `fields:`. `app.templates.entities` is this step -- a constraint's id set
+  living under a nested record.
+- **Into a `map`**: the segment is a KEY, and the step produces the map's
+  `value:` declaration. `weapon_stats.damage` is this step -- one named key of
+  a map field, which is how every weapon row in a real corpus renders.
+- **Into a variant-added field**: a first segment may name a field `variants:`
+  adds, not only one `fields:` declares. Where the path is written decides
+  whether that is in scope: a view entry naming one needs the matching `when:`,
+  and is an error without it.
+
+A key step is checked against the map's `key:` declaration. When the key is an
+`enum` or a `ref`, the segment must be a member of the declared set, and one
+that is not is an error naming the segment, the map, and the set it failed
+against. When the key is a bare `id` the set is undeclared, so there is no
+membership check to run: the step still resolves the value's shape, and the
+validator reports the unchecked key as an advisory -- the same channel an
+`open:` field uses, for the same reason. The advisory is the signal to declare
+that key set, not a tier of failure.
+
+Depth is unbounded, deliberately. The three steps already bound a path to the
+nesting a profile itself declared, which is finite and authored; a numeric
+ceiling on top of that is a second rule that can only ever fail an author whose
+data is legitimately deep. The deepest path the motivating corpus writes today
+is three segments.
+
+An unresolvable segment is a load error naming THAT segment and the declaration
+it failed against -- never an empty result, never a skipped check, and never
+just the whole path. `app.templates.recipes` reports `recipes` against the
+`templates` record, because the useful fact is where the walk stopped.
+
+### Where a path may not go
+
+A path descends ONE type's declarations. Three steps are refused, and they are
+the same refusal three times: a path continuing past any of them has reached
+into another type, which is a join.
+
+- **Through a `ref`.** `gear.weapon_family.damage` is refused. A `ref` is where
+  one type ends and the next begins. This is open question 3 and it stays open:
+  a path form that quietly crossed a `ref` would BE the query construct the
+  dialect declines to grow by accident.
+- **Through a `list`.** A list has no names, so a segment could only be an index
+  or a filter -- position addressing, which breaks on exactly the reorder
+  `ordered:` exists to make visible, or a predicate, which is a query again. A
+  path may END at a list; `values_from:` on a list-of-scalars field is precisely
+  that. It may not continue through one.
+- **Through a `shape_from:` value.** That shape is read from data at validation
+  time, so no segment past it can be resolved when the profile loads. Refusing
+  it is what keeps every path checkable at load rather than per record.
+
+### Paths and the constructs they cross
+
+- **`extensible:`** -- a path resolves against the type's DECLARATIONS, which
+  inheritance does not change, so one path holds for every record whether the
+  value is inherited or restated. This is the same division as required fields
+  being checked after flattening: the shape is the type's, the value is the
+  flattened record's. The `via:` and `abstract_flag:` fields are addressable at
+  depth one, like any other field.
+- **`partial_of:`** -- a layer's keys are field names of the target type, not
+  paths; a layer overrides a whole field or none of it. A `routes:` TARGET is an
+  anchored path and may be nested, because it names a field of the record the
+  value is routed onward to. A `routes:` KEY is a key of the layer, and stays
+  one segment.
+- **`identified_by:` and `variants: on:`** -- one segment each, and that is a
+  refusal rather than an omission. An identity is a record's address, and an
+  address living inside a map value has no stable form; a discriminator chooses
+  the shape of the whole record, so it must be a field the record has before any
+  variant applies.
+- **A source's `path:`, `files:` and `key:`** -- filesystem globs and a
+  document's own top-level key. They are not dialect paths, and a `.` in one is
+  a dot in a filename.
 
 ## Document kind: `view`
 
@@ -455,6 +559,17 @@ avoids inventing a second name for a field), `format`, `link` (the value is a
 drill-down to the referenced record), `group`, `when` (show only for a
 discriminator value).
 
+`field:` takes a field path (see Paths above), so an entry may address a key
+inside a map field:
+
+```yaml
+  - { field: weapon_stats.damage, label: Damage, when: weapon }
+```
+
+This is not an exotic case. A table showing three named keys of a map field
+rather than the map itself is how a real corpus's weapon rows render, and
+without a path form that table cannot be declared at all.
+
 A view may declare a display value with no backing field:
 
 ```yaml
@@ -477,6 +592,16 @@ covers: product_summary
 validator checks it. This exists because the rule "a detail card must show
 everything its summary shows" was previously a prose convention, and a prose
 convention was violated and only caught by a person noticing.
+
+`covers:` compares field paths by PREFIX: this view shows what the named view
+shows if, for each of that view's entries, this one names the same path or an
+ANCESTOR of it. A card naming `weapon_stats` covers a table naming
+`weapon_stats.damage`, because showing the map shows the key. The converse does
+not hold -- naming three keys does not cover the map, which may hold others.
+
+The rule is required, not a convenience. Without it the two views that motivate
+`covers:` fail the check they exist to pass, and the check reduces to which of
+two equally correct spellings each author happened to pick.
 
 ## Document kind: `source`
 
@@ -541,6 +666,9 @@ excluded so that adopting the dialect fixes it rather than preserving it.
 - **Undeclared map keys.** `key:` must be an `id`, a `ref`, or an `enum` --
   including an integer-valued enum. What is refused is a key set nobody
   declared, not a key that happens to be a number.
+- **A path that crosses a `ref`, a list, or a `shape_from` value.** A path
+  descends one type's declarations and stops where that type does. Reaching
+  further is a join, which is open question 3, not a path form.
 - **Two documents describing the same field.** `view` may not restate a
   field's type, and `type` may not carry a label or an order.
 
