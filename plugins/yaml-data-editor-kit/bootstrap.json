@@ -1,0 +1,8 @@
+{
+  "shared_libs": [
+    { "name": "yaml_data_editor_kit", "src": "lib" }
+  ],
+  "venv": {
+    "check_imports": ["yaml", "yaml_data_editor_kit"]
+  }
+}
