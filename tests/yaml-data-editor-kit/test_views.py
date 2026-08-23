@@ -165,6 +165,46 @@ fields:
     assert view.entries[0].when == "rental"
 
 
+def test_a_variant_added_first_segment_without_when_names_every_adding_variant(
+    profile_dir, write
+) -> None:
+    write(
+        "profile/product.yaml",
+        """
+dialect: type/1
+id: product
+fields:
+  category: { type: enum, values: [subscription, rental, loan] }
+variants:
+  on: category
+  when:
+    subscription:
+      duration: { type: int }
+    rental:
+      duration: { type: int }
+""",
+    )
+    write(
+        "profile/card.yaml",
+        """
+dialect: view/1
+id: product_card
+of: product
+form: card
+fields:
+  - { field: duration }
+""",
+    )
+
+    with pytest.raises(ProfileError) as caught:
+        load_profile(profile_dir)
+
+    message = str(caught.value)
+    assert "entry 'duration'" in message
+    assert "added by variants {'subscription', 'rental'}" in message
+    assert "needs a 'when:'" in message
+
+
 def test_a_when_that_is_not_a_variant_value_is_refused(profile_dir, write) -> None:
     write("profile/product.yaml", TYPE_AND_SOURCE)
     write(

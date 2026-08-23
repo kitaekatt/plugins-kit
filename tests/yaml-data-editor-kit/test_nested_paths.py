@@ -129,6 +129,31 @@ fields:
     message = str(caught.value)
     assert "stamina" in message
     assert "not a member of the declared set" in message
+    assert "map 'stats'" in message
+    assert "map 'loadout.stats'" not in message
+
+
+def test_an_empty_enum_key_set_names_the_empty_declaration_as_the_problem(
+    profile_dir, write
+) -> None:
+    write(
+        "profile/loadout.yaml",
+        ENUM_KEYED_MAP_PROFILE.replace("values: [power, speed]", "values: []"),
+    )
+    write(
+        "profile/table.yaml",
+        """
+dialect: view/1
+id: loadout_table
+of: loadout
+form: table
+fields:
+  - { field: stats.power }
+""",
+    )
+    with pytest.raises(ProfileError) as caught:
+        load_profile(profile_dir)
+    assert "declared set is empty" in str(caught.value)
 
 
 VALUES_FROM_ENUM_KEY_PROFILE = """
@@ -179,8 +204,26 @@ def test_a_values_from_enum_key_segment_must_belong_to_the_resolved_set(
     ]
     assert len(problems) == 1
     assert "key 'stamina'" in problems[0].message
-    assert "map 'metrics'" in problems[0].message
+    assert "map 'dashboard.metrics'" in problems[0].message
     assert "declared set (power, speed)" in problems[0].message
+
+
+def test_a_values_from_path_is_key_checked_when_every_record_omits_the_enum(
+    tmp_path, profile_dir, write
+) -> None:
+    write("profile/assembly.yaml", REF_KEYED_MAP_PROFILE)
+    write("content/component_defs.yaml", "- { id: hull }\n")
+    write("content/assemblies.yaml", "- { id: frame, parts: { hull: 1 } }\n")
+
+    profile = load_profile(profile_dir)
+    problems = [
+        diagnostic
+        for diagnostic in errors_only(validate_corpus(profile, tmp_path))
+        if diagnostic.field == "assembly.parts.turret"
+    ]
+    assert len(problems) == 1
+    assert "key 'turret'" in problems[0].message
+    assert "names no record of type 'component_def'" in problems[0].message
 
 
 # --------------------------------------------------------------------------
@@ -261,6 +304,44 @@ of: assembly
 layout: rows
 path: content/assemblies.yaml
 """
+
+
+CYCLIC_VALUES_FROM_KEY_PROFILE = """
+dialect: type/1
+id: t
+identified_by: id
+fields:
+  id: { type: id }
+  m:
+    type: map
+    key: { type: enum, values_from: t.m.a }
+    value: { type: string }
+---
+dialect: source/1
+of: t
+layout: rows
+path: content/t.yaml
+---
+dialect: view/1
+id: v
+of: t
+form: table
+fields:
+  - { field: m.a }
+"""
+
+
+def test_a_values_from_map_key_cycle_is_a_named_profile_error(profile_dir, write) -> None:
+    write("profile/t.yaml", CYCLIC_VALUES_FROM_KEY_PROFILE)
+
+    with pytest.raises(ProfileError) as caught:
+        load_profile(profile_dir)
+
+    message = str(caught.value)
+    assert "cyclic 'values_from:'" in message
+    assert "path 't.m.a'" in message
+    assert "map 't.m'" in message
+    assert "types involved: t" in message
 
 
 def test_a_ref_keyed_map_step_passes_when_the_key_names_a_real_record(
@@ -500,6 +581,8 @@ def test_a_path_may_not_continue_past_a_shape_from_value(profile_dir, write) -> 
     with pytest.raises(ProfileError) as caught:
         load_profile(profile_dir)
     message = str(caught.value)
+    assert "cannot continue with segment 'tension'" in message
+    assert "past 'assembly.parts.spring'" in message
     assert "shape_from" in message
 
 
@@ -570,3 +653,69 @@ def test_covers_still_fails_when_no_ancestor_is_named(tmp_path, profile_dir, wri
     ]
     assert len(problems) == 2
     assert {p.field for p in problems} == {"stats.power", "stats.speed"}
+
+
+def _covers_profile(covered_field: str, covering_field: str) -> str:
+    return """
+dialect: type/1
+id: gear
+identified_by: id
+fields:
+  id: { type: id }
+  stats:
+    type: map
+    key: { type: id }
+    value: { type: float }
+---
+dialect: source/1
+of: gear
+layout: rows
+path: content/gear.yaml
+---
+dialect: view/1
+id: gear_table
+of: gear
+form: table
+fields:
+  - { field: %s }
+---
+dialect: view/1
+id: gear_card
+of: gear
+form: card
+covers: gear_table
+fields:
+  - { field: %s }
+""" % (covered_field, covering_field)
+
+
+def test_covers_refuses_a_descendant_of_the_covered_entry(
+    tmp_path, profile_dir, write
+) -> None:
+    write("profile/gear.yaml", _covers_profile("stats", "stats.power"))
+    write("content/gear.yaml", "- { id: sword, stats: { power: 1.0 } }\n")
+
+    profile = load_profile(profile_dir)
+    problems = [
+        diagnostic
+        for diagnostic in errors_only(validate_corpus(profile, tmp_path))
+        if "covers:" in diagnostic.message
+    ]
+    assert len(problems) == 1
+    assert problems[0].field == "stats"
+
+
+def test_covers_refuses_a_sibling_of_the_covered_entry(
+    tmp_path, profile_dir, write
+) -> None:
+    write("profile/gear.yaml", _covers_profile("stats.speed", "stats.power"))
+    write("content/gear.yaml", "- { id: sword, stats: { power: 1.0 } }\n")
+
+    profile = load_profile(profile_dir)
+    problems = [
+        diagnostic
+        for diagnostic in errors_only(validate_corpus(profile, tmp_path))
+        if "covers:" in diagnostic.message
+    ]
+    assert len(problems) == 1
+    assert problems[0].field == "stats.speed"

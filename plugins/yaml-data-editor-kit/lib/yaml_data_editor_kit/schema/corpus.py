@@ -15,7 +15,7 @@ from typing import Any, Iterator
 import yaml
 
 from .errors import ADVISORY, Diagnostic
-from .model import Profile, SourceSpec, TypeSpec
+from .model import PathWalk, Profile, SourceSpec, TypeSpec
 
 
 @dataclass
@@ -41,6 +41,11 @@ class Corpus:
     root: Path
     records: list[Record] = dataclass_field(default_factory=list)
     diagnostics: list[Diagnostic] = dataclass_field(default_factory=list)
+    _path_key_steps_checked: bool = dataclass_field(
+        default=False,
+        init=False,
+        repr=False,
+    )
 
     def of_type(self, type_id: str) -> list[Record]:
         return [r for r in self.records if r.type_id == type_id]
@@ -56,10 +61,11 @@ class Corpus:
 
 
 def load_corpus(profile: Profile, root: Path) -> Corpus:
-    """Read every source the profile declares, rooted at ``root``."""
+    """Read every source, then check corpus-backed obligations of all paths."""
     corpus = Corpus(root=root)
     for source in _ordered_sources(profile):
         _load_source(profile, corpus, source, root)
+    check_path_key_steps(profile, corpus)
     return corpus
 
 
@@ -300,8 +306,6 @@ def resolve_value_set(profile: Profile, corpus: Corpus, path: str) -> list[Any]:
     type_id, *field_path = path.split(".")
     target = profile.types.get(type_id)
     is_identity = target is not None and field_path == [target.identified_by]
-    if not is_identity:
-        check_path_key_steps(profile, target, field_path, path, corpus)
     for record in corpus.of_type(type_id):
         if is_identity and field_path[0] not in record.data and record.identity is not None:
             # A keyed_map carries the identity as the document key, not as a
@@ -347,13 +351,10 @@ def resolve_path_value(type_spec: TypeSpec | None, data: Any, field_path: list[s
 
 def check_path_key_steps(
     profile: Profile,
-    target: TypeSpec | None,
-    field_path: list[str],
-    path: str,
     corpus: Corpus,
 ) -> None:
-    """Walk ``field_path`` over ``target``'s DECLARATIONS (not data), checking
-    each map key step this path crosses -- once per path, not once per record.
+    """Check every map-key step recorded by the loader -- once per declared
+    path use, never once per record that happens to hold a related field.
 
     A ref key is checked against the referenced type's actual identities,
     which only the corpus (not the loader) can see. A bare 'id' key has no
@@ -363,25 +364,22 @@ def check_path_key_steps(
     'values_from:'-sourced enum key is resolved here through the same corpus
     value-set machinery used for field values.
     """
-    if target is None or len(field_path) < 2:
+    if corpus._path_key_steps_checked:
         return
-    field = target.every_possible_field().get(field_path[0])
-    if field is None:
-        return
-    consumed = field_path[0]
-    for segment in field_path[1:]:
-        if field is None:
-            return
-        if field.kind == "map":
-            key_spec = field.key
+
+    for walked in profile.path_walks:
+        target = profile.types.get(walked.type_id)
+        for step in walked.key_steps:
+            segment = step.segment
+            key_spec = step.key_spec
             if key_spec is not None and key_spec.kind == "id":
                 corpus.diagnostics.append(
                     Diagnostic(
                         "steps into map '{0}' by key '{1}', which is a bare 'id' key "
                         "with no declared legal set -- the key is unchecked; declare "
-                        "the key set to make it checkable".format(consumed, segment),
-                        _profile_file_for(target),
-                        field=path,
+                        "the key set to make it checkable".format(step.map_path, segment),
+                        _profile_file_for(walked, target),
+                        field=walked.path,
                         severity=ADVISORY,
                     )
                 )
@@ -390,9 +388,9 @@ def check_path_key_steps(
                     corpus.diagnostics.append(
                         Diagnostic(
                             "has key '{0}' at map '{1}', which names no record of type "
-                            "'{2}'".format(segment, consumed, key_spec.to),
-                            _profile_file_for(target),
-                            field=path,
+                            "'{2}'".format(segment, step.map_path, key_spec.to),
+                            _profile_file_for(walked, target),
+                            field=walked.path,
                         )
                     )
             elif (
@@ -405,23 +403,29 @@ def check_path_key_steps(
                     for value in resolve_value_set(profile, corpus, key_spec.values_from)
                 ]
                 if segment not in legal:
+                    if not legal:
+                        message = (
+                            "has key '{0}' at map '{1}', but the declared set is empty "
+                            "and admits no map key"
+                        ).format(segment, step.map_path)
+                    else:
+                        message = (
+                            "has key '{0}' at map '{1}', which is not a member of the "
+                            "declared set ({2})"
+                        ).format(segment, step.map_path, ", ".join(legal))
                     corpus.diagnostics.append(
                         Diagnostic(
-                            "has key '{0}' at map '{1}', which is not a member of the "
-                            "declared set ({2})".format(segment, consumed, ", ".join(legal)),
-                            _profile_file_for(target),
-                            field=path,
+                            message,
+                            _profile_file_for(walked, target),
+                            field=walked.path,
                         )
                     )
-            field = field.value
-        elif field.kind == "record":
-            field = field.fields.get(segment)
-        else:
-            return
-        consumed = "{0}.{1}".format(consumed, segment)
+    corpus._path_key_steps_checked = True
 
 
-def _profile_file_for(target: TypeSpec | None) -> str:
+def _profile_file_for(walked: PathWalk, target: TypeSpec | None) -> str:
+    if walked.document is not None:
+        return walked.document.name
     if target is not None and target.document is not None:
         return target.document.name
     return "<profile>"

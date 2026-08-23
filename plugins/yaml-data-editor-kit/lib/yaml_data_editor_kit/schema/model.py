@@ -203,6 +203,32 @@ class TypeSpec:
 
 
 @dataclass(frozen=True)
+class PathKeyStep:
+    """One map-key step recorded while the loader walks a declared path."""
+
+    segment: str
+    map_path: str
+    anchored_map_path: str
+    key_spec: FieldSpec | None
+
+
+@dataclass(frozen=True)
+class PathWalk:
+    """The result and map-key obligations of one declared path use."""
+
+    type_id: str
+    segments: tuple[str, ...]
+    path: str
+    anchored_path: str
+    field: FieldSpec | None
+    synthetic_identity: bool
+    key_steps: tuple[PathKeyStep, ...]
+    where: str
+    document: Path | None
+    value_set_owner: FieldSpec | None = None
+
+
+@dataclass(frozen=True)
 class ViewEntry:
     """One line of a ``view``'s ordered ``fields:`` list."""
 
@@ -257,6 +283,7 @@ class Profile:
     types: dict[str, TypeSpec] = dataclass_field(default_factory=dict)
     views: dict[str, ViewSpec] = dataclass_field(default_factory=dict)
     sources: list[SourceSpec] = dataclass_field(default_factory=list)
+    path_walks: list[PathWalk] = dataclass_field(default_factory=list)
 
     def sources_for(self, type_id: str) -> list[SourceSpec]:
         return [s for s in self.sources if s.of == type_id]

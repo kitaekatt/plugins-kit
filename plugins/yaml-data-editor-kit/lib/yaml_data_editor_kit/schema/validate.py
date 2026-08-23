@@ -52,6 +52,7 @@ class Validator:
     # -- entry point ------------------------------------------------------
 
     def run(self) -> list[Diagnostic]:
+        check_path_key_steps(self.profile, self.corpus)
         for type_spec in self.profile.types.values():
             flattened, merge_diagnostics = flatten_type(type_spec, self.corpus)
             self.diagnostics.extend(merge_diagnostics)
@@ -63,10 +64,8 @@ class Validator:
             for constraint_index, _ in enumerate(type_spec.constraints):
                 self._check_constraint(type_spec, constraint_index)
         self._check_views()
-        # Some checks above (a path crossing a map, via resolve_value_set)
-        # append to the corpus's own diagnostics as they run, so this is
-        # gathered last -- gathering it first would miss anything appended
-        # mid-pass.
+        # Corpus loading includes declared-path checking and owns that
+        # diagnostic channel; prefix it to record-level validator findings.
         self.diagnostics = self.corpus.diagnostics + self.diagnostics
         return self.diagnostics
 
@@ -377,9 +376,15 @@ class Validator:
                 continue
             routed_type_id = route.split(".", 1)[0]
             routed_type = self.profile.types[routed_type_id]
-            routed_spec = resolve_field_path(self.profile, route)
+            routed_path = resolve_field_path(self.profile, route)
+            routed_spec = routed_path.field
             if routed_spec is None:
-                continue
+                if not routed_path.synthetic_identity or routed_type.identified_by is None:
+                    raise RuntimeError(
+                        "resolved route '{0}' has neither a field nor a synthetic "
+                        "identity".format(route)
+                    )
+                routed_spec = FieldSpec(name=routed_type.identified_by, kind="id")
             if entry is not None:
                 self._check_value(entry, routed_spec, routed_type, record, key_path)
 
@@ -542,11 +547,6 @@ class Validator:
 
     def _check_views(self) -> None:
         for view in self.profile.views.values():
-            target = self.profile.types.get(view.of)
-            for name in view.field_names():
-                check_path_key_steps(
-                    self.profile, target, split_path(name), name, self.corpus
-                )
             if view.covers is None:
                 continue
             covered = self.profile.views[view.covers]

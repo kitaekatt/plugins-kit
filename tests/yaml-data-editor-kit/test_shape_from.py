@@ -69,6 +69,59 @@ PART_DEFS = """
 """
 
 
+NESTED_SHAPE_PATH_PROFILE = """
+dialect: type/1
+id: schema_slot
+identified_by: id
+fields:
+  id: { type: id }
+---
+dialect: source/1
+of: schema_slot
+layout: rows
+path: content/schema_slots.yaml
+---
+dialect: type/1
+id: part_def
+identified_by: id
+fields:
+  id: { type: id }
+  shape_tables:
+    type: map
+    key: { type: ref, to: schema_slot }
+    value:
+      type: map
+      key: { type: id }
+      value:
+        type: record
+        fields:
+          type: { type: string }
+---
+dialect: source/1
+of: part_def
+layout: rows
+path: content/part_defs.yaml
+---
+dialect: type/1
+id: assembly
+identified_by: id
+fields:
+  id: { type: id }
+  parts:
+    type: map
+    key: { type: ref, to: part_def }
+    value: { shape_from: part_def.shape_tables.missing }
+adapter:
+  type_key: type
+  types: { f32: float }
+---
+dialect: source/1
+of: assembly
+layout: rows
+path: content/assemblies.yaml
+"""
+
+
 def _load(
     profile_dir: Path, write: Writer, assemblies: str, part_defs: str = PART_DEFS
 ) -> Profile:
@@ -189,3 +242,26 @@ def test_a_key_naming_no_shape_record_is_reported(tmp_path, profile_dir, write) 
     fields = {p.field for p in problems}
     assert fields == {"parts.damper"}
     assert any("no record of type 'part_def'" in p.message for p in problems)
+
+
+def test_a_shape_from_path_key_is_checked_without_a_shaped_map_entry(
+    tmp_path, profile_dir, write
+) -> None:
+    write("profile/assembly.yaml", NESTED_SHAPE_PATH_PROFILE)
+    write("content/schema_slots.yaml", "- { id: present }\n")
+    write(
+        "content/part_defs.yaml",
+        "- id: spring\n  shape_tables:\n    present:\n      tension: { type: f32 }\n",
+    )
+    write("content/assemblies.yaml", "- { id: frame, parts: {} }\n")
+
+    profile = load_profile(profile_dir)
+    problems = [
+        diagnostic
+        for diagnostic in errors_only(validate_corpus(profile, tmp_path))
+        if diagnostic.field == "part_def.shape_tables.missing"
+    ]
+    assert len(problems) == 1
+    assert "key 'missing'" in problems[0].message
+    assert "map 'part_def.shape_tables'" in problems[0].message
+    assert "names no record of type 'schema_slot'" in problems[0].message

@@ -23,6 +23,8 @@ from .model import (
     LEGAL_KEY_KINDS,
     OpenSpec,
     Ordered,
+    PathKeyStep,
+    PathWalk,
     Profile,
     SCALAR_KINDS,
     SOURCE_LAYOUTS,
@@ -666,6 +668,7 @@ def resolve(profile: Profile) -> None:
         _resolve_view(profile, view)
     for source in profile.sources:
         _resolve_source(profile, source)
+    _check_value_set_cycles(profile)
 
 
 def _resolve_type(profile: Profile, spec: TypeSpec) -> None:
@@ -680,7 +683,7 @@ def _resolve_type(profile: Profile, spec: TypeSpec) -> None:
         for path in (constraint.from_path, constraint.to_path, constraint.ids):
             if path is not None:
                 landed = _resolve_value_path(profile, path, spot, spec.document)
-                _check_terminates_at_set(landed, path, spot, spec.document)
+                _check_terminates_at_set(landed.field, path, spot, spec.document)
 
 
 def _resolve_field(profile: Profile, field: FieldSpec, where: str, owner: TypeSpec) -> None:
@@ -690,7 +693,13 @@ def _resolve_field(profile: Profile, field: FieldSpec, where: str, owner: TypeSp
             "{0}: 'ref' to unknown type '{1}'".format(where, field.to), document
         )
     if field.values_from is not None:
-        _resolve_value_path(profile, field.values_from, where, document)
+        _resolve_value_path(
+            profile,
+            field.values_from,
+            where,
+            document,
+            value_set_owner=field,
+        )
     if field.shape_from is not None:
         _resolve_value_path(profile, field.shape_from, where, document)
     if field.partial_of is not None:
@@ -709,26 +718,32 @@ def _resolve_field(profile: Profile, field: FieldSpec, where: str, owner: TypeSp
         _resolve_field(profile, child, "{0}.{1}".format(where, name), owner)
 
 
-def resolve_field_path(profile: Profile, path: str) -> FieldSpec | None:
-    """Resolve an already-validated anchored path to the ``FieldSpec`` it lands
-    on (``None`` => the type's own identity, which may have no ``FieldSpec``).
+def resolve_field_path(profile: Profile, path: str) -> PathWalk:
+    """Return the recorded walk for an already-validated anchored path.
 
-    For reuse by the validator once ``resolve()`` has already accepted the
-    path -- no fresh error text is produced, since a failure here would be a
-    bug in the loader, not a profile problem.
+    The result distinguishes a declared identity ``FieldSpec`` from a
+    synthetic identity. A missing walk is an internal error, never a signal to
+    skip validation.
     """
-    type_id, rest = path.split(".", 1)[0], path.split(".")[1:]
-    target = profile.types[type_id]
-    return _walk_declared_path(target, type_id, rest, path, "<internal>", None)
+    for walked in profile.path_walks:
+        if walked.anchored_path == path:
+            return walked
+    raise RuntimeError("validated path '{0}' has no recorded walk".format(path))
 
 
 def _resolve_value_path(
-    profile: Profile, path: str, where: str, document: Path | None
-) -> FieldSpec | None:
+    profile: Profile,
+    path: str,
+    where: str,
+    document: Path | None,
+    *,
+    value_set_owner: FieldSpec | None = None,
+) -> PathWalk:
     """Resolve an ANCHORED path against its type's declarations.
 
-    Returns the ``FieldSpec`` the path lands on, or ``None`` when it lands on
-    the type's own identity.
+    The walk is recorded on the profile so corpus-time map-key checking is an
+    obligation of every declared path, independent of which validator feature
+    later consumes its value.
     """
     segments = path.split(".")
     type_id, rest = segments[0], segments[1:]
@@ -737,21 +752,31 @@ def _resolve_value_path(
         raise ProfileError(
             "{0}: path '{1}' names unknown type '{2}'".format(where, path, type_id), document
         )
-    return _walk_declared_path(target, type_id, rest, path, where, document)
+    return _walk_declared_path(
+        profile,
+        target,
+        type_id,
+        rest,
+        path,
+        where,
+        document,
+        value_set_owner=value_set_owner,
+    )
 
 
 def _walk_declared_path(
+    profile: Profile,
     target: TypeSpec,
     type_id: str,
     segments: list[str],
     path: str,
     where: str,
     document: Path | None,
-) -> FieldSpec | None:
+    *,
+    value_set_owner: FieldSpec | None = None,
+) -> PathWalk:
     """Walk ``segments`` (everything after the anchor) over ``target``'s
-    declarations. Returns the landing ``FieldSpec``, or ``None`` when the walk
-    lands on the type's own identity -- which may have no ``FieldSpec`` of its
-    own (a keyed_map's identity is the document key, not a declared field).
+    declarations and record every map-key obligation the walk crosses.
 
     There are exactly three legal steps: into a ``record``'s ``fields:``, into
     a ``map`` as a KEY (landing on its ``value:``), and -- for the FIRST
@@ -763,8 +788,23 @@ def _walk_declared_path(
         raise ProfileError(
             "{0}: path '{1}' has no segment after the type".format(where, path), document
         )
+    anchored_path = ".".join([type_id, *segments])
     if segments == [target.identified_by] and target.identified_by is not None:
-        return None
+        identity_field = target.every_possible_field().get(target.identified_by)
+        walked = PathWalk(
+            type_id=type_id,
+            segments=tuple(segments),
+            path=path,
+            anchored_path=anchored_path,
+            field=identity_field,
+            synthetic_identity=identity_field is None,
+            key_steps=(),
+            where=where,
+            document=document,
+            value_set_owner=value_set_owner,
+        )
+        profile.path_walks.append(walked)
+        return walked
 
     first = segments[0]
     field = target.every_possible_field().get(first)
@@ -775,34 +815,71 @@ def _walk_declared_path(
             ),
             document,
         )
-    consumed = "{0}.{1}".format(type_id, first)
+    consumed = "{0}.{1}".format(type_id, first) if path == anchored_path else first
+    anchored_consumed = "{0}.{1}".format(type_id, first)
+    key_steps: list[PathKeyStep] = []
     for segment in segments[1:]:
-        field = _step_into_field(field, segment, consumed, path, where, document)
+        field, key_step = _step_into_field(
+            field,
+            segment,
+            consumed,
+            anchored_consumed,
+            path,
+            where,
+            document,
+        )
+        if key_step is not None:
+            key_steps.append(key_step)
         consumed = "{0}.{1}".format(consumed, segment)
-    return field
+        anchored_consumed = "{0}.{1}".format(anchored_consumed, segment)
+    walked = PathWalk(
+        type_id=type_id,
+        segments=tuple(segments),
+        path=path,
+        anchored_path=anchored_path,
+        field=field,
+        synthetic_identity=False,
+        key_steps=tuple(key_steps),
+        where=where,
+        document=document,
+        value_set_owner=value_set_owner,
+    )
+    profile.path_walks.append(walked)
+    return walked
 
 
 def _step_into_field(
-    field: FieldSpec, segment: str, consumed: str, path: str, where: str, document: Path | None
-) -> FieldSpec:
+    field: FieldSpec,
+    segment: str,
+    consumed: str,
+    anchored_consumed: str,
+    path: str,
+    where: str,
+    document: Path | None,
+) -> tuple[FieldSpec, PathKeyStep | None]:
     if field.kind == "ref":
         raise ProfileError(
-            "{0}: path '{1}' cannot continue past '{2}', a ref -- reaching through a "
-            "ref reaches into another type, which is a join".format(where, path, consumed),
+            "{0}: path '{1}' cannot continue with segment '{2}' past '{3}', a ref -- "
+            "reaching through a ref reaches into another type, which is a join".format(
+                where, path, segment, consumed
+            ),
             document,
         )
     if field.kind == "list":
         raise ProfileError(
-            "{0}: path '{1}' cannot continue past '{2}', a list -- a path may end at "
-            "a list but not continue through one".format(where, path, consumed),
+            "{0}: path '{1}' cannot continue with segment '{2}' past '{3}', a list -- "
+            "a path may end at a list but not continue through one".format(
+                where, path, segment, consumed
+            ),
             document,
         )
     if field.shape_from is not None:
         raise ProfileError(
-            "{0}: path '{1}' cannot continue past '{2}', whose shape comes from "
-            "'shape_from:' -- that shape is read from data at validation time, so no "
-            "segment past it can be resolved when the profile loads".format(
-                where, path, consumed
+            "{0}: path '{1}' cannot continue with segment '{2}' past '{3}', whose "
+            "shape comes from 'shape_from:' -- that shape is read from data at "
+            "validation time, so no segment past it can be resolved when the profile "
+            "loads".format(
+                where, path, segment, consumed
             ),
             document,
         )
@@ -814,7 +891,7 @@ def _step_into_field(
                 "'{3}'".format(where, path, segment, consumed),
                 document,
             )
-        return next_field
+        return next_field, None
     if field.kind == "map":
         _check_key_membership(field.key, segment, consumed, path, where, document)
         if field.value is None:
@@ -823,11 +900,16 @@ def _step_into_field(
                 "'value:'".format(where, path, consumed),
                 document,
             )
-        return field.value
+        return field.value, PathKeyStep(
+            segment=segment,
+            map_path=consumed,
+            anchored_map_path=anchored_consumed,
+            key_spec=field.key,
+        )
     raise ProfileError(
-        "{0}: path '{1}' cannot continue past '{2}', a '{3}' -- only a record's "
-        "fields or a map's keyed value can be stepped into".format(
-            where, path, consumed, field.kind or "shape"
+        "{0}: path '{1}' cannot continue with segment '{2}' past '{3}', a '{4}' -- "
+        "only a record's fields or a map's keyed value can be stepped into".format(
+            where, path, segment, consumed, field.kind or "shape"
         ),
         document,
     )
@@ -855,11 +937,90 @@ def _check_key_membership(
     legal = [str(v) for v in key_spec.enum_members]
     if str(segment) in legal:
         return
+    if not legal:
+        raise ProfileError(
+            "{0}: path '{1}' has key '{2}' at map '{3}', but the declared set is "
+            "empty and admits no map key".format(where, path, segment, consumed),
+            document,
+        )
     raise ProfileError(
         "{0}: path '{1}' has key '{2}' at map '{3}', which is not a member of the "
         "declared set ({4})".format(where, path, segment, consumed, ", ".join(legal)),
         document,
     )
+
+
+def _check_value_set_cycles(profile: Profile) -> None:
+    """Reject enum value sets whose path key checks depend on themselves."""
+    walks_by_owner: dict[int, PathWalk] = {}
+    for walked in profile.path_walks:
+        if walked.value_set_owner is not None:
+            walks_by_owner.setdefault(id(walked.value_set_owner), walked)
+
+    dependencies: dict[int, list[tuple[int, PathKeyStep]]] = {}
+    for owner_id, walked in walks_by_owner.items():
+        edges: list[tuple[int, PathKeyStep]] = []
+        for step in walked.key_steps:
+            key_spec = step.key_spec
+            if (
+                key_spec is not None
+                and key_spec.kind == "enum"
+                and key_spec.values_from is not None
+            ):
+                dependency_id = id(key_spec)
+                if dependency_id not in walks_by_owner:
+                    raise RuntimeError(
+                        "enum key 'values_from:' has no recorded path walk"
+                    )
+                edges.append((dependency_id, step))
+        dependencies[owner_id] = edges
+
+    state: dict[int, int] = {}
+    for root_id in walks_by_owner:
+        if state.get(root_id, 0) != 0:
+            continue
+        state[root_id] = 1
+        path_nodes = [root_id]
+        frames: list[tuple[int, int]] = [(root_id, 0)]
+        while frames:
+            owner_id, edge_index = frames[-1]
+            edges = dependencies.get(owner_id, [])
+            if edge_index >= len(edges):
+                state[owner_id] = 2
+                frames.pop()
+                path_nodes.pop()
+                continue
+
+            dependency_id, step = edges[edge_index]
+            frames[-1] = (owner_id, edge_index + 1)
+            dependency_state = state.get(dependency_id, 0)
+            if dependency_state == 0:
+                state[dependency_id] = 1
+                path_nodes.append(dependency_id)
+                frames.append((dependency_id, 0))
+                continue
+            if dependency_state == 2:
+                continue
+
+            cycle_start = path_nodes.index(dependency_id)
+            cycle_nodes = path_nodes[cycle_start:] + [dependency_id]
+            cycle = " -> ".join(walks_by_owner[node].path for node in cycle_nodes)
+            types = ", ".join(
+                sorted({walks_by_owner[node].type_id for node in cycle_nodes})
+            )
+            walked = walks_by_owner[owner_id]
+            raise ProfileError(
+                "{0}: cyclic 'values_from:' declarations ({1}); resolving path '{2}' "
+                "steps through map '{3}', whose enum key depends on the cycle; types "
+                "involved: {4}".format(
+                    walked.where,
+                    cycle,
+                    walked.path,
+                    step.anchored_map_path,
+                    types,
+                ),
+                walked.document,
+            )
 
 
 def _check_terminates_at_set(
@@ -909,6 +1070,7 @@ def _resolve_view(profile: Profile, view: ViewSpec) -> None:
                     view.document,
                 )
             _walk_declared_path(
+                profile,
                 target,
                 view.of,
                 segments,

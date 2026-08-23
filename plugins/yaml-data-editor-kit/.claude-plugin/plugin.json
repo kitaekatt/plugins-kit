@@ -1,6 +1,6 @@
 {
   "name": "yaml-data-editor-kit",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Library for a project-independent YAML data dialect: schema, anchors and comments, a planner/dispatcher binding to content-pipeline-kit, and a web editor surface. Not yet published.",
   "author": {
     "name": "Christina"
