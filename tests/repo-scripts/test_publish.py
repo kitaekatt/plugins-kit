@@ -530,3 +530,23 @@ class TestChangedPluginsUsesNetDiff:
         monkeypatch.setattr(publish.subprocess, "run",
                             lambda *a, **k: SimpleNamespace(returncode=1))
         assert publish._changed_plugins() == {"alpha"}
+
+
+class TestMergeCommitDetection:
+    """A merge commit carries no content of its own for a linearised replay."""
+
+    def test_two_parents_is_a_merge(self, monkeypatch):
+        import publish
+        monkeypatch.setattr(publish, "git",
+                            lambda *a, **k: "child parentA parentB")
+        assert publish._is_merge_commit("child") is True
+
+    def test_one_parent_is_not_a_merge(self, monkeypatch):
+        import publish
+        monkeypatch.setattr(publish, "git", lambda *a, **k: "child parentA")
+        assert publish._is_merge_commit("child") is False
+
+    def test_root_commit_is_not_a_merge(self, monkeypatch):
+        import publish
+        monkeypatch.setattr(publish, "git", lambda *a, **k: "child")
+        assert publish._is_merge_commit("child") is False

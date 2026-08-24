@@ -628,6 +628,11 @@ def commit_derived(bumps: list[str]) -> None:
 
 # --- publish + verify ------------------------------------------------------
 
+def _is_merge_commit(sha: str) -> bool:
+    """True when the commit has more than one parent."""
+    return len(git("rev-list", "--parents", "-n", "1", sha).split()) > 2
+
+
 def push_and_merge(excluded: dict[str, set[str]] | None = None) -> None:
     """Push dev, then land the release on master.
 
@@ -673,9 +678,40 @@ def push_and_merge(excluded: dict[str, set[str]] | None = None) -> None:
     try:
         git("worktree", "add", "--detach", str(workdir), f"{REMOTE}/{MASTER_BRANCH}")
         try:
+            skipped_empty = 0
             for sha in shipping:
-                subprocess.run(["git", "-C", str(workdir), "cherry-pick", sha],
-                               check=True, capture_output=True, text=True)
+                if _is_merge_commit(sha):
+                    # A merge carries no content of its own; its parents' work
+                    # is already in `shipping` (or already on master). Replaying
+                    # one needs a -m parent choice that means nothing on a
+                    # linearised master, so there is nothing here to pick.
+                    skipped_empty += 1
+                    continue
+                done = subprocess.run(
+                    ["git", "-C", str(workdir), "cherry-pick", sha],
+                    capture_output=True, text=True)
+                if done.returncode == 0:
+                    continue
+                blob = (done.stderr or "") + (done.stdout or "")
+                if "now empty" in blob or "nothing to commit" in blob:
+                    # Master already holds this content -- a cherry-picked
+                    # equivalent from an earlier filtered release, or a commit
+                    # whose changes another release carried. `already_applied`
+                    # catches most of these up front by patch-id; a rebase or a
+                    # conflict resolution can change the patch-id while leaving
+                    # the RESULT identical, and only the replay sees that. An
+                    # empty pick is the success case, not a conflict: there is
+                    # nothing left to ship because it already shipped.
+                    subprocess.run(["git", "-C", str(workdir), "cherry-pick",
+                                    "--skip"], check=True, capture_output=True,
+                                   text=True)
+                    skipped_empty += 1
+                    continue
+                raise subprocess.CalledProcessError(
+                    done.returncode, done.args, done.stdout, done.stderr)
+            if skipped_empty:
+                print(f"  skipped {skipped_empty} commit(s) that added nothing "
+                      f"to {MASTER_BRANCH} (already carried, or a merge)")
             head = subprocess.run(["git", "-C", str(workdir), "rev-parse", "HEAD"],
                                   check=True, capture_output=True, text=True).stdout.strip()
             git("push", REMOTE, f"{head}:refs/heads/{MASTER_BRANCH}")
