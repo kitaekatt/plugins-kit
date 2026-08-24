@@ -85,6 +85,7 @@ never reaches.
 | verdicts | `GAPS-FOUND` / `COVERAGE-ASSESSED` |
 | standards | `references/standards/coverage-standards.md` |
 | analysis depth | `basic` / `advanced` |
+| refutation stage | advanced depth only; `verify: false` switches it off |
 | input modes | inline `subjects[]`, or `subjectsFile` + `subjectCount` |
 | subjects per agent | `batchSize`, default 8 |
 | supported flags | `--diff`, `--json`, `--advanced` |
@@ -339,6 +340,7 @@ the ceiling.
 Step 1  Resolve + INTENT GATE
 Step 2  Discover (mechanical, side-effect free)
 Step 3  Assess (coverage-standards.md)
+Step 3b REFUTE surviving candidates (advanced depth only)
 Step 4  Report and stop
 ```
 
@@ -432,8 +434,11 @@ repo-wide bloat. Criteria travel whole or they do not travel.
 
 Apply the depth selected at the intent gate: `basic` uses a
 bounded read and one assessment pass; `advanced` reads every source file
-completely, discovers invariants before assessment, and verifies surviving
-candidates after assessment.
+completely, discovers invariants before assessment, and hands the surviving
+candidates to the separate refutation stage below. That stage is a DISPATCH of
+its own, not a clause of this one -- an agent re-reading its own candidates in
+the context that produced them is a self-check, and Step 3b is what the phrase
+"verified absent" names.
 
 The following settled rules remain part of the assessment contract:
 
@@ -463,6 +468,112 @@ The following settled rules remain part of the assessment contract:
 `coverage-detect.js` refuses to run while `refs.criteria` names no document, so
 this seam cannot be crossed by accident.
 
+### Step 3b -- Refute (advanced depth only)
+
+Everything the reducer does enforces FORM: subject identity, anchor membership,
+`destination`, the verdict rule. Whether a candidate is TRUE is a semantic
+property, and no string check reaches it. This stage is the one that does.
+`../standards/coverage-standards.md:270-292` is the authority on what "verified
+absent" may claim; this section is what the lane runs to earn it.
+
+**Shape.** After reconciliation and before the report, ONE agent dispatch per
+subject whose `status` is `ASSESSED` and which holds at least one candidate.
+Subjects with no candidates are not dispatched -- there is nothing to refute.
+The dispatch is pinned `opus` + `high` for the same reason detection is:
+refuting a universal claim means reading every file in a directory and noticing
+the one that does not conform.
+
+Each dispatch carries three things and nothing else:
+
+- the subject `root`;
+- that subject's DIRECT code-file list, stated in the brief as exhaustive. The
+  reducer keeps this list aside keyed by subject precisely for this stage --
+  the echoed list is stripped from every returned record, so nothing extra
+  travels back to the orchestrator that `subjectsFile` mode exists to keep out;
+- the candidates with their anchors, each under an index the prompt ISSUES.
+  Verdicts are matched back by that index, never by position in the returned
+  array -- the same rule `reconcileBatch` applies to subject keys.
+
+The context is FRESH: the verifier has not seen the assessment's reasoning and
+is not asked to agree with it.
+
+**Per subject, not per candidate.** A subject's candidates share one read of one
+directory, so per-subject amortizes that read across them; per-candidate would
+pay it again for every fact.
+
+**When it runs.** `advanced` depth AND `verify` not set to `false`. Passing
+`verify: false` switches it off at advanced depth, and nothing at `basic` depth
+runs it. **When it does not run, the run says so on its own summary line** --
+the caller is never left to infer it from the depth, and `COVERAGE-ASSESSED`
+from an unverified run means "not found within budget", NOT "verified absent".
+`totals.verifyRan` is the field a downstream consumer reads before believing
+the stronger reading.
+
+**Its scope is TRUTH ONLY, and that is measured rather than stylistic.** It may
+delete a candidate for being FALSE and for nothing else -- not because the fact
+looks unworthy of ambient cost, not because a comment at the site would serve
+better, not because the evidence is dull. Those criteria are applied once, at
+assessment. The boundary is drawn from measurement: an improvised gate over one
+corpus ran four checks, two testing truth (universal quantifiers, ordering) and
+two re-judging admission (evidence location, already-stated-at-site). Re-judged
+blind against the shipped criteria, the two admission checks OVERTURNED their
+own prior kills at 76% and 67%, while the two truth checks held at 33% and 50%.
+Refutation is a posture that finds what it is pointed at: pointed at truth it
+corrects the record, pointed at value it manufactures rejections.
+
+**What a verdict may do to a record.** Five cases, and only the first two change
+anything:
+
+1. **`STANDS`** -- the candidate survives and gains `verified: true`. An optional
+   `narrowing` field carries the restatement that WOULD stand when one
+   over-reaching clause is the only problem. It is handed to the caller and is
+   never auto-applied: a fact rewritten by its verifier has been proposed by
+   nobody.
+2. **`FALSIFIED` with a `file:line` counterexample** -- the candidate is DELETED
+   and the subject's notes name the fact and the counterexample.
+3. **`FALSIFIED` with no counterexample** -- the VERDICT is discarded and the
+   candidate is KEPT, `verified: false`, with a note naming it
+   (`totals.verifyUnsupported`). An unsupported deletion is the same
+   unaccountable rejection this stage exists to replace.
+4. **No verdict row for a candidate** -- kept, `verified: false`
+   (`totals.verifyUnreturned`).
+5. **No verdict set returned for the subject at all** -- every candidate is
+   kept, the subject is marked `verified: false`, and its notes say to treat its
+   candidates as depth `basic`, because it has not earned "verified absent".
+   Its whole candidate count lands in `totals.verifyUnreturned`. Dropping
+   candidates here would let an infrastructure failure read as a clean
+   directory, which is the confusion `DISCOVERY-FAILED` exists to prevent one
+   step upstream.
+
+**The verdict is re-derived after deletions**, with the same expression the
+reducer uses, so "GAPS-FOUND iff candidates" stays true by construction rather
+than being asserted in two places that can disagree. A subject whose every
+candidate was falsified therefore reports `COVERAGE-ASSESSED` with the
+deletions named.
+
+**Every verdict carries a VERBATIM QUOTE for any criterion it invokes.** The
+schema has a `quote` field for it, and empty is correct for a pure
+falsification, which needs no criterion at all. A verifier that applies a rule
+it cannot quote from the criteria document has INVENTED that rule -- see "The
+promotion gate" below for the measured case that motivated the field.
+
+**Read counts are reported and tallied.** Each verdict states `filesRead`
+against `filesInDir`; a shortfall is counted in `totals.verifyPartialReads` and
+noted on the subject. A universal claim judged without opening every file in the
+directory has not been checked, and the two counts are what make that visible
+afterwards.
+
+**Totals this stage adds**, all on the run's `totals` object:
+
+| Field | Meaning |
+|---|---|
+| `verifyRan` | whether the stage ran at all |
+| `verified` | surviving candidates a verdict upheld |
+| `falsified` | candidates deleted against a counterexample |
+| `verifyUnreturned` | candidates kept because no verdict came back for them |
+| `verifyUnsupported` | `FALSIFIED` verdicts discarded for naming no counterexample |
+| `verifyPartialReads` | verdicts judged against fewer files than the directory holds |
+
 ### Step 4 -- Report and stop
 
 ```
@@ -478,12 +589,14 @@ Skipped: <N>  (<reason> <path>, ...)
 Unknown extensions: <N>  (<ext>: <count>, ...)  (or: NONE)
 Candidate ceiling (per directory): <not reached | REACHED -- N not shown>
 Analysis depth: basic | advanced
+Refutation: RAN (<N> falsified, <N> upheld) | DID NOT RUN
 <only for a non-interactive implicit basic selection: defaults: depth=basic>
 
 ### Candidates
 - [<FINDING-CONVERTIBLE | CONTEXT-ONLY>] <fact>  ->  destination: <assessed directory>/CLAUDE.md
   <why it belongs there, and why it is not ambient today>
   evidence: <file:line>[, <file:line> ...]
+  <verified: yes | no -- and, when one was returned, narrowing: <restatement>>
 
 ### Coverage verdict
 GAPS-FOUND | COVERAGE-ASSESSED
@@ -503,7 +616,84 @@ assessment and drops them at the only point a reader sees. A CONTEXT-ONLY
 candidate is a normal result -- the tier exists so a reader can tell the facts a
 reviewer could act on from the ones that only orient, not to rank them.
 
+The refutation line is not decoration either. `COVERAGE-ASSESSED` means two
+different things depending on whether Step 3b ran, and a reader holding only the
+report has no other way to tell which they have. Render it even when the stage
+did not run -- especially then, since that is the case a reader is most likely to
+over-read. A `narrowing` is rendered as the verifier returned it and is never
+folded into the fact.
+
 Then STOP. No Q&A, no edits, no follow-up pass.
+
+## The promotion gate
+
+This lane hands candidates back for a decision the CALLER makes per candidate.
+At one directory that decision is a person reading five facts. At corpus scale
+it is a FILTERING PIPELINE over hundreds of them -- and a pipeline is a thing
+with steps, an order, and a rule about what may reject. Both corpus-scale runs
+of this lane had to improvise one, because the lane shipped the judgment without
+shipping the procedure, and both improvised versions drifted from the criteria
+document they claimed to apply.
+
+So the procedure is named here and is not a caller's invention. **Every
+corpus-scale consumer runs these four steps, in this order:**
+
+1. **Filter to `status: ASSESSED`.** Nothing else is a result. `NOT-ASSESSED`
+   covers `BATCH-INCOMPLETE` and `DISCOVERY-FAILED`, whose empty candidate lists
+   mean "never read", not "nothing found" -- see "Decision rules (verdict)".
+2. **Run the mechanical checks.** `scripts/coverage_subjects.py verify
+   <report.json> <subjects.jsonl>` -- identity, roots, anchor membership,
+   destinations, and the subjects-file digest. Deterministic, no model, exit 0
+   or a list of failing subjects. It is mandatory for any agent-attested run
+   whose candidates will be promoted without a human reading them; see
+   "Verifying an agent-attested run".
+3. **Run the semantic refutation stage.** Step 3b, which means running the lane
+   at `advanced` depth without `verify: false`. No separate entry point ships
+   for it -- a report produced at `basic` depth, or with the stage switched off,
+   has had no independent check of any candidate's truth, and reaching this step
+   means re-running those subjects at advanced depth rather than approximating
+   the stage by hand.
+4. **Hand the survivors to generation**, per the section below -- grouped by
+   `destination`, ordered bottom-up, tier carried through.
+
+Steps 2 and 3 are not interchangeable and neither substitutes for the other:
+step 2 checks that a record describes the directory it claims to, step 3 checks
+that its claims are true of that directory. Step 2 catches a misfiled
+assessment; step 3 catches a fabricated invariant in a correctly filed one.
+
+### The guardrail: a judge that cannot quote the document has invented the rule
+
+**Every verdict in every judging step must carry a VERBATIM QUOTE from the
+criteria document for the rule it applied.** Step 3b enforces this in its schema
+(`quote`, empty only for a pure falsification). Any judging a caller adds around
+these steps carries the same obligation, and the obligation is what makes drift
+DETECTABLE -- a rule with no quotable source in
+`../standards/coverage-standards.md` was invented by the judge, and that is
+readable off the record afterwards instead of requiring someone to reconstruct a
+brief nobody kept.
+
+This is not a hypothetical failure mode; it is the measurement that motivated
+the field. On the corpus-scale run that prompted this section, 68 of 81
+rejections were recorded under a letter from the improvised brief rather than
+under any named criterion from the standards document -- so the rejections
+looked systematic while being traceable to nothing. One invented rule, that
+evidence outside the assessed directory fails the evidence floor even when the
+fact is true, accounted for 25 of them; the standards document contains no such
+rule and CV-1's own ADMIT example contradicts it, and 19 of those 25 rejections
+were wrong. The quote requirement is what let that be established from the
+record rather than re-litigated from memory.
+
+Two consequences worth stating plainly:
+
+- **A rejection is as accountable as a deletion.** Step 3b already refuses to
+  delete on a `FALSIFIED` verdict that names no counterexample. A caller-side
+  rejection that names no criterion is the same unaccountable act arriving one
+  step later, where no schema is watching for it.
+- **An improvised brief outranks its own abstract rules in practice.** The
+  criteria travel whole and by absolute path for exactly this reason (Step 3);
+  a restatement of them inside a filtering brief becomes the operative document
+  the moment the two disagree, and nobody notices, because the brief is the only
+  thing the judge actually read.
 
 ## Handing the report to generation
 
@@ -700,6 +890,14 @@ review; a fossilized one is not.
   fact "feels broader" is a judgment made without the evidence -- the parent's
   other children were never opened. Report it at the subject and let hoisting at
   the parent decide, where the documents being compared have been read.
+- **Improvising a promotion pipeline.** The four steps and the quote guardrail
+  are shipped; re-deriving them per run is how a judging rule that appears in no
+  criteria document ends up applied to hundreds of candidates. See "The
+  promotion gate".
+- **Letting the refutation stage re-judge admission value.** It deletes for
+  falsity and nothing else, and the measurement behind that boundary is in
+  Step 3b. A stage pointed at value does not raise precision; it manufactures
+  rejections.
 - **Widening the subject to a subtree.** It looks like better recall and is
   strictly worse: the same fact then arrives once per enclosing directory, so a
   parent duplicates every descendant's findings and downstream de-duplication

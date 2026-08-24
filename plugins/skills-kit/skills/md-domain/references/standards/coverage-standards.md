@@ -95,11 +95,21 @@ standards_set:
         admit the fact: an ambient document loads for every reader beneath it to
         deliver something the one reader who needs it would have seen anyway.
         A single-site fact is admissible only when a comment at the site would
-        NOT serve -- the fact's other end is in another file, it must reach an
-        author writing NEW code rather than reading the existing code, it holds
-        across the directory, or the file cannot be edited. Judge by which of
-        those holds, never by how important the fact is; a very important fact
-        about one line is still a comment.
+        NOT serve. The governing question is whether a comment there REACHES THE
+        READER WHO WOULD MAKE THE MISTAKE; everything below is that one question
+        applied to the cases seen so far, and it is the question you answer, not
+        a checklist you match. Known cases: the fact's other end is in another
+        file; it must reach an author writing NEW code rather than reading the
+        existing code; it holds across the directory; the file cannot be edited;
+        or the reader who would make the mistake never opens the file at all
+        because they INVOKE this code or CONSUME ITS OUTPUT rather than read it
+        -- a caller relying on an exit code, a schema, a file format, or a
+        printed result is not reading the site that documents it, so a comment
+        there reaches nobody.
+        Name which case holds and why a comment fails to reach. Judge by that,
+        never by how important the fact is; a very important fact about one line
+        is still a comment. If no case holds and you cannot articulate a new one
+        in those terms, the answer is a comment.
 
     - id: already-ambient-suppressed
       statement: >-
@@ -256,6 +266,30 @@ assessment and injects what it found as input; its verification pass re-checks
 every surviving candidate against source after assessment. Both target
 precision. The exhaustive read targets recall. A caller who wants only one of
 those still gets both -- the dial is deliberately not two dials.
+
+**"Verified absent" names the REFUTATION STAGE, not the assessing agent's own
+verification pass.** The distinction is the whole content of the claim, so it
+must not be collapsed. An agent's pass over its own candidates, in the context
+that produced them, is a self-check: it does not hunt counterexamples to the
+pattern it just abstracted, and a lane that stopped there would be asserting
+verification it never performed. What earns the word is a separate stage that
+runs after the assessment returns, in FRESH context, and tries to falsify each
+surviving candidate against the subject's exhaustive direct-file list.
+
+Two consequences a caller must be able to act on:
+
+- **The stage can be absent.** It runs at advanced depth and can be switched
+  off. When it does not run, `COVERAGE-ASSESSED` means "not found within
+  budget" no matter what depth was requested, and the run says so on its own
+  summary line rather than leaving the caller to infer it.
+- **It deletes only for FALSITY, and only with a counterexample.** It does not
+  re-judge whether a fact earns its ambient cost; those criteria are applied
+  once, at assessment. A stage that re-judges value does not raise precision,
+  it manufactures rejections -- measured on a real corpus, refutation pointed
+  at admission judgment overturned at 76% and 67% when its verdicts were
+  re-checked against these criteria, while refutation pointed at truth held.
+  A verdict that cannot name the file and line that contradicts the fact is
+  discarded, and the candidate survives.
 
 **The verdict carries the mode.** Because `COVERAGE-ASSESSED` means materially
 different things in the two modes, the report states which mode produced it. A

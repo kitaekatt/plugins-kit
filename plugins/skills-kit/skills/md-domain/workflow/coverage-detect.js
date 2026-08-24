@@ -957,9 +957,18 @@ verifier has been proposed by nobody.
 
 ## Do not invent criteria
 
-If you invoke any rule from the criteria document, quote it verbatim in
-\`quote\`. If you cannot quote it, you have invented it: drop it and judge on
-truth alone. A pure falsification needs no quote and empty is correct there.
+The criteria document is at:
+
+${criteriaPath}
+
+It is the ONLY source of admission rules, and it is given to you here so the
+requirement below is checkable rather than rhetorical: if you invoke any rule
+from it, READ IT and quote the rule verbatim in \`quote\`. If you cannot quote
+it, you have invented it -- drop it and judge on truth alone. A pure
+falsification needs no quote and empty is correct there.
+
+You are not being asked to re-run the admission judgment against that document.
+Read it only to check a rule you were about to invoke.
 
 ## The candidates
 
