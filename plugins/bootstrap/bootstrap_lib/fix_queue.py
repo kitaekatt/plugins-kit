@@ -14,6 +14,10 @@ This module:
       - ``{"method": "apt", "package": <pkg>}``      -- deferred apt package;
       - ``{"method": "command", "command": <cmd>}``  -- deferred elevated command;
       - ``{"method": "brew_installer"}``             -- Homebrew missing on macOS;
+      - ``{"method": "brew_cask", "cask": <token>, "reason": ..., "caveats": ...}``
+        -- a Homebrew cask whose install invokes ``sudo`` (a signed .pkg, or a
+        ``sudo: true`` installer script). Becomes an UNELEVATED ``command``
+        task carrying an ``explain`` briefing -- see :func:`_brew_cask_task`;
       - ``{"method": "path_prune", "entries": [...]}`` -- dead Windows User PATH
         entries to delete. The one queued operation that needs no privilege at
         all (HKCU is the user's own hive): it is here for CONSENT, because it
@@ -107,6 +111,13 @@ class FixTask:
     entries: List[str] = field(default_factory=list)
     # path_prune only: where the runner saves the pre-prune PATH value.
     backup: Optional[str] = None
+    # Pre-execution briefing: full-sentence lines the runner prints BEFORE any
+    # task runs, so the user can read what is about to happen and Ctrl-C out
+    # before a single credential is requested. The plan's one-line label says
+    # WHAT; this says why root is needed, by what mechanism, and why bootstrap
+    # could not do it unattended. Data, not shell text, so the wording lives
+    # with the strategy that knows the answer -- see fix_runner.print_briefings.
+    explain: List[str] = field(default_factory=list)
 
     def to_json(self) -> dict:
         # Drop unset optionals so the queue file stays readable -- it is a
@@ -140,6 +151,8 @@ class FixTask:
             out["entries"] = self.entries
         if self.backup is not None:
             out["backup"] = self.backup
+        if self.explain:
+            out["explain"] = self.explain
         return out
 
 
@@ -198,6 +211,49 @@ def _command_label(desc: dict, cmd: str, index: int) -> str:
                       desc.get("id") or f"command:{index}")
 
 
+def _brew_cask_task(desc: dict, token: str) -> FixTask:
+    """One deferred Homebrew cask install, with its pre-execution briefing.
+
+    NOT ``elevated``: `brew` refuses to run as root, and wrapping it in sudo is
+    how a cask ends up with root-owned files in the user's Caskroom. It runs as
+    the user and Homebrew elevates the one step that needs it -- which is
+    precisely the step that needs a terminal, and precisely why the operation is
+    here rather than in the hook.
+    """
+    command = f"brew install --cask {token}"
+    reason = (desc.get("reason") or "").strip()
+    caveats = (desc.get("caveats") or "").strip()
+
+    explain = [
+        f"About to run:  {command}",
+        "",
+        "  This one step needs your administrator password: "
+        + (reason or "Homebrew invokes `sudo` during the install")
+        + ".",
+        "  Bootstrap could not do it for you: it runs as a background "
+        "session-start",
+        "  hook with no terminal, and `sudo` cannot read a password without "
+        "one.",
+        "  `brew` itself runs as YOU here -- only the install step elevates.",
+    ]
+    if caveats:
+        explain.append("")
+        explain.append(f"  Homebrew's notes for `{token}`:")
+        for line in caveats.splitlines():
+            explain.append(f"    {line}".rstrip())
+    return FixTask(
+        id=desc.get("id") or f"brew_cask:{token}",
+        kind="command",
+        label=desc.get("label") or f"Install {token} (needs your password)",
+        elevated=False,
+        command=command,
+        timeout=desc.get("timeout"),
+        # Downloads an application payload; never quick.
+        cost=COST_SLOW,
+        explain=explain,
+    )
+
+
 def queue_from_failures(failures, current_os: str) -> List[FixTask]:
     """Harvest ``elevation`` descriptors from the pass's failures into tasks.
 
@@ -212,6 +268,16 @@ def queue_from_failures(failures, current_os: str) -> List[FixTask]:
     commands: List[FixTask] = []
     brew = False
     prune: Optional[FixTask] = None
+    # One cask, one task -- a cask is legitimately declared by MORE THAN ONE
+    # plugin (p4-kit and unreal-kit both need the p4 client and neither should
+    # force the other's install), and plugin manifests are processed per-plugin,
+    # so the same absent cask arrives here once per declaring plugin. Without
+    # this the user reads the same briefing twice and `brew install --cask X`
+    # runs twice, the second a no-op whose "already installed" output is
+    # reported as a task outcome. brew_installer collapses via its bool and apt
+    # via its package list; the cask case needs its own key because each token
+    # is a separate task.
+    seen_casks = set()
 
     for f in failures:
         desc = f.get("elevation") if isinstance(f, dict) else None
@@ -243,6 +309,11 @@ def queue_from_failures(failures, current_os: str) -> List[FixTask]:
                     cost=cost_of(desc),
                     opportunistic=bool(desc.get("opportunistic")),
                 ))
+        elif method == "brew_cask":
+            token = desc.get("cask")
+            if token and token not in seen_casks:
+                seen_casks.add(token)
+                commands.append(_brew_cask_task(desc, token))
         elif method == "brew_installer":
             brew = True
         elif method == "path_prune":

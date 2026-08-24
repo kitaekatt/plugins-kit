@@ -688,17 +688,21 @@ Consequences to know rather than rediscover:
   `durable_outputs` rule still holds for anything that must outlive the task --
   a spec belongs in the repo it describes at authoring time, not because the
   folder is fragile, but because a document nobody can find is not durable.
-- **The task CLI misreports this setup**, pending a fix in awesome-kit. It
-  discovers the tasks repo correctly (`git -C <folder> rev-parse
-  --show-toplevel`), then passes the *logical* path through the link as a
-  pathspec against the *resolved* root, so git exits 128 with "is outside
-  repository" and the caught error surfaces as `version-control state
-  unverified: ... is not in a git repo`. That is a note rather than a blocking
-  warning, so `list`/`work`/`validate` behave normally, but `archive` will not
-  run its commit-and-delete flow. Resolving the folder path before handing it
-  to git (`Path.resolve()`; it traverses a Windows junction correctly) fixes
-  all four call sites -- `validate.py` lines 118, 143, 157 and
-  `location_ops.py` line 411.
+- **The task CLI used to misreport this setup** (fixed in awesome-kit 0.35.0).
+  It discovered the tasks repo correctly (`git -C <folder> rev-parse
+  --show-toplevel`), then passed the *logical* path through the link as a
+  pathspec against the *resolved* root, so git exited 128 with "is outside
+  repository" and the caught error surfaced as `version-control state
+  unverified: ... is not in a git repo`. That was a note rather than a blocking
+  warning, so `list`/`work`/`validate` behaved normally -- but `archive`
+  silently degraded to the `vcs_ignored` disposition, the one disposition where
+  the folder is the only copy and `delete` is unrecoverable. A false negative
+  reaching the one unrecoverable path is why this mattered more than the note
+  suggested. Every git-invoking helper in `validate.py` and `location_ops.py`
+  now resolves the folder (and the repo root where it takes one) before handing
+  it to git. Note the count: the four call sites originally identified were
+  real but not exhaustive -- eight functions had the pattern, and the live
+  archive bug was in one of the four that had NOT been named.
 
 ## Preferences
 

@@ -137,3 +137,125 @@ def brew_install(
     if ok:
         return BrewResult(True, None, f"installed {target} via brew")
     return BrewResult(False, None, f"brew install {target} failed: {out}")
+
+
+# --------------------------------------------------------------------------- #
+# Root-requirement detection for casks
+# --------------------------------------------------------------------------- #
+#
+# A cask whose payload is a signed .pkg is installed by Homebrew with
+# `sudo /usr/sbin/installer`. Bootstrap has no TTY, so sudo dies with "a
+# terminal is required to read the password" and 25+ lines of raw brew output
+# (caveats, license notice, download progress) land in the failure message --
+# after a pointless partial download. Detecting the requirement BEFORE the
+# attempt routes the cask to the elevation queue instead, where the user has a
+# console.
+#
+# `brew info --json=v2 --cask <token>` reports the cask's `artifacts`, which is
+# what distinguishes a `binary`/`app` cask (no root) from a `pkg` or sudo
+# `installer` one (root). It reads the already-cloned homebrew/cask tap, so it
+# is metadata only -- it downloads no payload.
+
+# Artifact keys that mean "Homebrew will invoke sudo during install".
+#   pkg       -- handed to `sudo /usr/sbin/installer`, always.
+#   installer -- root ONLY for `{"script": {..., "sudo": true}}`; an
+#                `{"manual": "Foo.app"}` installer needs no privilege at all.
+_ROOT_ARTIFACT_PKG = "pkg"
+_ROOT_ARTIFACT_INSTALLER = "installer"
+
+
+class CaskInfo(NamedTuple):
+    needs_root: bool          # True when installing this cask will invoke sudo
+    reason: str               # short, human-readable; "" when needs_root is False
+    caveats: str              # the cask's own caveats text, or ""
+    known: bool               # False when the query failed / could not be parsed
+
+
+def _installer_needs_root(entries) -> bool:
+    """True when an `installer` artifact declares a sudo script."""
+    if not isinstance(entries, list):
+        return False
+    for entry in entries:
+        if isinstance(entry, dict):
+            script = entry.get("script")
+            if isinstance(script, dict) and script.get("sudo"):
+                return True
+    return False
+
+
+def cask_root_requirement(cask: str, timeout: int = 120) -> CaskInfo:
+    """Ask Homebrew whether installing ``cask`` will need root, before trying.
+
+    FAILS OPEN: when brew is absent, the query errors, or the JSON has a shape
+    this does not recognise, the result is ``known=False, needs_root=False`` and
+    the caller installs inline exactly as before. An unrecognised cask must not
+    become an elevation prompt the user cannot act on -- the after-the-fact
+    sudo/TTY signature (:func:`is_sudo_tty_failure`) is the backstop for
+    anything this misses.
+    """
+    if sys.platform != "darwin":
+        return CaskInfo(False, "", "", False)
+    binp = _brew_bin()
+    if not binp:
+        return CaskInfo(False, "", "", False)
+    ok, out = _run_brew(binp, ["info", "--json=v2", "--cask", cask], timeout=timeout)
+    if not ok:
+        return CaskInfo(False, "", "", False)
+    try:
+        import json as _json
+        data = _json.loads(out)
+        casks = data.get("casks") or []
+        info = casks[0]
+    except Exception:
+        return CaskInfo(False, "", "", False)
+    if not isinstance(info, dict):
+        return CaskInfo(False, "", "", False)
+
+    caveats = info.get("caveats") or ""
+    if not isinstance(caveats, str):
+        caveats = ""
+    caveats = caveats.strip()
+
+    artifacts = info.get("artifacts")
+    if not isinstance(artifacts, list):
+        return CaskInfo(False, "", caveats, False)
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        if artifact.get(_ROOT_ARTIFACT_PKG):
+            return CaskInfo(
+                True,
+                "the cask ships a signed .pkg, which Homebrew installs with "
+                "`sudo /usr/sbin/installer`",
+                caveats, True,
+            )
+        if _installer_needs_root(artifact.get(_ROOT_ARTIFACT_INSTALLER)):
+            return CaskInfo(
+                True,
+                "the cask runs an installer script Homebrew declares as "
+                "`sudo: true`",
+                caveats, True,
+            )
+    return CaskInfo(False, "", caveats, True)
+
+
+# Substrings sudo emits when it has no terminal to read a password from, plus
+# brew's own wrapper wording. Matched case-insensitively against the combined
+# brew output. This is the BACKSTOP for a root requirement cask_root_requirement
+# did not predict; matching it lets the caller suppress the raw brew dump and
+# re-route the cask to the elevation queue instead of surfacing 25 lines of
+# download progress as an error message.
+_SUDO_TTY_MARKERS = (
+    "a terminal is required to read the password",
+    "no tty present and no askpass program specified",
+    "sudo: a password is required",
+    "requires a password to be entered",
+)
+
+
+def is_sudo_tty_failure(output: str) -> bool:
+    """True when brew output shows the install died for want of a TTY/password."""
+    if not output:
+        return False
+    low = output.lower()
+    return any(marker in low for marker in _SUDO_TTY_MARKERS)

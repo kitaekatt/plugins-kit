@@ -1,6 +1,6 @@
 {
   "name": "secrets-kit",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "Fleet secrets provisioning: materialize age-encrypted credentials from a private repo onto each machine, declaratively. One passphrase-protected identity per fleet, unlocked once per machine; blobs encrypt to the public key so adding or rotating a secret never needs the passphrase. Session-start convergence + CLI.",
   "author": {
     "name": "Christina"

@@ -1033,3 +1033,137 @@ class TestDurableOutputsCLI:
         assert proc.returncode == 1
         assert "lives INSIDE the task folder" in proc.stderr
         assert folder.is_dir()
+
+
+class TestGitPathResolution:
+    """Companion to ``test_task_validate.py::TestGitPathResolution``: a task
+    folder reached through a symlink or Windows junction (the standard
+    ``dev/tasks`` -> private tasks repo setup) makes ``_git_toplevel``
+    discover the REAL (resolved) repo root, while an unresolved ``folder``
+    handed to git as a pathspec against that resolved root is reported as
+    outside the repository -- archive's commit-and-delete flow then silently
+    degrades to the ``vcs_ignored`` disposition, where delete is
+    unrecoverable. The fix resolves ``folder`` (and ``repo_root``, which is
+    already resolved by git itself, but resolving again is a no-op) before
+    every pathspec-limited git call.
+
+    A real symlink/junction is the only way to reproduce the mismatch, and
+    creating one needs a privilege this sandbox does not have (Windows
+    ``SeCreateSymbolicLinkPrivilege``). So this tests the path-resolution
+    behavior directly: every git-invoking helper must pass ``folder.resolve()``
+    (and ``repo_root.resolve()``) -- never the original, possibly-aliased
+    path -- to the subprocess."""
+
+    @staticmethod
+    def _capture_run(monkeypatch, module):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append((list(cmd), kw))
+
+            class _Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return _Result()
+
+        monkeypatch.setattr(module.subprocess, "run", fake_run)
+        return calls
+
+    def test_git_toplevel_resolves_folder(self, monkeypatch, tmp_path):
+        calls = self._capture_run(monkeypatch, location_ops)
+        real = tmp_path / "real-target"
+        real.mkdir()
+        monkeypatch.setattr(Path, "resolve", lambda self, *a, **k: real)
+        alias = tmp_path / "alias-link"
+
+        location_ops._git_toplevel(alias)
+
+        assert len(calls) == 1
+        cmd, _kw = calls[0]
+        assert cmd[:3] == ["git", "-C", str(real)]
+
+    def test_unheld_files_in_resolves_both_paths(self, monkeypatch, tmp_path):
+        calls = self._capture_run(monkeypatch, location_ops)
+        real_repo = tmp_path / "real-repo"
+        real_repo.mkdir()
+        real_folder = tmp_path / "real-folder"
+        real_folder.mkdir()
+
+        def fake_resolve(self, *a, **k):
+            return real_repo if "repo" in self.name else real_folder
+
+        monkeypatch.setattr(Path, "resolve", fake_resolve)
+        alias_repo = tmp_path / "alias-repo"
+        alias_folder = tmp_path / "alias-folder"
+
+        location_ops._unheld_files_in(alias_repo, alias_folder)
+
+        assert len(calls) == 1
+        cmd, _kw = calls[0]
+        assert cmd[2] == str(real_repo)  # -C <repo_root>
+        assert cmd[-1] == str(real_folder)  # trailing pathspec
+
+    def test_git_commit_folder_resolves_both_paths(self, monkeypatch, tmp_path):
+        calls = self._capture_run(monkeypatch, location_ops)
+        real_repo = tmp_path / "real-repo"
+        real_repo.mkdir()
+        real_folder = tmp_path / "real-folder"
+        real_folder.mkdir()
+
+        def fake_resolve(self, *a, **k):
+            return real_repo if "repo" in self.name else real_folder
+
+        monkeypatch.setattr(Path, "resolve", fake_resolve)
+        alias_repo = tmp_path / "alias-repo"
+        alias_folder = tmp_path / "alias-folder"
+
+        location_ops._git_commit_folder(alias_repo, alias_folder, "msg")
+
+        assert len(calls) == 2
+        for cmd, _kw in calls:
+            assert cmd[2] == str(real_repo)  # -C <repo_root>
+            assert cmd[-1] == str(real_folder)  # trailing pathspec
+
+    def test_snapshot_index_resolves_both_paths(self, monkeypatch, tmp_path):
+        calls = self._capture_run(monkeypatch, location_ops)
+        real_repo = tmp_path / "real-repo"
+        real_repo.mkdir()
+        real_folder = tmp_path / "real-folder"
+        real_folder.mkdir()
+
+        def fake_resolve(self, *a, **k):
+            return real_repo if "repo" in self.name else real_folder
+
+        monkeypatch.setattr(Path, "resolve", fake_resolve)
+        alias_repo = tmp_path / "alias-repo"
+        alias_folder = tmp_path / "alias-folder"
+
+        location_ops._snapshot_index(alias_repo, alias_folder)
+
+        assert len(calls) == 1
+        cmd, _kw = calls[0]
+        assert cmd[2] == str(real_repo)  # -C <repo_root>
+        assert cmd[-1] == str(real_folder)  # trailing pathspec
+
+    def test_restore_index_resolves_both_paths(self, monkeypatch, tmp_path):
+        calls = self._capture_run(monkeypatch, location_ops)
+        real_repo = tmp_path / "real-repo"
+        real_repo.mkdir()
+        real_folder = tmp_path / "real-folder"
+        real_folder.mkdir()
+
+        def fake_resolve(self, *a, **k):
+            return real_repo if "repo" in self.name else real_folder
+
+        monkeypatch.setattr(Path, "resolve", fake_resolve)
+        alias_repo = tmp_path / "alias-repo"
+        alias_folder = tmp_path / "alias-folder"
+
+        location_ops._restore_index(alias_repo, alias_folder, "100644 abc123\t0\tx")
+
+        assert len(calls) == 2
+        for cmd, _kw in calls:
+            assert cmd[2] == str(real_repo)  # -C <repo_root>
+        assert calls[0][0][-1] == str(real_folder)  # reset's pathspec

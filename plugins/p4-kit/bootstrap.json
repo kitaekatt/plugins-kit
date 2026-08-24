@@ -3,7 +3,7 @@
   "tools": [
     {
       "name": "p4",
-      "$comment": "Perforce Helix Core CLI (p4) -- the client p4-kit's code review drives. p4-kit is the ONE owner (analysis row 29 / step 14; env-config's install-perforce.sh custom-install machinery is retired). macOS: brew cask p4 (the Helix command-line client cask; casks are trusted on install exit per the audited ruling). Windows: scoop main/p4. Ubuntu: Perforce apt repo (keyring + source) then `helix-cli`, elevated (verbatim the form audited in env-config Wave A). CLI only -- P4V/p4merge/p4admin GUI provisioning is dropped (the analysis delegates only the p4 CLI to p4-kit). check keys on p4 because the binary name differs from the package/cask name.",
+      "$comment": "Perforce Helix Core CLI (p4) -- the client p4-kit's code review drives. p4-kit is the declared owner (analysis row 29 / step 14; env-config's install-perforce.sh custom-install machinery is retired). unreal-kit ALSO declares p4, deliberately, with a fulfillment-identical entry -- both plugins genuinely need the client and neither should force the other's install. Any change to this entry's check/install must be mirrored in unreal-kit/bootstrap.json. macOS: brew cask p4 (the Helix command-line client cask; casks are trusted on install exit per the audited ruling). Windows: scoop main/p4. Ubuntu: Perforce apt repo (keyring + source) then `helix-cli`, elevated (verbatim the form audited in env-config Wave A). CLI only -- P4V/p4merge/p4admin GUI provisioning is dropped (the analysis delegates only the p4 CLI to p4-kit). check keys on p4 because the binary name differs from the package/cask name.",
       "check": "command -v p4",
       "install": {
         "macos": {"brew": {"cask": "p4"}},

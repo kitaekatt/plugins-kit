@@ -20,6 +20,11 @@ def _stub(monkeypatch):
     monkeypatch.setattr(path_check, "add_path_to_shell_config", lambda d: (True, "stub"))
     monkeypatch.setattr(tool_paths, "record", lambda *a, **k: None)
     monkeypatch.setattr(path_repair, "repair_path", lambda: None)
+    # Default: no cask needs root, so these tests exercise the inline install
+    # path regardless of the host OS. The root-requirement routing has its own
+    # file (test_brew_cask_elevation.py).
+    monkeypatch.setattr(brew_mod, "cask_root_requirement",
+                        lambda cask, timeout=120: brew_mod.CaskInfo(False, "", "", True))
 
 
 def _brew_present(monkeypatch):
