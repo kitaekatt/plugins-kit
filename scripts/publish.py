@@ -339,6 +339,29 @@ def _require_generated_orchestration() -> None:
             "authoritative.\n" + detail)
 
 
+def already_applied(sha_prefixes: list[str]) -> set[str]:
+    """Which of these commits master already carries AS CONTENT.
+
+    A filtered release replays commits onto master, which gives them new SHAs.
+    The originals therefore stay in `master..dev` forever, and every LATER
+    filtered publish would try to replay them again -- landing on an empty
+    cherry-pick and aborting the whole publish. `git cherry` answers the right
+    question (is an equivalent patch already upstream?) instead of the SHA
+    identity question, so shipped work drops out of the range on its own.
+
+    This does not arise on the fast-forward path, where dev and master share
+    history; it is the cost of filtering, and it is paid here rather than by a
+    human diagnosing a confusing abort on some future publish.
+    """
+    out = git("cherry", f"{REMOTE}/{MASTER_BRANCH}", DEV_BRANCH, check=False)
+    applied = set()
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] == "-":
+            applied.add(parts[1])
+    return applied
+
+
 def _range_commits() -> list[str]:
     """The commits a publish would land on master, newest first."""
     return git("rev-list", f"{REMOTE}/{MASTER_BRANCH}..{DEV_BRANCH}").split()
@@ -611,7 +634,12 @@ def push_and_merge(excluded: dict[str, set[str]] | None = None) -> None:
             git("checkout", DEV_BRANCH)
         return
 
-    shipping = [sha for sha in _range_commits() if sha not in excluded]
+    applied = already_applied([])
+    shipping = [sha for sha in _range_commits()
+                if sha not in excluded and sha not in applied]
+    if applied:
+        print(f"  skipping {len(applied)} commit(s) master already carries "
+              f"(replayed by an earlier filtered release)")
     if not shipping:
         raise PublishError(
             "every commit in the range touches a dev-only plugin -- there is "

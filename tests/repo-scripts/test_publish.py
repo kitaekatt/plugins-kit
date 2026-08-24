@@ -252,6 +252,49 @@ class TestDevOnlyExclusion:
             publish.preflight(allow_dev_only={"pub-kit"})
 
 
+class TestFilteredReleaseReplay:
+    """A filtered release replays commits onto master, giving them new SHAs.
+
+    The originals then sit in master..dev forever, so without a CONTENT-level
+    check the next filtered publish tries to replay them again and dies on an
+    empty cherry-pick. `git cherry` marks a patch already upstream with "-",
+    which is the question that actually needs answering.
+
+    These pin the PARSE, which is the part publish.py owns. That `git cherry`
+    marks a replayed commit "-" is git's own documented behaviour and was
+    confirmed against this repo after the first filtered release.
+    """
+
+    def test_parses_already_applied_commits(self, repo, monkeypatch):
+        monkeypatch.setattr(publish, "git", lambda *a, **k: (
+            "- 7b4bdcab4b2c0c6aeb8cff86c243f500649002fa\n"
+            "+ 53978995fc3c190af2975131fa7d971edcc17261\n"
+            "- 24223632c6bdd8f869429771119f9d31879ee455\n"))
+
+        applied = publish.already_applied([])
+
+        assert applied == {
+            "7b4bdcab4b2c0c6aeb8cff86c243f500649002fa",
+            "24223632c6bdd8f869429771119f9d31879ee455"}
+
+    def test_unshipped_commits_are_not_reported_as_applied(self, repo, monkeypatch):
+        """A "+" is work master does not have; treating it as applied would
+        silently drop it from the release."""
+        monkeypatch.setattr(publish, "git", lambda *a, **k: (
+            "+ 53978995fc3c190af2975131fa7d971edcc17261\n"
+            "+ 1874c6da90e1fd225c21474e87013c2dd5eac912\n"))
+
+        assert publish.already_applied([]) == set()
+
+    def test_unreadable_cherry_output_ships_everything(self, repo, monkeypatch):
+        """Fail OPEN, not closed. If the question cannot be answered, replaying
+        a commit fails loudly on a conflict; wrongly calling it applied drops
+        shippable work from master with nothing to notice it."""
+        monkeypatch.setattr(publish, "git", lambda *a, **k: "")
+
+        assert publish.already_applied([]) == set()
+
+
 class TestRepoInvariantGates:
     """The checks that exist as ESCAPABLE pre-commit hooks (--no-verify,
     PLUGINS_KIT_SKIP_BUMP_CHECK=1) and so were enforced nowhere before the
