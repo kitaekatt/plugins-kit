@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Render your installed marketplaces, plugins, and skills as a clickable HTML poster; plus file-backed task tracking.",
-      "version": "0.35.1",
+      "version": "0.35.2",
       "author": {
         "name": "Christina"
       },
@@ -190,7 +190,7 @@
     {
       "name": "agent-glue",
       "description": "Lightweight graph-orchestration kit for pipelines that interleave LLM inference, deterministic logic, and config-driven rules. Typed contracts at every boundary; discriminated-union dispatch; on-disk cohorts for replay-based testing. MVC layering with an ECS data model expressed in yaml primitives.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Christina"
       },

@@ -5,7 +5,7 @@ operations. **Implementation may supersede it** — where code and this document
 is authoritative and this document should be updated or retired.
 
 **Date:** 2026-06-09
-**Companion artifacts** - all five diagrams approved and consistent with this spec (audited 2026-06-09):
+**Companion artifacts:**
 - [`diagrams/task-lifecycle.html`](diagrams/task-lifecycle.html) — lifecycle (states × operations-as-inputs)
 - [`diagrams/task-entities.html`](diagrams/task-entities.html) — entity/relationship map (cardinalities + invariants)
 - [`diagrams/task-work-sequence.html`](diagrams/task-work-sequence.html) — `work` operation sequence
@@ -17,17 +17,11 @@ is authoritative and this document should be updated or retired.
   consumer's install.
 
 **Location.** This design package lives with the skill it evolves:
-`plugins/awesome-kit/skills/task/design/`. The task system **evolves the hand-off skill** (renamed
-`task` at Step 6) — the task folder *is* the generalized hand-off folder (see §10).
+`plugins/awesome-kit/skills/task/design/`. The task system **evolves the hand-off skill** — the task
+folder *is* the generalized hand-off folder.
 
-**Diagram workflow.** Diagrams are drafted in `tmp/diagrams/` (gitignored scratch) and **moved to
-`design/diagrams/` (here) when approved**. Only approved diagrams are referenced from this document.
-
-**Provenance.** Derived from three sources, simplified: the **hand-off** skill (the task folder =
-generalized hand-off folder), **tasks-kit / issues-kit** (the operation vocabulary and the
-file-backed vs native split), and **home-domain `issues.md`** (a hand-maintained tracker that will
-adopt this format). The governing idea is the **embedded-YAML typed-unit** model from skills-kit:
-structured records living inside markdown documents, discoverable by script.
+**Governing idea.** The **embedded-YAML typed-unit** model from skills-kit: structured records
+living inside markdown documents, discoverable by script.
 
 ---
 
@@ -540,53 +534,17 @@ CLAUDE.md). Thresholds and remedies: the task skill's `references/handoff-templa
 budgets"; constants at the top of `scripts/task_system/validate.py`.
 
 **Reuse of audit machinery.** `validate` is intended to run the **same typed-unit schema validation**
-skills-kit uses for embedded YAML (the `task`/`task_list` units registered as schemas). *Resolved (§10):
-the wiring is a **shared library** — `skills_kit_lib` exposed via bootstrap `shared_libs` and imported
-by awesome-kit.* The **rules above are the contract** regardless of how validation is wired.
+skills-kit uses for embedded YAML (the `task`/`task_list` units registered as schemas). The wiring is a
+**shared library** — `skills_kit_lib` exposed via bootstrap `shared_libs` and imported by awesome-kit.
+The **rules above are the contract** regardless of how validation is wired.
 
 ---
 
-## 10. Decisions
+## 10. Decisions and status
 
-**Resolved (2026-06-09):**
-- **Packaging / where this is built** → the task system **evolves the `hand-off` skill in awesome-kit**
-  (the task folder *is* the generalized hand-off folder). Design lives in
-  `plugins/awesome-kit/skills/task/design/`; approved diagrams in `design/diagrams/`.
-- **Uncommitted non-tmp archive** (§7.4, revised 2026-07-22) → version control is the record; **no
-  dependency on git**. In a git repo `validate` **warns** and `archive` **commits the final state +
-  removal itself**; outside a git repo the scripts run no git command — `archive` records the final
-  state and keeps the folder (`vcs_pending`) for the agent to submit via the workspace's VCS, and
-  `validate` emits an advisory note. `delete` keeps the refuse-when-git-dirty guard (no auto-commit).
-- **Type registration** (§2.5) → v1 ships exactly one type (`hand-off`); the `type` field reserves the
-  extension seam, but the registry-extension mechanism is **out of scope for v1**.
-
-**Open — small (resolve during implementation):**
-- **Stub disambiguation UX**: how `work <stub>` resolves when multiple folders share a base name. Current
-  rule: error and list candidates; a sharper UX (prefer current-project, interactive pick) is a polish item.
-
-**Resolved (2026-06-09, post-hand-off Step 0 — user decisions):**
-- **Cross-plugin schema coupling** (B) → **shared lib via bootstrap.** skills-kit declares
-  `skills_kit_lib` in its `bootstrap.json` `shared_libs`; awesome-kit imports it via
-  `shared_lib_imports` (standalone scripts use the vendored `bootstrap_guard.reexec_under_plugin_venv`
-  pattern per `plugins/CLAUDE.md`). `validate` calls `skills_kit_lib.schema_engine` directly; the
-  `task`/`task_list` schema dicts live in awesome-kit (they change with the task system, CCP).
-- **Hand-off evolution shape** (B) → **rename `hand-off` → `task`.** Single clean surface; `/hand-off`
-  breaks for consumers at the next publish (accepted). Rename lands with Step 6 (skill wiring).
-- **Skill / command surface** (B) → **domain-skill with dispatch only.** One `task` skill routes verb
-  requests to per-verb scripts; no slash command.
-- **Implementation model** (D) → **sub-agents on Fable 5.** The main session orchestrates and
-  integrates; each plan step is delegated to a Fable 5 sub-agent (single-tier).
-
----
-
-## 11. Status & next
-
-**Section A (spec) is complete** — entities, schemas (§2.2–§2.5), relationships, states, identity, SoT,
-per-verb operation contracts (§7), discovery algorithm (§8), and validation rules (§9) are specified and
-audited consistent with the five approved diagrams. This document is the **implementation contract**.
-
-**Next (per the agreed plan):** a **hand-off** of this design to a fresh session, then the post-hand-off
-steps — the B/C/D decisions above, then phased implementation (schemas + validate → `init`/scaffolding →
-read ops → state ops → destructive/location ops → skill wiring), tests throughout. Implementation
-dependencies to confirm: `pyyaml`/`ruamel` in awesome-kit's `pyproject.toml` + `bootstrap.json`
-`check_imports`; host detection via `hostname -s`.
+The decision record behind this specification -- which options were weighed, the dated resolutions,
+and the remaining implementation polish -- is maintainer-only development history. It is recorded in
+the plugins-kit repository rather than shipped with this skill, because it resolves against nothing
+in a consumer's install. The conclusions it reached are already stated above: type registration in
+section 2.5, the version-control-is-the-record archive policy in section 7.4, and the shared-library
+validation wiring in section 9.
