@@ -1156,7 +1156,7 @@ class TestRefutationStage:
         out = self._run(tmp_path, self._cands(1), [verdict(0)])
         brief = self._verify_calls(out)[0]["prompt"]
         assert "invent" in brief.lower()
-        assert "quote it verbatim" in brief
+        assert "quote the rule verbatim" in brief
 
     def test_verify_is_pinned_to_opus_not_inherited(self, tmp_path):
         out = self._run(tmp_path, self._cands(1), [verdict(0)])
@@ -1167,3 +1167,14 @@ class TestRefutationStage:
     def test_verify_responses_satisfy_the_schema_the_lane_passed(self, tmp_path):
         out = self._run(tmp_path, self._cands(1), [verdict(0)])
         assert out["schemaErrors"] == []
+
+    def test_verify_brief_names_the_criteria_document(self, tmp_path):
+        """The quote requirement is unenforceable if the judge cannot read the doc.
+
+        Shipped once without this: the brief demanded a verbatim quote from a
+        document it never named, which is a rule the verifier can only satisfy
+        by invention -- the exact failure the field exists to detect.
+        """
+        out = self._run(tmp_path, self._cands(1), [verdict(0)])
+        brief = self._verify_calls(out)[0]["prompt"]
+        assert "/abs/coverage-standards.md" in brief

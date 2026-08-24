@@ -508,9 +508,11 @@ ambiguous, ask rather than guessing.
 - **`--diff` / `--json`** -- both analyze-only. `--diff` resolves changed code
   into per-directory subjects; `--json` emits the coverage report as structured
   JSON.
-- **`--advanced`** -- analyze-only exhaustive reads plus invariant-discovery
-  and verification passes. Without an explicit depth, prompt interactively; a
-  non-interactive dispatch takes basic and discloses `defaults: depth=basic`.
+- **`--advanced`** -- analyze-only exhaustive reads, invariant discovery, and
+  the refutation stage that tries to falsify every surviving candidate in fresh
+  context. Only this depth earns "verified absent". Without an explicit depth,
+  prompt interactively; a non-interactive dispatch takes basic and discloses
+  `defaults: depth=basic`.
 - **`fast` / `--fast` / `--yes` / `-y`** -- non-interactive: skip the Q&A round
   and infer every IMPROVE/SPECIAL decision. FIX applies by definition, SERIOUS is
   surfaced. Prose intent ("just apply everything, don't ask me") sets the same flag.

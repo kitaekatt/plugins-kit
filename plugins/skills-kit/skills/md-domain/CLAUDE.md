@@ -429,6 +429,93 @@ claude_md:
         records and their tests, and a partial rename is the worse failure. It is
         recorded as its own change.
       added: "2026-08-11"
+    - id: verification_is_a_stage_not_a_prompt_clause
+      keywords: [refutation stage, verifier, generator with no verifier, self-verification, verified absent unearned, truth not value, refutation posture, counterexample required, unreturned verification, verbatim quote, invented criterion, promotion gate, unshipped filter drifts]
+      summary: Semantic criteria enforced by the agent that proposed the candidates are not enforced. Verification is a pipeline STAGE in fresh context, its scope is TRUTH ONLY, and it may delete a candidate only on a named counterexample -- all three are measured constraints, not preferences.
+      detail: |
+        THE DEFECT. The lane enforced every FORM property after the agent
+        returned (subject identity, anchor membership, destination, the verdict
+        rule) and every SEMANTIC property -- the truth of the fact included --
+        only inside the proposing agent's own context. Advanced depth's
+        "verification pass" was three lines of the batch prompt, executed by the
+        agent that had just committed to the candidates, and the standards doc
+        nonetheless stamped that output "verified absent". A generator with no
+        verifier, advertising verifier-grade semantics.
+
+        WHY A SELF-CHECK CANNOT SUBSTITUTE. The dominant real failure is a true
+        observation carrying one over-reaching clause -- a universal quantifier,
+        an ordering claim, an exclusivity claim -- and an agent does not go
+        hunting counterexamples to the pattern it just abstracted. The mechanical
+        layer cannot catch it either: a false universal is perfectly anchored, so
+        isolationViolations and unanchored both read zero on a run full of them.
+
+        THE SCOPE CONSTRAINT IS THE LOAD-BEARING PART, AND IT IS MEASURED. An
+        improvised filter over a real corpus ran four checks; two tested TRUTH
+        (universal quantifiers, ordering) and two re-judged ADMISSION VALUE
+        (where the evidence lives, whether commentary at the site already carried
+        it). Re-judged blind against these criteria alone, the truth checks
+        largely held -- 33% and 50% of their rejections overturned -- while the
+        value checks COLLAPSED, at 76% and 67%. Refutation is a posture that
+        finds what it is pointed at: pointed at truth it corrects the record,
+        pointed at value it manufactures rejections. So the stage deletes only
+        for falsity, and every other criterion stays with the assessment, judged
+        once. A future change that lets the verifier weigh whether a fact earns
+        its cost is not an improvement, it is the measured failure.
+
+        TWO REFUSALS, both pinned by tests, both cases where doing nothing is
+        correct and doing something looks helpful:
+          - A FALSIFIED verdict with no counterexample is DISCARDED and the
+            candidate kept. A verdict that cannot point at the contradiction is
+            not evidence, and deleting on it is the same unaccountable rejection
+            the stage exists to replace.
+          - A subject whose verification never returned KEEPS its candidates and
+            says so. Silently dropping them would let an infrastructure failure
+            read as a clean directory -- the confusion between "nobody checked"
+            and "nothing found" that DISCOVERY-FAILED exists to prevent upstream.
+
+        THE VERBATIM-QUOTE FIELD IS THE CHEAP GENERAL LESSON. Every verdict
+        carries a verbatim quote from the criteria document for any rule it
+        invoked. On the corpus run that motivated this work, one filter enforced
+        a rule the criteria do not contain and that CV-1's own ADMIT example
+        contradicts ("evidence outside the directory fails the evidence floor
+        even when the fact is true"); it produced 25 rejections of which 19 were
+        wrong, and 68 of 81 rejections overall were recorded under the filter's
+        own vocabulary rather than any named criterion. Requiring the quote makes
+        that separable from the record afterwards instead of only by re-reading a
+        brief nobody kept. Apply it to any judging stage this plugin ships.
+
+        THE THIRD INSTANCE OF THE UNSHIPPED-COMPONENT LESSON. Both corpus-scale
+        runs had to build the promotion filter themselves because the plugin
+        shipped none, and both drifted. This is the same failure the
+        verbatim-criteria guardrail and the discovery scripts each fixed at their
+        own seam: work that happens outside a shipped component detaches from the
+        criteria, and the drift is invisible from inside a run. The filter was
+        the last piece of the chain with no home.
+
+        WHAT WAS CONSIDERED AND REJECTED. A typed `counterparts` field letting a
+        fact cite evidence outside its subject was designed and NOT built. The
+        argument for it was that CV-1 admits "a local obligation whose
+        counterpart lives elsewhere" while anchor membership requires every
+        citation to name a file in the subject, so the flagship class ships with
+        anchors that do not support it. The tension is real in principle and its
+        measured cost was ZERO: every rejection in that class was either the
+        invented rule above or an unrelated failure, and a criteria-only gate
+        admitted such facts on in-list anchors without difficulty. Do not
+        rebuild it on the original argument; it needs new evidence.
+      origin: |
+        Surface: taking one root of a corpus run end to end through promotion
+        yielded 8 survivors from 125 candidates, which read as a lane precision
+        problem. Finding: a blind re-judgment of all 89 promoted candidates
+        against the shipped criteria admitted 58% of the rejections, so the
+        figure measured the lane composed with an improvised gate rather than the
+        lane -- the true end-to-end yield was roughly six times the reported one.
+        The defect ranking inverted: the unshipped gate was the largest error
+        source, the missing verifier the second, and the evidence-model
+        contradiction had no measured cost at all. Follow-up: the A/B against the
+        in-prompt pass, and a second root end to end -- every number here comes
+        from ONE root, which is a skills and tooling tree rather than the
+        application code the corpus is mostly made of.
+      added: "2026-08-24"
     - id: coverage_depth_asks_rather_than_defaults
       keywords: [basic advanced, analysis depth, intent gate, AskUserQuestion, extreme experience, default disclosure, verdict carries the mode, one dial not two]
       summary: Coverage depth is one dial with two operating points (basic / advanced). When the invocation expresses no depth the intent gate ASKS via AskUserQuestion rather than defaulting -- the rare case where prompting beats a sensible default, because both directions of a silent wrong choice are expensive and invisible.
@@ -456,6 +543,12 @@ claude_md:
         CONSEQUENCE FOR THE VERDICT. COVERAGE-ASSESSED means "not found within
         budget" under basic and "verified absent" under advanced, so the report
         must carry the mode; a verdict printed without it is ambiguous.
+        AMENDMENT -- "a verification pass after it" was, when this record was
+        written, three lines of the assessing agent's own batch prompt, and the
+        word "verified" in the paragraph above was therefore unearned. See
+        `verification_is_a_stage_not_a_prompt_clause`. The dial description
+        stands; what changed is that the pass it names is now a separate stage
+        the lane runs, and it can be absent even at advanced depth.
       origin: |
         Surface: authoring the criteria required settling evidence depth, which
         md-domain-coverage-gaps.md left as a blocking open question with unknown
