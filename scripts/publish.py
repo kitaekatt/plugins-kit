@@ -26,8 +26,13 @@ Why a script rather than a checklist -- three footguns it removes:
     copy instead of the cache. Here the restore is a `finally`, not a discipline,
     and the post-verify checks it landed even if the finally misfired.
   - The merge is only USUALLY a fast-forward. When dev carries commits for a
-    dev-only (published: false) plugin, merging publishes them. This refuses and
-    names them; picking what ships is a judgement call, not a script's job.
+    dev-only (published: false) plugin, a fast-forward would publish them, so
+    the release is FILTERED instead: the shippable commits are replayed onto
+    master in a temporary worktree and master is pushed from there. dev is
+    untouched and keeps the excluded work. `published: false` already recorded
+    the decision that the plugin does not ship, so honouring it is not the
+    script guessing -- what it must never do is decide that a plugin's status
+    has changed.
   - index.html must ride INSIDE the release commit, or master briefly holds a
     page that disagrees with its own marketplace.json.
 
@@ -37,7 +42,11 @@ escapable pre-commit hooks):
 
   - not on dev; a dirty tree; a merge that would not fast-forward; a range with
     nothing to publish.
-  - commits touching a dev-only (published: false) plugin.
+  - a single commit touching BOTH a dev-only plugin and files that would
+    otherwise ship. Excluding it withholds released work, including it puts
+    dev-only files on master, and splitting someone else's commit is a
+    judgement call. (Commits touching ONLY a dev-only plugin are excluded
+    silently-but-reported, not refused.)
   - a plugin that does not declare the bootstrap dependency.
   - no published plugin bumped at all, AND any published plugin whose files
     changed in the range without a bump (the cache keys on version, so those
@@ -60,8 +69,10 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -177,13 +188,16 @@ def version_at(ref: str, plugin: str) -> str | None:
 
 # --- preflight -------------------------------------------------------------
 
-def preflight(allow_dev_only: set[str] | None = None) -> list[str]:
-    """Refuse anything unsafe. Returns the human summary of what will publish.
+def preflight(allow_dev_only: set[str] | None = None
+              ) -> tuple[list[str], dict[str, set[str]]]:
+    """Refuse anything unsafe. Returns (publish summary, excluded commits).
 
     Every check here refuses rather than fixes: a publish is visible to other
-    machines, so guessing is worse than stopping. `allow_dev_only` names
-    dev-only plugins whose commits the operator has explicitly decided to
-    ship (see --allow-dev-only).
+    machines, so guessing is worse than stopping. The ONE thing it no longer
+    refuses is a range carrying dev-only commits -- those are excluded from the
+    release instead, per excluded_dev_only_commits(). `allow_dev_only` names
+    dev-only plugins whose commits the operator has decided to ship anyway
+    (see --allow-dev-only).
     """
     if git("rev-parse", "--abbrev-ref", "HEAD") != DEV_BRANCH:
         raise PublishError(
@@ -216,13 +230,14 @@ def preflight(allow_dev_only: set[str] | None = None) -> list[str]:
             f"{DEV_BRANCH} has nothing {REMOTE}/{MASTER_BRANCH} lacks -- "
             f"nothing to publish.")
 
-    _refuse_dev_only_commits(allow_dev_only or set())
+    excluded = excluded_dev_only_commits(allow_dev_only or set())
+    _refuse_mixed_dev_only_commit(excluded)
     _require_bootstrap_dependency()
     _require_pyproject_sync()
     _require_generated_orchestration()
     bumps = _require_version_bump()
     _require_bump_for_changed_plugins()
-    return bumps
+    return bumps, excluded
 
 
 def _load_rule_module(script_name: str):
@@ -334,15 +349,26 @@ def _commit_files(sha: str) -> list[str]:
     return [f for f in git("show", "--name-only", "--format=", sha).split("\n") if f]
 
 
-def _refuse_dev_only_commits(allow: set[str]) -> None:
-    """Refuse when the range touches a dev-only plugin.
+def excluded_dev_only_commits(allow: set[str]) -> dict[str, set[str]]:
+    """Which commits in the range touch a dev-only plugin, so must NOT ship.
 
-    Merging would publish a plugin marked `published: false`. The marketplace
-    regenerator filters it out of the LISTING, but its files would still land on
-    master. Which commits ship is a judgement call -- cherry-pick by hand, or
-    name the plugin in --allow-dev-only when its commits are finished work that
-    master's tree needs (e.g. a cross-plugin refactor); the allowance is
-    printed so the decision is visible in the publish log.
+    `published: false` is a standing decision that a plugin does not go to
+    consumers, so a shared dev branch carrying its commits is the NORMAL state,
+    not an operator error. This returns those commits for EXCLUSION; it does not
+    refuse. push_and_merge() then publishes a FILTERED release built from the
+    remaining commits, and master never receives the excluded ones.
+
+    That is a change of default, and the reason is worth keeping. This used to
+    refuse the whole publish and tell the operator to cherry-pick by hand, which
+    let one team's in-flight work block every other team's finished work, and
+    pushed the exact filtering the field already implies onto a human doing it
+    under time pressure -- by hand, against master, with no verification.
+    Deciding what ships is still not this script's job: the `published` field is
+    where that decision was already recorded, and honouring it is not a guess.
+
+    --allow-dev-only overrides per plugin, for finished work master's tree needs
+    (e.g. a cross-plugin refactor). The allowance is printed so it stays visible
+    in the publish log.
     """
     dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
     unknown = allow - dev_only
@@ -355,7 +381,7 @@ def _refuse_dev_only_commits(allow: set[str]) -> None:
               f"(operator decision via --allow-dev-only)")
     dev_only -= allow
     if not dev_only:
-        return
+        return {}
 
     offenders: dict[str, set[str]] = {}
     for sha in _range_commits():
@@ -363,19 +389,46 @@ def _refuse_dev_only_commits(allow: set[str]) -> None:
             for plugin in dev_only:
                 if f.startswith(f"plugins/{plugin}/"):
                     offenders.setdefault(sha, set()).add(plugin)
+    return offenders
 
-    if offenders:
-        lines = []
-        for sha, plugins in offenders.items():
-            subject = git("log", "-1", "--format=%s", sha)
-            lines.append(f"  {sha[:9]} {subject}  [{', '.join(sorted(plugins))}]")
-        raise PublishError(
-            "refusing: commits for dev-only (published: false) plugins are in "
-            f"{REMOTE}/{MASTER_BRANCH}..{DEV_BRANCH}:\n"
-            + "\n".join(lines)
-            + "\n\nMerging would put their files on master. Branch from master "
-              "and cherry-pick only the publish-ready commits. Deciding what "
-              "ships is yours, not this script's.")
+
+def _dev_only_owned(path: str, dev_only: set[str]) -> bool:
+    """True when this path belongs to a dev-only plugin's own tree."""
+    for plugin in dev_only:
+        if path.startswith(f"plugins/{plugin}/") or path.startswith(f"tests/{plugin}/"):
+            return True
+    return False
+
+
+def _refuse_mixed_dev_only_commit(excluded: dict[str, set[str]]) -> None:
+    """Refuse a commit touching BOTH a dev-only plugin and shippable files.
+
+    Such a commit cannot be excluded or included without being wrong either way:
+    dropping it withholds work that was bumped for release, taking it puts
+    dev-only files on master. Splitting someone else's commit is a judgement
+    call, so this stops and names it. Refusing is still right HERE -- what
+    changed above is only the case where the split is unambiguous.
+    """
+    dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
+    mixed = []
+    for sha in sorted(excluded):
+        for f in _commit_files(sha):
+            if not _dev_only_owned(f, dev_only):
+                mixed.append((sha, f, sorted(excluded[sha])))
+                break
+    if not mixed:
+        return
+    lines = []
+    for sha, path, plugins in mixed:
+        subject = git("log", "-1", "--format=%s", sha)
+        lines.append(f"  {sha[:9]} {subject}  "
+                     f"[dev-only: {', '.join(plugins)}; also touches {path}]")
+    raise PublishError(
+        "refusing: commit(s) touch BOTH a dev-only plugin and files that would "
+        "otherwise ship:\n" + "\n".join(lines)
+        + "\n\nExcluding them would withhold shippable work; including them "
+          "would put dev-only files on master. Split the commit, or name the "
+          "plugin in --allow-dev-only.")
 
 
 def _require_version_bump() -> list[str]:
@@ -531,16 +584,66 @@ def commit_derived(bumps: list[str]) -> None:
 
 # --- publish + verify ------------------------------------------------------
 
-def push_and_merge() -> None:
+def push_and_merge(excluded: dict[str, set[str]] | None = None) -> None:
+    """Push dev, then land the release on master.
+
+    With nothing excluded this is the fast-forward it has always been. With
+    dev-only commits in the range it is a FILTERED release: the shippable
+    commits are replayed onto master in a temporary worktree and pushed from
+    there, so master gets exactly the publishable work and dev is untouched.
+
+    The worktree is not a stylistic choice. The fast-forward path checks master
+    out in THIS tree, which is shared with other agent sessions -- their commits
+    would land on whatever branch the tree is on. That risk is tolerable for the
+    seconds a fast-forward takes; a cherry-pick sequence that can stop on a
+    conflict is a different matter, so the filtered path never moves this tree.
+    """
     git("push", REMOTE, DEV_BRANCH)
     print(f"  pushed {DEV_BRANCH}")
-    git("checkout", MASTER_BRANCH)
+
+    if not excluded:
+        git("checkout", MASTER_BRANCH)
+        try:
+            git("merge", "--ff-only", DEV_BRANCH)
+            git("push", REMOTE, MASTER_BRANCH)
+            print(f"  fast-forwarded and pushed {MASTER_BRANCH}")
+        finally:
+            git("checkout", DEV_BRANCH)
+        return
+
+    shipping = [sha for sha in _range_commits() if sha not in excluded]
+    if not shipping:
+        raise PublishError(
+            "every commit in the range touches a dev-only plugin -- there is "
+            "nothing to publish. The bumps that passed preflight are on "
+            "commits that cannot ship.")
+
+    # _range_commits() is newest-first; cherry-pick oldest-first.
+    shipping = list(reversed(shipping))
+    workdir = Path(tempfile.mkdtemp(prefix="publish-master-"))
     try:
-        git("merge", "--ff-only", DEV_BRANCH)
-        git("push", REMOTE, MASTER_BRANCH)
-        print(f"  fast-forwarded and pushed {MASTER_BRANCH}")
+        git("worktree", "add", "--detach", str(workdir), f"{REMOTE}/{MASTER_BRANCH}")
+        try:
+            for sha in shipping:
+                subprocess.run(["git", "-C", str(workdir), "cherry-pick", sha],
+                               check=True, capture_output=True, text=True)
+            head = subprocess.run(["git", "-C", str(workdir), "rev-parse", "HEAD"],
+                                  check=True, capture_output=True, text=True).stdout.strip()
+            git("push", REMOTE, f"{head}:refs/heads/{MASTER_BRANCH}")
+            print(f"  published {len(shipping)} commit(s) to {MASTER_BRANCH}; "
+                  f"excluded {len(excluded)} dev-only commit(s)")
+        finally:
+            git("worktree", "remove", "--force", str(workdir), check=False)
+    except subprocess.CalledProcessError as exc:
+        raise PublishError(
+            "the filtered release could not be replayed onto "
+            f"{MASTER_BRANCH} -- a shippable commit conflicts with master "
+            "without the excluded dev-only commits beneath it:\n"
+            f"{(exc.stderr or exc.stdout or '').strip()}\n\n"
+            "Nothing was pushed to master. Split the dependency, or ship the "
+            "dev-only plugin with --allow-dev-only.") from exc
     finally:
-        git("checkout", DEV_BRANCH)
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def check_index_scope(index_text: str) -> list[str]:
@@ -580,16 +683,45 @@ def check_index_scope(index_text: str) -> list[str]:
     return problems
 
 
-def verify() -> list[str]:
-    """Post-publish verification. Returns a list of problems (empty = good)."""
+def verify(excluded: dict[str, set[str]] | None = None) -> list[str]:
+    """Post-publish verification. Returns a list of problems (empty = good).
+
+    `excluded` is the dev-only commit set the release filtered out. When it is
+    non-empty the branches are SUPPOSED to differ, so identity is the wrong
+    check and the tree contents are checked instead -- master must match dev
+    everywhere except those plugins' own files.
+    """
     problems = []
 
+    git("fetch", REMOTE, "--quiet")
     dev_sha = git("rev-parse", f"{REMOTE}/{DEV_BRANCH}")
     master_sha = git("rev-parse", f"{REMOTE}/{MASTER_BRANCH}")
-    if dev_sha != master_sha:
-        problems.append(
-            f"{REMOTE}/{DEV_BRANCH} ({dev_sha[:9]}) != {REMOTE}/{MASTER_BRANCH} "
-            f"({master_sha[:9]}) -- the publish did not land on the cache source")
+    if not excluded:
+        if dev_sha != master_sha:
+            problems.append(
+                f"{REMOTE}/{DEV_BRANCH} ({dev_sha[:9]}) != {REMOTE}/{MASTER_BRANCH} "
+                f"({master_sha[:9]}) -- the publish did not land on the cache source")
+    else:
+        dev_only = {n for n, m in local_plugins().items() if not is_published(m)}
+        diff = git("diff", "--name-only", f"{REMOTE}/{MASTER_BRANCH}",
+                   f"{REMOTE}/{DEV_BRANCH}")
+        leaked = [f for f in diff.splitlines()
+                  if f.strip() and not _dev_only_owned(f.strip(), dev_only)]
+        if leaked:
+            problems.append(
+                f"filtered release: {REMOTE}/{MASTER_BRANCH} differs from "
+                f"{REMOTE}/{DEV_BRANCH} outside the excluded dev-only plugins, "
+                f"so shippable work did not land: {', '.join(leaked[:8])}"
+                + (f" (+{len(leaked) - 8} more)" if len(leaked) > 8 else ""))
+        for name in sorted(dev_only):
+            on_master = git("ls-tree", "-r", "--name-only",
+                            f"{REMOTE}/{MASTER_BRANCH}", f"plugins/{name}/",
+                            check=False)
+            changed = [f for f in diff.splitlines()
+                       if f.startswith(f"plugins/{name}/")]
+            if on_master and changed:
+                print(f"  note: {name} stays at its existing master version "
+                      f"({len(changed)} file(s) held back on {DEV_BRANCH})")
 
     marketplace = json.loads(MARKETPLACE_JSON.read_text(encoding="utf-8"))
     listed = {p["name"]: p.get("version") for p in marketplace.get("plugins", [])}
@@ -644,9 +776,16 @@ def main(argv: list[str]) -> int:
 
     try:
         print("preflight:")
-        bumps = preflight(set(args.allow_dev_only))
+        bumps, excluded = preflight(set(args.allow_dev_only))
         for bump in bumps:
             print(f"  publishing {bump}")
+        if excluded:
+            print(f"  excluding {len(excluded)} commit(s) for dev-only "
+                  f"(published: false) plugin(s) -- they stay on {DEV_BRANCH}:")
+            for sha in sorted(excluded):
+                subject = git("log", "-1", "--format=%s", sha)
+                plugins = ", ".join(sorted(excluded[sha]))
+                print(f"    {sha[:9]} {subject}  [{plugins}]")
 
         if args.check:
             print("\n--check: preflight passed; no changes made.")
@@ -659,7 +798,7 @@ def main(argv: list[str]) -> int:
             print("  already current (nothing to commit)")
 
         print("\npublishing:")
-        push_and_merge()
+        push_and_merge(excluded)
 
     except PublishError as exc:
         # Flush first: stdout is block-buffered when piped and stderr is not, so
@@ -669,14 +808,15 @@ def main(argv: list[str]) -> int:
         return 1
 
     print("\nverifying:")
-    problems = verify()
+    problems = verify(excluded)
     if problems:
         sys.stdout.flush()
         for problem in problems:
             print(f"  FAILED: {problem}", file=sys.stderr)
         return 1
 
-    print("  origin/dev == origin/master")
+    print("  origin/dev == origin/master" if not excluded
+          else "  origin/master carries every shippable commit; dev-only work held back")
     print("  marketplace.json, index.html, and plugin.json agree")
     print("  dev-tree restored to normal")
     print("\npublished. Users with autoUpdate get it next session start.")
