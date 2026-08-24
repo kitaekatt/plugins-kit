@@ -24,6 +24,7 @@ class Record:
 
     type_id: str
     identity: str | None
+    ordinal: int | None
     data: Any
     file: str
     source: SourceSpec
@@ -142,7 +143,14 @@ def _load_source(profile: Profile, corpus: Corpus, source: SourceSpec, root: Pat
             )
             return
         corpus.records.append(
-            Record(type_id=source.of, identity=None, data=document, file=name, source=source)
+            Record(
+                type_id=source.of,
+                identity=None,
+                ordinal=None,
+                data=document,
+                file=name,
+                source=source,
+            )
         )
 
 
@@ -185,6 +193,7 @@ def _load_rows(
             Record(
                 type_id=source.of,
                 identity=None if identity is None else str(identity),
+                ordinal=index,
                 data=row,
                 file=name,
                 source=source,
@@ -221,6 +230,7 @@ def _load_file_per_record(
         Record(
             type_id=source.of,
             identity=identity_text,
+            ordinal=None,
             data=document,
             file=name,
             source=source,
@@ -247,6 +257,7 @@ def _load_keyed_map(
                 Record(
                     type_id=source.of,
                     identity=str(key),
+                    ordinal=None,
                     data=body,
                     file=name,
                     source=source,
@@ -261,6 +272,7 @@ def _load_keyed_map(
             Record(
                 type_id=source.of,
                 identity=None,
+                ordinal=None,
                 data=metadata,
                 file=name,
                 source=source,
@@ -277,6 +289,7 @@ def _load_keyed_map(
             Record(
                 type_id=source.of,
                 identity=str(key),
+                ordinal=None,
                 data=body,
                 file=name,
                 source=source,
