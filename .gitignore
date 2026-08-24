@@ -24,6 +24,14 @@ plugins/unreal-kit/skills/ue-python-api/stubs/unreal.py
 # CLAUDE.md. This entry is load-bearing: it is what stops git traversing the
 # link and staging private task content into this PUBLIC repo. Do not add a
 # !dev/tasks exception.
+#
+# BOTH forms are required. The trailing-slash form matches a DIRECTORY, which
+# is what the link is on Windows (a junction). On macOS/Linux the link is a
+# symlink, which git treats as a FILE, and a trailing-slash pattern never
+# matches a file -- so without the bare form the entry silently fails open
+# there and `git add -A` would stage the symlink (a machine-specific absolute
+# path) into this public repo.
+dev/tasks
 dev/tasks/
 
 # Synthetic dev-layout registry written by scripts/claude_plugin_test.py
