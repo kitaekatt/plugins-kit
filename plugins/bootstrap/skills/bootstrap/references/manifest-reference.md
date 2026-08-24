@@ -141,8 +141,8 @@ export <PLUGIN_NAME_UPPER>_VENV=<absolute path to venv python>
 `<PLUGIN_NAME_UPPER>` is the plugin manifest name uppercased with hyphens replaced by underscores. Examples:
 
 ```sh
-export UNREAL_KIT_VENV=/Users/christina/.claude/plugins/data/plugins-kit/unreal-kit/.venv/bin/python
-export BOOTSTRAP_VENV=/Users/christina/.claude/plugins/data/plugins-kit/bootstrap/.venv/bin/python
+export UNREAL_KIT_VENV=/Users/<you>/.claude/plugins/data/plugins-kit/unreal-kit/.venv/bin/python
+export BOOTSTRAP_VENV=/Users/<you>/.claude/plugins/data/plugins-kit/bootstrap/.venv/bin/python
 ```
 
 **Consumer pattern** — scripts re-exec themselves under the plugin's venv without reconstructing bootstrap's data-dir layout:
@@ -168,7 +168,7 @@ if Path(sys.executable).resolve() != Path(_venv).resolve():
 Every plugin carrying a `bootstrap.json` also gets its **install root** exported, using the same name transform:
 
 ```sh
-export HUE_KIT_ROOT=/Users/christina/.claude/plugins/cache/plugins-kit/hue-kit/0.9.1
+export HUE_KIT_ROOT=/Users/<you>/.claude/plugins/cache/plugins-kit/hue-kit/0.9.1
 ```
 
 This is the pointer that lets a consumer **outside** a plugin invoke the scripts that plugin ships. `CLAUDE_PLUGIN_ROOT` only tells a component where its *own* plugin lives, and an install path is version-stamped, so without this a cross-plugin caller has no way to resolve one short of globbing the cache for a version directory.

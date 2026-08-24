@@ -11,7 +11,10 @@ is authoritative and this document should be updated or retired.
 - [`diagrams/task-work-sequence.html`](diagrams/task-work-sequence.html) — `work` operation sequence
 - [`diagrams/task-discovery.html`](diagrams/task-discovery.html) — discovery / scoped-list dataflow
 - [`diagrams/task-move.html`](diagrams/task-move.html) — location & move workflow
-- [`kitaekatt-tasks-issues-exploration.md`](kitaekatt-tasks-issues-exploration.md) — the two prior systems this derives from
+- The two prior systems this derives from are recorded in a maintainer-only
+  exploration document, kept in the plugins-kit repository rather than shipped
+  with this skill; it is development history and resolves against nothing in a
+  consumer's install.
 
 **Location.** This design package lives with the skill it evolves:
 `plugins/awesome-kit/skills/task/design/`. The task system **evolves the hand-off skill** (renamed
@@ -144,7 +147,7 @@ A task may be referenced from **multiple** documents; `list` dedupes by canonica
 
 ### 2.5 Task Type
 
-The pluggable **config bundle** that defines what varies between kinds of task. One type ships now
+The pluggable **config bundle** that defines what varies between kinds of task. v1 ships one type
 (`hand-off`, the default); the architecture allows more.
 
 A type defines four things:

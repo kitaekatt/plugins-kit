@@ -1,8 +1,9 @@
-# The parked spiritcrossing removal test
+# The parked C++ corpus removal test
 
 Owner-designed 2026-08-13, set up, PARKED UNRUN on usage limits. This is the
 task's next action. Everything needed to resume without re-deriving the design
-or re-doing the recon is here; `plan.md` carries only the pointer.
+or re-doing the recon is here; `dev/tasks/md-domain-review-enablement/plan.md`
+carries only the pointer.
 
 **THE QUESTION IT ANSWERS, in the owner's words:** run the workflow over a
 directory tree that already has CLAUDE.md files, put the result in a changelist,
@@ -20,7 +21,7 @@ task has had on the value vector -- it measures the criteria against real
 removals rather than against theory.
 
 **TARGET (selected and verified):**
-`D:/dev/spiritcrossing/main/SpiritCrossing/Source/SpiritCrossingEditor`.
+a large C++ game corpus, in its editor module source tree.
 9 code-bearing directories, 92 code files, 3 existing documents, 4 waves:
 
 - wave 0: `Private/ConfigViewer/ShopRotator` (2), `Public/ConfigViewer/ShopRotator` (2), `Test` (1, HAS doc), `UI` (3, HAS doc)
@@ -29,19 +30,23 @@ removals rather than against theory.
 - wave 3: `.` the root (50, HAS doc) -- composes from 4 children
 
 The 3 directories WITH documents are the only removal-test subjects; the other 6
-exercise the new-write path. Corroborated by `discover_hierarchy.py` itself
-(`leaves (code directories): 9`, `CLAUDE.md files in tree: 3`).
+exercise the new-write path. The counts were corroborated at setup time by the
+since-retired `discover_hierarchy.py` (removed in skills-kit 0.56.0)
+(`leaves (code directories): 9`, `CLAUDE.md files in tree: 3`); re-corroboration
+uses `discover_composition.py`.
 
 **THE BASELINE IS THE DEPOT, NOT A FILE.** Reconstruct the pre-run documents with
 `p4 print` at these exact revisions -- a scratchpad copy from the setup session is
 gone:
 
-- `.../SpiritCrossingEditor/CLAUDE.md#3` (18 lines)
-- `.../SpiritCrossingEditor/Test/CLAUDE.md#1` (34 lines)
-- `.../SpiritCrossingEditor/UI/CLAUDE.md#3` (22 lines)
+- the corpus root `CLAUDE.md#3` (18 lines)
+- the corpus's `Test/CLAUDE.md#1` (34 lines)
+- the corpus's `UI/CLAUDE.md#3` (22 lines)
 
-**SEQUENCING, OWNER-ACCEPTED: BASELINE FIRST.** Run the test on the CURRENTLY
-PUBLISHED lane before building the entailment adjudicator. The adjudicator is a
+**SEQUENCING, OWNER-ACCEPTED: BASELINE FIRST.** Run the test on the published
+skills-kit lane, recording the skills-kit version alongside the baseline number
+so the post-adjudicator re-run compares like with like, before building the
+entailment adjudicator. The adjudicator is a
 stage whose job is to reject claims, so shipping it first makes any removal
 unattributable -- we would not know whether it or baseline composition did it.
 Run baseline, get the number, THEN build, THEN re-run and compare. The baseline
@@ -51,7 +56,7 @@ scores perfectly against it).
 
 **PERFORCE OPERATIONAL FACTS -- all verified live, do not re-derive:**
 
-- The workspace is P4 (`.p4config.txt` at `D:/dev/spiritcrossing/main`, no `.git`).
+- The workspace is P4 (`.p4config.txt` at the corpus's workspace root, no `.git`).
   The owner granted WRITE AUTHORIZATION for it, and wants everything left in a
   NUMBERED PENDING CL, explicitly NOT p4-code-reviewed.
 - Existing CLAUDE.md files are READ-ONLY until `p4 edit`. An agent told to
@@ -61,12 +66,13 @@ scores perfectly against it).
   Nothing in the lane runs `p4 add`. Plan an explicit add pass or they are
   invisible to everyone and lost on a clean sync.
 - `p4` resolves its config from the CURRENT DIRECTORY, and `P4CONFIG` is a p4
-  registry setting, NOT an OS env var. `p4 <cmd> <abs-path>` run from
-  `D:/dev/plugins-kit` fails with `must create client '5090W'`. Pass `-d <dir
+  registry setting, NOT an OS env var. `p4 <cmd> <abs-path>` run from a directory
+  outside the P4 workspace (this repo's root, for instance) fails with `must
+  create client '<this machine>'`. Pass `-d <dir
   inside the workspace>` or set cwd. `vcs_ignore._p4_ignored` gets this right
   (`vcs_ignore.py:240`); ad-hoc p4 calls will not.
-- **RILEY HOLDS TWO OF THE THREE.** `Test/CLAUDE.md` and `UI/CLAUDE.md` are open
-  in `riley@riley_DESKTOP-C3OCUOE_spiritcrossing_v-main`, changelist 138349
+- **ANOTHER USER HOLDS TWO OF THE THREE.** `Test/CLAUDE.md` and `UI/CLAUDE.md` are open
+  in another user's workspace, changelist 138349
   (far behind head 159724, so possibly long-abandoned -- do not assume). The
   owner chose to EDIT THROUGH the collision for full test power; that decision
   stands, but re-check `p4 opened -a` before running, since it may have changed.
@@ -77,13 +83,13 @@ scores perfectly against it).
 
 **VCS-IGNORE IS FINE ON P4 -- a worry that was checked and closed.**
 `vcs_ignore.py` detects P4 via `_p4_config_above` (:109-137) and shells
-`p4 ignores -i` (:224-260); it correctly prunes `SpiritCrossing/Scripts/uvcache`,
+`p4 ignores -i` (:224-260); it correctly prunes the corpus's `Scripts/uvcache`,
 which contains a vendored plugins-kit checkout INCLUDING the deliberately
 malformed golden-corpus CLAUDE.md fixtures. Ingesting those would have been
 actively harmful. The module's own docstring called the P4 path UNVERIFIED; it
 was verified against the live server on 2026-08-13 and that docstring should be
 updated (bundle with the next skills-kit change; not worth a bump alone). Only
-`--diff` mode remains git-only (`discover_coverage.py:449-521`), and it fails
+`--diff` mode remains git-only (discover_coverage.py:612-693, diff_roots), and it fails
 loudly -- just do not pass `--diff`.
 
 **THE ONE THING THAT MUST LAND BEFORE THE TEST RUNS:** the P4 ambient-chain fix,

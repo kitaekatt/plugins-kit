@@ -1,11 +1,10 @@
 # md-domain coverage lane -- planning
 
-Design for an UNBUILT addition to `skills-kit:md-domain`: an opt-in lane that
-audits whether a code subtree's hazards are covered by the CLAUDE.md files that
-actually load for it.
+Design for an addition to `skills-kit:md-domain`: an opt-in lane that audits
+whether a code subtree's hazards are covered by the CLAUDE.md files that
+actually load for it. The lane shipped in skills-kit 0.62.0.
 
-Nothing here ships to consumers. These are planning documents for work that has
-not started; the shipped summary lives in
+These planning documents do not ship to consumers; the shipped summary lives in
 `plugins/skills-kit/skills/md-domain/references/coverage-gap.md`.
 
 ## Why this exists
@@ -30,6 +29,10 @@ CLAUDE.md this verb helps produce. See the spec's opening section.
 - `coverage-lane-spec.md` -- the design: unit `(code subtree, ambient CLAUDE.md
   chain)`, the report-only third-verb shape, intent gating, exclusions, and the
   distinct `GAPS-FOUND` / `COVERAGE-ASSESSED` verdict vocabulary.
+- `defect-history-p-series.md` -- the P-series: defects found by running the
+  built lane at corpus scale (2026-08-20/21) and through promotion end to end
+  (2026-08-24), each with the proposal it produced and, where one shipped, what
+  shipped. Read its "Known limit" section before quoting any figure from it.
 - `regression-test-design.md` -- how to measure it: the pre-registered answer
   key, per-mechanism recall, the negative controls, and the circularity
   limitation that makes recall alone meaningless.
@@ -53,15 +56,14 @@ never touching document compliance. Do not rediscover the rejected version.
 
 ## Status
 
-Split, as of 2026-08-08.
+As of 2026-08-24: shipped. Both halves that the 2026-08-08 split described as
+separately trackable landed in skills-kit 0.62.0.
 
-- **PIPELINE -- settled and buildable.** Shape (report-only third verb),
-  discovery, ambient-chain resolution, exclusions, intent gating, verdicts,
-  report shape, and their tests. None of it depends on the criteria below.
-- **ANALYSIS CRITERIA -- BLOCKED, awaiting two documents from the owner.** What
-  makes a code-derived fact worth a place in a CLAUDE.md, and the severity bar
-  for the severe-deficiency carve-out. Do not invent these; build the pipeline
-  with the criteria seam left open.
+- **PIPELINE.** Shape (report-only third verb), discovery, ambient-chain
+  resolution, exclusions, intent gating, verdicts, report shape, and their
+  tests.
+- **ANALYSIS CRITERIA.** What makes a code-derived fact worth a place in a
+  CLAUDE.md, and the severity bar for the severe-deficiency carve-out.
 
 The language-family validation gate that once blocked the whole design was
 retired 2026-08-08 as an accepted limitation (see the provenance entry in

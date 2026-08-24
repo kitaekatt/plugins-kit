@@ -308,10 +308,10 @@ def test_required_var_git_bash_pwd_flavour_mismatch_is_flagged(monkeypatch):
     Windows path, but differs as a raw string. Comparison stays exact
     string equality (still refuses) -- only the computed
     `likely_path_flavour_mismatch` attribute changes."""
-    monkeypatch.setenv("PWD", "/d/dev/spiritcrossing/main")
+    monkeypatch.setenv("PWD", "/d/dev/example-project/main")
     env = WorkerEnvironment(required_vars=("PWD",))
     with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
-        env.check({"PWD": "D:\\dev\\spiritcrossing\\main"}, run_id="fp-2026-08-18")
+        env.check({"PWD": "D:\\dev\\example-project\\main"}, run_id="fp-2026-08-18")
     err = exc_info.value
     assert err.likely_path_flavour_mismatch is True
     assert "different path flavour" in str(err)
@@ -432,7 +432,7 @@ def test_require_compatible_environment_treats_none_recorded_as_empty(monkeypatc
 # original defect; FAKE_CWD is built from the REAL os.getcwd() so they hold
 # on any machine, not just one hardcoded path.
 
-FAKE_CWD = "D:\\dev\\spiritcrossing\\main"
+FAKE_CWD = "D:\\dev\\example-project\\main"
 
 
 def test_probe_1_git_bash_posix_pwd_refuses(monkeypatch):
@@ -441,14 +441,14 @@ def test_probe_1_git_bash_posix_pwd_refuses(monkeypatch):
     ntpath.join takes the drive from cwd and appends the POSIX segments
     UNCHANGED, landing on a DIFFERENT location than cwd itself."""
     monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
-    snapshot = {"PWD": "/d/dev/spiritcrossing/main"}
+    snapshot = {"PWD": "/d/dev/example-project/main"}
     env = WorkerEnvironment(cwd_vars=("PWD",))
     with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
         require_creatable_environment("fp-2026-08-18", env, snapshot)
     err = exc_info.value
     assert err.likely_path_flavour_mismatch is True
     assert err.recorded_value == FAKE_CWD
-    assert err.actual_value == "/d/dev/spiritcrossing/main"
+    assert err.actual_value == "/d/dev/example-project/main"
 
 
 def test_probe_1_resolved_value_lands_on_a_different_location_than_cwd(monkeypatch):
@@ -457,8 +457,8 @@ def test_probe_1_resolved_value_lands_on_a_different_location_than_cwd(monkeypat
     resolved-location comparison rather than assuming it."""
     from content_pipeline.execution.adapter import _resolve_against_cwd
 
-    resolved = _resolve_against_cwd(FAKE_CWD, "/d/dev/spiritcrossing/main")
-    assert resolved == "d:\\d\\dev\\spiritcrossing\\main"
+    resolved = _resolve_against_cwd(FAKE_CWD, "/d/dev/example-project/main")
+    assert resolved == "d:\\d\\dev\\example-project\\main"
     assert resolved != _resolve_against_cwd(FAKE_CWD, FAKE_CWD)
 
 
@@ -478,7 +478,7 @@ def test_probe_3_pwd_equal_to_cwd_plus_trailing_separator_passes(monkeypatch):
 
 def test_probe_4_pwd_equal_to_cwd_drive_letter_case_swapped_passes(monkeypatch):
     monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
-    snapshot = {"PWD": "d:\\dev\\spiritcrossing\\main"}
+    snapshot = {"PWD": "d:\\dev\\example-project\\main"}
     env = WorkerEnvironment(cwd_vars=("PWD",))
     require_creatable_environment("run-1", env, snapshot)  # must not raise
 
@@ -542,13 +542,13 @@ def test_likely_path_flavour_mismatch_false_for_case_only_difference(monkeypatch
     monkeypatch.setenv("PWD", FAKE_CWD)
     env = WorkerEnvironment(required_vars=("PWD",))
     with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
-        env.check({"PWD": "d:\\dev\\spiritcrossing\\main"}, run_id="run-1")
+        env.check({"PWD": "d:\\dev\\example-project\\main"}, run_id="run-1")
     assert exc_info.value.likely_path_flavour_mismatch is False
     assert "path flavour" not in str(exc_info.value)
 
 
 def test_likely_path_flavour_mismatch_true_for_the_git_bash_case(monkeypatch):
-    monkeypatch.setenv("PWD", "/d/dev/spiritcrossing/main")
+    monkeypatch.setenv("PWD", "/d/dev/example-project/main")
     env = WorkerEnvironment(required_vars=("PWD",))
     with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
         env.check({"PWD": FAKE_CWD}, run_id="run-1")
@@ -585,7 +585,7 @@ def test_worker_side_cwd_var_trailing_separator_tolerated(monkeypatch):
 
 def test_worker_side_cwd_var_drive_letter_case_tolerated(monkeypatch):
     monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
-    monkeypatch.setenv("PWD", "d:\\dev\\spiritcrossing\\main")
+    monkeypatch.setenv("PWD", "d:\\dev\\example-project\\main")
     env = WorkerEnvironment(cwd_vars=("PWD",))
     env.check({}, run_id="run-1")  # must not raise
 
@@ -613,7 +613,7 @@ def test_worker_side_cwd_var_git_bash_posix_path_is_refused(monkeypatch):
     worker's own cwd to a DIFFERENT location, exactly the same reasoning as
     the create-run anchor check's Git Bash probe."""
     monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
-    monkeypatch.setenv("PWD", "/d/dev/spiritcrossing/main")
+    monkeypatch.setenv("PWD", "/d/dev/example-project/main")
     env = WorkerEnvironment(cwd_vars=("PWD",))
     with pytest.raises(WorkerEnvironmentMismatchError) as exc_info:
         env.check({}, run_id="run-1")

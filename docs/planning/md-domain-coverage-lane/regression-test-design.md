@@ -75,12 +75,12 @@ Targeted, not a full re-run. Restrict to the directories the answer key touches:
 ## Held-out corpus availability (checked 2026-08-07)
 
 Both reviews made held-out precision in a non-C/Python language family a
-PRECONDITION for publishing the criteria changes. A scan of `D:/dev` found no
+PRECONDITION for publishing the criteria changes. A scan of `$DEVROOT` found no
 qualifying repo: the only candidates with enough CLAUDE.md files
 (`christina-norman` 25, `private-plugins` 9) are Python-primary, and
 `woodworking-sim` has just one CLAUDE.md.
 
-**Partial substitute, used deliberately:** `D:/dev/spiritcrossing` -- 130
+**Partial substitute, used deliberately:** a large C#/C++ game corpus -- 130
 CLAUDE.md files, 1106 `.cs` alongside 1081 `.cpp`. C# is a different type
 system and documentation culture from the training corpus (nullable
 references, exceptions, LINQ), so it is a real precision test, just not the

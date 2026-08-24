@@ -479,10 +479,10 @@ def require_creatable_environment(
 
     This is what still catches the Git Bash case: under Git Bash, a
     declared ``PWD`` snapshots as a POSIX-style path
-    (``/d/dev/spiritcrossing/main``) with no drive letter. Resolved against
-    ``cwd`` (``D:\\dev\\spiritcrossing\\main``), ``ntpath.join`` takes the
+    (``/d/dev/example-project/main``) with no drive letter. Resolved against
+    ``cwd`` (``D:\\dev\\example-project\\main``), ``ntpath.join`` takes the
     drive from ``cwd`` and appends the POSIX value's path components
-    UNCHANGED -- ``D:\\d\\dev\\spiritcrossing\\main`` -- a DIFFERENT
+    UNCHANGED -- ``D:\\d\\dev\\example-project\\main`` -- a DIFFERENT
     location than ``cwd`` itself, so the refusal survives moving from exact
     string equality to resolved-location equality.
     """

@@ -35,7 +35,7 @@
     {
       "name": "bootstrap",
       "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
-      "version": "0.88.0",
+      "version": "0.88.1",
       "author": {
         "name": "Christina"
       },
@@ -71,7 +71,7 @@
     {
       "name": "skills-kit",
       "description": "Author and audit every md file a project loads or ships -- CLAUDE.md, SKILL.md, project docs, and their cross-references -- for placement, cohesion, and drift.",
-      "version": "0.62.0",
+      "version": "0.62.1",
       "author": {
         "name": "Christina"
       },
@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Render your installed marketplaces, plugins, and skills as a clickable HTML poster; plus file-backed task tracking.",
-      "version": "0.35.0",
+      "version": "0.35.1",
       "author": {
         "name": "Christina"
       },
@@ -164,7 +164,7 @@
     {
       "name": "content-pipeline-kit",
       "description": "Library + skills for LLM-in-the-loop batch content pipelines.",
-      "version": "0.15.0",
+      "version": "0.15.1",
       "author": {
         "name": "Christina"
       },

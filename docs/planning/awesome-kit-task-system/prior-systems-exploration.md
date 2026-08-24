@@ -1,6 +1,6 @@
 # kitaekatt-plugins: tasks-kit vs issues-kit — Architectural Exploration
 
-**Repo:** `/Users/christina/Dev/kitaekatt-plugins`
+**Repo:** a prior private plugins repository (not plugins-kit)
 **Plugins:** `plugins/tasks-kit` (v0.1.1) and `plugins/issues-kit` (v0.2.2)
 **Date:** 2026-06-09
 **Purpose:** Foundation for designing a NEW, simpler task/issue management system derived from these two generations.

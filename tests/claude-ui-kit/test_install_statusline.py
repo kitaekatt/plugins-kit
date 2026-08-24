@@ -326,9 +326,9 @@ class TestPortabilityDetection:
         the POSIX bare path -- must read as non-portable so they migrate."""
         assert not install_statusline._is_portable(
             '"C:/Program Files/Git/bin/bash.exe" '
-            '"C:/Users/truff/.claude/plugins/data/plugins-kit/claude-ui-kit/scripts/statusline.sh"')
+            '"C:/Users/someuser/.claude/plugins/data/plugins-kit/claude-ui-kit/scripts/statusline.sh"')
         assert not install_statusline._is_portable(
-            "/Users/christina/.claude/plugins/data/plugins-kit/claude-ui-kit/scripts/statusline.sh")
+            "/Users/someuser/.claude/plugins/data/plugins-kit/claude-ui-kit/scripts/statusline.sh")
 
 
 class TestLegacyMigration:
@@ -338,9 +338,9 @@ class TestLegacyMigration:
     """
 
     LEGACY_WINDOWS = ('"C:/Program Files/Git/bin/bash.exe" '
-                      '"C:/Users/truff/.claude/plugins/data/plugins-kit/'
+                      '"C:/Users/someuser/.claude/plugins/data/plugins-kit/'
                       'claude-ui-kit/scripts/statusline.sh"')
-    LEGACY_POSIX = ("/Users/christina/.claude/plugins/data/plugins-kit/"
+    LEGACY_POSIX = ("/Users/someuser/.claude/plugins/data/plugins-kit/"
                     "claude-ui-kit/scripts/statusline.sh")
 
     @pytest.mark.parametrize("legacy", [LEGACY_WINDOWS, LEGACY_POSIX])

@@ -329,8 +329,8 @@ def test_create_run_refuses_on_git_bash_pwd_flavour_mismatch(store, monkeypatch)
         WorkerEnvironmentMismatchError,
     )
 
-    monkeypatch.setattr(os_module, "getcwd", lambda: "D:\\dev\\spiritcrossing\\main")
-    monkeypatch.setenv("PWD", "/d/dev/spiritcrossing/main")
+    monkeypatch.setattr(os_module, "getcwd", lambda: "D:\\dev\\example-project\\main")
+    monkeypatch.setenv("PWD", "/d/dev/example-project/main")
     adapter = RunAdapter(
         user_for=lambda u: f"user:{u.id}",
         parse_fn=lambda t: t,
@@ -355,7 +355,7 @@ def test_create_run_a_content_root_var_that_differs_from_cwd_is_not_refused(stor
 
     from content_pipeline.execution.adapter import WorkerEnvironment
 
-    fake_cwd = "D:\\dev\\spiritcrossing\\main"
+    fake_cwd = "D:\\dev\\example-project\\main"
     monkeypatch.setattr(os_module, "getcwd", lambda: fake_cwd)
     monkeypatch.setenv("CONTENT_ROOT", fake_cwd + "\\plugins")
     adapter = RunAdapter(

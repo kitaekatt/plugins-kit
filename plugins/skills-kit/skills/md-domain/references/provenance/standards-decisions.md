@@ -90,7 +90,7 @@ claude_md:
         clause. One blocking defect found and fixed: enumeration depth was
         unspecified while the disposition is an APPLIED FIX, so a lane could
         write a NEW wrong number (12 rather than 19) into the doc.
-        Precision (spiritcrossing, HELD OUT, C#/C++): 4 true positives,
+        Precision (a large C#/C++ game corpus, HELD OUT): 4 true positives,
         2 false positives, 6 correct suppressions. Both false positives were in
         the ENUMERATION half and produced the closed-set and unit-ambiguity
         gates now in the rule -- membership decided by template / attribute /
