@@ -5661,16 +5661,32 @@ def _validate_env_machines(ctx, merged, hostname, current_os):
             name="machines",
             message=(
                 f"Unknown machine '{hostname}'. Known machines: {known}. "
-                f"Add it to ~/.claude/env.json under 'machines'."
+                f"Either the registry is missing this machine, or the "
+                f"hostname itself is wrong (an OS reinstall resets it) -- "
+                f"check which before changing either."
             ),
             agent_msg=(
+                # TWO causes, and the engine cannot tell them apart. Naming
+                # only the first one was a real defect: after an OS reinstall
+                # resets a hostname, "add it to the registry" writes a
+                # reinstall artifact into the FLEET registry permanently, and
+                # the reader has no signal that the other repair exists. State
+                # both and let the human decide which side is wrong.
                 f"This machine's hostname '{hostname}' is not declared in "
                 f"the env.json machines registry (known machines: {known}). "
                 f"env.json personalization refuses to run on an unknown "
-                f"machine -- no fallbacks. Add the hostname to "
+                f"machine -- no fallbacks. There are TWO possible causes and "
+                f"bootstrap cannot distinguish them, so do NOT pick one "
+                f"silently: either (1) this is a genuinely new machine and "
+                f"the registry is incomplete -- add the hostname to "
                 f"~/.claude/env.json under 'machines' (value at minimum "
-                f'{{"os": "macos|ubuntu|windows"}}), then ask the user to '
-                f"type 'fix-all' to re-run bootstrap. bootstrap.json "
+                f'{{"os": "macos|ubuntu|windows"}}); or (2) the HOSTNAME is '
+                f"the error -- an OS reinstall or a rename left this machine "
+                f"answering to the wrong name, and the fix is to restore the "
+                f"hostname, NOT to add it to the registry (doing so records "
+                f"the reinstall artifact in the fleet registry permanently). "
+                f"Ask the user which it is, then apply that repair and ask "
+                f"them to type 'fix-all' to re-run bootstrap. bootstrap.json "
                 f"provisioning is unaffected."
             ),
             persist_across_sessions=True,
@@ -6255,6 +6271,38 @@ def _user_visible_log(log_content):
     return "\n".join(kept).strip("\n")
 
 
+_USER_NOTICE_BLOCK_MARKER = " notice"
+
+
+def _user_notice_blocks(log_content):
+    """Just the reload/restart notice blocks from log content, or "".
+
+    Companion to `_user_visible_log`, and it exists because dropping the log
+    from the user's half of a collapsed message would otherwise drop these with
+    it. Reload and bootstrap-staleness notices are NOT failures -- they ride in
+    the display output as ordinary lines under a `<label> notice` header, and
+    `additionalContext` deliberately carries no directive telling Claude to
+    surface them (whether and when to restart is the user's call -- see
+    plugin-reload-lifecycle.md). So the user's copy is the ONLY copy that
+    reaches a human, and suppressing the log must not suppress these too.
+
+    Block boundaries follow `_user_visible_log`: a block runs from its
+    ``--- ... ---`` header to the next header. Content before any header
+    belongs to no block and is therefore never a notice.
+    """
+    if not log_content:
+        return ""
+    kept, keeping = [], False
+    for line in log_content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("--- "):
+            header = stripped[4:]
+            keeping = _USER_NOTICE_BLOCK_MARKER in header.split(":", 1)[0]
+        if keeping:
+            kept.append(line)
+    return "\n".join(kept).strip("\n")
+
+
 def _join_user_msg(*parts):
     """Join the non-empty pieces of a systemMessage body with blank lines."""
     return "\n\n".join(p for p in parts if p and p.strip())
@@ -6356,6 +6404,22 @@ def _visible_failures(failures):
     if not any(f.get("type") == "elevation_script" for f in failures):
         return failures
     return [f for f in failures if not _spoken_for(f)]
+
+
+def _collapse_occurred(failures):
+    """True when the aggregate exists AND actually speaks for something.
+
+    The predicate for dropping the raw action log from the USER's half of a
+    mixed-failure message. `_visible_failures` collapses the failure LIST, but
+    the log is built from every action entry the pass emitted, so a pass with
+    one root cause and a handful of unrelated stragglers still handed the user
+    one line per DEPENDENT. When a collapse happened, the collated per-item
+    summary (`_auto_user_msg` / `_ask_user_msg`, both built from the collapsed
+    set) is the one-line-per-root-cause surface and the log is the noise it
+    exists to replace. Claude's half keeps the log verbatim either way.
+    """
+    return any(f.get("type") == "elevation_script" for f in failures) and \
+        any(_spoken_for(f) for f in failures)
 
 
 def _is_elevation_only(failures):
@@ -6770,6 +6834,7 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
     # once per item is what made this output unreadable. Suppression is
     # conditional on the aggregate actually existing -- if the queue write
     # failed there is nothing speaking for them, so they must surface raw.
+    collapsed = _collapse_occurred(failures)
     failures = _visible_failures(failures)
 
     for i, f in enumerate(failures, 1):
@@ -6927,6 +6992,27 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
         return
 
     # General path: mixed failures.
+    #
+    # The user's half of the log is dropped once a collapse has happened. The
+    # log carries one line per ITEM -- including every dependent the aggregate
+    # already speaks for -- so a pass whose failures collapsed to one root cause
+    # plus a few stragglers still handed the reader the uncollapsed list, which
+    # is the exact readability problem the aggregate exists to solve. `user_msg`
+    # is built from the COLLAPSED set and names one line per root cause, so it
+    # is a strict improvement on the log here rather than a reduction. When
+    # nothing collapsed the log is the only per-item detail the user has, and it
+    # is kept verbatim. Claude's `additionalContext` always keeps the full log.
+    # The notice blocks are carried across explicitly. They are not failures
+    # and `user_msg` does not contain them, so without this the user loses a
+    # "restart to load it" notice on any collapsed pass that also installed a
+    # plugin -- suppressing noise would be suppressing a signal, which is the
+    # exact defect class this whole change exists to remove.
+    user_body = (
+        _join_user_msg(f"{label} -> Setup issues found:", user_msg,
+                       _user_notice_blocks(log_content),
+                       "Full details of this pass are in bootstrap.log.")
+        if collapsed else None
+    )
     if output_file:
         # Background mode: consumed by UserPromptSubmit hook.
         # `additionalContext` gives Claude the full log + fix directives,
@@ -6935,7 +7021,7 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
         response = {
             "continue": True,
             "suppressOutput": False,
-            "systemMessage": _join_user_msg(
+            "systemMessage": user_body or _join_user_msg(
                 f"{label} -> Setup issues found. Fix in order:\n"
                 f"{_user_visible_log(log_content)}".rstrip(),
                 user_msg,
@@ -6953,7 +7039,8 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
         response = {
             "continue": True,
             "suppressOutput": False,
-            "systemMessage": f"{label}:\n{_user_visible_log(log_content)}".rstrip(),
+            "systemMessage": user_body or
+                f"{label}:\n{_user_visible_log(log_content)}".rstrip(),
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": agent_msg,

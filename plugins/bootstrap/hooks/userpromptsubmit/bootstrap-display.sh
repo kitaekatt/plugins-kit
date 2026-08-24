@@ -151,9 +151,29 @@ if [ -z "$_RESCUE_LAUNCHED" ]; then
     _run_harvest
 fi
 
-# --- Display relay (unchanged) ---
+# --- Display relay ---
 # The engine writes its display JSON to bootstrap_display.pending; surface it
 # once, then rename so it isn't shown again.
+#
+# The pass that WROTE the file and the prompt that READS it are not the same
+# moment: a pending file waits on disk until some session's first prompt picks
+# it up, so a session that started after a skipped pass can be handed a verdict
+# produced long before it. Nothing in the payload said when the pass ran, so
+# "Setup issues found" read as a statement about the machine right now.
+# bootstrap_lib/display_relay.py stamps the message with its own age (derived
+# from the pending file's mtime) before emitting it, and consumes the file
+# itself -- so on success we must NOT also cat it.
+#
+# The plain cat + mv below stays as the fallback, and it is load-bearing rather
+# than defensive: on a fresh machine there is no Python yet, and the pending
+# file is often the message that says exactly that. Never let the age stamp
+# cost the user their bootstrap message.
 [ -f "$PENDING" ] || exit 0
+if [ -n "$_BOOT_PY" ] && [ -f "$PLUGIN_ROOT/bootstrap_lib/display_relay.py" ]; then
+    if "$_BOOT_PY" "$PLUGIN_ROOT/bootstrap_lib/display_relay.py" \
+        --data-dir "$DATA_DIR" 2>/dev/null; then
+        exit 0
+    fi
+fi
 cat "$PENDING"
 mv -f "$PENDING" "${DATA_DIR}/bootstrap_display.displayed"

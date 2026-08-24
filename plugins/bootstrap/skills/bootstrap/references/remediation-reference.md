@@ -188,6 +188,16 @@ per-task prompt. Ctrl-C, or an EOF because there is no console to confirm on,
 returns `EXIT_ABORTED` (4): nothing was attempted, the queue stays on disk, and
 the engine re-offers it next session.
 
+**The notice blocks survive the suppression.** Reload and
+bootstrap-staleness notices are not failures -- they ride in the display
+output under a `<label> notice` header, and `additionalContext` deliberately
+carries no directive telling Claude to surface them, because whether and when
+to restart is the user's call. The user's copy is therefore the ONLY copy that
+reaches a human. Dropping the log wholesale would have dropped those with it,
+so `_user_notice_blocks` extracts them and the collapsed message carries them
+explicitly. Suppressing noise must not suppress a signal; that is the same
+defect class the collapse itself exists to remove.
+
 **One cask, one task.** `queue_from_failures` deduplicates `brew_cask`
 descriptors by their cask token. A cask is legitimately declared by more than one
 plugin -- p4-kit and unreal-kit both declare the `p4` client, because each
@@ -367,6 +377,26 @@ while the aggregate exists, since it speaks for them; without an aggregate they
 surface raw rather than vanishing. There is **no `fixed` ritual on this path**:
 the env gate re-runs the phase every session until `last_result` is clean, so
 confirming would be redundant.
+
+### What the user sees when a collapse happened but stragglers remain
+
+The focused message above needs *every* failure to be the aggregate or spoken
+for by it. One unrelated failure defeats that, and the mixed path used to
+prepend the raw action log to the user's message -- one line per ITEM, including
+every dependent the aggregate already speaks for. A machine missing one
+prerequisite that blocks many tools therefore still handed the reader the
+uncollapsed list.
+
+So the mixed path drops the log from the **user's** half whenever a collapse
+actually occurred (`_collapse_occurred`: an aggregate exists *and* at least one
+failure carries an `elevation` descriptor). What remains is the per-item summary
+built from the collapsed set -- one line per root cause, the aggregate expanding
+into its queued task labels -- plus a pointer to `bootstrap.log` for the full
+pass. When nothing collapsed, the log is the only per-item detail the user has
+and it is kept verbatim.
+
+Claude's `additionalContext` is unaffected on both paths: it always carries the
+complete log alongside the numbered remediation steps.
 
 ## Display Timing
 

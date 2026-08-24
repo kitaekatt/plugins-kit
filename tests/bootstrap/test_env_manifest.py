@@ -296,8 +296,37 @@ class TestMachinesValidation:
         assert failure["persist_across_sessions"] is True
         assert "Unknown machine 'stranger'" in failure["message"]
         assert "testhost" in failure["message"]  # known machines listed
-        assert "Add it to ~/.claude/env.json" in failure["message"]
         assert read_env_state(str(run_env_pass.data_dir))["last_result"] == "failed"
+
+    def test_unknown_machine_advice_names_both_causes(
+            self, isolated_home, run_env_pass):
+        """The engine cannot tell an incomplete registry from a wrong hostname.
+
+        Prescribing only "add it to the registry" is actively harmful in the
+        second case: after an OS reinstall resets a hostname, following that
+        advice records the reinstall artifact in the FLEET registry
+        permanently. Both repairs must be named, and neither presented as
+        the answer.
+        """
+        _write_json(isolated_home / ".claude" / "env.json", MACHINES_ONLY)
+
+        result = run_env_pass(hostname="stranger")
+        failure = result.failures[0]
+
+        # The user-facing line flags the ambiguity rather than resolving it.
+        assert "hostname itself is wrong" in failure["message"]
+
+        agent_msg = failure["agent_msg"]
+        # Cause 1: registry incomplete.
+        assert "registry is incomplete" in agent_msg
+        assert "~/.claude/env.json" in agent_msg
+        # Cause 2: the hostname is the error -- and the warning against
+        # applying cause 1's repair to it.
+        assert "HOSTNAME is the error" in agent_msg
+        assert "restore the hostname" in agent_msg
+        assert "fleet registry permanently" in agent_msg
+        # The agent must ask rather than choose.
+        assert "Ask the user which it is" in agent_msg
 
     def test_os_mismatch_is_hard_error(self, isolated_home, run_env_pass):
         _write_json(isolated_home / ".claude" / "env.json",

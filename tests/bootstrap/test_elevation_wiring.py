@@ -509,3 +509,141 @@ class TestNextSessionPickup:
         p2 = elev.write_or_clear_queue(q2, data_dir, "ubuntu")
         assert p2 is None
         assert not os.path.exists(p1)
+
+
+# --------------------------------------------------------------------------- #
+# The collapsed-message leak: a mixed pass whose failures DID collapse must not
+# hand the user the uncollapsed action log. Acceptance: one line per ROOT CAUSE,
+# not one per dependent.
+# --------------------------------------------------------------------------- #
+
+class TestCollapsedMessageDropsTheLog:
+    def _agg(self, current_os, data_dir, fix_all_cmd=None):
+        tasks = elev.queue_from_failures(
+            [{"elevation": {"method": "brew_installer", "os": current_os}}],
+            current_os)
+        agg = elev.fix_queue_failure(tasks, current_os, data_dir)
+        if fix_all_cmd:
+            agg["fix_all_cmd"] = fix_all_cmd
+        return agg
+
+    def _spoken_for(self, name):
+        return {"type": "tool", "name": name, "message": "brew unavailable",
+                "install_state": "brew_failed", "install_cmd": None,
+                "elevation": {"method": "brew_installer", "os": "macos"}}
+
+    LOG = ("--- bootstrap: 1. p4: brew unavailable 2. age: brew unavailable "
+           "3. widget: FAILED ---")
+
+    def test_collapse_predicate_needs_both_halves(self):
+        agg = self._agg("macos", "/data")
+        assert engine._collapse_occurred([self._spoken_for("p4"), agg]) is True
+        # Aggregate present but speaking for nothing (queue built elsewhere):
+        # nothing was collapsed, so the log is still the user's only detail.
+        assert engine._collapse_occurred([{"type": "tool", "name": "w"}, agg]) is False
+        # No aggregate at all -- suppression is a no-op by design.
+        assert engine._collapse_occurred([self._spoken_for("p4")]) is False
+
+    def test_mostly_spoken_for_pass_emits_the_focused_summary(self, tmp_path):
+        """Two brew-backed tools collapse into the aggregate; one unrelated
+        failure remains. The user gets the root cause plus the straggler -- not
+        the three-item action log."""
+        agg = self._agg("macos", "/data")
+        straggler = {"type": "tool", "name": "widget",
+                     "install_state": "manual_install", "message": "no installer"}
+        out = tmp_path / "pending.json"
+        engine.emit_failure_response(
+            [self._spoken_for("p4"), self._spoken_for("age"), straggler, agg],
+            current_os="macos", log_content=self.LOG,
+            label="mkt:bootstrap@test", output_file=str(out))
+        payload = json.loads(out.read_text())
+        sm = payload["systemMessage"]
+        assert "brew unavailable" not in sm       # the leak is gone
+        assert "Fix in order:" not in sm
+        assert "bootstrap.log" in sm              # pointer to the full detail
+        assert "no installer" in sm               # straggler still named
+        # Claude's half is untouched: it keeps the whole log.
+        assert self.LOG in payload["hookSpecificOutput"]["additionalContext"]
+
+    def test_unrelated_failures_only_still_get_the_full_log(self, tmp_path):
+        """No collapse happened, so the log is the only per-item detail the
+        user has and it is kept verbatim."""
+        out = tmp_path / "pending.json"
+        engine.emit_failure_response(
+            [{"type": "tool", "name": "widget", "install_state": "manual_install"},
+             {"type": "venv", "message": "sync failed", "plugin": "x",
+              "remediation_cmd": "uv sync"}],
+            current_os="macos", log_content=self.LOG,
+            label="mkt:bootstrap@test", output_file=str(out))
+        sm = json.loads(out.read_text())["systemMessage"]
+        assert "brew unavailable" in sm
+        assert "Fix in order:" in sm
+
+    def test_sessionstart_path_collapses_too(self, capsys):
+        """The non-background branch emitted ONLY the log, so dropping it there
+        has to substitute the summary rather than leave a bare label."""
+        agg = self._agg("macos", "/data")
+        straggler = {"type": "tool", "name": "widget",
+                     "install_state": "manual_install", "message": "no installer"}
+        engine.emit_failure_response(
+            [self._spoken_for("p4"), straggler, agg],
+            current_os="macos", log_content=self.LOG,
+            label="mkt:bootstrap@test")
+        sm = json.loads(capsys.readouterr().out)["systemMessage"]
+        assert "brew unavailable" not in sm
+        assert "no installer" in sm
+        assert sm.strip() != "mkt:bootstrap@test:"
+
+
+class TestCollapsedMessageKeepsNotices:
+    """Suppressing the log must not suppress the reload/restart notices.
+
+    They are not failures, `user_msg` does not contain them, and
+    `additionalContext` deliberately carries no directive telling Claude to
+    surface them (whether and when to restart is the user's call). So the
+    user's copy is the ONLY copy that reaches a human -- dropping the log
+    wholesale silently dropped a signal along with the noise.
+    """
+
+    def _agg(self, current_os, data_dir):
+        tasks = elev.queue_from_failures(
+            [{"elevation": {"method": "brew_installer", "os": current_os}}],
+            current_os)
+        return elev.fix_queue_failure(tasks, current_os, data_dir)
+
+    def _spoken_for(self, name):
+        return {"type": "tool", "name": name, "message": "brew unavailable",
+                "install_state": "brew_failed", "install_cmd": None,
+                "elevation": {"method": "brew_installer", "os": "macos"}}
+
+    NOTICE = "bootstrap installed new plugin(s): hue-kit. Run /reload-plugins to start using them."
+    LOG_WITH_NOTICE = (
+        "--- bootstrap: 1. p4: brew unavailable 2. age: brew unavailable ---\n"
+        "--- bootstrap notice: 1. " + NOTICE + " ---"
+    )
+
+    def test_notice_blocks_are_extracted(self):
+        kept = engine._user_notice_blocks(self.LOG_WITH_NOTICE)
+        assert self.NOTICE in kept
+        assert "brew unavailable" not in kept
+
+    def test_no_notice_block_yields_nothing(self):
+        assert engine._user_notice_blocks(
+            "--- bootstrap: 1. p4: brew unavailable ---") == ""
+        assert engine._user_notice_blocks("") == ""
+        assert engine._user_notice_blocks(None) == ""
+
+    def test_collapsed_message_still_carries_the_reload_notice(self, tmp_path):
+        agg = self._agg("macos", "/data")
+        straggler = {"type": "tool", "name": "widget",
+                     "install_state": "manual_install", "message": "no installer"}
+        out = tmp_path / "pending.json"
+        engine.emit_failure_response(
+            [self._spoken_for("p4"), self._spoken_for("age"), straggler, agg],
+            current_os="macos", log_content=self.LOG_WITH_NOTICE,
+            label="mkt:bootstrap@test", output_file=str(out))
+        sm = json.loads(out.read_text())["systemMessage"]
+        # The signal survives...
+        assert "/reload-plugins" in sm
+        # ...while the per-dependent noise is still gone.
+        assert "brew unavailable" not in sm
