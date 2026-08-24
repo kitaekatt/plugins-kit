@@ -671,8 +671,23 @@ def resolve(profile: Profile) -> None:
     _check_value_set_cycles(profile)
 
 
+def _has_identity_less_rows(profile: Profile, type_id: str) -> bool:
+    """Whether a type has rows that the corpus must load without identities."""
+    target = profile.types[type_id]
+    return not target.identified_by and any(
+        source.layout == "rows" for source in profile.sources_for(type_id)
+    )
+
+
 def _resolve_type(profile: Profile, spec: TypeSpec) -> None:
     where = "type '{0}'".format(spec.id)
+    if spec.extensible is not None and _has_identity_less_rows(profile, spec.id):
+        raise ProfileError(
+            "{0}: identity-less type '{1}' cannot declare 'extensible:'".format(
+                where, spec.id
+            ),
+            spec.document,
+        )
     fields = list(spec.every_possible_field().items())
     if spec.open is not None:
         fields.append(("open", spec.open.type))
@@ -688,17 +703,28 @@ def _resolve_type(profile: Profile, spec: TypeSpec) -> None:
 
 def _resolve_field(profile: Profile, field: FieldSpec, where: str, owner: TypeSpec) -> None:
     document = owner.document
-    if field.to is not None and field.to not in profile.types:
-        raise ProfileError(
-            "{0}: 'ref' to unknown type '{1}'".format(where, field.to), document
-        )
+    if field.to is not None:
+        if field.to not in profile.types:
+            raise ProfileError(
+                "{0}: 'ref' to unknown type '{1}'".format(where, field.to), document
+            )
+        if _has_identity_less_rows(profile, field.to):
+            raise ProfileError(
+                "{0}: identity-less type '{1}' cannot be a 'ref' target".format(
+                    where, field.to
+                ),
+                document,
+            )
     if field.values_from is not None:
-        _resolve_value_path(
+        walked = _resolve_value_path(
             profile,
             field.values_from,
             where,
             document,
             value_set_owner=field,
+        )
+        _refuse_identity_less_id_set(
+            profile, walked, "values_from", where, document
         )
     if field.shape_from is not None:
         _resolve_value_path(profile, field.shape_from, where, document)
@@ -716,6 +742,24 @@ def _resolve_field(profile: Profile, field: FieldSpec, where: str, owner: TypeSp
             _resolve_field(profile, child, where, owner)
     for name, child in field.fields.items():
         _resolve_field(profile, child, "{0}.{1}".format(where, name), owner)
+
+
+def _refuse_identity_less_id_set(
+    profile: Profile,
+    walked: PathWalk,
+    declaration: str,
+    where: str,
+    document: Path | None,
+) -> None:
+    """Reject id sets supplied to ``values_from:`` or ``record_keys_from:``."""
+    if not _has_identity_less_rows(profile, walked.type_id):
+        return
+    raise ProfileError(
+        "{0}: identity-less type '{1}' cannot supply an id set to '{2}:'".format(
+            where, walked.type_id, declaration
+        ),
+        document,
+    )
 
 
 def resolve_field_path(profile: Profile, path: str) -> PathWalk:
@@ -1117,11 +1161,16 @@ def _resolve_source(profile: Profile, source: SourceSpec) -> None:
         raise ProfileError(
             "{0}: 'of:' names unknown type '{1}'".format(where, source.of), source.document
         )
-    if source.layout != "single" and not target.identified_by:
+    if source.layout == "file_per_record" and not target.identified_by:
         raise ProfileError(
             "{0}: layout '{1}' needs records to have an identity, but type '{2}' declares "
             "no 'identified_by:'".format(where, source.layout, source.of),
             source.document,
         )
     if source.record_keys_from is not None:
-        _resolve_value_path(profile, source.record_keys_from, where, source.document)
+        walked = _resolve_value_path(
+            profile, source.record_keys_from, where, source.document
+        )
+        _refuse_identity_less_id_set(
+            profile, walked, "record_keys_from", where, source.document
+        )

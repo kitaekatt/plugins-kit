@@ -256,8 +256,17 @@ def _load_keyed_map(
 def _keyed_map_records(
     profile: Profile, corpus: Corpus, source: SourceSpec, document: dict, name: str
 ) -> Iterator[tuple[str, Any]]:
+    metadata = {str(k) for k in (source.metadata_keys or [])}
     if source.record_keys is not None:
         wanted = [str(k) for k in source.record_keys]
+        _report_unknown_keyed_map_keys(
+            corpus,
+            document,
+            name,
+            set(wanted),
+            metadata,
+            "declared record keys",
+        )
         for key in wanted:
             if key not in document:
                 corpus.diagnostics.append(
@@ -268,6 +277,14 @@ def _keyed_map_records(
         return
     if source.record_keys_from is not None:
         wanted = {str(v) for v in resolve_value_set(profile, corpus, source.record_keys_from)}
+        _report_unknown_keyed_map_keys(
+            corpus,
+            document,
+            name,
+            wanted,
+            metadata,
+            "declared record keys from '{0}'".format(source.record_keys_from),
+        )
         for key in document:
             if str(key) in wanted:
                 yield str(key), document[key]
@@ -282,10 +299,39 @@ def _keyed_map_records(
                     )
                 )
         return
-    metadata = {str(k) for k in (source.metadata_keys or [])}
     for key in document:
         if str(key) not in metadata:
             yield str(key), document[key]
+
+
+def _report_unknown_keyed_map_keys(
+    corpus: Corpus,
+    document: dict[Any, Any],
+    name: str,
+    record_keys: set[str],
+    metadata_keys: set[str],
+    record_keys_label: str,
+) -> None:
+    """Refuse top-level keys outside both declared ``keyed_map`` sets."""
+    unknown = sorted(
+        {str(key) for key in document} - record_keys - metadata_keys
+    )
+    record_keys_text = ", ".join(sorted(record_keys))
+    metadata_keys_text = ", ".join(sorted(metadata_keys))
+    for key in unknown:
+        corpus.diagnostics.append(
+            Diagnostic(
+                "unknown keyed_map key '{0}'; {1}: [{2}]; declared metadata keys: "
+                "[{3}]".format(
+                    key,
+                    record_keys_label,
+                    record_keys_text,
+                    metadata_keys_text,
+                ),
+                name,
+                record=key,
+            )
+        )
 
 
 def resolve_value_set(profile: Profile, corpus: Corpus, path: str) -> list[Any]:

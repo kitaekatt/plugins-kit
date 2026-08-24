@@ -619,7 +619,8 @@ generated_by: tools/generate_catalog.py
 - `rows` -- a list of records in one file. `key:` names the containing key;
   OMIT it when the document IS the sequence, which is what a generated table
   typically looks like (the file opens with `- id: ...` under a banner
-  comment).
+  comment). A `rows` type can omit `identified_by:`. Such rows have no
+  identity.
 - `file_per_record` -- one record per file matching `path:` as a glob. The
   record's `identified_by:` field remains the identity; the filename must
   AGREE with it, and a disagreement is a validation error naming both. The
@@ -627,10 +628,33 @@ generated_by: tools/generate_catalog.py
   -- which is the only arrangement consistent with one fact having one home.
 - `keyed_map` -- records as top-level keys of a document, which requires
   `record_keys:` / `record_keys_from:` or `metadata_keys:` to separate records
-  from the document's own metadata keys sitting at the same level.
+  from the document's own metadata keys sitting at the same level. A
+  `keyed_map` record's document key IS its identity. `identified_by:` is not
+  required on the type.
 - `single` -- the whole document IS one record of `of:`, with its top-level
   keys as that record's fields. No identity is needed and `identified_by:` is
   not required on the type.
+
+An identity-less row is addressed as `(file, ordinal)`. The ordinal is its
+zero-based position in the source file. Every persisted address MUST carry a
+content guard. A content-guard mismatch is an error, and the address never
+resolves to a different row.
+
+Identity-less rows are allowed only when no construct addresses them by
+identity. The profile loader refuses an identity-less type in these cases:
+
+- Any `ref` names the type in `to:`.
+- The type declares `extensible:`.
+- A `values_from:` or `record_keys_from:` path names the type's id set.
+
+Each refusal names the identity-less type and the declaration that requires
+the identity.
+
+When `record_keys:` or `record_keys_from:` supplies a record-key set,
+`metadata_keys:` must enumerate every other top-level key. A key in neither
+set is a load error. The error names the unknown key, the source document,
+the declared record-key set, and the declared metadata-key set. The loader
+never treats an undeclared key as metadata.
 
 `single` is not a degenerate case to be tidied away later. A corpus's most
 load-bearing files are routinely one-of-a-kind documents -- a manifest, a

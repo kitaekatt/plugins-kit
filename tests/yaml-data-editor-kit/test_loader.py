@@ -304,7 +304,7 @@ fields:
     assert "which type 'product' does not declare" in str(caught.value)
 
 
-def test_a_non_single_layout_needs_the_type_to_have_an_identity(profile_dir, write) -> None:
+def test_file_per_record_needs_the_type_to_have_an_identity(profile_dir, write) -> None:
     write(
         "profile/settings.yaml",
         """
@@ -315,10 +315,138 @@ fields:
 ---
 dialect: source/1
 of: settings
-layout: rows
-path: content/settings.yaml
+layout: file_per_record
+path: content/settings/*.yaml
 """,
     )
     with pytest.raises(ProfileError) as caught:
         load_profile(profile_dir)
     assert "declares no 'identified_by:'" in str(caught.value)
+
+
+def test_identity_less_rows_cannot_be_a_ref_target(profile_dir, write) -> None:
+    write(
+        "profile/types.yaml",
+        """
+dialect: type/1
+id: note
+fields:
+  text: { type: text }
+---
+dialect: type/1
+id: product
+identified_by: id
+fields:
+  id:   { type: id }
+  note: { type: ref, to: note }
+---
+dialect: source/1
+of: note
+layout: rows
+path: content/notes.yaml
+""",
+    )
+
+    with pytest.raises(ProfileError) as caught:
+        load_profile(profile_dir)
+
+    message = str(caught.value)
+    assert "type 'product' field 'note'" in message
+    assert "identity-less type 'note' cannot be a 'ref' target" in message
+
+
+def test_identity_less_rows_cannot_be_extensible(profile_dir, write) -> None:
+    write(
+        "profile/note.yaml",
+        """
+dialect: type/1
+id: note
+fields:
+  text: { type: text }
+extensible:
+  via: extends
+---
+dialect: source/1
+of: note
+layout: rows
+path: content/notes.yaml
+""",
+    )
+
+    with pytest.raises(ProfileError) as caught:
+        load_profile(profile_dir)
+
+    assert "identity-less type 'note' cannot declare 'extensible:'" in str(caught.value)
+
+
+def test_identity_less_rows_cannot_supply_a_values_from_id_set(profile_dir, write) -> None:
+    write(
+        "profile/types.yaml",
+        """
+dialect: type/1
+id: note
+fields:
+  code: { type: id }
+  text: { type: text }
+---
+dialect: type/1
+id: product
+identified_by: id
+fields:
+  id:        { type: id }
+  note_code: { type: enum, values_from: note.code }
+---
+dialect: source/1
+of: note
+layout: rows
+path: content/notes.yaml
+""",
+    )
+
+    with pytest.raises(ProfileError) as caught:
+        load_profile(profile_dir)
+
+    message = str(caught.value)
+    assert "type 'product' field 'note_code'" in message
+    assert "identity-less type 'note' cannot supply an id set to 'values_from:'" in message
+
+
+def test_identity_less_rows_cannot_supply_a_record_keys_from_id_set(
+    profile_dir, write
+) -> None:
+    write(
+        "profile/types.yaml",
+        """
+dialect: type/1
+id: note
+fields:
+  code: { type: id }
+  text: { type: text }
+---
+dialect: type/1
+id: product
+fields:
+  name: { type: string }
+---
+dialect: source/1
+of: note
+layout: rows
+path: content/notes.yaml
+---
+dialect: source/1
+of: product
+layout: keyed_map
+path: content/products.yaml
+record_keys_from: note.code
+""",
+    )
+
+    with pytest.raises(ProfileError) as caught:
+        load_profile(profile_dir)
+
+    message = str(caught.value)
+    assert "source for 'product'" in message
+    assert (
+        "identity-less type 'note' cannot supply an id set to 'record_keys_from:'"
+        in message
+    )

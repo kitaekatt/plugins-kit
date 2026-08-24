@@ -85,6 +85,41 @@ path: content/products.yaml
     assert errors_only(validate_corpus(profile, tmp_path)) == []
 
 
+def test_rows_without_identified_by_load_as_identity_less_records(
+    tmp_path, profile_dir, write
+) -> None:
+    profile = _profile(
+        profile_dir,
+        write,
+        """
+dialect: source/1
+of: product
+layout: rows
+path: content/products.yaml
+""",
+        type_doc="""
+dialect: type/1
+id: product
+fields:
+  name:     { type: string }
+  category: { type: string }
+""",
+    )
+    write(
+        "content/products.yaml",
+        """
+- { name: Bolt, category: fastener }
+- { name: Washer, category: spacer }
+""",
+    )
+
+    corpus = load_corpus(profile, tmp_path)
+
+    assert [record.identity for record in corpus.records] == [None, None]
+    assert [record.data["name"] for record in corpus.records] == ["Bolt", "Washer"]
+    assert errors_only(validate_corpus(profile, tmp_path)) == []
+
+
 def test_rows_missing_the_declared_containing_key_names_the_file(tmp_path, profile_dir, write) -> None:
     profile = _profile(
         profile_dir,
@@ -170,6 +205,99 @@ nut:  { id: nut, name: Nut }
     assert errors_only(validate_corpus(profile, tmp_path)) == []
 
 
+def test_keyed_map_uses_document_keys_as_identity_without_identified_by(
+    tmp_path, profile_dir, write
+) -> None:
+    profile = _profile(
+        profile_dir,
+        write,
+        """
+dialect: source/1
+of: product
+layout: keyed_map
+path: content/catalog.yaml
+metadata_keys: [revision]
+""",
+        type_doc="""
+dialect: type/1
+id: product
+fields:
+  name: { type: string }
+""",
+    )
+    write(
+        "content/catalog.yaml",
+        """
+revision: 4
+bolt: { name: Bolt }
+nut:  { name: Nut }
+""",
+    )
+
+    corpus = load_corpus(profile, tmp_path)
+
+    assert sorted(record.identity for record in corpus.records) == ["bolt", "nut"]
+    assert errors_only(validate_corpus(profile, tmp_path)) == []
+
+
+def test_keyed_map_document_keys_are_ref_identities_without_identified_by(
+    tmp_path, profile_dir, write
+) -> None:
+    write(
+        "profile/category.yaml",
+        """
+dialect: type/1
+id: category
+fields:
+  label: { type: string }
+---
+dialect: source/1
+of: category
+layout: keyed_map
+path: content/categories.yaml
+metadata_keys: [revision]
+""",
+    )
+    write(
+        "profile/product.yaml",
+        """
+dialect: type/1
+id: product
+identified_by: id
+fields:
+  id:       { type: id }
+  category: { type: ref, to: category }
+---
+dialect: source/1
+of: product
+layout: rows
+path: content/products.yaml
+""",
+    )
+    write(
+        "content/categories.yaml",
+        """
+revision: 1
+hardware: { label: Hardware }
+""",
+    )
+    write(
+        "content/products.yaml",
+        """
+- { id: bolt, category: hardware }
+- { id: mystery, category: missing }
+""",
+    )
+
+    profile = load_profile(profile_dir)
+    problems = errors_only(validate_corpus(profile, tmp_path))
+
+    assert len(problems) == 1
+    assert problems[0].record == "mystery"
+    assert problems[0].field == "category"
+    assert "names no record of type 'category'" in problems[0].message
+
+
 def test_keyed_map_with_record_keys_from_another_types_id_set(tmp_path, profile_dir, write) -> None:
     write(
         "profile/product.yaml",
@@ -196,6 +324,7 @@ of: price
 layout: keyed_map
 path: content/prices.yaml
 record_keys_from: product.id
+metadata_keys: [revision]
 """,
     )
     write("content/products.yaml", "- { id: bolt, name: Bolt }\n- { id: nut, name: Nut }\n")
@@ -211,6 +340,59 @@ nut:  { amount: 45 }
     corpus = load_corpus(profile, tmp_path)
     assert sorted(r.identity for r in corpus.of_type("price")) == ["bolt", "nut"]
     assert errors_only(validate_corpus(profile, tmp_path)) == []
+
+
+def test_keyed_map_refuses_a_key_declared_as_neither_record_nor_metadata(
+    tmp_path, profile_dir, write
+) -> None:
+    write(
+        "profile/product.yaml",
+        PRODUCT_TYPE
+        + """
+---
+dialect: source/1
+of: product
+layout: rows
+path: content/products.yaml
+""",
+    )
+    write(
+        "profile/price.yaml",
+        """
+dialect: type/1
+id: price
+identified_by: id
+fields:
+  amount: { type: int, unit: cents }
+---
+dialect: source/1
+of: price
+layout: keyed_map
+path: content/prices.yaml
+record_keys_from: product.id
+metadata_keys: [revision]
+""",
+    )
+    write("content/products.yaml", "- { id: bolt, name: Bolt }\n")
+    write(
+        "content/prices.yaml",
+        """
+revision: 2
+revision_typo: 3
+bolt: { amount: 30 }
+""",
+    )
+    profile = load_profile(profile_dir)
+
+    problems = errors_only(load_corpus(profile, tmp_path).diagnostics)
+
+    assert len(problems) == 1
+    problem = problems[0]
+    assert problem.file == "content/prices.yaml"
+    assert problem.record == "revision_typo"
+    assert "unknown keyed_map key 'revision_typo'" in problem.message
+    assert "declared record keys from 'product.id': [bolt]" in problem.message
+    assert "declared metadata keys: [revision]" in problem.message
 
 
 def test_keyed_map_reports_a_record_key_the_document_does_not_carry(
