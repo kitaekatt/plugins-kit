@@ -12,5 +12,19 @@
 # the Workflow tool refused to launch it -- the lane was unreachable on any
 # Windows checkout with the default core.autocrlf=true. A new workflow script in
 # a THIRD location would need a third pattern; check this file when adding one.
-plugins/skills-kit/skills/*/workflow/*.js eol=lf
-plugins/*/workflows/*.js eol=lf
+#
+# `text` IS REQUIRED and is not redundant with `eol=lf`. The gitattributes docs
+# say specifying eol "automatically sets text if text was left unspecified", and
+# the first version of this file relied on exactly that sentence. It does not
+# hold on git 2.55.0.windows.3: with `eol=lf` alone, `git check-attr` reports
+# `text: unspecified` and a fresh `core.autocrlf=true` clone still checks the
+# files out as CRLF -- 266 CR in run-ready-wave.js, 368 in claude-md-detect.js.
+# Verified by cloning this repo into a scratch directory both ways; `text eol=lf`
+# reports `text: set` and yields 0 CR. Do not "simplify" the `text` back out.
+#
+# VERIFY A CHANGE HERE WITH A FRESH CLONE, never with the working tree. This
+# file governs CHECKOUT, so an already-materialized working-tree file keeps its
+# old bytes and git still reports it clean -- the working tree cannot tell you
+# whether a consumer would get LF.
+plugins/skills-kit/skills/*/workflow/*.js text eol=lf
+plugins/*/workflows/*.js text eol=lf
