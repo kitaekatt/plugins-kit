@@ -233,7 +233,11 @@ Two facts worth not rediscovering:
 - **`git commit -- <paths>` is safe under this, and it was established empirically.** That form commits the working-tree contents of the named paths, so a `--cached` check looks like it would see an empty staged set and skip. It does not: git builds a temporary index holding those paths' contents and exports it to hooks as `GIT_INDEX_FILE`, so the checks see exactly the commit. (Reproduced on git 2.55.0.windows.3.) This matters because `git commit -F <msg> -- <paths>` is the form this file tells you to use in a shared tree.
 - **Test a check against a temporary `GIT_INDEX_FILE`, never the real index** — staging things to prove a hook works is how you end up committing another session's work.
 
-**What the script will NOT do:** decide what ships. When `origin/master..dev` holds commits touching a dev-only (`published: false`) plugin, it refuses and names them — branch from master and cherry-pick the publish-ready commits yourself.
+**Dev-only commits are EXCLUDED, not a reason to refuse.** When `origin/master..dev` holds commits touching a dev-only (`published: false`) plugin, the script publishes a **filtered release**: it replays only the shippable commits onto master in a temporary worktree and pushes from there, printing every commit it held back. `dev` is untouched and keeps that work. This is the field doing its job — `published: false` already recorded the decision that the plugin does not go to consumers, so honouring it per-commit is not the script guessing.
+
+It still refuses one case: a single commit touching **both** a dev-only plugin and files that would otherwise ship. Excluding it withholds released work, including it puts dev-only files on master, and splitting someone else's commit is a judgement call. Split it, or pass `--allow-dev-only <plugin>` to ship that plugin's commits deliberately.
+
+**What the script will NOT do:** decide that a plugin's `published` status has changed. That edit is yours.
 
 Publishing is reversible-but-visible: nothing is destroyed, but it goes out to other machines. The bar is "user has expressed publish intent for this work," not "user has reconfirmed each git command." Treat unambiguous go-signals — `go`, `ship it`, `publish`, `do it`, `close the loop`, `push` — as authorizing the whole flow; run `publish.py` and let its preflight be the safety net. Confirm only when intent is genuinely ambiguous (partial work, no version bump in sight, unrelated WIP staged, or the user is mid-thought).
 

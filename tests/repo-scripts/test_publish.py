@@ -154,65 +154,94 @@ class TestPreflightRefusals:
             publish.preflight()
 
 
-class TestDevOnlyRefusal:
-    """The refusal that matters most: merging a dev-only plugin's commits puts
-    its files on master. The marketplace regenerator filters the LISTING, but
-    not the files -- so this must be caught before the merge."""
+class TestDevOnlyExclusion:
+    """`published: false` is a standing decision that a plugin does not ship.
 
-    def test_refuses_commits_touching_a_dev_only_plugin(self, repo):
+    So its commits are EXCLUDED from the release rather than being a reason to
+    refuse the whole publish. The old behaviour refused and told the operator to
+    cherry-pick by hand, which let one team's in-flight work block another
+    team's finished work and moved the filtering to a human doing it against
+    master with no verification. The one case that still refuses is a commit
+    that mixes dev-only and shippable files, where either choice is wrong.
+    """
+
+    def test_dev_only_commits_are_excluded_not_refused(self, repo):
         _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
         (repo / "plugins" / "dev-kit" / "feature.py").write_text("wip\n")
         _git(repo, "add", "-A")
         _git(repo, "commit", "-qm", "dev-kit: experimental feature")
 
+        bumps, excluded = publish.preflight()
+
+        assert bumps == ["pub-kit: 1.0.0 -> 1.1.0"]
+        assert len(excluded) == 1
+        assert set(next(iter(excluded.values()))) == {"dev-kit"}
+
+    def test_a_mixed_commit_still_refuses(self, repo):
+        """Excluding it would withhold shippable work; including it would put
+        dev-only files on master. Neither is safe to pick automatically."""
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        (repo / "plugins" / "dev-kit" / "feature.py").write_text("wip\n")
+        (repo / "plugins" / "pub-kit" / "shipped.py").write_text("real\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "dev-kit wip plus pub-kit change")
+
         with pytest.raises(publish.PublishError) as exc:
             publish.preflight()
 
         message = str(exc.value)
-        assert "dev-only" in message
+        assert "BOTH" in message
         assert "dev-kit" in message
-        assert "cherry-pick" in message
-        assert "experimental feature" in message  # names the offending commit
+        assert "Split the commit" in message
 
     def test_allows_a_clean_publish_ready_range(self, repo):
-        """The same range without the dev-only commit must pass -- otherwise the
-        guard is just refusing everything."""
+        """A range with no dev-only commits excludes nothing."""
         _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
 
-        bumps = publish.preflight()
+        bumps, excluded = publish.preflight()
 
         assert bumps == ["pub-kit: 1.0.0 -> 1.1.0"]
+        assert excluded == {}
 
     def test_dev_only_plugins_alone_do_not_trip_the_guard(self, repo):
         """A dev-only plugin merely EXISTING is normal; only commits touching
-        one in the publish range are the problem."""
+        one in the publish range are excluded."""
         _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
-        assert publish.preflight()  # dev-kit exists, untouched -> fine
+        bumps, excluded = publish.preflight()
+        assert bumps
+        assert excluded == {}
 
     def test_allow_dev_only_ships_the_named_plugins_commits(self, repo):
         """--allow-dev-only is the operator's explicit decision to ship
-        finished dev-only work master's tree needs."""
+        finished dev-only work master's tree needs -- it moves those commits
+        from excluded to included."""
         _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
         (repo / "plugins" / "dev-kit" / "feature.py").write_text("done\n")
         _git(repo, "add", "-A")
         _git(repo, "commit", "-qm", "dev-kit: finished refactor slice")
 
-        bumps = publish.preflight(allow_dev_only={"dev-kit"})
+        bumps, excluded = publish.preflight(allow_dev_only={"dev-kit"})
 
         assert bumps == ["pub-kit: 1.0.0 -> 1.1.0"]
+        assert excluded == {}
 
     def test_allow_dev_only_does_not_cover_unnamed_plugins(self, repo):
-        """Allowing one dev-only plugin must not silently wave through
-        another's commits."""
+        """Allowing one dev-only plugin must not silently include another's."""
         _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
         _write_manifest(repo, "other-kit", "0.1.0", published=False)
         (repo / "plugins" / "other-kit" / "done.py").write_text("done\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "other-kit done")
         (repo / "plugins" / "dev-kit" / "feature.py").write_text("wip\n")
         _git(repo, "add", "-A")
-        _git(repo, "commit", "-qm", "other-kit done; dev-kit experimental")
+        _git(repo, "commit", "-qm", "dev-kit experimental")
 
-        with pytest.raises(publish.PublishError, match="dev-kit"):
-            publish.preflight(allow_dev_only={"other-kit"})
+        bumps, excluded = publish.preflight(allow_dev_only={"other-kit"})
+
+        assert bumps == ["pub-kit: 1.0.0 -> 1.1.0"]
+        # other-kit rode along; dev-kit is still held back.
+        assert len(excluded) == 1
+        assert set(next(iter(excluded.values()))) == {"dev-kit"}
 
     def test_allow_dev_only_rejects_non_dev_only_names(self, repo):
         """Naming a published (or unknown) plugin is an operator error, not a
@@ -263,7 +292,7 @@ class TestRepoInvariantGates:
         _git(repo, "add", "-A")
         _git(repo, "commit", "-qm", "pub-kit: add pyproject")
 
-        assert publish.preflight() == ["pub-kit: 1.0.0 -> 1.1.0"]
+        assert publish.preflight()[0] == ["pub-kit: 1.0.0 -> 1.1.0"]
 
     def test_orchestration_drift_blocks_a_publish(self, repo, tmp_path, monkeypatch):
         monkeypatch.setattr(
@@ -329,7 +358,7 @@ class TestPerPluginBumpGate:
         _git(repo, "commit", "-qm", "pub-kit: engine change")
         _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
 
-        assert publish.preflight() == ["pub-kit: 1.0.0 -> 1.1.0"]
+        assert publish.preflight()[0] == ["pub-kit: 1.0.0 -> 1.1.0"]
 
     def test_dev_only_plugin_changed_without_a_bump_does_not_block(self, repo):
         """A published: false plugin has no consumers and no cache entry, so
@@ -341,7 +370,7 @@ class TestPerPluginBumpGate:
 
         # --allow-dev-only is what lets its commits into the range at all; the
         # per-plugin bump gate must not then demand a bump it cannot mean.
-        assert publish.preflight(allow_dev_only={"dev-kit"}) == [
+        assert publish.preflight(allow_dev_only={"dev-kit"})[0] == [
             "pub-kit: 1.0.0 -> 1.1.0"]
 
 
