@@ -291,6 +291,68 @@ const SUBJECT_FINDINGS_SCHEMA = {
 // requiring at least one entry made the wholly-skipped batch inexpressible, so
 // the not-assessed path below was unreachable through the very schema that
 // guards it.
+// The REFUTATION stage's output. One record per candidate, matched back by the
+// index the prompt issued -- never by position in the returned array, for the
+// same reason reconcileBatch matches subjects by key.
+//
+// `quote` is the load-bearing field and it is REQUIRED. A verifier that applies
+// a rule it cannot quote from the criteria document has invented that rule, and
+// an invented rule is not a hypothetical failure mode here: a corpus-scale run
+// enforced one ("evidence outside the directory fails even when the fact is
+// true") that the criteria do not contain and that CV-1's own ADMIT example
+// contradicts, and it produced more wrong rejections than any property of the
+// lane. Carrying the quote is what makes that detectable from the record
+// afterwards rather than only by re-reading a brief nobody kept.
+const VERIFY_FINDINGS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['verdicts'],
+  properties: {
+    verdicts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['index', 'truth', 'counterexample', 'filesRead', 'filesInDir'],
+        properties: {
+          index: {
+            type: 'integer',
+            description: 'The candidate index exactly as the prompt issued it.',
+          },
+          truth: {
+            type: 'string',
+            enum: ['STANDS', 'FALSIFIED'],
+            description:
+              'FALSIFIED only when a file in this directory contradicts the fact ' +
+              'as written. Not a judgment about whether the fact is worth carrying.',
+          },
+          counterexample: {
+            type: 'string',
+            description:
+              'file:line that falsifies the fact, or empty when truth is STANDS. ' +
+              'A FALSIFIED verdict without one is discarded as unsupported.',
+          },
+          narrowing: {
+            type: 'string',
+            description:
+              'Optional. When one over-reaching clause is the only thing that ' +
+              'fails, the restatement that would stand. Carried to the caller, ' +
+              'never auto-applied.',
+          },
+          quote: {
+            type: 'string',
+            description:
+              'Verbatim phrase from the criteria document backing any criterion ' +
+              'invoked. Empty is correct for a pure falsification.',
+          },
+          filesRead: { type: 'integer' },
+          filesInDir: { type: 'integer' },
+        },
+      },
+    },
+  },
+}
+
 const BATCH_FINDINGS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -578,7 +640,15 @@ const depthClause = depth === 'advanced'
   ? `ANALYSIS DEPTH: advanced. Read every source file completely. First run an
 invariant-discovery pass and carry those invariants into assessment. After
 assessment, run a verification pass over every surviving candidate against the
-source. At this depth COVERAGE-ASSESSED means verified absent.`
+source and drop what you falsify.
+
+Your verification pass is a SELF-CHECK, and it is NOT what makes this depth
+verified. You are judging candidates you just wrote, in the context that wrote
+them, which is measurably the weakest place to catch an over-reaching claim.
+After you return, this lane runs a separate refutation stage in FRESH context
+that tries to falsify every candidate you emit. COVERAGE-ASSESSED means verified
+absent only downstream of THAT stage. Do not weaken a claim to survive it: state
+the fact you actually believe, at the scope the source actually supports.`
   : `ANALYSIS DEPTH: basic. Use a bounded, sampled read and one assessment pass.
 At this depth COVERAGE-ASSESSED means not found within budget.`
 
@@ -817,6 +887,96 @@ const batchIncomplete = (b, i) => ({
   ],
 })
 
+// The refutation brief. Its scope is deliberately NARROW: is the fact TRUE as
+// written? It does not re-judge admission value, and that boundary is the whole
+// design, not a simplification.
+//
+// It is drawn from measurement rather than taste. An improvised gate over one
+// corpus ran four checks; two tested truth (universal quantifiers, ordering) and
+// two re-judged admission (evidence location, already-stated-at-site). Re-judged
+// blind against the criteria alone, the truth checks largely HELD -- 33% and 50%
+// overturned -- while the value checks COLLAPSED, at 76% and 67%. Refutation is a
+// posture that finds what it is pointed at; pointed at truth it corrects the
+// record, pointed at value it manufactures rejections. So this stage may delete a
+// candidate only for being false, and every other criterion stays exactly where
+// the criteria document put it: with the assessment, judged once.
+const verifyPrompt = (rec, cands) => `Try to REFUTE each proposed fact below. Report only what you can show.
+
+You are a fresh reviewer. Another agent proposed these facts about ONE directory
+after reading it. You have not seen its reasoning and you are not being asked to
+agree or disagree with its judgment.
+
+## The ONE question you are answering
+
+Is each fact TRUE AS WRITTEN of this directory?
+
+That is the whole of your task. You are NOT deciding whether a fact is worth
+recording, whether it belongs in an ambient document, whether a comment at the
+site would serve better, or whether the evidence is interesting. Those judgments
+were made against the criteria and are not yours to revisit. A fact you find
+useless but true is STANDS. A fact you find valuable but false is FALSIFIED.
+
+## Directory
+
+${rec.root}
+
+## Its direct code files -- ${(rec.codeFiles || []).length} of them, and this list is exhaustive
+
+${(rec.codeFiles || []).map((f) => `- ${f}`).join('\n')}
+
+Read these files. Not a sample of them, and never a subdirectory: a fact about
+this directory is falsified or not by these files alone.
+
+## What falsifies a fact
+
+A fact is FALSIFIED when a file in the list above CONTRADICTS it as written.
+Give the file:line. A FALSIFIED verdict with no counterexample is discarded, so
+if you cannot point at the contradiction, the claim STANDS.
+
+Three shapes account for nearly every real falsification, so check them first:
+
+1. UNIVERSAL QUANTIFIERS. "every", "all", "always", "never", "each", "only",
+   "no ... does". One file that behaves otherwise makes the fact false. Check
+   every file in the list -- this is the class that a self-check misses most,
+   because the agent that abstracted a pattern does not go hunting its
+   exceptions.
+2. ORDERING AND PRECEDENCE. "first", "before any other", "runs first", "at the
+   top". Open the file and read the actual order rather than the intent.
+3. EXCLUSIVITY. "the only X that", "nothing else". One sibling doing the same
+   thing refutes it.
+
+A fact that is true but IMPRECISE is not falsified. Judge the proposition, not
+the prose.
+
+## When one clause is the only problem
+
+Most falsified facts are a real observation carrying one over-reaching clause.
+When that is the case, put the restatement that WOULD stand in \`narrowing\`. It
+is handed to the caller, never applied automatically -- a fact rewritten by its
+verifier has been proposed by nobody.
+
+## Do not invent criteria
+
+If you invoke any rule from the criteria document, quote it verbatim in
+\`quote\`. If you cannot quote it, you have invented it: drop it and judge on
+truth alone. A pure falsification needs no quote and empty is correct there.
+
+## The candidates
+
+${cands.map((c, i) => `### index ${i}
+
+FACT: ${c.fact}
+
+ANCHORS: ${(Array.isArray(c.anchors) ? c.anchors : []).join(', ')}`).join('\n\n')}
+
+## Return
+
+One verdict per candidate, carrying the index EXACTLY as issued above. Report
+\`filesRead\` (how many of the listed files you actually opened) and
+\`filesInDir\` (${(rec.codeFiles || []).length}). A universal claim judged
+without reading every file has not been checked, and the two counts are how that
+is visible afterwards.`
+
 // Match the batch's returned array back onto the subjects that were REQUESTED,
 // BY KEY. Never by position: a batch that omits its middle subject would
 // otherwise shift every later result one slot, and the inline root overwrite --
@@ -881,7 +1041,14 @@ const perSubject = preDecided.concat(...batchResults.filter(Boolean))
 let isolationViolations = 0
 let destinationCorrected = 0
 let fileListDisagreements = 0
+// The echoed code-file list is stripped from every returned record below, but
+// the refutation stage needs it: it is the exhaustive read set a universal claim
+// has to be checked against. Kept here, keyed by subject, so the reducer's own
+// contract (nothing travels back to the orchestrator that subjectsFile mode
+// exists to keep out) is unchanged.
+const codeFilesByKey = new Map()
 const results = perSubject.filter(Boolean).map((r) => {
+  if (r && r.subjectKey) codeFilesByKey.set(r.subjectKey, Array.isArray(r.codeFiles) ? r.codeFiles : [])
   const incoming = r.candidates || []
   // A DISCOVERY-FAILED or BATCH-INCOMPLETE subject never produced an assessment,
   // so there is nothing to derive or re-derive: it is passed through unchanged,
@@ -983,10 +1150,136 @@ const results = perSubject.filter(Boolean).map((r) => {
   return { ...r, candidates: placed, verdict: derived, depth, notes, codeFiles: undefined }
 })
 
+// ---- The REFUTATION stage. ----
+//
+// This is the difference between a lane that GENERATES and a lane that
+// generates and VERIFIES. Everything above enforces FORM -- subject identity,
+// anchor membership, destination, the verdict rule. Until this stage existed,
+// every SEMANTIC property, the truth of the fact included, was enforced only by
+// the proposing agent judging its own output in its own context, while the depth
+// table told the caller the result was "verified absent".
+//
+// It runs in FRESH context, one dispatch per subject, and it may do exactly one
+// thing to the record: delete a candidate that a named file:line contradicts.
+// A measured note on why it is not per-candidate: a subject's candidates share
+// one read of one directory, so per-subject amortizes that read across them,
+// and per-candidate would pay it again for each.
+let verified = 0
+let falsified = 0
+let verifyUnreturned = 0
+let verifyUnsupported = 0
+let verifyPartialReads = 0
+const verifyEnabled = depth === 'advanced' && input.verify !== false
+const verifyTargets = verifyEnabled
+  ? results.filter((r) => r.status === 'ASSESSED' && (r.candidates || []).length)
+  : []
+
+const verifyByKey = new Map()
+if (verifyTargets.length) {
+  const verdictSets = await parallel(verifyTargets.map((r) => () =>
+    agent(verifyPrompt({ root: r.root, codeFiles: codeFilesByKey.get(r.subjectKey) || [] }, r.candidates), {
+      label: `verify ${r.root}`,
+      phase: 'Coverage',
+      // Pinned for the same reason detection is: refuting a universal claim
+      // means reading every file in a directory and noticing the one that does
+      // not conform, which is exactly where a cheaper tier was measured to fail.
+      model: 'opus',
+      effort: 'high',
+      schema: VERIFY_FINDINGS_SCHEMA,
+    }).then((v) => [r.subjectKey, v])
+  ))
+  for (const pair of verdictSets) {
+    if (!pair) continue
+    verifyByKey.set(pair[0], pair[1])
+  }
+}
+
+// Apply the verdicts. A subject the stage did not answer for KEEPS its
+// candidates and says so: an unreturned verification is missing evidence, and
+// silently dropping candidates on it would let an infrastructure failure read
+// as a clean directory -- the exact confusion between "nobody checked" and
+// "nothing found" that DISCOVERY-FAILED exists to prevent upstream.
+const verifiedResults = !verifyEnabled ? results : results.map((r) => {
+  if (r.status !== 'ASSESSED' || !(r.candidates || []).length) return r
+  const notes = Array.isArray(r.notes) ? [...r.notes] : []
+  const v = verifyByKey.get(r.subjectKey)
+  const rows = v && Array.isArray(v.verdicts) ? v.verdicts : null
+  if (!rows) {
+    verifyUnreturned += r.candidates.length
+    notes.push(
+      'verification UNRETURNED for this subject: its candidates are unverified ' +
+      'and were kept. At this depth COVERAGE-ASSESSED means verified absent, ' +
+      'which this subject has not earned -- treat its candidates as depth basic.'
+    )
+    return { ...r, notes, verified: false }
+  }
+
+  const byIndex = new Map()
+  for (const row of rows) {
+    if (!row || typeof row.index !== 'number') continue
+    if (!byIndex.has(row.index)) byIndex.set(row.index, row)
+  }
+
+  const killed = []
+  const kept = r.candidates.map((c, i) => {
+    const row = byIndex.get(i)
+    if (!row) {
+      verifyUnreturned++
+      return { ...c, verified: false }
+    }
+    const ce = String(row.counterexample || '').trim()
+    if (row.truth === 'FALSIFIED' && !ce) {
+      // A FALSIFIED verdict that cannot point at the contradiction is not
+      // evidence, and deleting a candidate on it would be the same
+      // unaccountable rejection this stage exists to replace.
+      verifyUnsupported++
+      notes.push(
+        `verification returned FALSIFIED with no counterexample for candidate ` +
+        `${i + 1}; the verdict was DISCARDED and the candidate kept.`
+      )
+      return { ...c, verified: false }
+    }
+    if (row.truth === 'FALSIFIED') {
+      killed.push(`"${String(c.fact).slice(0, 60)}..." [${ce}]`)
+      return null
+    }
+    const out = { ...c, verified: true }
+    if (String(row.narrowing || '').trim()) out.narrowing = String(row.narrowing).trim()
+    return out
+  })
+
+  const surviving = kept.filter(Boolean)
+  falsified += r.candidates.length - surviving.length
+  verified += surviving.filter((c) => c.verified).length
+
+  const partial = rows.filter((row) =>
+    row && typeof row.filesRead === 'number' && typeof row.filesInDir === 'number' &&
+    row.filesRead < row.filesInDir)
+  if (partial.length) {
+    verifyPartialReads += partial.length
+    notes.push(
+      `verification read ${partial.length} candidate(s) against fewer files than ` +
+      'the directory holds; a universal claim judged that way was not fully checked.'
+    )
+  }
+  if (killed.length) {
+    notes.push(
+      `verification FALSIFIED ${killed.length} candidate(s) against source ` +
+      `(${killed.slice(0, 3).join('; ')}${killed.length > 3 ? `; +${killed.length - 3} more` : ''}).`
+    )
+  }
+
+  // Re-derive with the SAME expression the reducer used, so "GAPS-FOUND iff
+  // candidates" stays true by construction after a deletion rather than being
+  // asserted twice and able to disagree with itself.
+  const derived = surviving.length ? 'GAPS-FOUND' : 'COVERAGE-ASSESSED'
+  return { ...r, candidates: surviving, verdict: derived, notes }
+})
+
 // A root appearing twice means two result objects claim one directory. Counted
 // rather than resolved: this lane cannot tell which of the two is real.
 const rootSeen = new Map()
-for (const r of results) {
+for (const r of verifiedResults) {
   const k = String(r.root)
   rootSeen.set(k, (rootSeen.get(k) || 0) + 1)
 }
@@ -1006,7 +1299,7 @@ const chainSizeForRoot = (r) =>
     ? chainSizeByRoot.get(String(r.root))
     : (subjectsFile ? r.ambientChainCount : 0)
 
-const totals = results.reduce((acc, r) => {
+const totals = verifiedResults.reduce((acc, r) => {
   acc.candidates += (r.candidates || []).length
   acc.severe += (r.candidates || []).filter((c) => c.severeDeficiency).length
   // CV-4 requires the classification to be REPORTED. The per-candidate `tier`
@@ -1053,7 +1346,7 @@ const totals = results.reduce((acc, r) => {
   uncovered: 0,
 })
 totals.requested = subjectCount
-totals.notAssessed = results.length - totals.completed
+totals.notAssessed = verifiedResults.length - totals.completed
 totals.isolationViolations = isolationViolations
 totals.destinationCorrected = destinationCorrected
 totals.fileListDisagreements = fileListDisagreements
@@ -1061,12 +1354,21 @@ totals.duplicateRoots = duplicateRoots
 totals.extraReturned = extraReturned
 totals.identityUnmatched = identityUnmatched
 totals.provenance = provenance
+// The refutation stage's own accounting. `verifyRan` is what downstream must
+// read before believing "verified absent": a run where it is false produced
+// candidates nothing independent ever checked, whatever the depth says.
+totals.verifyRan = verifyEnabled
+totals.verified = verified
+totals.falsified = falsified
+totals.verifyUnreturned = verifyUnreturned
+totals.verifyUnsupported = verifyUnsupported
+totals.verifyPartialReads = verifyPartialReads
 
 // The ceiling is per directory, so a wide run's aggregate is subjects x ceiling.
 // Stating the aggregate keeps a capped multi-directory run from reading as
 // complete just because no single directory looks truncated.
 const ceilingNote = totals.ceilingReached
-  ? `, ${totals.ceilingReached}/${results.length} directory/ies hit the per-directory ceiling of ${ceiling} (those results are capped, not complete)`
+  ? `, ${totals.ceilingReached}/${verifiedResults.length} directory/ies hit the per-directory ceiling of ${ceiling} (those results are capped, not complete)`
   : ''
 const severeNote = totals.severe ? `, ${totals.severe} severe-deficiency` : ''
 // CV-4: the tier split rides on the summary line so the classification is
@@ -1103,12 +1405,23 @@ const duplicateNote = totals.duplicateRoots
 const extraNote = totals.extraReturned
   ? `, ${totals.extraReturned} unrequested or unkeyed result object(s) discarded`
   : ''
+// The refutation stage rides on the summary line for the same reason the tier
+// split does: a reader who sees only the log must be able to tell a verified run
+// from an unverified one, and must never have to infer it from the depth.
+const verifyNote = !verifyEnabled
+  ? (depth === 'advanced'
+    ? ', verification DISABLED for this run -- COVERAGE-ASSESSED here means not found within budget, NOT verified absent'
+    : '')
+  : `, verification: ${totals.falsified} candidate(s) FALSIFIED against source, ${totals.verified} upheld` +
+    (totals.verifyUnreturned ? `, ${totals.verifyUnreturned} UNVERIFIED (no verdict returned -- kept, treat as depth basic)` : '') +
+    (totals.verifyUnsupported ? `, ${totals.verifyUnsupported} unsupported FALSIFIED verdict(s) discarded` : '') +
+    (totals.verifyPartialReads ? `, ${totals.verifyPartialReads} judged against fewer files than the directory holds` : '')
 const modeNote = subjectsFile ? `subjectsFile=${subjectsFile}` : 'inline'
 const provenanceWarning = provenance === 'agent-attested'
   ? ' PROVENANCE: roots and code-file lists are AGENT-ATTESTED, not verified against the subjects file -- verify before promoting (coverage-lane.md, "Verifying an agent-attested run").'
   : ''
 const runNoteClause = runNotes.length ? ` NOTE: ${runNotes.join(' ')}` : ''
 
-log(`Coverage (depth=${depth}, ${modeNote}, provenance=${provenance}, ${batches.length} batch(es) of up to ${batchSize}): ${totals.completed} of ${totals.requested} requested directory/ies COMPLETED (${totals.notAssessed} NOT assessed): ${totals.gapsFound} GAPS-FOUND, ${totals.assessed} COVERAGE-ASSESSED, ${totals.candidates} candidate(s)${tierNote}${severeNote}${evidenceNote}${uncoveredNote}${discoveryFailedNote}${incompleteNote}${isolationNote}${destinationNote}${disagreementNote}${duplicateNote}${extraNote}${ceilingNote}. Advisory and non-idempotent: re-runs may differ, and nothing is applied.${provenanceWarning}${runNoteClause}`)
+log(`Coverage (depth=${depth}, ${modeNote}, provenance=${provenance}, ${batches.length} batch(es) of up to ${batchSize}): ${totals.completed} of ${totals.requested} requested directory/ies COMPLETED (${totals.notAssessed} NOT assessed): ${totals.gapsFound} GAPS-FOUND, ${totals.assessed} COVERAGE-ASSESSED, ${totals.candidates} candidate(s)${tierNote}${severeNote}${evidenceNote}${uncoveredNote}${discoveryFailedNote}${incompleteNote}${isolationNote}${destinationNote}${disagreementNote}${duplicateNote}${extraNote}${verifyNote}${ceilingNote}. Advisory and non-idempotent: re-runs may differ, and nothing is applied.${provenanceWarning}${runNoteClause}`)
 
-return { perSubject: results, totals, ceiling, depth, batchSize, batches: batches.length, subjectsFile, provenance, notes: runNotes }
+return { perSubject: verifiedResults, totals, ceiling, depth, batchSize, batches: batches.length, subjectsFile, provenance, notes: runNotes }

@@ -987,3 +987,183 @@ class TestLaneDocumentsTheContract:
         assert "agent-attested" in text
         assert "harness-verified" in text
         assert "Verifying an agent-attested run" in text
+
+
+def verdict(index, truth="STANDS", counterexample="", files_read=2,
+            files_in_dir=2, narrowing=None, quote=""):
+    row = {
+        "index": index,
+        "truth": truth,
+        "counterexample": counterexample,
+        "filesRead": files_read,
+        "filesInDir": files_in_dir,
+        "quote": quote,
+    }
+    if narrowing is not None:
+        row["narrowing"] = narrowing
+    return row
+
+
+class TestRefutationStage:
+    """The verification stage -- the lane's only semantic enforcement.
+
+    Everything else the lane checks is FORM (subject identity, anchor
+    membership, destination, the verdict rule). Until this stage existed the
+    truth of a fact was enforced only by the agent that proposed it, judging its
+    own output in its own context, while the depth table told the caller the
+    result was "verified absent".
+
+    Several of these pin a REFUSAL rather than an action. That is deliberate:
+    the failure mode being guarded is a gate that deletes candidates it cannot
+    justify, which is what an unshipped version of this filter was measured
+    doing over a real corpus.
+    """
+
+    def _run(self, tmp_path, cands, verdicts, verify=None, default=None):
+        args = {
+            "subjects": [subject("d", ["d/a.py", "d/b.py"])],
+            "depth": "advanced",
+            "refs": {"criteria": "/abs/coverage-standards.md"},
+        }
+        if verify is not None:
+            args["verify"] = verify
+        batch = {"subjects": [result_for(
+            "S1", "d", cands, verdict="GAPS-FOUND",
+            code_files=["d/a.py", "d/b.py"])]}
+        responses = [batch]
+        if verdicts is not None:
+            responses.append({"verdicts": verdicts})
+        return run_lane(tmp_path, args, responses=responses,
+                        default_response=default if default is not None else {})
+
+    def _cands(self, n):
+        return [candidate("d", ["d/a.py:1"]) for _ in range(n)]
+
+    def _verify_calls(self, out):
+        return [c for c in out["calls"] if str(c["label"]).startswith("verify ")]
+
+    def test_falsified_candidate_is_deleted_and_named(self, tmp_path):
+        out = self._run(tmp_path, self._cands(2),
+                        [verdict(0, "FALSIFIED", "d/b.py:9"), verdict(1)])
+        rec = by_root(out)["d"]
+        assert len(rec["candidates"]) == 1
+        assert out["result"]["totals"]["falsified"] == 1
+        assert any("FALSIFIED" in n for n in rec["notes"])
+
+    def test_verdict_is_rederived_after_a_deletion(self, tmp_path):
+        """GAPS-FOUND iff candidates must hold AFTER verification, not just after the reducer."""
+        out = self._run(tmp_path, self._cands(1),
+                        [verdict(0, "FALSIFIED", "d/b.py:9")])
+        rec = by_root(out)["d"]
+        assert rec["candidates"] == []
+        assert rec["verdict"] == "COVERAGE-ASSESSED"
+
+    def test_falsified_without_a_counterexample_is_discarded_not_obeyed(self, tmp_path):
+        """A verdict that cannot point at the contradiction is not evidence."""
+        out = self._run(tmp_path, self._cands(1), [verdict(0, "FALSIFIED", "")])
+        rec = by_root(out)["d"]
+        assert len(rec["candidates"]) == 1
+        assert out["result"]["totals"]["verifyUnsupported"] == 1
+        assert out["result"]["totals"]["falsified"] == 0
+        assert any("DISCARDED" in n for n in rec["notes"])
+
+    def test_unreturned_verification_keeps_candidates_and_says_so(self, tmp_path):
+        """Missing evidence must never read as a clean directory."""
+        out = self._run(tmp_path, self._cands(2), None)
+        rec = by_root(out)["d"]
+        assert len(rec["candidates"]) == 2
+        assert out["result"]["totals"]["verifyUnreturned"] == 2
+        assert any("UNRETURNED" in n for n in rec["notes"])
+
+    def test_partial_read_is_reported(self, tmp_path):
+        out = self._run(tmp_path, self._cands(1),
+                        [verdict(0, files_read=1, files_in_dir=2)])
+        rec = by_root(out)["d"]
+        assert out["result"]["totals"]["verifyPartialReads"] == 1
+        assert any("fewer files" in n for n in rec["notes"])
+
+    def test_narrowing_rides_on_the_candidate_but_is_not_applied(self, tmp_path):
+        """A fact rewritten by its verifier has been proposed by nobody."""
+        out = self._run(tmp_path, self._cands(1),
+                        [verdict(0, narrowing="holds for a.py only")])
+        c = by_root(out)["d"]["candidates"][0]
+        assert c["narrowing"] == "holds for a.py only"
+        assert c["fact"] == "a fact"
+
+    def test_verdicts_match_by_issued_index_never_by_position(self, tmp_path):
+        """Same argument as reconcileBatch matching subjects by key."""
+        out = self._run(tmp_path, self._cands(2),
+                        [verdict(1, "FALSIFIED", "d/b.py:3"), verdict(0)])
+        rec = by_root(out)["d"]
+        assert len(rec["candidates"]) == 1
+        assert rec["candidates"][0]["verified"] is True
+
+    def test_basic_depth_does_not_verify(self, tmp_path):
+        args = {
+            "subjects": [subject("d", ["d/a.py"])],
+            "depth": "basic",
+            "refs": {"criteria": "/abs/coverage-standards.md"},
+        }
+        out = run_lane(tmp_path, args, responses=[{"subjects": [result_for(
+            "S1", "d", self._cands(1), verdict="GAPS-FOUND")]}],
+            default_response={})
+        assert out["result"]["totals"]["verifyRan"] is False
+        assert len(by_root(out)["d"]["candidates"]) == 1
+        assert not self._verify_calls(out)
+
+    def test_verify_can_be_switched_off_and_the_run_says_so(self, tmp_path):
+        """An advanced run without verification must not read as verified."""
+        out = self._run(tmp_path, self._cands(1), None, verify=False)
+        assert out["result"]["totals"]["verifyRan"] is False
+        assert any("verification DISABLED" in line for line in out["logs"])
+        assert len(by_root(out)["d"]["candidates"]) == 1
+
+    def test_verification_dispatches_one_agent_per_subject_with_candidates(self, tmp_path):
+        """A candidate-free subject is not worth a dispatch."""
+        args = {
+            "subjects": [subject("d", ["d/a.py"]), subject("e", ["e/a.py"])],
+            "depth": "advanced",
+            "batchSize": 8,
+            "refs": {"criteria": "/abs/coverage-standards.md"},
+        }
+        batch = {"subjects": [
+            result_for("S1", "d", self._cands(1), verdict="GAPS-FOUND"),
+            result_for("S2", "e", [], verdict="COVERAGE-ASSESSED"),
+        ]}
+        out = run_lane(tmp_path, args,
+                       responses=[batch, {"verdicts": [verdict(0, files_in_dir=1, files_read=1)]}],
+                       default_response={})
+        calls = self._verify_calls(out)
+        assert len(calls) == 1
+        assert calls[0]["label"] == "verify d"
+
+    def test_verify_brief_carries_the_exhaustive_file_list(self, tmp_path):
+        """A universal claim is falsified only against every direct file."""
+        out = self._run(tmp_path, self._cands(1), [verdict(0)])
+        brief = self._verify_calls(out)[0]["prompt"]
+        assert "d/a.py" in brief and "d/b.py" in brief
+        assert "exhaustive" in brief
+
+    def test_verify_brief_scopes_itself_to_truth_not_value(self, tmp_path):
+        """Measured: refutation pointed at value manufactures rejections."""
+        out = self._run(tmp_path, self._cands(1), [verdict(0)])
+        brief = self._verify_calls(out)[0]["prompt"]
+        assert "TRUE AS WRITTEN" in brief
+        assert "NOT deciding" in brief
+
+    def test_verify_brief_forbids_inventing_criteria(self, tmp_path):
+        """An invented rule caused more wrong rejections than any lane property."""
+        out = self._run(tmp_path, self._cands(1), [verdict(0)])
+        brief = self._verify_calls(out)[0]["prompt"]
+        assert "invent" in brief.lower()
+        assert "quote it verbatim" in brief
+
+    def test_verify_is_pinned_to_opus_not_inherited(self, tmp_path):
+        out = self._run(tmp_path, self._cands(1), [verdict(0)])
+        call = self._verify_calls(out)[0]
+        assert call["model"] == "opus"
+        assert call["effort"] == "high"
+
+    def test_verify_responses_satisfy_the_schema_the_lane_passed(self, tmp_path):
+        out = self._run(tmp_path, self._cands(1), [verdict(0)])
+        assert out["schemaErrors"] == []
