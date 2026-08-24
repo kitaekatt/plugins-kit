@@ -18,24 +18,42 @@ from .address import (
 )
 from .errors import AddressError, EvaluationError, SelectorError
 from .hashing import slice_hash
+from .staleness import (
+    MOVED,
+    OK,
+    UNRESOLVABLE,
+    AnchorReport,
+    check_anchors,
+    reanchor,
+)
+from .store import Comment, CommentSet, CommentStore
 
 __all__ = [
     'AddressError',
+    'AnchorReport',
+    'Comment',
+    'CommentSet',
+    'CommentStore',
     'DOC',
     'Evaluation',
     'EvaluationError',
+    'MOVED',
+    'OK',
     'Point',
     'Predicate',
     'ResolvedAnchor',
     'STAR',
     'Selector',
     'SelectorError',
+    'UNRESOLVABLE',
+    'check_anchors',
     'evaluate',
     'intersects',
     'overlaps',
     'parse_anchor',
     'parse_selector',
     'point_within',
+    'reanchor',
     'resolve_anchor',
     'slice_hash',
 ]

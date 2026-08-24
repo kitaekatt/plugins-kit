@@ -456,7 +456,11 @@ def _validate_set_field_path(
 
 
 def resolve_anchor(
-    anchor: Selector, profile: Profile, corpus: Corpus
+    anchor: Selector,
+    profile: Profile,
+    corpus: Corpus,
+    *,
+    guard: str | None = None,
 ) -> ResolvedAnchor:
     '''Resolve one singular anchor to the exact raw slice that it guards.'''
     if not anchor.is_anchor or anchor.type_seg is STAR:
@@ -501,11 +505,22 @@ def resolve_anchor(
             anchor, type_spec, record, field_path, profile, corpus
         )
     )
-    return ResolvedAnchor(
+    resolved = ResolvedAnchor(
         point=next(iter(evaluation.points)),
         slice_value=slice_value,
         record=record,
     )
+    if isinstance(anchor.record_seg, int) and guard is not None:
+        from .hashing import slice_hash
+
+        if slice_hash(resolved.slice_value) != guard:
+            raise EvaluationError(
+                'selector {!r}: the row under {!r} changed or moved; the address '
+                'never resolves to a different row; re-anchor the comment'.format(
+                    anchor.text, anchor.canonical()
+                )
+            )
+    return resolved
 
 
 def _type_slice_order(record: Record) -> tuple[str, str, Any]:
