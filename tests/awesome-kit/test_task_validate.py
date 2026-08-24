@@ -681,3 +681,89 @@ class TestCLI:
         assert proc.stdout.strip() == "orphaned"
         assert "warning: orphaned tmp reference" in proc.stderr
         assert "error:" not in proc.stderr
+
+
+class TestGitPathResolution:
+    """A task folder reached through a symlink or Windows junction (the
+    standard ``dev/tasks`` -> private tasks repo setup) used to misreport as
+    ``"no-repo"``: git's own ``rev-parse``/``chdir`` resolve the symlink to
+    the folder's REAL path, while an unresolved logical pathspec argument
+    still names the link path, so git rejects it as outside the repository
+    and the caught failure read as "not a git repo" (false). The fix
+    resolves ``folder`` before it is ever handed to a git subprocess, for
+    both the ``cwd`` argument and the pathspec argument, so the two always
+    agree.
+
+    A real symlink/junction is the only way to reproduce the mismatch (it
+    requires the OS to resolve a reparse point during ``chdir`` while argv
+    stays literal), and creating one needs a privilege this sandbox does not
+    have (Windows ``SeCreateSymbolicLinkPrivilege``) -- see
+    ``docs`` on ``migrate-claude-dir.sh`` for the same constraint elsewhere
+    in this fleet. So this tests the path-resolution behavior directly:
+    every git-invoking helper must pass ``folder.resolve()`` -- not the
+    original ``folder`` -- as both ``cwd`` and the trailing pathspec."""
+
+    @staticmethod
+    def _capture_run(monkeypatch, module):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append((list(cmd), kw))
+
+            class _Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return _Result()
+
+        monkeypatch.setattr(module.subprocess, "run", fake_run)
+        return calls
+
+    def test_git_status_porcelain_resolves_folder(self, monkeypatch, tmp_path):
+        from task_system import validate as validate_mod
+
+        calls = self._capture_run(monkeypatch, validate_mod)
+        real = tmp_path / "real-target"
+        real.mkdir()
+        monkeypatch.setattr(Path, "resolve", lambda self, *a, **k: real)
+        alias = tmp_path / "alias-link"
+
+        validate_mod._git_status_porcelain(alias)
+
+        assert len(calls) == 1
+        cmd, kw = calls[0]
+        assert cmd[-1] == str(real)
+        assert kw["cwd"] == real
+
+    def test_git_ignores_path_resolves_folder(self, monkeypatch, tmp_path):
+        from task_system import validate as validate_mod
+
+        calls = self._capture_run(monkeypatch, validate_mod)
+        real = tmp_path / "real-target"
+        real.mkdir()
+        monkeypatch.setattr(Path, "resolve", lambda self, *a, **k: real)
+        alias = tmp_path / "alias-link"
+
+        validate_mod.git_ignores_path(alias)
+
+        assert len(calls) == 1
+        cmd, kw = calls[0]
+        assert cmd[-1] == str(real)
+        assert kw["cwd"] == real
+
+    def test_git_tracks_nothing_in_resolves_folder(self, monkeypatch, tmp_path):
+        from task_system import validate as validate_mod
+
+        calls = self._capture_run(monkeypatch, validate_mod)
+        real = tmp_path / "real-target"
+        real.mkdir()
+        monkeypatch.setattr(Path, "resolve", lambda self, *a, **k: real)
+        alias = tmp_path / "alias-link"
+
+        validate_mod._git_tracks_nothing_in(alias)
+
+        assert len(calls) == 1
+        cmd, kw = calls[0]
+        assert cmd[-1] == str(real)
+        assert kw["cwd"] == real

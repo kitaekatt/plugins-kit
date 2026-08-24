@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import DecryptError, SecretsError, cli_command
-from .agefile import decrypt_with_identity
+from .agefile import age_available, decrypt_with_identity
 from .manifest import Config, Entry, Manifest
 from .perms import open_private, tighten, tighten_dir
 from . import repo as repo_mod
@@ -224,6 +224,15 @@ def converge(
     # Nothing below this line is actionable while locked, so this returns
     # rather than accumulating per-entry noise the user cannot act on.
     if not paths["identity"].is_file():
+        # A missing `age` binary is not an independent ASK: `unlock` shells out
+        # to age, and bootstrap already declares age/age-keygen as tools it
+        # provisions (secrets-kit's bootstrap.json). Reporting "locked" here
+        # too would surface the same missing dependency as two unrelated
+        # items; on a real machine, installing age clears this on its own
+        # with no further user action. So this is a skip, not a failure.
+        if not age_available():
+            result.skipped_reason = "age not installed; bootstrap will install it"
+            return result
         result.failures.append(
             Failure(
                 FAILURE_LOCKED,

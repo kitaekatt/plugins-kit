@@ -515,6 +515,17 @@ install attempt the tool is re-checked regardless of the installer's exit code.
   `brew_failed` item AND signals the fix queue to lead the macOS queue with a
   `brew_installer` task running the official Homebrew installer (one user-run
   step; brew entries then install unattended on the next pass).
+- **A cask whose install needs root is never attempted in the hook.** Before
+  installing a cask the engine asks `brew info --json=v2 --cask <token>` whether
+  its artifacts include a `pkg` (installed with `sudo /usr/sbin/installer`) or a
+  `sudo: true` `installer` script. If so the entry defers immediately with a
+  `brew_cask` descriptor instead of running an install that cannot possibly
+  succeed without a terminal. The query is metadata-only (it reads the cloned
+  cask tap and downloads no payload) and **fails open** -- an unrecognised cask
+  installs inline exactly as before. The backstop for anything the query misses
+  is the sudo/TTY failure signature: a cask install that dies with `a terminal
+  is required to read the password` is re-routed to the same descriptor and
+  brew's raw transcript is suppressed from the failure message.
 - **apt** always needs root — see elevation below. The backend runs `apt-get
   update` **once per pass**, immediately before the first *direct* apt install it
   performs, so a stale/empty package index does not fail an installable package.
@@ -543,8 +554,8 @@ Ubuntu/macOS, an admin-token check on Windows.
   `sudo -n` pass, so apt entries install silently in the hook.
 - **Privileges missing** → the strategy **defers** instead of attempting. It
   records a persistent per-item `needs_elevation` failure carrying a structured
-  `elevation` descriptor (`{method: apt|command|brew_installer|path_prune, os,
-  id, label}`). Not every descriptor is about privilege: `path_prune` needs none
+  `elevation` descriptor (`{method: apt|command|brew_cask|brew_installer|path_prune,
+  os, id, label}`). Not every descriptor is about privilege: `path_prune` needs none
   (`HKCU` is the user's own hive) and is deferred for **consent**, because it
   deletes PATH entries.
 
@@ -588,6 +599,17 @@ current OS into **ONE queue file**, plus a small launcher shim:
   runner elevated in one UAC hop (UAC preserves the user profile, so `elevated`
   is effectively advisory there). `brew_installer` is never elevated — the
   Homebrew installer refuses to run as root and elevates itself where it needs to.
+  A `brew_cask` task is likewise **not** elevated: `brew` refuses to run as root,
+  so it runs as you and elevates only its own install step.
+- **A task may carry an `explain` briefing.** The one-line plan label is enough
+  for a symlink; it is not enough for an operation about to ask for the user's
+  password. A task with `explain` gets its full briefing printed after the plan
+  and **before any task runs** -- the exact command, what needs root and by what
+  mechanism, why bootstrap could not do it unattended, and the cask's own
+  caveats -- followed by a hold: `Press ENTER to continue, or Ctrl-C to abort.
+  Nothing has run yet, and aborting changes nothing.` Ctrl-C (or no console to
+  confirm on) exits `EXIT_ABORTED` (4) with nothing attempted; the queue stays
+  on disk and is re-offered next session.
 
 Because the commands are **data**, they reach bash as a single argv element
 (`bash -c <command>`) and are parsed exactly once, never spliced into shell text.

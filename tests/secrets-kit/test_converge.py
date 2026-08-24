@@ -38,8 +38,11 @@ def test_host_not_listed_is_a_no_op(fleet, monkeypatch):
     assert result.failures == []
 
 
-def test_locked_machine_raises_exactly_one_ask(fleet):
+def test_locked_machine_raises_exactly_one_ask(fleet, monkeypatch):
     """No identity -> one ASK, and nothing else. Per-entry noise is unactionable."""
+    from secrets_kit import converge as converge_mod
+
+    monkeypatch.setattr(converge_mod, "age_available", lambda: True)
     result = _run(fleet)
     assert len(result.failures) == 1
     failure = result.failures[0]
@@ -49,11 +52,41 @@ def test_locked_machine_raises_exactly_one_ask(fleet):
     assert not (fleet.dest_root / "ha-token.txt").exists()
 
 
-def test_locked_agent_message_forbids_pasting_the_passphrase(fleet):
+def test_locked_agent_message_forbids_pasting_the_passphrase(fleet, monkeypatch):
     """The prepared statement must never invite a transcript-visible passphrase."""
+    from secrets_kit import converge as converge_mod
+
+    monkeypatch.setattr(converge_mod, "age_available", lambda: True)
     failure = _run(fleet).failures[0]
     assert "paste" in failure.agent_msg.lower()
     assert "not an API key" in failure.agent_msg
+
+
+def test_missing_age_binary_is_not_an_independent_locked_failure(fleet, monkeypatch):
+    """age absent -> no locked ASK; bootstrap's own tool-check already owns it.
+
+    Established empirically: when age was installed on a real machine, the
+    "secrets: locked" report cleared on its own with no further user action --
+    it was never an independent decision, so it must not be reported as one.
+    """
+    from secrets_kit import converge as converge_mod
+
+    monkeypatch.setattr(converge_mod, "age_available", lambda: False)
+    result = _run(fleet)
+    assert result.failures == []
+    assert result.skipped_reason == "age not installed; bootstrap will install it"
+    assert not (fleet.dest_root / "ha-token.txt").exists()
+
+
+def test_locked_failure_returns_once_age_is_present(fleet, monkeypatch):
+    """age present + identity missing -> the ordinary locked ASK, as before."""
+    from secrets_kit import converge as converge_mod
+
+    monkeypatch.setattr(converge_mod, "age_available", lambda: True)
+    result = _run(fleet)
+    assert len(result.failures) == 1
+    assert result.failures[0].key == FAILURE_LOCKED
+    assert result.skipped_reason == "locked (awaiting one-time unlock)"
 
 
 def test_unlocked_machine_materializes_its_profile(fleet):

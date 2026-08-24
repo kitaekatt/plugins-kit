@@ -3,10 +3,12 @@
   "tools": [
     {
       "name": "p4",
+      "$comment": "Perforce Helix Core CLI (p4). p4-kit is the declared owner of this tool; this entry is kept BYTE-IDENTICAL in fulfillment to p4-kit/bootstrap.json so the two declarations resolve and report the same way. macOS uses the `p4` cask (CLI-only: a single p4 binary), NOT the `perforce` cask (which also ships p4d/p4p/p4broker) -- both exist and both provide p4, and the narrower one matches the CLI-only scope. Structured install descriptors are required, not opaque strings: an opaque string bypasses the brew strategy, never receives the `elevation` descriptor, and so can never be collapsed with other brew-backed failures. Any change here must be mirrored in p4-kit/bootstrap.json.",
+      "check": "command -v p4",
       "install": {
-        "macos": "brew install --cask perforce",
-        "windows": { "scoop": "main/p4" },
-        "ubuntu": "manual"
+        "macos": {"brew": {"cask": "p4"}},
+        "windows": {"scoop": "main/p4"},
+        "ubuntu": {"command": "wget -qO - https://package.perforce.com/perforce.pubkey | gpg --dearmor | sudo tee /usr/share/keyrings/perforce.gpg > /dev/null && echo 'deb [signed-by=/usr/share/keyrings/perforce.gpg] https://package.perforce.com/apt/ubuntu noble release' | sudo tee /etc/apt/sources.list.d/perforce.list && sudo apt-get update && sudo apt-get install -y helix-cli", "elevated": true}
       }
     }
   ],

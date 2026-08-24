@@ -272,7 +272,15 @@ def _archive_preflight(
 
 def _git_toplevel(folder: Path) -> Path | None:
     """The git working-tree root holding ``folder``, or None when it is not
-    inside a repo (or git is unavailable/fails)."""
+    inside a repo (or git is unavailable/fails).
+
+    ``folder`` is resolved first: git itself prints a resolved (symlink- and
+    junction-free) toplevel, so resolving here keeps ``folder`` consistent
+    with that toplevel for every downstream pathspec-limited call (see
+    ``_unheld_files_in``, ``_git_commit_folder``, ``_snapshot_index``,
+    ``_restore_index``) -- an unresolved folder handed to git as a pathspec
+    against the resolved toplevel is reported as outside the repository."""
+    folder = folder.resolve()
     try:
         proc = subprocess.run(
             ["git", "-C", str(folder), "rev-parse", "--show-toplevel"],
@@ -300,7 +308,14 @@ def _git_commit_folder(
     an ignored pathspec outright, while ``-u`` stages exactly the changes to
     what git already tracks. That is also the right semantic, not just the
     working one: an ignored folder's NEW files were deliberately excluded,
-    and archive must not quietly start tracking them."""
+    and archive must not quietly start tracking them.
+
+    Both ``repo_root`` and ``folder`` are resolved first, so a task folder
+    reached through a symlink/junction is never handed to git as a pathspec
+    against a differently-spelled (but identical) repo root -- see
+    ``_git_toplevel``."""
+    repo_root = repo_root.resolve()
+    folder = folder.resolve()
     add = ["add", "-u"] if tracked_only else ["add", "-A"]
     for cmd in (
         ["git", "-C", str(repo_root), *add, "--", str(folder)],
@@ -370,7 +385,12 @@ def _unheld_files_in(repo_root: Path, folder: Path) -> list[str]:
     It deliberately generalizes the fully-ignored case: a folder where only
     SOME files were force-added reports ``clean`` from git_vcs_state (the
     porcelain is quiet and something IS tracked), yet its remaining files are
-    just as unrecoverable."""
+    just as unrecoverable.
+
+    Both ``repo_root`` and ``folder`` are resolved first -- see
+    ``_git_toplevel``."""
+    repo_root = repo_root.resolve()
+    folder = folder.resolve()
     try:
         proc = subprocess.run(
             [
@@ -405,7 +425,12 @@ def _snapshot_index(repo_root: Path, folder: Path) -> str | None:
     ``git add`` succeeds independently of ``git commit``, so a commit that
     fails (pre-commit hook, unset identity, signing) leaves the archived
     content STAGED while the tree is reverted -- and the next unrelated
-    commit ships it."""
+    commit ships it.
+
+    Both ``repo_root`` and ``folder`` are resolved first -- see
+    ``_git_toplevel``."""
+    repo_root = repo_root.resolve()
+    folder = folder.resolve()
     try:
         proc = subprocess.run(
             ["git", "-C", str(repo_root), "ls-files", "--stage", "--", str(folder)],
@@ -422,9 +447,14 @@ def _restore_index(repo_root: Path, folder: Path, snapshot: str | None) -> None:
     """Put the folder's index entries back exactly as ``_snapshot_index``
     found them. Pathspec-limited, so another session's staged work outside
     this folder is never touched. Best-effort: a restore that itself fails
-    must not replace the original error."""
+    must not replace the original error.
+
+    Both ``repo_root`` and ``folder`` are resolved first -- see
+    ``_git_toplevel``."""
     if snapshot is None:
         return
+    repo_root = repo_root.resolve()
+    folder = folder.resolve()
     try:
         subprocess.run(
             ["git", "-C", str(repo_root), "reset", "-q", "--", str(folder)],

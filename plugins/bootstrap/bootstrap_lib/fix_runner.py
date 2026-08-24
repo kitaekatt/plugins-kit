@@ -84,6 +84,10 @@ import time
 EXIT_OK = 0
 EXIT_TASK_FAILED = 2
 EXIT_BAD_QUEUE = 3
+# The user read a briefing and declined (Ctrl-C), or there was no console to
+# consent on. Distinct from a task failure: nothing was attempted at all, so the
+# queue stays on disk and the engine re-offers it next session.
+EXIT_ABORTED = 4
 
 QUEUE_VERSION = 1
 
@@ -665,6 +669,49 @@ def print_plan(queue):
     print()
 
 
+ABORT_PROMPT = ("  Press ENTER to continue, or Ctrl-C to abort. "
+                "Nothing has run yet, and aborting changes nothing. ")
+
+
+def print_briefings(queue) -> bool:
+    """Explain the tasks that carry an ``explain`` block, then hold for consent.
+
+    Printed BEFORE the first task runs -- which is what makes the closing
+    sentence true: at this point nothing has executed, so Ctrl-C really does
+    leave the machine exactly as bootstrap found it. The engine's re-check is
+    the authority either way, so an abort simply leaves the queue in place for
+    next time.
+
+    A one-line label is enough for a symlink; it is not enough for an operation
+    that is about to ask for the user's password. Returns True to proceed,
+    False when the user aborted.
+    """
+    briefed = [t for t in queue.get("tasks") or [] if t.get("explain")]
+    if not briefed:
+        return True
+    for task in briefed:
+        print("-" * 62)
+        for line in task["explain"]:
+            print(f"  {line}" if line else "")
+        print()
+    print("-" * 62)
+    try:
+        input(ABORT_PROMPT)
+    except KeyboardInterrupt:
+        print()
+        print("  Aborted. Nothing was run.")
+        return False
+    except EOFError:
+        # No console to consent with (piped stdin). Proceeding would ask for a
+        # password nobody can type -- the exact failure this whole path exists
+        # to avoid.
+        print()
+        print("  No console to confirm on; nothing was run.")
+        return False
+    print()
+    return True
+
+
 def run_queue(queue):
     """Execute every task, reporting per-task outcome. Returns an exit code.
 
@@ -802,6 +849,8 @@ def _main_teed(path, argv):
         return EXIT_BAD_QUEUE
 
     print_plan(queue)
+    if not print_briefings(queue):
+        return EXIT_ABORTED
     code = run_queue(queue)
 
     # Always hold. This window is the only account the user gets of what ran

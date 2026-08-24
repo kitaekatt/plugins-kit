@@ -112,7 +112,15 @@ class ValidationResult:
 
 def _git_status_porcelain(folder: Path) -> str | None:
     """``git status --porcelain`` scoped to folder; None when not in a repo
-    (or git is unavailable/fails) -- read as uncommitted (module docstring)."""
+    (or git is unavailable/fails) -- read as uncommitted (module docstring).
+
+    ``folder`` is resolved first: a task folder reached through a symlink or
+    Windows junction (the standard ``dev/tasks`` setup) chdirs the git
+    subprocess to its REAL path, while an unresolved pathspec argument still
+    names the logical (link) path -- git then reports the pathspec as outside
+    the repository. Resolving both to the same real path avoids the
+    mismatch."""
+    folder = folder.resolve()
     try:
         proc = subprocess.run(
             ["git", "status", "--porcelain", "--", str(folder)],
@@ -137,7 +145,12 @@ def git_ignores_path(folder: Path) -> bool:
     ``--no-index`` is load-bearing. Plain ``check-ignore`` consults the index
     first and reports a TRACKED path as not-ignored (exclude rules do not
     apply to tracked files), which is the opposite of the question here: the
-    rules still cover the path, and ``git add -A`` still refuses it."""
+    rules still cover the path, and ``git add -A`` still refuses it.
+
+    ``folder`` is resolved first for the same reason as
+    ``_git_status_porcelain``: an unresolved symlink/junction path as cwd vs.
+    pathspec is a mismatch git reports as outside the repository."""
+    folder = folder.resolve()
     try:
         proc = subprocess.run(
             ["git", "check-ignore", "--no-index", "-q", "--", str(folder)],
@@ -151,7 +164,12 @@ def git_ignores_path(folder: Path) -> bool:
 
 
 def _git_tracks_nothing_in(folder: Path) -> bool:
-    """True when git has no tracked file anywhere under the folder."""
+    """True when git has no tracked file anywhere under the folder.
+
+    ``folder`` is resolved first for the same reason as
+    ``_git_status_porcelain``: an unresolved symlink/junction path as cwd vs.
+    pathspec is a mismatch git reports as outside the repository."""
+    folder = folder.resolve()
     try:
         proc = subprocess.run(
             ["git", "ls-files", "--", str(folder)],

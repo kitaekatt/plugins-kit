@@ -174,6 +174,32 @@ that. The UAC (or sudo) prompt is the consent, the plan is the disclosure — an
 for `path_prune` the queue file itself is part of that disclosure: it lists every
 entry the prune will delete, verbatim, before the user agrees to anything.
 
+**A task may also carry a full `explain` briefing, and then the runner holds.**
+A one-line label is enough for a symlink; it is not enough for an operation that
+is about to ask for the user's password. A task carrying `explain` (today: a
+`brew_cask` install, produced by `fix_queue._brew_cask_task`) has its briefing
+printed after the plan and **before the first task runs** -- the exact command,
+what specifically needs root and by what mechanism, why bootstrap could not do
+it in a background hook, and Homebrew's own caveats for the cask -- closing with
+`Press ENTER to continue, or Ctrl-C to abort. Nothing has run yet, and aborting
+changes nothing.` That sentence is literally true only because the briefing
+precedes execution, which is why it lives in `print_briefings` and not in a
+per-task prompt. Ctrl-C, or an EOF because there is no console to confirm on,
+returns `EXIT_ABORTED` (4): nothing was attempted, the queue stays on disk, and
+the engine re-offers it next session.
+
+**One cask, one task.** `queue_from_failures` deduplicates `brew_cask`
+descriptors by their cask token. A cask is legitimately declared by more than one
+plugin -- p4-kit and unreal-kit both declare the `p4` client, because each
+genuinely needs it and neither should force the other's install -- and plugin
+manifests are processed per-plugin, so one absent cask arrives at the queue once
+per declaring plugin. Without the dedup the user reads the same briefing twice
+and `brew install --cask <token>` runs twice, the second a no-op whose "already
+installed" output is reported as a task outcome. The sibling methods collapse by
+their own means (`brew_installer` via a single bool, `apt` via one accumulated
+package list); the cask case needs a key of its own because each token is a
+separate task.
+
 **fix-all is "needs the user", not "needs admin".** `path_prune` is the case that
 makes the distinction concrete: it requires no privilege at all, and rides the
 queue purely because deleting PATH entries must be consented to rather than done

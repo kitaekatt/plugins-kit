@@ -2318,7 +2318,8 @@ def _strategy_brew(ctx):
     if not spec:
         return _StrategyOutcome(False)
     label = spec.get("cask") or spec.get("formula") or ctx.name
-    from .brew import ensure_brew, brew_install
+    from .brew import (ensure_brew, brew_install, cask_root_requirement,
+                       is_sudo_tty_failure)
     from .path_repair import repair_path
     eb = ensure_brew()
     if not eb.ok:
@@ -2334,7 +2335,30 @@ def _strategy_brew(ctx):
                 "install_state": "brew_failed", "install_cmd": None,
                 "elevation": {"method": "brew_installer", "os": "macos"},
                 "plugin": ctx.plugin_name})
-    bi = brew_install(formula=spec.get("formula"), cask=spec.get("cask"), tap=spec.get("tap"))
+    cask = spec.get("cask")
+    if cask:
+        # AHEAD of the attempt: a cask whose payload is a signed .pkg (or a
+        # sudo installer script) is installed by Homebrew with `sudo
+        # /usr/sbin/installer`. This hook has no TTY, so that attempt is
+        # GUARANTEED to fail -- after a full download -- and dumps brew's whole
+        # transcript into the failure message. Ask brew first and route the
+        # cask to the elevation queue, where the user has a console.
+        # cask_root_requirement fails open: an unknown cask installs inline
+        # exactly as before, and the sudo/TTY signature below is the backstop.
+        info = cask_root_requirement(cask)
+        if info.needs_root:
+            message = f"`{cask}` needs your password to install"
+            ctx.action_entries.append(
+                f"{ctx.prefix}{ctx.name}: {message} - queued for `bootstrap-fix`")
+            return _StrategyOutcome(True, {
+                "type": "tool", "name": ctx.name, "message": message,
+                "install_state": "brew_failed", "install_cmd": None,
+                "elevation": {"method": "brew_cask", "os": "macos",
+                              "cask": cask, "reason": info.reason,
+                              "caveats": info.caveats},
+                "plugin": ctx.plugin_name})
+
+    bi = brew_install(formula=spec.get("formula"), cask=cask, tap=spec.get("tap"))
     # brew links formulae into its prefix bin (already on PATH); reflect any
     # PATH change into this running process so the re-check can resolve it.
     repair_path()
@@ -2344,7 +2368,7 @@ def _strategy_brew(ctx):
             tool_paths.record(None, recheck.subject, recheck.path)
         ctx.tools_installed.append((ctx.name, f"installed `{label}` via brew"))
         return _StrategyOutcome(True, None)
-    if bi.ok and spec.get("cask"):
+    if bi.ok and cask:
         # CASK ONLY: brew reported success but the tool doesn't resolve by our
         # check -- a GUI cask may have no CLI binary and no `check` command, so
         # there is nothing on PATH for the re-check to see. Trust brew's success
@@ -2354,6 +2378,25 @@ def _strategy_brew(ctx):
         # (strategy section 8; mirrors scoop, which only trusts an actual shim).
         ctx.tools_installed.append((ctx.name, f"installed `{label}` via brew"))
         return _StrategyOutcome(True, None)
+    if cask and is_sudo_tty_failure(bi.message):
+        # AFTER the fact: the root requirement was not predictable from the
+        # cask's artifacts, but sudo said plainly why it died. Suppress brew's
+        # transcript -- it is download progress and a licence notice, not a
+        # diagnosis -- and route the cask to the queue like the ahead-of-time
+        # case. The env phase re-runs each session, so this converges too.
+        message = f"`{cask}` needs your password to install"
+        ctx.action_entries.append(
+            f"{ctx.prefix}{ctx.name}: {message} - queued for `bootstrap-fix`")
+        return _StrategyOutcome(True, {
+            "type": "tool", "name": ctx.name, "message": message,
+            "install_state": "brew_failed", "install_cmd": None,
+            "elevation": {"method": "brew_cask", "os": "macos",
+                          "cask": cask,
+                          "reason": "Homebrew invoked `sudo` during the "
+                                    "install and there was no terminal to "
+                                    "read your password from",
+                          "caveats": ""},
+            "plugin": ctx.plugin_name})
     ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: brew install failed - {bi.message}")
     return _StrategyOutcome(True, {"type": "tool", "name": ctx.name, "message": bi.message,
             "install_state": "brew_failed", "install_cmd": None,
