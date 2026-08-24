@@ -111,8 +111,9 @@ class ResolvedAnchor:
     record: Record | None
 
 
-def point_within(outer: Point, inner: Point) -> bool:
-    '''Whether the outer point contains the inner point by concrete path prefix.'''
+def contains(outer: Point, inner: Point) -> bool:
+    '''Whether OUTER contains INNER by concrete path prefix. Argument order is
+    container-first: contains(record, field) is True, the reverse is not.'''
     return (
         outer.type_id == inner.type_id
         and outer.record == inner.record
@@ -123,7 +124,7 @@ def point_within(outer: Point, inner: Point) -> bool:
 
 def overlaps(a: Point, b: Point) -> bool:
     '''Whether either concrete point contains the other.'''
-    return point_within(a, b) or point_within(b, a)
+    return contains(a, b) or contains(b, a)
 
 
 def intersects(

@@ -13,7 +13,7 @@ from .address import (
     overlaps,
     parse_anchor,
     parse_selector,
-    point_within,
+    contains,
     resolve_anchor,
 )
 from .errors import AddressError, EvaluationError, SelectorError
@@ -52,7 +52,7 @@ __all__ = [
     'overlaps',
     'parse_anchor',
     'parse_selector',
-    'point_within',
+    'contains',
     'reanchor',
     'resolve_anchor',
     'slice_hash',

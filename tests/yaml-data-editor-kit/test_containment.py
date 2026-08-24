@@ -6,7 +6,7 @@ from yaml_data_editor_kit.comments import (
     intersects,
     overlaps,
     parse_selector,
-    point_within,
+    contains,
 )
 
 
@@ -22,8 +22,8 @@ def test_whole_record_contains_its_field_but_not_the_reverse() -> None:
     record = Point('product', 'bolt')
     field = Point('product', 'bolt', ('summary',))
 
-    assert point_within(record, field)
-    assert not point_within(field, record)
+    assert contains(record, field)
+    assert not contains(field, record)
     assert overlaps(record, field)
     assert overlaps(field, record)
 
@@ -32,8 +32,8 @@ def test_sibling_fields_do_not_overlap() -> None:
     short = Point('product', 'bolt', ('description', 'short'))
     long = Point('product', 'bolt', ('description', 'long'))
 
-    assert not point_within(short, long)
-    assert not point_within(long, short)
+    assert not contains(short, long)
+    assert not contains(long, short)
     assert not overlaps(short, long)
 
 
