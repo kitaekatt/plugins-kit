@@ -295,3 +295,58 @@ class TestRateLimitSnapshot:
         assert result.returncode == 0, result.stderr
         assert "myproj" in result.stdout
         assert "unbound variable" not in result.stderr
+
+
+class TestNoTimeoutBinaryIsVisible:
+    """A machine with no `timeout(1)` must SAY its segments are off.
+
+    Stock macOS ships no `timeout` -- GNU coreutils installs it as `gtimeout`
+    -- and skipping *.sh segments there is the right call (an unbounded segment
+    stalls every prompt render). Skipping SILENTLY was not: an absent segment
+    and "this machine cannot run segments" rendered identically, so a user saw
+    their bar quietly lose cells with nothing saying why.
+
+    `BOOTSTRAP_BIN_TIMEOUT` set-but-empty is how that machine is declared, the
+    same way `BOOTSTRAP_BIN_JQ` carries jq's resolved path.
+    """
+
+    _PAYLOAD = json.dumps({
+        "model": {"display_name": "TestModel", "id": "m-1"},
+        "cwd": "/tmp/myproj",
+    })
+
+    def _run(self, tmp_path, extra_env):
+        segs = tmp_path / "segments"
+        segs.mkdir(exist_ok=True)
+        (segs / "50-hello.sh").write_text(
+            "#!/usr/bin/env bash\necho HELLO-CELL\n")
+        env = {"STATUSLINE_SEGMENTS_DIR": str(segs)}
+        env.update(extra_env)
+        return run_statusline(self._PAYLOAD, tmp_path, extra_env=env)
+
+    def test_absent_timeout_renders_a_marker_not_silence(self, tmp_path):
+        result = self._run(tmp_path, {"BOOTSTRAP_BIN_TIMEOUT": ""})
+        assert result.returncode == 0
+        # The segment is correctly skipped...
+        assert "HELLO-CELL" not in result.stdout
+        # ...and the bar says so rather than just losing a cell.
+        assert "segments off" in result.stdout
+        # The rest of the bar is unharmed.
+        assert "myproj" in result.stdout
+
+    def test_present_timeout_runs_segments_and_shows_no_marker(self, tmp_path):
+        result = self._run(tmp_path, {})
+        assert result.returncode == 0
+        assert "HELLO-CELL" in result.stdout
+        assert "segments off" not in result.stdout
+
+    def test_marker_appears_once_for_many_skipped_segments(self, tmp_path):
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        for i in range(3):
+            (segs / f"5{i}-x.sh").write_text("#!/usr/bin/env bash\necho X\n")
+        result = run_statusline(
+            self._PAYLOAD, tmp_path,
+            extra_env={"STATUSLINE_SEGMENTS_DIR": str(segs),
+                       "BOOTSTRAP_BIN_TIMEOUT": ""})
+        assert result.stdout.count("segments off") == 1

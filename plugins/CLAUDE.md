@@ -168,6 +168,44 @@ Both cases are pinned by
 and
 `tests/secrets-kit/test_terminal.py::test_posix_hold_open_avoids_the_bash_only_read_dash_p`.
 
+## Plugin shell code also meets BSD userland, not just an older bash
+
+The section above is about the shell DIALECT. This one is about the TOOLS the
+shell calls, and it is a separate axis that the bash 3.2 / zsh rule does not
+cover. macOS ships the BSD userland, so a GNU tool a script reaches for is
+either absent or takes different flags -- and the failure is usually silent
+rather than loud, because a script written defensively swallows the error.
+
+The case that produced this section: `timeout(1)` is GNU coreutils and does
+not exist on stock macOS at all; Homebrew installs it as `gtimeout`.
+claude-ui-kit's statusline probes for both and, finding neither, skips every
+`*.sh` segment rather than running one unbounded and stalling each prompt
+render. Skipping is correct. Skipping SILENTLY was not: an absent segment and
+"this machine cannot run segments" rendered identically, so a user's bar
+quietly lost cells with nothing saying why (fixed in claude-ui-kit 0.11.0,
+which renders one `[segments off: no timeout(1)]` marker instead).
+
+Two rules follow.
+
+- **A tool that may be absent must announce its absence, not degrade into
+  silence.** This is the same rule as "when success and failure are both silent
+  they are indistinguishable" in the section below, reached from a different
+  direction. Absent OUTPUT and absent CAPABILITY are different facts and must
+  not render identically.
+- **A test may not assume a binary the script under test documents as
+  OPTIONAL.** The statusline's own comment says the no-timeout path is real,
+  yet `tests/claude-ui-kit/test_statusline.py` assumed `timeout` exists -- so
+  the suite passed everywhere a developer ran it and failed on the one platform
+  the branch was written for. Where a script probes for a tool, give it a
+  `BOOTSTRAP_BIN_<TOOL>` override (the `BOOTSTRAP_BIN_JQ` precedent) and drive
+  BOTH branches from the test. Set-but-empty declares "this machine has no such
+  binary"; `${VAR+set}` is the POSIX set-vs-empty test and is safe under bash
+  3.2, zsh, and `set -u`.
+
+Others in the same class, none of which a Windows or Linux session will catch:
+`sed -i` (BSD requires an argument), `stat -c` vs `stat -f`, `date -d` vs
+`date -r`, `readlink -f`, `grep -P`, `mktemp` templates, and `base64 -w`.
+
 ## A detached process must keep an error channel
 
 Session readiness is held by the hook's process exit AND stdout-pipe EOF, so a

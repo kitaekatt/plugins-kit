@@ -222,6 +222,25 @@ if [ -d "$SEGMENTS_DIR" ]; then
     TXT_TTL="${STATUSLINE_SEGMENT_TXT_TTL:-300}"
     SEG_TIMEOUT="${STATUSLINE_SEGMENT_TIMEOUT:-2}"
     NOW=$(date +%s)
+    # Resolved ONCE rather than per segment. `command -v` in the loop was a
+    # subprocess per *.sh segment per render, and the answer cannot change
+    # mid-loop.
+    # Same precedent as JQ above: prefer the absolute path bootstrap recorded,
+    # fall back to a PATH lookup. Set-but-EMPTY is meaningful and distinct from
+    # unset -- it declares "this machine has no timeout binary", which is what
+    # bootstrap records on a stock macOS box and what the test below asserts
+    # against. `${VAR+set}` is the POSIX set-vs-empty test and is safe under
+    # bash 3.2, zsh, and `set -u`.
+    SEG_TIMEOUT_BIN=""
+    if [ "${BOOTSTRAP_BIN_TIMEOUT+set}" = set ]; then
+        SEG_TIMEOUT_BIN="$BOOTSTRAP_BIN_TIMEOUT"
+    elif command -v timeout >/dev/null 2>&1; then
+        SEG_TIMEOUT_BIN="timeout"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        SEG_TIMEOUT_BIN="gtimeout"
+    fi
+    SEG_SKIPPED=""
+
     for seg in "$SEGMENTS_DIR"/*; do
         [ -e "$seg" ] || continue
         SEGOUT=""
@@ -239,12 +258,17 @@ if [ -d "$SEGMENTS_DIR" ]; then
                 # `timeout` and falling through to an unbounded run would quietly
                 # void the guarantee on exactly the platform that needs it. If
                 # neither exists, skip *.sh segments rather than risk the bar.
-                if command -v timeout >/dev/null 2>&1; then
-                    SEGOUT=$(printf '%s' "$DATA" | timeout "$SEG_TIMEOUT" bash "$seg" 2>/dev/null || true)
-                elif command -v gtimeout >/dev/null 2>&1; then
-                    SEGOUT=$(printf '%s' "$DATA" | gtimeout "$SEG_TIMEOUT" bash "$seg" 2>/dev/null || true)
+                #
+                # Skipping is right; skipping SILENTLY was not. A user on stock
+                # macOS saw their segments simply absent from the bar, with
+                # nothing saying why -- the failure looked identical to a
+                # segment that had nothing to report. One marker is appended
+                # below instead, once per render rather than once per segment.
+                if [ -n "$SEG_TIMEOUT_BIN" ]; then
+                    SEGOUT=$(printf '%s' "$DATA" | "$SEG_TIMEOUT_BIN" "$SEG_TIMEOUT" bash "$seg" 2>/dev/null || true)
                 else
                     SEGOUT=""
+                    SEG_SKIPPED=1
                 fi
                 ;;
         esac
@@ -257,6 +281,13 @@ if [ -d "$SEGMENTS_DIR" ]; then
         fi
         [ -n "$SEGOUT" ] && OUT="$OUT$SEP$SEGOUT${RESET}"
     done
+
+    # Say so, once, rather than letting the segments quietly not be there.
+    # Absent output and "this machine cannot run segments" are different facts
+    # and must not render identically.
+    if [ -n "$SEG_SKIPPED" ]; then
+        OUT="$OUT$SEP[segments off: no timeout(1)]${RESET}"
+    fi
 fi
 
 printf '%s\n' "$OUT"
