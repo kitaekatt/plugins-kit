@@ -6,12 +6,18 @@ from .address import (
     Evaluation,
     Point,
     Predicate,
+    ResolvedAnchor,
     Selector,
     evaluate,
+    intersects,
+    overlaps,
     parse_anchor,
     parse_selector,
+    point_within,
+    resolve_anchor,
 )
 from .errors import AddressError, EvaluationError, SelectorError
+from .hashing import slice_hash
 
 __all__ = [
     'AddressError',
@@ -20,10 +26,16 @@ __all__ = [
     'EvaluationError',
     'Point',
     'Predicate',
+    'ResolvedAnchor',
     'STAR',
     'Selector',
     'SelectorError',
     'evaluate',
+    'intersects',
+    'overlaps',
     'parse_anchor',
     'parse_selector',
+    'point_within',
+    'resolve_anchor',
+    'slice_hash',
 ]
