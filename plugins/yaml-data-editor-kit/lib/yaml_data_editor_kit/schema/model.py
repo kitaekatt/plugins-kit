@@ -17,7 +17,7 @@ SCALAR_KINDS = ("string", "int", "float", "bool", "id", "text")
 COMPOUND_KINDS = ("list", "map", "ref", "enum", "record")
 FIELD_KINDS = SCALAR_KINDS + COMPOUND_KINDS
 
-# A map key must have a declared legal set.
+# A map key has a declared key shape; refs and enums also declare a set.
 LEGAL_KEY_KINDS = ("id", "ref", "enum")
 
 STORED_INT = "int"
@@ -96,6 +96,7 @@ class FieldSpec:
     max_chars: int | None = None
     minimum: float | None = None
     maximum: float | None = None
+    total: bool = False
 
     ordered: Ordered | None = None
 
@@ -160,6 +161,7 @@ class TypeSpec:
     title: str | None = None
     identified_by: str | None = None
     fields: dict[str, FieldSpec] = dataclass_field(default_factory=dict)
+    value: FieldSpec | None = None
     variants: Variants | None = None
     extensible: Extensible | None = None
     open: OpenSpec | None = None

@@ -1,7 +1,7 @@
 """Read a data corpus off disk according to the profile's ``source`` documents.
 
 One record is one addressable thing: the file it came from, the identity it
-carries, and its mapping of field values. Every diagnostic downstream is
+carries, and its data value. Every diagnostic downstream is
 addressed with those three, so they are captured here rather than reconstructed
 later.
 """
@@ -24,7 +24,7 @@ class Record:
 
     type_id: str
     identity: str | None
-    data: dict[str, Any]
+    data: Any
     file: str
     source: SourceSpec
 
@@ -236,6 +236,37 @@ def _load_keyed_map(
             Diagnostic("a 'keyed_map' source must be a mapping", name)
         )
         return
+    target = profile.types[source.of]
+    if target.value is not None:
+        record_items = list(
+            _keyed_map_records(profile, corpus, source, document, name)
+        )
+        present_record_keys = {key for key, _ in record_items}
+        for key, body in record_items:
+            corpus.records.append(
+                Record(
+                    type_id=source.of,
+                    identity=str(key),
+                    data=body,
+                    file=name,
+                    source=source,
+                )
+            )
+        metadata = {
+            str(key): value
+            for key, value in document.items()
+            if str(key) in target.fields and str(key) not in present_record_keys
+        }
+        corpus.records.append(
+            Record(
+                type_id=source.of,
+                identity=None,
+                data=metadata,
+                file=name,
+                source=source,
+            )
+        )
+        return
     for key, body in _keyed_map_records(profile, corpus, source, document, name):
         if not isinstance(body, dict):
             corpus.diagnostics.append(
@@ -254,19 +285,37 @@ def _load_keyed_map(
 
 
 def _keyed_map_records(
-    profile: Profile, corpus: Corpus, source: SourceSpec, document: dict, name: str
+    profile: Profile,
+    corpus: Corpus,
+    source: SourceSpec,
+    document: dict[Any, Any],
+    name: str,
 ) -> Iterator[tuple[str, Any]]:
-    metadata = {str(k) for k in (source.metadata_keys or [])}
+    target = profile.types[source.of]
+    if target.value is None:
+        metadata = {str(key) for key in (source.metadata_keys or [])}
+        metadata_label = "declared metadata keys"
+    else:
+        metadata = set(target.fields)
+        metadata_label = "fields of value-shaped type '{0}'".format(target.id)
+
     if source.record_keys is not None:
-        wanted = [str(k) for k in source.record_keys]
+        wanted = [str(key) for key in source.record_keys]
+        wanted_set = set(wanted)
+        record_keys_label = "declared record keys"
         _report_unknown_keyed_map_keys(
             corpus,
             document,
             name,
-            set(wanted),
+            wanted_set,
             metadata,
-            "declared record keys",
+            record_keys_label,
+            metadata_label,
         )
+        if target.value is not None:
+            _report_value_shaped_metadata_collisions(
+                corpus, name, target, wanted_set, metadata, record_keys_label
+            )
         for key in wanted:
             if key not in document:
                 corpus.diagnostics.append(
@@ -276,15 +325,28 @@ def _keyed_map_records(
             yield key, document[key]
         return
     if source.record_keys_from is not None:
-        wanted = {str(v) for v in resolve_value_set(profile, corpus, source.record_keys_from)}
+        wanted = {
+            str(value)
+            for value in resolve_value_set(
+                profile, corpus, source.record_keys_from
+            )
+        }
+        record_keys_label = "declared record keys from '{0}'".format(
+            source.record_keys_from
+        )
         _report_unknown_keyed_map_keys(
             corpus,
             document,
             name,
             wanted,
             metadata,
-            "declared record keys from '{0}'".format(source.record_keys_from),
+            record_keys_label,
+            metadata_label,
         )
+        if target.value is not None:
+            _report_value_shaped_metadata_collisions(
+                corpus, name, target, wanted, metadata, record_keys_label
+            )
         for key in document:
             if str(key) in wanted:
                 yield str(key), document[key]
@@ -304,6 +366,26 @@ def _keyed_map_records(
             yield str(key), document[key]
 
 
+def _report_value_shaped_metadata_collisions(
+    corpus: Corpus,
+    name: str,
+    target: TypeSpec,
+    record_keys: set[str],
+    metadata_keys: set[str],
+    record_keys_label: str,
+) -> None:
+    for key in sorted(record_keys & metadata_keys):
+        corpus.diagnostics.append(
+            Diagnostic(
+                "metadata field '{0}' of value-shaped type '{1}' is also in "
+                "{2}; one top-level key cannot be both a record and "
+                "metadata".format(key, target.id, record_keys_label),
+                name,
+                record=key,
+            )
+        )
+
+
 def _report_unknown_keyed_map_keys(
     corpus: Corpus,
     document: dict[Any, Any],
@@ -311,6 +393,7 @@ def _report_unknown_keyed_map_keys(
     record_keys: set[str],
     metadata_keys: set[str],
     record_keys_label: str,
+    metadata_keys_label: str,
 ) -> None:
     """Refuse top-level keys outside both declared ``keyed_map`` sets."""
     unknown = sorted(
@@ -321,11 +404,11 @@ def _report_unknown_keyed_map_keys(
     for key in unknown:
         corpus.diagnostics.append(
             Diagnostic(
-                "unknown keyed_map key '{0}'; {1}: [{2}]; declared metadata keys: "
-                "[{3}]".format(
+                "unknown keyed_map key '{0}'; {1}: [{2}]; {3}: [{4}]".format(
                     key,
                     record_keys_label,
                     record_keys_text,
+                    metadata_keys_label,
                     metadata_keys_text,
                 ),
                 name,
@@ -353,6 +436,12 @@ def resolve_value_set(profile: Profile, corpus: Corpus, path: str) -> list[Any]:
     target = profile.types.get(type_id)
     is_identity = target is not None and field_path == [target.identified_by]
     for record in corpus.of_type(type_id):
+        if (
+            target is not None
+            and target.value is not None
+            and record.identity is not None
+        ):
+            continue
         if is_identity and field_path[0] not in record.data and record.identity is not None:
             # A keyed_map carries the identity as the document key, not as a
             # field of the record body.

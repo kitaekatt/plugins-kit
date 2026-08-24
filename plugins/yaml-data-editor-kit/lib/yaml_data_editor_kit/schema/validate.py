@@ -54,8 +54,12 @@ class Validator:
     def run(self) -> list[Diagnostic]:
         check_path_key_steps(self.profile, self.corpus)
         for type_spec in self.profile.types.values():
-            flattened, merge_diagnostics = flatten_type(type_spec, self.corpus)
-            self.diagnostics.extend(merge_diagnostics)
+            flattened: dict[str, dict[str, Any]] = {}
+            if type_spec.value is None:
+                flattened, merge_diagnostics = flatten_type(
+                    type_spec, self.corpus
+                )
+                self.diagnostics.extend(merge_diagnostics)
             for record in self.corpus.of_type(type_spec.id):
                 data = record.data
                 if record.identity is not None and record.identity in flattened:
@@ -90,7 +94,32 @@ class Validator:
 
     # -- records ----------------------------------------------------------
 
-    def _check_record(self, type_spec: TypeSpec, record: Record, data: dict[str, Any]) -> None:
+    def _check_record(self, type_spec: TypeSpec, record: Record, data: Any) -> None:
+        if type_spec.value is not None:
+            if record.identity is None:
+                if not isinstance(data, dict):
+                    self._report(
+                        'document metadata is not a mapping of fields',
+                        record,
+                    )
+                    return
+                self._check_shape(
+                    data,
+                    type_spec.fields,
+                    type_spec,
+                    record,
+                    prefix='',
+                    open_allowed=False,
+                )
+            else:
+                self._check_value(
+                    data,
+                    type_spec.value,
+                    type_spec,
+                    record,
+                    'value',
+                )
+            return
         if not isinstance(data, dict):
             self._report("is not a mapping of fields", record)
             return
@@ -279,6 +308,27 @@ class Validator:
             self._wrong_type(value, "map", record, path)
             return
         self._check_size(len(value), spec, record, path)
+        if spec.total and spec.key is not None:
+            members = self._legal_values(spec.key)
+            if spec.key.kind == 'ref':
+                set_label = 'declared set of ref type {0!r}'.format(
+                    spec.key.to
+                )
+            elif spec.key.values_from is not None:
+                set_label = 'declared set {0!r}'.format(
+                    spec.key.values_from
+                )
+            else:
+                set_label = 'declared inline enum set'
+            for member in members:
+                if member not in value:
+                    self._report(
+                        'map {0!r} is missing key {1!r} from {2}'.format(
+                            path, member, set_label
+                        ),
+                        record,
+                        path,
+                    )
         if spec.key is None or spec.value is None:
             return
         for key, entry in value.items():
@@ -391,6 +441,8 @@ class Validator:
     # -- enum and ref -----------------------------------------------------
 
     def _legal_values(self, spec: FieldSpec) -> list[Any]:
+        if spec.kind == 'ref' and spec.to is not None:
+            return list(self.corpus.identities(spec.to))
         if spec.values_from is not None:
             if spec.values_from not in self._value_sets:
                 self._value_sets[spec.values_from] = resolve_value_set(

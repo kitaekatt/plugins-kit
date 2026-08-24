@@ -69,6 +69,61 @@ fields:
   price: { type: int, unit: cents }
 ```
 
+### `value` -- records that are values
+
+A type normally uses `fields:` to declare each record body. A type with
+`value:` instead declares that each record IS one value with that field
+declaration:
+
+```yaml
+dialect: type/1
+id: rate_table
+fields:
+  note: { type: text }
+value:
+  type: map
+  key: { type: enum, values_from: catalog.category_order }
+  value: { type: int, unit: cents }
+  total: true
+```
+
+`value:` takes a complete field declaration. All field types and annotations
+in this document can occur inside it.
+
+For a type with `value:`, the roles of the two declarations are exact:
+
+- `value:` declares each record body.
+- `fields:` declares the metadata keys of the containing document.
+
+The validator checks each identified record body against `value:`. It checks
+the document metadata once against `fields:`, with the same rules as a
+`single` source. An unknown metadata key is an error. An absent required
+metadata field is an error. A record body of the wrong YAML kind produces the
+ordinary wrong-type error, which names the record and the declared kind.
+
+A value-shaped type is legal only with a `keyed_map` source. A profile load
+fails for each of these combinations:
+
+- `value:` with `identified_by:`, `variants:`, `extensible:`, or `open:` on
+  the same type. The error names the type, `value:`, and the conflicting key.
+- A source of the type with a layout other than `keyed_map`. The error names
+  the source, its layout, and the type.
+- A source of the type with `metadata_keys:`. The error names the source and
+  the type. The type's field names already declare the metadata set.
+
+Source and type documents can load in either order. Therefore, the loader
+checks source/type combinations during deferred profile resolution.
+
+The document key remains the identity of a value-shaped record. A selector
+steps into the declared value after that identity. For example,
+`rate_table/basic/standard` selects the `standard` key from the `basic`
+record's map value.
+
+The metadata record uses the document identity `@doc`. For example,
+`rate_table/@doc/note` selects the `note` metadata field. A metadata field
+under a record identity is an unknown name. A selector cannot step into a
+list value. The selector for that record denotes the complete list.
+
 ### Field types
 
 Scalars: `string`, `int`, `float`, `bool`, `id`, `text`.
@@ -83,9 +138,10 @@ Compound: `list` (`of:`), `map` (`key:` and `value:`), `ref`, `enum`,
 
 ### `map` keys, and key-dependent values
 
-A map's `key:` must be an `id`, a `ref`, or an `enum` -- something with a
-declared legal set. A raw scalar key is refused, because a map keyed by
-undeclared values is a record whose fields nobody wrote down.
+A map's `key:` must be an `id`, a `ref`, or an `enum`. A `ref` or
+`enum` supplies a declared legal set. A bare `id` declares the key shape
+without claiming that its member set is known. A raw scalar key is refused,
+because it does not even declare that key shape.
 
 Integer keys are therefore permitted exactly when they are declared:
 
@@ -379,10 +435,24 @@ relate one type to another; these bound a single value.
 xp:          { type: list, of: { type: int }, length: 20 }
 short:       { type: text, max_chars: 120 }
 word_list:   { type: list, of: { type: ref, to: word }, min_length: 12 }
+rates:
+  type: map
+  key: { type: enum, values_from: catalog.category_order }
+  value: { type: int }
+  total: true
 ```
 
 `length` (exact), `min_length` / `max_length` (list or map), `max_chars` /
 `min_chars` (string and text), `min` / `max` (numbers).
+
+`total: true` applies to a map whose key has a declared set. The key must be
+an inline enum, an enum with `values_from:`, or a `ref`. Every member of that
+set must occur in the map. A missing member is an error that names the absent
+key, the declared set, the map, and the record.
+
+`total: true` on a map with a bare `id` key is a profile load error. A bare
+`id` has no declared set to be total over. Extra map keys remain errors under
+the map key's existing value check.
 
 These exist because a real corpus enforces all of them today -- a fixed
 20-element per-level array, a prose field with a stated character ceiling, a
@@ -532,6 +602,10 @@ into another type, which is a join.
   address living inside a map value has no stable form; a discriminator chooses
   the shape of the whole record, so it must be a field the record has before any
   variant applies.
+- **`value:`** -- an anchored path still resolves against `fields:`, which are
+  the metadata declarations for a value-shaped type. No anchored path enters
+  `value:`. A view of the type can name metadata fields, but it cannot name a
+  path inside the record value.
 - **A source's `path:`, `files:` and `key:`** -- filesystem globs and a
   document's own top-level key. They are not dialect paths, and a `.` in one is
   a dot in a filename.
@@ -626,11 +700,14 @@ generated_by: tools/generate_catalog.py
   AGREE with it, and a disagreement is a validation error naming both. The
   filename is a second expression of the identity, not a second source of it
   -- which is the only arrangement consistent with one fact having one home.
-- `keyed_map` -- records as top-level keys of a document, which requires
+- `keyed_map` -- records as top-level keys of a document. A regular type uses
   `record_keys:` / `record_keys_from:` or `metadata_keys:` to separate records
   from the document's own metadata keys sitting at the same level. A
-  `keyed_map` record's document key IS its identity. `identified_by:` is not
-  required on the type.
+  value-shaped type uses `record_keys:` or `record_keys_from:` for the record
+  keys and uses its `fields:` names for the metadata set. `metadata_keys:` is
+  refused for that source. A `keyed_map` record's document key IS its identity.
+  `identified_by:` is not required on a regular type and is refused on a
+  value-shaped type.
 - `single` -- the whole document IS one record of `of:`, with its top-level
   keys as that record's fields. No identity is needed and `identified_by:` is
   not required on the type.
@@ -651,10 +728,20 @@ Each refusal names the identity-less type and the declaration that requires
 the identity.
 
 When `record_keys:` or `record_keys_from:` supplies a record-key set,
-`metadata_keys:` must enumerate every other top-level key. A key in neither
-set is a load error. The error names the unknown key, the source document,
-the declared record-key set, and the declared metadata-key set. The loader
-never treats an undeclared key as metadata.
+`metadata_keys:` must enumerate every other top-level key for a regular type.
+A key in neither set is a load error. The error names the unknown key, the
+source document, the declared record-key set, and the declared metadata-key
+set. The loader never treats an undeclared key as metadata.
+
+For a value-shaped type, every other top-level key must name a field of that
+type. An unknown key is a load error. The error names the unknown key, the
+source document, the declared record-key set, and the type's field names.
+Thus, the field-name check replaces every case that `metadata_keys:` guarded.
+The loader still never treats an undeclared key as metadata.
+
+A field name must not collide with a member of the record-key set. Such a
+collision is a load error that names the field, the record-key set, the
+source, and the type. One top-level key cannot be both a record and metadata.
 
 `single` is not a degenerate case to be tidied away later. A corpus's most
 load-bearing files are routinely one-of-a-kind documents -- a manifest, a
@@ -687,9 +774,9 @@ excluded so that adopting the dialect fixes it rather than preserving it.
 - **An omitted field meaning "use the default".** The dialect has no
   `default:`. A field is required or optional; an optional field that is
   absent is absent. A value that should be there must be written.
-- **Undeclared map keys.** `key:` must be an `id`, a `ref`, or an `enum` --
-  including an integer-valued enum. What is refused is a key set nobody
-  declared, not a key that happens to be a number.
+- **Unconstrained scalar map keys.** `key:` must be an `id`, a `ref`, or
+  an `enum`, including an integer-valued enum. A bare `id` declares the key
+  shape but not its member set. Therefore, it cannot carry `total: true`.
 - **A path that crosses a `ref`, a list, or a `shape_from` value.** A path
   descends one type's declarations and stops where that type does. Reaching
   further is a join, which is open question 3, not a path form.

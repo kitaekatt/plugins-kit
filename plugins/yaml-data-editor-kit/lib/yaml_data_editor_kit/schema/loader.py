@@ -39,6 +39,7 @@ from .model import (
 )
 
 _FIELD_KEYS = {
+    'total',
     "type", "required", "unit", "meaning", "sentinel", "derived", "provenance",
     "of", "key", "value", "fields", "to",
     "values", "values_from", "stored",
@@ -47,6 +48,7 @@ _FIELD_KEYS = {
     "ordered",
 }
 _TYPE_KEYS = {
+    'value',
     "dialect", "id", "title", "identified_by", "fields",
     "variants", "extensible", "open", "constraints", "adapter",
 }
@@ -139,16 +141,37 @@ def _require(raw: dict, key: str, where: str, document: Path) -> Any:
 
 
 def _parse_type(raw: dict, document: Path) -> TypeSpec:
+    if 'value' in raw:
+        conflict_where = 'type {0!r}'.format(raw.get('id', '<missing>'))
+        for conflict in ('identified_by', 'variants', 'extensible', 'open'):
+            if conflict in raw:
+                raise ProfileError(
+                    '{0}: {1!r} cannot be declared with {2!r}'.format(
+                        conflict_where, 'value:', conflict + ':'
+                    ),
+                    document,
+                )
     _reject_unknown(raw, _TYPE_KEYS, "type document", document)
     type_id = _require(raw, "id", "type document", document)
     where = "type '{0}'".format(type_id)
 
     fields = _parse_fields(raw.get("fields") or {}, where, document)
+    value = (
+        _parse_field(
+            'value',
+            raw['value'],
+            '{0} {1!r}'.format(where, 'value:'),
+            document,
+        )
+        if 'value' in raw
+        else None
+    )
     spec = TypeSpec(
         id=type_id,
         title=raw.get("title"),
         identified_by=raw.get("identified_by"),
         fields=fields,
+        value=value,
         document=document,
     )
 
@@ -205,6 +228,8 @@ def _check_shape_from_placement(spec: TypeSpec, where: str, document: Path) -> N
             fields.update(added)
     if spec.open is not None:
         fields["open"] = spec.open.type
+    if spec.value is not None:
+        walk(spec.value, 'value', False)
     for name, field in fields.items():
         walk(field, name, False)
 
@@ -219,6 +244,8 @@ def _uses_shape_from(spec: TypeSpec) -> bool:
         return any(walk(f) for f in field.fields.values())
 
     fields = list(spec.fields.values())
+    if spec.value is not None:
+        fields.append(spec.value)
     if spec.variants is not None:
         for added in spec.variants.when.values():
             fields.extend(added.values())
@@ -248,6 +275,12 @@ def _parse_field(name: str, raw: Any, where: str, document: Path) -> FieldSpec:
         )
 
     spec = FieldSpec(name=name)
+    spec.total = bool(raw.get('total', False))
+    if spec.total and 'type' not in raw:
+        raise ProfileError(
+            '{0}: {1!r} is only legal on a map'.format(where, 'total: true'),
+            document,
+        )
     spec.required = bool(raw.get("required", True))
     spec.unit = raw.get("unit")
     spec.meaning = raw.get("meaning")
@@ -288,6 +321,11 @@ def _parse_field(name: str, raw: Any, where: str, document: Path) -> FieldSpec:
             document,
         )
     spec.kind = kind
+    if spec.total and kind != 'map':
+        raise ProfileError(
+            '{0}: {1!r} is only legal on a map'.format(where, 'total: true'),
+            document,
+        )
 
     if kind == "list":
         spec.of = _parse_field(
@@ -302,6 +340,12 @@ def _parse_field(name: str, raw: Any, where: str, document: Path) -> FieldSpec:
                 "{0}: a map key must be an id, a ref or an enum -- a map keyed by "
                 "undeclared values is a record whose fields nobody wrote "
                 "down".format(where),
+                document,
+            )
+        if spec.total and spec.key.kind == 'id':
+            raise ProfileError(
+                '{0}: {1!r} cannot use a bare {2!r} key because it has no '
+                'declared set'.format(where, 'total: true', 'id'),
                 document,
             )
         spec.value = _parse_field(
@@ -691,6 +735,13 @@ def _resolve_type(profile: Profile, spec: TypeSpec) -> None:
     fields = list(spec.every_possible_field().items())
     if spec.open is not None:
         fields.append(("open", spec.open.type))
+    if spec.value is not None:
+        _resolve_field(
+            profile,
+            spec.value,
+            '{0} {1!r}'.format(where, 'value:'),
+            spec,
+        )
     for name, field in fields:
         _resolve_field(profile, field, "{0} field '{1}'".format(where, name), spec)
     for index, constraint in enumerate(spec.constraints):
@@ -1157,6 +1208,23 @@ def _check_variant_scoping(
 def _resolve_source(profile: Profile, source: SourceSpec) -> None:
     where = "source for '{0}'".format(source.of)
     target = profile.types.get(source.of)
+    if target is not None and target.value is not None:
+        if source.layout != 'keyed_map':
+            raise ProfileError(
+                '{0}: layout {1!r} cannot supply value-shaped type {2!r}; '
+                'use {3!r}'.format(
+                    where, source.layout, source.of, 'keyed_map'
+                ),
+                source.document,
+            )
+        if source.metadata_keys is not None:
+            raise ProfileError(
+                '{0}: {1!r} restates metadata for value-shaped type {2!r}; '
+                'the type field names are the metadata set'.format(
+                    where, 'metadata_keys:', source.of
+                ),
+                source.document,
+            )
     if target is None:
         raise ProfileError(
             "{0}: 'of:' names unknown type '{1}'".format(where, source.of), source.document
