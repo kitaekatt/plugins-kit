@@ -475,14 +475,35 @@ def _require_version_bump() -> list[str]:
 
 
 def _changed_plugins() -> set[str]:
-    """Published plugins with at least one file changed in the publish range."""
+    """Published plugins whose files DIFFER between master and the dev tip.
+
+    The commit walk finds candidates; the net diff decides. Both halves are
+    needed and the second is the one that is easy to omit: after a filtered
+    release, master carries cherry-picked equivalents of dev commits, so those
+    commits are still in the range and still name the plugin's files while
+    master already holds their content byte-for-byte. Reporting those as
+    unbumped demands a version bump that would ship nothing -- burning a
+    version number and pushing a no-op refetch to every consumer, which is a
+    milder form of the same waste gotcha 3 describes.
+
+    So a plugin is "changed" only when master would actually receive different
+    bytes. `git diff --quiet` exits 1 when they differ, 0 when they do not.
+    """
     known = set(local_plugins())
-    changed = set()
+    candidates = set()
     for sha in _range_commits():
         for path in _commit_files(sha):
             parts = path.split("/")
             if len(parts) > 2 and parts[0] == "plugins" and parts[1] in known:
-                changed.add(parts[1])
+                candidates.add(parts[1])
+    changed = set()
+    for name in candidates:
+        differs = subprocess.run(
+            ["git", "diff", "--quiet",
+             f"{REMOTE}/{MASTER_BRANCH}..{DEV_BRANCH}", "--", f"plugins/{name}"],
+            cwd=REPO_ROOT, capture_output=True, text=True).returncode != 0
+        if differs:
+            changed.add(name)
     return changed
 
 

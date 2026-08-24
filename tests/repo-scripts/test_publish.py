@@ -15,6 +15,7 @@ import importlib.util
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -492,3 +493,40 @@ class TestIndexScopeGuard:
         """An output-shape change must fail loudly; a silent pass would retire the
         guard without anyone noticing."""
         assert publish.check_index_scope("<html>no data block</html>")
+
+
+class TestChangedPluginsUsesNetDiff:
+    """A plugin master already holds byte-for-byte is not "changed".
+
+    After a filtered release master carries cherry-picked equivalents of dev
+    commits. Those commits stay in the publish range and still name the
+    plugin's files, so a commit-walk alone reports them as unbumped -- and the
+    demanded version bump would ship nothing, burning a version number and
+    pushing a no-op refetch to every consumer.
+    """
+
+    def test_identical_plugin_is_not_reported_as_changed(self, monkeypatch):
+        import publish
+
+        monkeypatch.setattr(publish, "local_plugins",
+                            lambda: {"alpha": {"version": "1.0.0"}})
+        monkeypatch.setattr(publish, "_range_commits", lambda: ["deadbee"])
+        monkeypatch.setattr(publish, "_commit_files",
+                            lambda sha: ["plugins/alpha/file.py"])
+        # git diff --quiet exits 0 -> no net difference.
+        monkeypatch.setattr(publish.subprocess, "run",
+                            lambda *a, **k: SimpleNamespace(returncode=0))
+        assert publish._changed_plugins() == set()
+
+    def test_genuinely_differing_plugin_is_still_reported(self, monkeypatch):
+        import publish
+
+        monkeypatch.setattr(publish, "local_plugins",
+                            lambda: {"alpha": {"version": "1.0.0"}})
+        monkeypatch.setattr(publish, "_range_commits", lambda: ["deadbee"])
+        monkeypatch.setattr(publish, "_commit_files",
+                            lambda sha: ["plugins/alpha/file.py"])
+        # exit 1 -> the trees differ, so the bump rule must still bite.
+        monkeypatch.setattr(publish.subprocess, "run",
+                            lambda *a, **k: SimpleNamespace(returncode=1))
+        assert publish._changed_plugins() == {"alpha"}
