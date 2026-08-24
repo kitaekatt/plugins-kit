@@ -207,7 +207,11 @@ class TestAnalysisDepth:
     def test_detect_returns_the_depth_with_the_verdict(self):
         src = _detect()
         assert "verdict: derived, depth" in src
-        assert "return { perSubject: results, totals, ceiling, depth, batchSize" in src
+        # perSubject carries the REFUTATION stage's output, not the reducer's --
+        # the two differ exactly when verification falsified something, and
+        # returning the pre-verification set would hand the caller candidates the
+        # lane had already refuted.
+        assert "return { perSubject: verifiedResults, totals, ceiling, depth, batchSize" in src
 
 
 class TestScopeCorrection:
