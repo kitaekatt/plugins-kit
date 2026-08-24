@@ -10,10 +10,25 @@ be consumed by a project through the packages below.
 ## The profile boundary
 
 This plugin defines a project-independent YAML schema dialect: a way to
-declare types, shapes, and constraints in YAML. It learns no vocabulary
-belonging to any consuming project -- no game term, no engine term, no
-project-specific noun appears anywhere in this plugin's code, schema
-grammar, or examples.
+declare types, shapes, and constraints in YAML. It DEPENDS ON no
+vocabulary belonging to any consuming project: no project-specific noun
+is hardcoded in this plugin's code, and no construct in the schema
+grammar is named for, shaped around, or meaningful only to one project's
+data. The test is substitution -- rename every noun in a consuming
+project's profile and the kit behaves identically.
+
+**Illustrative examples ARE permitted**, in the dialect documentation and
+in test fixtures, and are usually drawn from the motivating corpus
+because a construct is easier to judge against real data than against
+`foo.bar`. An example noun is not a dependency; it is documentation of a
+shape. What is forbidden is the kit KNOWING that noun -- branching on it,
+defaulting to it, or requiring it to exist.
+
+(Amended 2026-08-23. The rule previously said no project noun could
+appear "anywhere in this plugin's code, schema grammar, or examples",
+which the dialect spec's own worked examples had never satisfied. It was
+restated to what it demonstrably means rather than scrubbing examples
+that cost nothing and explain more.)
 
 A consuming project supplies a **profile**: a document written *in* the
 dialect this plugin defines, naming that project's own types and fields.
