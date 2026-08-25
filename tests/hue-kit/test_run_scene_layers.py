@@ -15,9 +15,11 @@ runner.
 
 from pathlib import Path
 
+import pytest
+
 
 class TestRunSceneLayersOnWindows:
-    def test_delegates_to_subprocess_runner_and_returns_its_code(
+    def test_delegates_to_subprocess_runner_and_propagates_its_code(
             self, hue_cli, tmp_path, monkeypatch):
         seen = {}
 
@@ -34,9 +36,12 @@ class TestRunSceneLayersOnWindows:
         monkeypatch.setattr(hue_cli, "_call_scene_layers", fake_call)
         monkeypatch.setattr(hue_cli.os, "execve", exploded)
 
-        rc = hue_cli._run_scene_layers(["--validate-design"], tmp_path)
+        with pytest.raises(SystemExit) as excinfo:
+            hue_cli._run_scene_layers(["--validate-design"], tmp_path)
 
-        assert rc == 7, "the child's exit code must propagate, not a bare 0"
+        assert excinfo.value.code == 7, (
+            "the child's exit code must propagate, not a bare 0"
+        )
         assert seen["flags"] == ["--validate-design"]
         assert seen["workdir"] == tmp_path
         # capture must stay False so the child inherits this process's stdio and

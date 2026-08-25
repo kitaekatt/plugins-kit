@@ -262,7 +262,7 @@ def _run_scene_layers(flags: list[str], workdir: Path) -> int:
     the one-verb commands, where handing over the tty (and never returning) is
     exactly right.
 
-    On Windows it delegates to _call_scene_layers instead -- see below."""
+    On Windows it delegates to _call_scene_layers and exits with its status."""
     if _is_windows():
         # Windows has no exec. CPython routes os.execv/os.execve through the CRT
         # _execv, which SPAWNS the replacement and terminates the caller
@@ -276,10 +276,10 @@ def _run_scene_layers(flags: list[str], workdir: Path) -> int:
         # semantically identical here: same env, `cwd=workdir` in place of the
         # chdir below, and capture=False so the child INHERITS this process's
         # stdio -- the tty stays attached, which is what the one-verb commands
-        # need. Every caller returns our value immediately, so returning rather
-        # than never returning changes nothing for them.
+        # need. Exit with the waited-for child's status so this single-shot
+        # runner keeps its original "never returning" contract.
         rc, _ = _call_scene_layers(flags, workdir)
-        return rc
+        sys.exit(rc)
     env = _scene_layers_env(workdir)
     # scene-layers.py writes its relative paths (the tmp/ apply backups) to the
     # cwd, so anchor the process in the working dir before handing over.
@@ -638,8 +638,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "report":
         return _run_scene_layers([], workdir)
     if args.cmd == "groups":
-        # User paths resolve against the invocation cwd, BEFORE the chdir into
-        # the working dir that _run_scene_layers performs.
+        # User paths resolve against the invocation cwd before _run_scene_layers
+        # changes the POSIX cwd or launches the child with this cwd.
         out = str(Path(args.path).resolve()) if args.path else str(workdir / "scene-groups.yaml")
         return _run_scene_layers(["--export-groups", out], workdir)
     if args.cmd == "export":
