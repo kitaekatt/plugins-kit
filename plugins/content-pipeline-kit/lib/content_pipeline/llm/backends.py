@@ -1,8 +1,12 @@
 """Completion backends behind one protocol, selected by process-level routing.
 
-Four backends implement :class:`~content_pipeline.llm.platform.LLMBackend`:
+Five backends implement :class:`~content_pipeline.llm.platform.LLMBackend`:
 
 - :class:`OpenRouterBackend` -- an OpenAI-compatible HTTP completion.
+- :class:`ModelEndpointBackend` -- an OpenAI-compatible completion against an
+  entry in the model-endpoints registry, typically a locally hosted keyless
+  server. Unlike the others its availability is NOT assumed: :func:`route`
+  pings the selected entry before returning it.
 - :class:`ClaudeCliBackend` -- the local ``claude -p`` CLI (subscription-billed,
   no per-call metering).
 - :class:`CodexCliBackend` -- the local ``codex exec`` CLI (subscription-billed,
@@ -10,7 +14,7 @@ Four backends implement :class:`~content_pipeline.llm.platform.LLMBackend`:
 - :class:`MockBackend` -- deterministic, scriptable responses. The always-wins
   test seam: no network, no subprocess, no shared lib.
 
-The three live transports are THIN ADAPTERS over ``llm_scripting_kit.completion``
+The four live transports are THIN ADAPTERS over ``llm_scripting_kit.completion``
 (from llm-scripting-kit): that shared lib owns the actual completion
 transport -- the ``claude -p`` and ``codex exec`` subprocess runners, retry,
 timeout, hard-stop detection, and the OpenAI-compatible client + prompt-cache
@@ -36,7 +40,7 @@ from __future__ import annotations
 
 import os
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -50,6 +54,29 @@ _MISSING_LIB_MSG = (
     "needs the 'llm_scripting_kit' shared lib (from llm-scripting-kit). Declare it "
     "via the plugin's shared_lib_imports, or use MockBackend for tests."
 )
+
+
+_UNSET = object()
+"""Distinguishes "not looked up yet" from a looked-up None (see
+:meth:`ModelEndpointBackend._entry_reasoning_effort`)."""
+
+
+def _is_connection_error(exc: BaseException) -> bool:
+    """True when ``exc`` means the endpoint could not be reached at all.
+
+    Checked by TYPE against ``openai.APIConnectionError`` when the SDK is
+    importable, and by the stdlib connection errors otherwise, so a machine
+    without the SDK still classifies correctly. Import is lazy and failure is
+    non-fatal: an unclassifiable exception is simply not a connection error,
+    which falls through to the delegate rather than mislabelling anything.
+    """
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    try:
+        import openai  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 -- no SDK: stdlib check above is the answer
+        return False
+    return isinstance(exc, openai.APIConnectionError)
 
 
 def _lazy_build_note() -> None:
@@ -352,6 +379,166 @@ class CodexCliBackend:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Model-endpoint backend -- delegates to llm_scripting_kit
+# ---------------------------------------------------------------------------
+
+ENDPOINT_ENV = "CONTENT_PIPELINE_LLM_ENDPOINT"
+"""Selects WHICH registry entry this backend talks to (an entry id).
+
+Empty means the registry's own ``default`` entry. Separate from
+:data:`BACKEND_ENV`, which selects the backend itself: one names the transport,
+the other names the server.
+"""
+
+
+@dataclass
+class ModelEndpointBackend:
+    """Completion against a registered model endpoint.
+
+    The entry comes from llm-scripting-kit's model-endpoints registry -- a
+    private, fleet-propagating list of OpenAI-compatible endpoints, typically
+    locally hosted and keyless. "Local" is a property of an ENTRY, not of this
+    backend, so nothing here assumes localhost.
+
+    AVAILABILITY IS NOT ASSUMED, which is what separates this adapter from its
+    three siblings. A cloud provider is up unless it is having an incident; a
+    server on the registry is up only if somebody started it. :func:`route`
+    therefore pings the selected entry at selection time and refuses with
+    :class:`~content_pipeline.llm.platform.LLMUnavailableError` rather than
+    letting a bulk run discover the same dead host once per unit.
+
+    ``endpoint`` empty means the registry's default entry, resolved on first
+    use so that ``.endpoint`` is a concrete entry id by the time it reaches a
+    probe or a cache key.
+
+    THREAD SAFETY: as :class:`OpenRouterBackend` -- one instance may be shared
+    across worker threads; the lazy delegate build is double-checked-locked.
+    """
+
+    endpoint: str = field(
+        default_factory=lambda: os.environ.get(ENDPOINT_ENV, "").strip()
+    )
+    project_root: Optional[Path] = None
+    client: Any = None
+    name: str = field(default="model-endpoint", init=False)
+    _delegate: Any = field(default=None, init=False, repr=False, compare=False)
+    _effort: Any = field(default=_UNSET, init=False, repr=False, compare=False)
+    _build_lock: "threading.Lock" = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
+
+    # `name` is CONSTANT across entries, deliberately. The on-disk cache key is
+    # (backend name, model id, ...) and two entries serve different model ids,
+    # so their caches stay distinct without the entry id in the key. The one
+    # edge -- two entries serving the SAME model id on different servers --
+    # shares cache identity, which is acceptable: same weights, and the cache
+    # was always approximate across server restarts.
+
+    def _entry_id(self) -> Optional[str]:
+        """The concrete entry id, or None while the default is unresolved."""
+        return self.endpoint or None
+
+    def _backend(self) -> Any:
+        """Return the shared delegate, building it at most once (see notes)."""
+        if self._delegate is not None:
+            return self._delegate
+        with self._build_lock:
+            if self._delegate is None:
+                try:
+                    from llm_scripting_kit.completion import (  # noqa: PLC0415
+                        OpenRouterBackend as _CompletionOpenRouter,
+                    )
+                except ImportError as exc:  # pragma: no cover - env-dependent
+                    raise ImportError(
+                        f"ModelEndpointBackend {_MISSING_LIB_MSG}"
+                    ) from exc
+                self._delegate = _CompletionOpenRouter(
+                    endpoint=self._entry_id(),
+                    project_root=self.project_root,
+                    client=self.client,
+                )
+        return self._delegate
+
+    def probe(self, *, timeout: float = 2.0) -> Any:
+        """Non-raising reachability ping of the selected entry.
+
+        Returns an ``EndpointProbe`` (``ok`` / ``endpoint`` / ``base_url`` /
+        ``detail``). Never raises: an unresolvable entry and a dead host are
+        both answers to "is it usable?", not exceptions.
+        """
+        from llm_scripting_kit.account import probe_endpoint  # noqa: PLC0415
+
+        return probe_endpoint(
+            self._entry_id(),
+            timeout=timeout,
+            project_root=str(self.project_root) if self.project_root else None,
+        )
+
+    def _entry_reasoning_effort(self) -> Optional[str]:
+        """The selected entry's declared ``reasoning_effort``, or None.
+
+        Cached on the instance, including the None result -- a registry without
+        the field must not re-read the file on every call. Any failure resolves
+        to None; the delegate surfaces real errors itself, and this is only a
+        default-supplying lookup.
+        """
+        if self._effort is not _UNSET:
+            return self._effort
+        effort: Optional[str] = None
+        try:
+            from llm_scripting_kit.model_endpoints import (  # noqa: PLC0415
+                resolve_registry_entry,
+            )
+
+            effort = resolve_registry_entry(self._entry_id()).reasoning_effort
+        except Exception:  # noqa: BLE001 -- a missing default is not an error
+            effort = None
+        self._effort = effort
+        return effort
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        model: str,
+        options: Optional[BackendOptions] = None,
+    ) -> LLMResponse:
+        """Complete, defaulting reasoning effort from the registry entry.
+
+        Precedence, highest first:
+
+        1. ``options.extras["reasoning_effort"]`` -- an explicit level, or an
+           explicit ``None`` to suppress the parameter entirely and let the
+           server's own default win;
+        2. the selected registry entry's ``reasoning_effort``;
+        3. neither -- the parameter is not sent, so the server decides.
+
+        The plugin ships no effort value of its own; the fleet default lives in
+        the private registry, per entry.
+        """
+        opts = options or BackendOptions()
+        extras = dict(opts.extras or {})
+        if "reasoning_effort" not in extras:
+            default = self._entry_reasoning_effort()
+            if default:
+                extras["reasoning_effort"] = default
+        elif extras["reasoning_effort"] is None:
+            extras.pop("reasoning_effort")
+        opts = replace(opts, extras=extras)
+        resp = self._backend().complete(
+            system, user, model=model, options=_to_completion_options(opts)
+        )
+        return _from_completion_response(resp)
+
+    def classify_halt(self, exc: BaseException) -> Optional[str]:
+        """Connection failures are halts here; everything else defers."""
+        if _is_connection_error(exc):
+            return platform.HALT_UNREACHABLE
+        return self._backend().classify_halt(exc)
+
+
 @dataclass
 class MockBackend:
     """Deterministic, scriptable completion backend for tests.
@@ -483,6 +670,7 @@ def route(
     openrouter: Optional[Any] = None,
     claude_cli: Optional[Any] = None,
     codex_cli: Optional[Any] = None,
+    model_endpoint: Optional[Any] = None,
     mock: Optional[Any] = None,
 ) -> Any:
     """Return the process-active backend instance.
@@ -504,6 +692,30 @@ def route(
         return claude_cli if claude_cli is not None else ClaudeCliBackend()
     if name == "codex-cli":
         return codex_cli if codex_cli is not None else CodexCliBackend()
+    if name == "model-endpoint":
+        backend = (
+            model_endpoint if model_endpoint is not None else ModelEndpointBackend()
+        )
+        # PROBE ONLY THE SELECTED ENTRY, and only here. One ping per route()
+        # call -- ~4ms when up, at most one 2s timeout when down -- regardless
+        # of how many entries the registry holds; the others' state is
+        # irrelevant to a run that will not use them. No caching: route() runs
+        # about once per run, so a cache buys nothing and can go stale. A
+        # server that dies MID-run surfaces instead as HALT_UNREACHABLE on the
+        # failing call.
+        #
+        # An injected client is the caller's affair -- that is the hermetic
+        # test seam, and probing it would put tests back on the network.
+        if backend.client is None:
+            probe = backend.probe()
+            if not probe.ok:
+                raise platform.LLMUnavailableError(
+                    f"model endpoint {probe.endpoint!r} is unavailable: "
+                    f"{probe.detail}. Start that server (if it is one of "
+                    f"yours), select another registry entry "
+                    f"({ENDPOINT_ENV}), or another backend ({BACKEND_ENV})."
+                )
+        return backend
     return openrouter if openrouter is not None else OpenRouterBackend()
 
 
@@ -519,6 +731,18 @@ def routed_model(requested_model: str, *, backend_name: Optional[str] = None) ->
     records.
     """
     name = backend_name or active_backend_name()
+    if name == "model-endpoint":
+        override = os.environ.get(MODEL_ENV, "").strip()
+        if override:
+            return override
+        try:
+            from llm_scripting_kit.models import resolve_model  # noqa: PLC0415
+
+            return resolve_model(
+                None, endpoint=os.environ.get(ENDPOINT_ENV, "").strip() or None
+            )
+        except Exception:  # noqa: BLE001 -- truthful fallback beats a guess
+            return requested_model
     if name == "codex-cli":
         return requested_model
     if name == "claude-cli" and not requested_model.startswith("claude"):
@@ -530,8 +754,10 @@ __all__ = [
     "OpenRouterBackend",
     "ClaudeCliBackend",
     "CodexCliBackend",
+    "ModelEndpointBackend",
     "MockBackend",
     "BACKEND_ENV",
+    "ENDPOINT_ENV",
     "MODEL_ENV",
     "active_backend_name",
     "set_active_backend",

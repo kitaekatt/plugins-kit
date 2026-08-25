@@ -200,6 +200,18 @@ HALT_RATE_LIMIT = "rate_limit"
 HALT_INSUFFICIENT_CREDIT = "insufficient_credit"
 """Account credit exhausted (402) or suspended (403)."""
 
+HALT_UNREACHABLE = "unreachable"
+"""The backend's endpoint could not be reached at all (connection refused,
+DNS failure, timeout on connect).
+
+A halt rather than a retryable error BECAUSE of what this registry actually
+holds: manually-run servers. A cloud provider blipping is transient and worth
+a retry; a llama.cpp server that is not running does not start itself, so
+every subsequent unit in the run would burn its own timeout discovering the
+same thing. Should a registry entry ever point at a managed always-on service,
+that entry -- not this constant -- is where the exception belongs.
+"""
+
 
 class HaltError(Exception):
     """A failure that persists across subsequent calls -- stop the bulk run.
@@ -435,6 +447,17 @@ def model_alias(model: str, *, pricing: Optional[Mapping[str, Any]] = None) -> s
 # ---------------------------------------------------------------------------
 # Budget guards
 # ---------------------------------------------------------------------------
+
+
+class LLMUnavailableError(Exception):
+    """The selected backend cannot be used, established BEFORE any work ran.
+
+    Distinct from :class:`HaltError`, which reports a run that started and then
+    hit a wall. This is raised at selection time -- by :func:`route` after a
+    reachability probe fails -- so no unit has been attempted and none needs
+    resuming. The message names the remedy in terms of the env vars a consumer
+    controls.
+    """
 
 
 class BudgetExceededError(Exception):
@@ -1015,6 +1038,8 @@ __all__ = [
     "HALT_RATE_LIMIT",
     "HALT_INSUFFICIENT_CREDIT",
     "HaltError",
+    "HALT_UNREACHABLE",
+    "LLMUnavailableError",
     "classify_halt_text",
     "classify_openai_exception",
     "is_likely_reasoning_exhaustion",

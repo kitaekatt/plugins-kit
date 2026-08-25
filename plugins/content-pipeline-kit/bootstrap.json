@@ -32,7 +32,7 @@
         "default": "git"
       },
       "LLM_BACKEND": {
-        "user_msg": "LLM backend (openrouter | claude-cli | codex-cli)",
+        "user_msg": "LLM backend (openrouter | claude-cli | codex-cli | model-endpoint)",
         "agent_msg": "Ask for LLM_BACKEND",
         "default": "openrouter"
       }

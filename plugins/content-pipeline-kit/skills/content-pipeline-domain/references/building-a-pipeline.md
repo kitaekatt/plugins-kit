@@ -211,16 +211,52 @@ of this.
 
 ## 6. Pick an LLM backend and the mock seam
 
-`llm.backends` ships three transports and a process-level `route`:
+`llm.backends` ships four transports and a process-level `route`:
 
 - **`OpenRouterBackend`** -- the real completion transport (consumes
   llm-scripting-kit for key + model + client).
 - **`ClaudeCliBackend`** -- an agent-loop transport.
+- **`CodexCliBackend`** -- an agent-loop transport over `codex exec`.
+- **`ModelEndpointBackend`** -- a completion against an endpoint declared in
+  the model-endpoints registry.
 - **`MockBackend`** -- deterministic and scriptable, for every test.
 
-`route(openrouter=, claude_cli=, mock=)` reads the `CONTENT_PIPELINE_LLM_BACKEND`
-env var and returns the active instance; a supplied `mock` always wins so
-tests never reach a live transport. Run a completion through
+`route(openrouter=, claude_cli=, codex_cli=, model_endpoint=, mock=)` reads the
+`CONTENT_PIPELINE_LLM_BACKEND` env var and returns the active instance; a
+supplied `mock` always wins so tests never reach a live transport.
+
+### The model-endpoint backend
+
+`CONTENT_PIPELINE_LLM_BACKEND=model-endpoint` talks to an OpenAI-compatible
+endpoint declared in the registry at `~/.claude/config/model-endpoints.yaml`
+(or whichever file `MODEL_ENDPOINTS_REGISTRY` names) -- typically a locally
+hosted keyless server, though keyed entries are supported too. Pick a specific
+entry with `CONTENT_PIPELINE_LLM_ENDPOINT=<entry id>`; omit it for the
+registry's own `default`.
+
+Two things differ from the other transports:
+
+- **Availability is checked, not assumed.** `route()` pings the selected entry
+  and raises `LLMUnavailableError` if it is down, so a bulk run fails at
+  selection instead of rediscovering the same dead host once per unit. Only the
+  selected entry is pinged, and only there. A server that dies mid-run surfaces
+  as a `HALT_UNREACHABLE` halt on the failing call.
+- **Reasoning effort defaults per entry.** Set it per call via
+  `options.extras["reasoning_effort"]` (`none|low|medium|high|xhigh`); omit it
+  and the entry's own default applies; pass an explicit `None` to send nothing
+  and let the server decide. The plugin ships no effort value of its own.
+
+**Does your unit need a harness at all?** This backend is a plain completions
+call, and that is the right shape BECAUSE pipeline units are pure
+transformations of fully-supplied context -- summarize, classify, translate,
+rewrite, extract, score. A harness (`ClaudeCliBackend`, `CodexCliBackend`) adds
+an agent loop, tools, instruction-file ingestion, a sandbox and a working
+directory, at roughly 11k-34k tokens of fixed prompt overhead per unit, turning
+a seconds-long call into a minutes-long session. It earns that only when the
+information needed is not knowable when the prompt is written: the unit must
+discover what to read, verify its own output, iterate, edit in place across
+files, or honour instruction files it was not handed. If you can hand the unit
+everything it needs, keep it a completion. Run a completion through
 `platform.call_llm(backend, system, user, model=..., cache_dir=..., pricing=...)`,
 which layers a budget guard, a content-addressed response cache, retry, and
 cost accounting over one `backend.complete`.
