@@ -9,7 +9,7 @@
     {
       "name": "unreal-kit",
       "description": "Unreal Engine automation: Python API for asset inspection and data extraction; MCP server for live Editor authoring (actors, Blueprints, materials, PIE)",
-      "version": "0.12.3",
+      "version": "0.12.4",
       "author": {
         "name": "Christina"
       },
@@ -45,7 +45,7 @@
     {
       "name": "p4-kit",
       "description": "Multi-agent code review for pending Perforce changelists (/p4-code-review) -- auto-shelves, reviews, cleans up.",
-      "version": "0.28.3",
+      "version": "0.28.4",
       "author": {
         "name": "Christina"
       },
@@ -58,7 +58,7 @@
     {
       "name": "git-kit",
       "description": "Multi-agent pre-push code review for git (/git-code-review) with per-finding validation and declined-findings memory.",
-      "version": "0.14.2",
+      "version": "0.14.3",
       "author": {
         "name": "Christina"
       },
@@ -138,7 +138,7 @@
     {
       "name": "hue-kit",
       "description": "Manage Philips Hue scenes as editable YAML -- bridge sync, dry-run apply, HTML report.",
-      "version": "0.9.4",
+      "version": "0.9.5",
       "author": {
         "name": "Christina"
       },
