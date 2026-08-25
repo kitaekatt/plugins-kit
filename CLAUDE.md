@@ -1097,6 +1097,56 @@ claude_md:
         failure.
       origin: "2026-08-10 -- empirical probing of codex-cli 0.146.0 while adding codex as a work backend; the shipped policy had hardcoded network-on, no windows.sandbox, and framed the missing approval flag as a mere gotcha."
       added: "2026-08-10"
+    - id: codex_is_a_harness_over_a_responses_endpoint
+      keywords: [codex custom provider, model_providers, wire_api, responses api, chat completions removed, local model, llama.cpp, openai-compatible, keyless endpoint, env_key, harness vs transport, agent loop, do work, base_url]
+      summary: Codex speaks the Responses API ONLY, so it drives an OpenAI-compatible endpoint only when that endpoint serves /v1/responses -- and what it contributes is the HARNESS (agent loop, tools, AGENTS.md, sandbox, cwd, parseable result), not transport. Both halves are routinely got wrong in opposite directions.
+      detail: |
+        WIRE API. `wire_api = "chat"` was REMOVED from codex (2026-02-05, upstream
+        discussion #7782); the enum is Responses-only and passing "chat" is a hard
+        config error, not a fallback. The built-in ollama and lmstudio providers moved
+        to Responses too.
+        THE TRAP, and it is a wrong INFERENCE rather than a wrong fact: reading
+        "chat was removed" and concluding "codex cannot drive a chat-completions
+        server" is false. llama.cpp ships a Responses->Chat conversion layer, so a
+        llama-server endpoint works -- verified live against one (SSE with
+        response.created / response.output_item.added / response.reasoning_text.delta,
+        function_call items carrying call_id). This inference was drawn, from issue
+        trackers and without testing, during the very research that then disproved it.
+        Test the endpoint; do not reason from the enum. The real predicate is "does it
+        serve /v1/responses", NOT "is it OpenAI-compatible" -- but that is NECESSARY
+        AND NOT SUFFICIENT, and the insufficiency was found only by running it. xAI
+        serves /v1/responses (verified live, 200 on grok-4.6) and codex still cannot
+        drive it: codex emits a tool of type "namespace", which xAI's deserializer
+        rejects, failing the whole request with 422 `unknown variant "namespace",
+        expected one of function, web_search, x_search, ... shell`. Auth and provider
+        selection succeed first, so it looks like it is working until the first turn.
+        Disabling MCP servers and eleven feature flags shifted the tool index but did
+        not remove it -- "namespace" is a core codex tool, so no consumer-side config
+        fixes this. The full predicate is therefore "serves /v1/responses AND accepts
+        codex's tool schema", and only a live run answers the second half.
+        KEYLESS IS NATIVE, not a workaround: ModelProviderInfo.env_key is
+        Option<String> and requires_openai_auth defaults false, so omitting env_key
+        sends no Authorization header -- how the built-in OSS providers are built. Do
+        not fabricate a dummy key for a keyless server.
+        HARNESS VS TRANSPORT, the half that decides architecture. A raw endpoint
+        yields text; codex yields WORK -- the agent loop, shell/file/apply_patch
+        tools, AGENTS.md (and CLAUDE.md via project_doc_fallback_filenames) ingestion,
+        sandboxing, a working directory, and a machine-parseable result. That is why
+        it is a delegation backend rather than a client. It is also why it is not free:
+        a harness costs roughly 11k-34k tokens of fixed prompt overhead and turns a
+        seconds-long call into a minutes-long session. THE RULE: a harness is
+        warranted exactly when the information needed is not knowable when the prompt
+        is written -- the unit must discover what to read, verify its own output,
+        iterate, edit in place across files, or honour instruction files it was not
+        handed. Pure transformation of a fully-supplied context (summarize, classify,
+        translate, rewrite, extract, score) is a completions call and must stay one.
+        Dispatch mechanics, flags, and the operational gotchas (harmless per-run
+        stderr from a /v1/models schema mismatch, model-metadata warnings, Windows
+        BOM/CRLF on written files) live in
+        plugins/awesome-kit/skills/orchestrate/references/codex-dispatch.md, which the
+        codex_dispatch_is_silent_on_failure insight also names as the dispatch SSOT.
+      origin: "2026-08-25 -- research for adding a locally hosted model as a work backend. codex exec was run against a live llama.cpp server (three runs, including a multi-step coding task that edited files and ran pytest) by a research agent, not by the encoding session; the wire_api and env_key claims were read from codex source. The harness/no-harness line comes from measuring both paths against the same server."
+      added: "2026-08-25"
     - id: run_cli_streaming_rename
       keywords: [run_claude_streaming, run_cli_streaming, back-compat alias, claude_runner, content-pipeline-kit, shared lib rename, transport-neutral runner]
       summary: llm-scripting-kit's claude -p subprocess runner is now the transport-neutral run_cli_streaming; run_claude_streaming remains as a back-compat alias because llm-scripting-kit's own completion.backends imports it by name and re-exports it.
