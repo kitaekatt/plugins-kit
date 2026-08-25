@@ -1,3 +1,22 @@
+# Repo-wide default: git stores text as LF and materializes it as LF in the
+# working tree on EVERY platform. This tree is shared between Windows-side and
+# WSL sessions over the same directory, and a Windows tool rewrote the whole
+# tree to CRLF -- 1044 files -- which breaks `bash` outright: it reads the \r as
+# part of each token, so .sh scripts die with "$'\r': command not found" and
+# .githooks/pre-commit stops working. `eol=lf`, not just `text=auto`, is what
+# pins the WORKING TREE; text=auto alone governs only what gets committed, and
+# the working tree was the half that was actually broken.
+#
+# Binary files are excluded automatically by text=auto's content detection.
+# The four .cmd files are already stored LF and work that way, so they are
+# deliberately NOT carved out to eol=crlf -- that would be an unrequested
+# change to files nobody reported a problem with.
+#
+# Verified per the fresh-clone rule below: clones at core.autocrlf=true AND
+# =false both yield 1092 w/lf, 0 w/crlf, and zero CR in
+# plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh.
+* text=auto eol=lf
+
 # Workflow tool scripts must be LF-only. The Claude Code Workflow tool's
 # permission layer rejects launching a scriptPath whose content contains
 # control characters ("script contains control characters that would be hidden
