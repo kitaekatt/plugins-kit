@@ -213,7 +213,9 @@ standards_set:
         an anchor. There is no field for an outside citation and none is being
         added. The consequence for verification is the part that bites: such a
         fact cannot be contradicted by the subject's own files alone, so a
-        refuter reading only those files has not falsified it and it STANDS.
+        refuter reading only those files has not falsified it and it STANDS --
+        including when the only line it can cite is the candidate's own anchor,
+        whose apparent contradiction an outside definition would resolve.
 
     - id: present-content-not-re-audited
       statement: >-

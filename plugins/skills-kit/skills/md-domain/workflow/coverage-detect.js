@@ -324,7 +324,9 @@ const VERIFY_FINDINGS_SCHEMA = {
             enum: ['STANDS', 'FALSIFIED'],
             description:
               'FALSIFIED only when a file in this directory contradicts the fact ' +
-              'as written. Not a judgment about whether the fact is worth carrying.',
+              'as written. Not a judgment about whether the fact is worth carrying, ' +
+              'and not a verdict available when the evidence that would settle the ' +
+              'apparent contradiction lives outside this directory: that is STANDS.',
           },
           counterexample: {
             type: 'string',
@@ -945,6 +947,20 @@ outside end -- one its prose names, or one a listed file visibly delegates to
 have not falsified the fact and it STANDS. It never licenses inventing an
 unlisted file the fact does not depend on to explain away a contradiction a
 listed file shows on its own lines: that fact is FALSIFIED.
+
+THE TELL IS THE LINE YOU ARE ABOUT TO CITE. When your counterexample is one of
+the candidate's OWN anchors -- the line the fact offered as its evidence -- you
+have not found a second file contradicting it; you have re-read its evidence and
+read it differently. So put that line through the dependence test above before
+citing it: does the fact ride on an outside end -- one its prose names, or one
+the anchored line visibly extends, implements, or delegates to -- and does your
+reading of the line turn on what that outside end actually does? If it does, the
+decisive evidence lies outside this list, you CANNOT refute the fact from this
+subject alone, and it STANDS. Never treat "the definition that would settle this
+is not in my file list" as "the definition is absent, so the fact is false".
+If it does not -- if the anchored line contradicts the fact on its own terms --
+that fact is FALSIFIED, and a base class that MIGHT exist is not a reason to
+spare it.
 
 Three shapes account for nearly every real falsification, so check them first:
 

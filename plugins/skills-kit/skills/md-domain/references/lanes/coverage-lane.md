@@ -532,6 +532,21 @@ hypothesized to explain away a contradiction a listed file shows on its own
 lines. Measured on one corpus root: exactly one kill in 49 was unsound, and
 this was why.
 
+**The tell is that the counterexample is the candidate's own anchor.** In the
+unsound kill, the refuter cited the very line the fact had offered as its
+evidence -- so it had not found a contradicting file, it had re-read the fact's
+own evidence and read it differently, and the apparent contradiction dissolved on
+reading the base class the anchored file extends. So the brief states it as a
+rule the refuter can apply at the moment of citing: put the line through the
+dependence test before citing it, and when the fact rides on an outside end the
+anchored line extends or delegates to AND the reading turns on what that end
+does, the decisive evidence lies outside the list, the fact cannot be refuted
+from the subject alone, and it STANDS -- "the definition that would settle this
+is not in my list" is never "the definition is absent, so the fact is false".
+The one-way guard above is unchanged: an anchored line that contradicts the fact
+on its own terms is still FALSIFIED, and a base class that MIGHT exist is not a
+reason to spare it.
+
 **What a verdict may do to a record.** Five cases, and only the first two change
 anything:
 

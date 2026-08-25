@@ -501,6 +501,27 @@ class TestOutsideCounterpartStands:
         assert 'the fact ITSELF depends on an' in prompt
         assert 'that fact is FALSIFIED.' in prompt
 
+    def test_refuter_prompt_names_the_own_anchor_tell(self):
+        """The rule has to be applicable at the moment of citing a line.
+
+        The one unsound kill cited the candidate's OWN anchor as the
+        contradiction -- a re-reading of the fact's evidence, not a second file
+        contradicting it -- and it dissolved on reading a base class outside the
+        subject. A refuter that reads an out-of-subject definition as
+        absent-therefore-false is the exact failure, so the brief says so at the
+        point of citation rather than only as a general principle.
+        """
+        src = _detect()
+        prompt = src[src.index('const verifyPrompt'):]
+        assert "candidate's OWN anchors" in prompt
+        assert 'CANNOT refute the fact from' in prompt
+        assert 'is not in my file list' in prompt
+        # The own-anchor case is routed through the DEPENDENCE test, not a
+        # possibility test: "an outside definition could exist" would spare
+        # nearly every fact, since nearly every file extends something.
+        assert 'put that line through the dependence test' in prompt
+        assert 'MIGHT exist is not a reason to' in prompt
+
     def test_cv7_states_how_an_outside_counterpart_is_anchored(self):
         cv7 = STANDARDS.read_text(encoding='utf-8')
         assert 'ANCHORED AT ITS' in cv7
@@ -511,3 +532,9 @@ class TestOutsideCounterpartStands:
         lane = _lane()
         assert 'bounds what may be CONTRADICTED, not what a fact may' in lane
         assert 'the candidate STANDS' in lane
+        assert "counterexample is the candidate's own anchor" in lane
+        assert 'The one-way guard above is unchanged' in lane
+
+    def test_cv7_covers_the_own_anchor_case(self):
+        cv7 = STANDARDS.read_text(encoding='utf-8')
+        assert "the candidate's own anchor" in cv7
