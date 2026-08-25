@@ -691,8 +691,9 @@ backends:
       `failed to refresh available models ... missing field 'slug'` (codex
       parsing the entry server's /v1/models against a richer schema) and
       `Model metadata for '<model>' not found` (codex has no metadata for a
-      model it does not ship, which `model_context_window` above already
-      supplies). Both occur at exit 0; judge the run by the exit code and the
+      model it does not ship; it prints even with `model_context_window` set,
+      which is what puts the entry's real limit in play instead of the guessed
+      fallback). Both occur at exit 0; judge the run by the exit code and the
       `-o` file, never by stderr.
 
       Give the model generous room: a turn that truncates mid-tool-call

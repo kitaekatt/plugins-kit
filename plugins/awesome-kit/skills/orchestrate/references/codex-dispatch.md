@@ -221,9 +221,10 @@ explicit `-c` path is the sanctioned route to any other server.
   available models: ... missing field 'slug'` is codex parsing that server's
   `/v1/models` against a richer schema, and `Model metadata for '<model>' not
   found` is codex having no metadata for a model it does not ship. Both occur
-  at exit 0 and neither affects the run; `-c model_context_window=<N>` supplies
-  what the second one is missing. Judge the run by the exit code and the `-o`
-  file, as always.
+  at exit 0 and neither affects the run. The second one still prints with
+  `-c model_context_window=<N>` set -- what that flag buys is the real limit
+  instead of the guessed fallback the warning announces. Judge the run by the
+  exit code and the `-o` file, as always.
 
   Fixed overhead. About 11,000 input tokens of system prompt and tool
   definitions precede any work, measured on a trivial prompt. That is a real
