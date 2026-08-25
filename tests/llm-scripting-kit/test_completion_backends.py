@@ -417,3 +417,77 @@ class TestOpenRouterBackend:
         assert len(seen) == n_threads
         assert all(c is built[0] for c in seen)
         assert backend.client is built[0]
+
+
+# ---------------------------------------------------------------------------
+# extras -> extra_body forwarding, and the keyless client build
+# ---------------------------------------------------------------------------
+
+
+class TestOpenRouterExtras:
+    def test_extras_arrive_as_extra_body(self):
+        client = _FakeClient()
+        OpenRouterBackend(client=client).complete(
+            "s", "u", model="test/slug",
+            options=BackendOptions(extras={"reasoning_effort": "medium"}),
+        )
+        assert client.sink[0]["extra_body"] == {"reasoning_effort": "medium"}
+
+    def test_extra_body_is_a_copy_not_the_callers_mapping(self):
+        client = _FakeClient()
+        extras = {"reasoning_effort": "high"}
+        OpenRouterBackend(client=client).complete(
+            "s", "u", model="test/slug", options=BackendOptions(extras=extras),
+        )
+        assert client.sink[0]["extra_body"] is not extras
+
+    def test_empty_extras_add_no_extra_body_key(self):
+        client = _FakeClient()
+        OpenRouterBackend(client=client).complete("s", "u", model="test/slug")
+        assert "extra_body" not in client.sink[0]
+
+
+class TestKeylessClientBuild:
+    def test_keyless_endpoint_builds_without_a_key_in_the_environment(
+        self, monkeypatch
+    ):
+        """A keyless endpoint must not consult key resolution at all."""
+        from llm_scripting_kit import client as client_mod
+
+        cfg = {
+            "endpoints": {
+                "keyless-local": {
+                    "base_url": "http://localhost:8080/v1",
+                    "key_env": None,
+                },
+            },
+            "models": {},
+        }
+        monkeypatch.setattr(
+            "llm_scripting_kit.models.load_model_config", lambda **kw: cfg
+        )
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+        def _boom(*a, **kw):  # pragma: no cover - asserted not to run
+            raise AssertionError("get_api_key must not be called for a keyless endpoint")
+
+        monkeypatch.setattr(client_mod, "get_api_key", _boom)
+
+        captured = {}
+
+        class _FakeOpenAI:
+            def __init__(self, *, api_key, base_url):
+                captured["api_key"] = api_key
+                captured["base_url"] = base_url
+
+        import sys
+        import types
+
+        fake_openai = types.ModuleType("openai")
+        fake_openai.OpenAI = _FakeOpenAI
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
+
+        client_mod.make_openai_client(endpoint="keyless-local")
+        assert captured["base_url"] == "http://localhost:8080/v1"
+        assert captured["api_key"] == client_mod.KEYLESS_API_KEY
+        assert captured["api_key"]  # the SDK requires a truthy key

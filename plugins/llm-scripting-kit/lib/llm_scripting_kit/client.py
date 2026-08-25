@@ -11,6 +11,12 @@ from typing import Any, Optional
 from .api_key import get_api_key
 from .constants import BASE_URL
 
+# Placeholder sent to a KEYLESS endpoint. The OpenAI SDK requires a truthy
+# api_key, while a keyless server ignores the Authorization header entirely, so
+# a constant stand-in is the honest way to satisfy the SDK without inventing a
+# credential the user has to manage.
+KEYLESS_API_KEY = "keyless"
+
 
 def make_openai_client(
     api_key: Optional[str] = None,
@@ -26,6 +32,8 @@ def make_openai_client(
         project_root: Forwarded to ``get_api_key`` when ``api_key`` is None.
         endpoint: Named endpoint to target. ``None`` uses the default endpoint
             (``openrouter`` at ``BASE_URL``) -- identical to previous behavior.
+            A KEYLESS endpoint (one resolving with ``key_env`` None) skips key
+            resolution and passes ``KEYLESS_API_KEY``, which the server ignores.
 
     Returns:
         An ``openai.OpenAI`` instance with ``base_url`` set to the endpoint's
@@ -35,6 +43,7 @@ def make_openai_client(
         ImportError: If the ``openai`` package is not installed.
         RuntimeError: If no API key can be resolved from any source.
     """
+    keyless = False
     if endpoint is None:
         base_url = BASE_URL
         key_env_hint = "OPENROUTER_API_KEY"
@@ -46,6 +55,12 @@ def make_openai_client(
         )
         base_url = ep["base_url"]
         key_env_hint = ep["key_env"]
+        keyless = ep["key_env"] is None
+
+    if api_key is None and keyless:
+        # Keyless endpoint: never consult get_api_key -- there is no variable
+        # to resolve, and asking would fail on a None key_env.
+        api_key = KEYLESS_API_KEY
 
     if api_key is None:
         result = get_api_key(project_root, endpoint=endpoint)

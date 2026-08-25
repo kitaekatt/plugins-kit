@@ -24,6 +24,7 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .constants import BASE_URL
@@ -123,21 +124,23 @@ def check_account(
 
 
 def check_models_probe(
-    api_key: str, *, base_url: str, timeout: float = 10.0
+    api_key: str, *, base_url: str, timeout: float = 10.0, keyless: bool = False
 ) -> AccountStatus:
     """Validate ``api_key`` with a generic ``GET /models`` probe.
 
     For OpenAI-compatible endpoints that have no ``/auth/key`` equivalent. A 2xx
     means the key authenticated; 401 -> auth failure. Fields OpenRouter's
     ``/auth/key`` reports (usage, limit, ...) are unavailable here and stay None.
+
+    ``keyless`` True is for an endpoint that declares no credential at all (the
+    norm for a locally hosted server): an empty ``api_key`` is accepted and NO
+    Authorization header is sent. Keyed behavior is unchanged.
     """
-    if not api_key:
+    if not api_key and not keyless:
         raise AccountCheckError("api_key is empty -- nothing to check")
 
-    req = urllib.request.Request(
-        f"{base_url}/models",
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
+    headers = {} if keyless else {"Authorization": f"Bearer {api_key}"}
+    req = urllib.request.Request(f"{base_url}/models", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp.read()  # drain; we only care that it authenticated
@@ -172,15 +175,114 @@ def validate_endpoint(
     - ``"models-probe"`` -- generic ``GET /models`` (returns AccountStatus).
     - ``"none"`` -- validation not supported; returns ``None`` (skipped).
 
-    An unknown mode is treated as ``"none"``.
+    An unknown mode is treated as ``"none"``. An endpoint resolving with
+    ``key_env`` None is keyless: the models probe then sends no Authorization
+    header and tolerates an empty ``api_key``.
     """
     mode = endpoint_cfg.get("account_check") or "none"
     base_url = endpoint_cfg["base_url"]
     if mode == "openrouter":
         return check_account(api_key, timeout=timeout, base_url=base_url)
     if mode == "models-probe":
-        return check_models_probe(api_key, base_url=base_url, timeout=timeout)
+        return check_models_probe(
+            api_key,
+            base_url=base_url,
+            timeout=timeout,
+            keyless=endpoint_cfg.get("key_env") is None,
+        )
     return None
+
+
+@dataclass(frozen=True)
+class EndpointProbe:
+    """Result of a non-raising reachability ping.
+
+    ``detail`` is ``"ok"`` on success, else the resolve or network failure text.
+    """
+
+    ok: bool
+    endpoint: str
+    base_url: Optional[str]
+    detail: str
+
+
+def probe_endpoint(
+    name: Optional[str] = None,
+    *,
+    timeout: float = 2.0,
+    project_root: Optional[str] = None,
+) -> EndpointProbe:
+    """Quick ``GET {base_url}/models`` ping of a named endpoint. Never raises.
+
+    A keyless endpoint is probed with no Authorization header; a keyed one has
+    its key resolved and sent as a Bearer, and a key that does not resolve
+    reports ``ok=False`` naming the variable rather than crashing. Resolve
+    failures (unknown endpoint, unreadable registry) and network failures are
+    likewise returned as ``ok=False`` with the reason in ``detail`` -- this is
+    an "is it up?" question whose answer is a value, not an exception.
+
+    The default ``timeout`` is 2s: a reachable endpoint answers in milliseconds,
+    while a dead host burns the whole budget, so the ceiling is what a caller
+    on the interactive path actually waits.
+    """
+    from .models import resolve_endpoint  # noqa: PLC0415 -- avoids a cycle
+
+    label = name or "<default>"
+    try:
+        ep = resolve_endpoint(name, project_root=project_root)
+    except Exception as e:  # noqa: BLE001 -- any resolve defect is "not usable"
+        return EndpointProbe(ok=False, endpoint=label, base_url=None, detail=str(e))
+
+    label = ep.get("name") or label
+    base_url = ep.get("base_url")
+    if not base_url:
+        return EndpointProbe(
+            ok=False, endpoint=label, base_url=None, detail="endpoint has no base_url"
+        )
+
+    headers: Dict[str, str] = {}
+    key_env = ep.get("key_env")
+    if key_env is not None:
+        from .api_key import get_api_key  # noqa: PLC0415 -- avoids a cycle
+
+        try:
+            result = get_api_key(
+                Path(project_root) if project_root is not None else None,
+                endpoint=label,
+            )
+        except Exception as e:  # noqa: BLE001
+            return EndpointProbe(
+                ok=False,
+                endpoint=label,
+                base_url=base_url,
+                detail=f"cannot resolve key {key_env}: {e}",
+            )
+        if not result.key:
+            return EndpointProbe(
+                ok=False,
+                endpoint=label,
+                base_url=base_url,
+                detail=f"no API key resolved ({key_env} unset)",
+            )
+        headers["Authorization"] = f"Bearer {result.key}"
+
+    req = urllib.request.Request(f"{base_url}/models", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read()
+        return EndpointProbe(ok=True, endpoint=label, base_url=base_url, detail="ok")
+    except urllib.error.HTTPError as e:
+        return EndpointProbe(
+            ok=False, endpoint=label, base_url=base_url, detail=f"HTTP {e.code}: {e.reason}"
+        )
+    except urllib.error.URLError as e:
+        return EndpointProbe(
+            ok=False, endpoint=label, base_url=base_url, detail=f"unreachable: {e.reason}"
+        )
+    except Exception as e:  # noqa: BLE001 -- timeouts, OSError, malformed URLs
+        return EndpointProbe(
+            ok=False, endpoint=label, base_url=base_url, detail=f"unreachable: {e}"
+        )
 
 
 def _failure(reason: str) -> AccountStatus:

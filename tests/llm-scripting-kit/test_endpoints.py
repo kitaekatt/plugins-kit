@@ -154,3 +154,163 @@ class TestValidateEndpoint:
             status = validate_endpoint(ep, "bad-key")
         assert status.ok is False
         assert status.failure_reason == "auth"
+
+
+# A config declaring an explicitly KEYLESS endpoint alongside one that merely
+# omits key_env -- the pair that pins the deliberate asymmetry.
+KEYLESS_CFG = {
+    "default_endpoint": "openrouter",
+    "endpoints": {
+        "openrouter": {
+            "base_url": "https://openrouter.ai/api/v1",
+            "key_env": "OPENROUTER_API_KEY",
+            "account_check": "openrouter",
+        },
+        "keyless-local": {
+            "base_url": "http://localhost:8080/v1",
+            "key_env": None,
+            "account_check": "models-probe",
+            "default": "local",
+            "models": {"local": {"slug": "local-27b"}},
+        },
+        "forgot-key-env": {
+            "base_url": "http://localhost:8081/v1",
+            "account_check": "models-probe",
+        },
+    },
+    "models": {"gpt-mini": {"slug": "openai/gpt-4o-mini"}},
+    "default": "gpt-mini",
+}
+
+REGISTRY_YAML = """\
+default: alpha
+models:
+  alpha:
+    name: Alpha
+    base_url: http://alpha.invalid:8080/v1
+    model: alpha-27b
+    context_window: 262144
+    reasoning_effort: medium
+  keyed:
+    base_url: https://vendor.invalid/v1
+    model: vendor-1
+    key_env: VENDOR_API_KEY
+"""
+
+
+@pytest.fixture
+def registry_file(tmp_path, monkeypatch):
+    """Point the registry at a tmp file and isolate the convention path.
+
+    HOME and USERPROFILE are both redirected so the convention path can never
+    reach the developer's real ~/.claude, whichever one expanduser follows.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    path = tmp_path / "model-endpoints.yaml"
+    path.write_text(REGISTRY_YAML, encoding="utf-8")
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+    return path
+
+
+@pytest.fixture
+def no_registry(tmp_path, monkeypatch):
+    """No override and an empty convention path -- the not-opted-in state."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("MODEL_ENDPOINTS_REGISTRY", raising=False)
+    return home
+
+
+class TestKeylessEndpoint:
+    def test_explicit_null_key_env_resolves_keyless(self):
+        ep = resolve_endpoint("keyless-local", config=KEYLESS_CFG)
+        assert ep["key_env"] is None
+        assert ep["base_url"] == "http://localhost:8080/v1"
+
+    def test_omitted_key_env_still_raises(self):
+        with pytest.raises(EndpointResolveError) as exc:
+            resolve_endpoint("forgot-key-env", config=KEYLESS_CFG)
+        assert "key_env" in str(exc.value)
+        # The message must point at the deliberate opt-in, not just complain.
+        assert "key_env: null" in str(exc.value)
+
+    def test_default_endpoint_key_env_unchanged(self):
+        ep = resolve_endpoint(config=KEYLESS_CFG)
+        assert ep["key_env"] == "OPENROUTER_API_KEY"
+
+    def test_keyless_endpoint_still_needs_a_base_url(self):
+        cfg = {"endpoints": {"broken": {"key_env": None}}}
+        with pytest.raises(EndpointResolveError, match="base_url"):
+            resolve_endpoint("broken", config=cfg)
+
+    def test_validate_endpoint_sends_no_authorization_when_keyless(self):
+        ep = resolve_endpoint("keyless-local", config=KEYLESS_CFG)
+        with patch("urllib.request.urlopen") as mock_open:
+            resp = mock_open.return_value.__enter__.return_value
+            resp.read.return_value = b"{}"
+            status = validate_endpoint(ep, "")
+        assert status.ok is True
+        req = mock_open.call_args[0][0]
+        assert "Authorization" not in req.headers
+        assert req.full_url == "http://localhost:8080/v1/models"
+
+
+class TestRegistryEndpoints:
+    def test_entry_resolves_as_an_endpoint_by_id(self, registry_file):
+        ep = resolve_endpoint("alpha", config=CUSTOM_CFG)
+        assert ep["name"] == "alpha"
+        assert ep["base_url"] == "http://alpha.invalid:8080/v1"
+        assert ep["key_env"] is None  # keyless by default
+        assert ep["account_check"] == "models-probe"
+        assert ep["request_defaults"] == {"reasoning_effort": "medium"}
+        assert ep["context_window"] == 262144
+
+    def test_keyed_entry_carries_its_key_env(self, registry_file):
+        ep = resolve_endpoint("keyed", config=CUSTOM_CFG)
+        assert ep["key_env"] == "VENDOR_API_KEY"
+        assert ep["request_defaults"] == {}
+        assert ep["context_window"] is None
+
+    def test_resolve_model_yields_the_entry_model(self, registry_file):
+        assert resolve_model(None, config=CUSTOM_CFG, endpoint="alpha") == "alpha-27b"
+
+    def test_config_endpoint_shadows_a_registry_entry(self, registry_file):
+        shadowing = dict(CUSTOM_CFG)
+        shadowing["endpoints"] = dict(CUSTOM_CFG["endpoints"])
+        shadowing["endpoints"]["alpha"] = {
+            "base_url": "http://shadow.invalid/v1",
+            "key_env": "SHADOW_KEY",
+        }
+        ep = resolve_endpoint("alpha", config=shadowing)
+        assert ep["base_url"] == "http://shadow.invalid/v1"
+        assert ep["key_env"] == "SHADOW_KEY"
+
+    def test_unknown_name_with_no_registry_raises_as_before(self, no_registry):
+        with pytest.raises(EndpointResolveError, match="unknown endpoint 'nope'"):
+            resolve_endpoint("nope", config=CUSTOM_CFG)
+
+    def test_unknown_name_with_a_registry_raises_as_before(self, registry_file):
+        with pytest.raises(EndpointResolveError, match="unknown endpoint 'nope'"):
+            resolve_endpoint("nope", config=CUSTOM_CFG)
+
+    def test_unreadable_registry_is_loud_not_silent(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        broken = tmp_path / "broken.yaml"
+        broken.write_text("models: [unclosed\n", encoding="utf-8")
+        monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(broken))
+        with pytest.raises(EndpointResolveError) as exc:
+            resolve_endpoint("alpha", config=CUSTOM_CFG)
+        assert "broken.yaml" in str(exc.value)
+
+    def test_default_endpoint_never_consults_the_registry(self, registry_file):
+        ep = resolve_endpoint(config=LEGACY_CFG)
+        assert ep["name"] == "openrouter"
+        assert ep["key_env"] == "OPENROUTER_API_KEY"

@@ -32,6 +32,14 @@ names the endpoint used when a caller passes ``endpoint=None`` -- it defaults to
 endpoint that omits ``models`` / ``default`` / ``defaultCheap`` inherits the
 top-level ones, so pre-endpoints config.yaml files (top-level registry only)
 keep working: their registry drives the default openrouter endpoint.
+
+An endpoint declaring ``key_env: null`` is KEYLESS -- the norm for a locally
+hosted OpenAI-compatible server. Omitting ``key_env`` is not the same thing and
+still raises.
+
+Endpoints may also come from the model-endpoints registry
+(:mod:`llm_scripting_kit.model_endpoints`): a name no config layer declares is
+looked up there by entry id. A config-declared endpoint of the same name wins.
 """
 
 from __future__ import annotations
@@ -141,6 +149,45 @@ def default_endpoint_name(config: dict) -> str:
     return config.get("default_endpoint") or DEFAULT_ENDPOINT_NAME
 
 
+def _registry_endpoint(ep_name: str) -> Optional[dict]:
+    """Resolve ``ep_name`` as a model-endpoints registry entry, or None.
+
+    Returns an endpoint dict in the shape ``resolve_endpoint`` returns, with two
+    additive keys existing callers ignore: ``request_defaults`` (the entry's
+    per-request defaults, e.g. its ``reasoning_effort``) and ``context_window``.
+
+    A registry that exists but cannot be read raises EndpointResolveError with
+    the parse detail -- a present-but-broken registry must never read as an
+    absent one. No registry at all simply returns None, and the caller's
+    unknown-endpoint error stands unchanged.
+    """
+    from .model_endpoints import (  # noqa: PLC0415 -- avoids an import cycle
+        EndpointRegistryError,
+        load_endpoint_registry,
+    )
+
+    try:
+        registry = load_endpoint_registry()
+    except EndpointRegistryError as e:
+        raise EndpointResolveError(str(e)) from e
+    entry = registry.entries.get(ep_name)
+    if entry is None:
+        return None
+    return {
+        "name": entry.id,
+        "base_url": entry.base_url,
+        "key_env": entry.key_env,  # None unless the entry declares one
+        "models": {entry.id: {"slug": entry.model}},
+        "default": entry.id,
+        "defaultCheap": entry.id,
+        "account_check": "models-probe",
+        "request_defaults": (
+            {"reasoning_effort": entry.reasoning_effort} if entry.reasoning_effort else {}
+        ),
+        "context_window": entry.context_window,
+    }
+
+
 def resolve_endpoint(
     name: Optional[str] = None,
     *,
@@ -157,6 +204,16 @@ def resolve_endpoint(
 
     ``name`` None means the config's ``default_endpoint``. Raises
     EndpointResolveError for an unknown endpoint or one missing a base_url/key_env.
+
+    An endpoint declaring ``key_env: null`` explicitly resolves KEYLESS
+    (``key_env`` is None in the returned dict); an endpoint that merely OMITS
+    ``key_env`` still raises, so a dropped line cannot silently disable auth.
+
+    A name that no config layer declares is looked up in the model-endpoints
+    registry (:mod:`llm_scripting_kit.model_endpoints`), whose entry ids are
+    endpoint names. Such an endpoint resolves keyless unless its entry declares
+    a ``key_env``, and carries two additive keys -- ``request_defaults`` and
+    ``context_window`` -- that config-declared endpoints do not.
     """
     cfg = config if config is not None else load_model_config(project_root=project_root)
     ep_name = name or default_endpoint_name(cfg)
@@ -168,6 +225,14 @@ def resolve_endpoint(
         if ep_name == DEFAULT_ENDPOINT_NAME:
             ep = {}
         else:
+            # Not in any config layer: consult the model-endpoints registry,
+            # whose entry ids ARE endpoint names. Checked here -- after the
+            # config map -- so a config-declared endpoint of the same name
+            # shadows a registry entry (an explicit config edit is a
+            # deliberate override).
+            injected = _registry_endpoint(ep_name)
+            if injected is not None:
+                return injected
             known = ", ".join(sorted(endpoints)) or "<none>"
             raise EndpointResolveError(
                 f"unknown endpoint '{ep_name}' (known: {known})"
@@ -179,13 +244,24 @@ def resolve_endpoint(
     base_url = ep.get("base_url") or (
         DEFAULT_MODEL_CONFIG["endpoints"]["openrouter"]["base_url"] if is_default else None
     )
-    key_env = ep.get("key_env") or (
-        DEFAULT_MODEL_CONFIG["endpoints"]["openrouter"]["key_env"] if is_default else None
-    )
     if not base_url:
         raise EndpointResolveError(f"endpoint '{ep_name}' has no 'base_url'")
-    if not key_env:
-        raise EndpointResolveError(f"endpoint '{ep_name}' has no 'key_env'")
+
+    # Keyless endpoints are first-class, but only when declared DELIBERATELY:
+    # an explicit `key_env: null` resolves keyless, while an OMITTED key_env
+    # still raises exactly as before. The asymmetry is typo protection -- a
+    # dropped or misspelled key_env line must not silently become "no auth".
+    if "key_env" in ep and ep["key_env"] is None:
+        key_env = None
+    else:
+        key_env = ep.get("key_env") or (
+            DEFAULT_MODEL_CONFIG["endpoints"]["openrouter"]["key_env"] if is_default else None
+        )
+        if not key_env:
+            raise EndpointResolveError(
+                f"endpoint '{ep_name}' has no 'key_env' "
+                f"(declare `key_env: null` explicitly for a keyless endpoint)"
+            )
 
     models = ep["models"] if isinstance(ep.get("models"), dict) else (cfg.get("models") or {})
     default_sel = ep.get("default") or cfg.get("default")

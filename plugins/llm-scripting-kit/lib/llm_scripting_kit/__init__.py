@@ -17,6 +17,12 @@ protocol over three transports -- an OpenAI-compatible HTTP endpoint
 them purely by configuration. Its seam types and the CLI runner are
 stdlib-only; only the OpenRouter transport reaches for ``openai``, lazily, and
 only the codex transport reaches for ``bootstrap_lib``, also lazily.
+
+Named endpoints come from the layered ``config.yaml`` and from the
+model-endpoints registry (``llm_scripting_kit.model_endpoints``) -- a file the
+user owns at ``~/.claude/config/model-endpoints.yaml``, whose entry ids resolve
+as endpoint names. Endpoints may be keyless (``key_env: null``), which is the
+norm for a locally hosted OpenAI-compatible server.
 """
 
 from .constants import API_KEY_ENV, BASE_URL, USER_ENV_FILE, project_env_file
@@ -24,12 +30,23 @@ from .api_key import get_api_key, KeyLookupResult
 from .account import (
     check_account,
     check_models_probe,
+    probe_endpoint,
     validate_endpoint,
     AccountStatus,
     AccountCheckError,
+    EndpointProbe,
 )
-from .client import make_openai_client
+from .client import KEYLESS_API_KEY, make_openai_client
 from .env_file import read_env_file, write_env_file
+from .model_endpoints import (
+    EndpointEntry,
+    EndpointRegistry,
+    EndpointRegistryError,
+    REGISTRY_ENV,
+    default_registry_path,
+    load_endpoint_registry,
+    resolve_registry_entry,
+)
 from .models import (
     DEFAULT_ENDPOINT_NAME,
     DEFAULT_MODEL_CONFIG,
@@ -69,10 +86,13 @@ __all__ = [
     "KeyLookupResult",
     "check_account",
     "check_models_probe",
+    "probe_endpoint",
     "validate_endpoint",
     "AccountStatus",
     "AccountCheckError",
+    "EndpointProbe",
     "make_openai_client",
+    "KEYLESS_API_KEY",
     "read_env_file",
     "write_env_file",
     "DEFAULT_ENDPOINT_NAME",
@@ -83,6 +103,14 @@ __all__ = [
     "load_model_config",
     "resolve_endpoint",
     "resolve_model",
+    # model-endpoints registry
+    "REGISTRY_ENV",
+    "EndpointEntry",
+    "EndpointRegistry",
+    "EndpointRegistryError",
+    "default_registry_path",
+    "load_endpoint_registry",
+    "resolve_registry_entry",
     # completion seam
     "LLMResponse",
     "BackendOptions",

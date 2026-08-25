@@ -30,6 +30,17 @@ default_endpoint: openrouter
 #       default: llama
 #       models:
 #         llama: {slug: meta-llama/Llama-3.1-8B-Instruct}
+#
+# KEYLESS endpoints: write `key_env: null` explicitly and no credential is
+# resolved or sent -- the norm for a locally hosted server. OMITTING key_env is
+# not the same thing and still raises, so a dropped line cannot silently turn
+# auth off.
+#
+# Endpoints may also come from the model-endpoints REGISTRY: entries in
+# ~/.claude/config/model-endpoints.yaml (or the file MODEL_ENDPOINTS_REGISTRY
+# names when set) resolve as endpoints by their entry id, without appearing
+# here. An endpoint declared in this file shadows a registry entry of the same
+# name. Schema and default-entry resolution: model_endpoints.py.
 endpoints:
   openrouter:
     base_url: https://openrouter.ai/api/v1

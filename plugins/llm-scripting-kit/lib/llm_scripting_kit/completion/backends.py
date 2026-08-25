@@ -173,6 +173,12 @@ class OpenRouterBackend:
         }
         if opts.timeout_s is not None:
             create_kwargs["timeout"] = opts.timeout_s
+        if opts.extras:
+            # The generic escape hatch: anything the caller puts in `extras`
+            # rides as TOP-LEVEL request parameters (``reasoning_effort`` is the
+            # motivating case). Omitted entirely when empty, so the request
+            # shape for existing callers is byte-identical.
+            create_kwargs["extra_body"] = dict(opts.extras)
 
         start = time.monotonic()
         response = client.chat.completions.create(**create_kwargs)
