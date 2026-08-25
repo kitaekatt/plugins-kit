@@ -751,7 +751,13 @@ artifacts in that run's scratch tree beside the original run):
 - The improvised gate's brief, which is where the invented check appears verbatim
   and is the primary evidence for P10.
 
-The design critique written from the 2026-08-20 and 2026-08-24 trails is also
-unsanitized and lives in the private task folder. It remains the argument of
-record for the mechanism arguments and the "what I would NOT change" list; its
-headline figures are superseded by Part 3 of this document.
+The design critique written from the 2026-08-20 and 2026-08-24 trails was also
+unsanitized, and it has been RETIRED rather than relocated: being unsanitized, it
+could not move into this public repo, and a triage of all 297 lines found nothing
+in it that is both unique and still true. Its headline figures were superseded by
+Part 3; its defect arguments are carried by P9-P13; its "what I would NOT change"
+list is carried by Part 4 and by the as-built documents those items now live in --
+`coverage-standards.md` (non-recursive subject, the ambient chain, the generous
+generator posture), `coverage-lane.md` (the promotion gate, batch reconciliation),
+and the anchor-membership mechanism in `coverage-detect.js`. Do not cite the
+critique as the argument of record; it no longer exists.
