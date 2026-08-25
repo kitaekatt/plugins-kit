@@ -314,3 +314,58 @@ class TestRegistryEndpoints:
         ep = resolve_endpoint(config=LEGACY_CFG)
         assert ep["name"] == "openrouter"
         assert ep["key_env"] == "OPENROUTER_API_KEY"
+
+
+class TestUnknownEndpointNamesBothNamespaces:
+    """The unknown-endpoint error must list registry entry ids too.
+
+    An endpoint name may come from the config's `endpoints` map OR from the
+    model-endpoints registry, and resolve_endpoint tries both. Listing only the
+    config's is misleading in exactly the case the reader is in: a typo'd
+    registry entry id was told the known set is "openrouter", which points the
+    fix at the wrong file. (Same config-vs-registry confusion that produced a
+    live defect in content-pipeline-kit's model-endpoint backend.)
+    """
+
+    def test_registry_entries_appear_in_the_known_list(self, monkeypatch):
+        import sys
+        import types
+
+        from llm_scripting_kit import models
+
+        fake = types.ModuleType("llm_scripting_kit.model_endpoints")
+        fake.EndpointRegistryError = RuntimeError
+        fake.load_endpoint_registry = lambda *a, **k: types.SimpleNamespace(
+            entries={"qwen38": object(), "m5": object()}, default_id="qwen38"
+        )
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit.model_endpoints", fake)
+        monkeypatch.setattr(models, "_registry_endpoint", lambda name: None)
+
+        with pytest.raises(EndpointResolveError) as e:
+            models.resolve_endpoint("qwen39", config={"endpoints": {"openrouter": {}}})
+
+        msg = str(e.value)
+        assert "qwen38" in msg and "m5" in msg, msg
+        assert "openrouter" in msg, "config endpoints must still be listed"
+
+    def test_an_unreadable_registry_does_not_replace_the_real_error(
+        self, monkeypatch
+    ):
+        """The diagnostic helper must never raise over the caller's own error."""
+        import sys
+        import types
+
+        from llm_scripting_kit import models
+
+        fake = types.ModuleType("llm_scripting_kit.model_endpoints")
+        fake.EndpointRegistryError = RuntimeError
+
+        def boom(*a, **k):
+            raise RuntimeError("registry is broken")
+
+        fake.load_endpoint_registry = boom
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit.model_endpoints", fake)
+        monkeypatch.setattr(models, "_registry_endpoint", lambda name: None)
+
+        with pytest.raises(EndpointResolveError, match="unknown endpoint 'nope'"):
+            models.resolve_endpoint("nope", config={"endpoints": {"openrouter": {}}})

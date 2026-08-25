@@ -149,6 +149,21 @@ def default_endpoint_name(config: dict) -> str:
     return config.get("default_endpoint") or DEFAULT_ENDPOINT_NAME
 
 
+def _registry_entry_ids() -> set:
+    """Entry ids declared in the model-endpoints registry, for diagnostics.
+
+    Best-effort and never raises: this exists only to make an error message
+    complete, so a registry that is absent or unreadable contributes nothing
+    rather than replacing the caller's real error with a second one.
+    """
+    try:
+        from .model_endpoints import load_endpoint_registry  # noqa: PLC0415
+
+        return set(load_endpoint_registry().entries)
+    except Exception:  # noqa: BLE001 -- a diagnostic must not raise
+        return set()
+
+
 def _registry_endpoint(ep_name: str) -> Optional[dict]:
     """Resolve ``ep_name`` as a model-endpoints registry entry, or None.
 
@@ -233,7 +248,15 @@ def resolve_endpoint(
             injected = _registry_endpoint(ep_name)
             if injected is not None:
                 return injected
-            known = ", ".join(sorted(endpoints)) or "<none>"
+            # Name BOTH namespaces. An endpoint name may come from the config
+            # map or from the model-endpoints registry -- the lookup above just
+            # tried both -- so listing only the config's is misleading in the
+            # exact case the reader is in: a typo'd registry entry id was told
+            # the known set is "openrouter", pointing the fix at the wrong file.
+            # Same config-vs-registry confusion that caused a live defect in
+            # content-pipeline-kit's model-endpoint backend.
+            known = ", ".join(sorted(set(endpoints) | _registry_entry_ids()))
+            known = known or "<none>"
             raise EndpointResolveError(
                 f"unknown endpoint '{ep_name}' (known: {known})"
             )
