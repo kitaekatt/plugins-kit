@@ -94,9 +94,20 @@ def plugin_venv_python(plugin: str, marketplace: str = "plugins-kit") -> Path | 
     return None
 
 
-# Env flag set across the os.execv boundary so a missing/already-active venv can
+# Env flag set across the re-exec boundary so a missing/already-active venv can
 # never cause an exec loop.
 _REEXEC_GUARD_ENV = "_BOOTSTRAP_GUARD_VENV_REEXEC"
+
+
+def _is_windows() -> bool:
+    """Platform test, behind a seam so tests can exercise both branches.
+
+    Deliberately NOT an inline `os.name == "nt"`: pathlib reads `os.name` at
+    call time to decide between PosixPath and WindowsPath, so monkeypatching
+    it to cover the Windows branch on a POSIX runner breaks every Path() in
+    this module. A function is the only substitutable surface.
+    """
+    return os.name == "nt"
 
 
 def reexec_under_plugin_venv(plugin: str, marketplace: str = "plugins-kit") -> None:
@@ -145,4 +156,18 @@ def reexec_under_plugin_venv(plugin: str, marketplace: str = "plugins-kit") -> N
     except OSError:
         return
     os.environ[_REEXEC_GUARD_ENV] = "1"
+    # Windows has no exec. CPython implements os.execv there over the CRT
+    # _execv, which SPAWNS the replacement and terminates the caller
+    # immediately: the parent returns exit 0 before the child has done any
+    # work, and the child is orphaned rather than inherited by the launcher.
+    # A caller that reads our stdout therefore sees an empty stream and a
+    # success code, while the child writes its real output moments later into
+    # a pipe nobody is reading any more. Observed as: prepare_review.py exits 0
+    # with no JSON on stdout, having correctly written bundle.json to disk.
+    # Spawn and WAIT instead, propagating the child's exit code.
+    if _is_windows():
+        import subprocess
+
+        completed = subprocess.run([str(target), *sys.argv])
+        sys.exit(completed.returncode)
     os.execv(str(target), [str(target), *sys.argv])

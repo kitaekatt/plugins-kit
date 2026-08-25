@@ -242,3 +242,54 @@ class TestReexecUnderPluginVenv:
         assert captured["args"] == [str(py), "script.py", "152779"]
         # The loop-guard env flag is set before handing off to the new interpreter.
         assert mod.os.environ.get(mod._REEXEC_GUARD_ENV) == "1"
+
+    def test_reexec_on_windows_waits_and_propagates_exit_code(self, tmp_path, monkeypatch):
+        """On Windows the re-exec must SPAWN-AND-WAIT, never os.execv.
+
+        Windows has no exec: CPython's os.execv goes through the CRT _execv,
+        which spawns the replacement and terminates the caller immediately.
+        The parent then returns exit 0 before the child has produced anything,
+        and the child is orphaned rather than waited on -- so a caller reading
+        our stdout gets an empty stream and a false success. This surfaced as
+        git-kit's prepare_review.py exiting 0 with no JSON on stdout while
+        having correctly written bundle.json to disk.
+        """
+        import pytest
+        mod = _load_canon()
+        monkeypatch.setattr(mod.os.path, "expanduser", lambda p: str(tmp_path))
+        py = self._fake_venv_python(tmp_path, "git-kit")
+        monkeypatch.setattr(mod.sys, "executable", str(tmp_path / "other.exe"))
+        monkeypatch.setattr(mod.sys, "argv", ["prepare_review.py", "--staged"])
+        monkeypatch.delenv(mod._REEXEC_GUARD_ENV, raising=False)
+        # Patch the seam, NOT os.name: pathlib reads os.name at call time, so
+        # forcing it to "nt" on a POSIX runner makes every Path() in the module
+        # raise NotImplementedError('cannot instantiate WindowsPath').
+        monkeypatch.setattr(mod, "_is_windows", lambda: True)
+
+        def forbidden_execv(path, args):  # pragma: no cover - must not run
+            raise AssertionError("os.execv must not be used on Windows")
+
+        monkeypatch.setattr(mod.os, "execv", forbidden_execv)
+
+        import subprocess
+        captured = {}
+
+        class _Completed:
+            returncode = 3
+
+        def fake_run(args, **kwargs):
+            captured["args"] = args
+            return _Completed()
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        with pytest.raises(SystemExit) as excinfo:
+            mod.reexec_under_plugin_venv("git-kit")
+
+        # The child is WAITED on, and its exit code becomes ours -- not 0.
+        assert excinfo.value.code == 3, (
+            "the child's exit code must propagate; returning 0 regardless is "
+            "the os.execv-on-Windows bug this branch exists to avoid"
+        )
+        assert captured["args"] == [str(py), "prepare_review.py", "--staged"]
+        assert mod.os.environ.get(mod._REEXEC_GUARD_ENV) == "1"
