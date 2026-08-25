@@ -436,8 +436,33 @@ class ModelEndpointBackend:
     # was always approximate across server restarts.
 
     def _entry_id(self) -> Optional[str]:
-        """The concrete entry id, or None while the default is unresolved."""
-        return self.endpoint or None
+        """The concrete entry id for the selected entry, resolving the default.
+
+        An empty ``endpoint`` must be resolved through the model-endpoints
+        REGISTRY, not left as None. Passing None onward reaches
+        ``resolve_endpoint``, whose default is the llm-scripting-kit config's
+        default endpoint -- ``openrouter`` -- and NOT this registry's own
+        ``default:`` key. That mismatch is not cosmetic: it makes an unset
+        CONTENT_PIPELINE_LLM_ENDPOINT probe OpenRouter and fail with
+        "no API key resolved", a nonsense diagnosis for a backend whose entries
+        are typically keyless and local.
+
+        Resolution is cached onto ``endpoint`` so the id is concrete by the time
+        it reaches a probe or a cache key. A registry that cannot be read leaves
+        it unresolved and returns None -- the probe then reports that failure as
+        its own ``detail``, which is the honest answer to "is it usable?".
+        """
+        if self.endpoint:
+            return self.endpoint
+        try:
+            from llm_scripting_kit.model_endpoints import (  # noqa: PLC0415
+                resolve_registry_entry,
+            )
+
+            self.endpoint = resolve_registry_entry(None).id
+        except Exception:  # noqa: BLE001 -- unresolvable is the probe's to report
+            return None
+        return self.endpoint
 
     def _backend(self) -> Any:
         """Return the shared delegate, building it at most once (see notes)."""
@@ -739,7 +764,7 @@ def routed_model(requested_model: str, *, backend_name: Optional[str] = None) ->
             from llm_scripting_kit.models import resolve_model  # noqa: PLC0415
 
             return resolve_model(
-                None, endpoint=os.environ.get(ENDPOINT_ENV, "").strip() or None
+                None, endpoint=ModelEndpointBackend()._entry_id()
             )
         except Exception:  # noqa: BLE001 -- truthful fallback beats a guess
             return requested_model

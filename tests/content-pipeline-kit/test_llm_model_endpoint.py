@@ -55,8 +55,42 @@ def test_endpoint_defaults_from_env(monkeypatch):
     assert ModelEndpointBackend().endpoint == "qwen38"
 
 
-def test_empty_endpoint_means_the_registry_default():
-    assert ModelEndpointBackend().endpoint == ""
+def test_empty_endpoint_resolves_through_the_registry_not_the_config(monkeypatch):
+    """Regression: an unset endpoint must resolve via the model-endpoints
+    REGISTRY's own `default:`, never be passed onward as None.
+
+    None reaches resolve_endpoint, whose default is the llm-scripting-kit
+    config's default endpoint -- `openrouter` -- not this registry's. Live, that
+    made an unset CONTENT_PIPELINE_LLM_ENDPOINT probe OpenRouter and report
+    "no API key resolved", a nonsense diagnosis for a keyless local entry. Every
+    other test here injects or patches, so only an end-to-end run caught it.
+    """
+    import sys, types
+
+    fake = types.ModuleType("llm_scripting_kit.model_endpoints")
+    fake.resolve_registry_entry = lambda name=None, **k: types.SimpleNamespace(
+        id="the-default-entry", reasoning_effort=None
+    )
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.model_endpoints", fake)
+
+    b = ModelEndpointBackend()
+    assert b.endpoint == ""
+    assert b._entry_id() == "the-default-entry"
+    # resolved id is cached onto .endpoint, so probes and cache keys see it
+    assert b.endpoint == "the-default-entry"
+
+
+def test_unreadable_registry_leaves_the_default_unresolved(monkeypatch):
+    """An unreadable registry is the probe's failure to report, not a crash."""
+    import sys, types
+
+    fake = types.ModuleType("llm_scripting_kit.model_endpoints")
+
+    def boom(name=None, **k):
+        raise RuntimeError("no registry")
+
+    fake.resolve_registry_entry = boom
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.model_endpoints", fake)
     assert ModelEndpointBackend()._entry_id() is None
 
 
