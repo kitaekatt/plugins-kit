@@ -1072,7 +1072,7 @@ class TestRefutationStage:
         out = self._run(tmp_path, self._cands(2), None)
         rec = by_root(out)["d"]
         assert len(rec["candidates"]) == 2
-        assert out["result"]["totals"]["verifyUnreturned"] == 2
+        assert out["result"]["totals"]["verifySubjectsUnreturned"] == 2
         assert any("UNRETURNED" in n for n in rec["notes"])
 
     def test_partial_read_is_reported(self, tmp_path):
@@ -1178,3 +1178,200 @@ class TestRefutationStage:
         out = self._run(tmp_path, self._cands(1), [verdict(0)])
         brief = self._verify_calls(out)[0]["prompt"]
         assert "/abs/coverage-standards.md" in brief
+
+
+class TestPartialReadDirectionality:
+    """A partial read is SAFE falsifying and UNSAFE upholding, so it is not one fact.
+
+    Unread files can only ADD counterexamples. They can never withdraw the one
+    that killed a fact, so a partial FALSIFIED verdict is sound and is applied
+    unchanged. They can easily hold the counterexample that would have killed a
+    fact that was allowed to stand, so a partial STANDS has not been checked and
+    must not claim it was.
+
+    Measured on the 2026-08-24 second-root run: 21 of 287 verdict rows were
+    judged on a partial read, 17 STANDS and 4 FALSIFIED, and all 17 survivors
+    were stamped `verified: true` on the candidate record -- readable as a
+    fully-checked fact by anything that consumes candidates rather than notes.
+    """
+
+    _run = TestRefutationStage._run
+    _cands = TestRefutationStage._cands
+
+    def test_a_partial_read_stands_verdict_does_not_claim_verified(self, tmp_path):
+        out = self._run(tmp_path, self._cands(1),
+                        [verdict(0, files_read=1, files_in_dir=2)])
+        c = by_root(out)["d"]["candidates"][0]
+        assert c["verified"] is False
+        assert c["readComplete"] is False
+
+    def test_the_candidate_carries_the_read_figures_not_just_a_flag(self, tmp_path):
+        """A consumer must be able to see HOW partial without re-reading notes."""
+        out = self._run(tmp_path, self._cands(1),
+                        [verdict(0, files_read=1, files_in_dir=2)])
+        c = by_root(out)["d"]["candidates"][0]
+        assert c["filesRead"] == 1
+        assert c["filesInDir"] == 2
+
+    def test_a_complete_read_stands_verdict_is_still_verified(self, tmp_path):
+        out = self._run(tmp_path, self._cands(1),
+                        [verdict(0, files_read=2, files_in_dir=2)])
+        c = by_root(out)["d"]["candidates"][0]
+        assert c["verified"] is True
+        assert c["readComplete"] is True
+        assert "filesRead" not in c
+
+    def test_a_partial_read_falsified_verdict_is_still_applied(self, tmp_path):
+        """The directionality: an unread file cannot rescue a contradicted fact."""
+        out = self._run(tmp_path, self._cands(1),
+                        [verdict(0, "FALSIFIED", "d/b.py:9",
+                                 files_read=1, files_in_dir=2)])
+        rec = by_root(out)["d"]
+        assert rec["candidates"] == []
+        assert out["result"]["totals"]["falsified"] == 1
+
+    def test_partial_stands_is_counted_apart_from_partial_reads(self, tmp_path):
+        """verifyPartialReads counts both directions; only STANDS is the exposure."""
+        out = self._run(tmp_path, self._cands(2),
+                        [verdict(0, files_read=1, files_in_dir=2),
+                         verdict(1, "FALSIFIED", "d/b.py:9",
+                                 files_read=1, files_in_dir=2)])
+        totals = out["result"]["totals"]
+        assert totals["verifyPartialReads"] == 2
+        assert totals["verifyPartialStands"] == 1
+
+    def test_a_partial_stands_candidate_is_not_in_the_verified_tally(self, tmp_path):
+        out = self._run(tmp_path, self._cands(2),
+                        [verdict(0, files_read=1, files_in_dir=2), verdict(1)])
+        totals = out["result"]["totals"]
+        assert totals["verified"] == 1
+        assert len(by_root(out)["d"]["candidates"]) == 2
+
+    def test_the_subject_note_explains_the_asymmetry(self, tmp_path):
+        out = self._run(tmp_path, self._cands(1),
+                        [verdict(0, files_read=1, files_in_dir=2)])
+        notes = " ".join(by_root(out)["d"]["notes"])
+        assert "STANDS" in notes and "FALSIFIED" in notes
+        assert "readComplete" in notes
+
+    def test_the_run_summary_names_the_partial_stands(self, tmp_path):
+        out = self._run(tmp_path, self._cands(1),
+                        [verdict(0, files_read=1, files_in_dir=2)])
+        assert any("NOT counted as verified" in line for line in out["logs"])
+
+
+class TestTheKillRecordIsStructural:
+    """A deletion the report cannot name did not stay accountable.
+
+    Report-only means nothing is written to the CODEBASE. It was never a licence
+    for the report to forget what the run decided -- and the prose note names
+    only the first three kills at 60 characters each, so a subject with eight
+    kills discarded the counterexample the other five died on. The lane doc's
+    own promotion-gate section states the rule this violates: "a rejection is as
+    accountable as a deletion".
+    """
+
+    _run = TestRefutationStage._run
+    _cands = TestRefutationStage._cands
+
+    def test_a_falsified_candidate_appears_in_the_structural_array(self, tmp_path):
+        out = self._run(tmp_path, self._cands(1),
+                        [verdict(0, "FALSIFIED", "d/b.py:9")])
+        rec = by_root(out)["d"]
+        assert len(rec["falsified"]) == 1
+        entry = rec["falsified"][0]
+        assert entry["fact"] == "a fact"
+        assert entry["counterexample"] == "d/b.py:9"
+        assert entry["anchors"] == ["d/a.py:1"]
+        assert entry["tier"] == "CONTEXT-ONLY"
+
+    def test_an_empty_quote_is_carried_not_invented(self, tmp_path):
+        """Empty is CORRECT for a pure falsification; the field still exists."""
+        out = self._run(tmp_path, self._cands(1),
+                        [verdict(0, "FALSIFIED", "d/b.py:9")])
+        assert by_root(out)["d"]["falsified"][0]["quote"] == ""
+
+    def test_a_quote_backing_a_criterion_survives_onto_the_record(self, tmp_path):
+        out = self._run(tmp_path, self._cands(1),
+                        [verdict(0, "FALSIFIED", "d/b.py:9",
+                                 quote="a verbatim phrase")])
+        assert by_root(out)["d"]["falsified"][0]["quote"] == "a verbatim phrase"
+
+    def test_more_than_three_kills_are_ALL_recorded(self, tmp_path):
+        """The prose note truncates at three; the array must not."""
+        out = self._run(tmp_path, self._cands(8),
+                        [verdict(i, "FALSIFIED", f"d/b.py:{i + 1}") for i in range(8)])
+        rec = by_root(out)["d"]
+        assert rec["candidates"] == []
+        assert len(rec["falsified"]) == 8
+        assert [e["counterexample"] for e in rec["falsified"]] == [
+            f"d/b.py:{i + 1}" for i in range(8)
+        ]
+
+    def test_a_subject_with_no_kills_carries_an_empty_array(self, tmp_path):
+        out = self._run(tmp_path, self._cands(1), [verdict(0)])
+        assert by_root(out)["d"]["falsified"] == []
+
+    def test_an_unsupported_falsified_verdict_records_no_kill(self, tmp_path):
+        """Nothing was deleted, so nothing belongs in the deletion record."""
+        out = self._run(tmp_path, self._cands(1), [verdict(0, "FALSIFIED", "")])
+        rec = by_root(out)["d"]
+        assert rec["falsified"] == []
+        assert len(rec["candidates"]) == 1
+
+
+class TestUnansweredCandidateVersusUnreturnedSubject:
+    """Two different failures that one counter used to hide.
+
+    A whole subject the stage never answered for is an infrastructure failure
+    over a directory. One candidate missing from an otherwise-complete verdict
+    set is what OUTPUT TRUNCATION looks like -- on the measured run the single
+    unanswered candidate was the LAST index of the LONGEST candidate list, a
+    shape a judgment does not produce. Both are handled SAFELY (the candidate is
+    kept, never deleted); only the accounting was wrong.
+    """
+
+    _run = TestRefutationStage._run
+    _cands = TestRefutationStage._cands
+
+    def test_a_per_candidate_non_answer_has_its_own_counter(self, tmp_path):
+        out = self._run(tmp_path, self._cands(3), [verdict(0), verdict(1)])
+        totals = out["result"]["totals"]
+        assert totals["verifyCandidatesUnanswered"] == 1
+        assert totals["verifySubjectsUnreturned"] == 0
+
+    def test_a_whole_subject_non_return_has_the_other_counter(self, tmp_path):
+        out = self._run(tmp_path, self._cands(3), None)
+        totals = out["result"]["totals"]
+        assert totals["verifySubjectsUnreturned"] == 3
+        assert totals["verifyCandidatesUnanswered"] == 0
+
+    def test_the_unanswered_candidate_is_kept(self, tmp_path):
+        out = self._run(tmp_path, self._cands(3), [verdict(0), verdict(1)])
+        cands = by_root(out)["d"]["candidates"]
+        assert len(cands) == 3
+        assert cands[2]["verified"] is False
+
+    def test_the_unreturned_subject_keeps_every_candidate(self, tmp_path):
+        """Kept, and the SUBJECT carries verified false.
+
+        Note where the flag sits: on this path it is stamped on the subject
+        record, not on each candidate, so a candidate here carries no `verified`
+        key at all. That is pre-existing behaviour and is left alone here.
+        """
+        rec = by_root(self._run(tmp_path, self._cands(3), None))["d"]
+        assert len(rec["candidates"]) == 3
+        assert rec["verified"] is False
+
+    def test_the_per_candidate_case_is_visible_in_the_subject_note(self, tmp_path):
+        out = self._run(tmp_path, self._cands(3), [verdict(0), verdict(1)])
+        notes = " ".join(by_root(out)["d"]["notes"])
+        assert "no verdict row" in notes
+        assert "truncation" in notes.lower()
+
+    def test_both_counters_reach_the_run_summary(self, tmp_path):
+        out = self._run(tmp_path, self._cands(3), [verdict(0), verdict(1)])
+        line = " ".join(out["logs"])
+        assert "missing a verdict row" in line
+        out2 = self._run(tmp_path, self._cands(3), None)
+        assert any("never answered for" in line for line in out2["logs"])

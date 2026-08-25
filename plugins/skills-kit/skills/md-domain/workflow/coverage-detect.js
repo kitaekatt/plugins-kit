@@ -1175,9 +1175,26 @@ const results = perSubject.filter(Boolean).map((r) => {
 // and per-candidate would pay it again for each.
 let verified = 0
 let falsified = 0
-let verifyUnreturned = 0
+// A subject the stage never answered for and a single candidate missing from an
+// otherwise-complete verdict set are DIFFERENT failures, and one counter over
+// both hides which one happened. The first is an infrastructure failure over a
+// whole directory; the second is what OUTPUT TRUNCATION looks like -- on the
+// measured run the one unanswered candidate was the LAST index of the LONGEST
+// candidate list, which is a shape a judgment does not produce. Reading them
+// apart is what lets an operator tell "the dispatch failed" from "the answer
+// was cut off", so they are counted apart.
+let verifySubjectsUnreturned = 0
+let verifyCandidatesUnanswered = 0
 let verifyUnsupported = 0
 let verifyPartialReads = 0
+// Counted apart from verifyPartialReads, which tallies partial-read rows in
+// BOTH truth directions. A partial read is not symmetric: unread files can only
+// ADD counterexamples, so they can never rescue a fact a read file already
+// contradicted, but they can easily hold the counterexample that would have
+// killed one that was allowed to stand. So a partial FALSIFIED is sound and a
+// partial STANDS is the exposure, and only the second number tells a reader how
+// much of the run's "upheld" column was never actually checked.
+let verifyPartialStands = 0
 const verifyEnabled = depth === 'advanced' && input.verify !== false
 const verifyTargets = verifyEnabled
   ? results.filter((r) => r.status === 'ASSESSED' && (r.candidates || []).length)
@@ -1214,7 +1231,7 @@ const verifiedResults = !verifyEnabled ? results : results.map((r) => {
   const v = verifyByKey.get(r.subjectKey)
   const rows = v && Array.isArray(v.verdicts) ? v.verdicts : null
   if (!rows) {
-    verifyUnreturned += r.candidates.length
+    verifySubjectsUnreturned += r.candidates.length
     notes.push(
       'verification UNRETURNED for this subject: its candidates are unverified ' +
       'and were kept. At this depth COVERAGE-ASSESSED means verified absent, ' +
@@ -1229,11 +1246,34 @@ const verifiedResults = !verifyEnabled ? results : results.map((r) => {
     if (!byIndex.has(row.index)) byIndex.set(row.index, row)
   }
 
+  // A shortfall is a fact about the ROW, so it is computed once here and read
+  // in both directions below rather than re-derived at each use.
+  const shortfallOf = (row) => (
+    row && typeof row.filesRead === 'number' && typeof row.filesInDir === 'number' &&
+    row.filesRead < row.filesInDir
+  ) ? { filesRead: row.filesRead, filesInDir: row.filesInDir } : null
+
   const killed = []
+  // The STRUCTURAL record of every deletion. The prose note below is a reading
+  // convenience and truncates; this does not. A kill is a decision the run made
+  // about a fact, and report-only means nothing is written to the CODEBASE --
+  // it was never a licence for the report to forget what it decided. Without
+  // this array a subject with eight kills named three of them and discarded the
+  // counterexample the other five were killed on, so the rejection was less
+  // accountable than the deletion the schema already guards ("a rejection is as
+  // accountable as a deletion", ../references/lanes/coverage-lane.md).
+  const falsifiedRecords = []
+  let unansweredHere = 0
+  let partialStandsHere = 0
   const kept = r.candidates.map((c, i) => {
     const row = byIndex.get(i)
     if (!row) {
-      verifyUnreturned++
+      verifyCandidatesUnanswered++
+      unansweredHere++
+      // No `readComplete` here on purpose: the field reports what a RETURNED
+      // row said about its own read, and there is no row. `verified: false`
+      // already says this candidate was not checked at all, which is the
+      // stronger statement; adding readComplete would imply a read happened.
       return { ...c, verified: false }
     }
     const ce = String(row.counterexample || '').trim()
@@ -1249,10 +1289,40 @@ const verifiedResults = !verifyEnabled ? results : results.map((r) => {
       return { ...c, verified: false }
     }
     if (row.truth === 'FALSIFIED') {
+      // A partial read is NOT a reason to withhold a kill. Unread files can
+      // only add counterexamples, never withdraw the one that was found, so
+      // reading the rest of the directory cannot rescue this fact. The
+      // asymmetry is the whole reason the STANDS branch below behaves
+      // differently on the same shortfall.
       killed.push(`"${String(c.fact).slice(0, 60)}..." [${ce}]`)
+      falsifiedRecords.push({
+        index: i,
+        fact: String(c.fact),
+        anchors: Array.isArray(c.anchors) ? [...c.anchors] : [],
+        tier: c.tier,
+        counterexample: ce,
+        // Empty is CORRECT for a pure falsification -- the criteria document is
+        // quoted only when a criterion was invoked, and a contradiction needs
+        // none. Carried verbatim rather than defaulted, so a judge that DID
+        // invoke a rule is still readable off the record.
+        quote: String(row.quote || ''),
+      })
       return null
     }
-    const out = { ...c, verified: true }
+    // A candidate that STANDS on a partial read must not claim `verified: true`.
+    // The refuter did not open every file in the directory, so the file it did
+    // not open is exactly where a counterexample to a universal claim would
+    // sit. The subject-level note and verifyPartialReads already said this
+    // about the SUBJECT, but a consumer reads CANDIDATES, and a record stamped
+    // verified is indistinguishable there from a fully-checked one.
+    const short = shortfallOf(row)
+    const out = { ...c, verified: !short, readComplete: !short }
+    if (short) {
+      partialStandsHere++
+      verifyPartialStands++
+      out.filesRead = short.filesRead
+      out.filesInDir = short.filesInDir
+    }
     if (String(row.narrowing || '').trim()) out.narrowing = String(row.narrowing).trim()
     return out
   })
@@ -1261,9 +1331,7 @@ const verifiedResults = !verifyEnabled ? results : results.map((r) => {
   falsified += r.candidates.length - surviving.length
   verified += surviving.filter((c) => c.verified).length
 
-  const partial = rows.filter((row) =>
-    row && typeof row.filesRead === 'number' && typeof row.filesInDir === 'number' &&
-    row.filesRead < row.filesInDir)
+  const partial = rows.filter((row) => shortfallOf(row))
   if (partial.length) {
     verifyPartialReads += partial.length
     notes.push(
@@ -1271,10 +1339,32 @@ const verifiedResults = !verifyEnabled ? results : results.map((r) => {
       'the directory holds; a universal claim judged that way was not fully checked.'
     )
   }
+  if (partialStandsHere) {
+    notes.push(
+      `of those, ${partialStandsHere} STOOD on the partial read and were therefore ` +
+      'NOT stamped verified (readComplete: false on the candidate, with the read ' +
+      'figures). A partial read is safe in the FALSIFIED direction and unsafe in ' +
+      'the STANDS direction: an unread file can only add a counterexample, so it ' +
+      'cannot rescue a fact already contradicted, but it can hold the one that ' +
+      'would have killed a fact that was allowed to stand.'
+    )
+  }
+  if (unansweredHere) {
+    notes.push(
+      `verification returned no verdict row for ${unansweredHere} of this subject ` +
+      'candidate(s) while answering the rest; they were KEPT, verified false. This ' +
+      'is not the same failure as an unreturned subject -- a verdict set that is ' +
+      'complete except at its tail is what OUTPUT TRUNCATION looks like, so a ' +
+      'recurrence points at the response budget rather than at the judge.'
+    )
+  }
   if (killed.length) {
+    // The prose stays short and the full record rides on `falsified` below, so
+    // this note is a summary rather than the evidence.
     notes.push(
       `verification FALSIFIED ${killed.length} candidate(s) against source ` +
-      `(${killed.slice(0, 3).join('; ')}${killed.length > 3 ? `; +${killed.length - 3} more` : ''}).`
+      `(${killed.slice(0, 3).join('; ')}${killed.length > 3 ? `; +${killed.length - 3} more` : ''}). ` +
+      'Every deletion is recorded in full in this record falsified array.'
     )
   }
 
@@ -1282,7 +1372,7 @@ const verifiedResults = !verifyEnabled ? results : results.map((r) => {
   // candidates" stays true by construction after a deletion rather than being
   // asserted twice and able to disagree with itself.
   const derived = surviving.length ? 'GAPS-FOUND' : 'COVERAGE-ASSESSED'
-  return { ...r, candidates: surviving, verdict: derived, notes }
+  return { ...r, candidates: surviving, verdict: derived, notes, falsified: falsifiedRecords }
 })
 
 // A root appearing twice means two result objects claim one directory. Counted
@@ -1369,9 +1459,14 @@ totals.provenance = provenance
 totals.verifyRan = verifyEnabled
 totals.verified = verified
 totals.falsified = falsified
-totals.verifyUnreturned = verifyUnreturned
+// `verified` counts only candidates that carry `verified: true`, so a candidate
+// that stood on a partial read is NOT in it -- it survives, and the run does not
+// claim to have checked it.
+totals.verifySubjectsUnreturned = verifySubjectsUnreturned
+totals.verifyCandidatesUnanswered = verifyCandidatesUnanswered
 totals.verifyUnsupported = verifyUnsupported
 totals.verifyPartialReads = verifyPartialReads
+totals.verifyPartialStands = verifyPartialStands
 
 // The ceiling is per directory, so a wide run's aggregate is subjects x ceiling.
 // Stating the aggregate keeps a capped multi-directory run from reading as
@@ -1422,9 +1517,11 @@ const verifyNote = !verifyEnabled
     ? ', verification DISABLED for this run -- COVERAGE-ASSESSED here means not found within budget, NOT verified absent'
     : '')
   : `, verification: ${totals.falsified} candidate(s) FALSIFIED against source, ${totals.verified} upheld` +
-    (totals.verifyUnreturned ? `, ${totals.verifyUnreturned} UNVERIFIED (no verdict returned -- kept, treat as depth basic)` : '') +
+    (totals.verifySubjectsUnreturned ? `, ${totals.verifySubjectsUnreturned} UNVERIFIED in subjects the stage never answered for (kept, treat as depth basic)` : '') +
+    (totals.verifyCandidatesUnanswered ? `, ${totals.verifyCandidatesUnanswered} candidate(s) missing a verdict row from an otherwise-answered subject (kept, verified false -- the signature of output truncation, not of a judgment)` : '') +
     (totals.verifyUnsupported ? `, ${totals.verifyUnsupported} unsupported FALSIFIED verdict(s) discarded` : '') +
-    (totals.verifyPartialReads ? `, ${totals.verifyPartialReads} judged against fewer files than the directory holds` : '')
+    (totals.verifyPartialReads ? `, ${totals.verifyPartialReads} judged against fewer files than the directory holds` : '') +
+    (totals.verifyPartialStands ? `, of which ${totals.verifyPartialStands} STOOD on that partial read and are NOT counted as verified` : '')
 const modeNote = subjectsFile ? `subjectsFile=${subjectsFile}` : 'inline'
 const provenanceWarning = provenance === 'agent-attested'
   ? ' PROVENANCE: roots and code-file lists are AGENT-ATTESTED, not verified against the subjects file -- verify before promoting (coverage-lane.md, "Verifying an agent-attested run").'

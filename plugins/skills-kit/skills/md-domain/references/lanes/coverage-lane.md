@@ -524,23 +524,35 @@ corrects the record, pointed at value it manufactures rejections.
 **What a verdict may do to a record.** Five cases, and only the first two change
 anything:
 
-1. **`STANDS`** -- the candidate survives and gains `verified: true`. An optional
+1. **`STANDS`** -- the candidate survives. It gains `verified: true` only when
+   the verdict's `filesRead` equals its `filesInDir`; on a shortfall it gains
+   `verified: false`, `readComplete: false`, and the two figures, because the
+   file the refuter did not open is exactly where a counterexample to a
+   universal claim would sit (`totals.verifyPartialStands`). An optional
    `narrowing` field carries the restatement that WOULD stand when one
    over-reaching clause is the only problem. It is handed to the caller and is
    never auto-applied: a fact rewritten by its verifier has been proposed by
    nobody.
-2. **`FALSIFIED` with a `file:line` counterexample** -- the candidate is DELETED
-   and the subject's notes name the fact and the counterexample.
+2. **`FALSIFIED` with a `file:line` counterexample** -- the candidate is DELETED,
+   and the full record of the deletion -- fact, anchors, tier, counterexample,
+   quote -- lands in the subject's `falsified` array. The notes carry a short
+   summary naming the first three; the array is the record, and it never
+   truncates. A partial read does not withhold a kill: an unread file can only
+   ADD counterexamples, so it cannot rescue a fact a read file contradicts.
 3. **`FALSIFIED` with no counterexample** -- the VERDICT is discarded and the
    candidate is KEPT, `verified: false`, with a note naming it
    (`totals.verifyUnsupported`). An unsupported deletion is the same
    unaccountable rejection this stage exists to replace.
-4. **No verdict row for a candidate** -- kept, `verified: false`
-   (`totals.verifyUnreturned`).
+4. **No verdict row for a candidate**, in a subject whose other candidates WERE
+   answered -- kept, `verified: false`
+   (`totals.verifyCandidatesUnanswered`), with a note. Counted apart from case 5
+   because it is a different failure: a verdict set complete except at its tail
+   is what output truncation looks like, and folding it into the whole-subject
+   number would point an operator at the dispatch instead of at the budget.
 5. **No verdict set returned for the subject at all** -- every candidate is
    kept, the subject is marked `verified: false`, and its notes say to treat its
    candidates as depth `basic`, because it has not earned "verified absent".
-   Its whole candidate count lands in `totals.verifyUnreturned`. Dropping
+   Its whole candidate count lands in `totals.verifySubjectsUnreturned`. Dropping
    candidates here would let an infrastructure failure read as a clean
    directory, which is the confusion `DISCOVERY-FAILED` exists to prevent one
    step upstream.
@@ -568,11 +580,13 @@ afterwards.
 | Field | Meaning |
 |---|---|
 | `verifyRan` | whether the stage ran at all |
-| `verified` | surviving candidates a verdict upheld |
+| `verified` | surviving candidates a verdict upheld on a COMPLETE read |
 | `falsified` | candidates deleted against a counterexample |
-| `verifyUnreturned` | candidates kept because no verdict came back for them |
+| `verifySubjectsUnreturned` | candidates kept because their subject got no verdict set at all |
+| `verifyCandidatesUnanswered` | candidates kept because their own row was missing from an answered set |
 | `verifyUnsupported` | `FALSIFIED` verdicts discarded for naming no counterexample |
-| `verifyPartialReads` | verdicts judged against fewer files than the directory holds |
+| `verifyPartialReads` | verdicts judged against fewer files than the directory holds, in BOTH directions |
+| `verifyPartialStands` | of those, the ones that STOOD -- the exposure, since a partial FALSIFIED is sound |
 
 ### Step 4 -- Report and stop
 
