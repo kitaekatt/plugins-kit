@@ -337,9 +337,9 @@ ladders:
     criteria:
     - [cross-check]
     - terms: [novel, unverifiable]
-      where: raising gpt-5.6-luna to `max` would not resolve it
+      where: gpt-5.6-luna at `max` would not resolve it
     terminal: false
-    effort: max
+    effort: high
   - id: codex-workhorse
     model: gpt-5.6-luna
     criteria: []
@@ -347,7 +347,7 @@ ladders:
     text: >-
       terminal default. You are on this backend for dispatch shape, not difficulty, so arriving
       units are workhorse-difficulty units that happen to be awkwardly shaped.
-    effort: high
+    effort: max
 
 # ---------------------------------------------------------------------------
 # Agent type
@@ -382,7 +382,12 @@ effort:
   backend_notes:
   - id: codex-dial
     backend: codex
-    text: Codex-side, effort is a real dial set per dispatch -- the rung defaults are above.
+    text: >-
+      Codex-side, effort is a real dial set per dispatch -- the rung defaults are above. gpt-5.6-luna
+      carries the higher default because units arrive there for dispatch shape, not difficulty,
+      so deliberation is the only compensation on the rung that takes everything by fall-through.
+      Raise gpt-5.6-sol from `high` to `max` when the unit is `unverifiable`; a `cross-check`
+      stays at `high`.
   note: >-
     Claude-side, effort is NOT dialable per call: the Agent tool has no effort parameter,
     agents inherit from their type or the session, and it is settable per call only through

@@ -867,16 +867,22 @@ emits:
         is what the user says; it is never what `-m` receives.
 ```
 
-### P3.1 -- gpt-5.6-sol at max effort, or do not run it here
+### P3.1 -- gpt-5.6-sol, or do not run it here
 
-`cross-check`; or `novel` + `unverifiable` **where raising gpt-5.6-luna to `max`
+`cross-check`; or `novel` + `unverifiable` **where gpt-5.6-luna at `max`
 would not resolve it**.
 
 *Why the effort clause is part of the criterion:* effort IS dialable on this backend,
-so "try more thinking on the cheap rung first" is a real move here -- but under
-ordered elimination it cannot be stated as a sequencing instruction, because a unit
-matching this rung never reaches the one below to have its effort raised. Folding it
-into the criterion is the only form that executes.
+so "the cheap rung's own ceiling first" is a real move here -- but under ordered
+elimination it cannot be stated as a sequencing instruction, because a unit matching
+this rung never reaches the one below. Folding it into the criterion is the only form
+that executes.
+
+*Why the clause says `at` rather than `raising to`:* since P4.2 seats gpt-5.6-luna at
+`max` by default, there is no raise left to perform -- the workhorse rung is already
+at the top of its dial. The test is therefore whether luna's DEFAULT would resolve the
+unit, and the wording was corrected to say so. Read as a raise it would describe a
+move that no longer exists.
 
 *Why these terms:* the inherited criterion was "hard, ambiguous, long-horizon work",
 none of which are vocabulary terms -- and `difficult` is an explicit anti-term whose
@@ -905,11 +911,11 @@ emits:
     criteria:
       - [cross-check]
       - terms: [novel, unverifiable]
-        where: raising gpt-5.6-luna to `max` would not resolve it
+        where: gpt-5.6-luna at `max` would not resolve it
     terminal: false
 ```
 
-### P3.2 -- gpt-5.6-luna at high effort is the terminal default
+### P3.2 -- gpt-5.6-luna at max effort is the terminal default
 
 *Why the cheap rung is the default:* you are on this backend for dispatch shape, not
 difficulty (P1.1), so arriving units are workhorse-difficulty units that happen to be
@@ -1056,8 +1062,25 @@ consequences, and forcing it in would require a cross-edge.
 
 Scale, low to high: `low`, `medium`, `high`, `xhigh`, `max`.
 
-**Codex-side, effort is a real dial** -- set per dispatch. Defaults: gpt-5.6-luna `high`,
-gpt-5.6-sol `max`.
+**Codex-side, effort is a real dial** -- set per dispatch. Defaults: gpt-5.6-luna `max`,
+gpt-5.6-sol `high`, with gpt-5.6-sol raised to `max` on `unverifiable` units.
+
+*Why the workhorse rung carries the higher default:* the two rungs are selected on
+different grounds, so their dials answer different questions. Units arrive on
+gpt-5.6-luna for dispatch SHAPE, not difficulty (P1.1) -- nothing about that routing
+says the unit is easy, so deliberation is the only compensation available on the rung
+that gets everything by fall-through. Units arrive on gpt-5.6-sol for stated
+difficulty criteria, where the MODEL is already the escalation; spending the top of
+the dial as well, unconditionally, prices every second opinion at the ceiling.
+
+*Why `unverifiable` is the escalation trigger and not "challenging work":* gpt-5.6-sol's
+rung fires only on `cross-check` or `novel` + `unverifiable`, so a licence phrased as
+"when the work is hard" is true of everything reaching it and silently restores `max`
+as the real default -- the same two-answers-no-tie-break defect this section records
+against an earlier fable revision below. Binding it to `unverifiable` gives each of
+the rung's two criteria a distinct answer: a `cross-check` runs at `high`, a `novel` +
+`unverifiable` unit runs at `max`, because there no cheap check reaches the failure
+worth escalating for.
 
 **Claude-side, effort is NOT dialable per call.** The Agent tool has no effort
 parameter; agents inherit from their type or the session, and it is settable per call
@@ -1086,8 +1109,8 @@ never that no check exists, but that no check reaches the failure worth escalati
 
 ```yaml
 emits:
-  ladders.codex.rungs[codex-top].effort: max
-  ladders.codex.rungs[codex-workhorse].effort: high
+  ladders.codex.rungs[codex-top].effort: high
+  ladders.codex.rungs[codex-workhorse].effort: max
   effort.intro: >-
     Decided separately, after the tier. Scale, low to high: `low`, `medium`,
     `high`, `xhigh`, `max`.
@@ -1097,7 +1120,11 @@ emits:
     backend: codex
     text: >-
       Codex-side, effort is a real dial set per dispatch -- the rung defaults
-      are above.
+      are above. gpt-5.6-luna carries the higher default because units arrive
+      there for dispatch shape, not difficulty, so deliberation is the only
+      compensation on the rung that takes everything by fall-through. Raise
+      gpt-5.6-sol from `high` to `max` when the unit is `unverifiable`; a
+      `cross-check` stays at `high`.
   effort.note: >-
     Claude-side, effort is NOT dialable per call: the Agent tool has no effort
     parameter, agents inherit from their type or the session, and it is
