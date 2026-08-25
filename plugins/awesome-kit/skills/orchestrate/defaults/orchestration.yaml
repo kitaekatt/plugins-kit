@@ -501,8 +501,12 @@ backends:
         absolute `-C`; read-only units may share a tree.
       effort: >-
         Model via `-m`, fully qualified. Effort via `-c
-        model_reasoning_effort=<low|medium|high|max>` -- a config key, not a
-        flag, so `--help` does not list it.
+        model_reasoning_effort=<low|medium|high|xhigh|max>` -- a config key, not
+        a flag, so `--help` does not list it. `xhigh` IS accepted and is
+        deliberately included: it appears in no codex help output, and this
+        entry omitted it until a live run on codex-cli 0.149.1 echoed
+        `reasoning effort: xhigh` back in its session header. Do not trim it out
+        again on the grounds that the CLI does not document it.
       network: >-
         Only with `-c sandbox_workspace_write.network_access=true`. Without
         it egress fails SILENTLY -- `curl` returns HTTP 000, exit 1, no error

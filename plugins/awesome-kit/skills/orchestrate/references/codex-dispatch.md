@@ -74,12 +74,19 @@ Per-unit knobs on top of that shape:
   -m, --model <MODEL>      The rung. Model ids are FULLY QUALIFIED --
                            `gpt-5.6-sol`, not the bare codename, which is not
                            dispatchable and fails at launch.
-  -c model_reasoning_effort=<low|medium|high|max>
+  -c model_reasoning_effort=<low|medium|high|xhigh|max>
                            The effort dial, and a `-c` CONFIG KEY rather than a
                            flag -- `codex exec --help` does not list it, so
                            finding nothing there is expected. Verify a spelling
                            with `--strict-config`, which rejects an unknown key
                            at launch instead of ignoring it.
+                           `xhigh` is real but undocumented by the CLI: this
+                           list omitted it until a live run on codex-cli 0.149.1
+                           echoed `reasoning effort: xhigh` in its session
+                           header. Since the CLI documents neither the key nor
+                           its values, absence from `--help` is not evidence a
+                           level does not exist -- confirm with a run, not with
+                           the help text.
   --output-schema <FILE>   JSON Schema for the final response, when you want
                            the return value machine-parseable.
   --json                   Emit events as JSONL, for progress tracking.
