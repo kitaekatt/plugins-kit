@@ -1237,7 +1237,20 @@ const verifiedResults = !verifyEnabled ? results : results.map((r) => {
       'and were kept. At this depth COVERAGE-ASSESSED means verified absent, ' +
       'which this subject has not earned -- treat its candidates as depth basic.'
     )
-    return { ...r, notes, verified: false }
+    // Stamp every CANDIDATE too, not just the subject. The sibling path below
+    // (a single candidate with no row) already does this, and a consumer reads
+    // candidate records, not subject flags. Leaving the key ABSENT here was
+    // worse than a wrong value: `c.verified === false` read `undefined` and
+    // silently gave the wrong answer, while `!c.verified` happened to work by
+    // accident -- a contract only the laxer of two idiomatic checks satisfies
+    // is not a contract. No `readComplete`, for the same reason as the sibling
+    // path: no row was returned, so there is no read to report on.
+    return {
+      ...r,
+      notes,
+      verified: false,
+      candidates: r.candidates.map((c) => ({ ...c, verified: false })),
+    }
   }
 
   const byIndex = new Map()

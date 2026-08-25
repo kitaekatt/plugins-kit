@@ -1353,15 +1353,21 @@ class TestUnansweredCandidateVersusUnreturnedSubject:
         assert cands[2]["verified"] is False
 
     def test_the_unreturned_subject_keeps_every_candidate(self, tmp_path):
-        """Kept, and the SUBJECT carries verified false.
+        """Kept, and BOTH the subject and every candidate carry verified false.
 
-        Note where the flag sits: on this path it is stamped on the subject
-        record, not on each candidate, so a candidate here carries no `verified`
-        key at all. That is pre-existing behaviour and is left alone here.
+        The per-candidate stamp is the point. A consumer reads candidate
+        records, not subject flags, and an ABSENT key is worse than a wrong
+        value: `c["verified"] is False` raised KeyError while
+        `not c.get("verified")` passed by accident. Assert the key EXISTS and
+        is exactly False, so a regression to the absent-key shape fails here
+        rather than passing under the laxer of two idiomatic checks.
         """
         rec = by_root(self._run(tmp_path, self._cands(3), None))["d"]
         assert len(rec["candidates"]) == 3
         assert rec["verified"] is False
+        for cand in rec["candidates"]:
+            assert "verified" in cand
+            assert cand["verified"] is False
 
     def test_the_per_candidate_case_is_visible_in_the_subject_note(self, tmp_path):
         out = self._run(tmp_path, self._cands(3), [verdict(0), verdict(1)])
