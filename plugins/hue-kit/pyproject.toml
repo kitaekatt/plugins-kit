@@ -1,6 +1,6 @@
 [project]
 name = "hue-kit"
-version = "0.9.4"
+version = "0.9.5"
 description = "Host-side dependencies for the hue-kit plugin (Philips Hue layered scene framework)."
 requires-python = ">=3.10"
 
