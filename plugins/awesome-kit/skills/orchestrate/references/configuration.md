@@ -289,11 +289,29 @@ Machine data. Which backends exist here and how to drive them; not derived from 
 detect: {always: true}                # always available
 detect: {command: [codex, --version]} # available if the command exits 0
 detect: {path: "~/bin/my-runner"}     # available if the path exists
+detect: {model_endpoints: true, require_commands: [codex]}
+                                      # available if a registered model endpoint answers
 ```
 
 Command detection resolves through `PATHEXT`, so a `foo.cmd` installed by npm or scoop is
 found from the bare name on Windows. The command's first output line becomes the "Detected:"
 note, which is how the Codex backend reports its version.
+
+`model_endpoints` reads the model-endpoints registry -- `~/.claude/config/model-endpoints.yaml`,
+or the file `MODEL_ENDPOINTS_REGISTRY` names -- and probes every entry's `GET {base_url}/models`
+in parallel, so the wall-clock cost is one 2-second timeout however many entries are down. The
+backend is available when at least one entry answers, and the "Detected:" note is the roster of
+which are up and which are down. `require_commands` is a companion field, honoured by this rule:
+every name in it must resolve on PATH, so a backend does not advertise a harness that is not
+installed. No registry means unavailable and costs one `stat()`; a registry that exists but
+cannot be parsed means unavailable with the defect in the reason, never a crash and never a
+silent empty.
+
+The rule is generic over harness records, not tied to one CLI: it renders ONE backend for
+however many entries the registry holds, and a user-layer record driving the same registry
+through a different harness gets detection from it too. Per-entry records remain possible in
+the user layer -- records merge by `id`, so a hand-written record per endpoint is a supported
+override rather than a fork.
 
 **A backend that fails detection is omitted from the rendered guidance entirely** -- its
 name, mechanics, and gotchas all go, along with its ladder. Run `--explain` to see detection

@@ -93,6 +93,21 @@ technique_skill:
       invariant: >-
         The one-line `command:` in the backend record matches the worked example here, and
         both name `grok-4.6` -- the only sanctioned model on this backend.
+    - path: references/model-endpoints-dispatch.md
+      consumer: defaults/orchestration.yaml (backends[model-endpoints].dispatch)
+      purpose: the registry contract and the local-server behaviors for the request-only model-endpoints backend
+      invariant: >-
+        The record, its dispatch text, this reference, codex-dispatch.md's custom-provider
+        section, and the `model_endpoints` detect kind in
+        scripts/orchestration_guidance.py all derive every machine- and model-specific
+        value from the registry file -- `~/.claude/config/model-endpoints.yaml`, or the
+        `MODEL_ENDPOINTS_REGISTRY` override -- and name none literally.
+    - path: scripts/orchestration_guidance.py
+      consumer: defaults/orchestration.yaml (backends[model-endpoints].detect)
+      purpose: the `model_endpoints` detect kind, which reads the registry and renders the live roster
+      invariant: >-
+        The registry schema this script parses is the same file format
+        references/model-endpoints-dispatch.md documents; a schema change lands in both.
 
   techniques:
     - id: orchestrate

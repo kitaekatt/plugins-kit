@@ -1060,13 +1060,359 @@ class TestRequestOnlyBackend:
             for rung in ladder["rungs"]:
                 assert "grok" not in str(rung.get("model", "")), rung["id"]
 
+    REQUEST_ONLY = {"grok", "model-endpoints"}
+
     def test_selection_is_optional_and_absent_backends_render_no_such_line(self):
         """Only a restricted backend gets the heading; the others must not
         acquire one by accident."""
         data = shipped()
         for backend in data["backends"]:
-            if backend["id"] != "grok":
+            if backend["id"] not in self.REQUEST_ONLY:
                 assert "selection" not in backend, backend["id"]
+
+
+class TestModelEndpointsDetect:
+    """The `model_endpoints` detect kind: fail-closed, parallel, and silent
+    about a machine that never opted in."""
+
+    ENTRY = {"base_url": "http://endpoint.invalid:8080/v1", "model": "a-model"}
+
+    @staticmethod
+    def _registry(tmp_path, monkeypatch, text, *, via_override=True):
+        path = tmp_path / "model-endpoints.yaml"
+        path.write_text(text, encoding="utf-8")
+        if via_override:
+            monkeypatch.setenv(og.MODEL_ENDPOINTS_ENV, str(path))
+        else:
+            monkeypatch.delenv(og.MODEL_ENDPOINTS_ENV, raising=False)
+            home = tmp_path / "home"
+            (home / ".claude" / "config").mkdir(parents=True)
+            (home / ".claude" / "config" / "model-endpoints.yaml").write_text(
+                text, encoding="utf-8"
+            )
+            monkeypatch.setattr(og.Path, "home", classmethod(lambda cls: home))
+        return path
+
+    @staticmethod
+    def _probes(monkeypatch, verdicts):
+        """Answer each probe by base_url, without touching the network."""
+
+        def fake(entry, environ=None, timeout=og.MODEL_ENDPOINTS_PROBE_TIMEOUT):
+            return verdicts[entry["base_url"]]
+
+        monkeypatch.setattr(og, "probe_model_endpoint", fake)
+
+    @staticmethod
+    def _rule(**over):
+        rule = {"model_endpoints": True}
+        rule.update(over)
+        return {"id": "model-endpoints", "detect": rule}
+
+    def test_no_registry_anywhere_is_unavailable_and_names_the_convention(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv(og.MODEL_ENDPOINTS_ENV, raising=False)
+        monkeypatch.setattr(og.Path, "home", classmethod(lambda cls: tmp_path))
+        ok, reason = og.detect_backend(self._rule())
+        assert ok is False
+        assert "no model-endpoints registry" in reason
+        assert "model-endpoints.yaml" in reason
+
+    def test_present_but_unparseable_registry_is_unavailable_not_an_exception(
+        self, tmp_path, monkeypatch
+    ):
+        self._registry(tmp_path, monkeypatch, "models: [oops\n  - :\n")
+        ok, reason = og.detect_backend(self._rule())
+        assert ok is False
+        assert "unreadable" in reason
+
+    def test_a_schema_invalid_registry_names_the_defect(self, tmp_path, monkeypatch):
+        self._registry(tmp_path, monkeypatch, "models:\n  one:\n    model: m\n")
+        ok, reason = og.detect_backend(self._rule())
+        assert ok is False
+        assert "base_url" in reason
+
+    def test_a_default_naming_no_entry_is_a_defect(self, tmp_path, monkeypatch):
+        self._registry(
+            tmp_path,
+            monkeypatch,
+            "default: nope\nmodels:\n  one:\n    base_url: http://x/v1\n    model: m\n",
+        )
+        ok, reason = og.detect_backend(self._rule())
+        assert ok is False and "names no entry" in reason
+
+    def test_a_dangling_override_is_loud_where_a_missing_convention_is_silent(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv(og.MODEL_ENDPOINTS_ENV, str(tmp_path / "nowhere.yaml"))
+        ok, reason = og.detect_backend(self._rule())
+        assert ok is False
+        assert "unreadable" in reason and og.MODEL_ENDPOINTS_ENV in reason
+
+    def test_the_override_is_honored_over_the_convention(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            og.Path, "home", classmethod(lambda cls: tmp_path / "unused-home")
+        )
+        self._registry(
+            tmp_path,
+            monkeypatch,
+            "models:\n  one:\n    base_url: http://endpoint.invalid:8080/v1\n    model: a-model\n",
+        )
+        self._probes(monkeypatch, {"http://endpoint.invalid:8080/v1": (True, "")})
+        ok, reason = og.detect_backend(self._rule())
+        assert ok is True and "one (a-model)" in reason
+
+    def test_the_conventional_path_is_read_with_no_override_set(
+        self, tmp_path, monkeypatch
+    ):
+        self._registry(
+            tmp_path,
+            monkeypatch,
+            "models:\n  one:\n    base_url: http://endpoint.invalid:8080/v1\n    model: a-model\n",
+            via_override=False,
+        )
+        self._probes(monkeypatch, {"http://endpoint.invalid:8080/v1": (True, "")})
+        assert og.detect_backend(self._rule())[0] is True
+
+    def test_a_missing_required_command_is_unavailable_before_any_probe(
+        self, tmp_path, monkeypatch
+    ):
+        self._registry(
+            tmp_path,
+            monkeypatch,
+            "models:\n  one:\n    base_url: http://endpoint.invalid:8080/v1\n    model: a-model\n",
+        )
+
+        def boom(*a, **kw):
+            raise AssertionError("probed despite a missing required command")
+
+        monkeypatch.setattr(og, "probe_model_endpoint", boom)
+        monkeypatch.setattr(og.shutil, "which", lambda name: None)
+        ok, reason = og.detect_backend(
+            self._rule(require_commands=["definitely-not-a-real-harness-xyz"])
+        )
+        assert ok is False
+        assert "not found on PATH" in reason
+
+    def test_every_entry_down_is_unavailable(self, tmp_path, monkeypatch):
+        self._registry(
+            tmp_path,
+            monkeypatch,
+            "models:\n"
+            "  one:\n    base_url: http://a.invalid/v1\n    model: m1\n"
+            "  two:\n    base_url: http://b.invalid/v1\n    model: m2\n",
+        )
+        self._probes(
+            monkeypatch,
+            {
+                "http://a.invalid/v1": (False, "URLError"),
+                "http://b.invalid/v1": (False, "URLError"),
+            },
+        )
+        ok, reason = og.detect_backend(self._rule())
+        assert ok is False
+        assert "no registered model endpoint is up" in reason
+        assert "one" in reason and "two" in reason
+
+    def test_one_entry_up_detects_and_the_roster_lists_up_and_down(
+        self, tmp_path, monkeypatch
+    ):
+        self._registry(
+            tmp_path,
+            monkeypatch,
+            "models:\n"
+            "  one:\n    base_url: http://a.invalid/v1\n    model: m1\n"
+            "  two:\n    base_url: http://b.invalid/v1\n    model: m2\n",
+        )
+        self._probes(
+            monkeypatch,
+            {
+                "http://a.invalid/v1": (True, ""),
+                "http://b.invalid/v1": (False, "URLError"),
+            },
+        )
+        ok, reason = og.detect_backend(self._rule())
+        assert ok is True
+        assert reason.startswith("up: one (m1) @ http://a.invalid/v1")
+        assert "down: two (m2) @ http://b.invalid/v1 (URLError)" in reason
+
+    def test_a_keyed_entry_with_an_unset_variable_reports_down_by_name(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("SOME_ENDPOINT_KEY", raising=False)
+        ok, note = og.probe_model_endpoint(
+            {"base_url": "http://a.invalid/v1", "model": "m", "key_env": "SOME_ENDPOINT_KEY"}
+        )
+        assert ok is False and note == "SOME_ENDPOINT_KEY unset"
+
+    def test_a_keyed_entry_sends_a_bearer_token(self, monkeypatch):
+        seen = {}
+
+        class Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            seen["url"] = request.full_url
+            seen["auth"] = request.get_header("Authorization")
+            return Response()
+
+        monkeypatch.setattr(og.urllib.request, "urlopen", fake_urlopen)
+        ok, _ = og.probe_model_endpoint(
+            {"base_url": "http://a.invalid/v1/", "model": "m", "key_env": "K"},
+            environ={"K": "secret"},
+        )
+        assert ok is True
+        assert seen["url"] == "http://a.invalid/v1/models"
+        assert seen["auth"] == "Bearer secret"
+
+    def test_a_probe_never_raises(self, monkeypatch):
+        def explode(request, timeout=None):
+            raise OSError("no route to host")
+
+        monkeypatch.setattr(og.urllib.request, "urlopen", explode)
+        assert og.probe_model_endpoint(self.ENTRY) == (False, "OSError")
+
+    def test_a_non_2xx_response_is_down(self, monkeypatch):
+        class Response:
+            status = 503
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        monkeypatch.setattr(og.urllib.request, "urlopen", lambda *a, **kw: Response())
+        assert og.probe_model_endpoint(self.ENTRY) == (False, "HTTP 503")
+
+    def test_entries_are_probed_in_parallel_not_one_timeout_each(self, monkeypatch):
+        """Four slow entries must cost about ONE timeout, not four."""
+        delay = 0.4
+        entries = [
+            (f"e{n}", {"base_url": f"http://{n}.invalid/v1", "model": f"m{n}"})
+            for n in range(4)
+        ]
+
+        def slow(entry, environ=None, timeout=og.MODEL_ENDPOINTS_PROBE_TIMEOUT):
+            time.sleep(delay)
+            return False, "timeout"
+
+        monkeypatch.setattr(og, "probe_model_endpoint", slow)
+        started = time.monotonic()
+        results = og.probe_model_endpoints(entries)
+        elapsed = time.monotonic() - started
+        assert len(results) == 4
+        assert elapsed < delay * len(entries) / 2, elapsed
+
+
+class TestRequestOnlyModelEndpoints:
+    """The model-endpoints record is present-but-not-eligible on the same two
+    mechanisms as grok, and both are asserted because either alone leaks: no
+    ladder keeps it out of every TIER decision, and the `selection` line keeps
+    it out of the BACKEND decision, which happens first.
+
+    It carries a third obligation grok does not: every machine- and
+    model-specific value must come from the user's registry at dispatch time,
+    because this file ships publicly.
+    """
+
+    BACKEND_ID = "model-endpoints"
+
+    @staticmethod
+    def _render(monkeypatch, tmp_path, *, present):
+        """Stub this one backend's verdict, as the grok class does: the real
+        rule reads a registry and probes a network, so neither variant would be
+        true on every machine."""
+        real = og.detect_backend
+
+        def detect(backend):
+            if backend.get("id") == TestRequestOnlyModelEndpoints.BACKEND_ID:
+                return (
+                    (True, "up: one (a-model) @ http://endpoint.invalid:8080/v1")
+                    if present
+                    else (False, "stubbed absent")
+                )
+            return real(backend)
+
+        monkeypatch.setattr(og, "detect_backend", detect)
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        return og.render(config, provenance)
+
+    def _record(self):
+        return next(b for b in shipped()["backends"] if b["id"] == self.BACKEND_ID)
+
+    def test_the_record_has_no_ladder_and_claims_no_tiers(self):
+        record = self._record()
+        assert not (record.get("capabilities") or {}).get("tiers")
+        assert self.BACKEND_ID not in {l["id"] for l in shipped()["ladders"]}
+        assert record.get("selection"), "a ladder-less backend must state its condition"
+
+    def test_it_is_named_by_no_gate_pull_or_rung(self):
+        data = shipped()
+        block = data["backend"]
+        for row in (block.get("gates") or []) + (block.get("pulls") or []):
+            assert row["backend"] != self.BACKEND_ID, row["id"]
+        for ladder in data["ladders"]:
+            for rung in ladder["rungs"]:
+                assert self.BACKEND_ID not in str(rung.get("model", "")), rung["id"]
+
+    def test_the_record_renders_with_its_selection_line_when_detected(
+        self, monkeypatch, tmp_path
+    ):
+        text = self._render(monkeypatch, tmp_path, present=True)
+        assert "Registered model endpoints (codex harness)" in text
+        assert "**Selection.**" in text
+        assert "up: one (a-model)" in text
+        assert "n/a (no tier selection)" in text
+
+    def test_selection_precedes_the_mechanics(self, monkeypatch, tmp_path):
+        text = self._render(monkeypatch, tmp_path, present=True)
+        assert text.index("**Selection.**") < text.index("model_providers.registry")
+
+    def test_the_whole_record_disappears_when_undetected(self, monkeypatch, tmp_path):
+        text = self._render(monkeypatch, tmp_path, present=False)
+        for probe in (
+            "Registered model endpoints",
+            "model_providers.registry",
+            "model-endpoints-dispatch.md",
+        ):
+            assert probe not in text, probe
+
+    def test_the_detect_rule_requires_the_harness_it_documents(self):
+        rule = self._record()["detect"]
+        assert rule["model_endpoints"] is True
+        assert rule["require_commands"] == ["codex"]
+
+    def test_no_machine_or_model_specific_value_is_shipped(self):
+        """The public-repo guard, mechanical: every host- or model-shaped value
+        in this record is a placeholder, the registry convention path, or the
+        override variable name."""
+        record = self._record()
+        blob = yaml.safe_dump(record)
+        # No URL may carry a literal host: every one is a <placeholder>.
+        for match in re.finditer(r"https?://[^\s'\"]+", blob):
+            assert match.group(0).startswith("http://<entry"), match.group(0)
+        # The only registry location named is the home-relative convention.
+        for match in re.finditer(r"[~][^\s`'\"]*", blob):
+            assert match.group(0) == "~/.claude/config/model-endpoints.yaml", match.group(0)
+        assert "MODEL_ENDPOINTS_REGISTRY" in blob
+        # The model and its context window come from the registry, not from here.
+        for field in ("<entry base_url>", "<entry model>", "<entry context_window"):
+            assert field in record["command"], field
+
+    def test_the_references_it_points_at_exist(self):
+        record = self._record()
+        base = og.DEFAULTS_PATH.parent.parent
+        for name in ("model-endpoints-dispatch.md", "codex-dispatch.md"):
+            assert name in record["dispatch"], name
+            assert (base / "references" / name).is_file(), name
 
 
 class TestUserSpokenCodenames:

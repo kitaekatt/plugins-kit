@@ -27,6 +27,7 @@ Usage:
 """
 
 import argparse
+import concurrent.futures
 import json
 import os
 import re
@@ -34,6 +35,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -246,6 +248,9 @@ def detect_backend(backend: Dict[str, Any]) -> Tuple[bool, str]:
     if "always" in rule:
         return bool(rule["always"]), "always available" if rule["always"] else "disabled via detect.always"
 
+    if rule.get("model_endpoints"):
+        return detect_model_endpoints(rule)
+
     command = rule.get("command")
     if command:
         argv = [str(a) for a in (command if isinstance(command, list) else [command])]
@@ -291,7 +296,196 @@ def detect_backend(backend: Dict[str, Any]) -> Tuple[bool, str]:
 
     # A `detect:` mapping that declares no recognized rule is a config error,
     # not an assertion of availability -- fail closed.
-    return False, "`detect` declares no recognized rule (always / command / path)"
+    return False, (
+        "`detect` declares no recognized rule "
+        "(always / model_endpoints / command / path)"
+    )
+
+
+# --------------------------------------------------------------------------
+# Model-endpoints registry -- the `model_endpoints` detect kind
+#
+# The registry is a private, user-owned list of OpenAI-compatible endpoints a
+# harness can drive. It is read at DETECT time only, to decide whether a
+# harness backend has anything to talk to and to put the live roster in front
+# of the reader; every machine-specific value stays in that file.
+#
+# The schema handling below is deliberately NOT imported from
+# llm-scripting-kit's registry module: this script is stdlib-plus-pyyaml by
+# design and awesome-kit has no dependency edge to that plugin. The shared
+# contract is the FILE FORMAT, documented in both. Change both together.
+# --------------------------------------------------------------------------
+
+MODEL_ENDPOINTS_ENV = "MODEL_ENDPOINTS_REGISTRY"
+MODEL_ENDPOINTS_PROBE_TIMEOUT = 2.0
+
+
+class RegistryError(Exception):
+    """A registry that is present, or explicitly pointed at, cannot be read."""
+
+
+def model_endpoints_path(environ: Optional[Any] = None) -> Tuple[Path, bool]:
+    """(path, from_override) for the model-endpoints registry.
+
+    The conventional location is home-relative -- the same expression on every
+    machine, naming none. `MODEL_ENDPOINTS_REGISTRY` overrides it.
+    """
+    env = os.environ if environ is None else environ
+    override = env.get(MODEL_ENDPOINTS_ENV)
+    if override:
+        return Path(os.path.expanduser(str(override))), True
+    return Path.home() / ".claude" / "config" / "model-endpoints.yaml", False
+
+
+def load_model_endpoints(
+    environ: Optional[Any] = None,
+) -> Optional[List[Tuple[str, Dict[str, Any]]]]:
+    """Read the registry. Returns [(entry_id, entry), ...] in file order.
+
+    `None` means there is no registry here -- the normal state on a machine
+    that never declared one, one `stat()` of cost. A registry that EXISTS but
+    cannot be read, and an override path that dangles, both raise
+    RegistryError: a present registry must never be mistaken for an absent one,
+    and an explicit pointer that dangles is a misconfiguration.
+    """
+    path, from_override = model_endpoints_path(environ)
+    if not path.is_file():
+        if from_override:
+            raise RegistryError(
+                f"{MODEL_ENDPOINTS_ENV} names {path}, which does not exist"
+            )
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise RegistryError(f"{path}: {exc}") from exc
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise RegistryError(f"{path}: expected a mapping at the top level")
+    models = data.get("models")
+    if models is None:
+        raise RegistryError(f"{path}: no `models` mapping")
+    if not isinstance(models, dict):
+        raise RegistryError(f"{path}: `models` is not a mapping")
+    entries: List[Tuple[str, Dict[str, Any]]] = []
+    for entry_id, entry in models.items():
+        if not isinstance(entry, dict):
+            raise RegistryError(f"{path}: entry `{entry_id}` is not a mapping")
+        for field in ("base_url", "model"):
+            if not entry.get(field):
+                raise RegistryError(f"{path}: entry `{entry_id}` has no `{field}`")
+        entries.append((str(entry_id), entry))
+    default_id = data.get("default")
+    if default_id is not None and str(default_id) not in {e for e, _ in entries}:
+        raise RegistryError(f"{path}: `default: {default_id}` names no entry")
+    return entries
+
+
+def probe_model_endpoint(
+    entry: Dict[str, Any],
+    environ: Optional[Any] = None,
+    timeout: float = MODEL_ENDPOINTS_PROBE_TIMEOUT,
+) -> Tuple[bool, str]:
+    """Is this endpoint answering? Returns (up, note); it never raises.
+
+    `GET {base_url}/models` is the probe because every OpenAI-compatible
+    runtime serves it, where a health path is runtime-specific. A keyed entry
+    sends a bearer token; an entry whose `key_env` names an unset variable
+    reports down with the variable named rather than failing the whole render.
+    """
+    env = os.environ if environ is None else environ
+    url = str(entry.get("base_url", "")).rstrip("/") + "/models"
+    headers: Dict[str, str] = {}
+    key_env = entry.get("key_env")
+    if key_env:
+        key = env.get(str(key_env))
+        if not key:
+            return False, f"{key_env} unset"
+        headers["Authorization"] = "Bearer " + str(key)
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = int(getattr(response, "status", None) or response.getcode())
+    # A probe reports; it does not propagate. Every failure mode here -- DNS,
+    # refused connection, timeout, a proxy handler raising something exotic --
+    # means the same thing to the caller: that entry is not usable right now.
+    except Exception as exc:  # noqa: BLE001
+        return False, type(exc).__name__
+    if 200 <= status < 300:
+        return True, ""
+    return False, f"HTTP {status}"
+
+
+def probe_model_endpoints(
+    entries: List[Tuple[str, Dict[str, Any]]],
+    environ: Optional[Any] = None,
+    timeout: float = MODEL_ENDPOINTS_PROBE_TIMEOUT,
+) -> Dict[str, Tuple[bool, str]]:
+    """Probe every entry IN PARALLEL.
+
+    Wall-clock is one timeout however many entries are down, not one per
+    entry -- a registry of manually-started servers is mostly down most of the
+    time, and detection runs on the critical path of every render.
+    """
+    results: Dict[str, Tuple[bool, str]] = {}
+    if not entries:
+        return results
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(entries)) as pool:
+        pending = {
+            pool.submit(probe_model_endpoint, entry, environ, timeout): entry_id
+            for entry_id, entry in entries
+        }
+        for future in concurrent.futures.as_completed(pending):
+            entry_id = pending[future]
+            try:
+                results[entry_id] = future.result()
+            except Exception as exc:  # noqa: BLE001 -- see probe_model_endpoint
+                results[entry_id] = (False, type(exc).__name__)
+    return results
+
+
+def detect_model_endpoints(rule: Dict[str, Any]) -> Tuple[bool, str]:
+    """`detect: {model_endpoints: true, require_commands: [...]}`.
+
+    Available when at least one registered endpoint answers AND every required
+    command resolves on PATH. Fails closed on everything else, like the other
+    kinds. The reason line is the live roster, which is how a user's spoken
+    "the local model" maps onto a dispatch: the entry ids and model ids that
+    are actually up are in front of the reader.
+
+    Generic over any harness record: nothing here is specific to one CLI or one
+    runtime, so a user-layer record driving the same registry with a different
+    harness gets detection from this kind too.
+    """
+    try:
+        entries = load_model_endpoints()
+    except RegistryError as exc:
+        return False, f"model-endpoints registry unreadable: {exc}"
+    if entries is None:
+        path, _ = model_endpoints_path()
+        return False, f"no model-endpoints registry ({path})"
+    if not entries:
+        return False, "model-endpoints registry declares no entries"
+    for command in rule.get("require_commands") or []:
+        if shutil.which(str(command)) is None:
+            return False, f"`{command}` not found on PATH"
+    results = probe_model_endpoints(entries)
+    up: List[str] = []
+    down: List[str] = []
+    for entry_id, entry in entries:
+        ok, note = results.get(entry_id, (False, "not probed"))
+        shown = f"{entry_id} ({entry.get('model')}) @ {entry.get('base_url')}"
+        if ok:
+            up.append(shown)
+        else:
+            down.append(f"{shown} ({note})" if note else shown)
+    if not up:
+        return False, "no registered model endpoint is up -- down: " + ", ".join(down)
+    roster = "up: " + ", ".join(up)
+    if down:
+        roster += "; down: " + ", ".join(down)
+    return True, roster
 
 
 # --------------------------------------------------------------------------

@@ -146,3 +146,92 @@ Read the `-o` last-message file -- that is the conclusion, and usually the only
 thing that belongs in the orchestrating context. Leave the full transcript on
 disk; consult it only to verify a specific claim. The gap is large: a routine
 unit produced a 1-line result file against a 2248-line transcript.
+
+## Custom providers: driving other OpenAI-compatible servers
+
+Codex is a HARNESS, not a client for one vendor: the same agent loop, tools,
+sandbox and `-o` contract can be pointed at another server with `-c` config
+pairs. This section is the mechanics; which servers are registered on this
+machine, and the local-server behaviors, are in
+[model-endpoints-dispatch.md](model-endpoints-dispatch.md).
+
+### The wire API, and the inference to avoid
+
+Codex speaks the **Responses** API only. `wire_api = "chat"` was REMOVED from
+the enum (2026-02-05, upstream discussion #7782); passing it is a hard config
+error with a fix-it message, not a fallback. The built-in `ollama` and
+`lmstudio` providers moved to Responses too.
+
+The trap is the inference, not the fact: reading "wire_api chat was removed"
+and concluding "codex cannot drive a chat-completions server" is WRONG. A
+server-side conversion layer satisfies codex without the removed client mode --
+llama.cpp ships one, and a live run against it produces proper Responses SSE
+(`response.created`, `response.output_item.added`,
+`response.reasoning_text.delta`) with `function_call` output items carrying
+`call_id`. Anyone re-deriving this from issue trackers alone will reach the
+wrong answer. Test the server; do not infer from the wire enum.
+
+### The predicate: necessary but not sufficient
+
+Serving `/v1/responses` is NECESSARY BUT NOT SUFFICIENT. The endpoint must also
+accept codex's TOOL SCHEMA. Observed on a vendor endpoint that serves
+`/v1/responses` correctly (HTTP 200 on a real Responses completion): every
+codex request is rejected with 422 Unprocessable Entity, because codex emits a
+core tool of `type: "namespace"` and the server's tool enum has no such
+variant (`unknown variant 'namespace', expected one of function, web_search,
+x_search, image_generation, collections_search, file_search, code_execution,
+code_interpreter, mcp, shell`). Auth and provider selection both succeed; the
+run exits 1 and writes no `-o` file. No user-side configuration removes that
+tool -- disabling MCP servers and feature flags only moves its index.
+
+So the checkable predicate for "codex can drive endpoint X" is a LIVE
+`codex exec` against X. Not "OpenAI-compatible", and not "serves
+/v1/responses" either. llama.cpp passes the full predicate, including
+`function_call` round-trips; the endpoint above does not.
+
+### Keyless is native
+
+`ModelProviderInfo.env_key` is `Option<String>` and `requires_openai_auth`
+defaults false, so a provider block with no `env_key` sends no `Authorization`
+header at all -- that is how the built-in OSS providers are built
+(`create_oss_provider_with_base_url` sets `env_key: None`). Do not fabricate a
+dummy key for a keyless server.
+
+### The invocation shape
+
+    codex exec \
+      -c 'model_providers.<id>={name="<id>",base_url="<BASE_URL>",wire_api="responses"}' \
+      -c 'model_provider="<id>"' \
+      -c 'model="<MODEL_ID>"' \
+      -c 'model_context_window=<N>' \
+      -s workspace-write --skip-git-repo-check \
+      -C <ABSOLUTE root> -o <ABSOLUTE result file> -
+
+Single quotes around each `-c` pair, double quotes inside the TOML value --
+the same shape as `windows.sandbox="unelevated"` above. A keyed provider adds
+`env_key="<VAR>"` inside the provider block; the variable must be set in the
+launching environment.
+
+`--oss` and `--local-provider` accept only `lmstudio` and `ollama`, so the
+explicit `-c` path is the sanctioned route to any other server.
+
+### Operational notes
+
+  Two stderr lines per run against a llama.cpp server. `failed to refresh
+  available models: ... missing field 'slug'` is codex parsing that server's
+  `/v1/models` against a richer schema, and `Model metadata for '<model>' not
+  found` is codex having no metadata for a model it does not ship. Both occur
+  at exit 0 and neither affects the run; `-c model_context_window=<N>` supplies
+  what the second one is missing. Judge the run by the exit code and the `-o`
+  file, as always.
+
+  Fixed overhead. About 11,000 input tokens of system prompt and tool
+  definitions precede any work, measured on a trivial prompt. That is a real
+  budget line on a small local server.
+
+  Windows edits can land with a UTF-8 BOM and CRLF line endings, which fights a
+  repo enforcing `text eol=lf`.
+
+  MCP servers are reported broken against llama.cpp (codex#36942, codex#26977)
+  and are unverified. Codex's built-in shell, file-edit and apply_patch tools
+  work against it.
