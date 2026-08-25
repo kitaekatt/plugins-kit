@@ -204,6 +204,16 @@ standards_set:
         repeated patterns are discovery signals that start an investigation,
         never findings on their own. A fact that cannot be anchored to observed
         source is dropped, not hedged.
+        A FACT WHOSE COUNTERPART LIVES OUTSIDE THE SUBJECT IS ANCHORED AT ITS
+        LOCAL END. CV-1 deliberately admits such a fact -- a local obligation
+        whose other end is elsewhere -- while every anchor must name a file in
+        the subject's own direct list. Both hold at once: anchor the LOCAL half,
+        the site where the obligation is incurred or where the reader would make
+        the mistake, and name the outside end in the fact's prose rather than in
+        an anchor. There is no field for an outside citation and none is being
+        added. The consequence for verification is the part that bites: such a
+        fact cannot be contradicted by the subject's own files alone, so a
+        refuter reading only those files has not falsified it and it STANDS.
 
     - id: present-content-not-re-audited
       statement: >-

@@ -521,6 +521,17 @@ own prior kills at 76% and 67%, while the two truth checks held at 33% and 50%.
 Refutation is a posture that finds what it is pointed at: pointed at truth it
 corrects the record, pointed at value it manufactures rejections.
 
+**The exhaustive file list bounds what may be CONTRADICTED, not what a fact may
+depend on.** CV-1 deliberately admits a local obligation whose counterpart lives
+outside the subject, and CV-7 anchors such a fact at its local end -- so the
+refuter is handed facts it is structurally unable to check from the list alone.
+An apparent contradiction that only resolves by reading an unlisted file the
+fact DEPENDS on is not a counterexample, and the candidate STANDS. This does
+not run the other way: an unlisted file the fact does not depend on cannot be
+hypothesized to explain away a contradiction a listed file shows on its own
+lines. Measured on one corpus root: exactly one kill in 49 was unsound, and
+this was why.
+
 **What a verdict may do to a record.** Five cases, and only the first two change
 anything:
 
@@ -537,8 +548,10 @@ anything:
    and the full record of the deletion -- fact, anchors, tier, counterexample,
    quote -- lands in the subject's `falsified` array. The notes carry a short
    summary naming the first three; the array is the record, and it never
-   truncates. A partial read does not withhold a kill: an unread file can only
-   ADD counterexamples, so it cannot rescue a fact a read file contradicts.
+   truncates. A partial read does not withhold a kill: an unread LISTED file
+   can only ADD counterexamples, so it cannot rescue a fact a read file
+   contradicts -- files OUTSIDE the list are governed by the paragraph above,
+   not by this rule.
 3. **`FALSIFIED` with no counterexample** -- the VERDICT is discarded and the
    candidate is KEPT, `verified: false`, with a note naming it
    (`totals.verifyUnsupported`). An unsupported deletion is the same

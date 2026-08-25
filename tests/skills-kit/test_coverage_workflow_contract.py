@@ -460,3 +460,54 @@ class TestCoverageRegisteredWithCriteria:
         skill_md = (MD_DOMAIN / "SKILL.md").read_text(encoding="utf-8")
         record = skill_md.split("- id: coverage_code_subtree", 1)[1]
         assert "standards: references/standards/coverage-standards.md" in record
+
+
+class TestOutsideCounterpartStands:
+    """A fact CV-1 admits but the refuter cannot check must not be killed.
+
+    CV-1 deliberately admits a local obligation whose counterpart lives outside
+    the subject, while CV-7 requires every anchor to name a file in the subject's
+    own direct list. The refutation stage is handed that direct list and told it
+    is exhaustive -- so it is structurally unable to check exactly the class of
+    fact the criteria invite. Measured on the second root, that produced the
+    single UNSOUND kill of 49: an apparent contradiction that only resolved by
+    reading a base class outside the subject.
+
+    The rule is that the list bounds what may be CONTRADICTED, not what a fact
+    may depend on. It is pinned in three places because each is read by a
+    different reader, and dropping any one of them restores the defect.
+    """
+
+    def test_refuter_prompt_says_an_unlisted_dependency_is_not_a_contradiction(self):
+        src = _detect()
+        prompt = src[src.index('const verifyPrompt'):]
+        assert 'is not a contradiction' in prompt
+        assert 'bounds what you may CONTRADICT' in prompt
+        assert 'not falsified the fact and it STANDS.' in prompt
+
+    def test_refuter_prompt_guards_the_polarity_of_that_rule(self):
+        """The sparing rule must not become a licence to spare anything.
+
+        Outside code can hypothetically reconcile almost any contradiction -- an
+        override, a patch, a caller-side guard -- so a rule phrased only as
+        'if resolving it needs an unlisted file, it STANDS' lets a refuter
+        rationalise STANDS for a fact a listed file contradicts on its own
+        lines. The guard ties the sparing to the FACT's own declared outside
+        dependency, which CV-7 requires the fact to name.
+        """
+        src = _detect()
+        prompt = src[src.index('const verifyPrompt'):]
+        assert 'This cuts one way only.' in prompt
+        assert 'the fact ITSELF depends on an' in prompt
+        assert 'that fact is FALSIFIED.' in prompt
+
+    def test_cv7_states_how_an_outside_counterpart_is_anchored(self):
+        cv7 = STANDARDS.read_text(encoding='utf-8')
+        assert 'ANCHORED AT ITS' in cv7
+        assert 'LOCAL END' in cv7
+        assert 'no field for an outside citation' in cv7
+
+    def test_lane_procedure_states_the_bound_on_the_exhaustive_list(self):
+        lane = _lane()
+        assert 'bounds what may be CONTRADICTED, not what a fact may' in lane
+        assert 'the candidate STANDS' in lane

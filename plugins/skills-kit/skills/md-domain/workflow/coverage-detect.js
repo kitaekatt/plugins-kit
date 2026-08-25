@@ -933,6 +933,19 @@ A fact is FALSIFIED when a file in the list above CONTRADICTS it as written.
 Give the file:line. A FALSIFIED verdict with no counterexample is discarded, so
 if you cannot point at the contradiction, the claim STANDS.
 
+A contradiction you can only show by ASSUMING something about code outside this
+list is not a contradiction. Some facts state a local obligation whose other end
+lives elsewhere -- a base class, a caller, a schema in another directory -- and
+the criteria admit them deliberately. The list bounds what you may CONTRADICT,
+never what a fact is allowed to depend on.
+
+This cuts one way only. It spares a fact when the fact ITSELF depends on an
+outside end -- one its prose names, or one a listed file visibly delegates to
+-- and the apparent contradiction sits exactly on that dependency. Then you
+have not falsified the fact and it STANDS. It never licenses inventing an
+unlisted file the fact does not depend on to explain away a contradiction a
+listed file shows on its own lines: that fact is FALSIFIED.
+
 Three shapes account for nearly every real falsification, so check them first:
 
 1. UNIVERSAL QUANTIFIERS. "every", "all", "always", "never", "each", "only",
