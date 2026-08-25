@@ -42,3 +42,27 @@ def scene_layers():
     sys.modules["hue_scene_layers"] = module
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture(scope="session")
+def hue_cli():
+    """The hue_kit_cli.py module, loaded with its bootstrap guard neutralised.
+
+    hue_kit_cli imports bootstrap_guard and CALLS reexec_under_plugin_venv at
+    module scope, so importing it in-process would try to re-exec the test
+    runner under the plugin venv. Stub the module out first -- same technique
+    conftest already uses for requests/urllib3, and for the same reason: the
+    function under test is pure process-plumbing and needs none of it.
+    """
+    _install_bridge_io_stubs()
+    guard = types.ModuleType("bootstrap_guard")
+    guard.require_bootstrap = lambda *a, **k: None
+    guard.reexec_under_plugin_venv = lambda *a, **k: None
+    guard.data_dir = lambda *a, **k: Path("/nonexistent")
+    sys.modules["bootstrap_guard"] = guard
+    path = _SCRIPTS / "hue_kit_cli.py"
+    spec = importlib.util.spec_from_file_location("hue_kit_cli_undertest", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["hue_kit_cli_undertest"] = module
+    spec.loader.exec_module(module)
+    return module
