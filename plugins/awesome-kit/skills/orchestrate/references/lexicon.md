@@ -133,7 +133,8 @@ criterion. A delegated unit's output is never `authored-here`.
 
 ## Dispatch shape
 
-Selects the backend.
+Supplies the shape terms that select a routing row; that row selects the model entry and its
+harness.
 
 ### `conversational` `[skill]` `render: glossed`
 You expect to interrogate or refine the unit mid-flight.
