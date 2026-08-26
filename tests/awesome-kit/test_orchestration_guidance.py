@@ -12,7 +12,9 @@ process itself).
 
 import json
 import re
+import sys
 import time
+from pathlib import Path
 
 import pytest
 import yaml
@@ -554,6 +556,110 @@ def _shipped_path():
         / "defaults"
         / "orchestration.yaml"
     )
+
+
+def _install_repo_harness_library(monkeypatch):
+    """Put the working shared libraries before any stale installed copies."""
+    repo_root = Path(__file__).resolve().parents[2]
+    monkeypatch.syspath_prepend(str(repo_root / "plugins" / "bootstrap"))
+    monkeypatch.syspath_prepend(
+        str(repo_root / "plugins" / "llm-scripting-kit" / "lib")
+    )
+    for name in tuple(sys.modules):
+        if name == "llm_scripting_kit" or name.startswith("llm_scripting_kit."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+        if name == "bootstrap_lib" or name.startswith("bootstrap_lib."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+
+
+def _codex_command(rendered):
+    match = re.search(
+        r"### Codex CLI \(`codex`\).*?```\n(.*?)\n```", rendered, re.DOTALL
+    )
+    assert match, rendered
+    return match.group(1)
+
+
+class TestCommandTextProvider:
+    def _codex_setup(self, monkeypatch, tmp_path, entries):
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: (entries, []))
+        monkeypatch.setattr(og, "detect_backend", lambda _backend: (True, "stubbed"))
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        return config, provenance
+
+    def test_adapter_path_renders_the_adapter_argv(self, monkeypatch, tmp_path):
+        _install_repo_harness_library(monkeypatch)
+        entries = {
+            "sol": {
+                "id": "sol",
+                "harness": "codex",
+                "model": "gpt-5.6-sol",
+                "effort": "high",
+            }
+        }
+        config, provenance = self._codex_setup(monkeypatch, tmp_path, entries)
+
+        from bootstrap_lib import codex
+
+        calls = []
+
+        def fake_builder(**kwargs):
+            calls.append(kwargs)
+            return ["adapter-generated", kwargs["root"], kwargs["output_file"]]
+
+        monkeypatch.setattr(codex, "build_codex_exec_argv", fake_builder)
+        rendered = og.render(config, provenance)
+        command = _codex_command(rendered)
+
+        assert command == (
+            f"adapter-generated {og._placeholder_path('root')} "
+            f"{og._placeholder_path('result')}"
+        )
+        assert calls[0]["model"] == "gpt-5.6-sol"
+        assert calls[0]["effort"] == "high"
+
+    def test_fallback_command_is_reported_by_explain_when_library_is_unavailable(
+        self, monkeypatch, capsys, tmp_path
+    ):
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+        config, provenance = self._codex_setup(monkeypatch, tmp_path, {})
+        rendered = og.render(config, provenance)
+        command = _codex_command(rendered)
+        expected = og.fold(
+            next(b["command"] for b in shipped()["backends"] if b["id"] == "codex")
+        )
+        assert command == expected
+
+        assert og.main(["--explain", "--project-root", str(tmp_path / "project")]) == 0
+        explained = capsys.readouterr().out
+        assert (
+            "command  note      backend `codex` command adapter unavailable; "
+            "using fallback command from config (llm_scripting_kit unavailable"
+            in explained
+        )
+
+    def test_adapter_command_contains_only_absolute_sentinels(self, monkeypatch, tmp_path):
+        _install_repo_harness_library(monkeypatch)
+        entries = {
+            "sol": {
+                "id": "sol",
+                "harness": "codex",
+                "model": "gpt-5.6-sol",
+                "effort": "high",
+            }
+        }
+        config, provenance = self._codex_setup(monkeypatch, tmp_path, entries)
+        command = _codex_command(og.render(config, provenance))
+
+        root = og._placeholder_path("root")
+        result = og._placeholder_path("result")
+        assert og.os.path.isabs(root)
+        assert og.os.path.isabs(result)
+        assert root in command
+        assert result in command
+        assert str(tmp_path) not in command
+        assert str(Path.cwd()) not in command
 
 
 class TestCli:

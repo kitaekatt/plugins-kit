@@ -25,9 +25,11 @@ Usage:
 """
 
 import argparse
+from functools import partial
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1009,9 +1011,158 @@ def detect_all(config: Dict[str, Any]) -> List[Tuple[Dict[str, Any], bool, str]]
 
 
 def default_command_text_provider(backend: Dict[str, Any]) -> Optional[str]:
-    """Return the existing hand-authored command text for a backend record."""
+    """Return the hand-authored command used when adapter rendering is unavailable."""
     command = backend.get("command")
     return str(command) if command else None
+
+
+def _placeholder_path(label: str) -> str:
+    """Build an absolute, machine-independent path for adapter rendering."""
+    return os.path.join(os.path.sep, "__orchestrate_placeholder__", label)
+
+
+def _adapter_entry(
+    entry_type: Any,
+    harness_kind: str,
+    entry_id: str,
+    definition: Any,
+    harness: str,
+) -> Any:
+    """Turn a discovered definition into the adapter's EndpointEntry type."""
+    try:
+        if isinstance(definition, entry_type):
+            return definition
+    except TypeError:
+        pass
+
+    model = _record_value(definition, "model")
+    if not isinstance(model, str) or not model:
+        raise TypeError(f"model entry `{entry_id}` has no model")
+    effort = _record_value(definition, "effort")
+    kwargs: Dict[str, Any] = {
+        "id": entry_id,
+        "base_url": None,
+        "model": model,
+        "kind": harness_kind,
+        "harness": harness,
+    }
+    if effort is not None:
+        kwargs["effort"] = effort
+    return entry_type(**kwargs)
+
+
+def _command_fallback(
+    backend: Dict[str, Any],
+    notes: Optional[List[str]],
+    reason: str,
+) -> Optional[str]:
+    """Use the record command and disclose why adapter rendering did not happen."""
+    command = default_command_text_provider(backend)
+    if command and notes is not None:
+        bid = str(backend.get("id", "?"))
+        note = (
+            f"backend `{bid}` command adapter unavailable; using fallback command "
+            f"from config ({reason})"
+        )
+        if note not in notes:
+            notes.append(note)
+    return command
+
+
+def adapter_command_text_provider(
+    backend: Dict[str, Any],
+    *,
+    model_entries: Optional[Mapping[str, Any]] = None,
+    notes: Optional[List[str]] = None,
+) -> Optional[str]:
+    """Render a harness command by calling its shared-library adapter.
+
+    The provider supplies sentinel paths and a bare launcher name so the
+    resulting command is illustrative without carrying paths from the host
+    that rendered the policy. A missing or incompatible shared library, an
+    absent harness entry, or any adapter failure returns the backend record's
+    command as an explicit compatibility fallback.
+    """
+    harness = str(backend.get("id") or "")
+    if harness not in HARNESS_NAMES:
+        return default_command_text_provider(backend)
+
+    entries = model_entries or {}
+    selected_id: Optional[str] = None
+    selected_definition: Any = None
+    for raw_id, definition in entries.items():
+        entry_harness = _record_value(definition, "harness")
+        if entry_harness != harness:
+            continue
+        entry_kind = _record_value(definition, "kind")
+        if entry_kind is not None and entry_kind != "harness":
+            continue
+        selected_id = str(_record_value(definition, "id", raw_id))
+        selected_definition = definition
+        break
+
+    try:
+        import llm_scripting_kit as model_kit  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001 -- optional/version-skewed library degrades
+        return _command_fallback(
+            backend, notes, f"llm_scripting_kit unavailable: {type(exc).__name__}"
+        )
+
+    resolve_adapter = getattr(model_kit, "resolve_harness_adapter", None)
+    entry_type = getattr(model_kit, "EndpointEntry", None)
+    harness_kind = getattr(model_kit, "HARNESS_KIND", None)
+    if (
+        not callable(resolve_adapter)
+        or not callable(entry_type)
+        or harness_kind != "harness"
+    ):
+        return _command_fallback(
+            backend,
+            notes,
+            "llm_scripting_kit lacks the harness adapter feature",
+        )
+    if selected_id is None:
+        return _command_fallback(
+            backend, notes, f"no resolved {harness} harness entry"
+        )
+
+    try:
+        entry = _adapter_entry(
+            entry_type,
+            harness_kind,
+            selected_id,
+            selected_definition,
+            harness,
+        )
+        adapter = resolve_adapter(entry)
+        adapter_type = type(adapter)
+        # The adapter defaults may resolve a host executable to an absolute
+        # path. Give it a stable launcher token for rendered text instead.
+        adapter = adapter_type(argv_prefix=(harness,))
+        build_argv = getattr(adapter, "build_argv", None)
+        if not callable(build_argv):
+            raise TypeError("resolved harness adapter has no build_argv method")
+        kwargs: Dict[str, Any] = {"prompt": ""}
+        placeholder_root = _placeholder_path("root")
+        placeholder_result = _placeholder_path("result")
+        if harness == "codex":
+            kwargs["output_file"] = placeholder_result
+        argv = [str(part) for part in build_argv(entry, placeholder_root, **kwargs)]
+        allowed_paths = {placeholder_root, placeholder_result}
+        unexpected_paths = [
+            part for part in argv if os.path.isabs(part) and part not in allowed_paths
+        ]
+        if unexpected_paths:
+            raise ValueError(
+                "adapter returned an unexpected absolute path in rendered argv"
+            )
+        return shlex.join(argv)
+    except Exception as exc:  # noqa: BLE001 -- optional/version-skewed adapter degrades
+        return _command_fallback(
+            backend,
+            notes,
+            f"{type(exc).__name__}: {exc}",
+        )
 
 
 def _render_model_entries(
@@ -1038,7 +1189,7 @@ def render_backends(
     *,
     model_entries: Optional[Mapping[str, Mapping[str, str]]] = None,
     harness_status: Optional[Mapping[str, Tuple[bool, str]]] = None,
-    command_text_provider: Callable[[Dict[str, Any]], Optional[str]] = default_command_text_provider,
+    command_text_provider: Callable[[Dict[str, Any]], Optional[str]] = adapter_command_text_provider,
 ) -> None:
     model_entries = model_entries or {}
     harness_status = harness_status or {}
@@ -1195,12 +1346,17 @@ def render(config: Dict[str, Any], provenance: List[Tuple[str, Path, str]]) -> s
     harness_status = detect_harnesses(config, detected, model_entries)
     routes, _routing_notes = resolve_routing_models(config, model_entries, harness_status)
     render_decision_tree(config, available_backends, backend_names, out, routes)
+    command_text_provider = partial(
+        adapter_command_text_provider,
+        model_entries=model_entries,
+    )
     render_backends(
         config,
         detected,
         out,
         model_entries=model_entries,
         harness_status=harness_status,
+        command_text_provider=command_text_provider,
     )
     render_capacity(config, out)
     out.append("---")
@@ -1298,6 +1454,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"harness  {'available' if ok else 'MISSING':9} {harness}: {reason}")
         for note in model_notes:
             print(f"model    note      {note}")
+        command_notes: List[str] = []
+        command_text_provider = partial(
+            adapter_command_text_provider,
+            model_entries=model_entries,
+            notes=command_notes,
+        )
+        for backend, ok, _reason in detected:
+            if ok:
+                command_text_provider(backend)
+        for note in command_notes:
+            print(f"command  note      {note}")
         for note in routing_notes:
             print(f"routing  note      {note}")
         for route in routes:
