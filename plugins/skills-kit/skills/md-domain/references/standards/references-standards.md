@@ -41,6 +41,62 @@ that names a skill.
    when it is not. Rule id `shadowing`, severity INFO. A precedence relationship
    is never edited without user direction.
 
+## Resolving a skill reference
+
+Resolution is scoped by the reference's own form. This is the whole rule; there
+is no ladder of fallbacks behind it.
+
+- **A bare reference (`/skill-name`) resolves in the USER domain
+  (`~/.claude/skills/`), the PROJECT domain (`<project>/.claude/skills/`), or
+  the BUILT-IN domain (the harness's own skill roster), or it is BROKEN.**
+  Those three are its entire search space. No plugin repository is hunted for a
+  bare name.
+
+- **A prefixed reference (`/plugin:skill-name`) is checked ONLY when that plugin
+  is INSTALLED.** When it is not installed, the reference is ASSUMED CORRECT and
+  no finding is emitted.
+
+**Why the built-in domain exists.** A built-in harness skill lives in neither
+file-backed domain and has no plugin prefix, so under a two-domain rule every
+reference to one is permanently broken with NO VALID REMEDY: it cannot be
+repaired, cannot be removed without losing true content, and cannot be
+rewritten as `/plugin:skill`. A rule that produces unfixable findings is
+reporting its own gap, not a defect in the corpus. Built-ins are enumerable
+from the harness, so the third domain stays decidable from one machine like the
+other two.
+
+**The built-in roster is a snapshot, and that is acceptable.** It is captured
+from a harness version rather than read from a directory, so it can go stale.
+Staleness can only ever produce a FALSE BROKEN -- never a false correct -- and
+a false broken is visible, investigable, and fixable by refreshing the list. A
+detector carrying such a list must record its provenance beside it: where the
+names came from, when, and against which harness version.
+
+**Why not-installed means assume-correct.** The rule is then decidable entirely
+from one machine, and the not-installed case can never produce a false "broken",
+so machine state stops leaking into the verdict. It also makes the remedy
+uniform: every broken bare reference is fixed either by repairing or removing
+it, or by rewriting it as `/plugin:skill` -- after which installedness stops
+mattering.
+
+**Never report that a skill "does not exist".** A checker may only report that
+the reference was not found in the roots it searched, naming those roots. The
+stronger claim is not available to it. An audit once declared `/verify-cpp`
+fictional; the skill was real, living in a plugin and hidden from the session
+roster by `disable-model-invocation: true`. The tool later built to prevent
+that reproduced the same claim. This is a recurring defect class, so the
+phrasing is a standard rather than a style preference.
+
+**Detector requirement -- names come from the directory.** A skill's resolvable
+name is the directory containing its `SKILL.md`, not the frontmatter `name:`
+field. An enumerator that keys on `name:` silently drops any skill whose
+frontmatter is absent, misspelled, or unparsed, and every reference to that
+skill then reports as broken. Any enumerator must therefore compare
+SKILL.md-files-found against skills-enumerated and fail loudly on a mismatch
+instead of returning a short pool. Criterion 3 above still stands -- a `name:`
+disagreeing with its directory is worth reporting -- it is simply not the name
+the resolver uses.
+
 ## Marking deliberately-non-live references
 
 Some references are correct precisely because they do not resolve: syntax

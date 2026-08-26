@@ -14,24 +14,32 @@
       {
         "severity": "ERROR",
         "category_hint": "hard-dep",
-        "message": "ERROR: referencing-skill (project, skill) at <CORPUS>/references/.claude/skills/referencing-skill/SKILL.md:13 has hard dep `skill: \"absent-skill\"` but \"absent-skill\" does not exist",
+        "message": "ERROR: referencing-skill (project, skill) at <CORPUS>/references/.claude/skills/referencing-skill/SKILL.md:13 has hard dep `skill: \"absent-skill\"` but \"absent-skill\" was not found in the searched roots: <CORPUS>/references/.claude/skills, <CORPUS>/references/empty",
         "file": "<CORPUS>/references/.claude/skills/referencing-skill/SKILL.md",
         "line": 13,
         "ref": "absent-skill",
         "owner": "referencing-skill",
         "source": "project",
-        "kind": "skill"
+        "kind": "skill",
+        "searched_roots": [
+          "<CORPUS>/references/.claude/skills",
+          "<CORPUS>/references/empty"
+        ]
       },
       {
         "severity": "WARNING",
         "category_hint": "soft-ref",
-        "message": "WARNING: referencing-skill (project, skill) at <CORPUS>/references/.claude/skills/referencing-skill/SKILL.md:10 references `/missing-skill` but \"missing-skill\" does not exist",
+        "message": "WARNING: referencing-skill (project, skill) at <CORPUS>/references/.claude/skills/referencing-skill/SKILL.md:10 references `/missing-skill` but \"missing-skill\" was not found in the searched roots: <CORPUS>/references/.claude/skills, <CORPUS>/references/empty",
         "file": "<CORPUS>/references/.claude/skills/referencing-skill/SKILL.md",
         "line": 10,
         "ref": "missing-skill",
         "owner": "referencing-skill",
         "source": "project",
-        "kind": "skill"
+        "kind": "skill",
+        "searched_roots": [
+          "<CORPUS>/references/.claude/skills",
+          "<CORPUS>/references/empty"
+        ]
       }
     ],
     "hard_dep_edges": [

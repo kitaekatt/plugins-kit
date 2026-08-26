@@ -16,6 +16,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = (REPO_ROOT / "plugins" / "skills-kit" / "skills" / "md-domain"
           / "scripts" / "references_audit.py")
@@ -260,3 +262,116 @@ class TestUserDirRootExpansion:
         )
         names = {s.name for s in ra.discover_skills(proj / ".claude" / "skills", "project")}
         assert names == {"a", "b"}
+
+
+class TestUninstalledPluginRefsSuppressed:
+    """A `/plugin:skill` reference whose plugin is not installed in THIS
+    session cannot be told apart from a real broken reference -- suppress it
+    rather than reporting it as a deletable dead reference (taxonomy
+    category B). A reference naming an INSTALLED plugin's missing skill must
+    still be reported."""
+
+    def test_uninstalled_plugin_prefixed_ref_is_suppressed(self, tmp_path, capsys):
+        dirs = _build_tree(tmp_path, "# A\nSee /other-plugin:some-skill.\n")
+        rc, payload = _analyze(dirs, capsys)
+        assert rc == 0
+        assert _refs(payload) == set()
+
+    def test_installed_plugin_prefixed_ref_still_checked(self, tmp_path, capsys):
+        dirs = _build_tree(tmp_path, "# A\nSee /demo:ghost-skill.\n")
+        rc, payload = _analyze(dirs, capsys)
+        assert "demo:ghost-skill" in _refs(payload)
+
+    def test_installed_plugin_valid_skill_still_resolves(self, tmp_path, capsys):
+        dirs = _build_tree(tmp_path, "# A\nSee /demo:beta.\n")
+        rc, payload = _analyze(dirs, capsys)
+        assert rc == 0
+        assert "demo:beta" not in _refs(payload)
+
+
+class TestSearchedRootsPhrasing:
+    """A finding may only claim a ref was not found in the roots the scanner
+    searched -- never the stronger "does not exist" (a checker cannot see a
+    real skill hidden from its own roots, e.g. a plugin skill with
+    disable-model-invocation: true)."""
+
+    def test_soft_ref_message_names_searched_roots_not_existence(self, tmp_path, capsys):
+        dirs = _build_tree(tmp_path, "# A\nSee /ghost-skill.\n")
+        rc, payload = _analyze(dirs, capsys)
+        finding = next(f for f in payload["findings"] if f["ref"] == "ghost-skill")
+        assert "does not exist" not in finding["message"]
+        assert "was not found in the searched roots" in finding["message"]
+        assert finding["searched_roots"]
+
+    def test_hard_dep_message_names_searched_roots_not_existence(self, tmp_path, capsys):
+        dirs = _build_tree(tmp_path, '# A\nUse skill: "ghost-skill" here.\n')
+        rc, payload = _analyze(dirs, capsys)
+        finding = next(f for f in payload["findings"] if f["category_hint"] == "hard-dep")
+        assert "does not exist" not in finding["message"]
+        assert "was not found in the searched roots" in finding["message"]
+        assert finding["searched_roots"]
+
+
+class TestDirectoryDerivedNaming:
+    """discover_skills must not silently drop a skill whose frontmatter name
+    is absent or misparsed -- the resolvable name comes from directory
+    structure; the frontmatter name (when present) feeds only the
+    name-mismatch criterion."""
+
+    def test_missing_frontmatter_name_still_resolves_via_directory(self, tmp_path, capsys):
+        dirs = _build_tree(tmp_path, "# A\nSee /gamma.\n")
+        gamma_dir = dirs["project_dir"] / "gamma"
+        gamma_dir.mkdir()
+        (gamma_dir / "SKILL.md").write_text(
+            "---\ndescription: d\n---\n# Gamma\n", encoding="utf-8"
+        )
+        rc, payload = _analyze(dirs, capsys)
+        assert "gamma" not in _refs(payload)
+        assert payload["skill_pool"]["project"] == 2  # alpha + gamma
+
+    def test_name_mismatch_still_detected_via_frontmatter(self, tmp_path, capsys):
+        dirs = _build_tree(tmp_path, "# A\nplain\n")
+        delta_dir = dirs["project_dir"] / "delta"
+        delta_dir.mkdir()
+        (delta_dir / "SKILL.md").write_text(
+            "---\nname: wrong-name\ndescription: d\n---\n# Delta\n", encoding="utf-8"
+        )
+        rc, payload = _analyze(dirs, capsys)
+        mismatches = [
+            f for f in payload["findings"] if f["category_hint"] == "name-mismatch"
+        ]
+        assert any(
+            f["ref"] == "delta" and "wrong-name" in f["message"] for f in mismatches
+        )
+
+
+class TestEnumeratorSelfCheck:
+    """discover_skills counts SKILL.md files found (glob) against SkillInfo
+    records produced (append loop) from two independent sources, and fails
+    loudly on a mismatch. This test proves the guard is not vacuous: it
+    constructs a genuinely unnamed skill (no directory-derivable name, no
+    frontmatter name) that a bug would silently drop, and asserts the guard
+    actually fires and names the dropped path -- and a companion test proves
+    it stays silent when nothing is dropped."""
+
+    def test_dropped_skill_raises_loudly(self, tmp_path):
+        skills_root = tmp_path / "proj" / ".claude" / "skills"
+        skills_root.mkdir(parents=True)
+        # SKILL.md directly in the root -- no subdirectory means
+        # expected_name_from_path has no path parts to derive a name from,
+        # and this file has no frontmatter name either. A genuine drop.
+        (skills_root / "SKILL.md").write_text(
+            "---\ndescription: d\n---\n# Unnamed\n", encoding="utf-8"
+        )
+        with pytest.raises(RuntimeError, match="dropped"):
+            ra.discover_skills(skills_root, "project")
+
+    def test_guard_stays_silent_when_nothing_is_dropped(self, tmp_path):
+        skills_root = tmp_path / "proj" / ".claude" / "skills"
+        sub = skills_root / "delta"
+        sub.mkdir(parents=True)
+        (sub / "SKILL.md").write_text(
+            "---\ndescription: d\n---\n# Delta\n", encoding="utf-8"
+        )
+        skills = ra.discover_skills(skills_root, "project")
+        assert {s.name for s in skills} == {"delta"}
