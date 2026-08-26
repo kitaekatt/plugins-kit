@@ -101,7 +101,7 @@ lexicon:
 - id: default
   kind: skill
   render: bare
-  test: Did any rung above match? If none did, this is the term.
+  test: Did any routing row above match? If none did, this is the term.
 - id: stretch
   kind: concept
   test: Can you say what it would get wrong?
@@ -165,11 +165,11 @@ shape:
     text: >-
       Sufficiency -- {sufficient} dispatches as stated; otherwise the unit is {underspecified}
       and you author the brief first. All four combinations occur.
-  - id: sufficiency-is-not-a-rung-test
+  - id: sufficiency-is-not-a-route-test
     principle: P0.2
     guard: true
     text: >-
-      {sufficient} is never a rung criterion. It decides whether you author a brief, and nothing
+      {sufficient} is never a routing criterion. It decides whether you author a brief, and nothing
       else -- no test below may reference it.
   - id: specify-by-volume
     principle: P0.3
@@ -203,7 +203,7 @@ shape:
   - id: plan-create-or-review
     principle: P0.7
     text: >-
-      For a {plan-checkpoint} that escalates to its ladder's top rung: can a standalone brief
+      For a {plan-checkpoint} that reaches the highest-cost route: can a standalone brief
       carry or reference every decision-relevant constraint without encoding the answer and
       without losing context that exists only in this conversation? Yes -- delegate plan CREATION
       (question brief). No -- author the draft and delegate plan REVIEW of it. A model that
@@ -211,12 +211,12 @@ shape:
   - id: plan-review-second-family
     principle: P0.8
     text: >-
-      A top-rung {plan-checkpoint} review defaults to TWO units when unwinding the decision
+      A highest-cost {plan-checkpoint} review defaults to TWO units when unwinding the decision
       later would be expensive AND a disagreement would change the plan before anything executes:
       the primary review, routed as usual, plus a {cross-check} child carrying the same brief,
-      routed by the backend pulls. Skipping the child needs a named reason -- cheap to unwind,
-      or nobody would act on a disagreement. If the top rung is unavailable the primary drops
-      a rung and the child still dispatches. Announce each separately.
+      routed by the ordered rows. Skipping the child needs a named reason -- cheap to unwind,
+      or nobody would act on a disagreement. If the highest-cost model is unavailable the
+      primary falls through and the child still dispatches. Announce each separately.
     without_backend:
       codex: >-
         With a single model family there is no second-family child -- dispatch the primary
@@ -224,10 +224,10 @@ shape:
   - id: review-independence
     principle: P0.7
     text: >-
-      Authorship independence holds at every rung, not only the top: a review of a {load-bearing}
-      {authored-here} artifact is never dispatched to the authoring model -- the ladder carries
-      it as a criterion. A delegated unit's output is never {authored-here}. When the orchestrator
-      is itself the top model, the review seat is the {cross-check} child on its own conditions;
+      Authorship independence holds at every route, not only the highest-cost route: a review of a
+      {load-bearing} {authored-here} artifact is never dispatched to the authoring model -- the
+      routing policy carries it as a condition. A delegated unit's output is never {authored-here}.
+      When the orchestrator is itself the highest-cost model, the review seat is the {cross-check} child on its own conditions;
       with no second family, dispatch the review anyway and announce it as non-independent.
 
 # ---------------------------------------------------------------------------
@@ -239,11 +239,11 @@ routing:
 - shape: [novel, load-bearing]
   models: [agent:fable, sol]
   gate: >-
-    write "qualifies on <criteria>; <why the rung below is the wrong seat>". If it cannot be
+    write "qualifies on <criteria>; <why the broader route is the wrong seat>". If it cannot be
     written, the unit does not qualify.
   guards:
   - fable draws from a different usage pool; a pool does not degrade gracefully when spent, it stops.
-  - Never down-tier a unit that meets the fable bar to harvest the discount.
+  - Never choose a cheaper model for a unit that meets the fable bar to harvest the discount.
 - shape: [fan-out]
   models: [luna]
 - shape: []
@@ -277,29 +277,29 @@ agent_types:
 effort:
   title: Effort
   intro: >-
-    Decided separately, after the tier. Scale, low to high: `low`, `medium`, `high`, `xhigh`,
+    Decided separately, after routing. Scale, low to high: `low`, `medium`, `high`, `xhigh`,
     `max`.
   backend_notes:
   - id: codex-dial
     backend: codex
     text: >-
-      Codex-side, effort is a real dial set per dispatch -- the rung defaults are above. gpt-5.6-luna
+      Codex-side, effort is a real dial set per dispatch -- model-entry defaults are above. luna
       carries the higher default because units arrive there for dispatch shape, not difficulty,
-      so deliberation is the only compensation on the rung that takes everything by fall-through.
-      Raise gpt-5.6-sol from `high` to `max` when the unit is `unverifiable`; a `cross-check`
+      so deliberation is the only compensation on the default route that takes everything by fall-through.
+      Raise sol from `high` to `max` when the unit is `unverifiable`; a `cross-check`
       stays at `high`.
   note: >-
     Claude-side, effort is NOT dialable per call: the Agent tool has no effort parameter,
     agents inherit from their type or the session, and it is settable per call only through
-    Workflow's `agent()` `opts.effort`. So a Claude-side effort decision is an input to TIER
-    selection, not a knob to turn afterwards. Where it IS settable on fable, set `max` --
-    work that reaches that rung is dangerous in more than one way, and deliberation is the
+    Workflow's `agent()` `opts.effort`. So a Claude-side effort decision is an input to routing,
+    not a knob to turn afterwards. Where it IS settable on fable, set `max` -- work that reaches
+    that model is dangerous in more than one way, and deliberation is the
     main quality control left.
   up_effort_note: >-
-    Try up-effort before up-tier -- opus at `xhigh` before reaching for fable at all -- WHERE
+    Try higher effort before a higher-cost model -- opus at `xhigh` before reaching for fable at all -- WHERE
     effort is dialable (a CLI backend's effort setting, Workflow `agent()`). Via the Agent
-    tool there is no opus-at-`xhigh` rung between opus and fable: an Agent-tool opus dispatch
-    inherits the session's effort and does not count as the up-effort attempt. That move is
+    tool there is no per-call effort control for an Agent-tool opus dispatch: it inherits the session's effort
+    and does not count as the higher-effort attempt. That move is
     for units that do NOT meet fable's bar; a unit already meeting it goes there directly.
   raise_when:
   - ambiguous, or several plausible approaches where picking wrong is expensive
@@ -353,7 +353,6 @@ backends:
     detect:
       always: true
     capabilities:
-      tiers: [workhorse, high-reasoning, top]
       isolation: 'built in -- pass isolation: "worktree"'
       effort: Only dialable via Workflow's `agent()` `opts.effort`; else inherited.
       network: "yes"
@@ -376,7 +375,6 @@ backends:
     detect:
       command: [codex, --version]
     capabilities:
-      tiers: [codex-workhorse, codex-top]
       isolation: >-
         WRITES only, and only while every flag below is present. READS are
         unrestricted -- a unit can read any file the user can, on any drive,
@@ -449,14 +447,12 @@ backends:
     detect:
       command: [grok, --version]
     selection: >-
-      ON EXPLICIT USER REQUEST ONLY. This backend has no ladder and appears in
-      no gate or pull, so nothing in the decision tree routes work here and it
-      is never the answer to "which backend suits this unit". Dispatch here
-      only when the user names it -- a user who says "grok" means this backend
+      ON EXPLICIT USER REQUEST ONLY. This backend is not a routing target, so no
+      shape row routes work here and it is never the answer to "which backend
+      suits this unit". Dispatch here only when the user names it -- a user who says "grok" means this backend
       at `-m grok-4.6`. Otherwise route the unit as though this section were
       absent.
     capabilities:
-      tiers: []
       isolation: >-
         The sandbox is `off` by DEFAULT on every platform, and enforceable only
         on Linux (Landlock) and macOS (Seatbelt) -- on Windows `--sandbox` is
@@ -522,15 +518,13 @@ backends:
       model_endpoints: true
       require_commands: [codex]
     selection: >-
-      ON EXPLICIT USER REQUEST ONLY. This backend has no ladder and appears in
-      no gate or pull, so nothing in the decision tree routes work here and it
-      is never the answer to "which backend suits this unit". Dispatch here
-      only when the user names a registered model endpoint -- "the local
+      ON EXPLICIT USER REQUEST ONLY. This backend is not a routing target, so no
+      shape row routes work here and it is never the answer to "which backend
+      suits this unit". Dispatch here only when the user names a registered model endpoint -- "the local
       model", an entry id or model id shown in the Detected roster, or that
       model's family name. Otherwise route the unit as though this section
       were absent.
     capabilities:
-      tiers: []
       isolation: >-
         codex's sandbox, exactly as the codex backend above: `-s
         workspace-write` plus absolute `-C`/`--add-dir`. Only the HARNESS is
@@ -621,8 +615,8 @@ backends:
 # Claude Code does NOT expose per-model usage. What is observable is the
 # overall 5-hour and 7-day rate-limit windows (the statusline hook payload);
 # claude-ui-kit snapshots those to `snapshot_path` if it is installed. So a
-# rung-specific signal ("the top rung is spent") cannot be derived -- set it
-# yourself via `tier_overrides` when you know it.
+# model-specific usage cannot be derived from these account-wide windows; use
+# the routing rows and detected model roster rather than inventing a value.
 #
 #   source: auto     read snapshot_path when it exists (default)
 #           none     no capacity reporting
@@ -637,6 +631,3 @@ capacity:
   thresholds:
     warn_remaining_pct: 25
     critical_remaining_pct: 10
-  # Manual per-rung availability. Keys are rung ids; values are
-  # `available` | `limited` | `unavailable`. E.g. {top: unavailable}.
-  tier_overrides: {}

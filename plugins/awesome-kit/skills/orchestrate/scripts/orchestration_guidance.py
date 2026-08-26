@@ -88,7 +88,7 @@ RECORD_LISTS = (
 # display order. A key present in the shipped defaults but absent from this
 # tuple is silently dropped from the rendered output -- see the render site
 # below and TestCapabilityRendering in tests/awesome-kit/test_orchestration_guidance.py.
-CAPABILITY_KEYS = ("tiers", "isolation", "effort", "network", "returns")
+CAPABILITY_KEYS = ("isolation", "effort", "network", "returns")
 
 
 # --------------------------------------------------------------------------
@@ -1012,7 +1012,7 @@ def render_routing(
 def render_agent_types(
     config: Dict[str, Any], terms: Terms, blocks: Blocks, out: List[str]
 ) -> None:
-    """Block 3 -- which dispatch, once the tier has decided which model."""
+    """Block 3 -- which Agent-tool role applies to the selected model."""
     block = config.get("agent_types") or {}
     if not renders(block):
         return
@@ -1035,10 +1035,10 @@ def render_effort(
     blocks: Blocks,
     out: List[str],
 ) -> None:
-    """Block 4 -- effort, orthogonal to tier and decided after it.
+    """Block 4 -- effort, orthogonal to routing and decided after it.
 
-    Deliberately not a tree node: its criteria partly overlap tier criteria
-    with different consequences, and forcing it in would require a cross-edge.
+    Deliberately not a tree node: its signals partly overlap route signals with
+    different consequences, and forcing it in would require a cross-edge.
     """
     block = config.get("effort") or {}
     if not block or not renders(block):
@@ -1278,23 +1278,8 @@ def render_backends(
         _render_model_entries(model_entries, harness, out)
 
 
-def tier_overrides(config: Dict[str, Any], visible_tiers: Optional[set] = None) -> Dict[str, str]:
-    """Manual per-tier availability, restricted to tiers that actually render.
-
-    An override may name a tier gated on an absent backend. Rendering it would
-    leak that tier -- and by its name the backend behind it -- through the one
-    section that does not otherwise consult the gate, so filter here too.
-    """
-    raw = (config.get("capacity") or {}).get("tier_overrides") or {}
-    items = {str(k): str(v) for k, v in raw.items()}
-    if visible_tiers is None:
-        return items
-    return {k: v for k, v in items.items() if k in visible_tiers}
-
-
 def render_capacity(config: Dict[str, Any], out: List[str]) -> None:
     capacity = config.get("capacity") or {}
-    overrides = tier_overrides(config)
     out.append("## Capacity")
     out.append("")
 
@@ -1317,36 +1302,23 @@ def render_capacity(config: Dict[str, Any], out: List[str]) -> None:
                 out.append("")
                 out.append(
                     "Headroom is tight: bias harder toward delegation (it spends the "
-                    "cheaper pool), and hold the top tier for units that genuinely meet its bar."
+                    "cheaper pool), and hold the highest-cost model for units that genuinely meet its bar."
                 )
         out.append("")
         out.append(
             "These windows are ACCOUNT-wide, not per-model -- Claude Code exposes no "
-            "per-model breakdown, so they cannot tell you a specific tier is spent."
+            "per-model breakdown, so they cannot tell you a specific model is spent."
         )
     out.append("")
 
-    if overrides:
-        out.append("**Manual tier overrides** (`capacity.tier_overrides`):")
-        for tid, state in sorted(overrides.items()):
-            out.append(f"- `{tid}`: {state}")
-        blocked = [t for t, s in overrides.items() if s == "unavailable"]
-        if blocked:
-            out.append("")
-            out.append(
-                "Do not dispatch to " + ", ".join(f"`{t}`" for t in blocked)
-                + " -- route those units to the next tier down and say so when you relay results."
-            )
-        out.append("")
-
-
-# Schema-1 top-level keys. The decision half was reshaped in schema 2 and none of
+# Schema-1 and retired decision keys. The decision half was reshaped in schema 3 and none of
 # these is read any more, so an override written against schema 1 deep-merges
 # cleanly and then contributes nothing. Silence there is the worst outcome: the
 # user's policy is not in force and nothing says so.
 LEGACY_SCHEMA_1_KEYS = (
     "tiers",
     "default_tier",
+    "default_backend",
     "backend_selection",
     "implementation",
     "pool_economics",
@@ -1354,6 +1326,14 @@ LEGACY_SCHEMA_1_KEYS = (
     "rungs",
     "backend",
 )
+
+
+def retired_capacity_keys(config: Dict[str, Any]) -> List[str]:
+    """Return capacity paths whose old routing meaning is no longer supported."""
+    capacity = config.get("capacity")
+    if isinstance(capacity, dict) and "tier_overrides" in capacity:
+        return ["capacity.tier_overrides"]
+    return []
 
 
 def legacy_schema_keys(config: Dict[str, Any]) -> List[str]:
@@ -1407,6 +1387,14 @@ def render(config: Dict[str, Any], provenance: List[Tuple[str, Path, str]]) -> s
             "vocabulary or procedure in the corresponding schema-3 sections -- see "
             "references/configuration.md."
             + (" Layer(s): " + "; ".join(overrides) + "." if overrides else "")
+        )
+    retired_capacity = retired_capacity_keys(config)
+    if retired_capacity:
+        out.append("")
+        out.append(
+            "**Stale override -- NOT IN FORCE.** "
+            + ", ".join(f"`{key}`" for key in retired_capacity)
+            + " is retired in schema 3 and does not affect routing or capacity."
         )
     out.append("")
     return "\n".join(out)

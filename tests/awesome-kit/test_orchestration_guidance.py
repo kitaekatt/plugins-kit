@@ -1564,3 +1564,11 @@ class TestStaleOverrideWarning:
 
     def test_a_clean_schema_3_config_reports_no_stale_keys(self):
         assert og.legacy_schema_keys(shipped()) == []
+
+    def test_retired_capacity_override_warns_and_has_no_effect(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        config["capacity"]["tier_overrides"] = {"top": "unavailable"}
+        text = og.render(config, provenance)
+        assert "`capacity.tier_overrides`" in text
+        assert "does not affect routing or capacity" in text
