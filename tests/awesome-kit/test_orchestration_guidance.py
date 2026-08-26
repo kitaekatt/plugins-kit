@@ -1366,15 +1366,16 @@ class TestAgentTypesAndAnnouncement:
 
     def test_announcement_form_and_examples_render(self, layered, monkeypatch):
         text = self._shipped_text(layered, monkeypatch)
-        assert "delegating <what> to <model> (<terms that fired>)" in text
-        assert "delegating crash diagnosis to opus (open, inference)" in text
+        assert "delegating <what> to <target> (<the matched row's shape terms>)" in text
+        assert "delegating architecture review fallback to codex/sol" in text
 
     def test_announcement_examples_use_only_skill_terms(self):
         data = shipped()
         skills = {t["id"] for t in data["lexicon"] if t.get("kind") == "skill"}
         for example in data["announce"]["examples"]:
             inside = re.search(r"\(([^)]*)\)$", example["text"]).group(1)
-            assert {t.strip() for t in inside.split(",")} <= skills, example["id"]
+            terms = inside.split(";", 1)[0]
+            assert {t.strip() for t in terms.split(",")} <= skills, example["id"]
 
     def test_no_prices_dates_or_now_relative_phrasing(self, layered, monkeypatch):
         text = self._shipped_text(layered, monkeypatch).split("## Dispatch backends")[0]

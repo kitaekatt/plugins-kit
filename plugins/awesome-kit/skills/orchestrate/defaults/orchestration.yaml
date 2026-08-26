@@ -315,41 +315,24 @@ effort:
 # ---------------------------------------------------------------------------
 announce:
   title: Announce every dispatch, in one line
-  form: delegating <what> to <model> (<terms that fired>)
+  form: delegating <what> to <target> (<the matched row's shape terms>)
   rule: >-
-    Terms only, no free prose. The parenthetical carries the shape term plus the deciding
-    term(s) -- not the strongest available justification, not a complete characterisation.
-  backend_notes:
-  - id: pull-term
-    backend: codex
-    text: >-
-      Where the tier fell through to a terminal rung after a backend pull, the parenthetical
-      carries the pull term instead.
+    Terms only, no free prose. Use the matched routing row's shape terms; an empty shape uses
+    `default`. A fallback model appends `; fell through from <id>` inside the parenthetical.
   examples:
-  - id: ex-rename
-    text: delegating rename across 30 files to sonnet (known, default)
-  - id: ex-sweep
-    text: delegating log relevance sweep to sonnet (open, condensation)
-  - id: ex-crash
-    text: delegating crash diagnosis to opus (open, inference)
+  - id: ex-default
+    text: delegating rename across 30 files to sonnet (default)
+  - id: ex-cross-check
+    requires_backend: codex
+    text: delegating plan cross-check to codex/sol (cross-check)
   - id: ex-review
-    text: delegating architecture review to fable (novel, load-bearing, unverifiable)
+    text: delegating architecture review to fable (novel, load-bearing)
   - id: ex-migration
     requires_backend: codex
-    text: delegating per-file API migration to codex/gpt-5.6-luna (fan-out)
-  - id: ex-plan-review
-    text: delegating plan review to fable (plan-checkpoint, open, novel, unverifiable)
-  - id: ex-plan-crosscheck
+    text: delegating per-file API migration to codex/luna (fan-out)
+  - id: ex-fallback
     requires_backend: codex
-    text: delegating plan review second opinion to codex/gpt-5.6-sol (cross-check)
-  - id: ex-design
-    text: >-
-      delegating the schema decision the migration units build on to fable (plan-checkpoint,
-      open, load-bearing)
-  - id: ex-self-review
-    text: >-
-      delegating review of the orchestrator-drafted rollout plan to fable (authored-here,
-      open, load-bearing)
+    text: delegating architecture review fallback to codex/sol (novel, load-bearing; fell through from fable)
 
 # ===========================================================================
 # MACHINE HALF -- not derived from the principles. What this machine has and
