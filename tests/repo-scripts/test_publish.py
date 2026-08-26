@@ -87,25 +87,7 @@ def repo(tmp_path, monkeypatch):
     # The repo-wide invariant gates deliberately judge the REAL tree; point
     # them at the fixture so these tests neither read nor depend on it.
     monkeypatch.setattr(publish, "REAL_PLUGINS_DIR", root / "plugins")
-    monkeypatch.setattr(publish, "GENERATE_ORCHESTRATION_PY",
-                        _stub_script(tmp_path, "orchestration_ok.py", 0))
     return root
-
-
-def _stub_script(tmp_path: Path, name: str, exit_code: int, message: str = "") -> Path:
-    """A stand-in for a checker CLI publish shells out to.
-
-    The real generate_orchestration.py reads its three inputs from module-level
-    constants pinned to this repo, so it cannot be aimed at a fixture. What
-    publish.py owns is the WIRING -- that a non-zero check refuses the publish
-    and surfaces the checker's output -- and that is what these stubs exercise.
-    """
-    script = tmp_path / name
-    script.write_text(
-        "import sys\n"
-        f"sys.stdout.write({message!r})\n"
-        f"sys.exit({exit_code})\n")
-    return script
 
 
 def _bump(repo: Path, name: str, version: str, message: str) -> None:
@@ -337,22 +319,6 @@ class TestRepoInvariantGates:
         _git(repo, "commit", "-qm", "pub-kit: add pyproject")
 
         assert publish.preflight()[0] == ["pub-kit: 1.0.0 -> 1.1.0"]
-
-    def test_orchestration_drift_blocks_a_publish(self, repo, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            publish, "GENERATE_ORCHESTRATION_PY",
-            _stub_script(tmp_path, "orchestration_drift.py", 1,
-                         "-  tier: low\n+  tier: high\n"))
-        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
-
-        with pytest.raises(publish.PublishError) as exc:
-            publish.preflight()
-
-        message = str(exc.value)
-        assert "orchestration policy is not current" in message
-        assert "--write" in message          # says how to fix it
-        assert "+  tier: high" in message    # surfaces the checker's own diff
-
 
 class TestPerPluginBumpGate:
     """_require_version_bump only asserts SOMETHING was bumped. Every published

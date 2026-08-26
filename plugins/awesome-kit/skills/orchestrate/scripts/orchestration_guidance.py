@@ -1,14 +1,12 @@
-"""orchestration_guidance.py -- render the orchestrate skill's variable policy.
+"""Render the orchestrate skill's variable policy.
 
 The `orchestrate` skill's durable half (economics, procedure, anti-patterns)
-lives in SKILL.md. Its VARIABLE half is configuration, and this script renders
-it as a DECISION TREE plus a machine-data section:
+lives in SKILL.md. Its variable half is configuration, and this script renders
+an ordered routing policy plus machine data:
 
-    decision  shape -> backend -> tier -> agent type -> effort -> announcement,
-              derived from the orchestration principles and stated in the
-              controlled vocabulary of `lexicon:`
-    machine   which dispatch backends exist here and how to drive them, and how
-              much usage capacity is left
+    routing  ordered shape rows, with model priority and fallthrough
+    machine  which dispatch backends exist here and how to drive them, and how
+             much usage capacity is left
 
 Configuration resolves over three layers, later winning:
 
@@ -37,7 +35,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 # Re-exec under awesome-kit's bootstrap-provisioned venv before importing
 # pyyaml: a bare `python` / `uv run python` invocation builds a different
@@ -70,8 +68,7 @@ DEFAULTS_PATH = _SCRIPT_DIR.parent / "defaults" / CONFIG_NAME
 # Records in these lists are identified by `id` rather than position, so an
 # override patches a record instead of replacing the list. A list under one of
 # these keys whose members carry no `id` still replaces outright (see
-# merge_records), which is what keeps plain lists such as
-# `capabilities.tiers` behaving as scalars.
+# merge_records), which is what keeps capability lists behaving as scalars.
 RECORD_LISTS = (
     "tiers",
     "backends",
@@ -623,6 +620,252 @@ def live(records: Any) -> List[Dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------
+# Routing model resolution
+# --------------------------------------------------------------------------
+
+
+AGENT_MODEL_NAMES = frozenset(("fable", "opus", "sonnet", "haiku"))
+AGENT_MODEL_PREFIX = "agent:"
+HARNESS_NAMES = frozenset(("codex", "opencode"))
+
+
+def _record_value(record: Any, key: str, default: Any = None) -> Any:
+    """Read a model definition from either a dataclass or a mapping."""
+    if isinstance(record, Mapping):
+        return record.get(key, default)
+    return getattr(record, key, default)
+
+
+def _project_root_from_provenance(
+    provenance: List[Tuple[str, Path, str]],
+) -> Path:
+    for layer, path, _status in provenance:
+        if layer == "project":
+            # project_config_path() is <root>/.claude/orchestration.yaml.
+            return path.parent.parent
+    return Path.cwd()
+
+
+def discover_model_definitions(project_root: Path) -> Tuple[Dict[str, Dict[str, str]], List[str]]:
+    """Load harness model definitions when the shared library has the feature.
+
+    The import is deliberately not the feature test. A stale shared-library
+    copy can remain importable after its owner plugin is removed, and an older
+    copy can import successfully while lacking the discovery and kind symbols
+    this renderer needs. In either case routing falls back to its Agent-tool
+    members and `--explain` receives a diagnostic.
+    """
+    try:
+        import llm_scripting_kit as model_kit  # noqa: PLC0415
+    except ImportError as exc:
+        return {}, [f"llm_scripting_kit unavailable; harness model rows skipped ({type(exc).__name__})"]
+
+    discover = getattr(model_kit, "discover_model_entries", None)
+    harness_kind = getattr(model_kit, "HARNESS_KIND", None)
+    entry_type = getattr(model_kit, "EndpointEntry", None)
+    if not callable(discover) or harness_kind != "harness" or entry_type is None:
+        return {}, [
+            "llm_scripting_kit is importable but lacks the harness-model discovery feature; "
+            "harness model rows skipped"
+        ]
+
+    try:
+        discovery = discover(project_root=str(project_root))
+    except Exception as exc:  # noqa: BLE001 -- stale/version-skewed shared libs degrade
+        return {}, [
+            "llm_scripting_kit harness-model discovery failed; harness model rows skipped "
+            f"({type(exc).__name__}: {exc})"
+        ]
+
+    entries = getattr(discovery, "entries", discovery)
+    if not isinstance(entries, Mapping):
+        return {}, [
+            "llm_scripting_kit harness-model discovery returned an unsupported value; "
+            "harness model rows skipped"
+        ]
+
+    notes = [str(note) for note in (getattr(discovery, "notes", []) or [])]
+    normalized: Dict[str, Dict[str, str]] = {}
+    for raw_id, entry in entries.items():
+        entry_id = str(raw_id)
+        kind = _record_value(entry, "kind")
+        if kind != harness_kind:
+            continue
+        harness = _record_value(entry, "harness")
+        model = _record_value(entry, "model")
+        if not isinstance(harness, str) or not harness:
+            notes.append(f"model entry `{entry_id}` skipped: no harness")
+            continue
+        if not isinstance(model, str) or not model:
+            notes.append(f"model entry `{entry_id}` skipped: no model")
+            continue
+        normalized[entry_id] = {
+            "id": entry_id,
+            "harness": harness,
+            "model": model,
+        }
+        effort = _record_value(entry, "effort")
+        if isinstance(effort, str) and effort:
+            normalized[entry_id]["effort"] = effort
+    return normalized, notes
+
+
+def detect_harnesses(
+    config: Dict[str, Any],
+    detected: List[Tuple[Dict[str, Any], bool, str]],
+    model_entries: Mapping[str, Mapping[str, str]],
+) -> Dict[str, Tuple[bool, str]]:
+    """Detect each harness named by the discovered model definitions.
+
+    A configured backend record wins when one exists. A harness model can also
+    be used with a minimal configuration that has no corresponding machine
+    record, in which case the existing fail-closed command detector is reused
+    with the CLI's version command. This checks presence only; it never probes
+    a model server.
+    """
+    by_id = {str(backend.get("id")): (ok, reason) for backend, ok, reason in detected}
+    records = {
+        str(backend.get("id")): backend
+        for backend in active(config.get("backends") or [])
+    }
+    result: Dict[str, Tuple[bool, str]] = {}
+    for entry in model_entries.values():
+        harness = str(entry.get("harness"))
+        if harness in result:
+            continue
+        if harness not in HARNESS_NAMES:
+            result[harness] = (False, f"unknown harness `{harness}`")
+            continue
+        if harness in by_id:
+            result[harness] = by_id[harness]
+            continue
+        record = records.get(harness)
+        if record is not None:
+            result[harness] = detect_backend(record)
+            continue
+        result[harness] = detect_backend(
+            {"id": harness, "detect": {"command": [harness, "--version"]}}
+        )
+    return result
+
+
+def resolve_routing_models(
+    config: Dict[str, Any],
+    model_entries: Mapping[str, Mapping[str, str]],
+    harness_status: Mapping[str, Tuple[bool, str]],
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Resolve routing rows, retaining order and model priority.
+
+    Agent-tool names are a reserved namespace. Every other name is looked up
+    in the shared model registry and must resolve to a harness entry whose CLI
+    is present. Invalid model members are skipped individually; a row with no
+    surviving models is omitted.
+    """
+    terms = Terms(config.get("lexicon"))
+    routes: List[Dict[str, Any]] = []
+    notes: List[str] = []
+    raw_rows = config.get("routing") or []
+    if not isinstance(raw_rows, list):
+        return [], ["routing skipped: expected a list"]
+
+    for row_number, raw_row in enumerate(raw_rows, 1):
+        if not isinstance(raw_row, dict):
+            notes.append(f"routing row {row_number} skipped: expected a mapping")
+            continue
+        raw_shape = raw_row.get("shape", [])
+        if raw_shape is None:
+            raw_shape = []
+        if not isinstance(raw_shape, list) or any(
+            not isinstance(term, str) or not term for term in raw_shape
+        ):
+            notes.append(f"routing row {row_number} skipped: shape must be a list of names")
+            continue
+        shape = [str(term) for term in raw_shape]
+        unresolved_shape = [term for term in shape if not terms.is_skill(term)]
+        if unresolved_shape:
+            notes.append(
+                f"routing row {row_number} skipped: unknown or non-skill shape term(s) "
+                + ", ".join(f"`{term}`" for term in unresolved_shape)
+            )
+            continue
+
+        raw_models = raw_row.get("models")
+        if not isinstance(raw_models, list):
+            notes.append(f"routing row {row_number} skipped: models must be a list")
+            continue
+        models: List[Dict[str, str]] = []
+        for raw_model in raw_models:
+            if not isinstance(raw_model, str) or not raw_model:
+                notes.append(f"routing row {row_number}: invalid model name skipped")
+                continue
+            if raw_model.startswith(AGENT_MODEL_PREFIX):
+                entry_id = raw_model[len(AGENT_MODEL_PREFIX):]
+                if entry_id not in AGENT_MODEL_NAMES:
+                    notes.append(
+                        f"routing row {row_number}: `{raw_model}` skipped; unknown Agent-tool model"
+                    )
+                    continue
+                models.append({"id": entry_id, "target": entry_id, "kind": "agent"})
+                continue
+            if ":" in raw_model:
+                notes.append(
+                    f"routing row {row_number}: `{raw_model}` skipped; only `agent:` is a reserved namespace"
+                )
+                continue
+            entry = model_entries.get(raw_model)
+            if entry is None:
+                notes.append(
+                    f"routing row {row_number}: `{raw_model}` skipped; no harness model entry resolves"
+                )
+                continue
+            harness = str(entry.get("harness") or "")
+            available, reason = harness_status.get(
+                harness, (False, f"harness `{harness}` is not detected")
+            )
+            if not available:
+                notes.append(
+                    f"routing row {row_number}: `{raw_model}` skipped; {reason}"
+                )
+                continue
+            models.append(
+                {
+                    "id": raw_model,
+                    "target": f"{harness}/{raw_model}",
+                    "kind": "harness",
+                    "harness": harness,
+                    "model": str(entry.get("model")),
+                }
+            )
+        if not models:
+            notes.append(f"routing row {row_number} skipped: no model resolves")
+            continue
+        routes.append(
+            {
+                "number": row_number,
+                "shape": shape,
+                "models": models,
+                "gate": raw_row.get("gate"),
+                "guards": list(raw_row.get("guards") or []),
+            }
+        )
+    return routes, notes
+
+
+def announcement_text(
+    what: str,
+    target: str,
+    shape_terms: Iterable[str],
+    fell_through_from: Optional[str] = None,
+) -> str:
+    """Build the stable dispatch announcement, including fallback context."""
+    terms = list(shape_terms)
+    parenthetical = ", ".join(terms) if terms else "default"
+    if fell_through_from:
+        parenthetical += f"; fell through from {fell_through_from}"
+    return f"delegating {what} to {target} ({parenthetical})"
+
+
+# --------------------------------------------------------------------------
 # Vocabulary
 # --------------------------------------------------------------------------
 
@@ -697,22 +940,6 @@ class Blocks:
         self.out.append("")
 
 
-def visible_rungs(config: Dict[str, Any], available_backends: set) -> set:
-    """Rung ids that actually render.
-
-    A ladder whose backend is not detected disappears whole -- its rungs
-    cannot be dispatched to, and naming one would leak the absent backend into
-    the guidance through a section that does not otherwise consult the gate.
-    """
-    ids = set()
-    for ladder in live(config.get("ladders")):
-        if str(ladder.get("id")) not in available_backends:
-            continue
-        for rung in live(ladder.get("rungs")):
-            ids.add(str(rung.get("id")))
-    return ids
-
-
 def render_shape(
     config: Dict[str, Any], terms: Terms, available_backends: set, blocks: Blocks, out: List[str]
 ) -> None:
@@ -744,175 +971,42 @@ def render_shape(
     out.append("")
 
 
-def _group_by_backend(rows: List[Dict[str, Any]]) -> List[Tuple[str, List[Dict[str, Any]]]]:
-    order: List[str] = []
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
-    for row in rows:
-        bid = str(row.get("backend"))
-        if bid not in grouped:
-            grouped[bid] = []
-            order.append(bid)
-        grouped[bid].append(row)
-    return [(bid, grouped[bid]) for bid in order]
-
-
-def render_backend_choice(
+def render_routing(
     config: Dict[str, Any],
     terms: Terms,
-    available_backends: set,
-    backend_names: Dict[str, str],
+    routes: List[Dict[str, Any]],
     blocks: Blocks,
     out: List[str],
 ) -> None:
-    """Block 1 -- where the work RUNS.
-
-    Omitted entirely when the backend it selects for is absent: with one
-    backend there is nothing to choose, and a row naming an uninstalled tool
-    invites dispatch to it.
-    """
-    block = config.get("backend") or {}
-    if not block or not renders(block):
+    """Render the ordered shape list and its model priority."""
+    if not routes:
         return
-    required = block.get("requires_backend")
-    if required and str(required) not in available_backends:
-        return
-
-    sections = []
-    for key, intro_key in (("gates", "gates_intro"), ("pulls", "pulls_intro")):
-        rows = [r for r in live(block.get(key)) if str(r.get("backend")) in available_backends]
-        if rows:
-            sections.append((fold(block.get(intro_key)), rows))
-    if not sections:
-        return
-
-    blocks.heading(fold(block.get("title")) or "Backend")
-    if block.get("intro"):
-        out.append(terms.fill(block["intro"]))
-    default = str(block.get("default") or "")
-    if default in available_backends:
-        out.append(f"Default: **{backend_names.get(default, default)}**.")
+    blocks.heading("Routing")
+    out.append(
+        "Evaluate rows in order; the first matching shape wins. Within a row, "
+        "try models in the order shown and fall through on a launch or transport error."
+    )
     out.append("")
-    for intro, rows in sections:
-        for bid, group in _group_by_backend(rows):
-            listed = ", ".join(terms.term(r.get("term")) for r in group)
-            name = backend_names.get(bid, bid)
-            out.append(f"- {intro} **{name}**: {listed}.")
-    out.append("")
-
-
-class UnrenderableRung(Exception):
-    """A rung whose test cannot be rendered faithfully. Fails CLOSED -- see rung_criteria."""
-
-
-def rung_criteria(rung: Dict[str, Any], terms: Terms) -> str:
-    """The rung's test: OR'd groups of AND'd terms, plus any shape restriction.
-
-    Fails CLOSED. A criteria group is a CONJUNCTION, so dropping one unresolvable
-    conjunct would render a strictly WIDER test than the data specifies -- on this
-    ladder that silently widens the gate on the most expensive rung, which is the
-    exact direction the guards exist to prevent. An id that does not resolve to a
-    live `[skill]` term therefore invalidates its whole group; a non-terminal rung
-    left with no group at all raises, because an empty test under first-match-wins
-    reads as an unconditional match rather than as a missing one.
-    """
-    groups: List[str] = []
-    dropped: List[str] = []
-    for group in rung.get("criteria") or []:
-        if isinstance(group, dict):
-            ids, where = group.get("terms") or [], fold(group.get("where"))
+    for index, route in enumerate(routes, 1):
+        shape = route.get("shape") or []
+        shape_text = " + ".join(terms.term(term) for term in shape) if shape else "anything"
+        models = route.get("models") or []
+        targets = [f"**{model['target']}**" for model in models]
+        if len(targets) == 1:
+            dispatch = targets[0]
         else:
-            ids, where = group, ""
-        ids = list(ids or [])
-        resolved = terms.skill_terms(ids)
-        if len(resolved) != len(ids):
-            # Partial resolution would widen the conjunction -- drop the group whole.
-            dropped.extend(t for t in ids if t not in set(resolved))
-            continue
-        text = " + ".join(terms.term(t) for t in resolved)
-        if not text:
-            continue
-        if where:
-            text += f" where {where}"
-        groups.append(text)
-
-    declared = bool(rung.get("criteria"))
-    if declared and not groups and not rung.get("terminal"):
-        # Every group was invalidated. `shape` must NOT stand in as the test: it
-        # is a NARROWING clause on a criteria match, so alone it renders as
-        # "<shape> work only" -- which on the top rung matches every unit of that
-        # shape. That is the same widening this function exists to prevent,
-        # arriving through a different door.
-        raise UnrenderableRung(
-            f"rung {rung.get('id')!r} declares criteria but none resolved"
-            + (f" (unresolved terms: {', '.join(sorted(set(dropped)))})" if dropped else "")
-            + ". A non-terminal rung must state a test; only a terminal rung may state none."
-        )
-
-    body = "; or ".join(groups)
-    if rung.get("shape"):
-        clause = f"{terms.term(rung['shape'])} work only"
-        body = f"{body}; {clause}" if body else clause
-
-    if not body and not rung.get("terminal"):
-        raise UnrenderableRung(
-            f"rung {rung.get('id')!r} has no renderable criteria. "
-            "A non-terminal rung must state a test; only a terminal rung may state none."
-        )
-    return body
-
-
-def render_rung(rung: Dict[str, Any], index: int, terms: Terms, out: List[str]) -> None:
-    head = f"**{fold(rung.get('model')) or str(rung.get('id'))}**"
-    if rung.get("effort"):
-        head += f" at `{fold(rung['effort'])}` effort"
-    parts = [p for p in (rung_criteria(rung, terms), terms.fill(rung.get("text"))) if p]
-    line = f"{index}. {head} -- " + ". ".join(parts) if parts else f"{index}. {head}"
-    if rung.get("announce_as"):
-        forms = " or ".join(
-            "`(" + ", ".join(str(t) for t in form) + ")`" for form in rung["announce_as"]
-        )
-        line = line.rstrip(".") + f". Announced as {forms}"
-    out.append(line.rstrip(".") + ".")
-    if rung.get("gate"):
-        out.append(f"   - Gate: {terms.fill(rung['gate'])}")
-    for note in live(rung.get("notes")):
-        out.append(f"   - {terms.fill(note.get('text'))}")
-    # Negative guards render unconditionally. A rung something must NOT be
-    # used for is a decision, not rationale: without it a reader invents the
-    # dispatch the guard exists to prevent.
-    for guard in rung.get("guards") or []:
-        out.append(f"   - {terms.fill(guard)}")
-
-
-def render_tiers(
-    config: Dict[str, Any],
-    terms: Terms,
-    available_backends: set,
-    blocks: Blocks,
-    out: List[str],
-) -> None:
-    """Block 2 -- the tier, one subtree per available backend."""
-    ladders = [l for l in live(config.get("ladders")) if str(l.get("id")) in available_backends]
-    if not ladders:
-        return
-    blocks.heading("Tier")
-    multi = len(ladders) > 1
-    for ladder in ladders:
-        rungs = live(ladder.get("rungs"))
-        if not rungs:
-            continue
-        if multi:
-            out.append(f"### {fold(ladder.get('label')) or str(ladder.get('id'))} ladder")
-            out.append("")
-        for index, rung in enumerate(rungs, 1):
-            render_rung(rung, index, terms, out)
-        out.append("")
-        guards = [terms.fill(g) for g in (ladder.get("guards") or [])]
-        for note in live(ladder.get("notes")):
-            guards.append(terms.fill(note.get("text")))
-        if guards:
-            out.append(" ".join(guards))
-            out.append("")
+            dispatch = ", then ".join(targets)
+        out.append(f"{index}. If {shape_text}: try {dispatch}.")
+        if len(models) > 1:
+            out.append(
+                "   - On a launch or transport error, continue to the next model; "
+                f"a fallback announcement names the failed model from `{models[0]['id']}`."
+            )
+        if route.get("gate"):
+            out.append(f"   - Gate: {terms.fill(route['gate'])}")
+        for guard in route.get("guards") or []:
+            out.append(f"   - {terms.fill(guard)}")
+    out.append("")
 
 
 def render_agent_types(
@@ -980,6 +1074,7 @@ def render_announce(
     available_backends: set,
     blocks: Blocks,
     out: List[str],
+    routes: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Block 5 -- the announcement form.
 
@@ -990,12 +1085,13 @@ def render_announce(
     block = config.get("announce") or {}
     if not block or not renders(block):
         return
+    routes = routes or []
     examples = [
         e
         for e in live(block.get("examples"))
         if not e.get("requires_backend") or str(e["requires_backend"]) in available_backends
     ]
-    if not block.get("form") and not examples:
+    if not block.get("form") and not examples and not routes:
         return
     blocks.heading(fold(block.get("title")) or "Announce every dispatch")
     if block.get("form"):
@@ -1016,6 +1112,24 @@ def render_announce(
             out.append(fold(example.get("text")))
         out.append("```")
         out.append("")
+    if routes:
+        out.append("Use the matched row's shape terms in the parenthetical:")
+        out.append("```")
+        for route in routes:
+            models = route.get("models") or []
+            shape = route.get("shape") or []
+            for model_index, model in enumerate(models):
+                previous = models[model_index - 1]["id"] if model_index else None
+                out.append(
+                    announcement_text(
+                        "<what>",
+                        model["target"],
+                        shape,
+                        fell_through_from=previous,
+                    )
+                )
+        out.append("```")
+        out.append("")
 
 
 def render_decision_tree(
@@ -1023,9 +1137,10 @@ def render_decision_tree(
     available_backends: set,
     backend_names: Dict[str, str],
     out: List[str],
+    routes: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
-    """The derived half, in principle order: shape -> backend -> tier ->
-    agent type -> effort -> announcement.
+    """Render the policy in document order: shape -> routing -> agent type ->
+    effort -> announcement.
 
     Rendered strictly in document order because glossing is first-occurrence
     and therefore stateful.
@@ -1036,11 +1151,10 @@ def render_decision_tree(
         out.append("")
     blocks = Blocks(out)
     render_shape(config, terms, available_backends, blocks, out)
-    render_backend_choice(config, terms, available_backends, backend_names, blocks, out)
-    render_tiers(config, terms, available_backends, blocks, out)
+    render_routing(config, terms, routes or [], blocks, out)
     render_agent_types(config, terms, blocks, out)
     render_effort(config, terms, available_backends, blocks, out)
-    render_announce(config, terms, available_backends, blocks, out)
+    render_announce(config, terms, available_backends, blocks, out, routes)
 
 
 def detect_all(config: Dict[str, Any]) -> List[Tuple[Dict[str, Any], bool, str]]:
@@ -1052,16 +1166,43 @@ def detect_all(config: Dict[str, Any]) -> List[Tuple[Dict[str, Any], bool, str]]
     return results
 
 
+def default_command_text_provider(backend: Dict[str, Any]) -> Optional[str]:
+    """Return the existing hand-authored command text for a backend record."""
+    command = backend.get("command")
+    return str(command) if command else None
+
+
+def _render_model_entries(
+    entries: Mapping[str, Mapping[str, str]],
+    harness: str,
+    out: List[str],
+) -> None:
+    models = [entry for entry in entries.values() if entry.get("harness") == harness]
+    if not models:
+        return
+    out.append("**Models.**")
+    for entry in models:
+        line = f"- `{entry['id']}`"
+        if entry.get("effort"):
+            line += f"; default effort `{entry['effort']}`"
+        out.append(line)
+    out.append("")
+
+
 def render_backends(
     config: Dict[str, Any],
     detected: List[Tuple[Dict[str, Any], bool, str]],
-    visible_tiers: set,
     out: List[str],
+    *,
+    model_entries: Optional[Mapping[str, Mapping[str, str]]] = None,
+    harness_status: Optional[Mapping[str, Tuple[bool, str]]] = None,
+    command_text_provider: Callable[[Dict[str, Any]], Optional[str]] = default_command_text_provider,
 ) -> None:
-    default_backend = config.get("default_backend")
+    model_entries = model_entries or {}
+    harness_status = harness_status or {}
     out.append("## Dispatch backends")
     out.append("")
-    if not detected:
+    if not detected and not model_entries:
         out.append("No backends configured.")
         out.append("")
         return
@@ -1073,6 +1214,7 @@ def render_backends(
     # dispatch to something that is not installed. `--explain` reports the
     # detection status for anyone who wants to know why a backend is missing.
     available = [(b, reason) for b, ok, reason in detected if ok]
+    rendered_ids = set()
 
     if not available:
         out.append("None of the configured backends detected on this machine.")
@@ -1080,9 +1222,8 @@ def render_backends(
 
     for backend, reason in available:
         bid = str(backend.get("id", "?"))
+        rendered_ids.add(bid)
         title = f"### {backend.get('name', bid)} (`{bid}`)"
-        if bid == default_backend:
-            title += " -- default"
         out.append(title)
         out.append("")
         out.append(f"*Detected: {reason}.*")
@@ -1100,20 +1241,15 @@ def render_backends(
             out.append("")
         caps = backend.get("capabilities") or {}
         if caps:
-            tiers = caps.get("tiers")
-            if isinstance(tiers, list):
-                # Advertise only tiers that survived the gate -- a disabled or
-                # backend-gated tier must not be named here either.
-                shown = [str(t) for t in tiers if str(t) in visible_tiers]
-                caps = dict(caps)
-                caps["tiers"] = ", ".join(shown) if shown else "n/a (no tier selection)"
             for key in CAPABILITY_KEYS:
                 if key in caps and caps[key] not in (None, ""):
                     out.append(f"- {key}: {fold(caps[key])}")
             out.append("")
-        if backend.get("command"):
+        _render_model_entries(model_entries, bid, out)
+        command_text = command_text_provider(backend)
+        if command_text:
             out.append("```")
-            out.append(fold(backend["command"]))
+            out.append(fold(command_text))
             out.append("```")
             out.append("")
         if backend.get("dispatch"):
@@ -1124,7 +1260,22 @@ def render_backends(
             out.append("**Gotchas.**")
             for gotcha in gotchas:
                 out.append(f"- {fold(gotcha)}")
-            out.append("")
+                out.append("")
+
+    # A registry may name a supported harness for which the machine half has
+    # no hand-authored record. Show one mechanics section for that harness,
+    # using the same command detector as configured records. No dispatch
+    # command is invented here; the model definition only supplies its model
+    # identity and harness.
+    for harness, (ok, reason) in harness_status.items():
+        if not ok or harness in rendered_ids:
+            continue
+        rendered_ids.add(harness)
+        out.append(f"### {harness.title()} (`{harness}`)")
+        out.append("")
+        out.append(f"*Detected: {reason}.*")
+        out.append("")
+        _render_model_entries(model_entries, harness, out)
 
 
 def tier_overrides(config: Dict[str, Any], visible_tiers: Optional[set] = None) -> Dict[str, str]:
@@ -1141,9 +1292,9 @@ def tier_overrides(config: Dict[str, Any], visible_tiers: Optional[set] = None) 
     return {k: v for k, v in items.items() if k in visible_tiers}
 
 
-def render_capacity(config: Dict[str, Any], visible_tiers: set, out: List[str]) -> None:
+def render_capacity(config: Dict[str, Any], out: List[str]) -> None:
     capacity = config.get("capacity") or {}
-    overrides = tier_overrides(config, visible_tiers)
+    overrides = tier_overrides(config)
     out.append("## Capacity")
     out.append("")
 
@@ -1199,6 +1350,9 @@ LEGACY_SCHEMA_1_KEYS = (
     "backend_selection",
     "implementation",
     "pool_economics",
+    "ladders",
+    "rungs",
+    "backend",
 )
 
 
@@ -1208,18 +1362,25 @@ def legacy_schema_keys(config: Dict[str, Any]) -> List[str]:
 
 
 def render(config: Dict[str, Any], provenance: List[Tuple[str, Path, str]]) -> str:
-    out: List[str] = ["# Orchestration policy (generated)", ""]
+    out: List[str] = ["# Orchestration policy", ""]
     detected = detect_all(config)
     available_backends = {str(b.get("id")) for b, ok, _ in detected if ok}
     backend_names = {
         str(b.get("id")): str(b.get("name") or b.get("id")) for b, _, _ in detected
     }
-    # One visibility set, computed once and threaded through every section, so
-    # no render path can name a rung the gate removed.
-    visible_tiers = visible_rungs(config, available_backends)
-    render_decision_tree(config, available_backends, backend_names, out)
-    render_backends(config, detected, visible_tiers, out)
-    render_capacity(config, visible_tiers, out)
+    project_root = _project_root_from_provenance(provenance)
+    model_entries, _model_notes = discover_model_definitions(project_root)
+    harness_status = detect_harnesses(config, detected, model_entries)
+    routes, _routing_notes = resolve_routing_models(config, model_entries, harness_status)
+    render_decision_tree(config, available_backends, backend_names, out, routes)
+    render_backends(
+        config,
+        detected,
+        out,
+        model_entries=model_entries,
+        harness_status=harness_status,
+    )
+    render_capacity(config, out)
     out.append("---")
     out.append("")
     applied = [layer for layer, _, status in provenance if status == "applied"]
@@ -1241,10 +1402,10 @@ def render(config: Dict[str, Any], provenance: List[Tuple[str, Path, str]]) -> s
         out.append(
             "**Stale override -- NOT IN FORCE.** A layer sets schema-1 key(s) "
             + ", ".join(f"`{k}`" for k in stale)
-            + ", which schema 2 no longer reads; those settings contribute nothing to "
-            "the policy above. Port them to the schema-2 sections "
-            "(`lexicon`, `shape`, `backend`, `ladders`, `agent_types`, `effort`, "
-            "`announce`) -- see references/configuration.md."
+            + ", which schema 3 no longer reads; those settings contribute nothing to "
+            "the policy above. Port the decision to `routing` and keep any surviving "
+            "vocabulary or procedure in the corresponding schema-3 sections -- see "
+            "references/configuration.md."
             + (" Layer(s): " + "; ".join(overrides) + "." if overrides else "")
         )
     out.append("")
@@ -1298,28 +1459,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         available = {str(b.get("id")) for b, ok, _ in detected if ok}
         for backend, ok, reason in detected:
             print(f"backend  {'available' if ok else 'MISSING':9} {backend.get('id')}: {reason}")
-        for ladder in active(config.get("ladders") or []):
-            required = str(ladder.get("id"))
-            state = "available" if required in available else "HIDDEN"
-            for rung in active(ladder.get("rungs") or []):
-                print(f"rung     {state:9} {rung.get('id')}: requires backend {required}")
+        model_entries, model_notes = discover_model_definitions(project_root)
+        harness_status = detect_harnesses(config, detected, model_entries)
+        routes, routing_notes = resolve_routing_models(
+            config, model_entries, harness_status
+        )
+        for harness, (ok, reason) in harness_status.items():
+            print(f"harness  {'available' if ok else 'MISSING':9} {harness}: {reason}")
+        for note in model_notes:
+            print(f"model    note      {note}")
+        for note in routing_notes:
+            print(f"routing  note      {note}")
+        for index, route in enumerate(routes, 1):
+            targets = ", ".join(model["target"] for model in route["models"])
+            shape = "+".join(route["shape"]) or "default"
+            print(f"routing  row       {index}: {shape} -> {targets}")
         print()
         print(yaml.safe_dump(config, sort_keys=False, allow_unicode=False, width=100))
         return 0
 
-    try:
-        text = render(config, provenance)
-    except UnrenderableRung as exc:
-        # Fail CLOSED and LOUDLY. Rendering a partial policy would hand the
-        # orchestrator a ladder whose most-guarded rung had quietly widened,
-        # which is worse than no policy at all.
-        print(f"orchestration config error: {exc}", file=sys.stderr)
-        print(
-            "A layer has removed or renamed a lexicon term a rung's criteria "
-            "depend on. Run --explain to see which layers applied.",
-            file=sys.stderr,
-        )
-        return 1
+    text = render(config, provenance)
     print(text)
     return 0
 

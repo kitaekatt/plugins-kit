@@ -195,8 +195,8 @@ def main(argv: list[str]) -> int:
     # Nothing is given up by relaxing this: publish.py REGENERATES marketplace.json
     # and then verifies plugin.json agreement before pushing, so drift cannot
     # reach master (and master is what consumers fetch). Mirrors the index-aware
-    # convention already used by check-staged-version-bump.sh and
-    # generate_orchestration.py --check; this script was the last worktree holdout.
+    # convention already used by check-staged-version-bump.sh; this script was
+    # the last worktree holdout.
     staged_mode = "--staged" in argv
 
     from_index = False

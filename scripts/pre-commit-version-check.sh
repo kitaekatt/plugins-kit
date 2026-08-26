@@ -33,17 +33,8 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 
 # Interpreter resolution, split by what each check actually needs.
 #
-# Only generate_orchestration.py needs a provisioned dependency (pyyaml); the
-# other four are stdlib-only. The previous arrangement probed for yaml and, on a
-# miss, skipped the WHOLE chain -- disabling four stdlib-only checks to account
-# for one check's dependency, on exactly the unprovisioned clones least likely
-# to get things right. It also probed with one interpreter and then ran the
-# checks under `uv run`, a different resolution that can sync a different
-# environment or fail where the probe passed.
-#
-# So: stdlib-only checks run under a plain interpreter (no uv, no venv sync --
-# fast, and works on an unprovisioned clone), and only the yaml-dependent check
-# is gated on yaml actually being importable.
+# The checks in this file are stdlib-only and run under a plain interpreter --
+# fast, with no venv sync, and usable on an unprovisioned clone.
 PLAIN_PYTHON=""
 for candidate in \
     "$REPO_ROOT/.venv/bin/python" \
@@ -62,10 +53,6 @@ if [ -z "$PLAIN_PYTHON" ]; then
     echo "pre-commit: the public-repo leak guard still ran." >&2
     exit 0
 fi
-
-# `--no-sync`: bootstrap owns provisioning, so a commit is the wrong moment to
-# mutate the venv -- and concurrent sessions may be running uv themselves.
-UV_PY=(uv run --no-sync python)
 
 # Collect, then report. Under `set -e` the first failing check aborted the rest,
 # so a tree with two problems took two commit attempts to discover -- worse in a
@@ -118,30 +105,6 @@ fi
 # the standard's own enforcement section.
 if ! "$PLAIN_PYTHON" "$REPO_ROOT/scripts/check_agent_directives.py" --staged; then
     failed=1
-fi
-
-# --- the generated orchestration policy must match its source -------------
-# The DECISION half of the orchestrate skill's orchestration.yaml is generated
-# one-way from docs/reference/orchestrate/tier-principles.md and
-# plugins/awesome-kit/skills/orchestrate/references/lexicon.md. --staged scopes
-# this to the commit: index-aware, and a pass when the commit stages none of
-# the three generator inputs (classify_scope), matching every other check in
-# this file. A prior fingerprint-based guard was retired once this existed --
-# a fingerprint cannot disagree with principles compiled from those same
-# principles.
-#
-# The one check needing a provisioned dependency. A skipped check must be
-# VISIBLE, never silent.
-if "${UV_PY[@]}" -c "import yaml" >/dev/null 2>&1; then
-    if ! "${UV_PY[@]}" "$REPO_ROOT/scripts/generate_orchestration.py" --check --staged; then
-        note ""
-        note "The generated orchestration policy is stale."
-        note "Run \`uv run python scripts/generate_orchestration.py --write\` and stage the result."
-        failed=1
-    fi
-else
-    note "pre-commit: orchestration drift check SKIPPED -- pyyaml is not importable"
-    note "pre-commit: under \`uv run\`; run bootstrap to provision it. Other checks ran."
 fi
 
 exit "$failed"
