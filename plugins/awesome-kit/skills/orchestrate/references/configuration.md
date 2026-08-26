@@ -190,8 +190,8 @@ it is ignored and should be removed.
 The renderer warns with **Stale override -- NOT IN FORCE** when the merged configuration
 contains one of these retired top-level keys:
 
-`tiers`, `default_tier`, `backend_selection`, `implementation`, `pool_economics`, `ladders`,
-`rungs`, and `backend`.
+`tiers`, `default_tier`, `default_backend`, `backend_selection`, `implementation`,
+`pool_economics`, `ladders`, `rungs`, and `backend`.
 
 Those values do not affect schema 3 routing. Port the decision to `routing`; keep vocabulary,
 brief shaping, effort, announcement, backend, and capacity concerns in their corresponding
