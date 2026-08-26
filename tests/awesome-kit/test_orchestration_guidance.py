@@ -1299,3 +1299,74 @@ class TestStaleOverrideWarning:
         text = og.render(config, provenance)
         assert "`capacity.tier_overrides`" in text
         assert "does not affect routing or capacity" in text
+
+
+class TestSelectionRendersForAnOverrideSuppliedBackend:
+    """`selection` is live machinery no SHIPPED record reaches any more.
+
+    The two request-only backends that carried it were deleted, but the
+    renderer still emits it and SKILL.md still instructs an agent on how to
+    obey it ("a backend whose block opens with a `**Selection.**` line is not a
+    routing target"). A user or project override can still supply one, so the
+    path is reachable and must stay pinned -- otherwise the feature can be
+    deleted with every test still green while the shipped SKILL.md keeps
+    promising it.
+    """
+
+    def test_a_backend_carrying_selection_renders_the_line(self):
+        backend = {
+            "id": "example-request-only",
+            "label": "Example request-only backend",
+            "selection": "ON EXPLICIT USER REQUEST ONLY.",
+        }
+        out: list = []
+        og.render_backends(
+            {"backends": [backend]},
+            [(backend, True, "detected")],
+            out,
+            command_text_provider=lambda _b: None,
+        )
+        text = "\n".join(out)
+        assert "**Selection.**" in text
+        assert "ON EXPLICIT USER REQUEST ONLY." in text
+
+
+class TestRenderedCodexCommandKeepsItsSilentFailureFlags:
+    """The rendered command must not quietly lose a flag whose absence is silent.
+
+    references/codex-dispatch.md states the session scratchpad sits outside the
+    writable root under `-s workspace-write`, so a unit told to write there
+    exits 0 having written nothing. The prose beneath the rendered command
+    promises "every element is there because a probe showed its absence fails
+    silently" -- a rendered command missing --add-dir makes that promise false.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _shared_libs_on_path(self, monkeypatch):
+        # The provider degrades to the config fallback when the shared libs are
+        # absent, and a test that accepted the fallback would pass while the
+        # adapter dropped the flag. Put the libs on the path so the ADAPTER
+        # path is the one under test.
+        repo = Path(__file__).resolve().parents[2]
+        for lib in (repo / "plugins" / "llm-scripting-kit" / "lib", repo / "plugins" / "bootstrap"):
+            monkeypatch.syspath_prepend(str(lib))
+
+    def test_the_adapter_rendered_command_grants_the_scratchpad(self):
+        rendered = og.adapter_command_text_provider(
+            {"id": "codex", "command": "codex exec ... -"},
+            model_entries={
+                "sol": {
+                    "id": "sol",
+                    "kind": "harness",
+                    "harness": "codex",
+                    "model": "gpt-5.6-sol",
+                    "effort": "high",
+                }
+            },
+            notes=[],
+        )
+        assert rendered is not None
+        assert "--add-dir" in rendered, (
+            "the rendered codex command dropped --add-dir; the scratchpad is "
+            "outside the writable root, so a write there fails silently"
+        )

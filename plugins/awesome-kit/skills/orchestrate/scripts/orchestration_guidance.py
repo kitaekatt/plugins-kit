@@ -1145,10 +1145,19 @@ def adapter_command_text_provider(
         kwargs: Dict[str, Any] = {"prompt": ""}
         placeholder_root = _placeholder_path("root")
         placeholder_result = _placeholder_path("result")
+        placeholder_scratch = _placeholder_path("scratchpad")
+        allowed_paths = {placeholder_root, placeholder_result}
         if harness == "codex":
             kwargs["output_file"] = placeholder_result
+            # The scratchpad --add-dir is not decoration. Under
+            # `-s workspace-write` the session scratchpad sits outside the
+            # writable root, so a unit told to write there exits 0 having
+            # written nothing -- a silent failure references/codex-dispatch.md
+            # documents. Rendering the command WITHOUT it would hand the reader
+            # a command the surrounding prose promises is complete.
+            kwargs["add_dirs"] = [placeholder_scratch]
+            allowed_paths.add(placeholder_scratch)
         argv = [str(part) for part in build_argv(entry, placeholder_root, **kwargs)]
-        allowed_paths = {placeholder_root, placeholder_result}
         unexpected_paths = [
             part for part in argv if os.path.isabs(part) and part not in allowed_paths
         ]

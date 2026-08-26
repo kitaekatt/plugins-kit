@@ -134,6 +134,7 @@ class HarnessAdapter:
         prompt_file: Optional[PathLike] = None,
         output_file: Optional[PathLike] = None,
         effort: Optional[str] = None,
+        add_dirs: Sequence[PathLike] = (),
     ) -> HarnessInvocation:
         """Build argv and the stdin payload for one ready-to-run dispatch."""
         stdin = self.prompt_stdin(
@@ -146,6 +147,7 @@ class HarnessAdapter:
             prompt_file=prompt_file,
             output_file=output_file,
             effort=effort,
+            add_dirs=add_dirs,
         )
         return HarnessInvocation(argv=tuple(argv), stdin=stdin)
 
@@ -221,8 +223,16 @@ class CodexAdapter(HarnessAdapter):
         prompt_file: Optional[PathLike] = None,
         output_file: Optional[PathLike] = None,
         effort: Optional[str] = None,
+        add_dirs: Sequence[PathLike] = (),
     ) -> list[str]:
-        """Build one Codex argv, leaving the brief on stdin."""
+        """Build one Codex argv, leaving the brief on stdin.
+
+        ``add_dirs`` is forwarded rather than dropped because codex documents a
+        write that fails SILENTLY without it: under ``-s workspace-write`` the
+        session scratchpad is outside the writable root, so a unit told to
+        write there exits 0 having written nothing. An adapter that cannot
+        express the flag would render a command missing it.
+        """
         self._check_entry(entry)
         self._validate_prompt_args(
             prompt=prompt, prompt_file=prompt_file
@@ -242,6 +252,10 @@ class CodexAdapter(HarnessAdapter):
             kwargs["effort"] = effective_effort
         if output_file is not None:
             kwargs["output_file"] = output_file
+        if add_dirs:
+            kwargs["add_dirs"] = [
+                _absolute_path(d, "add_dirs") for d in add_dirs
+            ]
         if self.argv_prefix is not None:
             kwargs["argv_prefix"] = self.argv_prefix
         return build_codex_exec_argv(**kwargs)
@@ -311,9 +325,19 @@ class OpencodeAdapter(HarnessAdapter):
         prompt_file: Optional[PathLike] = None,
         output_file: Optional[PathLike] = None,
         effort: Optional[str] = None,
+        add_dirs: Sequence[PathLike] = (),
     ) -> list[str]:
         """Build one OpenCode argv, leaving the brief on stdin."""
         self._check_entry(entry)
+        if add_dirs:
+            # Refused rather than ignored: opencode has no writable-root set to
+            # extend -- `--dir` confines nothing in the first place -- so a
+            # caller passing add_dirs has a confinement belief this adapter
+            # cannot satisfy and should not appear to.
+            raise HarnessAdapterError(
+                "opencode has no add-dir flag; `--dir` does not confine writes, "
+                "so there is no writable-root set to extend"
+            )
         self._validate_prompt_args(
             prompt=prompt, prompt_file=prompt_file
         )
