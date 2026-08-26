@@ -74,6 +74,15 @@ DEFAULT_MODEL_CONFIG = {
             "key_env": "OPENROUTER_API_KEY",
             "account_check": "openrouter",
         },
+        # HARNESS entries: no base_url, so nothing here calls them over HTTP.
+        # They are shipped because they are codex SUBSCRIPTION models -- nothing
+        # about them is machine-specific, so a fresh machine with codex
+        # reproduces the fleet's routing from shipped defaults alone. Opencode
+        # models are deliberately NOT shipped: they name providers from the
+        # user's own opencode config, which this repo neither ships nor reads,
+        # so there is no default that would resolve anywhere but here.
+        "sol": {"harness": "codex", "model": "gpt-5.6-sol", "effort": "high"},
+        "luna": {"harness": "codex", "model": "gpt-5.6-luna", "effort": "max"},
     },
     "models": {
         "qwen": {"slug": "qwen/qwen3-32b"},

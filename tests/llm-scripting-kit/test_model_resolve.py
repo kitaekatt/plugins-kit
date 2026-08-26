@@ -201,3 +201,43 @@ class TestLoadModelConfig:
         assert "cannot read layered config" in captured.err
         assert "PyYAML" in captured.err
         assert captured.out == ""
+
+
+class TestShippedHarnessEntries:
+    """sol and luna ship in the baseline; nothing else in the fleet has to.
+
+    They are codex subscription models, so a fresh machine with codex
+    reproduces the routing from shipped defaults. Opencode models are
+    deliberately absent -- they name the user's own opencode providers.
+    """
+
+    def test_shipped_harness_entries_are_discoverable_by_kind(self):
+        from llm_scripting_kit import HARNESS_KIND, discover_model_entries
+
+        found = discover_model_entries(config=DEFAULT_MODEL_CONFIG)
+        for entry_id, model, effort in (
+            ("sol", "gpt-5.6-sol", "high"),
+            ("luna", "gpt-5.6-luna", "max"),
+        ):
+            entry = found[entry_id]
+            assert entry.kind == HARNESS_KIND
+            assert entry.harness == "codex"
+            assert entry.model == model
+            assert entry.effort == effort
+            assert entry.base_url is None
+
+    def test_a_shipped_harness_entry_is_refused_as_an_http_endpoint(self):
+        from llm_scripting_kit import EndpointResolveError, resolve_endpoint
+
+        with pytest.raises(EndpointResolveError) as excinfo:
+            resolve_endpoint("sol", config=DEFAULT_MODEL_CONFIG)
+        message = str(excinfo.value)
+        assert "harness" in message
+        assert "codex" in message
+        assert "no 'base_url'" not in message
+
+    def test_no_opencode_entry_ships(self):
+        # Shipping one would name a provider from the author's own opencode
+        # config, which resolves on no other machine.
+        for endpoint in (DEFAULT_MODEL_CONFIG["endpoints"] or {}).values():
+            assert endpoint.get("harness") != "opencode"
