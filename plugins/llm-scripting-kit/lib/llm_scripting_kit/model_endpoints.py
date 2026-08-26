@@ -21,8 +21,9 @@ Absence semantics differ by how the path was chosen, deliberately:
 - OVERRIDE set, file missing -> :class:`EndpointRegistryError`. An explicit
   pointer that dangles is a misconfiguration and must be loud.
 - EITHER path, file EXISTS but is unparseable or schema-invalid ->
-  :class:`EndpointRegistryError` naming the path and the defect. A present
-  registry that cannot be read must never read as a silent empty.
+  :class:`EndpointRegistryError` naming the path and the defect. Individual
+  entries that cannot be classified or validated are skipped with notes, but a
+  present registry that cannot be read must never read as a silent empty.
 
 File schema (``version:`` exists for a true break; unknown keys are ignored so
 the schema can grow additively)::
@@ -37,6 +38,11 @@ the schema can grow additively)::
         context_window: <tokens>            # optional
         reasoning_effort: <effort>          # optional per-entry default
         key_env: <ENV VAR>                  # optional; omitted = keyless
+      <harness entry id>:
+        harness: <harness name>             # required instead of base_url
+        model: <model id>                   # required, what the harness drives
+        effort: <effort>                    # optional harness setting
+        name: <human label>                 # optional
 
 Entry ids are the endpoint names: ``llm_scripting_kit.models.resolve_endpoint``
 injects each entry as a named endpoint, so ``resolve_endpoint("<entry id>")``
@@ -57,6 +63,12 @@ REGISTRY_ENV = "MODEL_ENDPOINTS_REGISTRY"
 #: The conventional location, relative to the user's home directory.
 REGISTRY_RELATIVE_PATH = Path(".claude") / "config" / "model-endpoints.yaml"
 
+# Entry kinds are deliberately strings: the registry is a YAML seam shared by
+# consumers that do not need to import an enum just to decide which adapter can
+# honour an entry.
+TRANSPORT_KIND = "transport"
+HARNESS_KIND = "harness"
+
 
 def default_registry_path() -> Path:
     """The conventional registry path for the current user.
@@ -69,20 +81,28 @@ def default_registry_path() -> Path:
 
 
 class EndpointRegistryError(Exception):
-    """The registry exists but could not be read, or an entry was not found."""
+    """The registry exists but could not be read, or a requested entry is absent."""
 
 
 @dataclass(frozen=True)
 class EndpointEntry:
-    """One declared endpoint. ``key_env`` None means keyless."""
+    """One declared model entry. ``key_env`` None means keyless.
+
+    The first fields retain the original transport-entry order so callers that
+    construct an ``EndpointEntry`` positionally keep working.  A harness entry
+    has ``base_url`` set to None and carries its harness-specific fields.
+    """
 
     id: str
-    base_url: str
+    base_url: Optional[str]
     model: str
     name: Optional[str] = None
     context_window: Optional[int] = None
     reasoning_effort: Optional[str] = None
     key_env: Optional[str] = None
+    kind: str = TRANSPORT_KIND
+    harness: Optional[str] = None
+    effort: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +117,27 @@ class EndpointRegistry:
     default_id: Optional[str] = None
     entries: Dict[str, EndpointEntry] = field(default_factory=dict)
     path: Optional[Path] = None
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def skipped(self) -> list[str]:
+        """Compatibility alias for callers that want the skipped-entry notes."""
+        return self.notes
+
+
+def harness_entry_message(entry_id: str, harness: Optional[str]) -> str:
+    """The one wording for "this entry cannot serve as an HTTP endpoint".
+
+    Both stores refuse a harness entry at their own boundary, and a reader who
+    hits the refusal from either side must not have to recognize two sentences
+    as the same fact. Defined here because ``models`` imports this module and
+    not the reverse.
+    """
+    return (
+        f"endpoint '{entry_id}' is a harness entry (harness: {harness or '<unknown>'}) "
+        "and has no transport base_url; it cannot be used as an "
+        "OpenAI-compatible endpoint"
+    )
 
 
 def _require_str(value: object, *, path: Path, entry_id: str, key: str) -> str:
@@ -152,7 +193,8 @@ def load_endpoint_registry(
 
     Raises:
         EndpointRegistryError: a dangling override path, an unparseable file,
-            or a file whose schema is invalid.
+            or a file whose top-level schema/default is invalid. Individual
+            entry defects are recorded in ``EndpointRegistry.notes``.
     """
     env = os.environ if environ is None else environ
     path, explicit = _resolve_registry_path(env)
@@ -191,37 +233,110 @@ def load_endpoint_registry(
         )
 
     entries: Dict[str, EndpointEntry] = {}
+    notes: list[str] = []
     for entry_id, raw in raw_models.items():
         key = str(entry_id)
         if not isinstance(raw, dict):
-            raise EndpointRegistryError(
-                f"model-endpoints registry '{path}': entry '{key}' is not a mapping"
+            notes.append(
+                f"model-endpoints registry '{path}': entry '{key}' skipped; "
+                "it is not a mapping"
             )
-        entries[key] = EndpointEntry(
-            id=key,
-            base_url=_require_str(raw.get("base_url"), path=path, entry_id=key, key="base_url"),
-            model=_require_str(raw.get("model"), path=path, entry_id=key, key="model"),
-            name=_optional_str(raw.get("name"), path=path, entry_id=key, key="name"),
-            context_window=_optional_int(
-                raw.get("context_window"), path=path, entry_id=key, key="context_window"
-            ),
-            reasoning_effort=_optional_str(
-                raw.get("reasoning_effort"), path=path, entry_id=key, key="reasoning_effort"
-            ),
-            key_env=_optional_str(raw.get("key_env"), path=path, entry_id=key, key="key_env"),
-        )
+            continue
+        has_base_url = "base_url" in raw
+        has_harness = "harness" in raw
+        if has_base_url and has_harness:
+            notes.append(
+                f"model-endpoints registry '{path}': entry '{key}' skipped; "
+                "both 'base_url' and 'harness' are present (contradictory kinds)"
+            )
+            continue
+        if not has_base_url and not has_harness:
+            notes.append(
+                f"model-endpoints registry '{path}': entry '{key}' skipped; "
+                "unknown kind (neither 'base_url' nor 'harness' is present)"
+            )
+            continue
+
+        if has_harness:
+            try:
+                entries[key] = EndpointEntry(
+                    id=key,
+                    base_url=None,
+                    model=_require_str(
+                        raw.get("model"), path=path, entry_id=key, key="model"
+                    ),
+                    name=_optional_str(
+                        raw.get("name"), path=path, entry_id=key, key="name"
+                    ),
+                    kind=HARNESS_KIND,
+                    harness=_require_str(
+                        raw.get("harness"), path=path, entry_id=key, key="harness"
+                    ),
+                    effort=_optional_str(
+                        raw.get("effort"), path=path, entry_id=key, key="effort"
+                    ),
+                )
+            except EndpointRegistryError as exc:
+                notes.append(f"{exc}; entry skipped")
+            continue
+
+        try:
+            entries[key] = EndpointEntry(
+                id=key,
+                base_url=_require_str(
+                    raw.get("base_url"), path=path, entry_id=key, key="base_url"
+                ),
+                model=_require_str(
+                    raw.get("model"), path=path, entry_id=key, key="model"
+                ),
+                name=_optional_str(
+                    raw.get("name"), path=path, entry_id=key, key="name"
+                ),
+                context_window=_optional_int(
+                    raw.get("context_window"), path=path, entry_id=key, key="context_window"
+                ),
+                reasoning_effort=_optional_str(
+                    raw.get("reasoning_effort"),
+                    path=path,
+                    entry_id=key,
+                    key="reasoning_effort",
+                ),
+                key_env=_optional_str(
+                    raw.get("key_env"), path=path, entry_id=key, key="key_env"
+                ),
+                kind=TRANSPORT_KIND,
+            )
+        except EndpointRegistryError as exc:
+            notes.append(f"{exc}; entry skipped")
 
     default_id = data.get("default")
     if default_id is not None:
         default_id = str(default_id)
         if default_id not in entries:
+            # Two different failures reach here and they need different words.
+            # The id may name no entry at all (a typo in `default:`), or it may
+            # name an entry that IS in the file and was skipped by the loop
+            # above. Saying "names no entry" for the second is false, and it
+            # points the reader at the wrong line -- the notes list holds the
+            # real defect but rides on a registry object this raise never
+            # returns, so the diagnostic has to be carried into the message.
+            skipped_note = next(
+                (n for n in notes if f"entry '{default_id}'" in n or f"'{default_id}'" in n),
+                None,
+            )
+            if default_id in {str(k) for k in raw_models}:
+                detail = skipped_note or "the entry was skipped"
+                raise EndpointRegistryError(
+                    f"model-endpoints registry '{path}': default '{default_id}' "
+                    f"names an entry that could not be loaded -- {detail}"
+                )
             known = ", ".join(sorted(entries)) or "<none>"
             raise EndpointRegistryError(
                 f"model-endpoints registry '{path}': default '{default_id}' "
                 f"names no entry (known: {known})"
             )
 
-    return EndpointRegistry(default_id=default_id, entries=entries, path=path)
+    return EndpointRegistry(default_id=default_id, entries=entries, path=path, notes=notes)
 
 
 def resolve_registry_entry(
@@ -245,7 +360,10 @@ def resolve_registry_entry(
                 "the model-endpoints registry declares no 'default' entry "
                 f"(known entries: {known})"
             )
-        return reg.entries[reg.default_id]
+        entry = reg.entries[reg.default_id]
+        if entry.kind == HARNESS_KIND:
+            raise EndpointRegistryError(harness_entry_message(entry.id, entry.harness))
+        return entry
     entry = reg.entries.get(name)
     if entry is None:
         known = ", ".join(sorted(reg.entries)) or "<none>"
@@ -257,7 +375,10 @@ def resolve_registry_entry(
 
 __all__ = [
     "REGISTRY_ENV",
+    "harness_entry_message",
     "REGISTRY_RELATIVE_PATH",
+    "TRANSPORT_KIND",
+    "HARNESS_KIND",
     "default_registry_path",
     "EndpointEntry",
     "EndpointRegistry",

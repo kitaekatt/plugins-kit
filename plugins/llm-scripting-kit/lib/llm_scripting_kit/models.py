@@ -47,7 +47,15 @@ from __future__ import annotations
 import copy
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
+
+from .model_endpoints import (
+    HARNESS_KIND,
+    TRANSPORT_KIND,
+    EndpointEntry,
+    EndpointRegistry,
+    harness_entry_message,
+)
 
 # The name of the endpoint used when a caller does not name one.
 DEFAULT_ENDPOINT_NAME = "openrouter"
@@ -88,6 +96,34 @@ class ModelResolveError(Exception):
 
 class EndpointResolveError(Exception):
     """A named endpoint could not be resolved from the config."""
+
+
+class ModelDiscovery(dict[str, EndpointEntry]):
+    """Merged model entries and non-fatal loader notes.
+
+    The object is a mapping keyed by entry id for callers that only need the
+    entries.  ``entries`` and ``notes`` make the two parts explicit for
+    discovery consumers that also need to surface skipped declarations.
+    """
+
+    def __init__(
+        self,
+        entries: Optional[Mapping[str, EndpointEntry]] = None,
+        *,
+        notes: Optional[list[str]] = None,
+    ) -> None:
+        super().__init__(entries or {})
+        self.notes = list(notes or [])
+
+    @property
+    def entries(self) -> "ModelDiscovery":
+        """Return the id-keyed entries mapping."""
+        return self
+
+    @property
+    def skipped(self) -> list[str]:
+        """Compatibility alias for the non-fatal skip notes."""
+        return self.notes
 
 
 def load_model_config(*, project_root: Optional[str] = None) -> dict:
@@ -164,6 +200,97 @@ def _registry_entry_ids() -> set:
         return set()
 
 
+def _config_entry_kind(ep_name: str, ep: Mapping[str, object]) -> Optional[str]:
+    """Classify one layered-config endpoint by its mutually exclusive address."""
+    has_base_url = "base_url" in ep
+    has_harness = "harness" in ep
+    if has_base_url and has_harness:
+        raise EndpointResolveError(
+            f"endpoint '{ep_name}' declares both 'base_url' and 'harness'; "
+            "the entry kind is contradictory"
+        )
+    if has_harness:
+        return HARNESS_KIND
+    if has_base_url:
+        return TRANSPORT_KIND
+    return None
+
+
+def _config_required_str(
+    ep_name: str,
+    ep: Mapping[str, object],
+    *,
+    kind: str,
+    key: str,
+) -> str:
+    value = ep.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise EndpointResolveError(
+            f"endpoint '{ep_name}' is a {kind} entry and has no '{key}' "
+            "(a non-empty string is required)"
+        )
+    return value.strip()
+
+
+def _config_optional_str(
+    ep_name: str,
+    ep: Mapping[str, object],
+    *,
+    kind: str,
+    key: str,
+) -> Optional[str]:
+    value = ep.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise EndpointResolveError(
+            f"endpoint '{ep_name}' is a {kind} entry and has a non-string "
+            f"'{key}' ({value!r})"
+        )
+    return value.strip()
+
+
+def _config_model_entry(
+    ep_name: str,
+    ep: Mapping[str, object],
+) -> Optional[EndpointEntry]:
+    """Turn a direct config model declaration into the common entry shape.
+
+    The existing ``openrouter`` config is an endpoint wrapper around the
+    top-level model alias map and deliberately has no direct ``model`` field.
+    It remains valid for resolution but is not itself a model definition for
+    merged discovery, so it returns None here.
+    """
+    kind = _config_entry_kind(ep_name, ep)
+    if kind is None:
+        return None
+
+    if kind == HARNESS_KIND:
+        return EndpointEntry(
+            id=ep_name,
+            base_url=None,
+            model=_config_required_str(ep_name, ep, kind=kind, key="model"),
+            name=_config_optional_str(ep_name, ep, kind=kind, key="name"),
+            kind=kind,
+            harness=_config_required_str(ep_name, ep, kind=kind, key="harness"),
+            effort=_config_optional_str(ep_name, ep, kind=kind, key="effort"),
+        )
+
+    if "model" not in ep:
+        return None
+    return EndpointEntry(
+        id=ep_name,
+        base_url=_config_required_str(ep_name, ep, kind=kind, key="base_url"),
+        model=_config_required_str(ep_name, ep, kind=kind, key="model"),
+        name=_config_optional_str(ep_name, ep, kind=kind, key="name"),
+        reasoning_effort=_config_optional_str(
+            ep_name, ep, kind=kind, key="reasoning_effort"
+        ),
+        key_env=_config_optional_str(ep_name, ep, kind=kind, key="key_env"),
+        kind=kind,
+    )
+
+
 def _registry_endpoint(ep_name: str) -> Optional[dict]:
     """Resolve ``ep_name`` as a model-endpoints registry entry, or None.
 
@@ -188,6 +315,15 @@ def _registry_endpoint(ep_name: str) -> Optional[dict]:
     entry = registry.entries.get(ep_name)
     if entry is None:
         return None
+    if entry.kind == HARNESS_KIND:
+        raise EndpointResolveError(
+            harness_entry_message(ep_name, entry.harness)
+        )
+    if entry.kind != TRANSPORT_KIND or not entry.base_url:
+        raise EndpointResolveError(
+            f"endpoint '{ep_name}' has an invalid {entry.kind} entry without a "
+            "transport base_url"
+        )
     return {
         "name": entry.id,
         "base_url": entry.base_url,
@@ -233,6 +369,8 @@ def resolve_endpoint(
     cfg = config if config is not None else load_model_config(project_root=project_root)
     ep_name = name or default_endpoint_name(cfg)
     endpoints = cfg.get("endpoints") or {}
+    if not isinstance(endpoints, dict):
+        raise EndpointResolveError("config 'endpoints' is not a mapping")
     ep = endpoints.get(ep_name)
     if ep is None:
         # Back-compat: a config with no endpoints map at all still resolves the
@@ -263,6 +401,12 @@ def resolve_endpoint(
     if not isinstance(ep, dict):
         raise EndpointResolveError(f"endpoint '{ep_name}' is not a mapping")
 
+    entry_kind = _config_entry_kind(ep_name, ep)
+    if entry_kind == HARNESS_KIND:
+        harness = _config_required_str(ep_name, ep, kind=entry_kind, key="harness")
+        _config_required_str(ep_name, ep, kind=entry_kind, key="model")
+        raise EndpointResolveError(harness_entry_message(ep_name, harness))
+
     is_default = ep_name == DEFAULT_ENDPOINT_NAME
     base_url = ep.get("base_url") or (
         DEFAULT_MODEL_CONFIG["endpoints"]["openrouter"]["base_url"] if is_default else None
@@ -286,9 +430,24 @@ def resolve_endpoint(
                 f"(declare `key_env: null` explicitly for a keyless endpoint)"
             )
 
-    models = ep["models"] if isinstance(ep.get("models"), dict) else (cfg.get("models") or {})
+    # A DIRECT model entry (the config-store counterpart to a registry entry)
+    # supplies its own one-model alias map and its own selectors. All three
+    # decisions below hang off this single predicate on purpose: gating the map
+    # on one condition and the selectors on another lets an endpoint carrying
+    # BOTH `model` and a nested `models:` alias map resolve with selectors
+    # naming an id that is absent from the map it actually chose, which
+    # resolve_model() can only report as an unknown model.
+    is_direct_model = "model" in ep and not isinstance(ep.get("models"), dict)
+    if is_direct_model:
+        models = {ep_name: {"slug": ep["model"]}}
+    else:
+        models = ep["models"] if isinstance(ep.get("models"), dict) else (cfg.get("models") or {})
     default_sel = ep.get("default") or cfg.get("default")
+    if is_direct_model and not ep.get("default"):
+        default_sel = ep_name
     default_cheap_sel = ep.get("defaultCheap") or cfg.get("defaultCheap")
+    if is_direct_model and not ep.get("defaultCheap"):
+        default_cheap_sel = ep_name
     account_check = ep.get("account_check")
     if account_check is None:
         account_check = "openrouter" if is_default else "none"
@@ -302,6 +461,72 @@ def resolve_endpoint(
         "defaultCheap": default_cheap_sel,
         "account_check": account_check,
     }
+
+
+def discover_model_entries(
+    *,
+    config: Optional[dict] = None,
+    project_root: Optional[str] = None,
+    registry: Optional[EndpointRegistry] = None,
+) -> ModelDiscovery:
+    """Return model entries from layered config plus the user registry.
+
+    Entries declared by the layered config are applied after registry entries,
+    preserving the resolution rule that an explicit config entry shadows the
+    same id from the model-endpoints registry.  The legacy endpoint wrapper
+    form (for example the built-in ``openrouter`` record with a nested model
+    alias map) remains available to ``resolve_endpoint`` but is not a direct
+    model definition and is therefore omitted here.
+
+    Registry skip notes are carried through unchanged.  Invalid or unknown
+    direct config declarations are also recorded as notes because discovery is
+    an inspection API and must not make a skipped entry look absent without an
+    explanation.
+    """
+    cfg = config if config is not None else load_model_config(project_root=project_root)
+    if registry is None:
+        from .model_endpoints import load_endpoint_registry  # noqa: PLC0415
+
+        registry = load_endpoint_registry()
+
+    entries = dict(registry.entries)
+    notes = list(getattr(registry, "notes", []))
+    endpoints = cfg.get("endpoints") or {}
+    if not isinstance(endpoints, dict):
+        notes.append("layered config 'endpoints' skipped; it is not a mapping")
+        return ModelDiscovery(entries, notes=notes)
+
+    config_ids: set[str] = set()
+    config_entries: dict[str, EndpointEntry] = {}
+    for entry_id, raw in endpoints.items():
+        key = str(entry_id)
+        if not isinstance(raw, dict):
+            notes.append(f"layered config endpoint '{key}' skipped; it is not a mapping")
+            continue
+        try:
+            kind = _config_entry_kind(key, raw)
+            if kind is None:
+                notes.append(
+                    f"layered config endpoint '{key}' skipped; unknown kind "
+                    "(neither 'base_url' nor 'harness' is present)"
+                )
+                continue
+            config_ids.add(key)
+            entry = _config_model_entry(key, raw)
+        except EndpointResolveError as exc:
+            notes.append(f"layered config endpoint '{key}' skipped: {exc}")
+            continue
+        if entry is not None:
+            config_entries[key] = entry
+
+    # A recognized config endpoint remains the deliberate shadow even when it
+    # is an old-style wrapper with no direct model or a malformed declaration;
+    # silently falling back to a same-id registry entry would defeat the
+    # config-vs-registry override rule.
+    for key in config_ids:
+        entries.pop(key, None)
+    entries.update(config_entries)
+    return ModelDiscovery(entries, notes=notes)
 
 
 def resolve_model(

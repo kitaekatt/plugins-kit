@@ -15,6 +15,7 @@ from llm_scripting_kit import (
     EndpointResolveError,
     KeyLookupResult,
     ModelResolveError,
+    discover_model_entries,
     resolve_endpoint,
     resolve_model,
     validate_endpoint,
@@ -290,6 +291,85 @@ class TestRegistryEndpoints:
         assert ep["base_url"] == "http://shadow.invalid/v1"
         assert ep["key_env"] == "SHADOW_KEY"
 
+    def test_registry_harness_entry_is_refused_by_openai_resolution(self, registry_file):
+        registry_file.write_text(
+            "models:\n  sol:\n    harness: codex\n    model: gpt-5.6-sol\n",
+            encoding="utf-8",
+        )
+        from llm_scripting_kit import models
+
+        with pytest.raises(EndpointResolveError) as exc:
+            models._registry_endpoint("sol")
+        msg = str(exc.value)
+        assert "sol" in msg
+        assert "harness" in msg
+        assert "codex" in msg
+
+        with pytest.raises(EndpointResolveError) as resolve_exc:
+            resolve_endpoint("sol", config={"endpoints": {}})
+        assert "harness" in str(resolve_exc.value)
+
+    def test_config_harness_entry_is_refused_by_openai_resolution(self):
+        config = {"endpoints": {"sol": {"harness": "codex", "model": "gpt-5.6-sol"}}}
+        with pytest.raises(EndpointResolveError) as exc:
+            resolve_endpoint("sol", config=config)
+        msg = str(exc.value)
+        assert "sol" in msg
+        assert "harness" in msg
+        assert "codex" in msg
+
+    def test_discovery_merges_config_and_registry_with_cross_kind_shadowing(self):
+        from llm_scripting_kit.model_endpoints import EndpointEntry, EndpointRegistry
+
+        registry = EndpointRegistry(
+            entries={
+                "transport-shadow": EndpointEntry(
+                    "transport-shadow", "http://registry.invalid/v1", "registry-model"
+                ),
+                "harness-shadow": EndpointEntry(
+                    "harness-shadow",
+                    None,
+                    "registry-model",
+                    kind="harness",
+                    harness="codex",
+                ),
+                "registry-only": EndpointEntry(
+                    "registry-only", "http://registry.invalid/v1", "registry-only-model"
+                ),
+            },
+            notes=["registry entry 'mystery' skipped; unknown kind"],
+        )
+        config = {
+            "endpoints": {
+                "transport-shadow": {
+                    "base_url": "http://config.invalid/v1",
+                    "model": "config-transport-model",
+                },
+                "harness-shadow": {
+                    "harness": "opencode",
+                    "model": "config-harness-model",
+                    "effort": "medium",
+                },
+                "config-only": {
+                    "harness": "codex",
+                    "model": "config-only-model",
+                },
+            }
+        }
+
+        discovered = discover_model_entries(config=config, registry=registry)
+
+        assert discovered.entries is discovered
+        assert discovered.notes == registry.notes
+        assert discovered["transport-shadow"].kind == "transport"
+        assert discovered["transport-shadow"].model == "config-transport-model"
+        assert discovered["harness-shadow"].kind == "harness"
+        assert discovered["harness-shadow"].harness == "opencode"
+        assert discovered["harness-shadow"].model == "config-harness-model"
+        assert discovered["harness-shadow"].effort == "medium"
+        assert discovered["config-only"].kind == "harness"
+        assert discovered["registry-only"].kind == "transport"
+
     def test_unknown_name_with_no_registry_raises_as_before(self, no_registry):
         with pytest.raises(EndpointResolveError, match="unknown endpoint 'nope'"):
             resolve_endpoint("nope", config=CUSTOM_CFG)
@@ -369,3 +449,55 @@ class TestUnknownEndpointNamesBothNamespaces:
 
         with pytest.raises(EndpointResolveError, match="unknown endpoint 'nope'"):
             models.resolve_endpoint("nope", config={"endpoints": {"openrouter": {}}})
+
+
+class TestDirectModelEntryPredicate:
+    """The three direct-model decisions must hang off ONE predicate.
+
+    An endpoint carrying both a `model` string and a nested `models:` alias map
+    is the shape that catches a split predicate: choose the alias map but force
+    the selectors to the endpoint id, and resolve_model() looks up an id that
+    map cannot contain.
+    """
+
+    MIXED_CFG = {
+        "endpoints": {
+            "mixed": {
+                "base_url": "http://mixed.invalid/v1",
+                "key_env": None,
+                "model": "ignored/direct-slug",
+                "models": {"alias": {"slug": "vendor/aliased-slug"}},
+                "default": "alias",
+            }
+        },
+        "models": {},
+        "default": None,
+    }
+
+    DIRECT_CFG = {
+        "endpoints": {
+            "direct": {
+                "base_url": "http://direct.invalid/v1",
+                "key_env": None,
+                "model": "vendor/direct-slug",
+            }
+        },
+        "models": {},
+        "default": None,
+    }
+
+    def test_nested_alias_map_wins_and_selectors_stay_consistent(self):
+        ep = resolve_endpoint("mixed", config=self.MIXED_CFG)
+        assert ep["default"] in ep["models"]
+        assert resolve_model(config=self.MIXED_CFG, endpoint="mixed") == (
+            "vendor/aliased-slug"
+        )
+
+    def test_direct_model_entry_supplies_its_own_map_and_selectors(self):
+        ep = resolve_endpoint("direct", config=self.DIRECT_CFG)
+        assert ep["models"] == {"direct": {"slug": "vendor/direct-slug"}}
+        assert ep["default"] == "direct"
+        assert ep["defaultCheap"] == "direct"
+        assert resolve_model(config=self.DIRECT_CFG, endpoint="direct") == (
+            "vendor/direct-slug"
+        )
