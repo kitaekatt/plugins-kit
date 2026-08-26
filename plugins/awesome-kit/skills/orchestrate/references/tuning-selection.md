@@ -1,139 +1,106 @@
-# Tuning how often a rung gets selected
+# Tuning routing-row selection
 
-You have read the rendered policy, and some rung is firing more or less often
-than you want -- the top rung almost never wins, or the terminal rung swallows
-everything. This document is the tuning guide: which keys move selection
-frequency, which way, and how far.
-
-It is not the schema. [configuration.md](configuration.md) documents every key,
-the layer model, and merge semantics; read it for *what a key is*. Read this for
-*which key to turn*.
+You have read the rendered policy and a routing row is matching more or less often than you
+want. This document describes which configuration keys change that frequency. It is not the
+schema; [configuration.md](configuration.md) documents every key, layer, and merge rule.
 
 ## The mental model
 
-A rung's selection rate is not set anywhere. It falls out of how hard its
-criteria are to satisfy, evaluated by ordered elimination -- first match wins. So
-there is no "use fable more" setting, and adding one would be a lie: the only way
-to move the rate is to change what the rung asks for, or what the rungs above it
-take first.
+Selection is the result of ordered rows. A row matches when every shape term in its `shape`
+list applies to the unit. The first matching row wins. There is no separate frequency setting.
+To change frequency, change the shape test, row order, or the model list attached to a row.
 
-Two consequences worth holding onto:
+Two consequences matter:
 
-- **Criteria compose multiplicatively.** A rung requiring three criteria at once
-  is not three times harder to reach than a one-criterion rung -- it is harder by
-  the product of each criterion's rejection rate. Adding or removing a single
-  conjunct is the largest single move available.
-- **Rungs compete.** Loosening a rung takes work away from the rung below it, not
-  from nowhere. Every knob below is zero-sum across the ladder.
+- A row with more shape terms is narrower because all of its terms must match.
+- Row order is substantive. Moving a broad row above a narrow row diverts work from the narrow
+  row; moving it below makes it a fallback.
 
 ## The knobs, ranked by travel per risk
 
-Travel = how much it moves the rate. Risk = how bad it is if you overshoot.
-The best knob has real travel and reverses cleanly.
-
 | Knob | Travel | Risk | Reverses |
 |---|---|---|---|
-| `lexicon[].test` / `.gloss` -- reword a criterion | high | low | cleanly |
-| `rungs[].criteria` -- add/drop a conjunct | very high | high | cleanly |
-| `rungs[].guards` -- the never-list | medium | low | cleanly |
-| `rungs[].gate` -- the justification ritual | medium | low | cleanly |
-| `rungs[].shape` -- `open` / `known` restriction | high | medium | cleanly |
-| `rungs[].disabled: true` | total | total | cleanly |
+| `lexicon[].test` / `.gloss` -- reword a shape term | high | low | cleanly |
+| `routing[].shape` -- add or remove a shape term | very high | high | cleanly |
+| `routing` row order -- move a row | very high | high | cleanly |
+| `routing[].models` -- change priority or fallback | medium | medium | cleanly |
+| `routing[].gate` / `.guards` -- refine the decision ritual | medium | low | cleanly |
+| `routing[].shape: []` -- change the default row | total | total | cleanly |
 
-All of them reverse cleanly, because overrides are sparse: delete the key and the
-default returns. That is what makes tuning by observation safe -- you are never
-one edit away from an unrecoverable policy.
+Overrides are sparse. A routing override replaces the complete list, so copy every row you
+intend to retain before editing it. Delete the override to restore the shipped list.
 
-### Rewording a criterion (start here)
+### Rewording a shape term
 
-The highest-value knob, because it is usually not a *calibration* problem at all.
-A criterion can reject far more than intended because its wording does not say
-what it means, and that reads as "the bar is too high" when the real defect is
-that the bar is aimed wrong.
-
-The tell: the criterion disqualifies on the existence of some condition rather
-than on whether that condition is *relevant*. Compare a check on whether any
-cheap verification exists against a check on whether cheap verification would
-catch the error that actually matters -- nearly all substantive work has some
-shallow check available, so the first form rejects almost everything while the
-second rejects only what is genuinely covered.
-
-Before assuming a rung is too strict, read its criteria and ask whether each one
-means what you want it to mean. Re-stating is a smaller, safer change than moving
-a bar, and it usually explains the symptom better.
+Start here when a row rejects too much or too little. The issue may be a test that describes a
+different question from the one the row needs to answer. Change one lexicon record by id:
 
 ```yaml
 lexicon:
-- id: unverifiable
+- id: novel
   test: >-
-    <your wording -- what makes an error invisible in YOUR work>
+    <your wording -- what makes the unit lack an established pattern>
   gloss: >-
-    <the short form the rendered tree shows inline>
+    <the short form the rendered policy shows inline>
 ```
 
-`lexicon[]` merges by `id`, so this patches that one term and leaves every other
-untouched.
+The routing shape name stays stable while its dispatch-time test becomes clearer.
 
-### Adding or dropping a conjunct
+### Adding or dropping a shape term
 
-The biggest hammer. Dropping one conjunct from a three-way requirement can move a
-rung from rare to common in a single edit, which is exactly why it is the highest
-risk on the table.
+This is the strongest routing adjustment. A row containing `[novel, load-bearing]` requires
+both signals; `[novel]` is broader. Dropping a term can divert a large population, so name the
+failure mode that the term had been excluding before removing it.
 
 ```yaml
-ladders:
-- id: agent
-  rungs:
-  - id: top
-    criteria:
-    - [novel, load-bearing]
+routing:
+- shape: [novel, load-bearing]
+  models: [agent:fable, sol]
 ```
 
-Before doing this, satisfy yourself that the conjunct you are dropping is not
-guarding a distinct failure. A conjunction is usually three different questions,
-not one question asked three ways; dropping the one that guards *consequence*
-gets you a rung that fires on interesting-but-harmless work.
+### Moving a row
 
-### The gate and the guards
+Rows are an ordered list, not an unordered set. Keep narrow rows above broad rows when the
+narrow case should win. Keep the empty-shape row last unless it is intentionally the only row.
 
-Softer than criteria and often enough on their own. A gate demanding a written
-justification is a real filter -- the friction is the mechanism, and removing it
-raises the rate without changing a single criterion. A never-list is pure
-debiasing: it names work that satisfies the criteria on paper but should not go
-there anyway.
+### Changing model priority
 
-Reach for these when the criteria are right but the rung is being reached for too
-eagerly, or too timidly, in practice.
+The first surviving model in a row is the preferred target. Later entries are fallback targets
+for launch or transport errors. An unprefixed model must be an entry exposed by
+`llm_scripting_kit`; an `agent:` name must belong to the Agent tool's fixed menu.
 
-### Disabling a rung
+```yaml
+routing:
+- shape: [fan-out]
+  models: [luna, agent:sonnet]
+```
 
-`disabled: true` removes it from the ladder entirely and sends its work to the
-next rung down. Use it when a tier is unavailable to you, not to express a
-preference -- a disabled rung renders as absent rather than as declined, so
-readers cannot tell you made a choice.
+The renderer skips unresolved entries and drops a row whose entries all fail to resolve. Use
+`--explain` to see the reason for each skipped entry.
 
-## Measuring what you changed
+### The gate and guards
 
-Turning a knob by feel and turning it by measurement are different activities,
-and it is worth knowing which one you are doing. Selection frequency is not
-recorded anywhere by default.
+A gate is a required justification before dispatch. A guard names a case that must not take the
+row. Use these when the shape terms are correct but the decision needs an explicit check or a
+debiasing instruction. They do not change matching by themselves; they make the decision
+visible to the orchestrator.
 
-The announcement line is the instrument. Every dispatch announces its rung and
-the terms that fired, so a period of announcements is a tally: which rungs won,
-and which criteria were doing the rejecting. Collect a few weeks, then tune
-against the tally rather than the impression.
+## Measuring what changed
 
-A felt frequency is a legitimate reason to *start* tuning. It is a poor reason to
-stop, because the thing that changed may be the work you happened to do.
+The announcement line is the instrument. It records the target and the shape terms from the
+matched row. A fallback also records `fell through from <id>`. Collect a sample of
+announcements, compare row frequencies, and adjust one key at a time.
+
+A felt frequency is a legitimate reason to start tuning. It is a poor reason to stop, because
+the work mix may be the thing that changed.
 
 ## What not to do
 
-- **Do not tune by overriding `capacity.tier_overrides`.** That is a manual
-  pin for a specific situation, not a policy control; it will not survive the
-  situation it was set for.
-- **Do not edit the shipped defaults file in place.** It lives inside the plugin
-  and is replaced on every update. Overrides are the supported path, and they
-  keep tracking upstream defaults for every key you did not touch.
-- **Do not compensate for a wrong rung by loosening the one above it.** Work
-  arriving at the wrong rung usually means a criterion is mis-stated; loosening
-  the neighbour moves the symptom and leaves the cause.
+- Do not tune by changing `capacity`. Capacity reports account-wide windows and does not select
+  a model.
+- Do not add command text to a routing row. Command construction belongs to the machine
+  backend's provider seam.
+- Do not edit the shipped defaults file as a user. Put the complete replacement list in the
+  user or project layer.
+- Do not fix a wrong row by broadening a different row. Correct the shape test or row order
+  that caused the mismatch.

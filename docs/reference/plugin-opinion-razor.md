@@ -25,7 +25,7 @@ real user to fight the plugin or abandon it.
 
 **Workflow opinion** -- an assumption about how the user works, rather than something
 intrinsic to the plugin's job. Branch names, directory layouts, which VCS, whether a file
-must be committed, review rosters, model tiers, thresholds, cadences.
+must be committed, review rosters, model routing, thresholds, cadences.
 
 **Intrinsic assumption** -- something the plugin cannot do its job without. A Perforce
 plugin assuming Perforce is intrinsic; a Python plugin assuming Python is intrinsic.
@@ -141,7 +141,7 @@ the config key and its default, or state the scenarios you tried and why they fa
 opinion nobody has tested is the finding -- not the opinion itself.
 
 **Worked example of the test PASSING (two distinct scenarios).** git-kit and p4-kit fix
-their reviewer roster and model tiers inside SKILL.md: sonnet for compliance, opus for both
+their reviewer roster and model routing inside SKILL.md: sonnet for compliance, opus for both
 bug lanes, opus validators. (1) A power user near their weekly usage limit wants sonnet
 everywhere to protect the opus pool -- an acutely realistic preference, since the
 orchestrate policy this marketplace ships renders a live capacity readout precisely because
@@ -164,11 +164,11 @@ is one message naming the exact fix ("pass an explicit range"). No uninstall, no
 remediation, no second distinct scenario. FAILS -- so it gets no config key. If the omission
 still bothers you, widen the hardcoded list; that is a one-line default change, not a seam.
 
-**Worked example of (a) done right.** `orchestrate` renders its entire policy -- tiers,
+**Worked example of (a) done right.** `orchestrate` renders its entire policy -- routing,
 backends, agent types, effort, capacity thresholds -- from `defaults/orchestration.yaml`
 through a three-layer merge (shipped, then user, then project), with record-id merge
 semantics, sparse overrides, and `disabled: true` to remove a record. Its SKILL.md goes
-further and states that it carries no tier table *deliberately*, so the policy cannot be
+further and states that it carries no routing table *deliberately*, so the policy cannot be
 answered from memory instead of from configuration.
 
 **Worked example of (a) done right, differently.** `skills-kit:md-domain` buckets its rules
@@ -181,11 +181,11 @@ authored by the consumer in their own CLAUDE.md. The plugin supplies the mechani
 holds no opinion about what must happen before a submit. Where this shape is available it
 beats both outcomes of the razor, because there is no default to be wrong.
 
-**Worked example of (a) done right.** `orchestrate` renders its entire policy -- tiers,
+**Worked example of (a) done right.** `orchestrate` renders its entire policy -- routing,
 backends, agent types, effort, capacity thresholds -- from `defaults/orchestration.yaml`
 through a three-layer merge (shipped, then user, then project), with record-id merge
 semantics, sparse overrides, and `disabled: true` to remove a record. Its SKILL.md goes
-further and states that it carries no tier table *deliberately*, so the policy cannot be
+further and states that it carries no routing table *deliberately*, so the policy cannot be
 answered from memory instead of from configuration.
 
 **Worked example of (a) done right, differently.** `skills-kit:md-domain` buckets its rules
@@ -285,7 +285,7 @@ so an audit neither rediscovers them as new nor re-litigates the ones that faile
 |---|---|---|---|
 | awesome-kit:task | `dev/tasks/<stub>` is durable and must be committed | **Serious, and evidenced:** this repo gitignores `dev/` and had to instruct readers to treat the resulting blocking warnings as noise. Second: a user whose durable folder is `docs/tasks` or `.tasks` cannot express it -- the two prefixes are argparse `choices`. | `durability_roots` mapping + an off switch for the uncommitted-folder rule |
 | awesome-kit:task | git is the privileged, automated VCS | **Serious:** a Perforce user -- an audience this marketplace explicitly serves via p4-kit and unreal-kit -- gets a permanently degraded path where `archive` silently does no VCS work and every retirement is manual. | `vcs: git\|p4\|none`, default auto-detect-git |
-| git-kit, p4-kit | reviewer roster and model tiers fixed in SKILL.md | **Two distinct** (see OP-2 above): the usage-limited user wanting cheaper tiers, and the user wanting to add or re-route a lane. Hit in practice while writing this doc. | layered `review_profiles.yaml` |
+| git-kit, p4-kit | reviewer roster and model routing fixed in SKILL.md | **Two distinct** (see OP-2 above): the usage-limited user wanting cheaper models, and the user wanting to add or re-route a lane. Hit in practice while writing this doc. | layered `review_profiles.yaml` |
 
 ### FAILS -- correctly hardcoded, do not open these
 

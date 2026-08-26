@@ -9,8 +9,8 @@ one-line command: `defaults/orchestration.yaml`, `backends[id: grok]`.
 
 ## When this backend runs at all
 
-Only when the user names it. Grok sits on no ladder, in no gate, and in no
-pull, so nothing in the decision tree resolves here; its backend block opens
+Only when the user names it. Grok is not a routing target, so no shape row
+resolves here; its backend block opens
 with a `Selection.` line saying so. A user who says "grok" means this backend
 at `-m grok-4.6`.
 

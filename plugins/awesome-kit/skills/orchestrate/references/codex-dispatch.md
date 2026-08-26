@@ -71,9 +71,8 @@ Launch each unit as its own Bash tool call with run_in_background: true.
 
 Per-unit knobs on top of that shape:
 
-  -m, --model <MODEL>      The rung. Model ids are FULLY QUALIFIED --
-                           `gpt-5.6-sol`, not the bare codename, which is not
-                           dispatchable and fails at launch.
+  -m, --model <MODEL>      The provider model value. Routing uses an entry id;
+                           the rendered target carries the harness and entry id.
   -c model_reasoning_effort=<low|medium|high|xhigh|max>
                            The effort dial, and a `-c` CONFIG KEY rather than a
                            flag -- `codex exec --help` does not list it, so
