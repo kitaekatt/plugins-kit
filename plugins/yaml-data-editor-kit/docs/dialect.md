@@ -230,6 +230,39 @@ strings -- the same list whose ORDER is load-bearing, so it cannot be
 converted into a record table without losing that -- would have no reachable
 home.
 
+`values_from:` also accepts a LIST of paths, in which case the legal set is
+the UNION of what each one resolves to (FINDING D-1: a real key set is
+sometimes the union of two declared sets, and one path could not express
+that):
+
+```yaml
+weapon_stats:
+  type: map
+  key:
+    type: enum
+    values_from: [stat.id, weapon_stat_table.derived_fields]
+  value: { type: float }
+```
+
+A value present under more than one member path is legal and counted once --
+the legal set is a SET, not a concatenation. A single path is still legal and
+RESOLVES exactly as it always has (a bare string is the same as a
+one-element list); a list must name at least one path, and the same path may
+not appear in it twice. This extends `values_from:` only -- `record_keys_from:`
+(below) still takes a single path (a list there is refused with a clear
+message, not silently misread); nothing in the corpus this dialect was
+designed against has needed a union of record-key sets, and a sibling
+construct is not grown ahead of a real case.
+
+As of 0.10.0, a message that lists a legal set -- an out-of-set map key or
+enum value, an out-of-set predicate value -- caps the listing at 12 members
+(`...` past that), the same cap on every site that renders one, whether the
+set came from one path or several. Before 0.10.0 one such site (a map-key
+step checked at corpus-load time) rendered the full set uncapped; that was
+an inconsistency with the other two sites, not a feature, and the cap now
+applies everywhere a legal set is listed -- including a single-path
+`values_from:` whose set happens to exceed 12 members.
+
 A third form exists for a value whose STORED form is not its label:
 
 ```yaml
@@ -543,7 +576,11 @@ nothing.
 Several constructs name a value rather than declaring one: `values_from:`,
 `shape_from:`, `record_keys_from:`, a constraint's `ids:` / `from:` / `to:`, a
 `routes:` target, and a `view` entry's `field:`. They all take a PATH, and
-there are exactly two forms.
+there are exactly two forms. `values_from:` alone may take a LIST of paths
+instead of one (see "`enum` -- and where legal values live" above); every
+other construct in this list, and every path form below, is unaffected --
+each element of a `values_from:` list is an ordinary single path, walked and
+checked exactly as described here.
 
 - An **anchored path** starts at a type: `<type>.<segment>[.<segment>]*` --
   `gear_manifest.slot_order`, `component_def.fields`, `app.templates.entities`.

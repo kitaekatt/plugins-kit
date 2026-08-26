@@ -378,7 +378,7 @@ def _parse_enum(spec: FieldSpec, raw: dict, where: str, document: Path) -> None:
             document,
         )
     if has_from:
-        spec.values_from = _as_path(raw["values_from"], "values_from", where, document)
+        spec.values_from = _as_paths(raw["values_from"], "values_from", where, document)
         return
 
     values = raw["values"]
@@ -443,7 +443,21 @@ def _as_path(raw: Any, key: str, where: str, document: Path) -> str:
     the nesting a profile actually declared. All this checks is shape: at
     least one segment past the anchor, and no empty segment (which also
     catches a leading or trailing dot).
+
+    Only ``values_from:`` accepts a LIST of these (see ``_as_paths``); every
+    other single-path construct (``shape_from:``, ``partial_of:`` routes, a
+    constraint's ``ids:``/``from:``/``to:``, ``record_keys_from:``) still
+    calls this function directly, so a list here is refused with a message
+    naming the mistake -- without this, a list would fall through to
+    ``str(raw)`` and produce an unresolvable, confusing path made of Python's
+    own list repr.
     """
+    if isinstance(raw, list):
+        raise ProfileError(
+            "{0}: '{1}:' takes a single path, not a list; only 'values_from:' "
+            "accepts a list of paths".format(where, key),
+            document,
+        )
     text = str(raw)
     segments = text.split(".")
     if len(segments) < 2 or any(not segment for segment in segments):
@@ -454,6 +468,43 @@ def _as_path(raw: Any, key: str, where: str, document: Path) -> str:
             document,
         )
     return text
+
+
+def _as_paths(raw: Any, key: str, where: str, document: Path) -> tuple[str, ...]:
+    """One or more ANCHORED paths (``values_from:``'s dialect-level type).
+
+    A bare string is the scalar form -- normalized here to a one-element
+    tuple so every consumer downstream sees one shape (``tuple[str, ...]``)
+    and a single path is handled by the exact same code as a list of one,
+    rather than by a parallel ``isinstance(..., str)`` branch that could
+    drift from it. A list form is the union: the legal set is every member
+    path's resolved set, unioned. An empty list declares no members at all,
+    which is a key set nothing can ever satisfy, so it is refused here
+    rather than surfacing later as "the declared set is empty" once per
+    corpus use. A path repeated in the list is refused too -- it changes
+    nothing about the union it contributes to, so it is far more likely a
+    copy-paste slip than an intentional restatement.
+    """
+    if not isinstance(raw, list):
+        return (_as_path(raw, key, where, document),)
+    if not raw:
+        raise ProfileError(
+            "{0}: '{1}:' is a list but names no paths -- a key set with no "
+            "members admits no map key".format(where, key),
+            document,
+        )
+    paths: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        path = _as_path(item, key, where, document)
+        if path in seen:
+            raise ProfileError(
+                "{0}: '{1}:' lists path '{2}' more than once".format(where, key, path),
+                document,
+            )
+        seen.add(path)
+        paths.append(path)
+    return tuple(paths)
 
 
 def _parse_extensible(
@@ -767,16 +818,17 @@ def _resolve_field(profile: Profile, field: FieldSpec, where: str, owner: TypeSp
                 document,
             )
     if field.values_from is not None:
-        walked = _resolve_value_path(
-            profile,
-            field.values_from,
-            where,
-            document,
-            value_set_owner=field,
-        )
-        _refuse_identity_less_id_set(
-            profile, walked, "values_from", where, document
-        )
+        for member_path in field.values_from:
+            walked = _resolve_value_path(
+                profile,
+                member_path,
+                where,
+                document,
+                value_set_owner=field,
+            )
+            _refuse_identity_less_id_set(
+                profile, walked, "values_from", where, document
+            )
     if field.shape_from is not None:
         _resolve_value_path(profile, field.shape_from, where, document)
     if field.partial_of is not None:
@@ -1046,28 +1098,38 @@ def _check_key_membership(
 
 
 def _check_value_set_cycles(profile: Profile) -> None:
-    """Reject enum value sets whose path key checks depend on themselves."""
-    walks_by_owner: dict[int, PathWalk] = {}
+    """Reject enum value sets whose path key checks depend on themselves.
+
+    A ``values_from:`` field owns one walk PER member path (a list form has
+    several), so an owner is tracked by every walk it produced rather than
+    by a single one -- a cycle can run through ANY of an owner's member
+    paths, not only its first.
+    """
+    walks_by_owner: dict[int, list[PathWalk]] = {}
     for walked in profile.path_walks:
         if walked.value_set_owner is not None:
-            walks_by_owner.setdefault(id(walked.value_set_owner), walked)
+            walks_by_owner.setdefault(id(walked.value_set_owner), []).append(walked)
 
-    dependencies: dict[int, list[tuple[int, PathKeyStep]]] = {}
-    for owner_id, walked in walks_by_owner.items():
-        edges: list[tuple[int, PathKeyStep]] = []
-        for step in walked.key_steps:
-            key_spec = step.key_spec
-            if (
-                key_spec is not None
-                and key_spec.kind == "enum"
-                and key_spec.values_from is not None
-            ):
-                dependency_id = id(key_spec)
-                if dependency_id not in walks_by_owner:
-                    raise RuntimeError(
-                        "enum key 'values_from:' has no recorded path walk"
-                    )
-                edges.append((dependency_id, step))
+    # Each edge remembers the SPECIFIC member-path walk of its owner that
+    # crossed the dependency, so a cycle report names the path that actually
+    # cycles rather than an arbitrary member of a multi-path owner.
+    dependencies: dict[int, list[tuple[int, PathKeyStep, PathWalk]]] = {}
+    for owner_id, walks in walks_by_owner.items():
+        edges: list[tuple[int, PathKeyStep, PathWalk]] = []
+        for walked in walks:
+            for step in walked.key_steps:
+                key_spec = step.key_spec
+                if (
+                    key_spec is not None
+                    and key_spec.kind == "enum"
+                    and key_spec.values_from is not None
+                ):
+                    dependency_id = id(key_spec)
+                    if dependency_id not in walks_by_owner:
+                        raise RuntimeError(
+                            "enum key 'values_from:' has no recorded path walk"
+                        )
+                    edges.append((dependency_id, step, walked))
         dependencies[owner_id] = edges
 
     state: dict[int, int] = {}
@@ -1076,6 +1138,7 @@ def _check_value_set_cycles(profile: Profile) -> None:
             continue
         state[root_id] = 1
         path_nodes = [root_id]
+        taken_walks: list[PathWalk] = []
         frames: list[tuple[int, int]] = [(root_id, 0)]
         while frames:
             owner_id, edge_index = frames[-1]
@@ -1084,37 +1147,37 @@ def _check_value_set_cycles(profile: Profile) -> None:
                 state[owner_id] = 2
                 frames.pop()
                 path_nodes.pop()
+                if taken_walks:
+                    taken_walks.pop()
                 continue
 
-            dependency_id, step = edges[edge_index]
+            dependency_id, step, walked_edge = edges[edge_index]
             frames[-1] = (owner_id, edge_index + 1)
             dependency_state = state.get(dependency_id, 0)
             if dependency_state == 0:
                 state[dependency_id] = 1
                 path_nodes.append(dependency_id)
+                taken_walks.append(walked_edge)
                 frames.append((dependency_id, 0))
                 continue
             if dependency_state == 2:
                 continue
 
             cycle_start = path_nodes.index(dependency_id)
-            cycle_nodes = path_nodes[cycle_start:] + [dependency_id]
-            cycle = " -> ".join(walks_by_owner[node].path for node in cycle_nodes)
-            types = ", ".join(
-                sorted({walks_by_owner[node].type_id for node in cycle_nodes})
-            )
-            walked = walks_by_owner[owner_id]
+            cycle_walks = taken_walks[cycle_start:] + [walked_edge]
+            cycle = " -> ".join(w.path for w in cycle_walks)
+            types = ", ".join(sorted({w.type_id for w in cycle_walks}))
             raise ProfileError(
                 "{0}: cyclic 'values_from:' declarations ({1}); resolving path '{2}' "
                 "steps through map '{3}', whose enum key depends on the cycle; types "
                 "involved: {4}".format(
-                    walked.where,
+                    walked_edge.where,
                     cycle,
-                    walked.path,
+                    walked_edge.path,
                     step.anchored_map_path,
                     types,
                 ),
-                walked.document,
+                walked_edge.document,
             )
 
 

@@ -62,6 +62,14 @@ places, and both are worth stating as the actual shape of the problem:
    from a second type; a reverse index. The dialect is strong within one type
    and weak between types.
 
+   **PARTIALLY SUPERSEDED.** The first example is no longer true. `values_from:`
+   (dialect.md, "UNION of what each one resolves to", D-1 row below, marked
+   RESOLVED) now takes a list of paths and unions their resolved sets, which is
+   exactly a key set that is the union of two declared sets. The other three
+   examples in this cluster (a foreign field that is really a reference, a
+   view column drawn from a second type, a reverse index) are unaffected --
+   this is still cluster 2's shape overall, just with one example closed.
+
 ## Findings, by severity
 
 | id | What breaks | Corpus evidence | Minimal fix |
@@ -69,7 +77,7 @@ places, and both are worth stating as the actual shape of the problem:
 | D-9 | **APPLIED** (dialect.md, "records that are values") -- `keyed_map` requires `of:` to name a TYPE, but the values are a map of numbers or a list of refs | `prices.yaml`, `stat-pools.yaml` (both inexpressible), `weapon-stats.yaml` (half) | let `keyed_map` take `value:` as an alternative to `of:`; let `of:` name the type whose fields are the metadata keys |
 | D-12 | **UNAPPLIED** (no hit for `shape_overrides`) -- `shape_from` cannot enrich an INDIVIDUAL foreign field, so a declared `string` that is really a ref, and an `i32` that is really an enum, stay dumb | all 35 `entities/*.yaml`, `app.yaml` `spawn_list` | `shape_overrides:` on the `shape_from` declaration |
 | D-5 | **APPLIED** (dialect.md, "`total: true` applies to a map whose key has a declared set") -- no way to say a map is TOTAL over its key enum | `manifest.yaml` `counts`; `prices.yaml` states a missing pair is a BUILD FAILURE | `total: true` on a map field |
-| D-1 | **UNAPPLIED** (dialect.md, "`values_from:` also accepts a path to a LIST-OF-SCALARS field", added a single-path LIST-OF-SCALARS form, a different capability; a UNION of two paths, the fix this row actually proposes, has no hit) -- `values_from:` takes ONE path, but a real key set is a UNION of two | `gear.weapon_stats` keys = `stat.id` + `weapon_stat_table.derived_fields` | `values_from:` accepts a list of paths |
+| D-1 | **RESOLVED** (dialect.md, "UNION of what each one resolves to") -- `values_from:` takes ONE path, but a real key set is a UNION of two | `gear.weapon_stats` keys = `stat.id` + `weapon_stat_table.derived_fields` | `values_from:` accepts a list of paths, unioned (yaml-data-editor-kit 0.10.0); `record_keys_from:` is deliberately NOT extended -- no corpus need has shown up for it |
 | D-16 | **APPLIED** (dialect.md, "`field:` takes a field path", `{ field: weapon_stats.damage, ... }`; dialect.md, "`covers:` compares field paths by PREFIX") -- `view` `field:` has no PATH form, so it cannot address a map key -- which also breaks `covers:` (card names the map, table names three paths) | `templates/items.yaml` `headers_weapon_extra` | a path form for `field:`, plus how a path relates to its parent under `covers:` |
 | D-2 | **UNAPPLIED** (no hit for `partition_by` or a `{segment}` placeholder) -- a record set partitioned across files by a filename segment; `rows` takes one literal path | `names-{armor,helm,accessory,charm}.yaml` | `path:` with a `{segment}` placeholder + `partition_by:` |
 | D-3 | **RESOLVED** -- a MEANINGFUL explicit `null` (present-and-null is an assertion; absent is silence) | `stats.yaml` `sashimi_field: null` on 11 of 30 | `sentinel:` may declare `null` as a member; a field whose sentinel set contains `null` treats an explicit `null` as PRESENT, carrying that sentinel's meaning (resolved together with L-16) |

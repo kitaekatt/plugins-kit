@@ -891,13 +891,15 @@ def _check_declared_membership(
         _raise_uncoercible_record_value(
             selector, predicate, record, raw_value, declaration
         )
+    note = _union_note(field_spec.values_from) if field_spec.kind == 'enum' else ''
     raise EvaluationError(
         'selector {!r}: predicate value {!r} at {!r} is outside the declared '
-        '{}; values: {}'.format(
+        '{}{}; values: {}'.format(
             selector.text,
             raw_value,
             predicate.field,
             declaration,
+            note,
             _listed(legal),
         )
     )
@@ -1051,6 +1053,19 @@ def _listed(values: Iterable[Any]) -> str:
     if len(rendered) > _MAX_LISTED_VALUES:
         rendered = rendered[:_MAX_LISTED_VALUES] + ['...']
     return '[{}]'.format(', '.join(rendered))
+
+
+def _union_note(paths: tuple[str, ...] | None) -> str:
+    '''A parenthetical naming the member paths, present only when
+    ``values_from:`` declared more than one -- a single path is the scalar
+    form and its messages must read exactly as they always have.
+
+    Duplicated verbatim in schema/validate.py and schema/corpus.py -- see
+    validate._union_note for why this is kept private per module rather
+    than shared.'''
+    if paths is None or len(paths) <= 1:
+        return ''
+    return ' (union of {0})'.format(', '.join("'{0}'".format(p) for p in paths))
 
 
 def _resolve_field_paths(
@@ -1600,9 +1615,10 @@ def _map_key(
             )
         )
     if candidate not in legal:
+        note = _union_note(key_spec.values_from) if key_spec.kind == 'enum' else ''
         raise EvaluationError(
             'selector {!r}: key {!r} at map {!r} is not a member of the declared '
-            'set {}'.format(selector.text, segment, unit, _listed(legal))
+            'set{} {}'.format(selector.text, segment, unit, note, _listed(legal))
         )
     return candidate
 

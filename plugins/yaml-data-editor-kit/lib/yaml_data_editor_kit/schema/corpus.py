@@ -18,6 +18,8 @@ import yaml
 from .errors import ADVISORY, Diagnostic
 from .model import PathWalk, Profile, SourceSpec, TypeSpec
 
+_MAX_LISTED_VALUES = 12
+
 
 @dataclass
 class Record:
@@ -612,20 +614,45 @@ def _report_unknown_keyed_map_keys(
         )
 
 
-def resolve_value_set(profile: Profile, corpus: Corpus, path: str) -> list[Any]:
-    """The legal-value set a ``<type>.<segment>[.<segment>]*`` path names, in
-    corpus order.
+def resolve_value_set(
+    profile: Profile, corpus: Corpus, path: str | tuple[str, ...]
+) -> list[Any]:
+    """The legal-value set a ``<type>.<segment>[.<segment>]*`` path (or, for
+    ``values_from:``'s list form, several of them) names, in corpus order.
 
-    Two forms, and which one applies is decided by the data rather than by a
-    second declaration: a field holding a list of scalars contributes each of
-    its members, and any other field contributes its own value. An id set is
-    the second form applied to the type's ``identified_by`` field, so both
-    ``values_from:`` shapes the spec names go through here.
-
-    Order is preserved (and duplicates are kept) because ``ordered:`` makes
-    position load-bearing for exactly the list-of-scalars form, and because a
+    A single path -- a bare ``str``, or the scalar form's one-element tuple
+    as stored on ``FieldSpec.values_from`` -- resolves through
+    ``_resolve_one_value_set`` exactly as this function always has: order
+    preserved, duplicates kept, because ``ordered:`` makes position
+    load-bearing for exactly the list-of-scalars form, and because a
     ``unique`` constraint cannot see a duplicate a set has already discarded.
+
+    A tuple of MORE than one path is the union form: each member's set is
+    resolved the same way, then combined as a SET -- a value present under
+    two member paths is legal and appears once, in first-seen order across
+    the paths in the order given. This shape is used only to build a legal
+    set for membership checking (an enum's or a map key's declared values),
+    never for a ``unique``/``covers``/``matches_files`` constraint or a
+    ``record_keys_from:`` set (those still pass a single ``str``), so
+    deduplicating here does not touch either of those.
     """
+    if isinstance(path, tuple):
+        if len(path) == 1:
+            return _resolve_one_value_set(profile, corpus, path[0])
+        union: list[Any] = []
+        seen: set[Any] = set()
+        for member_path in path:
+            for value in _resolve_one_value_set(profile, corpus, member_path):
+                marker = _hashable(value)
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                union.append(value)
+        return union
+    return _resolve_one_value_set(profile, corpus, path)
+
+
+def _resolve_one_value_set(profile: Profile, corpus: Corpus, path: str) -> list[Any]:
     out: list[Any] = []
     type_id, *field_path = path.split(".")
     target = profile.types.get(type_id)
@@ -733,16 +760,17 @@ def check_path_key_steps(
                     for value in resolve_value_set(profile, corpus, key_spec.values_from)
                 ]
                 if segment not in legal:
+                    note = _union_note(key_spec.values_from)
                     if not legal:
                         message = (
-                            "has key '{0}' at map '{1}', but the declared set is empty "
-                            "and admits no map key"
-                        ).format(segment, step.map_path)
+                            "has key '{0}' at map '{1}', but the declared set{2} is "
+                            "empty and admits no map key"
+                        ).format(segment, step.map_path, note)
                     else:
                         message = (
                             "has key '{0}' at map '{1}', which is not a member of the "
-                            "declared set ({2})"
-                        ).format(segment, step.map_path, ", ".join(legal))
+                            "declared set{2} ({3})"
+                        ).format(segment, step.map_path, note, _listed(legal))
                     corpus.diagnostics.append(
                         Diagnostic(
                             message,
@@ -766,3 +794,42 @@ class _Absent:
 
 
 ABSENT = _Absent()
+
+
+def _listed(values: list[str]) -> str:
+    """Truncate a legal-set listing at ``_MAX_LISTED_VALUES``, same cap and
+    same '...' convention as ``validate._listed`` -- duplicated rather than
+    imported, same reasoning as ``_union_note`` below."""
+    shown = values[:_MAX_LISTED_VALUES]
+    if len(values) > _MAX_LISTED_VALUES:
+        shown = shown + ["..."]
+    return ", ".join(shown)
+
+
+def _union_note(paths: tuple[str, ...] | None) -> str:
+    """A parenthetical naming the member paths, present only when
+    ``values_from:`` declared more than one -- a single path is the scalar
+    form and its messages must read exactly as they always have.
+
+    Duplicated verbatim in validate.py and comments/address.py -- see
+    validate._union_note for why this is kept private per module rather
+    than shared.
+    """
+    if paths is None or len(paths) <= 1:
+        return ""
+    return " (union of {0})".format(", ".join("'{0}'".format(p) for p in paths))
+
+
+def _hashable(value: Any) -> Any:
+    """A hashable stand-in for ``value``, for de-duplicating a union set.
+
+    Mirrors ``validate._hashable`` -- a value a 'values_from:' path resolves
+    to is ordinarily a hashable scalar, but nothing here guarantees it, so an
+    unhashable value (e.g. a list) falls back to its ``repr`` rather than
+    raising while building a union set.
+    """
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value

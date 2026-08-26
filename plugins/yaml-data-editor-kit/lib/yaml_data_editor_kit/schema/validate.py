@@ -47,7 +47,13 @@ class Validator:
         self.profile = profile
         self.corpus = corpus
         self.diagnostics: list[Diagnostic] = []
-        self._value_sets: dict[str, list[Any]] = {}
+        # Keyed by whatever 'resolve_value_set' was called with: a plain
+        # 'str' path for a constraint's 'ids:'/'from:'/'to:', or the tuple
+        # 'FieldSpec.values_from' carries (one element for the scalar form,
+        # several for the union form) for an enum or map key's legal set.
+        # A tuple key is hashable, same as a str one, so no list ever lands
+        # here as a key.
+        self._value_sets: dict[Any, list[Any]] = {}
 
     # -- entry point ------------------------------------------------------
 
@@ -329,8 +335,8 @@ class Validator:
                     spec.key.to
                 )
             elif spec.key.values_from is not None:
-                set_label = 'declared set {0!r}'.format(
-                    spec.key.values_from
+                set_label = 'declared set {0}'.format(
+                    _values_from_repr(spec.key.values_from)
                 )
             else:
                 set_label = 'declared inline enum set'
@@ -481,8 +487,11 @@ class Validator:
         if value in legal:
             return
         self._report(
-            "{0} {1!r}, which is not one of the declared values ({2})".format(
-                "has key" if subject == "key" else "holds", value, _listed(legal)
+            "{0} {1!r}, which is not one of the declared values{2} ({3})".format(
+                "has key" if subject == "key" else "holds",
+                value,
+                _union_note(spec.values_from),
+                _listed(legal),
             ),
             record,
             path,
@@ -653,6 +662,30 @@ def _hashable(value: Any) -> Any:
     except TypeError:
         return repr(value)
     return value
+
+
+def _values_from_repr(paths: tuple[str, ...]) -> str:
+    """Render a 'values_from:' tuple for a message. A single path reprs
+    exactly as the old str-typed field did; a union names every member."""
+    if len(paths) == 1:
+        return repr(paths[0])
+    return "(union of {0})".format(", ".join(repr(p) for p in paths))
+
+
+def _union_note(paths: tuple[str, ...] | None) -> str:
+    """A parenthetical naming the member paths, present only when
+    'values_from:' declared more than one -- a single path is the scalar
+    form and its messages must read exactly as they always have.
+
+    Duplicated verbatim in corpus.py and comments/address.py rather than
+    shared: each of those already keeps its own small message-formatting
+    helpers private (see corpus._listed / address._listed) instead of
+    importing across schema/comments, and this one-liner is cheaper to
+    triplicate than to introduce a cross-module coupling for.
+    """
+    if paths is None or len(paths) <= 1:
+        return ""
+    return " (union of {0})".format(", ".join(repr(p) for p in paths))
 
 
 def _listed(values: list[Any]) -> str:

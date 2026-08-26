@@ -80,7 +80,13 @@ class FieldSpec:
     # enum
     values: list[Any] | None = None
     value_labels: dict[Any, Any] | None = None
-    values_from: str | None = None
+    # A tuple of one or more ANCHORED paths whose resolved sets UNION
+    # together into the legal set. The scalar YAML form (a bare string) is
+    # normalized to a one-element tuple at load time (see loader._as_paths)
+    # so every downstream consumer sees one shape and a single path behaves
+    # bit-for-bit as it always has -- there is no second, string-typed form
+    # to keep in sync.
+    values_from: tuple[str, ...] | None = None
     stored: str = STORED_STRING
 
     # key-dependent shape and named override layers
