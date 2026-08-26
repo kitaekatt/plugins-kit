@@ -282,6 +282,35 @@ a `-1` meaning "no limit" and a `delay_ticks` that is not
 seconds are exactly the facts an agent gets wrong when they live in a
 comment.
 
+`sentinel:` accepts three forms: a mapping from value to stated meaning
+(`sentinel: { -1: "no limit" }`), a list of values with no stated meaning
+(`sentinel: [null]`), or a single bare value with no stated meaning
+(`sentinel: null`). All three declare the same thing, a set of legal
+sentinel members; only the mapping form also records why.
+
+`sentinel:` is also the corpus's one way to write present-and-null with a
+stated meaning. A written `null` is exempt from the type check in a FIELD
+SLOT -- a field of a mapping, an ORDINARY map entry value (one whose
+`value:` is not `shape_from:`), a `partial_of` layer value, or the `open:`
+ad hoc branch -- and that exemption is pre-existing and unrelated to
+`sentinel:`; it is what lets a null-sentinel field hold `null` at all. It
+does not extend to a `null` written as a LIST ITEM or as a MAP KEY, where
+the ordinary type check still fires, and it does not extend to a
+`shape_from:`-shaped map entry either: that value is dispatched to shape
+resolution before the null guard, so a null there fails as a wrong-type
+record, not as an absence. By default a written `null` in an exempt field
+slot still counts as ABSENT: the required-field check above demands a value
+and finds none. `sentinel:` changes only that last step.
+When a field's `sentinel:` set contains `null` as a member, an explicit
+`null` there is PRESENT instead: it satisfies `required` and carries the
+sentinel's declared meaning. A field whose sentinel set does not mention
+`null` keeps the ordinary rule: `null` there still means absent.
+`sentinel:` itself grants no exemption beyond `min`/`max` on a
+genuinely-held value -- a non-null sentinel member is still checked against
+the declared `type:`. Marking a field `required: false` is a different,
+weaker statement -- it says the value may be silently missing, not that a
+written `null` means something.
+
 ### `variants` -- discriminated unions
 
 A record whose shape depends on one of its own field values:

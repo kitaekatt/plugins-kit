@@ -167,8 +167,14 @@ class Validator:
             )
 
         for name, spec in fields.items():
-            if data.get(name) is not None:
-                continue
+            if name in data:
+                value = data[name]
+                # An explicit `null` is PRESENT, not absent, exactly when the
+                # field's sentinel set declares `null` as a member: the corpus
+                # is asserting the sentinel's meaning, not staying silent. A
+                # `null` with no such declaration stays ABSENT, same as today.
+                if value is not None or None in spec.sentinel:
+                    continue
             if spec.required and spec.is_authored:
                 self._report(
                     "is required but absent", record, prefix + name
