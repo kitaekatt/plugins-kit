@@ -12,9 +12,10 @@ This layer owns everything a SINGLE completion needs -- endpoint resolution,
 the model registry, credential lookup with source attribution, prompt-cache
 message shaping, and a shared halt taxonomy (`classify_halt_text`, `HaltError`
 in `completion/halt.py`) so a persistent failure classifies identically
-whichever transport produced it. Three transports sit behind one `complete()`:
+whichever transport produced it. Four transports sit behind one `complete()`:
 `OpenRouterBackend` over HTTP, `ClaudeCliBackend` driving the local
-`claude -p` CLI, and `CodexCliBackend` driving `codex exec`.
+`claude -p` CLI, `CodexCliBackend` driving `codex exec`, and
+`OpencodeCliBackend` driving `opencode run`.
 
 This layer classifies; it does not halt. Every backend exposes
 `classify_halt(exc)` and the transports raise ordinary errors carrying
@@ -24,7 +25,8 @@ whether it is mid-sweep with hundreds of items left or running a one-shot
 script that should simply die. Exporting the type instead of raising it is what
 lets a new consumer inherit the taxonomy rather than invent one.
 
-The codex transport carries two rules the other two do not need.
+The Codex and OpenCode transports carry additional rules their siblings do not
+need.
 
 **Its consumers must declare `bootstrap_lib` themselves.** `CodexCliBackend`
 builds argv exclusively via `bootstrap_lib.codex.build_codex_exec_argv`, and
@@ -42,11 +44,17 @@ and out of the message. Inlining a channel into that message makes a healthy run
 that merely discusses a rate limit classify as a persistent halt and abort the
 caller's whole run.
 
+**OpenCode is explicitly unconfined.** Its required `--auto` flag bypasses
+permissions, and its `--dir` argument sets a working directory but does NOT
+confine absolute writes. `OpencodeCliBackend` announces this posture at
+dispatch time; callers must supply any stronger filesystem policy outside this
+layer.
+
 ## The seam is uniform; the transports are not
 
 The useful mental model is that you write the prompt pair once and choose the
 executor separately -- but the separation is incomplete, and a caller who
-believes it is clean will get burned. Three things travel with the executor:
+believes it is clean will get burned. These things travel with the executor:
 
 **The `model` id is not portable.** An OpenRouter slug means nothing to
 `claude -p`, and codex requires fully-qualified ids. Nothing here translates
@@ -56,17 +64,19 @@ and its existence is the evidence: a genuinely uniform seam would not need it.
 
 **`BackendOptions` is a union, not a neutral description of the work.**
 `user_cache_prefix` is OpenRouter-only; `allowed_tools` is claude-cli-only;
-`effort` reaches claude-cli and codex but not OpenRouter. `temperature` and
-`max_tokens` are accepted and then SILENTLY IGNORED by both CLI backends.
+`effort` reaches claude-cli, codex, and opencode but not OpenRouter.
+`temperature` and `max_tokens` are accepted and then SILENTLY IGNORED by all
+CLI backends.
 
 **The same call does not behave the same way.** Retry, timeout defaults, token
 accounting (codex reports one undifferentiated `total_tokens` and no
-input/output split at all), cost (flat zero for both subscription CLIs, real
-money for OpenRouter), and prompt delivery all differ -- codex has no system
-channel and concatenates system and user into one stdin prompt.
+input/output split at all; opencode's default output reports no usage), cost
+(flat zero for the subscription CLIs, unavailable from opencode's default
+output, real money for OpenRouter), and prompt delivery all differ -- the CLI
+transports have one stdin prompt rather than a separate system channel.
 
 So: uniform CALL SHAPE and uniform FAILURE VOCABULARY, not interchangeable
-behaviour. Say so when documenting this layer rather than letting "three
+behaviour. Say so when documenting this layer rather than letting "four
 transports behind one `complete()`" imply more than it delivers.
 
 It does not own the concerns of a RUN OF MANY CALLS. Response caching, cost

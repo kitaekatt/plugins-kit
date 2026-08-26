@@ -10,13 +10,14 @@ so callers that only need the raw key (or use a different HTTP client) do not
 pay the SDK install cost.
 
 The completion seam (``llm_scripting_kit.completion``) adds one ``complete()``
-protocol over three transports -- an OpenAI-compatible HTTP endpoint
-(:class:`OpenRouterBackend`) and two subscription-billed local CLIs, ``claude
--p`` (:class:`ClaudeCliBackend`) and ``codex exec``
-(:class:`CodexCliBackend`) -- so a pipeline can run the same task on any of
-them purely by configuration. Its seam types and the CLI runner are
-stdlib-only; only the OpenRouter transport reaches for ``openai``, lazily, and
-only the codex transport reaches for ``bootstrap_lib``, also lazily.
+protocol over four transports -- an OpenAI-compatible HTTP endpoint
+(:class:`OpenRouterBackend`) and three local CLIs, ``claude -p``
+(:class:`ClaudeCliBackend`), ``codex exec`` (:class:`CodexCliBackend`), and
+``opencode run`` (:class:`OpencodeCliBackend`) -- so a pipeline can run the
+same task on any of them purely by configuration. Its seam types and the CLI
+runner are stdlib-only; only the OpenRouter transport reaches for ``openai``,
+lazily, and only the codex transport reaches for ``bootstrap_lib``, also
+lazily.
 
 Named endpoints come from the layered ``config.yaml`` and from the
 model-endpoints registry (``llm_scripting_kit.model_endpoints``) -- a file the
@@ -76,6 +77,8 @@ from .completion import (
     ClaudeCliBackend,
     CodexCliBackend,
     CodexRunError,
+    OpencodeCliBackend,
+    OpencodeRunError,
     HALT_AUTH,
     HALT_INSUFFICIENT_CREDIT,
     HALT_RATE_LIMIT,
@@ -87,6 +90,7 @@ from .completion import (
     classify_codex_exception,
     classify_codex_text,
     classify_halt_text,
+    classify_opencode_exception,
     classify_openai_exception,
 )
 
@@ -144,6 +148,8 @@ __all__ = [
     "ClaudeCliBackend",
     "CodexCliBackend",
     "CodexRunError",
+    "OpencodeCliBackend",
+    "OpencodeRunError",
     "HaltError",
     "HALT_AUTH",
     "HALT_RATE_LIMIT",
@@ -153,5 +159,6 @@ __all__ = [
     "classify_claude_exception",
     "classify_codex_text",
     "classify_codex_exception",
+    "classify_opencode_exception",
     "AgentTimeoutError",
 ]

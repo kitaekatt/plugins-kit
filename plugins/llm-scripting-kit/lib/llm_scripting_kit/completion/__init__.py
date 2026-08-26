@@ -1,9 +1,9 @@
 """llm_scripting_kit.completion -- the completion seam.
 
-One ``complete()`` protocol over three transports, so a pipeline can run the
+One ``complete()`` protocol over four transports, so a pipeline can run the
 same completion-shaped task against an OpenAI-compatible HTTP endpoint, the
-local ``claude -p`` CLI, or the local ``codex exec`` CLI (both CLIs
-subscription-billed) purely by configuration:
+local ``claude -p`` CLI, the local ``codex exec`` CLI, or the local
+``opencode run`` CLI purely by configuration:
 
     from llm_scripting_kit.completion import (
         LLMResponse, BackendOptions, LLMBackend,
@@ -17,7 +17,8 @@ subprocess runner is stdlib-only too. Only :class:`OpenRouterBackend` reaches
 for the ``openai`` SDK, and only lazily -- the claude-cli transport works with
 no ``openai`` installed. :class:`CodexCliBackend` likewise defers its one
 non-stdlib import (``bootstrap_lib.codex``, the argv single source of truth) to
-call time, so importing this package never requires the shared lib.
+call time, so importing this package never requires the shared lib. The
+OpenCode adapter resolves its launcher only when a call is dispatched.
 """
 from __future__ import annotations
 
@@ -45,9 +46,17 @@ from .halt import (
     classify_codex_exception,
     classify_codex_text,
     classify_halt_text,
+    classify_opencode_exception,
     classify_openai_exception,
 )
 from .types import BackendOptions, LLMBackend, LLMResponse
+from .opencode_backend import (
+    DEFAULT_OPENCODE_TIMEOUT_S,
+    OPENCODE_FILESYSTEM_POSTURE,
+    OPENCODE_PROMPT_SEPARATOR,
+    OpencodeCliBackend,
+    OpencodeRunError,
+)
 
 __all__ = [
     # seam types
@@ -64,6 +73,7 @@ __all__ = [
     "classify_claude_exception",
     "classify_codex_text",
     "classify_codex_exception",
+    "classify_opencode_exception",
     # CLI runner core
     "AgentTimeoutError",
     "HARD_STOP_STDERR_MARKERS",
@@ -75,6 +85,11 @@ __all__ = [
     "ClaudeCliBackend",
     "CodexCliBackend",
     "CodexRunError",
+    "OpencodeCliBackend",
+    "OpencodeRunError",
+    "DEFAULT_OPENCODE_TIMEOUT_S",
+    "OPENCODE_FILESYSTEM_POSTURE",
+    "OPENCODE_PROMPT_SEPARATOR",
     "CODEX_EXTRA_KEYS",
     "PROMPT_SEPARATOR",
     "compose_prompt",

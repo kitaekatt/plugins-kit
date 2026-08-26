@@ -237,6 +237,22 @@ def classify_codex_exception(exc: BaseException) -> Optional[str]:
     return None
 
 
+def classify_opencode_exception(exc: BaseException) -> Optional[str]:
+    """Map an OpenCode exception's transport-authored message to a halt.
+
+    OpenCode's stdout is the answer and may contain arbitrary model prose, so
+    its carried ``stdout`` / ``stderr`` channels are deliberately NOT scanned
+    here. The backend keeps those channels on exception attributes for
+    diagnostics and keeps them out of its message. A timeout is a transport
+    failure under the OpenCode dispatch rule, not a persistent halt; checking
+    its type first also makes this true if an injected runner supplied a
+    message containing halt vocabulary.
+    """
+    if isinstance(exc, AgentTimeoutError):
+        return None
+    return classify_halt_text(str(exc))
+
+
 __all__ = [
     "HALT_AUTH",
     "HALT_RATE_LIMIT",
@@ -247,4 +263,5 @@ __all__ = [
     "classify_claude_exception",
     "classify_codex_text",
     "classify_codex_exception",
+    "classify_opencode_exception",
 ]

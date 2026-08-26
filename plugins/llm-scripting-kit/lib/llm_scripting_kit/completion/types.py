@@ -58,9 +58,10 @@ class LLMResponse:
 class BackendOptions:
     """Per-call knobs, some understood by only one transport.
 
-    ``max_tokens`` / ``temperature`` are common to every completion transport.
-    The remaining fields are transport-specific and documented as ignored by
-    transports that do not honor them (documented, not silent):
+    ``max_tokens`` / ``temperature`` are common to the protocol shape, but a
+    CLI may not expose either flag. The remaining fields are transport-specific
+    and documented as ignored by transports that do not honor them (documented,
+    not silent):
 
     - ``timeout_s`` -- per-call wall-clock cap. ``None`` uses the backend
       default.
@@ -70,12 +71,13 @@ class BackendOptions:
       ignores it.
     - ``user_cache_prefix`` -- static-across-cells leading block of the user
       message, used for a second prompt-cache breakpoint (OpenRouter only).
-    - ``effort`` -- thinking-budget flag ``--effort low|medium|high``
-      (claude-cli only).
+    - ``effort`` -- thinking-budget / provider-variant flag (claude-cli,
+      codex-cli, and opencode; the spelling is transport-specific).
     - ``allowed_tools`` -- claude-cli ``--allowedTools`` value. ``None`` (the
       default) means a pure completion (no tools). Only read-only vision use
       (``"Read"``) is sanctioned; agentic tool sets are out of scope here.
-    - ``cwd`` -- claude-cli working directory. ``None`` uses the process cwd.
+    - ``cwd`` -- CLI working directory. ``None`` uses the process cwd; an
+      OpenCode ``--dir`` is not a filesystem-confinement boundary.
     - ``log_prefix`` -- stderr tag so mixed logs from parallel runs stay
       attributable.
     - ``extras`` -- open map for consumer-specific knobs a backend may read.
