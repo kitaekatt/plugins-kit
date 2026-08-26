@@ -266,3 +266,64 @@ def test_filesystem_posture_is_explicitly_unconfined(tmp_path, capsys):
     notice = capsys.readouterr().err
     assert "--auto bypasses permissions" in notice
     assert "does not confine writes" in notice
+
+
+class TestHaltClassificationScansStderrOnly:
+    """The channel asymmetry is probe-backed; these pin both halves of it.
+
+    OpenCode puts the model's words on stdout and its own framing on stderr
+    (observed 2026-08-26, opencode 1.18.23). So stderr may be scanned for halt
+    vocabulary and stdout may never be: scanning stdout would let a healthy run
+    that merely discusses a rate limit abort the caller's whole run.
+    """
+
+    def _error(self, *, stdout: str = "", stderr: str = ""):
+        from llm_scripting_kit.completion.opencode_backend import OpencodeRunError
+
+        return OpencodeRunError(
+            "opencode run failed (exit 1)",
+            stdout=stdout,
+            stderr=stderr,
+            returncode=1,
+        )
+
+    def test_an_observed_auth_failure_classifies_as_a_halt(self):
+        # Read off a real run: an OpenRouter provider with an invalid key exits
+        # 1 with empty stdout and stderr "Error: User not found."
+        from llm_scripting_kit.completion.halt import (
+            HALT_AUTH,
+            classify_opencode_exception,
+        )
+
+        exc = self._error(stderr="\nError: User not found.\n")
+        assert classify_opencode_exception(exc) == HALT_AUTH
+
+    def test_a_standard_envelope_on_stderr_classifies(self):
+        from llm_scripting_kit.completion.halt import (
+            HALT_RATE_LIMIT,
+            classify_opencode_exception,
+        )
+
+        exc = self._error(stderr='Error: {"api_error_status":429}')
+        assert classify_opencode_exception(exc) == HALT_RATE_LIMIT
+
+    def test_model_prose_on_stdout_cannot_forge_a_halt(self):
+        # The whole reason stdout is excluded. A model asked to say these words
+        # really does put them on stdout -- verified against a live run.
+        from llm_scripting_kit.completion.halt import classify_opencode_exception
+
+        exc = self._error(
+            stdout="BANANA rate limit exceeded insufficient credit "
+            'authentication_error "api_error_status":401',
+            stderr="",
+        )
+        assert classify_opencode_exception(exc) is None
+
+    def test_a_transport_only_failure_is_not_a_halt(self):
+        from llm_scripting_kit.completion.halt import classify_opencode_exception
+
+        exc = self._error(
+            stderr="Error: Cannot connect to API: Unable to connect. "
+            "Is the computer able to access the url?"
+        )
+        assert classify_opencode_exception(exc) is None
