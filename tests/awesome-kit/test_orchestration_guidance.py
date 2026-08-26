@@ -570,6 +570,24 @@ class TestCli:
         assert "shipped  applied" in out
         assert "default_tier: top" in out
 
+    def test_explain_uses_config_row_numbers_for_surviving_routes(self, capsys, layered):
+        layered(
+            "shipped",
+            cfg(
+                routing=[
+                    {"shape": ["novel"], "models": ["missing"]},
+                    {"shape": ["open"], "models": ["agent:haiku"]},
+                    {"shape": [], "models": ["agent:sonnet"]},
+                ]
+            ),
+        )
+        assert og.main(["--explain", "--project-root", str(layered.project_root)]) == 0
+        out = capsys.readouterr().out
+        assert "routing  note      routing row 1:" in out
+        assert "routing  row       2: open -> haiku" in out
+        assert "routing  row       3: default -> sonnet" in out
+        assert "routing  row       1: open -> haiku" not in out
+
     def test_broken_config_exits_nonzero_with_a_reason(self, capsys, layered, tmp_path):
         layered("shipped", {"default_tier": "workhorse"})
         (tmp_path / "user.yaml").write_text("just a string\n", encoding="utf-8")
@@ -601,11 +619,14 @@ class TestOrderedElimination:
         assert text.index("Resolution.") < text.index("## 1.")
 
     def test_models_render_in_declared_priority_order(self, layered):
-        layered("shipped", cfg())
+        layered(
+            "shipped",
+            cfg(routing=[{"shape": ["novel"], "models": ["agent:fable", "agent:sonnet"]}]),
+        )
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
         assert "1. If `novel`" in text
-        assert "then **sonnet**" in text or "**sonnet**" in text
+        assert "try **fable**, then **sonnet**" in text
         assert text.index("**fable**") < text.index("**sonnet**")
 
     def test_first_matching_row_semantics_are_stated(self, layered):
@@ -877,7 +898,26 @@ class TestCodexAbsentVariant:
             assert "defaults to TWO units" in text
 
     def test_agent_member_survives_when_registry_model_is_skipped(self, without):
-        assert "fable" in without
+        routing = re.split(r"^## \d+\. Routing\n", without, maxsplit=1, flags=re.M)[1]
+        routing = routing.split("\n## ", 1)[0]
+        assert re.search(
+            r"If `novel`(?: \([^)]*\))? \+ `load-bearing`(?: \([^)]*\))?: try \*\*fable\*\*\.",
+            routing,
+        )
+
+    def test_model_specific_content_follows_surviving_routes(self, without, with_codex):
+        assert "delegating plan cross-check to codex/sol (cross-check)" in with_codex
+        assert "delegating per-file API migration to codex/luna (fan-out)" in with_codex
+        assert "delegating plan cross-check to codex/sol" not in without
+        assert "delegating per-file API migration to codex/luna" not in without
+        assert "luna carries the higher default" not in without
+        assert "Raise sol from `high` to `max`" not in without
+
+    def test_codex_effort_note_renders_when_codex_is_present(self, with_codex):
+        assert "Codex-side, effort is a real dial set per dispatch" in with_codex
+
+    def test_second_family_gap_is_disclosed_without_codex(self, without):
+        assert "no second-family child -- dispatch the primary review alone" in without
 
 
 class TestNoBareCodenames:
@@ -1336,6 +1376,23 @@ class TestRoutingRendering:
         assert "try **fable**, then **sonnet**" in text
         assert "continue to the next model" in text
 
+    def test_fallthrough_attribution_uses_each_immediately_preceding_model(self, layered):
+        layered(
+            "shipped",
+            cfg(
+                routing=[
+                    {
+                        "shape": ["novel"],
+                        "models": ["agent:fable", "agent:sonnet", "agent:haiku"],
+                    }
+                ]
+            ),
+        )
+        config, provenance = og.resolve_config(layered.project_root)
+        text = og.render(config, provenance)
+        assert "failed model from `fable`." in text
+        assert "failed model from `sonnet`." in text
+
     def test_empty_shape_is_the_default_route(self, layered):
         layered("shipped", cfg(routing=[{"shape": [], "models": ["agent:haiku"]}]))
         config, provenance = og.resolve_config(layered.project_root)
@@ -1367,7 +1424,7 @@ class TestAgentTypesAndAnnouncement:
     def test_announcement_form_and_examples_render(self, layered, monkeypatch):
         text = self._shipped_text(layered, monkeypatch)
         assert "delegating <what> to <target> (<the matched row's shape terms>)" in text
-        assert "delegating architecture review fallback to codex/sol" in text
+        assert "delegating rename across 30 files to sonnet (default)" in text
 
     def test_announcement_examples_use_only_skill_terms(self):
         data = shipped()

@@ -198,24 +198,18 @@ the strongest available justification, not a complete characterisation. Only
 `[skill]` terms are permitted, which is what makes the lines aggregate: the
 transcript becomes the usage record for which routes get chosen and why.
 
-```
-delegating rename across 30 files to sonnet (known, default)
-delegating log relevance sweep to sonnet (open, condensation)
-delegating crash diagnosis to opus (open, inference)
-delegating architecture review to fable (novel, load-bearing, unverifiable)
-delegating per-file API migration to codex/luna (fan-out)
-```
+The rendered worked examples are the `announce.examples` records in
+[`../defaults/orchestration.yaml`](../defaults/orchestration.yaml). Keep that
+list as the single source of truth for worked targets and matched shape terms.
 
-*The first and last lines are the same file count and route differently -- that is
-the collapse test doing its job, and the pair is worth keeping as the worked
-example.* A rename is one `sed`, so it never becomes `fan-out` however many files it
-touches; it is one `mechanical` unit. A migration needing per-file judgment resists
-collapsing, so it is genuinely N units. Scale is not the discriminator and must never
-be read as one.
+The `ex-default` and `ex-migration` records illustrate the collapse test. A
+rename is one `sed`, so it never becomes `fan-out` however many files it
+touches; it is one `mechanical` unit. A migration needing per-file judgment
+resists collapsing, so it is genuinely N units. Scale is not the discriminator
+and must never be read as one.
 
-*High-cost route:* its shape uses two of the three escalation terms, or a
-`load-bearing` `plan-checkpoint`, or a `load-bearing` `authored-here` review,
-so at least two terms fire together by construction -- announce the ones that
-actually fired, which may be two or all three, or the unit-class term plus
-`load-bearing`. The gate's additional demand (saying what the
-broader route would get wrong) stays internal and is not rendered on the line.
+*High-cost route:* a routing row carries one `shape` list. In the default
+policy, the high-cost row is `shape: [novel, load-bearing]`, so both terms must
+match; its `gate` asks for the reason the broader route is the wrong seat. The
+list does not encode OR'd groups, and `plan-checkpoint` or `authored-here` do
+not add alternate groups to it. Announce only the terms in the matched row.

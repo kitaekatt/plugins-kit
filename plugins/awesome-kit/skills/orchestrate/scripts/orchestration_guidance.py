@@ -865,6 +865,25 @@ def announcement_text(
     return f"delegating {what} to {target} ({parenthetical})"
 
 
+def _resolved_model_ids(routes: Iterable[Mapping[str, Any]]) -> set:
+    """Return the model ids that survive routing resolution."""
+    return {
+        str(model["id"])
+        for route in routes
+        for model in (route.get("models") or [])
+        if isinstance(model, Mapping) and model.get("id")
+    }
+
+
+def _requires_resolved_models(record: Mapping[str, Any], resolved_models: set) -> bool:
+    """Whether a record's optional model dependencies all survived resolution."""
+    required = record.get("requires_model")
+    if required is None:
+        return True
+    required_models = required if isinstance(required, list) else [required]
+    return all(str(model) in resolved_models for model in required_models)
+
+
 # --------------------------------------------------------------------------
 # Vocabulary
 # --------------------------------------------------------------------------
@@ -998,10 +1017,12 @@ def render_routing(
             dispatch = ", then ".join(targets)
         out.append(f"{index}. If {shape_text}: try {dispatch}.")
         if len(models) > 1:
-            out.append(
-                "   - On a launch or transport error, continue to the next model; "
-                f"a fallback announcement names the failed model from `{models[0]['id']}`."
-            )
+            for model_index in range(1, len(models)):
+                previous = models[model_index - 1]["id"]
+                out.append(
+                    "   - On a launch or transport error, continue to the next model; "
+                    f"a fallback announcement names the failed model from `{previous}`."
+                )
         if route.get("gate"):
             out.append(f"   - Gate: {terms.fill(route['gate'])}")
         for guard in route.get("guards") or []:
@@ -1034,6 +1055,7 @@ def render_effort(
     available_backends: set,
     blocks: Blocks,
     out: List[str],
+    routes: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Block 4 -- effort, orthogonal to routing and decided after it.
 
@@ -1048,12 +1070,16 @@ def render_effort(
         out.append(fold(block))
         out.append("")
         return
+    resolved_models = _resolved_model_ids(routes or [])
     blocks.heading(fold(block.get("title")) or "Effort")
     if block.get("intro"):
         out.append(terms.fill(block["intro"]))
         out.append("")
     for note in live(block.get("backend_notes")):
-        if str(note.get("backend")) in available_backends:
+        if (
+            str(note.get("backend")) in available_backends
+            and _requires_resolved_models(note, resolved_models)
+        ):
             out.append(terms.fill(note.get("text")))
             out.append("")
     for key in ("note", "up_effort_note"):
@@ -1086,10 +1112,14 @@ def render_announce(
     if not block or not renders(block):
         return
     routes = routes or []
+    resolved_models = _resolved_model_ids(routes)
     examples = [
         e
         for e in live(block.get("examples"))
-        if not e.get("requires_backend") or str(e["requires_backend"]) in available_backends
+        if (
+            (not e.get("requires_backend") or str(e["requires_backend"]) in available_backends)
+            and _requires_resolved_models(e, resolved_models)
+        )
     ]
     if not block.get("form") and not examples and not routes:
         return
@@ -1103,7 +1133,10 @@ def render_announce(
         out.append(terms.fill(block["rule"]))
         out.append("")
     for note in live(block.get("backend_notes")):
-        if str(note.get("backend")) in available_backends:
+        if (
+            str(note.get("backend")) in available_backends
+            and _requires_resolved_models(note, resolved_models)
+        ):
             out.append(terms.fill(note.get("text")))
             out.append("")
     if examples:
@@ -1153,7 +1186,7 @@ def render_decision_tree(
     render_shape(config, terms, available_backends, blocks, out)
     render_routing(config, terms, routes or [], blocks, out)
     render_agent_types(config, terms, blocks, out)
-    render_effort(config, terms, available_backends, blocks, out)
+    render_effort(config, terms, available_backends, blocks, out, routes)
     render_announce(config, terms, available_backends, blocks, out, routes)
 
 
@@ -1458,10 +1491,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"model    note      {note}")
         for note in routing_notes:
             print(f"routing  note      {note}")
-        for index, route in enumerate(routes, 1):
+        for route in routes:
             targets = ", ".join(model["target"] for model in route["models"])
             shape = "+".join(route["shape"]) or "default"
-            print(f"routing  row       {index}: {shape} -> {targets}")
+            print(f"routing  row       {route['number']}: {shape} -> {targets}")
         print()
         print(yaml.safe_dump(config, sort_keys=False, allow_unicode=False, width=100))
         return 0

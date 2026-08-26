@@ -282,6 +282,7 @@ effort:
   backend_notes:
   - id: codex-dial
     backend: codex
+    requires_model: [luna, sol]
     text: >-
       Codex-side, effort is a real dial set per dispatch -- model-entry defaults are above. luna
       carries the higher default because units arrive there for dispatch shape, not difficulty,
@@ -321,17 +322,19 @@ announce:
     `default`. A fallback model appends `; fell through from <id>` inside the parenthetical.
   examples:
   - id: ex-default
+    requires_model: sonnet
     text: delegating rename across 30 files to sonnet (default)
   - id: ex-cross-check
-    requires_backend: codex
+    requires_model: sol
     text: delegating plan cross-check to codex/sol (cross-check)
   - id: ex-review
+    requires_model: fable
     text: delegating architecture review to fable (novel, load-bearing)
   - id: ex-migration
-    requires_backend: codex
+    requires_model: luna
     text: delegating per-file API migration to codex/luna (fan-out)
   - id: ex-fallback
-    requires_backend: codex
+    requires_model: sol
     text: delegating architecture review fallback to codex/sol (novel, load-bearing; fell through from fable)
 
 # ===========================================================================
