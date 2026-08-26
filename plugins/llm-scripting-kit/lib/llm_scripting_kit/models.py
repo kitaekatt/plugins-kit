@@ -120,11 +120,6 @@ class ModelDiscovery(dict[str, EndpointEntry]):
         """Return the id-keyed entries mapping."""
         return self
 
-    @property
-    def skipped(self) -> list[str]:
-        """Compatibility alias for the non-fatal skip notes."""
-        return self.notes
-
 
 def load_model_config(*, project_root: Optional[str] = None) -> dict:
     """Resolve the effective model config: shipped baseline deep-merged with the

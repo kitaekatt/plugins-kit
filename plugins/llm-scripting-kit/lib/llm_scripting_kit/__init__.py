@@ -49,6 +49,15 @@ from .model_endpoints import (
     load_endpoint_registry,
     resolve_registry_entry,
 )
+from .harness_adapters import (
+    CODEX_EFFORT_MENU,
+    CodexAdapter,
+    HarnessAdapter,
+    HarnessAdapterError,
+    HarnessInvocation,
+    OpencodeAdapter,
+    resolve_harness_adapter,
+)
 from .models import (
     DEFAULT_ENDPOINT_NAME,
     DEFAULT_MODEL_CONFIG,
@@ -119,6 +128,14 @@ __all__ = [
     "default_registry_path",
     "load_endpoint_registry",
     "resolve_registry_entry",
+    # harness adapters
+    "CODEX_EFFORT_MENU",
+    "HarnessAdapter",
+    "HarnessAdapterError",
+    "HarnessInvocation",
+    "CodexAdapter",
+    "OpencodeAdapter",
+    "resolve_harness_adapter",
     # completion seam
     "LLMResponse",
     "BackendOptions",

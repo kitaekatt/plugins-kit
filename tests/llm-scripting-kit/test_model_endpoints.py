@@ -196,7 +196,6 @@ class TestSchema:
         assert len(reg.notes) == 1
         assert "mystery" in reg.notes[0]
         assert "unknown kind" in reg.notes[0]
-        assert reg.skipped == reg.notes
 
     def test_both_addresses_are_skipped_and_conflict_is_noted(self, fake_home):
         _write_convention(

@@ -119,11 +119,6 @@ class EndpointRegistry:
     path: Optional[Path] = None
     notes: list[str] = field(default_factory=list)
 
-    @property
-    def skipped(self) -> list[str]:
-        """Compatibility alias for callers that want the skipped-entry notes."""
-        return self.notes
-
 
 def harness_entry_message(entry_id: str, harness: Optional[str]) -> str:
     """The one wording for "this entry cannot serve as an HTTP endpoint".
