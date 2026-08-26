@@ -94,6 +94,85 @@ def test_unreadable_registry_leaves_the_default_unresolved(monkeypatch):
     assert ModelEndpointBackend()._entry_id() is None
 
 
+def _make_shared_lib_importable():
+    """Make the checked-in shared library available to these seam tests."""
+    import sys
+    from pathlib import Path
+
+    shared_lib = (
+        Path(__file__).resolve().parents[2] / "plugins" / "llm-scripting-kit" / "lib"
+    )
+    if str(shared_lib) not in sys.path:
+        sys.path.insert(0, str(shared_lib))
+
+
+def _write_registry(tmp_path, text):
+    path = tmp_path / "model-endpoints.yaml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_harness_sibling_does_not_break_transport_default(monkeypatch, tmp_path):
+    """The upstream tolerant loader keeps a valid harness sibling visible."""
+    _make_shared_lib_importable()
+    path = _write_registry(
+        tmp_path,
+        "version: 1\n"
+        "default: local\n"
+        "models:\n"
+        "  local:\n"
+        "    base_url: http://local.invalid/v1\n"
+        "    model: local-model\n"
+        "  opencode:\n"
+        "    harness: opencode\n"
+        "    model: openai/gpt-5\n",
+    )
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+
+    assert ModelEndpointBackend()._entry_id() == "local"
+
+
+def test_default_harness_is_refused_by_model_endpoint_backend(monkeypatch, tmp_path):
+    """A default harness must name its kind instead of becoming None."""
+    _make_shared_lib_importable()
+    path = _write_registry(
+        tmp_path,
+        "version: 1\n"
+        "default: opencode\n"
+        "models:\n"
+        "  opencode:\n"
+        "    harness: opencode\n"
+        "    model: openai/gpt-5\n",
+    )
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+
+    with pytest.raises(Exception, match="harness entry"):
+        ModelEndpointBackend()._entry_id()
+
+
+def test_explicit_harness_is_refused_as_transport(monkeypatch, tmp_path):
+    """The shared endpoint resolver names the kind for an explicit harness."""
+    _make_shared_lib_importable()
+    path = _write_registry(
+        tmp_path,
+        "version: 1\n"
+        "default: local\n"
+        "models:\n"
+        "  local:\n"
+        "    base_url: http://local.invalid/v1\n"
+        "    model: local-model\n"
+        "  opencode:\n"
+        "    harness: opencode\n"
+        "    model: openai/gpt-5\n",
+    )
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+    monkeypatch.setenv(ENDPOINT_ENV, "opencode")
+    set_active_backend("model-endpoint")
+
+    with pytest.raises(LLMUnavailableError, match="harness entry"):
+        route()
+
+
 def test_constructs_without_the_shared_lib():
     """Constructing must never require llm_scripting_kit -- only driving it."""
     assert ModelEndpointBackend(endpoint="x") is not None

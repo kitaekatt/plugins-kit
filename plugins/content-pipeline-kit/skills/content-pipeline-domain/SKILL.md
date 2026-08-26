@@ -100,7 +100,8 @@ domain_skill:
 
 ## Requirements: the live LLM backends
 
-The library's LIVE backends (`openrouter`, `claude-cli`) need the
+The library's LIVE backends (`openrouter`, `model-endpoint`, `claude-cli`,
+`codex-cli`, `opencode-cli`) need the
 `llm_scripting_kit` shared lib, published by `plugins-kit:llm-scripting-kit`.
 Only `MockBackend` is hermetic -- tests should use it and need none of this
 (the library's own `_MISSING_LIB_MSG` in `lib/content_pipeline/llm/backends.py`

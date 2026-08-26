@@ -211,17 +211,20 @@ of this.
 
 ## 6. Pick an LLM backend and the mock seam
 
-`llm.backends` ships four transports and a process-level `route`:
+`llm.backends` ships five live transports, a `MockBackend`, and a process-level
+`route`:
 
 - **`OpenRouterBackend`** -- the real completion transport (consumes
   llm-scripting-kit for key + model + client).
 - **`ClaudeCliBackend`** -- an agent-loop transport.
 - **`CodexCliBackend`** -- an agent-loop transport over `codex exec`.
+- **`OpencodeCliBackend`** -- an agent-loop transport over `opencode run`; its
+  model id is the user's `provider/model` string and its answer is on stdout.
 - **`ModelEndpointBackend`** -- a completion against an endpoint declared in
   the model-endpoints registry.
 - **`MockBackend`** -- deterministic and scriptable, for every test.
 
-`route(openrouter=, claude_cli=, codex_cli=, model_endpoint=, mock=)` reads the
+`route(openrouter=, claude_cli=, codex_cli=, opencode_cli=, model_endpoint=, mock=)` reads the
 `CONTENT_PIPELINE_LLM_BACKEND` env var and returns the active instance; a
 supplied `mock` always wins so tests never reach a live transport.
 
@@ -249,9 +252,10 @@ Two things differ from the other transports:
 **Does your unit need a harness at all?** This backend is a plain completions
 call, and that is the right shape BECAUSE pipeline units are pure
 transformations of fully-supplied context -- summarize, classify, translate,
-rewrite, extract, score. A harness (`ClaudeCliBackend`, `CodexCliBackend`) adds
-an agent loop, tools, instruction-file ingestion, a sandbox and a working
-directory, at roughly 11k-34k tokens of fixed prompt overhead per unit, turning
+rewrite, extract, score. A harness (`ClaudeCliBackend`, `CodexCliBackend`,
+`OpencodeCliBackend`) adds an agent loop, tools, instruction-file ingestion,
+and a working directory; filesystem posture is backend-specific (OpenCode is
+unconfined). At roughly 11k-34k tokens of fixed prompt overhead per unit, it turns
 a seconds-long call into a minutes-long session. It earns that only when the
 information needed is not knowable when the prompt is written: the unit must
 discover what to read, verify its own output, iterate, edit in place across
