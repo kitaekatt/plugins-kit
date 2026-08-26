@@ -139,8 +139,8 @@ Backend records describe detected tools. An available record renders its name, d
 capabilities, model entries for its harness, existing command text, dispatch prose, and
 gotchas. A record that fails detection is omitted from the artifact; `--explain` reports its
 reason. Request-only records can carry `selection`, which tells the reader to use that backend
-only when the stated condition holds. The shipped Grok and model-endpoints records remain
-request-only records.
+only when the stated condition holds. A request-only record is not a routing target; it is
+documented for an explicitly named backend.
 
 Recognized capability keys, in display order, are:
 
@@ -155,14 +155,11 @@ Detection rules include:
 detect: {always: true}
 detect: {command: [codex, --version]}
 detect: {path: "~/bin/my-runner"}
-detect: {model_endpoints: true, require_commands: [codex]}
 ```
 
 Command detection is fail-closed and resolves bare commands through `PATHEXT` on Windows.
-The `model_endpoints` rule and its probe machinery remain part of the machine half. It reads
-`~/.claude/config/model-endpoints.yaml`, or the path in `MODEL_ENDPOINTS_REGISTRY`, and reports
-the registry roster. `require_commands` must resolve before the registry can make the backend
-available.
+A `detect` mapping must name `always`, `command`, or `path`; an unrecognized mapping fails
+closed and omits the backend.
 
 The optional `llm_scripting_kit` dependency is feature-detected. An importable stale or
 version-skewed copy is insufficient: the renderer requires the model-discovery callable and

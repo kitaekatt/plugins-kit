@@ -52,6 +52,26 @@ def test_routing_rows_are_read_and_names_are_classified(tmp_path):
     assert all("ladders" not in probe.where for probe in routing)
 
 
+def test_hardcoded_backend_command_model_is_still_collected(tmp_path, monkeypatch):
+    monkeypatch.setattr(_CHECKER, "collect_config_keys", lambda _path: {})
+    policy = {
+        "routing": [{"shape": [], "models": ["agent:fable"]}],
+        "backends": [
+            {"id": "codex", "command": "codex exec -m gpt-5.6-sol -"},
+        ],
+    }
+    probes = _CHECKER.collect_probes(
+        policy,
+        tmp_path / "orchestration.yaml",
+        model_entries={},
+    )
+
+    backend_models = [probe for probe in probes if not probe.is_routing]
+    assert [(probe.kind, probe.value) for probe in backend_models] == [
+        ("codex-model", "gpt-5.6-sol"),
+    ]
+
+
 def test_unresolved_name_is_reported_and_changes_exit_code(
     tmp_path, monkeypatch, capsys
 ):
@@ -102,7 +122,6 @@ def test_list_performs_no_dispatch(tmp_path, monkeypatch, capsys):
         "probe_claude_model",
         "probe_codex_model",
         "probe_opencode_model",
-        "probe_grok_model",
         "probe_codex_config_key",
     ):
         monkeypatch.setattr(_CHECKER, name, fail_if_called)

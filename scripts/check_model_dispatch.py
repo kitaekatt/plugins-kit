@@ -34,9 +34,9 @@ is probed tomorrow with no edit here:
     harness (`codex` or `opencode`) and the model id that harness receives --
     the routing name itself is never passed to a CLI;
   * every `-m <id>` hardcoded in a `backends[].command`, via that backend's own
-    launch form. A backend with no routing row still names a model -- `grok`'s
-    record pins `-m grok-4.6` there -- and an unchecked hardcoded id is exactly
-    the defect class above;
+    launch form. A backend can name a model in its command even when routing
+    does not name it, and an unchecked hardcoded id is exactly the defect class
+    above;
   * every `-c <key>=` config key named anywhere in orchestration.yaml or in
     references/codex-dispatch.md, via `codex exec --strict-config` with an
     EMPTY prompt -- an unknown key is rejected while loading config, before any
@@ -71,7 +71,6 @@ rather than papered over: the check is a tool, not a gate.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import shutil
@@ -368,12 +367,11 @@ def collect_probes(
             )
         )
 
-    # A model id pinned inside a backend's one-line `command:`. A backend with
-    # no routing row still names a model -- grok's record hardcodes `-m grok-4.6`
-    # precisely because it has no routing name to carry it -- and a hardcoded
-    # id is the exact thing this script exists for. Reading it out of the
-    # command string rather than a dedicated field keeps ONE copy of that id in
-    # the policy; a second field to scan would be a second thing to keep in step.
+    # A model id pinned inside a backend's one-line `command:`. A hardcoded id
+    # is the exact thing this script exists for, even when routing does not name
+    # it. Reading it out of the command string rather than a dedicated field
+    # keeps ONE copy of that id in the policy; a second field to scan would be a
+    # second thing to keep in step.
     for backend in policy.get("backends") or []:
         command = backend.get("command")
         if not command:
@@ -517,58 +515,6 @@ def probe_opencode_model(model: str, effort: str | None) -> tuple[bool, str]:
     return False, _last_meaningful(output) or f"exit {result.returncode}"
 
 
-def probe_grok_model(model: str) -> tuple[bool, str]:
-    """Dispatch one trivial turn at a grok model id.
-
-    `--prompt-file` is the headless form, and it is NOT combinable with `-p`
-    (which takes the prompt as its own value), so the probe writes the prompt
-    to a file the way a real dispatch does. `--output-format json` puts the
-    reply on stdout as `text`; an unusable model id fails before that.
-
-    Deliberately NOT the launch shape the policy documents. That shape is for
-    doing work: `--always-approve` and the live repo as `--cwd`. This asks one
-    question -- does the identifier dispatch -- and answering it needs no tool
-    call at all, so the probe runs rooted in the throwaway temp dir with
-    `--permission-mode dontAsk`, which auto-DENIES anything not pre-approved
-    rather than prompting (so it cannot hang either). That is the analogue of
-    the codex probe's `-s read-only`, and it matters more here: grok's sandbox
-    is off by default and unenforceable on Windows, so `--cwd` is the only
-    thing standing between a validation run and the working tree.
-    """
-    with tempfile.TemporaryDirectory() as tmp:
-        brief = Path(tmp) / "brief.txt"
-        brief.write_text(PROMPT, encoding="utf-8")
-        cmd = [
-            "grok",
-            "--prompt-file",
-            str(brief),
-            "-m",
-            model,
-            "--cwd",
-            tmp,
-            "--permission-mode",
-            "dontAsk",
-            "--no-subagents",
-            "--output-format",
-            "json",
-        ]
-        result = _run(cmd, stdin="", timeout=MODEL_TIMEOUT)
-    if result is None:
-        return False, f"timed out after {MODEL_TIMEOUT}s"
-    output = (result.stdout + result.stderr).strip()
-    if result.returncode != 0:
-        return False, _last_meaningful(output) or f"exit {result.returncode}"
-    try:
-        payload = json.loads(result.stdout)
-    except (json.JSONDecodeError, ValueError):
-        # Exit 0 with unparseable stdout means the run did not produce a
-        # result object -- report it rather than counting it as a pass.
-        return False, _last_meaningful(output) or "stdout was not a JSON object"
-    reply = str(payload.get("text", "")).strip()
-    stop = payload.get("stopReason")
-    return True, f"replied: {reply[:120]}" + (f" (stopReason={stop})" if stop else "")
-
-
 def probe_codex_config_key(key: str) -> tuple[bool, str]:
     """Validate a `-c` key with ZERO token cost.
 
@@ -657,7 +603,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--backend",
-        choices=["all", "claude", "codex", "opencode", "grok"],
+        choices=["all", "claude", "codex", "opencode"],
         default="all",
         help=(
             "restrict probes to a dispatch harness (agent: -> claude; "
@@ -725,7 +671,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "claude": "claude",
         "codex": "codex",
         "opencode": "opencode",
-        "grok": "grok",
     }
     available = {
         backend: backend_available(binary)
@@ -753,8 +698,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             ok, detail = probe_codex_model(probe.value, probe.effort)
         elif probe.kind == "opencode-model":
             ok, detail = probe_opencode_model(probe.value, probe.effort)
-        elif probe.kind == "grok-model":
-            ok, detail = probe_grok_model(probe.value)
         else:
             ok, detail = probe_codex_config_key(probe.value)
         print("OK" if ok else "FAILED")
