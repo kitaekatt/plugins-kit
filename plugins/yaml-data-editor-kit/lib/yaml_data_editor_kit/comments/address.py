@@ -11,6 +11,7 @@ import yaml
 
 from yaml_data_editor_kit.schema.corpus import (
     ABSENT,
+    claiming_source,
     Corpus,
     Record,
     resolve_value_set,
@@ -617,6 +618,10 @@ def _predicate_records(
                     predicate.field,
                 )
             )
+        if predicate.field in record.excluded_keys:
+            _raise_excluded_first_field(
+                selector, profile, corpus, type_spec, record, predicate.field
+            )
         if predicate.field not in record.data or record.data[predicate.field] is None:
             if field_spec.required:
                 raise EvaluationError(
@@ -646,6 +651,17 @@ def _predicate_records(
 def _predicate_fields(type_spec: TypeSpec, record: Record) -> dict[str, FieldSpec]:
     if type_spec.value is not None:
         return type_spec.fields if record.identity is None else {}
+    # DECISION (D-7 review): unguarded against 'record.excluded_keys' on
+    # purpose, not by oversight. 'variants: { on: X }' requires X to be a
+    # field THIS record's own data supplies to decide its own shape -- a
+    # discriminator that is simultaneously owned by a DIFFERENT source is
+    # not a coherent profile under that constraint, so no realistic
+    # profile reaches this with an excluded discriminator. Even if one
+    # did, the wrong-variant fields it would compute are still caught
+    # loudly downstream -- '_raise_unknown_first_field''s variant-aware
+    # branch -- not silently, so guarding here (which would mean
+    # threading 'selector', 'profile' and 'corpus' through every caller
+    # of this helper) was judged not worth it for an unreachable case.
     discriminator_value: Any = None
     if type_spec.variants is not None and isinstance(record.data, dict):
         discriminator_value = record.data.get(type_spec.variants.on)
@@ -1107,6 +1123,9 @@ def _resolve_field_value(
 
 
 def _record_fields(type_spec: TypeSpec, record: Record) -> dict[str, FieldSpec]:
+    # DECISION (D-7 review): same reasoning as '_predicate_fields' above --
+    # unguarded against 'record.excluded_keys' on purpose; see that
+    # function's comment.
     discriminator_value: Any = None
     if type_spec.variants is not None and isinstance(record.data, dict):
         discriminator_value = record.data.get(type_spec.variants.on)
@@ -1168,6 +1187,8 @@ def _expand_field_paths(
         _raise_unknown_first_field(
             selector, type_spec, record, fields, str(first)
         )
+    if str(first) in record.excluded_keys:
+        _raise_excluded_first_field(selector, profile, corpus, type_spec, record, str(first))
     value = (
         record.data.get(first, ABSENT)
         if isinstance(record.data, dict)
@@ -1320,6 +1341,8 @@ def _walk_named_fields(
     field_spec = fields.get(first)
     if field_spec is None:
         _raise_unknown_first_field(selector, type_spec, record, fields, first)
+    if first in record.excluded_keys:
+        _raise_excluded_first_field(selector, profile, corpus, type_spec, record, first)
     value = record.data.get(first, ABSENT) if isinstance(record.data, dict) else ABSENT
     return _walk_field_tail(
         selector,
@@ -1441,6 +1464,62 @@ def _step_into_field(
         'selector {!r}: cannot continue with segment {!r} past {!r}, a {!r}; only '
         'a record or map can be stepped into'.format(
             selector.text, segment, unit, field_spec.kind or 'shape'
+        )
+    )
+
+
+def _raise_excluded_first_field(
+    selector: Selector,
+    profile: Profile,
+    corpus: Corpus,
+    type_spec: TypeSpec,
+    record: Record,
+    segment: str,
+) -> NoReturn:
+    '''A declared field whose key a DIFFERENT source claims -- see D-7: a
+    'single' record never carries a key another source owns, so resolving it
+    to ABSENT here would be silent, not just wrong. Names the claiming
+    source and a working replacement address instead of letting the walk
+    continue into a value that was never there.
+
+    The replacement address must actually RESOLVE, not merely look like an
+    address -- an unresolvable suggestion ('<id>' as a literal placeholder,
+    matching no established convention elsewhere in this module) sends the
+    reader to a second dead end. When the claiming source already has at
+    least one loaded record, its real identity is used; only an EMPTY
+    claiming source (no rows loaded yet) falls back to a description rather
+    than fabricate an identity that resolves nowhere.
+    '''
+    other = claiming_source(profile, record.source, segment)
+    # 'excluded_keys' is populated (in '_precompute_single_claims') from
+    # exactly the same search 'claiming_source' performs -- the same path,
+    # a 'rows' source, matching 'key:' -- so a key that reached this raise
+    # by being IN 'record.excluded_keys' always has a claimant here. This is
+    # an internal-consistency assertion, not a data check: no profile or
+    # corpus content can make it fail.
+    assert other is not None, (
+        "'{0}' is in this record's excluded_keys, so a claiming source must "
+        "exist -- 'claiming_source' and '_precompute_single_claims' have "
+        "gone out of sync".format(segment)
+    )
+    claiming_records = corpus.of_type(other.of)
+    identified = [r for r in claiming_records if r.identity is not None]
+    if identified:
+        example = '{}/{}'.format(other.of, identified[0].identity)
+    else:
+        example = "the '{}' source's own records, once any are loaded".format(other.of)
+    raise EvaluationError(
+        'selector {!r}: {!r} is declared on type {!r}, but the {!r} source '
+        'for {!r} excludes it -- a {!r} source for type {!r} claims it '
+        'instead; address it as {!r}'.format(
+            selector.text,
+            segment,
+            type_spec.id,
+            record.source.layout,
+            type_spec.id,
+            other.layout,
+            other.of,
+            example,
         )
     )
 

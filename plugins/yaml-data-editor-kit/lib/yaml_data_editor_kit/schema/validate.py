@@ -175,6 +175,14 @@ class Validator:
                 # `null` with no such declaration stays ABSENT, same as today.
                 if value is not None or None in spec.sentinel:
                     continue
+            if prefix == "" and name in record.excluded_keys:
+                # A top-level key another source claims never belongs to
+                # this record at all -- it is neither present nor absent,
+                # so a 'single' record makes no required-ness claim about
+                # it. (Only a top-level exclusion can apply: a claim names a
+                # key of the DOCUMENT, so a nested field sharing that name
+                # is unaffected.)
+                continue
             if spec.required and spec.is_authored:
                 self._report(
                     "is required but absent", record, prefix + name

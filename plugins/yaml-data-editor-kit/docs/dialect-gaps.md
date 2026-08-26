@@ -17,11 +17,18 @@ ruling spans the whole "Field annotations" section of `docs/dialect.md`
 (the `required`, `sentinel` prose starting there), not one sentence.
 
 Every other row was checked against `docs/dialect.md` by grep, most recently
-on 2026-08-26, and carries either a line citation or "no hit" -- treat an
-individual row's marker as current, re-grep before trusting an old citation,
-and do not treat this file as spec on its own even where a row is marked
-APPLIED: `docs/dialect.md` is the spec, this file is the record of how it
-got there.
+on 2026-08-26, and carries either a citation or "no hit". **A citation is a
+short phrase quoted verbatim from `docs/dialect.md`, in double quotes,
+never a line number:** `docs/dialect.md` is edited far more often than this
+row is re-checked, and a line number silently points at the wrong sentence
+the moment the file grows or shrinks above it -- this file has drifted that
+way twice already. A quoted phrase is self-verifying instead: `grep -F` for
+it in `docs/dialect.md` must return exactly one line, and if it returns zero
+the citation is stale and the row's marker needs re-checking, not trusting.
+Treat an individual row's marker as current, re-grep before trusting an old
+citation, and do not treat this file as spec on its own even where a row is
+marked APPLIED: `docs/dialect.md` is the spec, this file is the record of
+how it got there.
 
 **The APPLIED/UNAPPLIED standard, stated once so rows are marked
 consistently:** a row is APPLIED only when `docs/dialect.md` states the
@@ -46,7 +53,7 @@ places, and both are worth stating as the actual shape of the problem:
    id to a non-record value -- a map of numbers, a list of refs -- has no
    home.
 
-   **SUPERSEDED.** This is no longer true. `value:` (dialect.md:72-125, D-9
+   **SUPERSEDED.** This is no longer true. `value:` (dialect.md, "records that are values", D-9
    row below, marked APPLIED) declares exactly this shape: a type whose
    records ARE values rather than field-bearing bodies, loaded via a
    `keyed_map` source.
@@ -59,28 +66,26 @@ places, and both are worth stating as the actual shape of the problem:
 
 | id | What breaks | Corpus evidence | Minimal fix |
 |---|---|---|---|
-| D-9 | **APPLIED** (dialect.md:72, `value:` -- records that are values) -- `keyed_map` requires `of:` to name a TYPE, but the values are a map of numbers or a list of refs | `prices.yaml`, `stat-pools.yaml` (both inexpressible), `weapon-stats.yaml` (half) | let `keyed_map` take `value:` as an alternative to `of:`; let `of:` name the type whose fields are the metadata keys |
+| D-9 | **APPLIED** (dialect.md, "records that are values") -- `keyed_map` requires `of:` to name a TYPE, but the values are a map of numbers or a list of refs | `prices.yaml`, `stat-pools.yaml` (both inexpressible), `weapon-stats.yaml` (half) | let `keyed_map` take `value:` as an alternative to `of:`; let `of:` name the type whose fields are the metadata keys |
 | D-12 | **UNAPPLIED** (no hit for `shape_overrides`) -- `shape_from` cannot enrich an INDIVIDUAL foreign field, so a declared `string` that is really a ref, and an `i32` that is really an enum, stay dumb | all 35 `entities/*.yaml`, `app.yaml` `spawn_list` | `shape_overrides:` on the `shape_from` declaration |
-| D-5 | **APPLIED** (dialect.md:458-477, `total: true`) -- no way to say a map is TOTAL over its key enum | `manifest.yaml` `counts`; `prices.yaml` states a missing pair is a BUILD FAILURE | `total: true` on a map field |
-| D-1 | **UNAPPLIED** (dialect.md:221 added a single-path LIST-OF-SCALARS form, a different capability; a UNION of two paths, the fix this row actually proposes, has no hit) -- `values_from:` takes ONE path, but a real key set is a UNION of two | `gear.weapon_stats` keys = `stat.id` + `weapon_stat_table.derived_fields` | `values_from:` accepts a list of paths |
-| D-16 | **APPLIED** (dialect.md:665, `field:` takes a path, `{ field: weapon_stats.damage, ... }`; dialect.md:699, `covers:` compares field paths by PREFIX) -- `view` `field:` has no PATH form, so it cannot address a map key -- which also breaks `covers:` (card names the map, table names three paths) | `templates/items.yaml` `headers_weapon_extra` | a path form for `field:`, plus how a path relates to its parent under `covers:` |
+| D-5 | **APPLIED** (dialect.md, "`total: true` applies to a map whose key has a declared set") -- no way to say a map is TOTAL over its key enum | `manifest.yaml` `counts`; `prices.yaml` states a missing pair is a BUILD FAILURE | `total: true` on a map field |
+| D-1 | **UNAPPLIED** (dialect.md, "`values_from:` also accepts a path to a LIST-OF-SCALARS field", added a single-path LIST-OF-SCALARS form, a different capability; a UNION of two paths, the fix this row actually proposes, has no hit) -- `values_from:` takes ONE path, but a real key set is a UNION of two | `gear.weapon_stats` keys = `stat.id` + `weapon_stat_table.derived_fields` | `values_from:` accepts a list of paths |
+| D-16 | **APPLIED** (dialect.md, "`field:` takes a field path", `{ field: weapon_stats.damage, ... }`; dialect.md, "`covers:` compares field paths by PREFIX") -- `view` `field:` has no PATH form, so it cannot address a map key -- which also breaks `covers:` (card names the map, table names three paths) | `templates/items.yaml` `headers_weapon_extra` | a path form for `field:`, plus how a path relates to its parent under `covers:` |
 | D-2 | **UNAPPLIED** (no hit for `partition_by` or a `{segment}` placeholder) -- a record set partitioned across files by a filename segment; `rows` takes one literal path | `names-{armor,helm,accessory,charm}.yaml` | `path:` with a `{segment}` placeholder + `partition_by:` |
 | D-3 | **RESOLVED** -- a MEANINGFUL explicit `null` (present-and-null is an assertion; absent is silence) | `stats.yaml` `sashimi_field: null` on 11 of 30 | `sentinel:` may declare `null` as a member; a field whose sentinel set contains `null` treats an explicit `null` as PRESENT, carrying that sentinel's meaning (resolved together with L-16) |
-| D-7 | **UNAPPLIED** (no hit for a `single`-covers-the-unclaimed-keys statement) -- two sources claiming different regions of ONE file; `single`'s wording reads as a conflict | `manifest.yaml`, claimed by `gear_manifest` (single) and `weapon_family` (rows) | one sentence: `single` covers the keys no other source claims |
-| D-6 | **APPLIED** (dialect.md:744, identity-less `(file, ordinal)` rows) -- `rows` with no identity column; `identified_by:` is required | `open-decisions.yaml` is a `{what, where}` table | permit omission for `rows`, row index as the anchor address |
+| D-7 | **RESOLVED** (dialect.md, "EXCLUDING any key another source on the same") -- two sources claiming different regions of ONE file; `single`'s wording reads as a conflict | `manifest.yaml`, claimed by a `single` source and a `rows` source with `key:` for the same file (see a consuming profile's own `FINDING D-7` comment for a worked instance) | `single` covers the keys no other source claims; a claimant that instead covers the WHOLE document (a `rows` source with no `key:`, a `keyed_map` source, a `file_per_record` source whose glob matches the file, or a second `single` source) cannot coexist with `single` at all, a load error naming both |
+| D-6 | **APPLIED** (dialect.md, "An identity-less row is addressed as `(file, ordinal)`") -- `rows` with no identity column; `identified_by:` is required | `open-decisions.yaml` is a `{what, where}` table | permit omission for `rows`, row index as the anchor address |
 | D-8 | **UNAPPLIED** (no hit for `open_question:`) -- no home for an open question ABOUT a declaration (`meaning:` says what a value is for, nothing says what is unresolved) | `points.yaml`, eight owner TBD directives as trailing comments | an `open_question:` field annotation |
-| D-10 | **UNAPPLIED** (no hit for a `disjoint` constraint kind; still three kinds at dialect.md:509-512) -- no `disjoint` constraint kind; `covers` asserts inclusion only | `weapon-stats.yaml` `fixed_stat_meanings` | a fourth constraint kind |
+| D-10 | **UNAPPLIED** (no hit for a `disjoint` constraint kind; still three kinds at dialect.md, "Three kinds, each drawn from an obligation") -- no `disjoint` constraint kind; `covers` asserts inclusion only | `weapon-stats.yaml` `fixed_stat_meanings` | a fourth constraint kind |
 | D-14 | **UNAPPLIED** (no hit for `scope:` / `external:` on `ref`) -- no foreign-scope `ref`; the value degrades to bare string | `app.yaml` `imports.*.components` | `scope:` / `external: true` on `ref` |
 | D-15 | **UNAPPLIED** (no hit for an `except:` on `values_from:`) -- `values_from:` cannot SUBTRACT, so four values are inlined two keys below the list they duplicate | `manifest.name_template` = slots MINUS one | an `except:` on `values_from` |
-| D-0 | **UNAPPLIED, no construct proposed** (carried forward as Open question 3, dialect.md:835) -- a view of ONE type cannot express a JOIN -- confirmed structural, three instances over three type pairs | `templates/stats.yaml` (11 columns from 3 sources incl. a reverse index over 112 records), `tag_table`, `mechanic_card` | none proposed; the fix is a query construct |
+| D-0 | **UNAPPLIED, no construct proposed** (carried forward as Open question 3, dialect.md, "A view of ONE type cannot express a join, and real views are joins") -- a view of ONE type cannot express a JOIN -- confirmed structural, three instances over three type pairs | `templates/stats.yaml` (11 columns from 3 sources incl. a reverse index over 112 records), `tag_table`, `mechanic_card` | none proposed; the fix is a query construct |
 
 Also noted, minor: `constraints.ids:` is documented as `<type>.<field>` but real
 paths go two deep, and nested paths are used in `values_from:` too. The spec
 is silent on whether they are legal. Say.
 
-**SUPERSEDED.** The spec is no longer silent: dialect.md:510 states `ids:`,
-`from:` and `to:` "take anchored paths and may be nested," with the worked
-example `ids: app.templates.entities`.
+**SUPERSEDED.** The spec is no longer silent: dialect.md, "take anchored paths and may be nested" -- `ids:`, `from:` and `to:` now state exactly that, with the worked example `ids: app.templates.entities`.
 
 ## What this confirms
 
@@ -110,7 +115,7 @@ expected to produce a second finding list.
 
 **SUPERSEDED.** The loader now exists and runs against this profile
 routinely (the real-corpus gate in `devolver/`). The `covers:` prediction was
-WRONG: D-16 resolved with `covers:`'s PREFIX rule (dialect.md:695-699), and
+WRONG: D-16 resolved with `covers:`'s PREFIX rule (dialect.md, "`covers:` compares field paths by PREFIX"), and
 `gear_card`'s `covers: gear_table` passes -- the gate reports no covers
 finding for that pair. Whether the `extends` merge algebra is correct for
 all 24 templates has not been separately re-audited by this note; the gate
@@ -136,7 +141,7 @@ Renaming is cleaner -- a schema language whose own example is a parser gotcha
 is teaching the gotcha. `discriminator:` or `switch:` would not have this
 problem. VERIFIED directly, not taken from the report.
 
-**L-2. UNAPPLIED for the `stored:`-scoping half (no hit for whether `stored:` is scoped to the mapping form only). dialect.md:262 settles the OTHER half -- "an `enum`'s values are therefore not restricted to strings" -- so the tri-state example is no longer unremarked, only the scoping question is open. `stored:` defaults to `string`, yet `values: [true, false, TBD]` is
+**L-2. UNAPPLIED for the `stored:`-scoping half (no hit for whether `stored:` is scoped to the mapping form only). dialect.md, "values are therefore not restricted to strings" settles the OTHER half -- so the tri-state example is no longer unremarked, only the scoping question is open. `stored:` defaults to `string`, yet `values: [true, false, TBD]` is
 endorsed.** Under a literal reading `true` is not a string, so the spec's own
 tri-state example contradicts its own default. The loader scoped `stored:` to
 the MAPPING form only, leaving the list form as literal membership. The spec
@@ -149,23 +154,23 @@ they become folklore.
 
 | id | The silence | What the loader chose |
 |---|---|---|
-| L-3 | **UNAPPLIED** (dialect.md:512 names `unique` but no declared `scope:` keys) -- `unique` has no declared keys | `ids: <type>.<field>` plus an uninterpreted `scope:` -- so `scope` is NOT enforced |
-| L-4 | **UNAPPLIED** (dialect.md:511 names `matches_files` with no comparison detail) -- what `matches_files` compares | `Path.stem`, both directions reported |
-| L-5 | **APPLIED, and it is the correct row: do not edit it** (dialect.md:285-289, the three-forms sentence added for D-3/L-16) -- `sentinel:` has no stated form | accepts mapping, list or bare scalar; exempt from `min`/`max` only |
-| L-6 | **UNAPPLIED** (dialect.md:276 says 'not authored' but never states the required-check is skipped) -- is a `derived` field required? | never demanded, never compared (a literal reading fails every record) |
+| L-3 | **UNAPPLIED** (dialect.md, "an id set has no duplicates within a scope" names `unique` but no declared `scope:` keys) -- `unique` has no declared keys | `ids: <type>.<field>` plus an uninterpreted `scope:` -- so `scope` is NOT enforced |
+| L-4 | **UNAPPLIED** (dialect.md, "a declared id set equals a glob's filenames" names `matches_files` with no comparison detail) -- what `matches_files` compares | `Path.stem`, both directions reported |
+| L-5 | **APPLIED, and it is the correct row: do not edit it** (dialect.md, "`sentinel:` accepts three forms", the three-forms sentence added for D-3/L-16) -- `sentinel:` has no stated form | accepts mapping, list or bare scalar; exempt from `min`/`max` only |
+| L-6 | **UNAPPLIED** (dialect.md, "computed, not authored -- how" but never states the required-check is skipped) -- is a `derived` field required? | never demanded, never compared (a literal reading fails every record) |
 | L-7 | **UNAPPLIED** (no hit for `required:` defaulting on a `shape_from` field) -- `required` for fields from `shape_from` | defaults true -- so a genuinely optional foreign field cannot be expressed |
-| L-8 | **UNAPPLIED** (dialect.md:171-172 states the restriction -- 'deliberately limited to this: a map value... not a general macro' -- but not the enforced consequence, a load-time error; see the L-8/L-9 standard in the header) -- `shape_from` outside a map value | a load-time error |
-| L-9 | **UNAPPLIED** (dialect.md:357 still only says 'do not', no stated consequence) -- restating `via`/`abstract_flag` under `fields:` | an error (the spec says "do not", with no consequence) |
-| L-10 | **UNAPPLIED** (dialect.md:737 states the document key IS the identity but never addresses a disagreeing body id) -- `keyed_map` identity vs a body id | document key wins; NO cross-check (unlike `file_per_record`, where the spec is explicit) |
+| L-8 | **UNAPPLIED** (dialect.md, "deliberately limited to this: a map value" -- but not the enforced consequence, a load-time error; see the L-8/L-9 standard in the header) -- `shape_from` outside a map value | a load-time error |
+| L-9 | **UNAPPLIED** (dialect.md, "Do not also list them under" -- still only says 'do not', no stated consequence) -- restating `via`/`abstract_flag` under `fields:` | an error (the spec says "do not", with no consequence) |
+| L-10 | **UNAPPLIED** (dialect.md, "document key IS its identity" but never addresses a disagreeing body id) -- `keyed_map` identity vs a body id | document key wins; NO cross-check (unlike `file_per_record`, where the spec is explicit) |
 | L-11 | **UNAPPLIED** (no hit for duplicate-identity / ambiguous-ref clarification) -- duplicate identities | not an implicit error, since `unique` exists -- which makes `ref` resolution silently ambiguous |
-| L-12 | **UNAPPLIED** (dialect.md:684 `covers:` section never scopes itself to `field:` entries over `computed:`) -- `covers` and `computed:` entries | compares `field:` entries only |
+| L-12 | **UNAPPLIED** (dialect.md, "asserts that this view shows every field the named view shows" -- the `covers:` section never scopes itself to `field:` entries over `computed:`) -- `covers` and `computed:` entries | compares `field:` entries only |
 | L-13 | **UNAPPLIED** (no hit for a shared-`of:` requirement between covering views) -- must both `covers` views share `of:`? | not checked |
-| L-14 | **UNAPPLIED** (dialect.md:727 documents `file_per_record`'s glob; other layouts' non-globbing is never stated) -- which layouts glob | `file_per_record` only |
+| L-14 | **UNAPPLIED** (dialect.md, "one record per file matching `path:` as a glob"; other layouts' non-globbing is never stated) -- which layouts glob | `file_per_record` only |
 | L-15 | **UNAPPLIED** (no hit for float/int or bool/int coercion rules) -- `float` accepting an `int` | yes; `bool` is never an `int` |
 | L-16 | **RESOLVED** -- an explicit `null` | treated as ABSENT, except on a field whose `sentinel:` set contains `null`, where it is PRESENT and carries that sentinel's meaning; every other field keeps the old ABSENT behaviour unchanged (resolved together with D-3) |
 | L-17 | **UNAPPLIED** (no hit for a dangling-`extensible`-parent clarification) -- dangling `extensible` parent | reported once, by the generic `ref` check |
-| L-18 | **APPLIED** (dialect.md:788, 'The editor refuses to write there') -- `generated_by:` enforcement | parsed and carried, not enforced (the spec assigns it to the editor) |
-| L-19 | **APPLIED** (dialect.md:455, 582, the advisory channel is documented) -- the advisory channel | `severity="advisory"`, with `errors_only()` as the fatal subset |
+| L-18 | **APPLIED** (dialect.md, "The editor refuses to write") -- `generated_by:` enforcement | parsed and carried, not enforced (the spec assigns it to the editor) |
+| L-19 | **APPLIED** (dialect.md, "reported by the validator as an advisory"; dialect.md, "the same channel an", the advisory channel is documented) -- the advisory channel | `severity="advisory"`, with `errors_only()` as the fatal subset |
 
 **L-16 and D-3 were in direct conflict** and have been resolved together:
 the loader treated an explicit `null` as absent, while the corpus uses an

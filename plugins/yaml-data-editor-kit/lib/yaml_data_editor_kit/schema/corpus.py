@@ -9,6 +9,7 @@ later.
 from __future__ import annotations
 
 from dataclasses import dataclass, field as dataclass_field
+import fnmatch
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -28,6 +29,7 @@ class Record:
     data: Any
     file: str
     source: SourceSpec
+    excluded_keys: frozenset[str] = dataclass_field(default_factory=frozenset)
 
     @property
     def label(self) -> str:
@@ -64,10 +66,179 @@ class Corpus:
 def load_corpus(profile: Profile, root: Path) -> Corpus:
     """Read every source, then check corpus-backed obligations of all paths."""
     corpus = Corpus(root=root)
+    single_claims = _precompute_single_claims(profile)
+    for _claimed, diagnostics in single_claims.values():
+        corpus.diagnostics.extend(diagnostics)
     for source in _ordered_sources(profile):
-        _load_source(profile, corpus, source, root)
+        _load_source(profile, corpus, source, root, single_claims)
     check_path_key_steps(profile, corpus)
     return corpus
+
+
+def claiming_source(profile: Profile, source: SourceSpec, key: str) -> SourceSpec | None:
+    """The other source on ``source``'s path that claims top-level key
+    ``key``, if any.
+
+    Only a ``rows`` source with ``key:`` claims a SPECIFIC key (see
+    ``_precompute_single_claims``) -- every other coexisting layout claims
+    the whole document, which refuses coexistence outright rather than
+    reaching this record with a per-key exclusion. Used to build an
+    actionable message when an address steps into a key a ``single`` record
+    excluded, so the reader is pointed at the record that actually owns it.
+    """
+    for other in profile.sources:
+        if other is source or other.path != source.path:
+            continue
+        if other.layout == "rows" and other.key == key:
+            return other
+    return None
+
+
+def _shares_this_path(source: SourceSpec, path: str) -> bool:
+    """Whether ``source`` occupies file ``path`` -- literally for every
+    other layout, or by GLOB EXPANSION for ``file_per_record``, whose own
+    ``path:`` is a pattern rather than a literal file. A ``file_per_record``
+    source that never literally spells ``path`` can still claim it whole by
+    matching it: ``content/*.yaml`` reads ``content/manifest.yaml`` as one
+    of its own records exactly as surely as a pattern that names it
+    verbatim, so treating only an exact string match as "sharing" the path
+    missed that case entirely -- the file loaded twice, silently, under two
+    type ids, with no coexistence refusal at all.
+    """
+    if source.layout != "file_per_record":
+        return source.path == path
+    return _file_per_record_matches(source.path, path)
+
+
+def _file_per_record_matches(pattern: str, path: str) -> bool:
+    """Whether the glob ``pattern`` (as passed to ``Path.glob``) would match
+    literal file ``path``, without touching the filesystem.
+
+    Matches ``pathlib.Path.glob`` semantics for the patterns this dialect
+    actually uses: each ``/``-separated segment matches independently, so a
+    bare ``*`` does not cross a directory boundary -- which is why this is
+    not a single ``fnmatch`` over the whole string (that would let
+    ``content/*.yaml`` wrongly match ``content/sub/manifest.yaml``). A
+    recursive ``**`` segment is rare in this corpus and not worth
+    replicating exactly; it falls back to a conservative single-``*``
+    translation rather than silently failing to match.
+    """
+    pattern_segments = pattern.split("/")
+    path_segments = path.split("/")
+    if "**" in pattern_segments:
+        return fnmatch.fnmatch(path, pattern.replace("**/", "").replace("**", "*"))
+    if len(pattern_segments) != len(path_segments):
+        return False
+    return all(
+        fnmatch.fnmatch(path_segment, pattern_segment)
+        for path_segment, pattern_segment in zip(path_segments, pattern_segments)
+    )
+
+
+def _precompute_single_claims(
+    profile: Profile,
+) -> dict[str, tuple[set[str], list[Diagnostic]]]:
+    """For each file path a 'single' source names, the top-level keys another
+    source on that same path claims, plus coexistence diagnostics.
+
+    ``single`` means "the whole document is one record" only for the keys no
+    OTHER source addresses -- a ``rows`` source with ``key:`` on the same
+    path unambiguously owns that one key, its own layout says so, so
+    ``single`` must not also read it as a field of its own record.
+
+    Coexistence works only when the other source's claim is a well-defined
+    PROPER SUBSET of the document. Four things instead claim the WHOLE
+    document, and none of them can share a file with ``single`` at all: a
+    ``rows`` source with no ``key:`` (it IS the document's sequence), a
+    ``keyed_map`` source (every top-level key is either one of its records or
+    its metadata -- there is no third region left for ``single``), a
+    ``file_per_record`` source whose glob names this exact file (it reads the
+    whole matched file as one record, the same whole-document claim a
+    key-less ``rows`` source makes), and a second ``single`` source (by
+    definition, the whole document again).
+
+    Two ``rows`` sources both naming the same ``key:`` is the same "one key,
+    two owners" problem restated one level down, and is refused the same
+    way -- but ONLY on a path a ``single`` source also occupies, because that
+    is the only case this function inspects; two ``rows`` sources sharing a
+    key on a path with no ``single`` source at all is a real, separate
+    defect (each would silently load the same rows twice, under two type
+    ids) that this ruling does not cover.
+
+    Computed once, before any source loads, so a path shared by several
+    sources -- including two ``single`` sources, which would otherwise each
+    discover and report the same conflict -- is diagnosed exactly once.
+    """
+    single_paths = sorted({s.path for s in profile.sources if s.layout == "single"})
+    result: dict[str, tuple[set[str], list[Diagnostic]]] = {}
+    for path in single_paths:
+        siblings = [s for s in profile.sources if _shares_this_path(s, path)]
+        singles = [s for s in siblings if s.layout == "single"]
+        claimed: dict[str, SourceSpec] = {}
+        diagnostics: list[Diagnostic] = []
+        for other in siblings:
+            if other.layout == "single":
+                continue
+            if other.layout == "rows" and other.key is not None:
+                key = other.key
+                first = claimed.get(key)
+                if first is not None:
+                    diagnostics.append(
+                        Diagnostic(
+                            "key '{0}' of this file is claimed by two 'rows' "
+                            "sources -- one for type '{1}' and one for type "
+                            "'{2}'; one top-level key cannot have two "
+                            "owners".format(key, first.of, other.of),
+                            path,
+                            record=key,
+                        )
+                    )
+                    continue
+                claimed[key] = other
+                continue
+            # A 'rows' source with no 'key:', a 'keyed_map' source, or a
+            # 'file_per_record' source whose glob names this exact file --
+            # each claims the whole document, so none can share a file with
+            # 'single' at all.
+            if other.layout == "rows":
+                reason = "no 'key:', so it IS the document's sequence -- the whole file"
+            elif other.layout == "keyed_map":
+                reason = (
+                    "every top-level key is either one of its records or "
+                    "its metadata, leaving no third region for 'single'"
+                )
+            else:
+                reason = (
+                    "its 'path:' glob matches this exact file, and it reads "
+                    "every matched file as one whole record"
+                )
+            diagnostics.append(
+                Diagnostic(
+                    "a 'single' source for type '{0}' shares this file with a "
+                    "'{1}' source for type '{2}': {3}; a 'single' source can "
+                    "only coexist with a 'rows' source that names a specific "
+                    "'key:'".format(
+                        ", ".join(sorted(s.of for s in singles)),
+                        other.layout,
+                        other.of,
+                        reason,
+                    ),
+                    path,
+                )
+            )
+        if len(singles) > 1:
+            names = ", ".join(sorted(s.of for s in singles))
+            diagnostics.append(
+                Diagnostic(
+                    "two 'single' sources both claim this whole file: types "
+                    "{0}; a 'single' source IS the whole document, so a "
+                    "second one on the same path has nothing left to "
+                    "be".format(names),
+                    path,
+                )
+            )
+        result[path] = (set(claimed), diagnostics)
+    return result
 
 
 def _ordered_sources(profile: Profile) -> list[SourceSpec]:
@@ -102,7 +273,13 @@ def _matching_files(root: Path, pattern: str) -> list[Path]:
     return sorted(p for p in root.glob(pattern) if p.is_file())
 
 
-def _load_source(profile: Profile, corpus: Corpus, source: SourceSpec, root: Path) -> None:
+def _load_source(
+    profile: Profile,
+    corpus: Corpus,
+    source: SourceSpec,
+    root: Path,
+    single_claims: dict[str, tuple[set[str], list[Diagnostic]]],
+) -> None:
     type_spec = profile.types[source.of]
     identified_by = type_spec.identified_by
 
@@ -142,14 +319,19 @@ def _load_source(profile: Profile, corpus: Corpus, source: SourceSpec, root: Pat
                 Diagnostic("a 'single' source must be a mapping of that record's fields", name)
             )
             return
+        claimed_keys, _diagnostics = single_claims.get(source.path, (set(), []))
+        record_data = {
+            key: value for key, value in document.items() if str(key) not in claimed_keys
+        }
         corpus.records.append(
             Record(
                 type_id=source.of,
                 identity=None,
                 ordinal=None,
-                data=document,
+                data=record_data,
                 file=name,
                 source=source,
+                excluded_keys=frozenset(claimed_keys),
             )
         )
 

@@ -738,8 +738,41 @@ generated_by: tools/generate_catalog.py
   `identified_by:` is not required on a regular type and is refused on a
   value-shaped type.
 - `single` -- the whole document IS one record of `of:`, with its top-level
-  keys as that record's fields. No identity is needed and `identified_by:` is
+  keys as that record's fields, EXCLUDING any key another source on the same
+  `path:` claims for itself. No identity is needed and `identified_by:` is
   not required on the type.
+
+  A `rows` source with `key:` on the same path claims exactly that one key --
+  its own layout says so -- so a `single` record on that path never sees it:
+  the key is absent from the `single` record's data, and the `single` type's
+  own field of that name (if it declares one) is exempt from the
+  required-field check, because the record makes no claim about a key it
+  never carried. That key's data is validated entirely through the source
+  that claims it. A comment anchor addressed at an excluded key is refused
+  the same way, not resolved to an absent value: it names the source that
+  claims the key and the working address to use instead, because resolving
+  quietly to absent would make a stale anchor look permanently valid.
+
+  Coexistence works only when the other source's claim is a well-defined
+  PROPER SUBSET of the document. Four things instead claim the WHOLE
+  document, and none of them can share a path with a `single` source at
+  all -- each is a load error naming the path and both sources: a `rows`
+  source with no `key:` (it IS the document's sequence); a `keyed_map`
+  source (every top-level key is one of its records or its metadata,
+  leaving no third region for `single`); a `file_per_record` source whose
+  `path:` glob MATCHES this file -- by literally naming it or by expanding
+  to it (`content/*.yaml` matches `content/manifest.yaml` exactly as surely
+  as a pattern spelling it out) -- reads every matched file as one whole
+  record, so either form claims this file whole; and a second `single`
+  source (by definition, the whole document again).
+
+  Two `rows` sources both naming the same `key:` on a path a `single`
+  source ALSO occupies is the same "one key, two owners" problem restated
+  at the key level, and is refused the same way, naming the key and both
+  sources. This refusal is scoped to that case, not general: two `rows`
+  sources sharing a `key:` on a path with no `single` source present is a
+  real, separate defect -- each loads the same rows twice, under two type
+  ids -- that this ruling does not cover.
 
 An identity-less row is addressed as `(file, ordinal)`. The ordinal is its
 zero-based position in the source file. Every persisted address MUST carry a
