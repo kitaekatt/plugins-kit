@@ -1,7 +1,7 @@
 # rename-spec: executing the ratified terminology framework
 
 **Status:** specification only. Nothing in this document has been applied.
-**Input:** `dev/tasks/md-domain-review-enablement/terminology-audit.md` (the 27-row
+**Input:** `docs/reference/terminology/terminology-audit.md` (the 27-row
 divergence table). This document does not redo that analysis; it converts the
 owner's ratified decisions into executable packets.
 
@@ -812,8 +812,12 @@ No new configurable opinion is introduced by this spec.
 
 ## K. Critical-infrastructure disclosure
 
-- **Created:** this file only, `dev/tasks/md-domain-review-enablement/rename-spec.md`.
-  `dev/` is gitignored in this repo, so it is untracked scratch and is the ONLY copy.
+- **Created:** this file only. It was written to
+  `dev/tasks/md-domain-review-enablement/rename-spec.md`, which was then untracked scratch
+  under a gitignored `dev/` and the only copy. Both of those facts have since changed and
+  the sentence is kept only as provenance: `cc1a5d5d` promoted this document to
+  `docs/reference/terminology/rename-spec.md`, where it is tracked, and the task folder
+  was later renamed to `dev/tasks/better-md-review/`. The tracked copy is authoritative.
 - **Changed:** nothing. No file under `plugins/`, `tests/`, `scripts/`, or `docs/` was
   edited. No rename was applied. No generator was run.
 - **Git:** no branch created, no branch switched, no `git add`, no commit, no push.
