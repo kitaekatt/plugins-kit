@@ -7,6 +7,29 @@ the launch -- the rendered policy carries the summary; this carries the detail.
 Rendered policy: `scripts/orchestration_guidance.py`. Backend record and the
 one-line command: `defaults/orchestration.yaml`, `backends[id: codex]`.
 
+## When a harness is warranted at all
+
+A harness is not a transport wrapper. A raw endpoint returns text; codex
+supplies the agent loop, the shell / file / apply_patch tools, instruction-file
+ingestion, a sandbox, a working directory, and a machine-parseable result. That
+is worth roughly 11,000 tokens of fixed prompt overhead per run and turns a
+seconds-long call into a minutes-long session.
+
+So the rule is: **a harness is warranted exactly when the information the unit
+needs is not knowable when the prompt is written** -- it must discover what to
+read, verify its own output, iterate, edit files in place, or honour
+instruction files it was not handed. Pure transformation of a fully supplied
+context -- summarize, classify, translate, rewrite, extract, score -- is a
+completions call and must stay one. Wrapping such a unit in a harness buys
+nothing and pays the whole overhead.
+
+**Truncation mid-tool-call poisons the session.** A turn that hits the token
+limit while emitting tool-call arguments produces unparseable JSON, and every
+later request carrying that history then fails outright -- not just the turn
+that truncated. It is unrecoverable within that session and invisible until it
+happens. The mitigation is generous token budgets: do not squeeze a unit on
+this backend to save capacity.
+
 ## Absolute paths, always
 
 Every path you hand codex -- `-C`, `--add-dir`, `-o` -- is ABSOLUTE. This is a
@@ -71,9 +94,8 @@ Launch each unit as its own Bash tool call with run_in_background: true.
 
 Per-unit knobs on top of that shape:
 
-  -m, --model <MODEL>      The rung. Model ids are FULLY QUALIFIED --
-                           `gpt-5.6-sol`, not the bare codename, which is not
-                           dispatchable and fails at launch.
+  -m, --model <MODEL>      The provider model value. Routing uses an entry id;
+                           the rendered target carries the harness and entry id.
   -c model_reasoning_effort=<low|medium|high|xhigh|max>
                            The effort dial, and a `-c` CONFIG KEY rather than a
                            flag -- `codex exec --help` does not list it, so
@@ -158,9 +180,8 @@ unit produced a 1-line result file against a 2248-line transcript.
 
 Codex is a HARNESS, not a client for one vendor: the same agent loop, tools,
 sandbox and `-o` contract can be pointed at another server with `-c` config
-pairs. This section is the mechanics; which servers are registered on this
-machine, and the local-server behaviors, are in
-[model-endpoints-dispatch.md](model-endpoints-dispatch.md).
+pairs. This section covers the custom-provider mechanics and compatibility
+requirements.
 
 ### The wire API, and the inference to avoid
 

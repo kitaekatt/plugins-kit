@@ -1,8 +1,8 @@
-"""Tests for the orchestrate skill's policy generator.
+"""Tests for the orchestrate skill's policy renderer.
 
 Covers the three-layer merge, record-list merging by id, backend detection,
-capacity reporting (including the snapshot contract with claude-ui-kit), and
-the shape of the rendered guidance.
+    capacity reporting (including the snapshot contract with claude-ui-kit), and
+    the shape of the rendered guidance.
 
 The module under test re-execs into awesome-kit's provisioned venv on import;
 tests/conftest.py sets _BOOTSTRAP_GUARD_VENV_REEXEC so that is a no-op here
@@ -12,7 +12,9 @@ process itself).
 
 import json
 import re
+import sys
 import time
+from pathlib import Path
 
 import pytest
 import yaml
@@ -165,52 +167,63 @@ class TestShippedDefaults:
 
     def test_shipped_defaults_parse_and_carry_the_expected_shape(self):
         data = shipped()
-        assert data["schema_version"] == 2
+        assert data["schema_version"] == 3
+        assert "backend" not in data
+        assert "ladders" not in data
+        assert isinstance(data["routing"], list)
         backend_ids = [b["id"] for b in data["backends"]]
-        assert data["default_backend"] in backend_ids
-        assert {"agent", "codex"} <= set(backend_ids)
-        assert [l["id"] for l in data["ladders"]] == ["agent", "codex"]
+        assert backend_ids == ["agent", "codex"]
         assert data["resolution"]
 
-    def test_every_ladder_names_a_declared_backend(self):
-        data = shipped()
-        ids = {b["id"] for b in data["backends"]}
-        for ladder in data["ladders"]:
-            assert ladder["id"] in ids, ladder["id"]
-
-    def test_backend_capability_tier_lists_name_that_backends_rungs(self):
-        data = shipped()
-        for backend in data["backends"]:
-            declared = (backend.get("capabilities") or {}).get("tiers")
-            if not declared:
-                continue
-            ladder = next(l for l in data["ladders"] if l["id"] == backend["id"])
-            rungs = {r["id"] for r in ladder["rungs"]}
-            assert set(declared) <= rungs, backend["id"]
-
-    def test_exactly_one_terminal_rung_per_ladder_and_it_is_last(self):
-        """Ordered elimination needs a rung that is unreachable except by
-        falling through -- and it can only be the last one."""
-        for ladder in shipped()["ladders"]:
-            terminal = [r["id"] for r in ladder["rungs"] if r.get("terminal")]
-            assert terminal == [ladder["rungs"][-1]["id"]], ladder["id"]
-
-    def test_only_a_terminal_rung_may_state_no_criteria(self):
-        for ladder in shipped()["ladders"]:
-            for rung in ladder["rungs"]:
-                if not rung.get("criteria"):
-                    assert rung.get("terminal"), rung["id"]
-
-    def test_every_criterion_names_a_skill_term(self):
+    def test_routing_rows_have_shapes_and_models_in_priority_order(self):
         data = shipped()
         skills = {t["id"] for t in data["lexicon"] if t.get("kind") == "skill"}
-        for ladder in data["ladders"]:
-            for rung in ladder["rungs"]:
-                if rung.get("shape"):
-                    assert rung["shape"] in skills, rung["id"]
-                for group in rung.get("criteria") or []:
-                    ids = group["terms"] if isinstance(group, dict) else group
-                    assert set(ids) <= skills, rung["id"]
+        assert data["routing"][-1]["shape"] == []
+        for row in data["routing"]:
+            assert set(row["shape"]) <= skills
+            assert row["models"]
+            assert all(isinstance(model, str) for model in row["models"])
+
+    def test_shipped_routing_uses_only_the_two_namespaces(self):
+        data = shipped()
+        models = [model for row in data["routing"] for model in row["models"]]
+        assert models == ["sol", "agent:fable", "sol", "luna", "agent:sonnet"]
+        assert all(model.startswith("agent:") or ":" not in model for model in models)
+
+    def test_shipped_defaults_render_with_the_expected_sections(
+        self, capsys, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
+        monkeypatch.setattr(
+            og,
+            "detect_backend",
+            lambda backend: (
+                (True, "stubbed")
+                if backend.get("id") in {"agent", "codex"}
+                else (False, "stubbed absent")
+            ),
+        )
+        assert og.main(["--project-root", str(tmp_path / "project")]) == 0
+        text = capsys.readouterr().out
+        for section in ("Shape the unit", "Routing", "Agent type", "Effort", "Announce", "Dispatch backends", "Capacity"):
+            assert section in text
+
+    def test_lexicon_and_routing_shape_terms_stay_in_sync(self):
+        data = shipped()
+        reference = (
+            og.DEFAULTS_PATH.parent.parent / "references" / "lexicon.md"
+        ).read_text(encoding="utf-8")
+        reference_ids = set(re.findall(r"^### `([^`]+)`", reference, re.M))
+        yaml_ids = {str(term["id"]) for term in data["lexicon"]}
+        assert yaml_ids == reference_ids
+        skills = {
+            str(term["id"])
+            for term in data["lexicon"]
+            if term.get("kind") == "skill" and not term.get("disabled")
+        }
+        for row in data["routing"]:
+            assert set(row.get("shape") or []) <= skills
 
     def test_glossed_terms_carry_a_gloss_and_bare_terms_do_not(self):
         for term in shipped()["lexicon"]:
@@ -435,8 +448,9 @@ class TestFormatReset:
 
 
 def cfg(**over):
-    """A minimal but complete decision-tree config."""
+    """A minimal but complete routing config."""
     base = {
+        "schema_version": 3,
         "resolution": "first match wins",
         "lexicon": [
             {"id": "known", "kind": "skill", "render": "glossed",
@@ -449,17 +463,9 @@ def cfg(**over):
             "title": "Shape the unit",
             "tests": [{"id": "axes", "text": "{known} or {open}."}],
         },
-        "ladders": [
-            {
-                "id": "agent",
-                "label": "Claude",
-                "rungs": [
-                    {"id": "top", "model": "fable", "criteria": [["novel"]]},
-                    {"id": "workhorse", "model": "sonnet", "criteria": [], "terminal": True,
-                     "text": "terminal default."},
-                ],
-                "guards": ["There is no haiku rung."],
-            }
+        "routing": [
+            {"shape": ["novel"], "models": ["agent:fable"]},
+            {"shape": [], "models": ["agent:sonnet"]},
         ],
         "backends": [{"id": "agent", "name": "Agent", "detect": {"always": True}}],
         "capacity": {"source": "none"},
@@ -478,12 +484,11 @@ class TestRender:
         assert "## Capacity" in text
         assert "Layers applied: shipped" in text
 
-    def test_unavailable_rung_is_marked_and_instructed_against(self, layered):
-        layered("shipped", cfg(capacity={"source": "none", "tier_overrides": {"top": "unavailable"}}))
+    def test_unresolvable_model_is_not_rendered(self, layered):
+        layered("shipped", cfg(routing=[{"shape": ["novel"], "models": ["missing"]}]))
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "`top`: unavailable" in text
-        assert "Do not dispatch to `top`" in text
+        assert "missing" not in text.split("\n---\n")[0]
 
     def test_undetected_backend_leaves_no_trace(self, layered):
         """An absent backend must not be named at all -- mentioning it invites
@@ -509,39 +514,13 @@ class TestRender:
         assert "ghost" not in text
         assert "agent" in text
 
-    def test_ladder_gated_on_a_missing_backend_is_hidden(self, layered):
-        ghost = {
-            "id": "ghost",
-            "label": "Ghost",
-            "rungs": [{"id": "gated", "model": "phantom", "criteria": [], "terminal": True}],
-        }
+    def test_routing_row_with_unknown_shape_is_hidden(self, layered):
         layered("shipped", cfg(
-            ladders=cfg()["ladders"] + [ghost],
-            backends=[
-                {"id": "agent", "name": "Agent", "detect": {"always": True}},
-                {"id": "ghost", "detect": {"command": ["no-such-binary-xyz"]}},
-            ],
+            routing=[{"shape": ["missing-shape"], "models": ["agent:fable"]}],
         ))
         config, provenance = og.resolve_config(layered.project_root)
-        # Body only: the footer echoes tmp paths, which carry the test's own name.
         body = og.render(config, provenance).split("\n---\n")[0]
-        assert "phantom" not in body and "gated" not in body
-
-    def test_ladder_on_a_present_backend_is_shown(self, layered):
-        here = {
-            "id": "here",
-            "label": "Here",
-            "rungs": [{"id": "gated", "model": "phantom", "criteria": [], "terminal": True}],
-        }
-        layered("shipped", cfg(
-            ladders=cfg()["ladders"] + [here],
-            backends=[
-                {"id": "agent", "name": "Agent", "detect": {"always": True}},
-                {"id": "here", "name": "Here", "detect": {"always": True}},
-            ],
-        ))
-        config, provenance = og.resolve_config(layered.project_root)
-        assert "phantom" in og.render(config, provenance)
+        assert "missing-shape" not in body
 
     def test_capacity_unknown_says_so_rather_than_guessing(self, layered, tmp_path):
         layered(
@@ -579,6 +558,110 @@ def _shipped_path():
     )
 
 
+def _install_repo_harness_library(monkeypatch):
+    """Put the working shared libraries before any stale installed copies."""
+    repo_root = Path(__file__).resolve().parents[2]
+    monkeypatch.syspath_prepend(str(repo_root / "plugins" / "bootstrap"))
+    monkeypatch.syspath_prepend(
+        str(repo_root / "plugins" / "llm-scripting-kit" / "lib")
+    )
+    for name in tuple(sys.modules):
+        if name == "llm_scripting_kit" or name.startswith("llm_scripting_kit."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+        if name == "bootstrap_lib" or name.startswith("bootstrap_lib."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+
+
+def _codex_command(rendered):
+    match = re.search(
+        r"### Codex CLI \(`codex`\).*?```\n(.*?)\n```", rendered, re.DOTALL
+    )
+    assert match, rendered
+    return match.group(1)
+
+
+class TestCommandTextProvider:
+    def _codex_setup(self, monkeypatch, tmp_path, entries):
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: (entries, []))
+        monkeypatch.setattr(og, "detect_backend", lambda _backend: (True, "stubbed"))
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        return config, provenance
+
+    def test_adapter_path_renders_the_adapter_argv(self, monkeypatch, tmp_path):
+        _install_repo_harness_library(monkeypatch)
+        entries = {
+            "sol": {
+                "id": "sol",
+                "harness": "codex",
+                "model": "gpt-5.6-sol",
+                "effort": "high",
+            }
+        }
+        config, provenance = self._codex_setup(monkeypatch, tmp_path, entries)
+
+        from bootstrap_lib import codex
+
+        calls = []
+
+        def fake_builder(**kwargs):
+            calls.append(kwargs)
+            return ["adapter-generated", kwargs["root"], kwargs["output_file"]]
+
+        monkeypatch.setattr(codex, "build_codex_exec_argv", fake_builder)
+        rendered = og.render(config, provenance)
+        command = _codex_command(rendered)
+
+        assert command == (
+            f"adapter-generated {og._placeholder_path('root')} "
+            f"{og._placeholder_path('result')}"
+        )
+        assert calls[0]["model"] == "gpt-5.6-sol"
+        assert calls[0]["effort"] == "high"
+
+    def test_fallback_command_is_reported_by_explain_when_library_is_unavailable(
+        self, monkeypatch, capsys, tmp_path
+    ):
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+        config, provenance = self._codex_setup(monkeypatch, tmp_path, {})
+        rendered = og.render(config, provenance)
+        command = _codex_command(rendered)
+        expected = og.fold(
+            next(b["command"] for b in shipped()["backends"] if b["id"] == "codex")
+        )
+        assert command == expected
+
+        assert og.main(["--explain", "--project-root", str(tmp_path / "project")]) == 0
+        explained = capsys.readouterr().out
+        assert (
+            "command  note      backend `codex` command adapter unavailable; "
+            "using fallback command from config (llm_scripting_kit unavailable"
+            in explained
+        )
+
+    def test_adapter_command_contains_only_absolute_sentinels(self, monkeypatch, tmp_path):
+        _install_repo_harness_library(monkeypatch)
+        entries = {
+            "sol": {
+                "id": "sol",
+                "harness": "codex",
+                "model": "gpt-5.6-sol",
+                "effort": "high",
+            }
+        }
+        config, provenance = self._codex_setup(monkeypatch, tmp_path, entries)
+        command = _codex_command(og.render(config, provenance))
+
+        root = og._placeholder_path("root")
+        result = og._placeholder_path("result")
+        assert og.os.path.isabs(root)
+        assert og.os.path.isabs(result)
+        assert root in command
+        assert result in command
+        assert str(tmp_path) not in command
+        assert str(Path.cwd()) not in command
+
+
 class TestCli:
     def test_paths_lists_three_layers(self, capsys, layered):
         assert og.main(["--paths", "--project-root", str(layered.project_root)]) == 0
@@ -592,6 +675,24 @@ class TestCli:
         out = capsys.readouterr().out
         assert "shipped  applied" in out
         assert "default_tier: top" in out
+
+    def test_explain_uses_config_row_numbers_for_surviving_routes(self, capsys, layered):
+        layered(
+            "shipped",
+            cfg(
+                routing=[
+                    {"shape": ["novel"], "models": ["missing"]},
+                    {"shape": ["open"], "models": ["agent:haiku"]},
+                    {"shape": [], "models": ["agent:sonnet"]},
+                ]
+            ),
+        )
+        assert og.main(["--explain", "--project-root", str(layered.project_root)]) == 0
+        out = capsys.readouterr().out
+        assert "routing  note      routing row 1:" in out
+        assert "routing  row       2: open -> haiku" in out
+        assert "routing  row       3: default -> sonnet" in out
+        assert "routing  row       1: open -> haiku" not in out
 
     def test_broken_config_exits_nonzero_with_a_reason(self, capsys, layered, tmp_path):
         layered("shipped", {"default_tier": "workhorse"})
@@ -614,9 +715,7 @@ class TestCapabilityRendering:
 
 
 class TestOrderedElimination:
-    """Rungs are tested in order and the first match wins. The semantics are
-    not inferable from the content, so they are stated at the top; the order
-    itself is data, so a renderer must not reorder it."""
+    """Routing rows preserve declaration order and model priority."""
 
     def test_resolution_is_stated_before_any_block(self, layered):
         layered("shipped", cfg())
@@ -625,26 +724,29 @@ class TestOrderedElimination:
         assert "**Resolution.** first match wins" in text
         assert text.index("Resolution.") < text.index("## 1.")
 
-    def test_rungs_render_in_declared_order_and_are_numbered(self, layered):
+    def test_models_render_in_declared_priority_order(self, layered):
+        layered(
+            "shipped",
+            cfg(routing=[{"shape": ["novel"], "models": ["agent:fable", "agent:sonnet"]}]),
+        )
+        config, provenance = og.resolve_config(layered.project_root)
+        text = og.render(config, provenance)
+        assert "1. If `novel`" in text
+        assert "try **fable**, then **sonnet**" in text
+        assert text.index("**fable**") < text.index("**sonnet**")
+
+    def test_first_matching_row_semantics_are_stated(self, layered):
         layered("shipped", cfg())
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "1. **fable**" in text
-        assert "2. **sonnet**" in text
-        assert text.index("**fable**") < text.index("**sonnet**")
-
-    def test_shipped_ladders_keep_their_principle_order(self, layered, monkeypatch):
-        monkeypatch.setattr(og, "DEFAULTS_PATH", _shipped_path())
-        config, provenance = og.resolve_config(layered.project_root)
-        text = og.render(config, provenance)
-        for earlier, later in (("**fable**", "**opus**"), ("**opus**", "**sonnet**")):
-            assert text.index(earlier) < text.index(later), (earlier, later)
+        assert "first matching shape wins" in text
+        assert "launch or transport error" in text
 
     def test_blocks_render_in_principle_order(self, layered, monkeypatch):
         monkeypatch.setattr(og, "DEFAULTS_PATH", _shipped_path())
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        expected = ["Shape the unit", "Backend", "Tier", "Agent type", "Effort", "Announce"]
+        expected = ["Shape the unit", "Routing", "Agent type", "Effort", "Announce"]
         headings = [line.split(". ", 1)[1] for line in text.splitlines()
                     if re.match(r"^## \d+\. ", line)]
         assert [h.split(" ")[0] for h in headings] == [e.split(" ")[0] for e in expected]
@@ -667,7 +769,7 @@ class TestGlossing:
             monkeypatch.setattr(og.shutil, "which", lambda name: None)
         monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
         config, provenance = og.resolve_config(tmp_path / "no-project")
-        return og.render(config, provenance).split("\n## Dispatch backends")[0]
+        return re.split(r"\n## \d+\. Effort", og.render(config, provenance))[0]
 
     def _glossed(self, term):
         return {t["id"]: t for t in shipped()["lexicon"]}[term].get("gloss")
@@ -739,48 +841,23 @@ class TestGlossing:
 
 
 class TestNegativeGuards:
-    """A rung something must NOT be used for, and a rung that does not exist,
-    are decisions rather than rationale: without them a reader who knows the
-    model exists invents the dispatch."""
-
-    def _both(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
-        config, provenance = og.resolve_config(tmp_path / "no-project")
-        with_codex = og.render(config, provenance)
-        monkeypatch.setattr(og.shutil, "which", lambda name: None)
-        config, provenance = og.resolve_config(tmp_path / "no-project")
-        return with_codex, og.render(config, provenance)
-
-    def test_backend_independent_guards_render_in_both_variants(self, monkeypatch, tmp_path):
-        with_codex, without = self._both(monkeypatch, tmp_path)
-        for guard in (
-            "There is no haiku rung.",
-            "Any doubt resolves to the rung below",
-            "Never down-tier a unit that meets the fable bar to harvest the discount.",
-            "Never this rung:",
-            "is never a rung criterion",
-        ):
-            assert guard in with_codex, guard
-            assert guard in without, guard
-
-    def test_every_shipped_guard_string_reaches_the_with_codex_variant(
-        self, monkeypatch, tmp_path
-    ):
-        with_codex, _ = self._both(monkeypatch, tmp_path)
-        for ladder in shipped()["ladders"]:
-            for guard in ladder.get("guards") or []:
-                assert og.fold(guard).split(" -- ")[0].rstrip(".") in with_codex
-            for rung in ladder["rungs"]:
-                for guard in rung.get("guards") or []:
-                    assert og.fold(guard).split(" --")[0].rstrip(".") in with_codex
-
-    def test_guards_render_without_a_render_required_flag(self, layered):
-        """render_required is a backstop, not the mechanism -- an untagged
-        guard still renders."""
-        ladder = dict(cfg()["ladders"][0], guards=["No untagged guard may vanish."])
-        layered("shipped", cfg(ladders=[ladder]))
+    def test_routing_guards_render(self, layered):
+        layered("shipped", cfg(routing=[{
+            "shape": ["novel"],
+            "models": ["agent:fable"],
+            "guards": ["Keep this route explicit."],
+        }]))
         config, provenance = og.resolve_config(layered.project_root)
-        assert "No untagged guard may vanish." in og.render(config, provenance)
+        assert "Keep this route explicit." in og.render(config, provenance)
+
+    def test_routing_gate_renders(self, layered):
+        layered("shipped", cfg(routing=[{
+            "shape": ["novel"],
+            "models": ["agent:fable"],
+            "gate": "write the reason before dispatch",
+        }]))
+        config, provenance = og.resolve_config(layered.project_root)
+        assert "Gate: write the reason before dispatch" in og.render(config, provenance)
 
 
 class TestRenderScope:
@@ -813,10 +890,6 @@ class TestRenderScope:
         for test in shipped()["shape"]["tests"]:
             if test.get("render_scope") == "principles-only":
                 yield test["id"], self._probe(test["text"])
-        for ladder in shipped()["ladders"]:
-            for note in ladder.get("notes") or []:
-                if note.get("render_scope") == "principles-only":
-                    yield note["id"], self._probe(note["text"])
 
     def test_principles_only_records_do_not_render(self, monkeypatch, tmp_path):
         monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
@@ -838,9 +911,7 @@ class TestRenderScope:
         """
         monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
         config, provenance = og.resolve_config(tmp_path / "no-project")
-        for record in list(config["shape"]["tests"]) + [
-            n for lad in config["ladders"] for n in (lad.get("notes") or [])
-        ]:
+        for record in list(config["shape"]["tests"]):
             record.pop("render_scope", None)
         text = og.render(config, provenance)
         for record_id, probe in self._principles_only_probes():
@@ -862,17 +933,32 @@ class TestRenderScope:
 
 
 class TestCodexAbsentVariant:
-    """One source, two variants. Without Codex the backend block has nothing
-    to choose and the Codex ladder cannot be dispatched to."""
+    """Registry-backed routes disappear when their harness is absent."""
 
     @pytest.fixture
     def variants(self, monkeypatch, tmp_path):
-        """Both variants from one source. Rendered with-Codex FIRST: the
-        without-Codex run patches `which` for the rest of the test."""
         monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        monkeypatch.setattr(
+            og,
+            "discover_model_definitions",
+            lambda _root: ({
+                "sol": {"id": "sol", "harness": "codex", "model": "gpt-5.6-sol"},
+                "luna": {"id": "luna", "harness": "codex", "model": "gpt-5.6-luna"},
+            }, []),
+        )
+        real = og.detect_backend
+
+        def detect(backend):
+            if backend.get("id") == "codex":
+                return True, "stubbed codex"
+            return real(backend)
+
+        monkeypatch.setattr(og, "detect_backend", detect)
         config, provenance = og.resolve_config(tmp_path / "no-project")
         present = og.render(config, provenance)
-        monkeypatch.setattr(og.shutil, "which", lambda name: None)
+        monkeypatch.setattr(og, "detect_backend", lambda backend: (
+            (False, "stubbed codex") if backend.get("id") == "codex" else detect(backend)
+        ))
         config, provenance = og.resolve_config(tmp_path / "no-project")
         return present, og.render(config, provenance)
 
@@ -884,22 +970,19 @@ class TestCodexAbsentVariant:
     def without(self, variants):
         return variants[1]
 
-    def test_backend_block_is_omitted_entirely(self, without):
-        assert "## 2. Backend" not in without
-        assert "Gates --" not in without
-        assert "Pulls --" not in without
+    def test_registry_model_is_rendered_when_codex_is_present(self, with_codex):
+        assert "codex/sol" in with_codex
+        assert "codex/luna" in with_codex
 
-    def test_backend_block_renders_when_codex_is_present(self, with_codex):
-        assert "## 2. Backend" in with_codex
-        assert "Gates --" in with_codex and "Pulls --" in with_codex
+    def test_registry_model_is_skipped_when_codex_is_absent(self, without):
+        assert "codex/sol" not in without
+        assert "codex/luna" not in without
+        assert "agent:fable" not in without
+        assert "fable" in without
 
-    def test_codex_ladder_and_its_rungs_disappear(self, without):
-        for probe in ("Codex ladder", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"):
-            assert probe not in without, probe
-
-    def test_ladder_headings_appear_only_when_more_than_one_renders(self, without, with_codex):
-        assert "### Claude ladder" in with_codex
-        assert "### " not in without.split("## Dispatch backends")[0]
+    def test_fan_out_row_is_skipped_without_a_surviving_model(self, without):
+        body = without.split("\n---\n")[0]
+        assert "If `fan-out`" not in body
 
     def test_fan_out_collapse_test_survives_without_codex(self, without):
         assert "`fan-out`" in without
@@ -911,17 +994,6 @@ class TestCodexAbsentVariant:
         assert "sequence the units or handle them inline" in without
         assert "sequence the units or handle them inline" not in with_codex
 
-    def test_codex_only_effort_and_announce_notes_drop(self, without, with_codex):
-        assert "effort is a real dial" in with_codex
-        assert "effort is a real dial" not in without
-        assert "the pull term instead" in with_codex
-        assert "the pull term instead" not in without
-
-    def test_claude_side_effort_asymmetry_survives_in_both(self, without, with_codex):
-        for text in (without, with_codex):
-            assert "NOT dialable per call" in text
-            assert "opts.effort" in text
-
     def test_plan_checkpoint_shape_tests_render_in_both_variants(self, without, with_codex):
         """P0.6-P0.8 live in shaping, which both variants render."""
         for text in (without, with_codex):
@@ -929,561 +1001,81 @@ class TestCodexAbsentVariant:
             assert "not an independent reviewer" in text
             assert "defaults to TWO units" in text
 
-    def test_second_family_hole_is_disclosed_without_codex(self, without, with_codex):
-        """Same convention as the fan-out hole: the P0.8 test renders in the
-        Codex-absent variant with its one-clause disclosure, not silently."""
-        assert "dispatch the primary review alone" in without
-        assert "dispatch the primary review alone" not in with_codex
+    def test_agent_member_survives_when_registry_model_is_skipped(self, without):
+        routing = re.split(r"^## \d+\. Routing\n", without, maxsplit=1, flags=re.M)[1]
+        routing = routing.split("\n## ", 1)[0]
+        assert re.search(
+            r"If `novel`(?: \([^)]*\))? \+ `load-bearing`(?: \([^)]*\))?: try \*\*fable\*\*\.",
+            routing,
+        )
 
-    def test_plan_announce_examples_follow_backend_presence(self, without, with_codex):
-        assert "delegating plan review to fable" in with_codex
-        assert "delegating plan review to fable" in without
-        assert "plan review second opinion" in with_codex
-        assert "plan review second opinion" not in without
+    def test_model_specific_content_follows_surviving_routes(self, without, with_codex):
+        assert "delegating plan cross-check to codex/sol (cross-check)" in with_codex
+        assert "delegating per-file API migration to codex/luna (fan-out)" in with_codex
+        assert "delegating plan cross-check to codex/sol" not in without
+        assert "delegating per-file API migration to codex/luna" not in without
+        assert "luna carries the higher default" not in without
+        assert "Raise sol from `high` to `max`" not in without
+
+    def test_codex_effort_note_renders_when_codex_is_present(self, with_codex):
+        assert "Codex-side, effort is a real dial set per dispatch" in with_codex
+
+    def test_second_family_gap_is_disclosed_without_codex(self, without):
+        assert "no second-family child -- dispatch the primary review alone" in without
 
 
 class TestNoBareCodenames:
-    """The bare codenames are not dispatchable, and a policy that names them
-    is a policy that fails every time it is followed.
+    """Registry entry ids are the public routing names."""
 
-    SHAPE ONLY. These assertions prove an id is well-FORMED, never that it is
-    dispatchable -- a renamed or retired model passes every one of them. The
-    live check is `scripts/check_model_dispatch.py`, which dispatches a trivial
-    prompt to every rung's model and validates the `-c` config keys with
-    `--strict-config`. It cannot live here: it needs network, a login, and real
-    usage. Run it by hand when the ladders or the dispatch flags change.
-    """
-
-    CODENAMES = ("luna", "terra", "sol")
-
-    @pytest.mark.parametrize("with_codex", [True, False])
-    def test_no_unqualified_codename_anywhere_in_the_output(
-        self, monkeypatch, tmp_path, with_codex
-    ):
-        if not with_codex:
-            monkeypatch.setattr(og.shutil, "which", lambda name: None)
-        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
-        config, provenance = og.resolve_config(tmp_path / "no-project")
-        text = og.render(config, provenance)
-        for name in self.CODENAMES:
-            # A codename is legal only as the tail of a fully qualified id.
-            for match in re.finditer(rf"\b{name}\b", text, re.I):
-                prefix = text[max(0, match.start() - 8):match.start()]
-                assert prefix.endswith("gpt-5.6-"), f"bare `{name}` at {match.start()}"
-
-    def test_shipped_data_never_writes_a_bare_codename(self):
-        raw = og.DEFAULTS_PATH.read_text(encoding="utf-8")
-        for name in self.CODENAMES:
-            for match in re.finditer(rf"\b{name}\b", raw):
-                prefix = raw[max(0, match.start() - 8):match.start()]
-                assert prefix.endswith("gpt-5.6-"), f"bare `{name}` in the shipped data"
-
-
-class TestRequestOnlyBackend:
-    """Grok is present-but-not-eligible: fully documented so a user-named
-    dispatch can be driven correctly, and reachable by nothing else.
-
-    Two independent mechanisms carry that, and both are asserted here because
-    either alone leaks. No ladder keeps it out of every TIER decision; the
-    `selection` line keeps it out of the BACKEND decision, which happens first
-    and would otherwise see a third backend carrying a ready-made command.
-    """
-
-    ONLY_MODEL = "grok-4.6"
-
-    @staticmethod
-    def _render(monkeypatch, tmp_path, *, present):
-        """Force grok's detection either way rather than patching `shutil.which`.
-
-        `detect_backend` RUNS the command, so a faked PATH hit still fails the
-        probe -- and the honest version (let the real machine decide) makes the
-        present-variant assertions pass only where grok happens to be
-        installed. Stubbing the one backend's verdict keeps both variants true
-        on every machine, including CI.
-        """
-        real = og.detect_backend
-
-        def detect(backend):
-            if backend.get("id") == "grok":
-                return (present, "stubbed") if present else (False, "stubbed absent")
-            return real(backend)
-
-        monkeypatch.setattr(og, "detect_backend", detect)
-        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
-        config, provenance = og.resolve_config(tmp_path / "no-project")
-        return og.render(config, provenance)
-
-    def test_shipped_grok_record_has_no_ladder_and_claims_no_tiers(self):
+    def test_shipped_routing_uses_entry_ids_not_provider_slugs(self):
         data = shipped()
-        grok = next(b for b in data["backends"] if b["id"] == "grok")
-        assert not (grok.get("capabilities") or {}).get("tiers")
-        assert "grok" not in {l["id"] for l in data["ladders"]}
-        assert grok.get("selection"), "a ladder-less backend must state its condition"
-
-    def test_shipped_data_names_only_the_sanctioned_grok_model(self):
-        """`grok models` also offers 4.5. Naming it anywhere in the policy is
-        one copy-paste away from dispatching it."""
-        raw = og.DEFAULTS_PATH.read_text(encoding="utf-8")
-        for match in re.finditer(r"\bgrok-[0-9][^\s`'\"]*", raw):
-            assert match.group(0) == self.ONLY_MODEL, match.group(0)
-
-    def test_the_record_renders_with_its_selection_line_when_detected(
-        self, monkeypatch, tmp_path
-    ):
-        text = self._render(monkeypatch, tmp_path, present=True)
-        assert "Grok CLI" in text
-        assert "**Selection.**" in text
-        assert self.ONLY_MODEL in text
-        # No ladder -> the capability line says so rather than naming rungs.
-        assert "n/a (no tier selection)" in text
-
-    def test_selection_precedes_the_mechanics(self, monkeypatch, tmp_path):
-        """A reader who has reached the command has already decided to launch."""
-        text = self._render(monkeypatch, tmp_path, present=True)
-        assert text.index("**Selection.**") < text.index("--always-approve")
-
-    def test_the_whole_record_disappears_when_grok_is_absent(
-        self, monkeypatch, tmp_path
-    ):
-        text = self._render(monkeypatch, tmp_path, present=False)
-        for probe in ("Grok CLI", "grok-4.6", "--always-approve", "--no-subagents"):
-            assert probe not in text, probe
-
-    def test_grok_is_named_by_no_gate_pull_or_rung(self):
-        """The decision tree must not reach it -- being listed is not being
-        eligible, and a pull naming it would make it eligible."""
-        data = shipped()
-        block = data["backend"]
-        for row in (block.get("gates") or []) + (block.get("pulls") or []):
-            assert row["backend"] != "grok", row["id"]
-        for ladder in data["ladders"]:
-            for rung in ladder["rungs"]:
-                assert "grok" not in str(rung.get("model", "")), rung["id"]
-
-    REQUEST_ONLY = {"grok", "model-endpoints"}
-
-    def test_selection_is_optional_and_absent_backends_render_no_such_line(self):
-        """Only a restricted backend gets the heading; the others must not
-        acquire one by accident."""
-        data = shipped()
-        for backend in data["backends"]:
-            if backend["id"] not in self.REQUEST_ONLY:
-                assert "selection" not in backend, backend["id"]
+        models = [model for row in data["routing"] for model in row["models"]]
+        assert "sol" in models and "luna" in models
+        assert all("gpt-5.6-" not in model for model in models)
 
 
-class TestModelEndpointsDetect:
-    """The `model_endpoints` detect kind: fail-closed, parallel, and silent
-    about a machine that never opted in."""
-
-    ENTRY = {"base_url": "http://endpoint.invalid:8080/v1", "model": "a-model"}
-
-    @staticmethod
-    def _registry(tmp_path, monkeypatch, text, *, via_override=True):
-        path = tmp_path / "model-endpoints.yaml"
-        path.write_text(text, encoding="utf-8")
-        if via_override:
-            monkeypatch.setenv(og.MODEL_ENDPOINTS_ENV, str(path))
-        else:
-            monkeypatch.delenv(og.MODEL_ENDPOINTS_ENV, raising=False)
-            home = tmp_path / "home"
-            (home / ".claude" / "config").mkdir(parents=True)
-            (home / ".claude" / "config" / "model-endpoints.yaml").write_text(
-                text, encoding="utf-8"
-            )
-            monkeypatch.setattr(og.Path, "home", classmethod(lambda cls: home))
-        return path
-
-    @staticmethod
-    def _probes(monkeypatch, verdicts):
-        """Answer each probe by base_url, without touching the network."""
-
-        def fake(entry, environ=None, timeout=og.MODEL_ENDPOINTS_PROBE_TIMEOUT):
-            return verdicts[entry["base_url"]]
-
-        monkeypatch.setattr(og, "probe_model_endpoint", fake)
-
-    @staticmethod
-    def _rule(**over):
-        rule = {"model_endpoints": True}
-        rule.update(over)
-        return {"id": "model-endpoints", "detect": rule}
-
-    def test_no_registry_anywhere_is_unavailable_and_names_the_convention(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.delenv(og.MODEL_ENDPOINTS_ENV, raising=False)
-        monkeypatch.setattr(og.Path, "home", classmethod(lambda cls: tmp_path))
-        ok, reason = og.detect_backend(self._rule())
-        assert ok is False
-        assert "no model-endpoints registry" in reason
-        assert "model-endpoints.yaml" in reason
-
-    def test_present_but_unparseable_registry_is_unavailable_not_an_exception(
-        self, tmp_path, monkeypatch
-    ):
-        self._registry(tmp_path, monkeypatch, "models: [oops\n  - :\n")
-        ok, reason = og.detect_backend(self._rule())
-        assert ok is False
-        assert "unreadable" in reason
-
-    def test_a_schema_invalid_registry_names_the_defect(self, tmp_path, monkeypatch):
-        self._registry(tmp_path, monkeypatch, "models:\n  one:\n    model: m\n")
-        ok, reason = og.detect_backend(self._rule())
-        assert ok is False
-        assert "base_url" in reason
-
-    def test_a_default_naming_no_entry_is_a_defect(self, tmp_path, monkeypatch):
-        self._registry(
-            tmp_path,
-            monkeypatch,
-            "default: nope\nmodels:\n  one:\n    base_url: http://x/v1\n    model: m\n",
+class TestRoutingRendering:
+    def test_fallthrough_uses_the_next_model_in_the_same_row(self, layered):
+        layered(
+            "shipped",
+            cfg(routing=[{"shape": ["novel"], "models": ["agent:fable", "agent:sonnet"]}]),
         )
-        ok, reason = og.detect_backend(self._rule())
-        assert ok is False and "names no entry" in reason
-
-    def test_a_dangling_override_is_loud_where_a_missing_convention_is_silent(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.setenv(og.MODEL_ENDPOINTS_ENV, str(tmp_path / "nowhere.yaml"))
-        ok, reason = og.detect_backend(self._rule())
-        assert ok is False
-        assert "unreadable" in reason and og.MODEL_ENDPOINTS_ENV in reason
-
-    def test_the_override_is_honored_over_the_convention(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            og.Path, "home", classmethod(lambda cls: tmp_path / "unused-home")
-        )
-        self._registry(
-            tmp_path,
-            monkeypatch,
-            "models:\n  one:\n    base_url: http://endpoint.invalid:8080/v1\n    model: a-model\n",
-        )
-        self._probes(monkeypatch, {"http://endpoint.invalid:8080/v1": (True, "")})
-        ok, reason = og.detect_backend(self._rule())
-        assert ok is True and "one (a-model)" in reason
-
-    def test_the_conventional_path_is_read_with_no_override_set(
-        self, tmp_path, monkeypatch
-    ):
-        self._registry(
-            tmp_path,
-            monkeypatch,
-            "models:\n  one:\n    base_url: http://endpoint.invalid:8080/v1\n    model: a-model\n",
-            via_override=False,
-        )
-        self._probes(monkeypatch, {"http://endpoint.invalid:8080/v1": (True, "")})
-        assert og.detect_backend(self._rule())[0] is True
-
-    def test_a_missing_required_command_is_unavailable_before_any_probe(
-        self, tmp_path, monkeypatch
-    ):
-        self._registry(
-            tmp_path,
-            monkeypatch,
-            "models:\n  one:\n    base_url: http://endpoint.invalid:8080/v1\n    model: a-model\n",
-        )
-
-        def boom(*a, **kw):
-            raise AssertionError("probed despite a missing required command")
-
-        monkeypatch.setattr(og, "probe_model_endpoint", boom)
-        monkeypatch.setattr(og.shutil, "which", lambda name: None)
-        ok, reason = og.detect_backend(
-            self._rule(require_commands=["definitely-not-a-real-harness-xyz"])
-        )
-        assert ok is False
-        assert "not found on PATH" in reason
-
-    def test_every_entry_down_is_unavailable(self, tmp_path, monkeypatch):
-        self._registry(
-            tmp_path,
-            monkeypatch,
-            "models:\n"
-            "  one:\n    base_url: http://a.invalid/v1\n    model: m1\n"
-            "  two:\n    base_url: http://b.invalid/v1\n    model: m2\n",
-        )
-        self._probes(
-            monkeypatch,
-            {
-                "http://a.invalid/v1": (False, "URLError"),
-                "http://b.invalid/v1": (False, "URLError"),
-            },
-        )
-        ok, reason = og.detect_backend(self._rule())
-        assert ok is False
-        assert "no registered model endpoint is up" in reason
-        assert "one" in reason and "two" in reason
-
-    def test_one_entry_up_detects_and_the_roster_lists_up_and_down(
-        self, tmp_path, monkeypatch
-    ):
-        self._registry(
-            tmp_path,
-            monkeypatch,
-            "models:\n"
-            "  one:\n    base_url: http://a.invalid/v1\n    model: m1\n"
-            "  two:\n    base_url: http://b.invalid/v1\n    model: m2\n",
-        )
-        self._probes(
-            monkeypatch,
-            {
-                "http://a.invalid/v1": (True, ""),
-                "http://b.invalid/v1": (False, "URLError"),
-            },
-        )
-        ok, reason = og.detect_backend(self._rule())
-        assert ok is True
-        assert reason.startswith("up: one (m1) @ http://a.invalid/v1")
-        assert "down: two (m2) @ http://b.invalid/v1 (URLError)" in reason
-
-    def test_a_keyed_entry_with_an_unset_variable_reports_down_by_name(
-        self, monkeypatch
-    ):
-        monkeypatch.delenv("SOME_ENDPOINT_KEY", raising=False)
-        ok, note = og.probe_model_endpoint(
-            {"base_url": "http://a.invalid/v1", "model": "m", "key_env": "SOME_ENDPOINT_KEY"}
-        )
-        assert ok is False and note == "SOME_ENDPOINT_KEY unset"
-
-    def test_a_keyed_entry_sends_a_bearer_token(self, monkeypatch):
-        seen = {}
-
-        class Response:
-            status = 200
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-        def fake_urlopen(request, timeout=None):
-            seen["url"] = request.full_url
-            seen["auth"] = request.get_header("Authorization")
-            return Response()
-
-        monkeypatch.setattr(og.urllib.request, "urlopen", fake_urlopen)
-        ok, _ = og.probe_model_endpoint(
-            {"base_url": "http://a.invalid/v1/", "model": "m", "key_env": "K"},
-            environ={"K": "secret"},
-        )
-        assert ok is True
-        assert seen["url"] == "http://a.invalid/v1/models"
-        assert seen["auth"] == "Bearer secret"
-
-    def test_a_probe_never_raises(self, monkeypatch):
-        def explode(request, timeout=None):
-            raise OSError("no route to host")
-
-        monkeypatch.setattr(og.urllib.request, "urlopen", explode)
-        assert og.probe_model_endpoint(self.ENTRY) == (False, "OSError")
-
-    def test_a_non_2xx_response_is_down(self, monkeypatch):
-        class Response:
-            status = 503
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-        monkeypatch.setattr(og.urllib.request, "urlopen", lambda *a, **kw: Response())
-        assert og.probe_model_endpoint(self.ENTRY) == (False, "HTTP 503")
-
-    def test_entries_are_probed_in_parallel_not_one_timeout_each(self, monkeypatch):
-        """Four slow entries must cost about ONE timeout, not four."""
-        delay = 0.4
-        entries = [
-            (f"e{n}", {"base_url": f"http://{n}.invalid/v1", "model": f"m{n}"})
-            for n in range(4)
-        ]
-
-        def slow(entry, environ=None, timeout=og.MODEL_ENDPOINTS_PROBE_TIMEOUT):
-            time.sleep(delay)
-            return False, "timeout"
-
-        monkeypatch.setattr(og, "probe_model_endpoint", slow)
-        started = time.monotonic()
-        results = og.probe_model_endpoints(entries)
-        elapsed = time.monotonic() - started
-        assert len(results) == 4
-        assert elapsed < delay * len(entries) / 2, elapsed
-
-
-class TestRequestOnlyModelEndpoints:
-    """The model-endpoints record is present-but-not-eligible on the same two
-    mechanisms as grok, and both are asserted because either alone leaks: no
-    ladder keeps it out of every TIER decision, and the `selection` line keeps
-    it out of the BACKEND decision, which happens first.
-
-    It carries a third obligation grok does not: every machine- and
-    model-specific value must come from the user's registry at dispatch time,
-    because this file ships publicly.
-    """
-
-    BACKEND_ID = "model-endpoints"
-
-    @staticmethod
-    def _render(monkeypatch, tmp_path, *, present):
-        """Stub this one backend's verdict, as the grok class does: the real
-        rule reads a registry and probes a network, so neither variant would be
-        true on every machine."""
-        real = og.detect_backend
-
-        def detect(backend):
-            if backend.get("id") == TestRequestOnlyModelEndpoints.BACKEND_ID:
-                return (
-                    (True, "up: one (a-model) @ http://endpoint.invalid:8080/v1")
-                    if present
-                    else (False, "stubbed absent")
-                )
-            return real(backend)
-
-        monkeypatch.setattr(og, "detect_backend", detect)
-        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
-        config, provenance = og.resolve_config(tmp_path / "no-project")
-        return og.render(config, provenance)
-
-    def _record(self):
-        return next(b for b in shipped()["backends"] if b["id"] == self.BACKEND_ID)
-
-    def test_the_record_has_no_ladder_and_claims_no_tiers(self):
-        record = self._record()
-        assert not (record.get("capabilities") or {}).get("tiers")
-        assert self.BACKEND_ID not in {l["id"] for l in shipped()["ladders"]}
-        assert record.get("selection"), "a ladder-less backend must state its condition"
-
-    def test_it_is_named_by_no_gate_pull_or_rung(self):
-        data = shipped()
-        block = data["backend"]
-        for row in (block.get("gates") or []) + (block.get("pulls") or []):
-            assert row["backend"] != self.BACKEND_ID, row["id"]
-        for ladder in data["ladders"]:
-            for rung in ladder["rungs"]:
-                assert self.BACKEND_ID not in str(rung.get("model", "")), rung["id"]
-
-    def test_the_record_renders_with_its_selection_line_when_detected(
-        self, monkeypatch, tmp_path
-    ):
-        text = self._render(monkeypatch, tmp_path, present=True)
-        assert "Registered model endpoints (codex harness)" in text
-        assert "**Selection.**" in text
-        assert "up: one (a-model)" in text
-        assert "n/a (no tier selection)" in text
-
-    def test_selection_precedes_the_mechanics(self, monkeypatch, tmp_path):
-        text = self._render(monkeypatch, tmp_path, present=True)
-        assert text.index("**Selection.**") < text.index("model_providers.registry")
-
-    def test_the_whole_record_disappears_when_undetected(self, monkeypatch, tmp_path):
-        text = self._render(monkeypatch, tmp_path, present=False)
-        for probe in (
-            "Registered model endpoints",
-            "model_providers.registry",
-            "model-endpoints-dispatch.md",
-        ):
-            assert probe not in text, probe
-
-    def test_the_detect_rule_requires_the_harness_it_documents(self):
-        rule = self._record()["detect"]
-        assert rule["model_endpoints"] is True
-        assert rule["require_commands"] == ["codex"]
-
-    def test_no_machine_or_model_specific_value_is_shipped(self):
-        """The public-repo guard, mechanical: every host- or model-shaped value
-        in this record is a placeholder, the registry convention path, or the
-        override variable name."""
-        record = self._record()
-        blob = yaml.safe_dump(record)
-        # No URL may carry a literal host: every one is a <placeholder>.
-        for match in re.finditer(r"https?://[^\s'\"]+", blob):
-            assert match.group(0).startswith("http://<entry"), match.group(0)
-        # The only registry location named is the home-relative convention.
-        for match in re.finditer(r"[~][^\s`'\"]*", blob):
-            assert match.group(0) == "~/.claude/config/model-endpoints.yaml", match.group(0)
-        assert "MODEL_ENDPOINTS_REGISTRY" in blob
-        # The model and its context window come from the registry, not from here.
-        for field in ("<entry base_url>", "<entry model>", "<entry context_window"):
-            assert field in record["command"], field
-
-    def test_the_references_it_points_at_exist(self):
-        record = self._record()
-        base = og.DEFAULTS_PATH.parent.parent
-        for name in ("model-endpoints-dispatch.md", "codex-dispatch.md"):
-            assert name in record["dispatch"], name
-            assert (base / "references" / name).is_file(), name
-
-
-class TestUserSpokenCodenames:
-    """A user says `sol`; `-m` needs `gpt-5.6-sol`. The policy has to carry the
-    RESOLUTION, not only the prohibition -- and has to carry it without writing
-    a bare codename into shipped data (see TestNoBareCodenames)."""
-
-    def test_the_codex_ladder_states_how_a_spoken_codename_resolves(self):
-        guards = " ".join(
-            next(l for l in shipped()["ladders"] if l["id"] == "codex")["guards"]
-        )
-        assert "gpt-5.6-" in guards
-        assert "resolve" in guards.lower()
-
-    def test_the_resolution_rule_renders(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
-        config, provenance = og.resolve_config(tmp_path / "no-project")
-        text = og.render(config, provenance)
-        assert "resolve it to the `gpt-5.6-` form" in text
-
-
-class TestRungRendering:
-    def test_or_groups_and_conjunctions_render(self, layered):
-        rung = {
-            "id": "top", "model": "fable",
-            "criteria": [["known", "novel"], ["open"]],
-        }
-        ladder = dict(cfg()["ladders"][0])
-        ladder["rungs"] = [rung, cfg()["ladders"][0]["rungs"][1]]
-        layered("shipped", cfg(ladders=[ladder]))
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "+ `novel` (no pattern applies); or `open`" in text
+        assert "If `novel`" in text
+        assert "try **fable**, then **sonnet**" in text
+        assert "continue to the next model" in text
 
-    def test_a_where_clause_qualifies_only_its_group(self, layered):
-        rung = {"id": "top", "model": "fable",
-                "criteria": [["open"], {"terms": ["novel"], "where": "up-effort would not do"}]}
-        ladder = dict(cfg()["ladders"][0], rungs=[rung, cfg()["ladders"][0]["rungs"][1]])
-        layered("shipped", cfg(ladders=[ladder]))
+    def test_fallthrough_attribution_uses_each_immediately_preceding_model(self, layered):
+        layered(
+            "shipped",
+            cfg(
+                routing=[
+                    {
+                        "shape": ["novel"],
+                        "models": ["agent:fable", "agent:sonnet", "agent:haiku"],
+                    }
+                ]
+            ),
+        )
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "`open`; or `novel` (no pattern applies) where up-effort would not do" in text
+        assert "failed model from `fable`." in text
+        assert "failed model from `sonnet`." in text
 
-    def test_shape_restriction_renders(self, layered):
-        rung = {"id": "top", "model": "fable", "shape": "open", "criteria": [["novel"]]}
-        ladder = dict(cfg()["ladders"][0], rungs=[rung, cfg()["ladders"][0]["rungs"][1]])
-        layered("shipped", cfg(ladders=[ladder]))
-        config, provenance = og.resolve_config(layered.project_root)
-        assert "`open` work only" in og.render(config, provenance)
-
-    def test_effort_renders_only_where_it_is_dialable(self, layered):
-        rung = {"id": "top", "model": "gpt", "effort": "max", "criteria": [["novel"]]}
-        ladder = dict(cfg()["ladders"][0], rungs=[rung, cfg()["ladders"][0]["rungs"][1]])
-        layered("shipped", cfg(ladders=[ladder]))
+    def test_empty_shape_is_the_default_route(self, layered):
+        layered("shipped", cfg(routing=[{"shape": [], "models": ["agent:haiku"]}]))
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "**gpt** at `max` effort" in text
-        assert "**sonnet** at" not in text
+        assert "If anything: try **haiku**." in text
 
-    def test_the_gate_and_announcement_forms_render(self, layered, monkeypatch):
-        monkeypatch.setattr(og, "DEFAULTS_PATH", _shipped_path())
-        config, provenance = og.resolve_config(layered.project_root)
-        text = og.render(config, provenance)
-        assert "Gate: write \"qualifies on <criteria>" in text
-        assert "Announced as `(known, default)` or `(open, condensation)`" in text
-
-    def test_terminal_rung_states_no_test_of_its_own(self, layered):
-        layered("shipped", cfg())
-        config, provenance = og.resolve_config(layered.project_root)
-        text = og.render(config, provenance)
-        assert "2. **sonnet** -- terminal default." in text
+    def test_announcement_text_names_the_entry_and_fallthrough(self):
+        assert og.announcement_text("the change", "codex/sol", ["novel"]) == (
+            "delegating the change to codex/sol (novel)"
+        )
+        assert og.announcement_text(
+            "the retry", "sonnet", [], fell_through_from="sol"
+        ) == "delegating the retry to sonnet (default; fell through from sol)"
 
 
 class TestAgentTypesAndAnnouncement:
@@ -1492,24 +1084,25 @@ class TestAgentTypesAndAnnouncement:
         config, provenance = og.resolve_config(layered.project_root)
         return og.render(config, provenance)
 
-    def test_agent_types_render_after_the_tier_and_before_effort(self, layered, monkeypatch):
+    def test_agent_types_render_after_routing_and_before_effort(self, layered, monkeypatch):
         text = self._shipped_text(layered, monkeypatch)
-        assert text.index("Agent type") > text.index(". Tier")
+        assert text.index("Agent type") > text.index("Routing")
         assert text.index("Agent type") < text.index("Effort")
         for name in ("`Explore`", "`Plan`", "`general-purpose`"):
             assert name in text
 
     def test_announcement_form_and_examples_render(self, layered, monkeypatch):
         text = self._shipped_text(layered, monkeypatch)
-        assert "delegating <what> to <model> (<terms that fired>)" in text
-        assert "delegating crash diagnosis to opus (open, inference)" in text
+        assert "delegating <what> to <target> (<the matched row's shape terms>)" in text
+        assert "delegating rename across 30 files to sonnet (default)" in text
 
     def test_announcement_examples_use_only_skill_terms(self):
         data = shipped()
         skills = {t["id"] for t in data["lexicon"] if t.get("kind") == "skill"}
         for example in data["announce"]["examples"]:
             inside = re.search(r"\(([^)]*)\)$", example["text"]).group(1)
-            assert {t.strip() for t in inside.split(",")} <= skills, example["id"]
+            terms = inside.split(";", 1)[0]
+            assert {t.strip() for t in terms.split(",")} <= skills, example["id"]
 
     def test_no_prices_dates_or_now_relative_phrasing(self, layered, monkeypatch):
         text = self._shipped_text(layered, monkeypatch).split("## Dispatch backends")[0]
@@ -1520,35 +1113,17 @@ class TestAgentTypesAndAnnouncement:
 
 
 class TestLayeringOverridesTheTree:
-    """Users have override files against this data; patching by id must keep
-    working across the reshape."""
+    """Users have override files against this data; routing is a plain list."""
 
-    def test_a_user_layer_patches_a_rung_by_id(self, layered):
+    def test_a_user_layer_replaces_the_routing_list(self, layered):
         layered("shipped", cfg())
-        layered("user", {"ladders": [{"id": "agent", "rungs": [
-            {"id": "workhorse", "model": "my-model"}]}]})
+        replacement = {"routing": [{"shape": ["open"], "models": ["agent:haiku"]}]}
+        layered("user", replacement)
         config, provenance = og.resolve_config(layered.project_root)
-        rungs = config["ladders"][0]["rungs"]
-        assert [r["id"] for r in rungs] == ["top", "workhorse"]
-        assert rungs[1]["model"] == "my-model"
-        assert rungs[1]["terminal"] is True  # untouched fields survive
-        assert "**my-model**" in og.render(config, provenance)
-
-    def test_a_user_layer_appends_a_rung(self, layered):
-        layered("shipped", cfg())
-        layered("user", {"ladders": [{"id": "agent", "rungs": [
-            {"id": "mine", "model": "extra", "criteria": [["novel"]]}]}]})
-        config, _ = og.resolve_config(layered.project_root)
-        assert [r["id"] for r in config["ladders"][0]["rungs"]] == ["top", "workhorse", "mine"]
-
-    def test_a_user_layer_disables_a_rung(self, layered):
-        layered("shipped", cfg())
-        layered("user", {"ladders": [{"id": "agent", "rungs": [
-            {"id": "top", "disabled": True}]}]})
-        config, provenance = og.resolve_config(layered.project_root)
+        assert config["routing"] == replacement["routing"]
         text = og.render(config, provenance)
+        assert "If `open`: try **haiku**." in text
         assert "**fable**" not in text
-        assert "1. **sonnet**" in text  # renumbered, not left with a hole
 
     def test_a_user_layer_patches_a_lexicon_gloss(self, layered):
         layered("shipped", cfg())
@@ -1556,89 +1131,25 @@ class TestLayeringOverridesTheTree:
         config, provenance = og.resolve_config(layered.project_root)
         assert "`known` (my own gloss)" in og.render(config, provenance)
 
-    def test_a_user_layer_disables_a_whole_ladder(self, layered):
-        layered("shipped", cfg())
-        layered("user", {"ladders": [{"id": "agent", "disabled": True}]})
-        config, provenance = og.resolve_config(layered.project_root)
-        assert "**fable**" not in og.render(config, provenance)
-
-    def test_visible_rungs_tracks_the_merged_data(self, layered):
-        layered("shipped", cfg())
-        layered("user", {"ladders": [{"id": "agent", "rungs": [{"id": "mine"}]}]})
-        config, _ = og.resolve_config(layered.project_root)
-        assert og.visible_rungs(config, {"agent"}) == {"top", "workhorse", "mine"}
-        assert og.visible_rungs(config, set()) == set()
-
-
-class TestBackendBlock:
-    CONFIG = dict(
-        cfg(),
-        backend={
-            "title": "Backend",
-            "requires_backend": "other",
-            "intro": "where does it run",
-            "default": "agent",
-            "gates_intro": "Gates. Any one resolves to",
-            "pulls_intro": "Pulls. To",
-            "gates": [{"id": "g", "term": "known", "backend": "agent"}],
-            "pulls": [{"id": "p", "term": "novel", "backend": "other"}],
-        },
-    )
-
-    def _render(self, layered, backends):
-        layered("shipped", dict(self.CONFIG, backends=backends))
-        config, provenance = og.resolve_config(layered.project_root)
-        return og.render(config, provenance)
-
-    BOTH = [
-        {"id": "agent", "name": "Agent", "detect": {"always": True}},
-        {"id": "other", "name": "Other", "detect": {"always": True}},
-    ]
-    ONE = [{"id": "agent", "name": "Agent", "detect": {"always": True}}]
-
-    def test_gates_and_pulls_group_under_their_backend(self, layered):
-        text = self._render(layered, self.BOTH)
-        assert "Gates. Any one resolves to **Agent**:" in text
-        assert "Pulls. To **Other**:" in text
-        assert "Default: **Agent**." in text
-
-    def test_block_disappears_when_its_required_backend_is_absent(self, layered):
-        text = self._render(layered, self.ONE)
-        assert "where does it run" not in text
-        assert "Gates." not in text
-
-    def test_rows_naming_a_missing_backend_are_dropped(self, layered):
-        cfgd = dict(self.CONFIG)
-        cfgd["backend"] = dict(self.CONFIG["backend"], requires_backend=None)
-        layered("shipped", dict(cfgd, backends=self.ONE))
-        config, provenance = og.resolve_config(layered.project_root)
-        body = og.render(config, provenance).split("\n---\n")[0]
-        assert "Gates." in body
-        assert "Pulls." not in body
-
-    def test_absent_block_is_not_an_error(self, layered):
-        layered("shipped", cfg())
-        config, provenance = og.resolve_config(layered.project_root)
-        assert "Gates" not in og.render(config, provenance)
 
 
 class TestEffortBlock:
     def test_structured_effort_renders_as_tests(self, layered):
         layered("shipped", cfg(effort={
             "title": "Effort",
-            "intro": "after the tier",
+            "intro": "after routing",
             "note": "not dialable",
             "raise_when": ["it is ambiguous"],
             "lower_when": ["it is mechanical"],
         }))
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "after the tier" in text and "not dialable" in text
+        assert "after routing" in text and "not dialable" in text
         assert "- Raise: it is ambiguous." in text
         assert "- Lower: it is mechanical." in text
 
-    def test_legacy_string_effort_still_renders(self, layered):
-        """An override written against the old prose schema must not vanish."""
+    def test_string_effort_still_renders(self, layered):
+        """A prose override remains renderable."""
         layered("shipped", cfg(effort="just some prose about effort"))
         config, provenance = og.resolve_config(layered.project_root)
         assert "just some prose about effort" in og.render(config, provenance)
@@ -1647,59 +1158,6 @@ class TestEffortBlock:
         layered("shipped", cfg())
         config, provenance = og.resolve_config(layered.project_root)
         assert "Effort" not in og.render(config, provenance)
-
-
-class TestGateLeaks:
-    """Regressions for confirmed leaks of gated content into the guidance.
-    Each of these rendered an absent backend's tier by name."""
-
-    def _cfg(self, **over):
-        base = cfg(
-            ladders=[
-                cfg()["ladders"][0],
-                {
-                    "id": "ghost",
-                    "label": "Ghost",
-                    "rungs": [{"id": "gated", "model": "phantom", "criteria": [],
-                               "terminal": True}],
-                },
-            ],
-            backends=[
-                {"id": "agent", "name": "Agent", "detect": {"always": True},
-                 "capabilities": {"tiers": ["workhorse", "gated"]}},
-                {"id": "ghost", "detect": {"command": ["no-such-binary-xyz"]}},
-            ],
-        )
-        base.update(over)
-        return base
-
-    def _body(self, layered, config_data):
-        layered("shipped", config_data)
-        config, provenance = og.resolve_config(layered.project_root)
-        return og.render(config, provenance).split("\n---\n")[0]
-
-    def test_rung_override_naming_a_gated_rung_does_not_leak_it(self, layered):
-        body = self._body(
-            layered,
-            self._cfg(capacity={"source": "none", "tier_overrides": {"gated": "unavailable"}}),
-        )
-        assert "gated" not in body and "phantom" not in body
-
-    def test_rung_override_on_a_visible_rung_still_renders(self, layered):
-        body = self._body(
-            layered,
-            self._cfg(capacity={"source": "none", "tier_overrides": {"workhorse": "unavailable"}}),
-        )
-        assert "`workhorse`: unavailable" in body
-        assert "Do not dispatch to" in body
-
-    def test_backend_capabilities_do_not_advertise_a_gated_rung(self, layered):
-        assert "gated" not in self._body(layered, self._cfg())
-
-    def test_backend_capabilities_do_not_advertise_a_disabled_rung(self, layered):
-        data = self._cfg()
-        data["ladders"][0]["rungs"][1] = {"id": "workhorse", "disabled": True}
-        assert "workhorse" not in self._body(layered, data)
 
 
 class TestDetectFailsClosed:
@@ -1727,7 +1185,7 @@ class TestProjectLayerCannotExecute:
     executable field from it would run that repo's chosen program on render."""
 
     def test_project_detect_command_is_stripped(self, layered):
-        layered("shipped", {"tiers": [{"id": "w"}],
+        layered("shipped", {"routing": [{"shape": [], "models": ["agent:sonnet"]}],
                             "backends": [{"id": "agent", "detect": {"always": True}}],
                             "capacity": {"source": "none"}})
         layered("project", {"backends": [{"id": "evil", "detect": {"command": ["calc.exe"]}}]})
@@ -1737,7 +1195,7 @@ class TestProjectLayerCannotExecute:
         assert any("executable field" in status for _, _, status in provenance)
 
     def test_project_capacity_command_is_stripped(self, layered):
-        layered("shipped", {"tiers": [{"id": "w"}], "backends": [{"id": "agent"}],
+        layered("shipped", {"routing": [], "backends": [{"id": "agent"}],
                             "capacity": {"source": "command", "command": ["safe"]}})
         layered("project", {"capacity": {"command": ["evil.exe"]}})
         config, _ = og.resolve_config(layered.project_root)
@@ -1745,18 +1203,18 @@ class TestProjectLayerCannotExecute:
 
     def test_user_layer_may_still_declare_commands(self, layered):
         """Machine-level trust is a different question from repo-level trust."""
-        layered("shipped", {"tiers": [{"id": "w"}], "backends": [{"id": "agent"}],
+        layered("shipped", {"routing": [], "backends": [{"id": "agent"}],
                             "capacity": {"source": "none"}})
         layered("user", {"capacity": {"command": ["my-probe"]}})
         config, _ = og.resolve_config(layered.project_root)
         assert config["capacity"]["command"] == ["my-probe"]
 
     def test_a_harmless_project_layer_is_untouched(self, layered):
-        layered("shipped", {"tiers": [{"id": "w", "model": "a"}], "backends": [{"id": "agent"}],
+        layered("shipped", {"routing": [{"shape": [], "models": ["agent:sonnet"]}], "backends": [{"id": "agent"}],
                             "capacity": {"source": "none"}})
-        layered("project", {"tiers": [{"id": "w", "model": "b"}]})
+        layered("project", {"routing": [{"shape": [], "models": ["agent:haiku"]}]})
         config, provenance = og.resolve_config(layered.project_root)
-        assert config["tiers"][0]["model"] == "b"
+        assert config["routing"][0]["models"] == ["agent:haiku"]
         assert not any("executable field" in s for _, _, s in provenance)
 
 
@@ -1778,128 +1236,31 @@ class TestHostileCapacityInput:
         assert og.window_rows({"captured_at": 0}, {})[0] == []
 
 
-class TestCriteriaFailClosed:
-    """A criteria group is a CONJUNCTION.
-
-    Dropping one unresolvable conjunct renders a strictly WIDER test than the
-    data specifies. On this ladder that silently widens the gate on the most
-    expensive rung -- the exact direction every guard in the policy exists to
-    prevent -- so an unresolvable id must invalidate its whole group, and a
-    non-terminal rung left with no group at all must raise rather than render
-    an empty test that first-match-wins reads as unconditional.
-    """
-
-    @staticmethod
-    def _claude_ladder(config):
-        for ladder in config["ladders"]:
-            if str(ladder.get("id")) == "agent":
-                return ladder
-        raise AssertionError("no agent ladder in shipped data")
-
-    @staticmethod
-    def _guarded_rung(ladder):
-        for rung in ladder["rungs"]:
-            for group in rung.get("criteria") or []:
-                ids = group.get("terms") if isinstance(group, dict) else group
-                if ids and len(ids) > 1:
-                    return rung
-        raise AssertionError("no multi-term conjunction in shipped data")
-
-    def test_a_disabled_conjunct_drops_the_whole_group_not_just_the_term(self):
-        """Group granularity: a surviving alternative still renders, but the
-        group containing the unresolvable id vanishes WHOLE -- its other
-        conjuncts must not survive on their own, which would widen the test."""
-        rung = {
-            "id": "probe",
-            "model": "probe-model",
-            "criteria": [["alpha", "beta"], ["gamma"]],
-        }
-        lexicon = [
-            {"id": "alpha", "kind": "skill", "name": "alpha"},
-            {"id": "beta", "kind": "skill", "name": "beta"},
-            {"id": "gamma", "kind": "skill", "name": "gamma"},
-        ]
-        full = og.rung_criteria(rung, og.Terms(list(lexicon)))
-        assert "`alpha`" in full and "`beta`" in full and "`gamma`" in full
-
-        degraded_lexicon = [dict(r) for r in lexicon]
-        for record in degraded_lexicon:
-            if record["id"] == "beta":
-                record["disabled"] = True
-        degraded = og.rung_criteria(rung, og.Terms(degraded_lexicon))
-
-        assert "`gamma`" in degraded, "the surviving alternative should still render"
-        assert "`beta`" not in degraded
-        assert "`alpha`" not in degraded, (
-            "alpha survived after its sibling conjunct was disabled -- "
-            "the conjunction was widened rather than dropped"
+class TestRoutingResolution:
+    def test_an_unknown_model_is_skipped_and_an_empty_row_is_dropped(self, layered):
+        config_data = cfg(
+            routing=[
+                {"shape": ["novel"], "models": ["missing"]},
+                {"shape": ["open"], "models": ["also-missing"]},
+                {"shape": [], "models": ["agent:sonnet"]},
+            ]
         )
+        layered("shipped", config_data)
+        config, _ = og.resolve_config(layered.project_root)
+        routes, notes = og.resolve_routing_models(config, {}, {})
+        assert [route["shape"] for route in routes] == [[]]
+        assert any("missing" in note for note in notes)
+        assert any("no model resolves" in note for note in notes)
 
-    def test_shape_alone_cannot_stand_in_as_a_rungs_whole_test(self):
-        """`shape` NARROWS a criteria match; it is not a test on its own.
-
-        Caught by a smoke test, not by the assertion above: after every group was
-        invalidated the top rung still rendered as "`open` work only", which
-        matches every unit of that shape -- the same widening, through a
-        different door.
-        """
-        rung = {
-            "id": "probe",
-            "model": "probe-model",
-            "shape": "open",
-            "criteria": [["nonexistent-term"]],
-        }
-        terms = og.Terms([{"id": "open", "kind": "skill", "name": "open"}])
-        with pytest.raises(og.UnrenderableRung):
-            og.rung_criteria(rung, terms)
-
-    def test_a_rung_whose_only_test_is_shape_still_renders(self):
-        """A rung that declares no criteria at all is a different case -- it was
-        authored as shape-only, so shape IS its test."""
-        rung = {"id": "probe", "model": "probe-model", "shape": "open"}
-        terms = og.Terms([{"id": "open", "kind": "skill", "name": "open"}])
-        assert "work only" in og.rung_criteria(rung, terms)
-
-    def test_disabling_a_conjunct_raises_rather_than_rendering_a_shape_only_rung(
-        self, monkeypatch, tmp_path
-    ):
-        """End-to-end: the shipped top rung has both criteria and a shape."""
-        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
-        config, _ = og.resolve_config(tmp_path / "no-project")
-        rung = self._guarded_rung(self._claude_ladder(config))
-        group = rung["criteria"][0]
-        ids = list(group.get("terms") if isinstance(group, dict) else group)
-        if not rung.get("shape"):
-            pytest.skip("shipped guarded rung carries no shape restriction")
-        for record in config["lexicon"]:
-            if str(record.get("id")) in ids:
-                record["disabled"] = True
-        with pytest.raises(og.UnrenderableRung):
-            og.rung_criteria(rung, og.Terms(config["lexicon"]))
-
-    def test_a_non_terminal_rung_with_no_resolvable_criteria_raises(self):
-        rung = {
-            "id": "probe",
-            "model": "probe-model",
-            "criteria": [["nonexistent-term"]],
-        }
-        with pytest.raises(og.UnrenderableRung) as excinfo:
-            og.rung_criteria(rung, og.Terms([]))
-        assert "nonexistent-term" in str(excinfo.value)
-
-    def test_a_terminal_rung_may_state_no_criteria(self):
-        rung = {"id": "probe", "model": "probe-model", "terminal": True}
-        assert og.rung_criteria(rung, og.Terms([])) == ""
-
-    def test_a_typo_in_a_term_id_cannot_widen_a_conjunction(self):
-        rung = {
-            "id": "probe",
-            "model": "probe-model",
-            "terminal": True,
-            "criteria": [["real", "typoed"]],
-        }
-        terms = og.Terms([{"id": "real", "kind": "skill", "name": "real"}])
-        assert og.rung_criteria(rung, terms) == ""
+    def test_only_agent_prefix_is_a_reserved_namespace(self, layered):
+        layered(
+            "shipped",
+            cfg(routing=[{"shape": [], "models": ["codex:sol", "agent:sonnet"]}]),
+        )
+        config, _ = og.resolve_config(layered.project_root)
+        routes, notes = og.resolve_routing_models(config, {}, {})
+        assert [model["target"] for model in routes[0]["models"]] == ["sonnet"]
+        assert any("only `agent:`" in note for note in notes)
 
 
 class TestStaleOverrideWarning:
@@ -1915,14 +1276,97 @@ class TestStaleOverrideWarning:
         assert "Stale override" not in og.render(config, provenance)
 
         config["tiers"] = [{"id": "cheapest", "model": "haiku"}]
+        config["ladders"] = [{"id": "old"}]
+        config["rungs"] = [{"id": "old-rung"}]
+        config["backend"] = {"id": "old-backend"}
         text = og.render(config, provenance)
         assert "Stale override" in text
-        assert "`tiers`" in text
+        for key in ("tiers", "ladders", "rungs", "backend"):
+            assert f"`{key}`" in text
         assert "configuration.md" in text
 
     def test_every_legacy_key_is_detected(self):
         for key in og.LEGACY_SCHEMA_1_KEYS:
             assert og.legacy_schema_keys({key: "x"}) == [key]
 
-    def test_a_clean_schema_2_config_reports_no_stale_keys(self):
+    def test_a_clean_schema_3_config_reports_no_stale_keys(self):
         assert og.legacy_schema_keys(shipped()) == []
+
+    def test_retired_capacity_override_warns_and_has_no_effect(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        config["capacity"]["tier_overrides"] = {"top": "unavailable"}
+        text = og.render(config, provenance)
+        assert "`capacity.tier_overrides`" in text
+        assert "does not affect routing or capacity" in text
+
+
+class TestSelectionRendersForAnOverrideSuppliedBackend:
+    """`selection` is live machinery no SHIPPED record reaches any more.
+
+    The two request-only backends that carried it were deleted, but the
+    renderer still emits it and SKILL.md still instructs an agent on how to
+    obey it ("a backend whose block opens with a `**Selection.**` line is not a
+    routing target"). A user or project override can still supply one, so the
+    path is reachable and must stay pinned -- otherwise the feature can be
+    deleted with every test still green while the shipped SKILL.md keeps
+    promising it.
+    """
+
+    def test_a_backend_carrying_selection_renders_the_line(self):
+        backend = {
+            "id": "example-request-only",
+            "label": "Example request-only backend",
+            "selection": "ON EXPLICIT USER REQUEST ONLY.",
+        }
+        out: list = []
+        og.render_backends(
+            {"backends": [backend]},
+            [(backend, True, "detected")],
+            out,
+            command_text_provider=lambda _b: None,
+        )
+        text = "\n".join(out)
+        assert "**Selection.**" in text
+        assert "ON EXPLICIT USER REQUEST ONLY." in text
+
+
+class TestRenderedCodexCommandKeepsItsSilentFailureFlags:
+    """The rendered command must not quietly lose a flag whose absence is silent.
+
+    references/codex-dispatch.md states the session scratchpad sits outside the
+    writable root under `-s workspace-write`, so a unit told to write there
+    exits 0 having written nothing. The prose beneath the rendered command
+    promises "every element is there because a probe showed its absence fails
+    silently" -- a rendered command missing --add-dir makes that promise false.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _shared_libs_on_path(self, monkeypatch):
+        # The provider degrades to the config fallback when the shared libs are
+        # absent, and a test that accepted the fallback would pass while the
+        # adapter dropped the flag. Put the libs on the path so the ADAPTER
+        # path is the one under test.
+        repo = Path(__file__).resolve().parents[2]
+        for lib in (repo / "plugins" / "llm-scripting-kit" / "lib", repo / "plugins" / "bootstrap"):
+            monkeypatch.syspath_prepend(str(lib))
+
+    def test_the_adapter_rendered_command_grants_the_scratchpad(self):
+        rendered = og.adapter_command_text_provider(
+            {"id": "codex", "command": "codex exec ... -"},
+            model_entries={
+                "sol": {
+                    "id": "sol",
+                    "kind": "harness",
+                    "harness": "codex",
+                    "model": "gpt-5.6-sol",
+                    "effort": "high",
+                }
+            },
+            notes=[],
+        )
+        assert rendered is not None
+        assert "--add-dir" in rendered, (
+            "the rendered codex command dropped --add-dir; the scratchpad is "
+            "outside the writable root, so a write there fails silently"
+        )

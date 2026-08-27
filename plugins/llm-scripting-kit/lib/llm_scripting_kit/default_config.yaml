@@ -47,6 +47,28 @@ endpoints:
     key_env: OPENROUTER_API_KEY
     account_check: openrouter
 
+  # HARNESS entries. A harness entry carries `harness` + `model` and NO
+  # base_url: it is driven by a CLI that supplies an agent loop, tools and a
+  # working directory, not called over HTTP. Asking for one as an
+  # OpenAI-compatible endpoint is refused by kind rather than reported as a
+  # missing base_url.
+  #
+  # These two are shipped because they are codex SUBSCRIPTION models -- nothing
+  # about them is machine-specific, so a fresh machine with codex reproduces
+  # the fleet's routing from shipped defaults alone. Opencode models are
+  # deliberately NOT shipped: they name providers from the user's own opencode
+  # config, which this repo neither ships nor reads, so there is no default
+  # that would resolve anywhere but on the machine that wrote it. Declare those
+  # in the model-endpoints registry instead.
+  sol:
+    harness: codex
+    model: gpt-5.6-sol
+    effort: high
+  luna:
+    harness: codex
+    model: gpt-5.6-luna
+    effort: max
+
 # Top-level model registry (the openrouter endpoint's registry). Named
 # selection: `default` for general use, `defaultCheap` for cheap/smoke work.
 # Each references a key under `models` (or may be a raw slug).

@@ -2,9 +2,9 @@
 
 The pipeline-shaped layer above a raw OpenAI-compatible client: the
 validate-until-valid loop, a content-addressed response cache, cost/budget
-accounting, process-level backend routing (openrouter completion vs. a
-claude-cli agent loop), a mock seam for tests, and the convergence gate. Key
-resolution, the model registry, and the ready-made client are NOT
+accounting, process-level backend routing (OpenRouter, registry endpoints, or
+CLI harnesses), a mock seam for tests, and the convergence gate. Key resolution,
+the model registry, and the ready-made client are NOT
 reimplemented here -- they are consumed from llm-scripting-kit via
 ``shared_lib_imports`` (reuse-by-availability). This package is the
 domain-free machinery both source systems this plugin unifies share; it is
@@ -18,15 +18,16 @@ Submodules:
   model == hard ``KeyError``), the budget guards, ``call_llm`` (the single
   entry point), and ``submit_validated`` (the validate-until-valid loop over
   ``validate.contract`` validators).
-- ``backends`` -- the three transports (``OpenRouterBackend``,
-  ``ClaudeCliBackend``, ``MockBackend``) and process-level ``route``. The two
-  live transports are THIN ADAPTERS over ``llm_scripting_kit.completion`` (from
-  llm-scripting-kit), which owns the actual completion transport -- the
-  ``claude -p`` subprocess runner, retry, timeout, hard-stop detection, and the
-  OpenAI-compatible client + prompt-cache message shaping. This layer keeps only
-  the pipeline glue and adapts the seam types across the boundary; the shared
-  lib is a lazy / optional import, so the ``MockBackend`` path and the import
-  graph stay hermetic without it.
+- ``backends`` -- the five live transports (``OpenRouterBackend``,
+  ``ClaudeCliBackend``, ``CodexCliBackend``, ``OpencodeCliBackend``,
+  ``ModelEndpointBackend``), the ``MockBackend``, and process-level ``route``.
+  The live transports are THIN ADAPTERS over
+  ``llm_scripting_kit.completion`` (from llm-scripting-kit), which owns the
+  actual completion transport -- subprocess runners, retry, timeout,
+  hard-stop detection, and the OpenAI-compatible client + prompt-cache
+  message shaping. This layer keeps only the pipeline glue and adapts the seam
+  types across the boundary; the shared lib is a lazy / optional import, so
+  the ``MockBackend`` path and the import graph stay hermetic without it.
 - ``convergence`` -- the ``CONVERGED`` / ``STALLED`` / ``CONTINUE`` gate.
 - ``yaml_extract`` -- fenced-block-tolerant YAML extraction from LLM output.
 
@@ -109,9 +110,10 @@ The surface (both live under ``platform`` unless noted):
 - ``HaltError`` + ``HALT_AUTH`` / ``HALT_RATE_LIMIT`` /
   ``HALT_INSUFFICIENT_CREDIT`` -- the halt taxonomy.
 - ``ResponseCache`` / ``CostBudget`` -- the cache and budget guard.
-- ``OpenRouterBackend`` / ``ClaudeCliBackend`` / ``MockBackend`` / ``route`` /
-  ``routed_model`` -- the transports and process-level routing (from
-  ``backends``).
+- ``OpenRouterBackend`` / ``ClaudeCliBackend`` / ``CodexCliBackend`` /
+  ``OpencodeCliBackend`` / ``ModelEndpointBackend`` / ``MockBackend`` /
+  ``route`` / ``routed_model`` -- the transports and process-level routing
+  (from ``backends``).
 
 The ``convergence`` and ``yaml_extract`` submodules are imported directly (their
 top-level names would be less discoverable flattened here, and ``convergence``
@@ -123,6 +125,7 @@ from content_pipeline.llm.backends import (
     CodexCliBackend,
     MockBackend,
     ModelEndpointBackend,
+    OpencodeCliBackend,
     OpenRouterBackend,
     route,
     routed_model,
@@ -152,6 +155,7 @@ __all__ = [
     "HaltError",
     "LLMUnavailableError",
     "CodexCliBackend",
+    "OpencodeCliBackend",
     "ModelEndpointBackend",
     "HALT_AUTH",
     "HALT_RATE_LIMIT",

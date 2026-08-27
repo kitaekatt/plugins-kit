@@ -18,7 +18,7 @@ Answering the right question takes two halves, and every check needs both:
      introduced it.
 
 Both halves were being re-implemented per script (regen_marketplace.py,
-check_pyproject_sync.py, generate_orchestration.py, precommit_guard.py), with
+check_pyproject_sync.py, precommit_guard.py), with
 comments saying "mirroring X" and real behavioural divergence between the
 copies. This module is the one implementation.
 

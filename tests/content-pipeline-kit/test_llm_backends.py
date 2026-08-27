@@ -1,8 +1,8 @@
 """Behavioral tests for content_pipeline.llm.backends.
 
 Covers the hermetic surface: the MockBackend seam and process-level routing.
-The three live transports (OpenRouterBackend, ClaudeCliBackend,
-CodexCliBackend) are thin adapters
+The live transports (OpenRouterBackend, ClaudeCliBackend, CodexCliBackend,
+OpencodeCliBackend) are thin adapters
 that delegate to ``llm_scripting_kit.completion`` -- the ported transport itself is
 covered in tests/llm-scripting-kit (fake-runner subprocess seam, envelope parse,
 retry, hard-stop, timeout, halt classification, OpenRouter fake client). Here we
@@ -18,12 +18,13 @@ from content_pipeline.llm.backends import (
     CodexCliBackend,
     MockBackend,
     OpenRouterBackend,
+    OpencodeCliBackend,
     active_backend_name,
     route,
     routed_model,
     set_active_backend,
 )
-from content_pipeline.llm.platform import BackendOptions
+from content_pipeline.llm.platform import BackendOptions, build_cache_key
 
 
 # --- MockBackend -------------------------------------------------------------
@@ -254,6 +255,8 @@ def test_routing_returns_active_backend():
     assert isinstance(route(), ClaudeCliBackend)
     set_active_backend("codex-cli")
     assert isinstance(route(), CodexCliBackend)
+    set_active_backend("opencode-cli")
+    assert isinstance(route(), OpencodeCliBackend)
     set_active_backend("mock")
     assert isinstance(route(), MockBackend)
 
@@ -300,6 +303,61 @@ def test_routed_model_preserves_codex_model_id(monkeypatch):
     monkeypatch.setenv(backends.MODEL_ENV, "gpt-5.6-sol")
     assert routed_model("gpt-5.6-luna") == "gpt-5.6-luna"
     assert routed_model("luna") == "luna"
+
+
+def test_opencode_backend_has_constant_name_and_model_specific_cache_keys():
+    """The provider/model id, not a registry entry id, separates cache entries."""
+    first = OpencodeCliBackend()
+    second = OpencodeCliBackend()
+    assert first.name == second.name == "opencode-cli"
+    assert first.filesystem_posture == "unconfined"
+
+    one = build_cache_key(
+        backend=first.name, model="openai/gpt-5", system="s", user="u"
+    )
+    other = build_cache_key(
+        backend=first.name, model="anthropic/claude-sonnet-4-6", system="s", user="u"
+    )
+    assert one != other
+
+
+def test_routed_model_preserves_opencode_provider_model_and_honors_override(monkeypatch):
+    set_active_backend("opencode-cli")
+    assert routed_model("openai/gpt-5") == "openai/gpt-5"
+    monkeypatch.setenv(backends.MODEL_ENV, "anthropic/claude-sonnet-4-6")
+    assert routed_model("openai/gpt-5") == "anthropic/claude-sonnet-4-6"
+
+
+def test_opencode_backend_delegates_lazily_without_running_opencode(monkeypatch):
+    """The adapter test seam needs neither the CLI nor a live model."""
+    import sys
+    import types
+
+    built = []
+
+    class _Delegate:
+        def __init__(self, **kwargs):
+            built.append(kwargs)
+
+    package = types.ModuleType("llm_scripting_kit")
+    completion = types.ModuleType("llm_scripting_kit.completion")
+    completion.OpencodeCliBackend = _Delegate
+    package.completion = completion
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.completion", completion)
+
+    runner = object()
+    backend = OpencodeCliBackend(
+        default_timeout_s=17.0, argv_prefix=("opencode",), runner=runner
+    )
+    assert backend._backend() is not None
+    assert built == [
+        {
+            "default_timeout_s": 17.0,
+            "argv_prefix": ("opencode",),
+            "runner": runner,
+        }
+    ]
 
 
 def test_mock_backend_exhaustion_race_raises_documented_error():

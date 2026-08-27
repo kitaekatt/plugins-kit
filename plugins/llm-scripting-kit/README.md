@@ -71,14 +71,14 @@ endpoints:
 
 ## Completion seam
 
-`llm_scripting_kit.completion` puts three transports behind one `complete()` so
-a pipeline can switch between a paid HTTP endpoint and either of two
-subscription-billed local CLIs -- `claude -p` and `codex exec`, billed on
-separate accounts -- purely by configuration:
+`llm_scripting_kit.completion` puts four transports behind one `complete()` so
+a pipeline can switch between a paid HTTP endpoint and local CLIs --
+`claude -p`, `codex exec`, or `opencode run` -- purely by configuration:
 
 ```python
 from llm_scripting_kit.completion import (
-    OpenRouterBackend, ClaudeCliBackend, CodexCliBackend, BackendOptions,
+    OpenRouterBackend, ClaudeCliBackend, CodexCliBackend, OpencodeCliBackend,
+    BackendOptions,
 )
 
 backend = ClaudeCliBackend()                       # or OpenRouterBackend(endpoint="local")
@@ -88,18 +88,21 @@ print(resp.text, resp.input_tokens, resp.output_tokens)
 
 `BackendOptions` carries per-call knobs (`max_tokens`, `temperature`,
 `timeout_s`, `effort`, `allowed_tools`, `user_cache_prefix`, ...); transports
-ignore the ones they do not understand. `ClaudeCliBackend` spawns via a shared,
-battle-tested runner (UTF-8 pipes, daemon stdout/stderr drains, a bounded
-per-call timeout raising `AgentTimeoutError`, and a live hard-stop kill on
-rate-limit / auth markers). Persistent failures on either transport classify
+ignore the ones they do not understand. The CLI backends use a shared,
+battle-tested runner (UTF-8 pipes, daemon stdout/stderr drains, and a bounded
+per-call timeout raising `AgentTimeoutError`). `OpencodeCliBackend` returns
+default-format stdout, reports zero usage because that format supplies no
+usage envelope, and explicitly warns that required `--auto` bypasses
+permissions while `--dir` does not confine writes. Persistent failures classify
 into one halt taxonomy (`classify_halt_text`, `HaltError`, `HALT_*`) so an
 orchestrator can halt-and-resume identically regardless of provider. The seam
 types and the runner are stdlib-only; only `OpenRouterBackend` reaches for the
 `openai` SDK, and only lazily.
 
-The `claude-cli` backend needs the `claude` executable on PATH; it is already
-provisioned via the `bootstrap` dependency (which declares `claude` as a tool),
-so no extra install step is required.
+The `claude-cli` backend needs the `claude` executable on PATH, and the
+`opencode-cli` backend needs `opencode` on PATH. The former is already
+provisioned via the `bootstrap` dependency (which declares `claude` as a tool);
+OpenCode is a caller-provided CLI.
 
 ## Key handling
 

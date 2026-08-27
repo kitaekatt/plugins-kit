@@ -51,16 +51,23 @@ DESCEND_MAX_DEPTH = 6
 
 CODE_DATA_EXT = {
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh", ".cs", ".py", ".go",
-    ".rs", ".java", ".kt", ".swift", ".m", ".mm", ".ts", ".tsx", ".js", ".jsx",
-    ".mjs", ".cjs", ".lua", ".rb", ".php", ".scala", ".sql", ".yaml", ".yml",
-    ".csv", ".json", ".toml", ".proto", ".fbs", ".gradle", ".cmake", ".tf",
-    ".sh", ".ps1", ".gd", ".tscn", ".awk",
+    ".rs", ".java", ".kt", ".kts", ".swift", ".m", ".mm", ".ts", ".tsx", ".js",
+    ".jsx", ".mjs", ".cjs", ".dart", ".lua", ".rb", ".php", ".scala", ".nim",
+    ".nimble", ".lobster", ".sql", ".yaml", ".yml", ".csv", ".json", ".toml",
+    ".proto", ".fbs", ".gradle", ".cmake", ".tf", ".bazel", ".bff",
+    ".sh", ".bat", ".ps1", ".gd", ".tscn", ".awk",
     # Unreal descriptors: JSON text listing modules, plugins and dependencies --
     # readable, and the most coverage-relevant file in the directory holding it.
     # The engine's BINARY containers (.uasset/.umap/...) are the opposite case
     # and live in discover_coverage.ASSET_BINARY_EXT.
     ".uplugin", ".uproject",
 }
+# .kts (Kotlin script), .dart, .nim/.nimble, .lobster, .bazel, .bff (FASTBuild
+# config -- load-bearing build config in at least one consuming project, not
+# incidental), and .bat added 2026-08-26 from an evidenced corpus survey of
+# DISCOVERY-FAILED directories (built from `p4 files`, not from this set's own
+# classification): 62 directories held zero recognized extensions and were
+# skipped entirely. `.sh` was already present.
 # .md files that are docs, not review-notes; CLAUDE.md/local are the audited file.
 _MD_LIKE = {".md", ".mdx", ".rst", ".txt"}
 _CLAUDE_NAMES = {"CLAUDE.md", "CLAUDE.local.md"}

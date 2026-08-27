@@ -1059,19 +1059,31 @@ claude_md:
       origin: "2026-08-08 -- a review-bootstrap-cli branch was created off origin/master to scope a code review; a concurrent session then committed twice onto it, stranding both commits on a master-based throwaway branch that git branch --contains showed existed nowhere else."
       added: "2026-08-08"
     - id: orchestration_yaml_is_generated
-      keywords: [orchestration.yaml, generated decision half, tier-principles.md, generate_orchestration.py, hand-edit orchestration.yaml, one-way authorship, orchestrate skill policy]
-      summary: The decision half of awesome-kit's orchestrate skill policy (plugins/awesome-kit/skills/orchestrate/defaults/orchestration.yaml) is GENERATED from maintainer-only principles -- never hand-edit it or back-fill a principle to match a hand edit.
+      keywords: [orchestration.yaml, generated decision half, tier-principles.md, generate_orchestration.py, hand-edit orchestration.yaml, one-way authorship, orchestrate skill policy, retracted, superseded, routing]
+      summary: "RETRACTED 2026-08-26. orchestration.yaml is HAND-WRITTEN configuration; its generator, its principles source, and its pre-commit and publish drift gates are deleted. The former rule -- never hand-edit it -- no longer applies."
       detail: |
-        Full chain, the one-way authorship rule, why the generator's two inputs
-        (tier-principles.md, lexicon.md) live in two different roots on purpose,
-        and the reversion posture: docs/reference/orchestrate/CLAUDE.md. That
-        file is the disclosure of record because the SKILL.md links that used to
-        point at this machinery were deliberately removed when the maintainer-only
-        derivation source was unshipped from the published skill (commits
-        1ba87e2, 0e08fca, 8bc3f9c, d6d7aae, 566c941) -- a consumer's plugin
-        install has no docs/ directory for those links to resolve against.
-      origin: "2026-08-08 -- disclosure gap identified after the unshipping move removed the in-plugin links that used to name this chain."
+        This insight stated that the decision half of orchestrate's policy was
+        GENERATED from a maintainer-only principles source, and that authorship
+        was one-way: change a principle, re-derive the data, never edit the
+        rendered tree. That was true until the decision half was replaced by a
+        hand-written `routing:` list.
+        What replaced it: `backend` and `ladders` are gone; an ordered
+        `routing:` list of shapes, each naming models in priority order, is the
+        decision policy, and the whole file is now hand-maintained
+        configuration at `schema_version: 3`. `scripts/generate_orchestration.py`,
+        `docs/reference/orchestrate/tier-principles.md`, the derivation docs,
+        `tests/awesome-kit/test_orchestration_generator.py`, the pre-commit
+        drift check and `publish.py`'s `_require_generated_orchestration` are
+        all deleted. Two tests in tests/awesome-kit -- shipped-defaults-render
+        and lexicon-sync -- replace the protection the deleted gates gave.
+        Kept as a retraction rather than deleted because the removed disclosure
+        (`docs/reference/orchestrate/CLAUDE.md`) was the only record that the
+        one-way rule ever existed, and an agent that remembers the old rule
+        needs to find out here that it is dead rather than conclude the file is
+        undocumented.
+      origin: "2026-08-08 -- disclosure gap identified after the unshipping move removed the in-plugin links that used to name this chain. RETRACTED 2026-08-26 when config-driven routing replaced the generated decision half."
       added: "2026-08-08"
+      updated: "2026-08-26"
     - id: codex_dispatch_is_silent_on_failure
       keywords: [codex, codex exec, sandbox, workspace-write, windows.sandbox, absolute -C, add-dir, exit 0, no approval channel, permission spam, danger-full-access, reads unrestricted, bootstrap_lib.codex, CodexCliBackend, run_cli_streaming]
       summary: Every way a codex dispatch can be misconfigured fails SILENTLY at exit 0, so codex machinery is built to refuse bad input rather than trust it. bootstrap_lib.codex is the single source of truth for detection and argv; orchestrate deliberately does NOT consume it.

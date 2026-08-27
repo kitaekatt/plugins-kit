@@ -1,6 +1,6 @@
 """Completion backends behind one protocol, selected by process-level routing.
 
-Five backends implement :class:`~content_pipeline.llm.platform.LLMBackend`:
+Six backends implement :class:`~content_pipeline.llm.platform.LLMBackend`:
 
 - :class:`OpenRouterBackend` -- an OpenAI-compatible HTTP completion.
 - :class:`ModelEndpointBackend` -- an OpenAI-compatible completion against an
@@ -11,14 +11,16 @@ Five backends implement :class:`~content_pipeline.llm.platform.LLMBackend`:
   no per-call metering).
 - :class:`CodexCliBackend` -- the local ``codex exec`` CLI (subscription-billed,
   no per-call metering).
+- :class:`OpencodeCliBackend` -- the local ``opencode run`` CLI, with stdout as
+  the answer and a mandatory wall-clock timeout.
 - :class:`MockBackend` -- deterministic, scriptable responses. The always-wins
   test seam: no network, no subprocess, no shared lib.
 
-The four live transports are THIN ADAPTERS over ``llm_scripting_kit.completion``
+The five live transports are THIN ADAPTERS over ``llm_scripting_kit.completion``
 (from llm-scripting-kit): that shared lib owns the actual completion
-transport -- the ``claude -p`` and ``codex exec`` subprocess runners, retry,
-timeout, hard-stop detection, and the OpenAI-compatible client + prompt-cache
-message shaping.
+transport -- the ``claude -p``, ``codex exec``, and ``opencode run`` subprocess
+runners, retry, timeout, hard-stop detection, and the OpenAI-compatible client
+and prompt-cache message shaping.
 This module keeps only the content-pipeline-specific glue; it does NOT
 reimplement the transport. ``llm_scripting_kit`` is a LAZY / optional import: it is
 reached for only when a live backend's ``complete`` / ``classify_halt`` actually
@@ -48,8 +50,8 @@ from content_pipeline.llm import platform
 from content_pipeline.llm.platform import BackendOptions, LLMResponse
 
 # The message a live backend raises when the shared lib is missing. The
-# claude-cli / codex-cli / openrouter transports genuinely require
-# llm_scripting_kit; only the MockBackend path is hermetic.
+# openrouter / model-endpoint / claude-cli / codex-cli / opencode-cli transports
+# genuinely require llm_scripting_kit; only the MockBackend path is hermetic.
 _MISSING_LIB_MSG = (
     "needs the 'llm_scripting_kit' shared lib (from llm-scripting-kit). Declare it "
     "via the plugin's shared_lib_imports, or use MockBackend for tests."
@@ -77,6 +79,17 @@ def _is_connection_error(exc: BaseException) -> bool:
     except Exception:  # noqa: BLE001 -- no SDK: stdlib check above is the answer
         return False
     return isinstance(exc, openai.APIConnectionError)
+
+
+def _is_harness_refusal(exc: BaseException) -> bool:
+    """True when the shared registry refused a harness as an HTTP endpoint.
+
+    ``llm_scripting_kit`` owns entry classification and the canonical refusal
+    wording. This small check preserves that refusal across this adapter's
+    best-effort fallback boundaries; it does not classify or load entries here.
+    Other registry failures retain the existing probe-friendly fallback.
+    """
+    return "is a harness entry" in str(exc)
 
 
 def _lazy_build_note() -> None:
@@ -375,6 +388,99 @@ class CodexCliBackend:
 
 
 # ---------------------------------------------------------------------------
+# OpenCode CLI backend -- delegates to llm_scripting_kit
+# ---------------------------------------------------------------------------
+
+OPENCODE_FILESYSTEM_POSTURE = "unconfined"
+"""The upstream OpenCode adapter's actual filesystem posture.
+
+OpenCode's required ``--auto`` flag bypasses permissions, and ``--dir`` does
+not confine absolute writes. Selecting ``opencode-cli`` is therefore an
+explicit process-wide run decision; this adapter exposes the posture instead
+of presenting the working directory as a sandbox.
+"""
+
+
+@dataclass
+class OpencodeCliBackend:
+    """Local ``opencode run`` completion, delegated to llm-scripting-kit.
+
+    ``default_timeout_s`` / ``argv_prefix`` / ``runner`` are forwarded to
+    ``llm_scripting_kit.completion.OpencodeCliBackend``. The
+    delegate is built lazily so constructing this adapter never requires the
+    shared lib or the ``opencode`` executable.
+
+    OpenCode's non-interactive command requires ``--auto``, which bypasses
+    permissions; its ``--dir`` option is not a write boundary. The shared
+    backend emits that warning at call time and returns the answer on stdout.
+    ``filesystem_posture`` records the run-level decision made here: this
+    adapter accepts the explicitly selected backend's unconfined posture and
+    does not claim to sandbox a pipeline run.
+
+    ``name`` is intentionally constant across OpenCode configurations. The
+    cache key also includes the exact provider/model string (for example,
+    ``openai/gpt-5``), so distinct model ids remain distinct without embedding
+    a user-specific config or entry id in the backend identity.
+
+    THREAD SAFETY: one instance may be shared across worker threads; the lazy
+    delegate build is guarded by double-checked locking (see
+    :func:`_lazy_build_note`).
+    """
+
+    default_timeout_s: float = 120.0
+    argv_prefix: Optional[tuple] = None
+    runner: Optional[Callable[..., "tuple[str, str, int]"]] = None
+    name: str = field(default="opencode-cli", init=False)
+    filesystem_posture: str = field(
+        default=OPENCODE_FILESYSTEM_POSTURE, init=False
+    )
+    _delegate: Any = field(default=None, init=False, repr=False, compare=False)
+    _build_lock: "threading.Lock" = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
+
+    def _backend(self) -> Any:
+        """Return the shared delegate, building it at most once (see notes)."""
+        if self._delegate is not None:
+            return self._delegate
+        with self._build_lock:
+            if self._delegate is None:
+                try:
+                    from llm_scripting_kit.completion import (  # noqa: PLC0415
+                        OpencodeCliBackend as _CompletionOpencodeCli,
+                    )
+                except ImportError as exc:  # pragma: no cover - env-dependent
+                    raise ImportError(
+                        f"OpencodeCliBackend {_MISSING_LIB_MSG}"
+                    ) from exc
+                kwargs: Dict[str, Any] = {
+                    "default_timeout_s": self.default_timeout_s,
+                    "argv_prefix": self.argv_prefix,
+                }
+                if self.runner is not None:
+                    kwargs["runner"] = self.runner
+                self._delegate = _CompletionOpencodeCli(**kwargs)
+        return self._delegate
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        model: str,
+        options: Optional[BackendOptions] = None,
+    ) -> LLMResponse:
+        opts = options or BackendOptions()
+        resp = self._backend().complete(
+            system, user, model=model, options=_to_completion_options(opts)
+        )
+        return _from_completion_response(resp)
+
+    def classify_halt(self, exc: BaseException) -> Optional[str]:
+        return self._backend().classify_halt(exc)
+
+
+# ---------------------------------------------------------------------------
 # Mock backend (test seam)
 # ---------------------------------------------------------------------------
 
@@ -402,7 +508,7 @@ class ModelEndpointBackend:
     backend, so nothing here assumes localhost.
 
     AVAILABILITY IS NOT ASSUMED, which is what separates this adapter from its
-    three siblings. A cloud provider is up unless it is having an incident; a
+    four siblings. A cloud provider is up unless it is having an incident; a
     server on the registry is up only if somebody started it. :func:`route`
     therefore pings the selected entry at selection time and refuses with
     :class:`~content_pipeline.llm.platform.LLMUnavailableError` rather than
@@ -450,7 +556,10 @@ class ModelEndpointBackend:
         Resolution is cached onto ``endpoint`` so the id is concrete by the time
         it reaches a probe or a cache key. A registry that cannot be read leaves
         it unresolved and returns None -- the probe then reports that failure as
-        its own ``detail``, which is the honest answer to "is it usable?".
+        its own ``detail``, which is the honest answer to "is it usable?". The
+        shared library's harness refusal is intentionally propagated: a harness
+        is a valid registry entry, but not a transport endpoint, and must not be
+        turned into a misleading default or missing-base-url error here.
         """
         if self.endpoint:
             return self.endpoint
@@ -460,7 +569,9 @@ class ModelEndpointBackend:
             )
 
             self.endpoint = resolve_registry_entry(None).id
-        except Exception:  # noqa: BLE001 -- unresolvable is the probe's to report
+        except Exception as exc:  # noqa: BLE001 -- unresolvable is the probe's to report
+            if _is_harness_refusal(exc):
+                raise
             return None
         return self.endpoint
 
@@ -489,8 +600,10 @@ class ModelEndpointBackend:
         """Non-raising reachability ping of the selected entry.
 
         Returns an ``EndpointProbe`` (``ok`` / ``endpoint`` / ``base_url`` /
-        ``detail``). Never raises: an unresolvable entry and a dead host are
-        both answers to "is it usable?", not exceptions.
+        ``detail``). Ordinary registry/readability failures are reported as a
+        probe result rather than raised; a selected harness is the deliberate
+        exception, because it is a valid registry entry but not a transport
+        endpoint and must name its kind.
         """
         from llm_scripting_kit.account import probe_endpoint  # noqa: PLC0415
 
@@ -504,9 +617,9 @@ class ModelEndpointBackend:
         """The selected entry's declared ``reasoning_effort``, or None.
 
         Cached on the instance, including the None result -- a registry without
-        the field must not re-read the file on every call. Any failure resolves
-        to None; the delegate surfaces real errors itself, and this is only a
-        default-supplying lookup.
+        the field must not re-read the file on every call. Ordinary lookup
+        failures resolve to None; a harness refusal is preserved so callers do
+        not receive a misleading transport error.
         """
         if self._effort is not _UNSET:
             return self._effort
@@ -517,7 +630,9 @@ class ModelEndpointBackend:
             )
 
             effort = resolve_registry_entry(self._entry_id()).reasoning_effort
-        except Exception:  # noqa: BLE001 -- a missing default is not an error
+        except Exception as exc:  # noqa: BLE001 -- a missing default is not an error
+            if _is_harness_refusal(exc):
+                raise
             effort = None
         self._effort = effort
         return effort
@@ -695,6 +810,7 @@ def route(
     openrouter: Optional[Any] = None,
     claude_cli: Optional[Any] = None,
     codex_cli: Optional[Any] = None,
+    opencode_cli: Optional[Any] = None,
     model_endpoint: Optional[Any] = None,
     mock: Optional[Any] = None,
 ) -> Any:
@@ -717,6 +833,8 @@ def route(
         return claude_cli if claude_cli is not None else ClaudeCliBackend()
     if name == "codex-cli":
         return codex_cli if codex_cli is not None else CodexCliBackend()
+    if name == "opencode-cli":
+        return opencode_cli if opencode_cli is not None else OpencodeCliBackend()
     if name == "model-endpoint":
         backend = (
             model_endpoint if model_endpoint is not None else ModelEndpointBackend()
@@ -766,8 +884,15 @@ def routed_model(requested_model: str, *, backend_name: Optional[str] = None) ->
             return resolve_model(
                 None, endpoint=ModelEndpointBackend()._entry_id()
             )
-        except Exception:  # noqa: BLE001 -- truthful fallback beats a guess
+        except Exception as exc:  # noqa: BLE001 -- truthful fallback beats a guess
+            if _is_harness_refusal(exc):
+                raise
             return requested_model
+    if name == "opencode-cli":
+        # OpenCode model ids are provider/model strings from the user's own
+        # OpenCode configuration. Do not translate an OpenRouter slug or invent
+        # a provider; an explicit process-level override is authoritative.
+        return os.environ.get(MODEL_ENV, "").strip() or requested_model
     if name == "codex-cli":
         return requested_model
     if name == "claude-cli" and not requested_model.startswith("claude"):
@@ -779,11 +904,13 @@ __all__ = [
     "OpenRouterBackend",
     "ClaudeCliBackend",
     "CodexCliBackend",
+    "OpencodeCliBackend",
     "ModelEndpointBackend",
     "MockBackend",
     "BACKEND_ENV",
     "ENDPOINT_ENV",
     "MODEL_ENV",
+    "OPENCODE_FILESYSTEM_POSTURE",
     "active_backend_name",
     "set_active_backend",
     "route",

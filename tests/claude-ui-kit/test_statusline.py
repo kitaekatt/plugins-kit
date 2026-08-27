@@ -6,10 +6,12 @@ X11: the plugin's bootstrap.json must declare its jq dependency explicitly
 instead of relying on the bootstrap plugin's manifest transitively.
 """
 
+import atexit
 import json
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -20,10 +22,88 @@ _STATUSLINE = _PLUGIN_ROOT / "scripts" / "statusline.sh"
 _HAS_TOOLS = shutil.which("bash") and shutil.which("jq")
 
 
+def _behaves_like_timeout(candidate):
+    """True when `candidate` accepts GNU timeout's `<duration> <command...>`."""
+    try:
+        probe = subprocess.run(
+            [candidate, "5", "bash", "-c", "printf TIMEOUT-OK"],
+            capture_output=True, text=True, timeout=15,
+            encoding="utf-8", errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 0 and "TIMEOUT-OK" in (probe.stdout or "")
+
+
+def _resolve_timeout_shim():
+    """A stand-in `timeout(1)`, or None when the machine has a usable one.
+
+    Stock macOS ships neither `timeout` nor `gtimeout` (GNU coreutils installs
+    the latter), and statusline.sh documents the binary as OPTIONAL: finding
+    none, it skips every *.sh segment and says so on the bar. A test may not
+    assume a binary the script under test calls optional -- doing so made five
+    segment tests fail on any machine without coreutils, and made two others
+    (the hang and the failing-segment cases) pass VACUOUSLY, since a skipped
+    segment also produces no output.
+
+    Returning None where a real binary EXISTS is deliberate: the tests then set
+    no override at all, so statusline.sh's own PATH probe (`command -v timeout`
+    / `gtimeout`) stays under test on the machines that can exercise it. Only
+    where no usable binary is found do we fabricate one and declare it through
+    BOOTSTRAP_BIN_TIMEOUT, the override statusline.sh already honours.
+
+    The stand-in implements real duration semantics rather than just exec-ing
+    the command, so the hang test keeps exercising the timeout, not the skip
+    path.
+
+    A found binary is BEHAVIOURALLY probed rather than trusted by name:
+    Windows ships an unrelated `System32\\timeout.exe` (a pause utility that
+    refuses redirected input), which must not be handed to statusline.sh.
+    """
+    for name in ("timeout", "gtimeout"):
+        found = shutil.which(name)
+        if found and _behaves_like_timeout(found):
+            return None
+    shim = Path(tempfile.mkdtemp(prefix="statusline-timeout-")) / "timeout"
+    shim.write_text(
+        '#!/usr/bin/env bash\n'
+        '# Minimal timeout(1) stand-in: <duration> <command...>\n'
+        '# `set -m` gives the child its own process group, so the watcher can\n'
+        '# signal the GROUP -- killing only the direct child leaves a grandchild\n'
+        '# (a segment running `sleep`) alive holding the captured stdout pipe.\n'
+        'set -m\n'
+        'dur="$1"; shift\n'
+        '# Background jobs get stdin from /dev/null unless it is redirected\n'
+        '# explicitly; segments are fed their JSON on stdin, so hand it over.\n'
+        'exec 3<&0\n'
+        '"$@" <&3 &\n'
+        'child=$!\n'
+        '# stdout redirected: the caller captures via $(...), so a watcher\n'
+        '# holding the pipe open would block the substitution for `dur`.\n'
+        '( sleep "$dur"; kill -TERM -"$child" ) >/dev/null 2>&1 &\n'
+        'watcher=$!\n'
+        'wait "$child" 2>/dev/null; rc=$?\n'
+        'kill -TERM "$watcher" >/dev/null 2>&1\n'
+        'exit "$rc"\n',
+        encoding="utf-8")
+    shim.chmod(0o755)
+    atexit.register(shutil.rmtree, str(shim.parent), True)
+    return str(shim)
+
+
+_TIMEOUT_SHIM = _resolve_timeout_shim()
+
+
 def run_statusline(stdin_text, cwd, extra_env=None):
     env = dict(os.environ)
     env.pop("BOOTSTRAP_BIN_JQ", None)  # use PATH jq deterministically
     env.pop("STATUSLINE_SHOW_MODEL", None)  # test the default unless overridden
+    # Only when the machine has no usable timeout(1) do we hand over a shim,
+    # so segment tests run everywhere without masking statusline.sh's own PATH
+    # probe where it can be tested (see _resolve_timeout_shim). extra_env still
+    # wins, so a test declares "no timeout binary here" with
+    # BOOTSTRAP_BIN_TIMEOUT="".
+    if _TIMEOUT_SHIM is not None:
+        env["BOOTSTRAP_BIN_TIMEOUT"] = _TIMEOUT_SHIM
     if extra_env:
         env.update(extra_env)
     # encoding pinned to UTF-8: the statusline emits non-ASCII glyphs

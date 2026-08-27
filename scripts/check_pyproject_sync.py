@@ -115,7 +115,7 @@ def _read_pair(
 
     Index blobs when anything is staged, else the working tree. A file Git
     cannot provide (untracked, or no Git at all) falls back to the working tree
-    individually, matching generate_orchestration.py's fallback.
+    individually, matching the index helper's fallback.
     """
     py_path = plugin_dir / "pyproject.toml"
     pj_path = plugin_dir / ".claude-plugin" / "plugin.json"

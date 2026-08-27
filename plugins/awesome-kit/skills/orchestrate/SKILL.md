@@ -12,18 +12,16 @@ agents, keeping the main agent's context reserved for coordination, judgment, an
 See [references/why-delegate.md](references/why-delegate.md) for the economics behind this
 procedure and the anti-pattern catalogue.
 
-**Policy is configuration, and it is rendered, not remembered.** Which tier suits which unit,
-which dispatch backends exist on this machine and how to drive them, and how much usage
-capacity is left all vary by user and by machine. Step 2 runs a script that prints the
-resolved policy. Do not answer those questions from this file or from memory -- this file has
-no tier table, deliberately. Users tune the policy by overriding
+**Policy is configuration, and it is rendered, not remembered.** Which routing row suits a
+unit, which model entries and Agent-tool models are available, which dispatch backends exist
+on this machine and how to drive them, and how much usage capacity is left all vary by user
+and by machine. Step 2 runs a script that prints the resolved policy. Do not answer those
+questions from this file or from memory. Users tune the policy by overriding
 [defaults/orchestration.yaml](defaults/orchestration.yaml); see
 [references/configuration.md](references/configuration.md) for the schema and layering,
-and [references/tuning-selection.md](references/tuning-selection.md) when a rung is
-firing more or less often than you want -- which keys move selection frequency, which
-way, and how far. The decision tree itself is compiled from a controlled vocabulary,
-[references/lexicon.md](references/lexicon.md), against a maintainer-only criteria
-source that is not part of this install.
+and [references/tuning-selection.md](references/tuning-selection.md) when a routing row is
+firing more or less often than you want. The routing policy is hand-written configuration
+stated in the controlled vocabulary of [references/lexicon.md](references/lexicon.md).
 
 ```yaml
 technique_skill:
@@ -32,7 +30,7 @@ technique_skill:
   scope:
     covers:
       - decomposing significant work into delegable units and running them via background agents
-      - rendering the machine's orchestration policy (tiers, backends, capacity) and dispatching by it
+      - rendering the machine's orchestration policy (routing, backends, capacity) and dispatching by it
       - keeping the main context clean while agents run, and synthesizing results on completion
     excludes:
       - small or single-step tasks cheaper to do inline than to delegate
@@ -40,7 +38,7 @@ technique_skill:
       - subagent authoring (defining new agent types)
 
   policy:
-    keywords: [model choice, model tier, backend, codex, grok, custom orchestrator, usage limit, capacity, rate limit, configurable, override, pool]
+    keywords: [model choice, model routing, backend, codex, custom orchestrator, usage limit, capacity, rate limit, configurable, override, pool]
     render: |
       Use the plugin venv's Python explicitly -- not `uv run python`, which resolves the
       venv from the cwd and misses this plugin's dependencies when run from another project
@@ -51,11 +49,11 @@ technique_skill:
 
       Add `--project-root <path>` when the project whose policy applies is not the cwd.
     emits: |
-      A markdown block covering (a) a DECISION TREE -- shape, backend, tier, agent type,
-      effort, announcement -- resolved by ordered elimination, first match wins, (b) every
+      A markdown block covering (a) a DECISION TREE -- shape, routing, agent type, effort,
+      announcement -- resolved by ordered elimination, first match wins, (b) every
       dispatch backend detected on this machine -- the Agent tool, Codex CLI, or whatever
       the user configured -- with its exact mechanics, capabilities and gotchas, and (c)
-      best-effort usage capacity plus any manual tier overrides.
+      best-effort usage capacity.
     when: |
       Once per orchestration, at step 2, BEFORE decomposing or planning anything -- the
       policy's shaping tests govern the plan itself, so rendering after the plan exists
@@ -63,13 +61,13 @@ technique_skill:
       Budget a few thousand tokens for its output; it grows with each installed backend.
     reading_it: |
       Treat the rendered block as authoritative over anything you believe about model
-      lineups or dispatch mechanics: a tier marked UNAVAILABLE or LIMITED must not be
-      dispatched to (route down a tier and say so when you relay results), and the tiers
-      and backends listed are the only ones that exist here. Anything not installed on this
-      machine is omitted from the output entirely rather than shown as unavailable, so do
-      not reach for a backend or tier you remember but cannot see, and do not tell the user
+      lineups or dispatch mechanics: a model or harness absent from the rendered policy must
+      not be dispatched to. A routing row falls through to its next model on a launch or
+      transport error. The model entries and backends listed are the only ones that exist
+      here. Anything not installed on this machine is omitted from the output entirely, so do
+      not reach for a backend or model you remember but cannot see, and do not tell the user
       something is "unavailable" on the strength of its absence. (`--explain` reports what
-      was gated and why, if you need to answer that question.)
+      was skipped and why, if you need to answer that question.)
 
       Being LISTED is not the same as being ELIGIBLE. A backend whose block opens with a
       `**Selection.**` line is not a routing target: it is documented so you can drive it
@@ -87,28 +85,6 @@ technique_skill:
       consumer: defaults/orchestration.yaml (backends[codex].dispatch)
       purpose: the flag catalog and launch mechanics the rendered summary points at
       invariant: The one-line `command:` in the backend record matches the worked example here.
-    - path: references/grok-dispatch.md
-      consumer: defaults/orchestration.yaml (backends[grok].dispatch)
-      purpose: the flag catalog and launch mechanics for the request-only Grok backend
-      invariant: >-
-        The one-line `command:` in the backend record matches the worked example here, and
-        both name `grok-4.6` -- the only sanctioned model on this backend.
-    - path: references/model-endpoints-dispatch.md
-      consumer: defaults/orchestration.yaml (backends[model-endpoints].dispatch)
-      purpose: the registry contract and the local-server behaviors for the request-only model-endpoints backend
-      invariant: >-
-        The record, its dispatch text, this reference, codex-dispatch.md's custom-provider
-        section, and the `model_endpoints` detect kind in
-        scripts/orchestration_guidance.py all derive every machine- and model-specific
-        value from the registry file -- `~/.claude/config/model-endpoints.yaml`, or the
-        `MODEL_ENDPOINTS_REGISTRY` override -- and name none literally.
-    - path: scripts/orchestration_guidance.py
-      consumer: defaults/orchestration.yaml (backends[model-endpoints].detect)
-      purpose: the `model_endpoints` detect kind, which reads the registry and renders the live roster
-      invariant: >-
-        The registry schema this script parses is the same file format
-        references/model-endpoints-dispatch.md documents; a schema change lands in both.
-
   techniques:
     - id: orchestrate
       name: Orchestrate work through background agents
@@ -130,7 +106,7 @@ technique_skill:
             Run it once, inline, BEFORE decomposing -- its shaping tests govern the plan
             itself, and rendering after the plan exists can only trigger a retrospective
             review, never route the plan's creation. Keep the output in view for steps 3-5;
-            it is the source of truth for tiers, backends and capacity on this machine.
+            it is the source of truth for routing, backends and capacity on this machine.
         - n: 3
           action: Decompose into self-contained units and classify each -- the plan itself is the first candidate unit.
           detail: |
@@ -142,15 +118,14 @@ technique_skill:
             small conclusion? High-generation-cost / small-conclusion units are the ideal
             delegations.
         - n: 4
-          action: Pick a backend per unit, then a tier from that backend's ladder.
+          action: Match the unit to the rendered routing rows and choose the first available model.
           detail: >-
-            Backend first: the rendered policy gives one tier ladder per backend, and rungs
-            are comparable only within a ladder -- across them the decision is dispatch
-            shape, pool, and independence, not model capability. Default backend and default
-            tier are stated in the output; deviate per unit when the unit's shape argues for
-            it. Honour UNAVAILABLE/LIMITED markings. A backend carrying a `**Selection.**`
-            restriction is excluded from this step unless its stated condition holds -- no
-            unit's shape argues its way onto one. When the user names a backend or a model,
+            Evaluate routing rows in declaration order. A row's shape must match the unit;
+            its models are tried in declaration order, and a launch or transport error falls
+            through to the next model in that row. An unresolvable model or an unavailable
+            harness removes that model, and a row with no surviving models disappears. A
+            backend carrying a `**Selection.**` restriction is documented for its stated
+            condition and is not a routing target. When the user names a backend or model,
             that names the dispatch: take the named one and skip this step.
         - n: 5
           action: Launch background units -- each prompt a standalone brief (goal, paths, constraints, premises, return shape).

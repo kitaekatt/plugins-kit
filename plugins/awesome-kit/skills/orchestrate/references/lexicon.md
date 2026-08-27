@@ -45,7 +45,7 @@ sufficiency needs a label. Without it that branch cannot be announced.
 
 ## Execution demand
 
-What the work does to information. Selects among the Claude rungs. Replaces the
+What the work does to information. Supplies a signal used by routing rows. Replaces the
 undefined pair `shallow` / `real reasoning`.
 
 ### `mechanical` `[concept]`
@@ -72,7 +72,7 @@ what the work must produce beyond its sources is.
 
 ## Escalation
 
-Why this rung and not the one below.
+Why this route and not a broader one.
 
 ### `novel` `[skill]` `render: glossed`
 No established pattern applies.
@@ -90,15 +90,14 @@ You could not spot a wrong answer by reading the summary.
 **Gloss:** "no cheap check would catch the error that matters -- a check catching only shallow errors does not verify"
 
 ### `default` `[skill]` `render: bare`
-No escalation test matched; the unit reached the ladder's terminal rung by
-fall-through.
-**Test:** did any rung above match? If none did, this is the term.
-*Why it exists:* the terminal rung states no criteria of its own, so without this
-term the most common dispatch on the ladder has no legal announcement -- putting the
-largest hole in the usage record at the largest population.
+No earlier routing row matched; the unit reaches the default row by fall-through.
+**Test:** did any routing row above match? If none did, this is the term.
+*Why it exists:* the default row states no shape of its own, so without this term
+the most common dispatch has no legal announcement -- putting the largest hole in
+the usage record at the largest population.
 
 ### `stretch` `[concept]`
-The rung below would plausibly get this wrong.
+The broader route below would plausibly get this wrong.
 **Test:** can you say what it would get wrong?
 
 ---
@@ -127,14 +126,15 @@ rather than the output of a delegated unit?
 
 *Consequence:* a review is independent only when the reviewer is not the
 author's model. `authored-here` names the artifacts that test applies to, so
-the ladder can route their review away from the orchestrating model by
+the routing policy can send their review away from the orchestrating model by
 criterion. A delegated unit's output is never `authored-here`.
 
 ---
 
 ## Dispatch shape
 
-Selects the backend.
+Supplies the shape terms that select a routing row; that row selects the model entry and its
+harness.
 
 ### `conversational` `[skill]` `render: glossed`
 You expect to interrogate or refine the unit mid-flight.
@@ -171,9 +171,9 @@ The return shape must be machine-validated.
 
 Words that feel like criteria and are not. Each has been reached for in practice.
 
-- **`difficult`** -- never a criterion. Hard-but-patterned work belongs a rung
-  LOWER, not higher. Say `novel` if no pattern applies, or `stretch` if the rung
-  below would plausibly fail.
+- **`difficult`** -- never a criterion. Hard-but-patterned work belongs on a
+  broader route, not a narrower one. Say `novel` if no pattern applies, or `stretch`
+  if the broader route would plausibly fail.
 - **`important`** -- not `load-bearing`. Importance is about the topic;
   `load-bearing` is about whether a wrong answer propagates. Important work with a
   cheap check is not load-bearing in the sense that matters.
@@ -190,32 +190,26 @@ Words that feel like criteria and are not. Each has been reached for in practice
 One line per dispatch, terms only, no free prose:
 
 ```
-delegating <what> to <model> (<terms that fired>)
+delegating <what> to <target> (<the matched row's shape terms>)
 ```
 
 The parenthetical carries the terms from the tree node that ACTUALLY fired -- not
 the strongest available justification, not a complete characterisation. Only
 `[skill]` terms are permitted, which is what makes the lines aggregate: the
-transcript becomes the usage record for which rungs get chosen and why.
+transcript becomes the usage record for which routes get chosen and why.
 
-```
-delegating rename across 30 files to sonnet (known, default)
-delegating log relevance sweep to sonnet (open, condensation)
-delegating crash diagnosis to opus (open, inference)
-delegating architecture review to fable (novel, load-bearing, unverifiable)
-delegating per-file API migration to codex/gpt-5.6-luna (fan-out)
-```
+The rendered worked examples are the `announce.examples` records in
+[`../defaults/orchestration.yaml`](../defaults/orchestration.yaml). Keep that
+list as the single source of truth for worked targets and matched shape terms.
 
-*The first and last lines are the same file count and route differently -- that is
-the collapse test doing its job, and the pair is worth keeping as the worked
-example.* A rename is one `sed`, so it never becomes `fan-out` however many files it
-touches; it is one `mechanical` unit. A migration needing per-file judgment resists
-collapsing, so it is genuinely N units. Scale is not the discriminator and must never
-be read as one.
+The `ex-default` and `ex-migration` records illustrate the collapse test. A
+rename is one `sed`, so it never becomes `fan-out` however many files it
+touches; it is one `mechanical` unit. A migration needing per-file judgment
+resists collapsing, so it is genuinely N units. Scale is not the discriminator
+and must never be read as one.
 
-*Top rung:* its criteria are two of the three escalation terms, or a
-`load-bearing` `plan-checkpoint`, or a `load-bearing` `authored-here` review,
-so at least two terms fire together by construction -- announce the ones that
-actually fired, which may be two or all three, or the unit-class term plus
-`load-bearing`. The gate's additional demand (saying what the
-rung below would get wrong) stays internal and is not rendered on the line.
+*High-cost route:* a routing row carries one `shape` list. In the default
+policy, the high-cost row is `shape: [novel, load-bearing]`, so both terms must
+match; its `gate` asks for the reason the broader route is the wrong seat. The
+list does not encode OR'd groups, and `plan-checkpoint` or `authored-here` do
+not add alternate groups to it. Announce only the terms in the matched row.

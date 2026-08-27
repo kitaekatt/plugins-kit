@@ -52,9 +52,8 @@ escapable pre-commit hooks):
     changed in the range without a bump (the cache keys on version, so those
     files would ship under a version consumers already hold and never refetch).
   - a pyproject.toml version disagreeing with its plugin.json.
-  - awesome-kit's generated orchestration policy drifting from its principles.
 
-The last three exist as pre-commit hooks too, but those are skippable with
+The last two exist as pre-commit hooks too, but those are skippable with
 --no-verify (and PLUGINS_KIT_SKIP_BUMP_CHECK=1, whose documented purpose is
 legitimate dev-branch commits between publish checkpoints). Skipping them on dev
 is sanctioned; shipping the result is not, so publish re-runs them from the same
@@ -85,7 +84,6 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 # plugin tree, and PLUGINS_DIR is patched to a synthetic repo by
 # tests/repo-scripts/test_publish.py. Tests point these two at fixture data.
 REAL_PLUGINS_DIR = REPO_ROOT / "plugins"
-GENERATE_ORCHESTRATION_PY = SCRIPTS_DIR / "generate_orchestration.py"
 MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 POSTER_YAML = REPO_ROOT / ".claude-plugin" / "poster.yaml"
 INDEX_PAGE_YAML = REPO_ROOT / ".claude-plugin" / "index-page.yaml"
@@ -234,7 +232,6 @@ def preflight(allow_dev_only: set[str] | None = None
     _refuse_mixed_dev_only_commit(excluded)
     _require_bootstrap_dependency()
     _require_pyproject_sync()
-    _require_generated_orchestration()
     bumps = _require_version_bump()
     _require_bump_for_changed_plugins()
     return bumps, excluded
@@ -313,30 +310,6 @@ def _require_pyproject_sync() -> None:
               "pyproject.toml version equal to it and commit that. "
               "(PLUGINS_KIT_SKIP_BUMP_CHECK is a commit-time allowance; it "
               "does not apply to a publish.)")
-
-
-def _require_generated_orchestration() -> None:
-    """Refuse when awesome-kit's generated orchestration policy has drifted.
-
-    plugins/awesome-kit/skills/orchestrate/defaults/orchestration.yaml is
-    GENERATED from docs/reference/orchestrate/tier-principles.md plus the
-    skill's lexicon.md; a hand-edit or an unregenerated principles change makes
-    the shipped policy disagree with its own source. Also a pre-commit check,
-    also skippable with --no-verify, so it is re-run here where it reaches
-    consumers.
-    """
-    result = subprocess.run(
-        [sys.executable, str(GENERATE_ORCHESTRATION_PY), "--check"],
-        cwd=REPO_ROOT, capture_output=True, text=True)
-    if result.returncode != 0:
-        detail = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
-        raise PublishError(
-            "refusing: the generated orchestration policy is not current "
-            "(scripts/generate_orchestration.py --check failed).\n"
-            "Regenerate it and commit the result:\n"
-            "  uv run python scripts/generate_orchestration.py --write\n"
-            "Never hand-edit orchestration.yaml -- the principles source is "
-            "authoritative.\n" + detail)
 
 
 def already_applied(sha_prefixes: list[str]) -> set[str]:

@@ -71,10 +71,17 @@ from skills_kit_lib.markdown_heuristics import (  # noqa: E402
 
 @dataclass
 class SkillInfo:
-    """A discovered skill (one SKILL.md). Defines a resolvable name."""
+    """A discovered skill (one SKILL.md). Defines a resolvable name.
+
+    `name` is directory-derived (see expected_name_from_path), not read from
+    frontmatter -- a skill whose frontmatter is absent or fails to parse
+    must still resolve refs, or every reference to it silently reports
+    broken instead of surfacing the real problem. `frontmatter_name` is kept
+    separately, solely as input to the name-mismatch criterion."""
     name: str
     path: Path
     source: str  # "project", "user", or "plugin:<plugin-id>"
+    frontmatter_name: str | None = None
 
 
 @dataclass
@@ -280,8 +287,22 @@ def discover_skills(
     """Find all SKILL.md files under every `.claude/skills` root reachable
     from `base_dir`. Returns one SkillInfo per discovered SKILL.md.
 
+    The resolvable name is directory-derived (expected_name_from_path), with
+    the frontmatter `name` (when present) kept only as `frontmatter_name` for
+    the name-mismatch criterion in analyze(). A skill is dropped only if
+    BOTH the directory-derived name and the frontmatter name are unusable --
+    previously a missing/misparsed frontmatter alone silently dropped an
+    otherwise-real skill, and every reference to it then reported as broken
+    instead of surfacing the real defect.
+
+    A self-check guards against silent drops going forward: the count of
+    SKILL.md files this function found is compared, from two independent
+    sources (the glob results vs. the SkillInfo records actually appended),
+    and a mismatch raises loudly naming the dropped paths.
+
     `expand=False` for the user dir (see find_project_skill_roots)."""
-    skills = []
+    skills: list[SkillInfo] = []
+    found_paths: list[Path] = []
     seen: set[Path] = set()
     for root in find_project_skill_roots(base_dir, expand=expand):
         for skill_file in sorted(
@@ -291,12 +312,27 @@ def discover_skills(
             if resolved in seen:
                 continue
             seen.add(resolved)
+            found_paths.append(resolved)
             text = skill_file.read_text(encoding="utf-8", errors="replace")
             fm = parse_frontmatter(text)
-            name = fm.get("name", "")
+            frontmatter_name = fm.get("name") or None
+            derived_name = expected_name_from_path(skill_file, root)
+            name = derived_name or frontmatter_name
             if not name:
                 continue
-            skills.append(SkillInfo(name=name, path=skill_file, source=source))
+            skills.append(SkillInfo(
+                name=name, path=skill_file, source=source,
+                frontmatter_name=frontmatter_name,
+            ))
+
+    produced_paths = {s.path.resolve() for s in skills}
+    if len(produced_paths) != len(found_paths):
+        dropped = [p for p in found_paths if p not in produced_paths]
+        raise RuntimeError(
+            f"discover_skills: found {len(found_paths)} SKILL.md file(s) "
+            f"under {base_dir} but only produced {len(skills)} SkillInfo "
+            f"record(s) -- dropped: {', '.join(_fwd(p) for p in dropped)}"
+        )
     return skills
 
 
@@ -568,6 +604,7 @@ def analyze(
     #    via skills_kit_lib.corpus); the pool, the skill-dir set, and the scan
     #    roots below all derive from it.
     plugin_entries = discover_plugin_entries(plugins_dir)
+    installed_plugin_names = {entry.name for entry in plugin_entries}
 
     # 1. Build the skill pool (always from SKILL.md files across all roots,
     #    regardless of scope, so refs resolve correctly).
@@ -620,6 +657,7 @@ def analyze(
         owner: str | None = None,
         source: str | None = None,
         kind: str | None = None,
+        searched_roots: list[str] | None = None,
     ) -> None:
         findings.append({
             "severity": severity,
@@ -631,7 +669,19 @@ def analyze(
             "owner": owner,
             "source": source,
             "kind": kind,
+            "searched_roots": searched_roots,
         })
+
+    # Roots actually searched to build the skill pool -- a finding can only
+    # claim a name "was not found here", never the stronger "does not
+    # exist": a checker cannot see skills hidden from its own roots (e.g. a
+    # plugin skill with `disable-model-invocation: true` that is real but
+    # absent from the session roster). Computed once and threaded into both
+    # "not found" messages below.
+    project_roots = find_project_skill_roots(project_dir) if project_dir else []
+    user_roots = find_user_skill_roots(user_dir) if user_dir else []
+    plugin_roots = [entry.install_path / "skills" for entry in plugin_entries]
+    searched_roots = sorted({_fwd(r) for r in project_roots + user_roots + plugin_roots})
 
     for src in sources:
         owner = src.skill_name or _fwd(src.path)
@@ -643,21 +693,33 @@ def analyze(
                 "ERROR", "hard-dep",
                 f"ERROR: {owner} ({src.source}, {src.kind}) at "
                 f"{file_str}:{line} has hard dep `skill: \"{dep}\"` "
-                f"but \"{dep}\" does not exist",
+                f"but \"{dep}\" was not found in the searched roots: "
+                f"{', '.join(searched_roots)}",
                 file=file_str, line=line, ref=dep,
                 owner=owner, source=src.source, kind=src.kind,
+                searched_roots=searched_roots,
             )
         for ref, line in src.soft_refs:
             bare = ref.split(":", 1)[-1] if ":" in ref else ref
             if ref in all_names or bare in src.allow_stale or ref in src.allow_stale:
                 continue
+            if ":" in ref:
+                head = ref.split(":", 1)[0]
+                if head not in installed_plugin_names:
+                    # Prefixed ref naming a plugin that is not installed in
+                    # this session -- cannot tell if it's broken or just
+                    # unavailable here, so it is not reported at all (never
+                    # silently classified as a deletable dead reference).
+                    continue
             add_finding(
                 "WARNING", "soft-ref",
                 f"WARNING: {owner} ({src.source}, {src.kind}) at "
                 f"{file_str}:{line} references `/{ref}` but "
-                f"\"{ref}\" does not exist",
+                f"\"{ref}\" was not found in the searched roots: "
+                f"{', '.join(searched_roots)}",
                 file=file_str, line=line, ref=ref,
                 owner=owner, source=src.source, kind=src.kind,
+                searched_roots=searched_roots,
             )
 
     # Shadowed skills (user overrides project) -- skill-pool issue, scope-independent
@@ -671,9 +733,8 @@ def analyze(
             )
 
     # Name/directory mismatch on the skill identities (project/user only;
-    # plugin install paths are version-pinned cache dirs).
-    project_roots = find_project_skill_roots(project_dir) if project_dir else []
-    user_roots = find_user_skill_roots(user_dir) if user_dir else []
+    # plugin install paths are version-pinned cache dirs). Reuses the
+    # project_roots/user_roots computed above for searched_roots.
     for s in all_skills:
         if s.source.startswith("plugin:"):
             continue
@@ -687,12 +748,17 @@ def analyze(
             expected = expected_name_from_path(s.path, base)
             if expected is not None:
                 break
-        if expected is not None and expected != s.name:
+        if (
+            expected is not None
+            and s.frontmatter_name is not None
+            and expected != s.frontmatter_name
+        ):
             add_finding(
                 "WARNING", "name-mismatch",
-                f"WARNING: {s.name} ({s.source}) -- directory "
-                f'suggests "{expected}" but frontmatter says "{s.name}"',
-                file=_fwd(s.path), owner=s.name, source=s.source,
+                f"WARNING: {s.frontmatter_name} ({s.source}) -- directory "
+                f'suggests "{expected}" but frontmatter says '
+                f'"{s.frontmatter_name}"',
+                file=_fwd(s.path), owner=s.frontmatter_name, source=s.source,
                 ref=expected, kind="skill",
             )
 

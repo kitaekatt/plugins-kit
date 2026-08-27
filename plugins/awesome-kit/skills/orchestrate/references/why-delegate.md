@@ -17,19 +17,19 @@ the machine's own dispatch options and their mechanics.
 
 ```yaml
 anti_patterns:
-  - id: top_tier_everywhere
-    name: Top-tier agents by default
+  - id: premium_model_everywhere
+    name: Premium models by default
     keywords: [fable default, model overkill, expensive fan-out]
     why_it_seems_right: The best model should give the best results on every unit.
-    why_it_is_wrong: Most delegated units are workhorse-shaped; top-tier agents spend the premium pool on work that doesn't need it.
-    alternative: Take the default tier from the rendered policy and escalate per unit against its stated criteria.
+    why_it_is_wrong: Most delegated units are routine-shaped; premium models spend the premium pool on work that does not need it.
+    alternative: Take the default model from the rendered routing policy and escalate per unit against its stated shape.
   - id: remembered_policy
     name: Choosing models and backends from memory
-    keywords: [skipped the script, hardcoded tier table, stale model names, assumed agent tool, ignored override]
-    why_it_seems_right: The tier lineup and dispatch mechanics feel like stable background knowledge, so running a script to restate them looks like ceremony.
+    keywords: [skipped the script, hardcoded model table, stale model names, assumed agent tool, ignored override]
+    why_it_seems_right: The model lineup and dispatch mechanics feel like stable background knowledge, so running a script to restate them looks like ceremony.
     why_it_is_wrong: >-
-      The policy is per-user and per-machine: a user may have retargeted tiers, added a
-      backend this skill has never heard of, disabled one, or marked a tier unavailable
+      The policy is per-user and per-machine: a user may have retargeted models, added a
+      backend this skill has never heard of, or disabled one
       because its usage is spent. Answering from memory silently ignores every one of
       those and produces confident dispatch to something that is wrong or gone.
     alternative: Run the policy script before decomposing; it is deterministic and sub-second.

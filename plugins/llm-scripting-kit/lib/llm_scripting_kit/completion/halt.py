@@ -101,6 +101,33 @@ _CODEX_AUTH_MARKERS = (
 _CODEX_CHANNEL_ATTRS = ("stderr", "stdout")
 
 
+# OpenCode failure vocabulary, and the CHANNEL RULE that makes scanning safe.
+#
+# OpenCode passes the PROVIDER's error body through on stderr rather than
+# emitting an envelope of its own, so _AUTH_MARKERS / _RATE_LIMIT_MARKERS above
+# do most of the work for any provider that emits the standard shapes. These
+# are the additions observed from providers that do not.
+#
+# PROVENANCE: "user not found" was READ OFF A REAL RUN (opencode 1.18.23,
+# 2026-08-26) -- an OpenRouter provider with a deliberately invalid key exited 1
+# with empty stdout and stderr `Error: User not found.`. Unlike the codex
+# markers below-of-it, this is observed rather than guessed. It is also
+# PROVIDER text, not OpenCode structure, so it generalises to OpenRouter and
+# not necessarily to another provider; add observed strings as they are
+# captured rather than inventing variants.
+_OPENCODE_AUTH_MARKERS = ("user not found",)
+
+# Scan STDERR ONLY -- never stdout. This is the bargain that lets OpenCode
+# classify halts at all, and it rests on a probe rather than an assumption:
+# asked to reply with the literal text "BANANA rate limit exceeded insufficient
+# credit", the model's words arrived on STDOUT while stderr held 33 bytes of
+# OpenCode's own `> build - <model>` framing (opencode 1.18.23, 2026-08-26).
+# So stdout is model-authored and forgeable; stderr is transport-authored.
+# Adding "stdout" here would let a healthy run that merely DISCUSSES a rate
+# limit abort the caller's whole run.
+_OPENCODE_CHANNEL_ATTRS = ("stderr",)
+
+
 def classify_halt_text(text: str) -> Optional[str]:
     """Map a provider text channel (error body / stderr) to a halt kind.
 
@@ -237,6 +264,50 @@ def classify_codex_exception(exc: BaseException) -> Optional[str]:
     return None
 
 
+def classify_opencode_exception(exc: BaseException) -> Optional[str]:
+    """Map an OpenCode failure to a halt kind, scanning stderr but never stdout.
+
+    The message alone is NOT enough, and treating it as enough is a real defect
+    rather than a conservative default -- the same one
+    :func:`classify_codex_exception` documents. ``OpencodeRunError``
+    deliberately keeps the transcript off its message (model-authored text
+    there would let a healthy run forge a halt), so the message is only ever
+    the transport's own ``opencode run failed (exit N)``, which carries no halt
+    vocabulary by construction. Classifying on ``str(exc)`` alone therefore
+    misses EVERY true halt: a permanent auth failure reads as transient and a
+    bulk run retries against a wall forever.
+
+    So the carried STDERR channel is scanned as well, via
+    :data:`_OPENCODE_CHANNEL_ATTRS` -- and stdout is not. That asymmetry is the
+    whole design and it is probe-backed, not assumed: OpenCode puts the model's
+    words on stdout and its own framing on stderr, so stdout is forgeable and
+    stderr is not. See the comment on those constants for the two runs.
+
+    A timeout stays a TRANSPORT failure here rather than a halt, unlike the
+    codex sibling: under the OpenCode dispatch rule an unreachable server hangs
+    rather than exiting, so the timeout IS the transport error, not a
+    CLI-layer backoff. Checking its type first also keeps that true when an
+    injected runner supplies a message containing halt vocabulary.
+    """
+    if isinstance(exc, AgentTimeoutError):
+        return None
+    reason = classify_halt_text(str(exc))
+    if reason is not None:
+        return reason
+    for attr in _OPENCODE_CHANNEL_ATTRS:
+        channel = getattr(exc, attr, None)
+        if not isinstance(channel, str) or not channel:
+            continue
+        reason = classify_halt_text(channel)
+        if reason is not None:
+            return reason
+        lowered = channel.lower()
+        for marker in _OPENCODE_AUTH_MARKERS:
+            if marker in lowered:
+                return HALT_AUTH
+    return None
+
+
 __all__ = [
     "HALT_AUTH",
     "HALT_RATE_LIMIT",
@@ -247,4 +318,5 @@ __all__ = [
     "classify_claude_exception",
     "classify_codex_text",
     "classify_codex_exception",
+    "classify_opencode_exception",
 ]

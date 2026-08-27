@@ -32,6 +32,20 @@ models:
     key_env: BETA_API_KEY
 """
 
+MIXED_YAML = """\
+version: 1
+default: alpha
+models:
+  alpha:
+    base_url: http://alpha.invalid/v1
+    model: alpha-1
+  sol:
+    harness: codex
+    model: gpt-5.6-sol
+    effort: high
+    name: Sol
+"""
+
 
 @pytest.fixture
 def fake_home(tmp_path, monkeypatch):
@@ -150,37 +164,76 @@ class TestSchema:
             load_endpoint_registry()
         assert "no 'models' map" in str(exc.value)
 
-    def test_entry_without_base_url_raises_naming_the_entry(self, fake_home):
-        _write_convention(fake_home, "models:\n  alpha:\n    model: alpha-27b\n")
-        with pytest.raises(EndpointRegistryError) as exc:
-            load_endpoint_registry()
-        assert "alpha" in str(exc.value)
-        assert "base_url" in str(exc.value)
+    def test_mixed_transport_and_harness_entries_load(self, fake_home):
+        _write_convention(fake_home, MIXED_YAML)
+        reg = load_endpoint_registry()
 
-    def test_entry_without_model_raises_naming_the_entry(self, fake_home):
+        assert reg.entries["alpha"].kind == "transport"
+        assert reg.entries["alpha"].base_url == "http://alpha.invalid/v1"
+        sol = reg.entries["sol"]
+        assert sol.kind == "harness"
+        assert sol.base_url is None
+        assert sol.harness == "codex"
+        assert sol.model == "gpt-5.6-sol"
+        assert sol.effort == "high"
+        assert sol.name == "Sol"
+
+    def test_unknown_kind_is_skipped_and_noted(self, fake_home):
+        _write_convention(
+            fake_home,
+            "models:\n"
+            "  alpha:\n"
+            "    base_url: http://alpha.invalid/v1\n"
+            "    model: alpha-27b\n"
+            "  sol:\n"
+            "    harness: codex\n"
+            "    model: gpt-5.6-sol\n"
+            "  mystery:\n"
+            "    model: mystery-1\n",
+        )
+        reg = load_endpoint_registry()
+        assert sorted(reg.entries) == ["alpha", "sol"]
+        assert len(reg.notes) == 1
+        assert "mystery" in reg.notes[0]
+        assert "unknown kind" in reg.notes[0]
+
+    def test_both_addresses_are_skipped_and_conflict_is_noted(self, fake_home):
+        _write_convention(
+            fake_home,
+            "models:\n  alpha:\n    base_url: http://a.invalid/v1\n"
+            "    harness: codex\n    model: alpha-27b\n",
+        )
+        reg = load_endpoint_registry()
+        assert reg.entries == {}
+        assert "alpha" in reg.notes[0]
+        assert "both 'base_url' and 'harness'" in reg.notes[0]
+
+    def test_transport_entry_without_model_is_skipped_and_noted(self, fake_home):
         _write_convention(
             fake_home, "models:\n  alpha:\n    base_url: http://a.invalid/v1\n"
         )
-        with pytest.raises(EndpointRegistryError) as exc:
-            load_endpoint_registry()
-        assert "alpha" in str(exc.value)
-        assert "'model'" in str(exc.value)
+        reg = load_endpoint_registry()
+        assert reg.entries == {}
+        assert "alpha" in reg.notes[0]
+        assert "'model'" in reg.notes[0]
 
-    def test_entry_that_is_not_a_mapping_raises(self, fake_home):
+    def test_entry_that_is_not_a_mapping_is_skipped_and_noted(self, fake_home):
         _write_convention(fake_home, "models:\n  alpha: http://a.invalid/v1\n")
-        with pytest.raises(EndpointRegistryError) as exc:
-            load_endpoint_registry()
-        assert "not a mapping" in str(exc.value)
+        reg = load_endpoint_registry()
+        assert reg.entries == {}
+        assert "alpha" in reg.notes[0]
+        assert "not a mapping" in reg.notes[0]
 
-    def test_non_integer_context_window_raises(self, fake_home):
+    def test_non_integer_context_window_is_skipped_and_noted(self, fake_home):
         _write_convention(
             fake_home,
             "models:\n  alpha:\n    base_url: http://a.invalid/v1\n"
             "    model: a-1\n    context_window: lots\n",
         )
-        with pytest.raises(EndpointRegistryError) as exc:
-            load_endpoint_registry()
-        assert "context_window" in str(exc.value)
+        reg = load_endpoint_registry()
+        assert reg.entries == {}
+        assert "alpha" in reg.notes[0]
+        assert "context_window" in reg.notes[0]
 
     def test_default_naming_no_entry_raises(self, fake_home):
         _write_convention(
@@ -192,6 +245,38 @@ class TestSchema:
             load_endpoint_registry()
         assert "missing" in str(exc.value)
         assert "alpha" in str(exc.value)
+
+    def test_default_naming_skipped_entry_reports_the_skip_not_absence(self, fake_home):
+        # The entry IS in the file; it was skipped. Saying "names no entry"
+        # would be false and would send the reader to the `default:` line
+        # instead of the defective entry, so the raise carries the skip note.
+        _write_convention(
+            fake_home,
+            "default: mystery\nmodels:\n  mystery:\n"
+            "    model: mystery-1\n  alpha:\n"
+            "    base_url: http://a.invalid/v1\n    model: a-1\n",
+        )
+        with pytest.raises(EndpointRegistryError) as exc:
+            load_endpoint_registry()
+        message = str(exc.value)
+        assert "mystery" in message
+        assert "could not be loaded" in message
+        assert "unknown kind" in message
+        assert "names no entry" not in message
+
+    def test_default_naming_an_absent_id_still_says_names_no_entry(self, fake_home):
+        # The other half of the same branch: a `default:` typo names nothing in
+        # the file, and there the original wording is the accurate one.
+        _write_convention(
+            fake_home,
+            "default: nosuch\nmodels:\n  alpha:\n"
+            "    base_url: http://a.invalid/v1\n    model: a-1\n",
+        )
+        with pytest.raises(EndpointRegistryError) as exc:
+            load_endpoint_registry()
+        message = str(exc.value)
+        assert "names no entry" in message
+        assert "alpha" in message
 
     def test_no_default_is_allowed(self, fake_home):
         _write_convention(
@@ -209,6 +294,15 @@ class TestResolveRegistryEntry:
     def test_explicit_id_resolves_that_entry(self, fake_home):
         _write_convention(fake_home, VALID_YAML)
         assert resolve_registry_entry("beta").model == "beta-9b"
+
+    def test_default_harness_entry_is_refused_by_transport_resolution(self, fake_home):
+        _write_convention(fake_home, MIXED_YAML.replace("default: alpha", "default: sol"))
+        with pytest.raises(EndpointRegistryError) as exc:
+            resolve_registry_entry(None)
+        msg = str(exc.value)
+        assert "sol" in msg
+        assert "harness" in msg
+        assert "codex" in msg
 
     def test_unknown_id_lists_the_known_ids(self, fake_home):
         _write_convention(fake_home, VALID_YAML)
