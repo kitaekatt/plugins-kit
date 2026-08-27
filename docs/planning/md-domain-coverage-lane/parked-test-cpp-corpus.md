@@ -2,7 +2,7 @@
 
 Owner-designed 2026-08-13, set up, PARKED UNRUN on usage limits. This is the
 task's next action. Everything needed to resume without re-deriving the design
-or re-doing the recon is here; `dev/tasks/md-domain-review-enablement/plan.md`
+or re-doing the recon is here; `dev/tasks/better-md-review/plan.md`
 carries only the pointer.
 
 **THE QUESTION IT ANSWERS, in the owner's words:** run the workflow over a

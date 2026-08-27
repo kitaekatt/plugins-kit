@@ -518,7 +518,7 @@ heuristic and keeps the test.
 
 The 13 candidates routing to `godot/` (G3) were the case Option B was proposed
 to rescue. Measured against the corpus reports in
-`dev/tasks/md-domain-review-enablement/reports-json/`, those 13 candidates are
+`dev/tasks/better-md-review/reports-json/`, those 13 candidates are
 **12 distinct facts**, and they distribute like this:
 
 | Class | Facts | What Option C does with them |
