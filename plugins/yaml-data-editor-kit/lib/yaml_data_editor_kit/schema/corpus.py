@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field as dataclass_field
 import fnmatch
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -116,25 +117,34 @@ def _file_per_record_matches(pattern: str, path: str) -> bool:
     """Whether the glob ``pattern`` (as passed to ``Path.glob``) would match
     literal file ``path``, without touching the filesystem.
 
-    Matches ``pathlib.Path.glob`` semantics for the patterns this dialect
-    actually uses: each ``/``-separated segment matches independently, so a
-    bare ``*`` does not cross a directory boundary -- which is why this is
-    not a single ``fnmatch`` over the whole string (that would let
-    ``content/*.yaml`` wrongly match ``content/sub/manifest.yaml``). A
-    recursive ``**`` segment is rare in this corpus and not worth
-    replicating exactly; it falls back to a conservative single-``*``
-    translation rather than silently failing to match.
+    Each ``/``-separated segment matches independently, so a bare ``*`` does
+    not cross a directory boundary -- which is why this is not a single
+    ``fnmatch`` over the whole string (that would let ``content/*.yaml``
+    wrongly match ``content/sub/manifest.yaml``). A complete ``**`` segment
+    matches zero or more path segments, mirroring the recursive part of
+    ``Path.glob`` that matters when deciding whether a source claims this
+    concrete file.
     """
     pattern_segments = pattern.split("/")
     path_segments = path.split("/")
-    if "**" in pattern_segments:
-        return fnmatch.fnmatch(path, pattern.replace("**/", "").replace("**", "*"))
-    if len(pattern_segments) != len(path_segments):
-        return False
-    return all(
-        fnmatch.fnmatch(path_segment, pattern_segment)
-        for path_segment, pattern_segment in zip(path_segments, pattern_segments)
-    )
+
+    @lru_cache(maxsize=None)
+    def matches(pattern_index: int, path_index: int) -> bool:
+        if pattern_index == len(pattern_segments):
+            return path_index == len(path_segments)
+        pattern_segment = pattern_segments[pattern_index]
+        if pattern_segment == "**":
+            return matches(pattern_index + 1, path_index) or (
+                path_index < len(path_segments)
+                and matches(pattern_index, path_index + 1)
+            )
+        return (
+            path_index < len(path_segments)
+            and fnmatch.fnmatch(path_segments[path_index], pattern_segment)
+            and matches(pattern_index + 1, path_index + 1)
+        )
+
+    return matches(0, 0)
 
 
 def _precompute_single_claims(

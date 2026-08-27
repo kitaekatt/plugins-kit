@@ -648,6 +648,145 @@ slogan: together
     assert len(coexistence) == 1
 
 
+def test_recursive_file_per_record_glob_expanding_to_nested_single_path_refuses(
+    tmp_path, profile_dir, write
+) -> None:
+    """M18: ``**`` must span the real intermediate directory instead of
+    being erased and compared as though the file lived directly in
+    ``content/``. This is the reproduced double-load shape: the recursive
+    glob genuinely loads the nested file, so it must also trigger the
+    whole-document coexistence refusal for that same concrete file."""
+    write(
+        "profile/manifest.yaml",
+        MANIFEST_TYPE.replace(
+            "path: content/manifest.yaml", "path: content/sub/manifest.yaml"
+        ),
+    )
+    write(
+        "profile/family.yaml",
+        """
+dialect: type/1
+id: family
+identified_by: id
+fields:
+  id:   { type: id }
+  name: { type: string }
+---
+dialect: source/1
+of: family
+layout: file_per_record
+path: content/**/manifest.yaml
+""",
+    )
+    write(
+        "content/sub/manifest.yaml",
+        """
+id: manifest
+name: Shared document
+seed: 7
+motto: onward
+slogan: together
+""",
+    )
+    profile = load_profile(profile_dir)
+
+    corpus = load_corpus(profile, tmp_path)
+    coexistence = [
+        problem
+        for problem in errors_only(corpus.diagnostics)
+        if "shares this file with a 'file_per_record'" in problem.message
+    ]
+
+    assert len(coexistence) == 1
+    assert coexistence[0].file == "content/sub/manifest.yaml"
+    assert [record.file for record in corpus.of_type("manifest")] == [
+        "content/sub/manifest.yaml"
+    ]
+    assert [record.file for record in corpus.of_type("family")] == [
+        "content/sub/manifest.yaml"
+    ]
+
+
+def test_recursive_file_per_record_glob_can_span_zero_directories(
+    tmp_path, profile_dir, write
+) -> None:
+    """Boundary pin for recursive matching: ``**`` includes zero directory
+    segments, so the direct child is claimed just like a nested child."""
+    write("profile/manifest.yaml", MANIFEST_TYPE)
+    write(
+        "profile/family.yaml",
+        """
+dialect: type/1
+id: family
+identified_by: id
+fields:
+  id:   { type: id }
+  name: { type: string }
+---
+dialect: source/1
+of: family
+layout: file_per_record
+path: content/**/manifest.yaml
+""",
+    )
+    write(
+        "content/manifest.yaml",
+        "id: manifest\nname: Shared document\nseed: 7\nmotto: onward\nslogan: together\n",
+    )
+    profile = load_profile(profile_dir)
+
+    coexistence = [
+        problem
+        for problem in errors_only(load_corpus(profile, tmp_path).diagnostics)
+        if "shares this file with a 'file_per_record'" in problem.message
+    ]
+
+    assert len(coexistence) == 1
+    assert coexistence[0].file == "content/manifest.yaml"
+
+
+def test_recursive_file_per_record_glob_with_a_different_filename_is_not_a_sibling(
+    tmp_path, profile_dir, write
+) -> None:
+    """Near-twin for M18: ``**`` is recursive, but it must not turn a
+    different terminal filename into a claim on the single source's file."""
+    write(
+        "profile/manifest.yaml",
+        MANIFEST_TYPE.replace(
+            "path: content/manifest.yaml", "path: content/sub/manifest.yaml"
+        ),
+    )
+    write(
+        "profile/family.yaml",
+        """
+dialect: type/1
+id: family
+identified_by: id
+fields:
+  id:   { type: id }
+  name: { type: string }
+---
+dialect: source/1
+of: family
+layout: file_per_record
+path: content/**/family.yaml
+""",
+    )
+    write(
+        "content/sub/manifest.yaml",
+        "seed: 7\nmotto: onward\nslogan: together\n",
+    )
+    profile = load_profile(profile_dir)
+
+    problems = errors_only(load_corpus(profile, tmp_path).diagnostics)
+
+    assert [
+        problem
+        for problem in problems
+        if "shares this file with a 'file_per_record'" in problem.message
+    ] == []
+
+
 def test_file_per_record_glob_that_does_not_expand_to_the_path_is_not_a_sibling(
     tmp_path, profile_dir, write
 ) -> None:
@@ -823,6 +962,28 @@ def test_an_address_into_an_excluded_key_raises_naming_the_claiming_source(
     assert len(resolved.points) == 1
 
 
+def test_an_undeclared_excluded_key_names_its_claiming_source_and_working_address(
+    tmp_path, profile_dir, write
+) -> None:
+    """The normal D-7 shape does not repeat the claimed key as a placeholder
+    field on the ``single`` type. Ownership is still known from
+    ``excluded_keys``, so that actionable refusal must win over the generic
+    unknown-field error."""
+    _write_manifest_and_family(write)
+    profile = load_profile(profile_dir)
+    corpus = load_corpus(profile, tmp_path)
+
+    with pytest.raises(EvaluationError) as exc_info:
+        evaluate(parse_selector("manifest/@doc/families"), profile, corpus)
+
+    message = str(exc_info.value)
+    assert "'rows' source for type 'family' claims it" in message
+    assert "fields of type 'manifest'" not in message
+    suggested = re.search(r"address it as '([^']+)'", message).group(1)
+    assert suggested == "family/alpha"
+    assert len(evaluate(parse_selector(suggested), profile, corpus).points) == 1
+
+
 def test_the_excluded_field_error_names_the_source_when_the_type_has_no_identity(
     tmp_path, profile_dir, write
 ) -> None:
@@ -982,6 +1143,24 @@ def test_a_predicate_over_an_excluded_required_field_raises_not_a_false_data_err
     assert "excludes it" in message
     assert "'rows' source for type 'family'" in message
     assert "has no value at required predicate field" not in message
+
+
+def test_a_predicate_over_an_undeclared_excluded_key_names_the_claiming_source(
+    tmp_path, profile_dir, write
+) -> None:
+    """Predicate near-twin of the plain field walk: the excluded ownership
+    check must precede the predicate's type-wide unknown-field rejection."""
+    _write_manifest_and_family(write)
+    profile = load_profile(profile_dir)
+    corpus = load_corpus(profile, tmp_path)
+
+    with pytest.raises(EvaluationError) as exc_info:
+        evaluate(parse_selector("manifest/[families has alpha]/seed"), profile, corpus)
+
+    message = str(exc_info.value)
+    assert "'rows' source for type 'family' claims it" in message
+    assert "does not resolve against the fields" not in message
+    assert "address it as 'family/alpha'" in message
 
 
 def test_a_predicate_over_an_excluded_optional_field_raises_not_a_silent_skip(

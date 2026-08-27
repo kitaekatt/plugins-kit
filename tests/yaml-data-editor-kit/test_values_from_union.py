@@ -617,7 +617,9 @@ def test_address_rejects_a_key_from_no_member_path(tmp_path, profile_dir, write)
     profile, corpus = _addressing_corpus(tmp_path, profile_dir, write)
     with pytest.raises(EvaluationError) as exc_info:
         evaluate(parse_selector('dish/d1/ratios.charcoal'), profile, corpus)
-    assert 'declared' in str(exc_info.value)
+    message = str(exc_info.value)
+    assert 'declared' in message
+    assert "(union of 'ingredient.id', 'batch.extra', 'tag.id')" in message
 
 
 def test_address_rejects_a_predicate_value_outside_every_member_path(
@@ -656,7 +658,34 @@ path: content/picks.yaml
 
     with pytest.raises(EvaluationError) as exc_info:
         evaluate(parse_selector('pick/[choice=charcoal]'), profile, corpus)
-    assert 'outside the declared' in str(exc_info.value)
+    message = str(exc_info.value)
+    assert 'outside the declared' in message
+    assert "(union of 'ingredient.id', 'batch.extra', 'tag.id')" in message
+
+
+def test_check_path_key_steps_rejection_names_its_union_member_paths(
+    tmp_path, profile_dir, write
+) -> None:
+    """M9: this is corpus.py's static declared-path diagnostic, separate
+    from validate.py's record validation and address.py's selector errors."""
+    profile_text = UNION_VIEW_PROFILE.replace('ratios.pepper', 'ratios.charcoal')
+    write('profile/types.yaml', profile_text)
+    write('content/ingredients.yaml', '- { id: salt }\n- { id: sugar }\n- { id: flour }\n')
+    write('content/batches.yaml', '- { id: sweet, extra: [pepper] }\n')
+    write('content/tags.yaml', '- { id: vegan }\n')
+    write('content/dishes.yaml', '- { id: d1, ratios: { salt: 0.5 } }\n')
+    profile = load_profile(profile_dir)
+
+    problems = [
+        diagnostic
+        for diagnostic in load_corpus(profile, tmp_path).diagnostics
+        if diagnostic.field == 'ratios.charcoal'
+    ]
+
+    assert len(problems) == 1
+    assert "declared set (union of 'ingredient.id', 'batch.extra', 'tag.id')" in (
+        problems[0].message
+    )
 
 
 # --------------------------------------------------------------------------

@@ -786,9 +786,11 @@ generated_by: tools/generate_catalog.py
   required-field check, because the record makes no claim about a key it
   never carried. That key's data is validated entirely through the source
   that claims it. A comment anchor addressed at an excluded key is refused
-  the same way, not resolved to an absent value: it names the source that
-  claims the key and the working address to use instead, because resolving
-  quietly to absent would make a stale anchor look permanently valid.
+  the same way, not resolved to an absent value or treated as merely unknown:
+  whether or not the `single` type also declares a field of that name, the
+  refusal names the source that claims the key and the working address to use
+  instead, because resolving quietly to absent would make a stale anchor look
+  permanently valid.
 
   Coexistence works only when the other source's claim is a well-defined
   PROPER SUBSET of the document. Four things instead claim the WHOLE
@@ -799,9 +801,10 @@ generated_by: tools/generate_catalog.py
   leaving no third region for `single`); a `file_per_record` source whose
   `path:` glob MATCHES this file -- by literally naming it or by expanding
   to it (`content/*.yaml` matches `content/manifest.yaml` exactly as surely
-  as a pattern spelling it out) -- reads every matched file as one whole
-  record, so either form claims this file whole; and a second `single`
-  source (by definition, the whole document again).
+  as a pattern spelling it out), including a recursive `**` segment spanning
+  zero or more directories -- reads every matched file as one whole record,
+  so every matching form claims this file whole; and a second `single` source
+  (by definition, the whole document again).
 
   Two `rows` sources both naming the same `key:` on a path a `single`
   source ALSO occupies is the same "one key, two owners" problem restated

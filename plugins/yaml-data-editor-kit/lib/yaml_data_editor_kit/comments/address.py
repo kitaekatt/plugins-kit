@@ -590,6 +590,11 @@ def _predicate_records(
     possible_fields = type_spec.every_possible_field()
     possible_spec = possible_fields.get(predicate.field)
     if possible_spec is None:
+        for record in records:
+            if predicate.field in record.excluded_keys:
+                _raise_excluded_first_field(
+                    selector, profile, corpus, type_spec, record, predicate.field
+                )
         raise EvaluationError(
             'selector {!r}: predicate field {!r} does not resolve against the fields '
             'of type {!r}; fields: {}'.format(
@@ -603,6 +608,10 @@ def _predicate_records(
 
     matched: list[Record] = []
     for record in records:
+        if predicate.field in record.excluded_keys:
+            _raise_excluded_first_field(
+                selector, profile, corpus, type_spec, record, predicate.field
+            )
         fields = _predicate_fields(type_spec, record)
         field_spec = fields.get(predicate.field)
         if field_spec is None:
@@ -617,10 +626,6 @@ def _predicate_records(
                     record.file,
                     predicate.field,
                 )
-            )
-        if predicate.field in record.excluded_keys:
-            _raise_excluded_first_field(
-                selector, profile, corpus, type_spec, record, predicate.field
             )
         if predicate.field not in record.data or record.data[predicate.field] is None:
             if field_spec.required:
@@ -1077,7 +1082,9 @@ def _resolve_field_paths(
 ) -> list[tuple[str, ...]]:
     if not selector.field_path:
         return [()]
-    if _set_selector_omits_variant_field(selector, type_spec, record):
+    if _set_selector_omits_variant_field(
+        selector, type_spec, record, profile, corpus
+    ):
         return []
     if any(segment is STAR for segment in selector.field_path):
         return _expand_field_paths(selector, type_spec, record, profile, corpus)
@@ -1087,7 +1094,11 @@ def _resolve_field_paths(
 
 
 def _set_selector_omits_variant_field(
-    selector: Selector, type_spec: TypeSpec, record: Record
+    selector: Selector,
+    type_spec: TypeSpec,
+    record: Record,
+    profile: Profile,
+    corpus: Corpus,
 ) -> bool:
     if selector.record_seg is not STAR and not isinstance(
         selector.record_seg, Predicate
@@ -1098,6 +1109,10 @@ def _set_selector_omits_variant_field(
     first = selector.field_path[0]
     if first is STAR:
         return False
+    if str(first) in record.excluded_keys:
+        _raise_excluded_first_field(
+            selector, profile, corpus, type_spec, record, str(first)
+        )
     possible = type_spec.every_possible_field()
     if first not in possible:
         _raise_unknown_first_field(
@@ -1198,12 +1213,12 @@ def _expand_field_paths(
             'declared map'.format(selector.text)
         )
     field_spec = fields.get(first)
+    if str(first) in record.excluded_keys:
+        _raise_excluded_first_field(selector, profile, corpus, type_spec, record, str(first))
     if field_spec is None:
         _raise_unknown_first_field(
             selector, type_spec, record, fields, str(first)
         )
-    if str(first) in record.excluded_keys:
-        _raise_excluded_first_field(selector, profile, corpus, type_spec, record, str(first))
     value = (
         record.data.get(first, ABSENT)
         if isinstance(record.data, dict)
@@ -1354,10 +1369,10 @@ def _walk_named_fields(
 ) -> Any:
     first = path[0]
     field_spec = fields.get(first)
-    if field_spec is None:
-        _raise_unknown_first_field(selector, type_spec, record, fields, first)
     if first in record.excluded_keys:
         _raise_excluded_first_field(selector, profile, corpus, type_spec, record, first)
+    if field_spec is None:
+        _raise_unknown_first_field(selector, type_spec, record, fields, first)
     value = record.data.get(first, ABSENT) if isinstance(record.data, dict) else ABSENT
     return _walk_field_tail(
         selector,
@@ -1491,11 +1506,11 @@ def _raise_excluded_first_field(
     record: Record,
     segment: str,
 ) -> NoReturn:
-    '''A declared field whose key a DIFFERENT source claims -- see D-7: a
-    'single' record never carries a key another source owns, so resolving it
-    to ABSENT here would be silent, not just wrong. Names the claiming
-    source and a working replacement address instead of letting the walk
-    continue into a value that was never there.
+    '''A key a DIFFERENT source claims -- see D-7: a 'single' record never
+    carries a key another source owns, so resolving it to ABSENT or rejecting
+    it as merely unknown would hide the useful ownership information. Names
+    the claiming source and a working replacement address instead of letting
+    the walk continue into a value that was never there.
 
     The replacement address must actually RESOLVE, not merely look like an
     address -- an unresolvable suggestion ('<id>' as a literal placeholder,
@@ -1524,14 +1539,13 @@ def _raise_excluded_first_field(
     else:
         example = "the '{}' source's own records, once any are loaded".format(other.of)
     raise EvaluationError(
-        'selector {!r}: {!r} is declared on type {!r}, but the {!r} source '
-        'for {!r} excludes it -- a {!r} source for type {!r} claims it '
-        'instead; address it as {!r}'.format(
+        'selector {!r}: {!r} cannot be addressed through type {!r}: the {!r} '
+        'source for that type excludes it because a {!r} source for type {!r} '
+        'claims it instead; address it as {!r}'.format(
             selector.text,
             segment,
             type_spec.id,
             record.source.layout,
-            type_spec.id,
             other.layout,
             other.of,
             example,
