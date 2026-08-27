@@ -147,6 +147,39 @@ lexicon:
   kind: skill
   render: bare
   test: Will you parse the result rather than read it?
+# The three terms below ship WITHOUT a routing row, which is the norm here rather
+# than an omission -- inference, condensation, bulk-output, schema, abortable,
+# conversational, plan-checkpoint and authored-here are all rowless too, working
+# through the shape, agent_types and effort prose instead. They exist so a policy
+# layer that adds a slow, cheap, or unconfined lane has vocabulary to route on:
+# a routing row may only name live `kind: skill` terms, and a user layer's
+# `routing` list replaces this one in full, so the terms must exist here first.
+- id: rule-applying
+  kind: skill
+  render: glossed
+  test: Does it apply a stated rule, rather than decide which rule applies?
+  gloss: applies a stated rule rather than deciding which rule applies
+- id: latency-tolerant
+  kind: skill
+  render: glossed
+  test: >-
+    Would anything -- a downstream unit, or the user reading the answer -- start sooner if
+    this unit finished sooner?
+  gloss: nothing starts sooner if it finishes sooner
+# Scoped to effects a checkout cannot undo, NOT to "writes files". Implementation
+# is write-work, so a writes-anything term would divert every implementation unit
+# away from a cheap lane. Note what this term does NOT buy: a delegated unit
+# cannot put a question to the user and wait for an answer -- it can only end
+# with the work not done and a question in its report, which the orchestrator
+# relays. So no routing row can arrange for an irreversible action to be
+# confirmed first. This term marks such a dispatch; it does not gate one.
+- id: mutating
+  kind: skill
+  render: glossed
+  test: >-
+    Would any effect of this unit survive a git checkout -- a push, a deploy, a service
+    call, state outside the tree?
+  gloss: takes effects no sandbox confines and no checkout reverts
 
 # ---------------------------------------------------------------------------
 # Shape the unit

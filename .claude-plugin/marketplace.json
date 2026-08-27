@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Render your installed marketplaces, plugins, and skills as a clickable HTML poster; plus file-backed task tracking.",
-      "version": "0.38.0",
+      "version": "0.39.0",
       "author": {
         "name": "Christina"
       },
