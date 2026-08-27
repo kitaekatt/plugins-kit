@@ -566,16 +566,16 @@ Hand-editing any file in this table is forbidden.
 pre-edit tree:
 
 ```
-mkdir -p dev/tasks/better-md-review/baseline
+mkdir -p dev/tasks/md-domain-review-enablement/baseline
 uv run --extra dev pytest tests/skills-kit/ tests/bootstrap/code_review/ \
     tests/git-kit/ tests/p4-kit/ tests/repo-scripts/ \
     -q -p no:randomly \
-    > dev/tasks/better-md-review/baseline/pytest-before.txt 2>&1 || true
+    > dev/tasks/md-domain-review-enablement/baseline/pytest-before.txt 2>&1 || true
 uv run --extra dev pytest tests/skills-kit/ tests/bootstrap/code_review/ \
     tests/git-kit/ tests/p4-kit/ tests/repo-scripts/ \
     -q -p no:randomly --tb=no -rf \
     | grep '^FAILED' | sort \
-    > dev/tasks/better-md-review/baseline/failures-before.txt || true
+    > dev/tasks/md-domain-review-enablement/baseline/failures-before.txt || true
 ```
 
 The tree is SHARED with other sessions, so the baseline may already be red. That is
@@ -593,9 +593,9 @@ uv run --extra dev pytest tests/skills-kit/ tests/bootstrap/code_review/ \
     tests/git-kit/ tests/p4-kit/ tests/repo-scripts/ \
     -q -p no:randomly --tb=short -rf \
     | grep '^FAILED' | sort \
-    > dev/tasks/better-md-review/baseline/failures-after.txt || true
-diff dev/tasks/better-md-review/baseline/failures-before.txt \
-     dev/tasks/better-md-review/baseline/failures-after.txt
+    > dev/tasks/md-domain-review-enablement/baseline/failures-after.txt || true
+diff dev/tasks/md-domain-review-enablement/baseline/failures-before.txt \
+     dev/tasks/md-domain-review-enablement/baseline/failures-after.txt
 ```
 
 A clean `diff` (or only REMOVED lines) is the pass condition. Any ADDED line is a
@@ -816,8 +816,8 @@ No new configurable opinion is introduced by this spec.
   `dev/tasks/md-domain-review-enablement/rename-spec.md`, which was then untracked scratch
   under a gitignored `dev/` and the only copy. Both of those facts have since changed and
   the sentence is kept only as provenance: `cc1a5d5d` promoted this document to
-  `docs/reference/terminology/rename-spec.md`, where it is tracked, and the task folder
-  was later renamed to `dev/tasks/better-md-review/`. The tracked copy is authoritative.
+  `docs/reference/terminology/rename-spec.md`, where it is tracked. The task folder
+  still exists under its original name; the tracked copy is authoritative.
 - **Changed:** nothing. No file under `plugins/`, `tests/`, `scripts/`, or `docs/` was
   edited. No rename was applied. No generator was run.
 - **Git:** no branch created, no branch switched, no `git add`, no commit, no push.

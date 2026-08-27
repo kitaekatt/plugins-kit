@@ -2,7 +2,7 @@
 
 Status: design proposal, 2026-08-10. Nothing here is implemented.
 Evidence base: the woodworking-sim coverage campaign
-(`dev/tasks/better-md-review/reports/`, gitignored -- LEDGER.md,
+(`dev/tasks/md-domain-review-enablement/reports/`, gitignored -- LEDGER.md,
 MERGE-src.md, BRIEF.md), read directly, not summarized.
 
 ## The recommendation
@@ -188,7 +188,7 @@ Three inputs, all caller-named, no defaults that widen scope:
 
 **On persistence -- this design answers a KNOWN OPEN QUESTION and says so.**
 "Which representation persists a reported candidate" is open in
-`dev/tasks/better-md-review/plan.md` (Working notes). The answer
+`dev/tasks/md-domain-review-enablement/plan.md` (Working notes). The answer
 proposed here: the persistence unit is the coverage report itself, in its
 existing `--json` form, one file per subtree, location caller-chosen (a task
 folder, a `reports/` directory -- the lane takes a path and imposes no
