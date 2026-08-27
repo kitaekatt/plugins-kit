@@ -566,16 +566,16 @@ Hand-editing any file in this table is forbidden.
 pre-edit tree:
 
 ```
-mkdir -p dev/tasks/md-domain-review-enablement/baseline
+mkdir -p dev/tasks/better-md-review/baseline
 uv run --extra dev pytest tests/skills-kit/ tests/bootstrap/code_review/ \
     tests/git-kit/ tests/p4-kit/ tests/repo-scripts/ \
     -q -p no:randomly \
-    > dev/tasks/md-domain-review-enablement/baseline/pytest-before.txt 2>&1 || true
+    > dev/tasks/better-md-review/baseline/pytest-before.txt 2>&1 || true
 uv run --extra dev pytest tests/skills-kit/ tests/bootstrap/code_review/ \
     tests/git-kit/ tests/p4-kit/ tests/repo-scripts/ \
     -q -p no:randomly --tb=no -rf \
     | grep '^FAILED' | sort \
-    > dev/tasks/md-domain-review-enablement/baseline/failures-before.txt || true
+    > dev/tasks/better-md-review/baseline/failures-before.txt || true
 ```
 
 The tree is SHARED with other sessions, so the baseline may already be red. That is
@@ -593,9 +593,9 @@ uv run --extra dev pytest tests/skills-kit/ tests/bootstrap/code_review/ \
     tests/git-kit/ tests/p4-kit/ tests/repo-scripts/ \
     -q -p no:randomly --tb=short -rf \
     | grep '^FAILED' | sort \
-    > dev/tasks/md-domain-review-enablement/baseline/failures-after.txt || true
-diff dev/tasks/md-domain-review-enablement/baseline/failures-before.txt \
-     dev/tasks/md-domain-review-enablement/baseline/failures-after.txt
+    > dev/tasks/better-md-review/baseline/failures-after.txt || true
+diff dev/tasks/better-md-review/baseline/failures-before.txt \
+     dev/tasks/better-md-review/baseline/failures-after.txt
 ```
 
 A clean `diff` (or only REMOVED lines) is the pass condition. Any ADDED line is a
