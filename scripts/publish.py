@@ -276,7 +276,10 @@ def _master_only_paths() -> list[str]:
     if not base:
         return []
     stray = []
-    for path in git("diff", "--name-only", master, DEV_BRANCH).splitlines():
+    # The trailing "--" is required, not tidiness: this repo has a `dev/`
+    # directory, so `git diff <ref> dev` is ambiguous between a revision and a
+    # path and git refuses outright.
+    for path in git("diff", "--name-only", master, DEV_BRANCH, "--").splitlines():
         path = path.strip()
         if not path or path in GENERATED_PATHS or _dev_only_owned(path, dev_only):
             continue
@@ -895,7 +898,7 @@ def verify() -> list[str]:
     if dev_sha != master_sha:
         dev_only = {n for n, m in local_plugins().items() if not is_published(m)}
         diff = git("diff", "--name-only", f"{REMOTE}/{MASTER_BRANCH}",
-                   f"{REMOTE}/{DEV_BRANCH}")
+                   f"{REMOTE}/{DEV_BRANCH}", "--")
         leaked = [f for f in diff.splitlines()
                   if f.strip() and not _dev_only_owned(f.strip(), dev_only)]
         if leaked:

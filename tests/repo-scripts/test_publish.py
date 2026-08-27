@@ -70,6 +70,11 @@ def repo(tmp_path, monkeypatch):
     (root / ".claude-plugin" / "marketplace.json").write_text(
         json.dumps({"plugins": [{"name": "pub-kit", "version": "1.0.0"}]}, indent=2))
     (root / "index.html").write_text('{"name": "pub-kit", "version": "1.0.0"}')
+    # A `dev/` directory alongside a `dev` BRANCH, as the real repo has. Every
+    # `git diff <ref> dev` without a trailing "--" is then ambiguous and git
+    # refuses it outright, which is a publish that fails on its first command.
+    (root / "dev").mkdir()
+    (root / "dev" / "notes.md").write_text("shared dev scratch\n")
 
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "initial")
