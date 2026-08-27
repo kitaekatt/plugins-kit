@@ -1,7 +1,7 @@
 """Tests for bootstrap_lib/agent_skills_check.py -- the agent_skills_link check.
 
 Proportionate to the design's stated risk surface: quick-exit correctness
-(the .agents escape hatch must win before every other seam runs), D2's
+(the .agents/skills escape hatch must win before every other seam runs), D2's
 git-toplevel scoping, strict boolean validation, the D4 absent-directory
 regression, real link creation/verification, and the no-copy /
 bounded-cleanup safety guarantees. VCS behavior itself is covered by
@@ -59,14 +59,22 @@ def _forbid_codex(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# .agents quick exit -- must win before every other seam
+# .agents/skills quick exit -- must win before every other seam
 # ---------------------------------------------------------------------------
 
 
+def _skills(root):
+    return os.path.join(root, ".agents", "skills")
+
+
 class TestQuickExit:
+    """The sentinel is the CHILD. `.agents/` is shared with Codex's own
+    `.agents/plugins/` config, so its mere existence says nothing about
+    whether the skills link is wanted -- see the module docstring."""
+
     def test_existing_directory(self, tmp_path, monkeypatch):
         root = str(tmp_path)
-        os.makedirs(os.path.join(root, ".agents"))
+        os.makedirs(_skills(root))
         _forbid_subprocess(monkeypatch)
         _forbid_codex(monkeypatch)
         result = asc.check_project_agent_skills_link(root, None)
@@ -74,7 +82,8 @@ class TestQuickExit:
 
     def test_existing_file(self, tmp_path, monkeypatch):
         root = str(tmp_path)
-        with open(os.path.join(root, ".agents"), "w") as f:
+        os.makedirs(os.path.join(root, ".agents"))
+        with open(_skills(root), "w") as f:
             f.write("not a directory")
         _forbid_subprocess(monkeypatch)
         _forbid_codex(monkeypatch)
@@ -86,7 +95,8 @@ class TestQuickExit:
         root = str(tmp_path)
         target = os.path.join(root, "elsewhere")
         os.makedirs(target)
-        os.symlink(target, os.path.join(root, ".agents"), target_is_directory=True)
+        os.makedirs(os.path.join(root, ".agents"))
+        os.symlink(target, _skills(root), target_is_directory=True)
         _forbid_subprocess(monkeypatch)
         _forbid_codex(monkeypatch)
         result = asc.check_project_agent_skills_link(root, None)
@@ -94,12 +104,46 @@ class TestQuickExit:
 
     @requires_symlinks
     def test_existing_dangling_symlink(self, tmp_path, monkeypatch):
+        """lstat, not stat: a dangling link is still somebody's link and is
+        not ours to repair."""
         root = str(tmp_path)
-        os.symlink(os.path.join(root, "nonexistent"), os.path.join(root, ".agents"))
+        os.makedirs(os.path.join(root, ".agents"))
+        os.symlink(os.path.join(root, "nonexistent"), _skills(root))
         _forbid_subprocess(monkeypatch)
         _forbid_codex(monkeypatch)
         result = asc.check_project_agent_skills_link(root, None)
         assert result.status == "existing"
+
+    def test_bare_agents_directory_does_not_quick_exit(self, tmp_path, monkeypatch):
+        """The regression. A project that adopts `.agents/plugins/` for
+        repo-level Codex config used to be skipped forever, and the only
+        documented recovery -- "delete .agents to rebuild" -- meant deleting
+        that config. The parent is not the sentinel."""
+        repo = _init_repo(str(tmp_path / "repo"))
+        _make_source(repo)
+        os.makedirs(os.path.join(repo, ".agents", "plugins"))
+        with open(os.path.join(repo, ".agents", "plugins",
+                               "marketplace.json"), "w") as f:
+            f.write("{}\n")
+        monkeypatch.setattr(
+            asc, "detect_codex",
+            lambda: CodexDetection(available=True, reason="fake"))
+
+        result = asc.check_project_agent_skills_link(repo, None)
+
+        assert result.status == "fixable"
+
+    def test_agents_as_a_file_reports_the_os_error(self, tmp_path, monkeypatch):
+        """ENOTDIR on the child. Unusual enough that the OS message beats a
+        status of its own -- but it must be a failure, not a silent skip."""
+        root = str(tmp_path)
+        with open(os.path.join(root, ".agents"), "w") as f:
+            f.write("not a directory")
+        _forbid_subprocess(monkeypatch)
+        _forbid_codex(monkeypatch)
+        result = asc.check_project_agent_skills_link(root, None)
+        assert result.status == "lstat_error"
+        assert result.detail
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +312,81 @@ class TestD4TrailingSlashRegression:
 # ---------------------------------------------------------------------------
 # Link creation: real symlink / real junction, no-copy, bounded cleanup
 # ---------------------------------------------------------------------------
+
+
+class TestAdoptsExistingAgentsDir:
+    """`.agents` is created only when absent, adopted when present, and never
+    removed unless THIS attempt made it."""
+
+    @requires_symlinks
+    def test_links_into_an_existing_agents_directory(self, tmp_path):
+        repo = _init_repo(str(tmp_path / "repo"))
+        _make_source(repo)
+        config = os.path.join(repo, ".agents", "plugins", "marketplace.json")
+        os.makedirs(os.path.dirname(config))
+        with open(config, "w") as f:
+            f.write("{}\n")
+
+        result = asc.create_agent_skills_link(repo)
+
+        assert result.ok, result.detail
+        assert os.path.islink(os.path.join(repo, ".agents", "skills"))
+        assert os.path.isfile(config), "adoption must not disturb existing content"
+
+    def test_a_failed_link_leaves_an_adopted_agents_alone(self, tmp_path, monkeypatch):
+        """The half that adoption makes dangerous: bounded cleanup removes
+        the `.agents` it created, and an adopted one is not that."""
+        repo = _init_repo(str(tmp_path / "repo"))
+        _make_source(repo)
+        config = os.path.join(repo, ".agents", "plugins", "marketplace.json")
+        os.makedirs(os.path.dirname(config))
+        with open(config, "w") as f:
+            f.write("{}\n")
+
+        def _fake_symlink(*a, **k):
+            err = OSError("access denied")
+            err.winerror = 5  # NOT the privilege signal -- no junction fallback
+            raise err
+
+        monkeypatch.setattr(os, "symlink", _fake_symlink)
+        result = asc.create_agent_skills_link(repo)
+
+        assert not result.ok
+        assert not os.path.lexists(os.path.join(repo, ".agents", "skills"))
+        assert os.path.isfile(config), (
+            "cleanup must never remove an .agents this attempt did not create")
+
+    def test_agents_as_a_file_is_a_mkdir_failure(self, tmp_path):
+        """The check half reports ENOTDIR and never reaches the fixer, so
+        this is the race/direct-call guard."""
+        repo = _init_repo(str(tmp_path / "repo"))
+        _make_source(repo)
+        with open(os.path.join(repo, ".agents"), "w") as f:
+            f.write("not a directory")
+
+        result = asc.create_agent_skills_link(repo)
+
+        assert not result.ok
+        assert result.status == "mkdir_failed"
+        assert "not a directory" in result.detail
+
+    @requires_symlinks
+    def test_a_link_appearing_first_is_reported_as_a_race(self, tmp_path):
+        """Adoption moves the race window from `.agents` down to the child,
+        which is the thing that actually has one owner."""
+        repo = _init_repo(str(tmp_path / "repo"))
+        _make_source(repo)
+        os.makedirs(os.path.join(repo, ".agents"))
+        os.symlink(os.path.join(repo, ".claude", "skills"),
+                   os.path.join(repo, ".agents", "skills"),
+                   target_is_directory=True)
+
+        result = asc.create_agent_skills_link(repo)
+
+        assert not result.ok
+        assert result.status == "race_existing"
+        assert os.path.islink(os.path.join(repo, ".agents", "skills")), (
+            "the loser of a race must not delete the winner's link")
 
 
 class TestLinkCreation:

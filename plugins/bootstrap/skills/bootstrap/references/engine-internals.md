@@ -154,11 +154,22 @@ is called directly instead, with the effective value already resolved from
 
 **Quick-exit invariant.** The very first operation, before config lookup,
 Codex detection, source inspection, or any VCS command, is `os.lstat(project
-/ ".agents")`. Any object at that path — directory, file, symlink, dangling
-symlink, junction — short-circuits to one `ok` entry and nothing else runs.
-This is the escape hatch: once `.agents` exists by any means, later passes
-pay one `lstat` and stop. There is no repair path; the user deletes
-`.agents` to make bootstrap rebuild it.
+/ ".agents" / "skills")`. Any object at that path — directory, file, symlink,
+dangling symlink, junction — short-circuits to one `ok` entry and nothing else
+runs. This is the escape hatch: once `.agents/skills` exists by any means,
+later passes pay one `lstat` and stop. There is no repair path; the user
+deletes `.agents/skills` to make bootstrap rebuild it.
+
+**The sentinel is the child, never the parent.** `.agents/` is shared — Codex
+also keeps repo-level plugin config at `.agents/plugins/marketplace.json`,
+which is why the generated ignore rule anchors the skills child (see
+`_GENERATED_RULE`). Keying the quick exit on the parent contradicted that: a
+project that adopted `.agents/plugins/` was skipped forever, and the only
+documented recovery — delete `.agents` — meant deleting that config. So an
+existing `.agents` is ADOPTED (created only when absent) and the fixer's
+bounded cleanup removes it only when THIS attempt created it. A non-directory
+at `.agents` surfaces as ENOTDIR from that same `lstat`, reported as
+`lstat_error` with the OS message.
 
 **Check → fix → authoritative re-check.** `check_project_agent_skills_link`
 is side-effect-free and returns a `SkillsLinkCheck` naming exactly one of:
@@ -166,14 +177,14 @@ quick-exit (`existing`), a root-scoping skip (`not_worktree`/`not_toplevel`
 — see the `agent_skills_link` manifest-reference section for why v1 links
 only at the git repository root), an option/Codex/source skip, or
 `fixable`. Only on `fixable` does the engine call
-`create_agent_skills_link`, which `mkdir`s `.agents`, applies Git/P4
+`create_agent_skills_link`, which `mkdir`s `.agents` when absent, applies Git/P4
 exclusions, creates the link (real symlink, falling back to an NTFS
 junction on Windows only for the privilege signal, WinError 1314 — see
 `agent_skills_check._create_link`), and verifies the link itself. The
 engine then re-runs `check_project_agent_skills_link` — its first operation
 is the same `lstat`, so the re-check is cheap, not a second full pass — and
 only a resulting `existing` status is reported as `action`; anything else
-(including the fixer having reported success) is a `failed; .agents is
+(including the fixer having reported success) is a `failed; .agents/skills is
 absent after creation` or `cannot verify` failure. The re-check, not the
 fixer's own return value, controls the final outcome.
 

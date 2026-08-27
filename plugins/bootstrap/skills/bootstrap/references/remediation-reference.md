@@ -76,15 +76,17 @@ reaches the user.
 
 | Condition | Check Method | Remediation |
 |-----------|-------------|-------------|
-| `.agents` already exists (any kind) | `os.lstat` | None — quick-exit `ok`. Delete `.agents` to make bootstrap rebuild it; bootstrap never repairs a dangling or misdirected link in place |
+| `.agents/skills` already exists (any kind) | `os.lstat` | None — quick-exit `ok`. Delete `.agents/skills` to make bootstrap rebuild it; bootstrap never repairs a dangling or misdirected link in place. The parent `.agents` is NOT the sentinel — it is shared with Codex's own `.agents/plugins/` config and is adopted, not treated as an opt-out |
 | Project root is not the git repository root (v1 scope) | `git rev-parse --show-toplevel` compared to the project dir; no `.git` at all is a separate skip | None — `ok` skip. Codex resolves a project root by walking up to a `.git` marker, so linking anywhere else would never be discovered |
 | `agent_skills_link` present but not a strict JSON boolean | `type(value) is bool` | None auto — fix the manifest value (`null`/strings/numbers including `0`/`1` are invalid) |
 | Codex CLI unavailable | `bootstrap_lib.codex.detect_codex()` | None — `ok` skip; nothing to link against |
 | `.claude/skills` missing, not a directory, or empty | `os.path.isdir` + `os.scandir` | None — `ok` skip; nothing to link |
 | `.agents/skills` (or a Git/P4-tracked ancestor) is tracked by version control | `git ls-files --literal-pathspecs` (Git); Perforce mapping check | Refuses to write an exclusion over a tracked path — untrack the path first |
-| Git/P4 exclusion cannot be established | See VCS steps below | Removes the freshly created empty `.agents` and fails with the reason; a `cleanup failed` variant additionally tells the user to delete `.agents` before retrying |
-| Symlink creation fails and (Windows only) the junction fallback also fails, or fails outright on POSIX | `os.symlink`, then on Windows only for WinError 1314 `_winapi.CreateJunction` | No copy fallback is ever created. Removes the partial link/junction and the empty `.agents`; VCS exclusions already written are left in place (harmless, makes the retry cheaper) |
-| `.agents` absent, or unverifiable, on the authoritative post-fix re-check | Re-run of the side-effect-free check | Fails even though the fixer itself reported success — the re-check, not the fixer's return value, decides the outcome |
+| `.agents` exists but is not a directory | `os.lstat` on the child returns ENOTDIR | None auto — `failed; cannot stat .agents/skills` carries the OS message; remove or rename the file at `.agents` |
+| Git/P4 exclusion cannot be established | See VCS steps below | Removes `.agents` only if this attempt created it, and fails with the reason; a `cleanup failed` variant additionally tells the user to delete `.agents` before retrying |
+| Symlink creation fails and (Windows only) the junction fallback also fails, or fails outright on POSIX | `os.symlink`, then on Windows only for WinError 1314 `_winapi.CreateJunction` | No copy fallback is ever created. Removes the partial link/junction, and `.agents` only if this attempt created it; VCS exclusions already written are left in place (harmless, makes the retry cheaper) |
+| Another process created `.agents/skills` between the check and the fix | `os.path.lexists` before and after link creation | None — reported as a race and the winner's link is left untouched |
+| `.agents/skills` absent, or unverifiable, on the authoritative post-fix re-check | Re-run of the side-effect-free check | Fails even though the fixer itself reported success — the re-check, not the fixer's return value, decides the outcome |
 
 **Windows privilege behavior.** A real directory symlink is attempted
 first; the NTFS junction fallback fires *only* for the specific
