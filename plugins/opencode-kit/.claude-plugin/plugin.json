@@ -1,0 +1,10 @@
+{
+  "name": "opencode-kit",
+  "version": "0.1.0",
+  "description": "opencode integration for Claude Code. Placeholder: no skills or commands yet.",
+  "author": {
+    "name": "Christina"
+  },
+  "keywords": ["opencode", "cli", "delegation"],
+  "dependencies": ["bootstrap"]
+}

@@ -27,12 +27,24 @@ Why a script rather than a checklist -- three footguns it removes:
     and the post-verify checks it landed even if the finally misfired.
   - The merge is only USUALLY a fast-forward. When dev carries commits for a
     dev-only (published: false) plugin, a fast-forward would publish them, so
-    the release is FILTERED instead: the shippable commits are replayed onto
-    master in a temporary worktree and master is pushed from there. dev is
-    untouched and keeps the excluded work. `published: false` already recorded
-    the decision that the plugin does not ship, so honouring it is not the
-    script guessing -- what it must never do is decide that a plugin's status
-    has changed.
+    the release is a PROJECTION instead: in a temporary worktree, master's next
+    commit takes dev's tree with the dev-only plugins' own files held at the
+    content master already has. dev is untouched and keeps the excluded work.
+    `published: false` already recorded the decision that the plugin does not
+    ship, so honouring it is not the script guessing -- what it must never do
+    is decide that a plugin's status has changed.
+
+    A projection rather than a commit replay, because replaying is not
+    idempotent and the damage compounds. A replay gives every shipped commit a
+    NEW sha, so the originals sit in `master..dev` forever; their patch-ids do
+    not match the replays either, because the replay was built without the
+    excluded commits beneath it and its context lines differ. So every LATER
+    publish tried to ship work master already had and died on a duplication
+    conflict, while preflight read master's replay commits as a reconcile and
+    refused before even getting there. The projection has neither failure: it
+    computes the tree master should have -- which is exactly what verify()
+    asserts -- and stamps `Published-From: <dev sha>` on the commit so the next
+    run knows where the range starts instead of inferring it from ancestry.
   - index.html must ride INSIDE the release commit, or master briefly holds a
     page that disagrees with its own marketplace.json.
 
@@ -184,6 +196,111 @@ def version_at(ref: str, plugin: str) -> str | None:
         return None
 
 
+# --- where the range starts, and what master must not lose -----------------
+
+PUBLISHED_FROM = "Published-From:"
+
+# Derived artifacts, regenerated from the plugin manifests on every publish.
+# master's copy is an OUTPUT of the last release rather than content anyone
+# authored there, so dev wins unconditionally -- the same rule the reconcile
+# procedure states in docs/reference/publish-reconcile.md.
+GENERATED_PATHS = frozenset({".claude-plugin/marketplace.json", "index.html"})
+
+
+def _rc(*args: str) -> int:
+    """Exit code of a git command, for the questions git answers that way."""
+    return subprocess.run(["git", *args], cwd=REPO_ROOT,
+                          capture_output=True, text=True).returncode
+
+
+def blob_at(ref: str, path: str) -> str | None:
+    """Object id of `path` at `ref`, or None when it does not exist there."""
+    return git("rev-parse", "--verify", "--quiet", f"{ref}:{path}",
+               check=False) or None
+
+
+def range_base() -> str:
+    """The commit `..dev` should be measured from.
+
+    Normally `origin/master` itself. After a PROJECTION release master's tip is
+    a commit dev has never seen, and plain ancestry then counts every
+    already-published commit as unshipped FOREVER: the range grows without
+    bound, dev-only commits excluded years ago are re-reported on every run,
+    and the bump gates judge work that is already on master. The projection
+    therefore records the dev commit it was built from, and that -- not
+    ancestry -- is the honest boundary.
+
+    Falls back to `origin/master` when the trailer is absent, names an object
+    this clone lacks, or names a commit that is not an ancestor of dev (a
+    rewritten dev). The fallback over-reports rather than under-reports, which
+    is the safe direction: a wider range costs noise, a narrower one silently
+    drops a commit from the release.
+    """
+    master = f"{REMOTE}/{MASTER_BRANCH}"
+    message = git("log", "-1", "--format=%B", master, check=False)
+    for line in reversed(message.splitlines()):
+        line = line.strip()
+        if not line.startswith(PUBLISHED_FROM):
+            continue
+        sha = line[len(PUBLISHED_FROM):].strip()
+        if sha and _rc("merge-base", "--is-ancestor", sha, DEV_BRANCH) == 0:
+            return sha
+        break
+    return master
+
+
+def _master_only_paths() -> list[str]:
+    """Paths where master holds content dev does not.
+
+    The old guard for this was ancestry -- "master has commits dev lacks" --
+    which a projection (or the replay before it) makes permanently true even
+    though nothing has diverged. What actually matters is CONTENT: a publish
+    takes dev's version of every shippable file, so the only thing that can be
+    LOST is a file master changed since the branches last agreed and dev never
+    picked up. Generated artifacts are exempt (dev wins by definition) and so
+    are the dev-only plugins' own files, which are supposed to differ.
+
+    "Last agreed" is range_base(), NOT the merge base, and the difference is
+    load-bearing. A projection's content comes from dev, but its commit is not
+    in dev's history, so `git merge-base` still points at the ancient common
+    ancestor -- against which every file the last release shipped looks like a
+    master-side change. Measuring from the recorded publish point instead
+    compares master to the dev tree it was actually built from. The merge base
+    is only the fallback, for a master that never carried a projection.
+    """
+    dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
+    master = f"{REMOTE}/{MASTER_BRANCH}"
+    base = range_base()
+    if base == master:
+        base = git("merge-base", master, DEV_BRANCH, check=False)
+    if not base:
+        return []
+    stray = []
+    # The trailing "--" is required, not tidiness: this repo has a `dev/`
+    # directory, so `git diff <ref> dev` is ambiguous between a revision and a
+    # path and git refuses outright.
+    for path in git("diff", "--name-only", master, DEV_BRANCH, "--").splitlines():
+        path = path.strip()
+        if not path or path in GENERATED_PATHS or _dev_only_owned(path, dev_only):
+            continue
+        if blob_at(master, path) != blob_at(base, path):
+            stray.append(path)
+    return stray
+
+
+def _require_no_master_only_content() -> None:
+    stray = _master_only_paths()
+    if not stray:
+        return
+    raise PublishError(
+        f"{REMOTE}/{MASTER_BRANCH} holds content {DEV_BRANCH} does not, so a "
+        f"publish would discard it:\n  " + "\n  ".join(stray[:12])
+        + (f"\n  (+{len(stray) - 12} more)" if len(stray) > 12 else "")
+        + f"\n\nThat is a reconcile, not a routine publish. Back-port those "
+          f"changes to {DEV_BRANCH} first (see the conflict-resolution policy "
+          f"in docs/reference/publish-reconcile.md), then publish.")
+
+
 # --- preflight -------------------------------------------------------------
 
 def preflight(allow_dev_only: set[str] | None = None
@@ -214,16 +331,12 @@ def preflight(allow_dev_only: set[str] | None = None
 
     git("fetch", REMOTE, "--quiet")
 
-    behind = git("rev-list", "--count", f"{DEV_BRANCH}..{REMOTE}/{MASTER_BRANCH}")
-    if behind != "0":
-        raise PublishError(
-            f"{REMOTE}/{MASTER_BRANCH} has {behind} commit(s) {DEV_BRANCH} lacks, "
-            f"so the merge would not fast-forward. This is a reconcile, not a "
-            f"routine publish -- resolve toward {DEV_BRANCH} by hand (see "
-            f"CLAUDE.md on reconciles).")
+    # NOT "is master an ancestor of dev". A filtered release leaves master
+    # carrying commits dev will never see, by design and permanently, so
+    # ancestry reports a reconcile on every publish after the first one.
+    _require_no_master_only_content()
 
-    ahead = git("rev-list", "--count", f"{REMOTE}/{MASTER_BRANCH}..{DEV_BRANCH}")
-    if ahead == "0":
+    if git("rev-list", "--count", f"{range_base()}..{DEV_BRANCH}") == "0":
         raise PublishError(
             f"{DEV_BRANCH} has nothing {REMOTE}/{MASTER_BRANCH} lacks -- "
             f"nothing to publish.")
@@ -312,32 +425,9 @@ def _require_pyproject_sync() -> None:
               "does not apply to a publish.)")
 
 
-def already_applied(sha_prefixes: list[str]) -> set[str]:
-    """Which of these commits master already carries AS CONTENT.
-
-    A filtered release replays commits onto master, which gives them new SHAs.
-    The originals therefore stay in `master..dev` forever, and every LATER
-    filtered publish would try to replay them again -- landing on an empty
-    cherry-pick and aborting the whole publish. `git cherry` answers the right
-    question (is an equivalent patch already upstream?) instead of the SHA
-    identity question, so shipped work drops out of the range on its own.
-
-    This does not arise on the fast-forward path, where dev and master share
-    history; it is the cost of filtering, and it is paid here rather than by a
-    human diagnosing a confusing abort on some future publish.
-    """
-    out = git("cherry", f"{REMOTE}/{MASTER_BRANCH}", DEV_BRANCH, check=False)
-    applied = set()
-    for line in out.splitlines():
-        parts = line.split()
-        if len(parts) == 2 and parts[0] == "-":
-            applied.add(parts[1])
-    return applied
-
-
 def _range_commits() -> list[str]:
     """The commits a publish would land on master, newest first."""
-    return git("rev-list", f"{REMOTE}/{MASTER_BRANCH}..{DEV_BRANCH}").split()
+    return git("rev-list", f"{range_base()}..{DEV_BRANCH}").split()
 
 
 def _commit_files(sha: str) -> list[str]:
@@ -601,29 +691,146 @@ def commit_derived(bumps: list[str]) -> None:
 
 # --- publish + verify ------------------------------------------------------
 
-def _is_merge_commit(sha: str) -> bool:
-    """True when the commit has more than one parent."""
-    return len(git("rev-list", "--parents", "-n", "1", sha).split()) > 2
+def _in_worktree(workdir, *args: str) -> str:
+    """Run git inside the projection worktree, surfacing failures verbatim."""
+    result = subprocess.run(["git", "-C", str(workdir), *args],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        raise PublishError(
+            f"projecting the release onto {MASTER_BRANCH} failed at "
+            f"`git {' '.join(args)}`:\n"
+            + ((result.stderr or result.stdout).strip() or "(no output)"))
+    return result.stdout.strip()
+
+
+def _master_is_ancestor_of_dev() -> bool:
+    return _rc("merge-base", "--is-ancestor",
+               f"{REMOTE}/{MASTER_BRANCH}", DEV_BRANCH) == 0
+
+
+def _held_back_paths(dev_only: set[str]) -> tuple[list[str], list[str]]:
+    """The dev-only files to hold at master's content: (on master, dev-only new).
+
+    The UNION of both trees, because the two halves need opposite treatment. A
+    file master already carries is restored to master's version -- the plugin
+    stays exactly where it was published. A file that exists only on dev has
+    never shipped and must be removed from the projected tree entirely; taking
+    dev's tree wholesale and forgetting this half is how unshipped work leaks.
+    """
+    if not dev_only:
+        return [], []
+    master = f"{REMOTE}/{MASTER_BRANCH}"
+    prefixes = [f"{top}/{name}/" for name in sorted(dev_only)
+                for top in ("plugins", "tests")]
+    on_master, dev_new, seen = [], [], set()
+    for ref in (master, DEV_BRANCH):
+        listing = git("ls-tree", "-r", "--name-only", "-z", ref, "--", *prefixes,
+                      check=False)
+        for path in listing.split("\0"):
+            path = path.strip()
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            (on_master if blob_at(master, path) else dev_new).append(path)
+    return sorted(on_master), sorted(dev_new)
+
+
+def _projection_message(shipping: list[str], excluded: dict[str, set[str]],
+                        dev_sha: str) -> str:
+    """The projection's commit message: what shipped, what did not, and from where.
+
+    The `Published-From:` trailer is load-bearing, not a courtesy -- range_base()
+    reads it back on the next publish. Without it the next run has only ancestry
+    to go on, which is the thing that broke.
+    """
+    lines = [f"publish: {len(shipping)} commit(s) from {DEV_BRANCH}", ""]
+    for sha in reversed(shipping):
+        lines.append(f"  {sha[:9]} {git('log', '-1', '--format=%s', sha)}")
+    if excluded:
+        held = sorted({p for plugins in excluded.values() for p in plugins})
+        lines += ["", f"Held back on {DEV_BRANCH} ({len(excluded)} commit(s), "
+                      f"dev-only): {', '.join(held)}"]
+    lines += ["", f"{PUBLISHED_FROM} {dev_sha}"]
+    return "\n".join(lines)
+
+
+def _publish_projection(excluded: dict[str, set[str]]) -> None:
+    """Land one commit on master whose tree is dev's, minus the dev-only plugins.
+
+    This is the whole filtered release. It cannot conflict, because nothing is
+    being merged: the tree is computed, not negotiated. It is idempotent, so
+    running it twice is a no-op rather than a duplicate-work conflict. And it
+    produces by construction exactly the invariant verify() checks -- master
+    matches dev everywhere except the excluded plugins' own files.
+    """
+    dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
+    shipping = [sha for sha in _range_commits() if sha not in excluded]
+    if not shipping:
+        raise PublishError(
+            "every commit in the range touches a dev-only plugin -- there is "
+            "nothing to publish. The bumps that passed preflight are on "
+            "commits that cannot ship.")
+
+    dev_sha = git("rev-parse", DEV_BRANCH)
+    on_master, dev_new = _held_back_paths(dev_only)
+
+    workdir = Path(tempfile.mkdtemp(prefix="publish-master-"))
+    try:
+        git("worktree", "add", "--detach", str(workdir), f"{REMOTE}/{MASTER_BRANCH}")
+        try:
+            # Index and worktree := dev's tree, then put the dev-only plugins
+            # back the way master had them.
+            _in_worktree(workdir, "read-tree", "--reset", "-u", DEV_BRANCH)
+            if on_master:
+                _in_worktree(workdir, "checkout", f"{REMOTE}/{MASTER_BRANCH}",
+                             "--", *on_master)
+            if dev_new:
+                _in_worktree(workdir, "rm", "-q", "-f", "--ignore-unmatch",
+                             "--", *dev_new)
+
+            if _rc_in(workdir, "diff", "--cached", "--quiet", "HEAD") == 0:
+                print(f"  {MASTER_BRANCH} already carries this content -- "
+                      f"nothing to push")
+                return
+
+            # --no-verify: the pre-commit gates already ran against dev, and
+            # this tree is a computed artifact rather than an authored change.
+            _in_worktree(workdir, "commit", "--no-verify", "-q", "-m",
+                         _projection_message(shipping, excluded, dev_sha))
+            _in_worktree(workdir, "push", REMOTE,
+                         f"HEAD:refs/heads/{MASTER_BRANCH}")
+            print(f"  projected {len(shipping)} commit(s) onto {MASTER_BRANCH}"
+                  + (f"; held back {len(excluded)} dev-only commit(s)"
+                     if excluded else ""))
+        finally:
+            git("worktree", "remove", "--force", str(workdir), check=False)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _rc_in(workdir, *args: str) -> int:
+    return subprocess.run(["git", "-C", str(workdir), *args],
+                          capture_output=True, text=True).returncode
 
 
 def push_and_merge(excluded: dict[str, set[str]] | None = None) -> None:
     """Push dev, then land the release on master.
 
-    With nothing excluded this is the fast-forward it has always been. With
-    dev-only commits in the range it is a FILTERED release: the shippable
-    commits are replayed onto master in a temporary worktree and pushed from
-    there, so master gets exactly the publishable work and dev is untouched.
+    Fast-forward when nothing is excluded AND master is still an ancestor of
+    dev. Otherwise project (see _publish_projection): master gets dev's tree
+    with the dev-only plugins held back, and dev is untouched.
 
-    The worktree is not a stylistic choice. The fast-forward path checks master
-    out in THIS tree, which is shared with other agent sessions -- their commits
-    would land on whatever branch the tree is on. That risk is tolerable for the
-    seconds a fast-forward takes; a cherry-pick sequence that can stop on a
-    conflict is a different matter, so the filtered path never moves this tree.
+    The worktree in the projection path is not a stylistic choice. The
+    fast-forward path checks master out in THIS tree, which is shared with
+    other agent sessions -- their commits would land on whatever branch the
+    tree is on. That risk is tolerable for the seconds a fast-forward takes;
+    anything that can stop partway is a different matter, so the projection
+    never moves this tree.
     """
     git("push", REMOTE, DEV_BRANCH)
     print(f"  pushed {DEV_BRANCH}")
 
-    if not excluded:
+    if not excluded and _master_is_ancestor_of_dev():
         git("checkout", MASTER_BRANCH)
         try:
             git("merge", "--ff-only", DEV_BRANCH)
@@ -633,75 +840,7 @@ def push_and_merge(excluded: dict[str, set[str]] | None = None) -> None:
             git("checkout", DEV_BRANCH)
         return
 
-    applied = already_applied([])
-    shipping = [sha for sha in _range_commits()
-                if sha not in excluded and sha not in applied]
-    if applied:
-        print(f"  skipping {len(applied)} commit(s) master already carries "
-              f"(replayed by an earlier filtered release)")
-    if not shipping:
-        raise PublishError(
-            "every commit in the range touches a dev-only plugin -- there is "
-            "nothing to publish. The bumps that passed preflight are on "
-            "commits that cannot ship.")
-
-    # _range_commits() is newest-first; cherry-pick oldest-first.
-    shipping = list(reversed(shipping))
-    workdir = Path(tempfile.mkdtemp(prefix="publish-master-"))
-    try:
-        git("worktree", "add", "--detach", str(workdir), f"{REMOTE}/{MASTER_BRANCH}")
-        try:
-            skipped_empty = 0
-            for sha in shipping:
-                if _is_merge_commit(sha):
-                    # A merge carries no content of its own; its parents' work
-                    # is already in `shipping` (or already on master). Replaying
-                    # one needs a -m parent choice that means nothing on a
-                    # linearised master, so there is nothing here to pick.
-                    skipped_empty += 1
-                    continue
-                done = subprocess.run(
-                    ["git", "-C", str(workdir), "cherry-pick", sha],
-                    capture_output=True, text=True)
-                if done.returncode == 0:
-                    continue
-                blob = (done.stderr or "") + (done.stdout or "")
-                if "now empty" in blob or "nothing to commit" in blob:
-                    # Master already holds this content -- a cherry-picked
-                    # equivalent from an earlier filtered release, or a commit
-                    # whose changes another release carried. `already_applied`
-                    # catches most of these up front by patch-id; a rebase or a
-                    # conflict resolution can change the patch-id while leaving
-                    # the RESULT identical, and only the replay sees that. An
-                    # empty pick is the success case, not a conflict: there is
-                    # nothing left to ship because it already shipped.
-                    subprocess.run(["git", "-C", str(workdir), "cherry-pick",
-                                    "--skip"], check=True, capture_output=True,
-                                   text=True)
-                    skipped_empty += 1
-                    continue
-                raise subprocess.CalledProcessError(
-                    done.returncode, done.args, done.stdout, done.stderr)
-            if skipped_empty:
-                print(f"  skipped {skipped_empty} commit(s) that added nothing "
-                      f"to {MASTER_BRANCH} (already carried, or a merge)")
-            head = subprocess.run(["git", "-C", str(workdir), "rev-parse", "HEAD"],
-                                  check=True, capture_output=True, text=True).stdout.strip()
-            git("push", REMOTE, f"{head}:refs/heads/{MASTER_BRANCH}")
-            print(f"  published {len(shipping)} commit(s) to {MASTER_BRANCH}; "
-                  f"excluded {len(excluded)} dev-only commit(s)")
-        finally:
-            git("worktree", "remove", "--force", str(workdir), check=False)
-    except subprocess.CalledProcessError as exc:
-        raise PublishError(
-            "the filtered release could not be replayed onto "
-            f"{MASTER_BRANCH} -- a shippable commit conflicts with master "
-            "without the excluded dev-only commits beneath it:\n"
-            f"{(exc.stderr or exc.stdout or '').strip()}\n\n"
-            "Nothing was pushed to master. Split the dependency, or ship the "
-            "dev-only plugin with --allow-dev-only.") from exc
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
+    _publish_projection(excluded or {})
 
 
 def check_index_scope(index_text: str) -> list[str]:
@@ -741,35 +880,32 @@ def check_index_scope(index_text: str) -> list[str]:
     return problems
 
 
-def verify(excluded: dict[str, set[str]] | None = None) -> list[str]:
+def verify() -> list[str]:
     """Post-publish verification. Returns a list of problems (empty = good).
 
-    `excluded` is the dev-only commit set the release filtered out. When it is
-    non-empty the branches are SUPPOSED to differ, so identity is the wrong
-    check and the tree contents are checked instead -- master must match dev
-    everywhere except those plugins' own files.
+    Identical tips are the strongest possible result, but they are only
+    reachable on the fast-forward path. A projection gives master a commit dev
+    has never seen, so sha identity is the wrong question there -- the contract
+    is a CONTENT one: master must match dev everywhere except the dev-only
+    plugins' own files. That check is correct in both cases, so it runs
+    whenever the tips differ, whether or not this release excluded anything.
     """
     problems = []
 
     git("fetch", REMOTE, "--quiet")
     dev_sha = git("rev-parse", f"{REMOTE}/{DEV_BRANCH}")
     master_sha = git("rev-parse", f"{REMOTE}/{MASTER_BRANCH}")
-    if not excluded:
-        if dev_sha != master_sha:
-            problems.append(
-                f"{REMOTE}/{DEV_BRANCH} ({dev_sha[:9]}) != {REMOTE}/{MASTER_BRANCH} "
-                f"({master_sha[:9]}) -- the publish did not land on the cache source")
-    else:
+    if dev_sha != master_sha:
         dev_only = {n for n, m in local_plugins().items() if not is_published(m)}
         diff = git("diff", "--name-only", f"{REMOTE}/{MASTER_BRANCH}",
-                   f"{REMOTE}/{DEV_BRANCH}")
+                   f"{REMOTE}/{DEV_BRANCH}", "--")
         leaked = [f for f in diff.splitlines()
                   if f.strip() and not _dev_only_owned(f.strip(), dev_only)]
         if leaked:
             problems.append(
-                f"filtered release: {REMOTE}/{MASTER_BRANCH} differs from "
-                f"{REMOTE}/{DEV_BRANCH} outside the excluded dev-only plugins, "
-                f"so shippable work did not land: {', '.join(leaked[:8])}"
+                f"{REMOTE}/{MASTER_BRANCH} differs from {REMOTE}/{DEV_BRANCH} "
+                f"outside the dev-only plugins, so shippable work did not "
+                f"land: {', '.join(leaked[:8])}"
                 + (f" (+{len(leaked) - 8} more)" if len(leaked) > 8 else ""))
         for name in sorted(dev_only):
             on_master = git("ls-tree", "-r", "--name-only",
@@ -866,15 +1002,18 @@ def main(argv: list[str]) -> int:
         return 1
 
     print("\nverifying:")
-    problems = verify(excluded)
+    problems = verify()
     if problems:
         sys.stdout.flush()
         for problem in problems:
             print(f"  FAILED: {problem}", file=sys.stderr)
         return 1
 
-    print("  origin/dev == origin/master" if not excluded
-          else "  origin/master carries every shippable commit; dev-only work held back")
+    print("  origin/dev == origin/master"
+          if git("rev-parse", f"{REMOTE}/{DEV_BRANCH}")
+          == git("rev-parse", f"{REMOTE}/{MASTER_BRANCH}")
+          else "  origin/master carries every shippable commit; "
+               "dev-only work held back")
     print("  marketplace.json, index.html, and plugin.json agree")
     print("  dev-tree restored to normal")
     print("\npublished. Users with autoUpdate get it next session start.")

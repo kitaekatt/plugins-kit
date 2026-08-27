@@ -212,6 +212,32 @@
       "dependencies": [
         "bootstrap"
       ]
+    },
+    {
+      "name": "codex-kit",
+      "description": "Codex CLI integration for Claude Code. Placeholder: no skills or commands yet.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Christina"
+      },
+      "source": "./plugins/codex-kit",
+      "category": "development",
+      "dependencies": [
+        "bootstrap"
+      ]
+    },
+    {
+      "name": "opencode-kit",
+      "description": "opencode integration for Claude Code. Placeholder: no skills or commands yet.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Christina"
+      },
+      "source": "./plugins/opencode-kit",
+      "category": "development",
+      "dependencies": [
+        "bootstrap"
+      ]
     }
   ]
 }

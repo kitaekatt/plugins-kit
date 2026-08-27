@@ -37,3 +37,5 @@ dev/tasks/
 # Synthetic dev-layout registry written by scripts/claude_plugin_test.py
 # (session-scoped; never committed -- see that script for why it lives here)
 plugins/installed_plugins.json
+
+.agents
