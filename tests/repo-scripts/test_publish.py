@@ -124,8 +124,11 @@ class TestPreflightRefusals:
         with pytest.raises(publish.PublishError, match="no published plugin's version differs"):
             publish.preflight()
 
-    def test_refuses_non_fast_forward(self, repo):
-        """master having commits dev lacks is a reconcile, not a publish."""
+    def test_refuses_master_only_content(self, repo):
+        """A hotfix committed straight on master would be DISCARDED by a
+        publish, which takes dev's version of every shippable file. That is a
+        reconcile, and it is the only thing master being 'ahead' can mean that
+        actually costs anything."""
         _git(repo, "checkout", "-q", "master")
         (repo / "hotfix.txt").write_text("landed straight on master\n")
         _git(repo, "add", "-A")
@@ -133,8 +136,29 @@ class TestPreflightRefusals:
         _git(repo, "push", "-q", "origin", "master")
         _git(repo, "checkout", "-q", "dev")
 
-        with pytest.raises(publish.PublishError, match="would not fast-forward"):
+        with pytest.raises(publish.PublishError,
+                           match="holds content dev does not"):
             publish.preflight()
+
+    def test_master_commits_dev_lacks_are_fine_without_content_drift(self, repo):
+        """The regression this whole design exists for. A filtered release
+        leaves master carrying a commit dev will never see, permanently. The
+        old ancestry check read that as a reconcile and refused EVERY later
+        publish, even though master holds nothing dev lacks."""
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        _git(repo, "push", "-q", "origin", "dev")
+        # A commit on master with dev's exact content: ahead by a sha, not by
+        # anything anyone would lose.
+        shipped = _git(repo, "rev-parse", "dev")
+        _git(repo, "checkout", "-q", "--detach", "origin/master")
+        _git(repo, "read-tree", "--reset", "-u", "dev")
+        _git(repo, "commit", "-qm",
+             f"publish: projected\n\nPublished-From: {shipped}")
+        _git(repo, "push", "-q", "origin", "HEAD:refs/heads/master")
+        _git(repo, "checkout", "-q", "dev")
+        _bump(repo, "pub-kit", "1.2.0", "pub-kit 1.2.0")
+
+        publish.preflight()  # must not raise
 
 
 class TestDevOnlyExclusion:
@@ -235,47 +259,120 @@ class TestDevOnlyExclusion:
             publish.preflight(allow_dev_only={"pub-kit"})
 
 
-class TestFilteredReleaseReplay:
-    """A filtered release replays commits onto master, giving them new SHAs.
+class TestProjectionRelease:
+    """The filtered release, end to end against a real bare origin.
 
-    The originals then sit in master..dev forever, so without a CONTENT-level
-    check the next filtered publish tries to replay them again and dies on an
-    empty cherry-pick. `git cherry` marks a patch already upstream with "-",
-    which is the question that actually needs answering.
-
-    These pin the PARSE, which is the part publish.py owns. That `git cherry`
-    marks a replayed commit "-" is git's own documented behaviour and was
-    confirmed against this repo after the first filtered release.
+    This replaced a cherry-pick replay that could not survive its own output:
+    replaying gave each shipped commit a new sha, so the originals stayed in
+    the range forever and the next publish re-picked work master already had,
+    dying on a duplication conflict. The projection is idempotent by
+    construction, which is what these assert.
     """
 
-    def test_parses_already_applied_commits(self, repo, monkeypatch):
-        monkeypatch.setattr(publish, "git", lambda *a, **k: (
-            "- 7b4bdcab4b2c0c6aeb8cff86c243f500649002fa\n"
-            "+ 53978995fc3c190af2975131fa7d971edcc17261\n"
-            "- 24223632c6bdd8f869429771119f9d31879ee455\n"))
+    def _range(self, repo):
+        (repo / "plugins" / "dev-kit" / "notes.md").write_text("dev-only\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "dev-kit: notes")
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        return publish.preflight()[1]
 
-        applied = publish.already_applied([])
+    def test_ships_dev_content_and_holds_the_dev_only_plugin_back(self, repo):
+        excluded = self._range(repo)
+        publish.push_and_merge(excluded)
 
-        assert applied == {
-            "7b4bdcab4b2c0c6aeb8cff86c243f500649002fa",
-            "24223632c6bdd8f869429771119f9d31879ee455"}
+        assert publish.version_at("origin/master", "pub-kit") == "1.1.0"
+        assert publish.version_at("origin/master", "dev-kit") == "0.1.0"
+        on_master = _git(repo, "ls-tree", "-r", "--name-only", "origin/master")
+        assert "plugins/dev-kit/notes.md" not in on_master.splitlines()
+        assert "plugins/dev-kit/.claude-plugin/plugin.json" in on_master.splitlines()
 
-    def test_unshipped_commits_are_not_reported_as_applied(self, repo, monkeypatch):
-        """A "+" is work master does not have; treating it as applied would
-        silently drop it from the release."""
-        monkeypatch.setattr(publish, "git", lambda *a, **k: (
-            "+ 53978995fc3c190af2975131fa7d971edcc17261\n"
-            "+ 1874c6da90e1fd225c21474e87013c2dd5eac912\n"))
+    def test_stamps_the_dev_commit_it_was_built_from(self, repo):
+        excluded = self._range(repo)
+        expected = _git(repo, "rev-parse", "dev")
+        publish.push_and_merge(excluded)
 
-        assert publish.already_applied([]) == set()
+        message = _git(repo, "log", "-1", "--format=%B", "origin/master")
+        assert f"Published-From: {expected}" in message
 
-    def test_unreadable_cherry_output_ships_everything(self, repo, monkeypatch):
-        """Fail OPEN, not closed. If the question cannot be answered, replaying
-        a commit fails loudly on a conflict; wrongly calling it applied drops
-        shippable work from master with nothing to notice it."""
-        monkeypatch.setattr(publish, "git", lambda *a, **k: "")
+    def test_a_second_publish_of_the_same_work_is_a_no_op(self, repo):
+        """The regression. A replay conflicted here; a projection has nothing
+        left to do, and preflight sees an empty range rather than commits it
+        already shipped."""
+        excluded = self._range(repo)
+        publish.push_and_merge(excluded)
+        before = _git(repo, "rev-parse", "origin/master")
 
-        assert publish.already_applied([]) == set()
+        with pytest.raises(publish.PublishError, match="nothing to publish"):
+            publish.preflight()
+        assert _git(repo, "rev-parse", "origin/master") == before
+
+    def test_verify_passes_after_a_projection(self, repo):
+        excluded = self._range(repo)
+        publish.push_and_merge(excluded)
+
+        leaked = [p for p in publish.verify()
+                  if "differs from" in p or "did not land" in p]
+        assert leaked == []
+
+
+class TestRangeBase:
+    """Where `..dev` starts.
+
+    A projection release stamps the dev sha it was built from onto master's
+    commit. Reading that back is what stops the range -- and therefore the
+    dev-only exclusion list and the bump gates -- from growing without bound
+    once master's history stops being an ancestor of dev's.
+    """
+
+    def test_falls_back_to_master_without_a_trailer(self, repo):
+        assert publish.range_base() == "origin/master"
+
+    def test_reads_the_published_from_trailer(self, repo):
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        _git(repo, "push", "-q", "origin", "dev")
+        shipped = _git(repo, "rev-parse", "dev")
+
+        _git(repo, "checkout", "-q", "--detach", "origin/master")
+        _git(repo, "read-tree", "--reset", "-u", "dev")
+        _git(repo, "commit", "-qm",
+             f"publish: projected\n\nPublished-From: {shipped}")
+        _git(repo, "push", "-q", "origin", "HEAD:refs/heads/master")
+        _git(repo, "checkout", "-q", "dev")
+        _git(repo, "fetch", "-q", "origin")
+
+        assert publish.range_base() == shipped
+        assert publish._range_commits() == []
+
+    def test_ignores_a_trailer_naming_an_unreachable_commit(self, repo):
+        """Fail OPEN: an unusable trailer must widen the range back to plain
+        ancestry, never narrow it -- a narrower range silently drops a commit
+        from the release."""
+        _git(repo, "checkout", "-q", "--detach", "origin/master")
+        _git(repo, "commit", "-q", "--allow-empty", "-m",
+             "publish: projected\n\nPublished-From: " + "0" * 40)
+        _git(repo, "push", "-q", "origin", "HEAD:refs/heads/master")
+        _git(repo, "checkout", "-q", "dev")
+        _git(repo, "fetch", "-q", "origin")
+
+        assert publish.range_base() == "origin/master"
+
+
+class TestHeldBackPaths:
+    """The projection takes dev's tree, so every dev-only file needs putting
+    back -- and the two halves need opposite treatment."""
+
+    def test_splits_by_whether_master_has_the_file(self, repo):
+        (repo / "plugins" / "dev-kit" / "new.py").write_text("unshipped\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "dev-kit: new file")
+
+        on_master, dev_new = publish._held_back_paths({"dev-kit"})
+
+        assert "plugins/dev-kit/.claude-plugin/plugin.json" in on_master
+        assert dev_new == ["plugins/dev-kit/new.py"]
+
+    def test_no_dev_only_plugins_holds_nothing_back(self, repo):
+        assert publish._held_back_paths(set()) == ([], [])
 
 
 class TestRepoInvariantGates:
@@ -496,23 +593,3 @@ class TestChangedPluginsUsesNetDiff:
         monkeypatch.setattr(publish.subprocess, "run",
                             lambda *a, **k: SimpleNamespace(returncode=1))
         assert publish._changed_plugins() == {"alpha"}
-
-
-class TestMergeCommitDetection:
-    """A merge commit carries no content of its own for a linearised replay."""
-
-    def test_two_parents_is_a_merge(self, monkeypatch):
-        import publish
-        monkeypatch.setattr(publish, "git",
-                            lambda *a, **k: "child parentA parentB")
-        assert publish._is_merge_commit("child") is True
-
-    def test_one_parent_is_not_a_merge(self, monkeypatch):
-        import publish
-        monkeypatch.setattr(publish, "git", lambda *a, **k: "child parentA")
-        assert publish._is_merge_commit("child") is False
-
-    def test_root_commit_is_not_a_merge(self, monkeypatch):
-        import publish
-        monkeypatch.setattr(publish, "git", lambda *a, **k: "child")
-        assert publish._is_merge_commit("child") is False
