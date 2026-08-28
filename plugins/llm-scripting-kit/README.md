@@ -1,5 +1,24 @@
 # llm-scripting-kit
 
+The installed `llm-scripting-kit` command is the host-neutral interface to the
+shared endpoint registry and completion backends:
+
+```bash
+llm-scripting-kit endpoints
+llm-scripting-kit models --endpoint openrouter
+llm-scripting-kit resolve --endpoint sol
+printf 'Review this design' | llm-scripting-kit complete --endpoint sol
+llm-scripting-kit complete --endpoint openrouter --model qwen \
+  --system-file system.txt --prompt-file prompt.txt
+```
+
+Discovery and completion commands emit JSON by default. `complete --format
+text` prints only the response text. Exit codes are `0` for success, `1` for a
+runtime failure, `2` for invalid input/configuration, and `3` for a classified
+persistent halt such as authentication, credit, or rate limiting. The existing
+`status`, `set-key`, and `which` account commands retain their human-readable
+output.
+
 LLM access for scripts and pipelines: key resolution, a shared model registry,
 and named OpenAI-compatible endpoints. **OpenRouter is the default endpoint**,
 so existing setups keep working unchanged.

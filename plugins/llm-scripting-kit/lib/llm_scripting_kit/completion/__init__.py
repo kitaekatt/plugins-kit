@@ -50,6 +50,7 @@ from .halt import (
     classify_openai_exception,
 )
 from .types import BackendOptions, LLMBackend, LLMResponse
+from .factory import BackendSelection, create_backend
 from .opencode_backend import (
     DEFAULT_OPENCODE_TIMEOUT_S,
     OPENCODE_FILESYSTEM_POSTURE,
@@ -63,6 +64,8 @@ __all__ = [
     "LLMResponse",
     "BackendOptions",
     "LLMBackend",
+    "BackendSelection",
+    "create_backend",
     # halt taxonomy
     "HALT_AUTH",
     "HALT_RATE_LIMIT",
