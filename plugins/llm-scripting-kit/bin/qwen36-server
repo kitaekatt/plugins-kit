@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+readonly source_path="$(realpath "${BASH_SOURCE[0]}")"
+readonly script_dir="$(cd "$(dirname "$source_path")" && pwd)"
+exec "$script_dir/../scripts/model-server.sh" qwen36 "$@"
