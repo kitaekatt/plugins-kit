@@ -1,5 +1,24 @@
 # llm-scripting-kit
 
+The installed `llm-scripting-kit` command is the host-neutral interface to the
+shared endpoint registry and completion backends:
+
+```bash
+llm-scripting-kit endpoints
+llm-scripting-kit models --endpoint openrouter
+llm-scripting-kit resolve --endpoint sol
+printf 'Review this design' | llm-scripting-kit complete --endpoint sol
+llm-scripting-kit complete --endpoint openrouter --model qwen \
+  --system-file system.txt --prompt-file prompt.txt
+```
+
+Discovery and completion commands emit JSON by default. `complete --format
+text` prints only the response text. Exit codes are `0` for success, `1` for a
+runtime failure, `2` for invalid input/configuration, and `3` for a classified
+persistent halt such as authentication, credit, or rate limiting. The existing
+`status`, `set-key`, and `which` account commands retain their human-readable
+output.
+
 LLM access for scripts and pipelines: key resolution, a shared model registry,
 and named OpenAI-compatible endpoints. **OpenRouter is the default endpoint**,
 so existing setups keep working unchanged.
@@ -41,6 +60,10 @@ registry from this plugin, so keys are set up once and consumed everywhere.
 - **Shared model registry.** A layered `config.yaml` maps aliases (plus
   `default` / `defaultCheap` selectors) to concrete slugs, per endpoint. One
   project override changes the model for every consumer at once.
+- **Local server launch profiles.** The canonical `model-server.sh` script owns
+  the measured Qwen3.6/NInfer and Qwen3.8/llama.cpp argument sets. Claude calls
+  it through `${CLAUDE_PLUGIN_ROOT}`; `qwen36-server` and `qwen38-server` are
+  thin PATH adapters for interactive shells.
 
 ## API
 

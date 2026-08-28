@@ -1,4 +1,4 @@
-"""llm-scripting-kit CLI -- inspect, set, and validate an endpoint's API key.
+"""Compatibility launcher for the installed :mod:`llm_scripting_kit.cli`.
 
 Subcommands (all accept ``--endpoint NAME``; default is the config's
 ``default_endpoint``, i.e. ``openrouter``):
@@ -194,4 +194,6 @@ def _cmd_which(endpoint: str | None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from llm_scripting_kit.cli import main as package_main
+
+    sys.exit(package_main())

@@ -276,11 +276,18 @@ P4-managed. Plugin install paths are explicitly out of scope: a plugin
 cache directory is never a CWD and is not a git repo, so a link created
 there would never be discovered by Codex.
 
-Once `<project>/.agents` exists (by any means -- bootstrap's own link, or
-anything else), bootstrap performs exactly one `lstat` on later passes and
-stops: it will not repair a dangling or misdirected link, will not update
-VCS exclusions later, and will not preserve user content on a
-user-requested deletion. Delete `.agents` to make bootstrap rebuild it.
+Once `<project>/.agents/skills` exists (by any means -- bootstrap's own
+link, or anything else), bootstrap performs exactly one `lstat` on later
+passes and stops: it will not repair a dangling or misdirected link, will not
+update VCS exclusions later, and will not preserve user content on a
+user-requested deletion. Delete `.agents/skills` to make bootstrap rebuild it.
+
+The sentinel is that CHILD, not the `.agents` parent. `.agents/` is shared --
+Codex also keeps repo-level plugin config at `.agents/plugins/marketplace.json`
+-- so an existing `.agents` is adopted (bootstrap creates it only when absent,
+and its cleanup removes it only when the same attempt created it) rather than
+read as an opt-out. Anything other than a directory at `.agents` is a failure
+carrying the OS message, not a silent skip.
 
 See `plugins/bootstrap/skills/bootstrap/references/engine-internals.md` for
 the check/fix/re-check flow and `remediation-reference.md` for failure

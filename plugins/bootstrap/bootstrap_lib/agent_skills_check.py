@@ -6,6 +6,16 @@ skills, bootstrap creates the former as a link to the latter (a directory
 symlink, or an NTFS junction on Windows when a symlink cannot be created),
 and excludes the generated path from Git and Perforce first.
 
+Everything here keys on ``.agents/skills``, the child -- never on ``.agents``
+itself. ``.agents/`` is a SHARED directory: Codex also keeps repo-level
+plugin config at ``.agents/plugins/marketplace.json``, which is why the
+generated ignore rule below anchors the skills child rather than the parent.
+Treating the parent as the sentinel contradicted that -- a project that
+adopted ``.agents/plugins/`` silently never got its skills link, and the only
+documented recovery ("delete .agents to rebuild") meant deleting that config.
+So an existing ``.agents`` is ADOPTED, and only a missing one is created;
+what this module refuses to touch is a pre-existing ``.agents/skills``.
+
 Scope for v1 is the current PROJECT ROOT only -- plugin install paths are
 explicitly out of scope. Codex resolves a project root by walking up from
 CWD to a ``project_root_markers`` entry, defaulting to ``.git``; a plugin
@@ -74,8 +84,11 @@ class SkillsLinkCheck:
 
     ``status`` is one of:
 
-    - ``existing``          -- .agents already exists; quick-exit skip.
-    - ``lstat_error``        -- could not lstat .agents; failure.
+    - ``existing``          -- .agents/skills already exists; quick-exit skip.
+    - ``lstat_error``        -- could not lstat .agents/skills; failure. This
+      is also how a non-directory ``.agents`` surfaces (ENOTDIR), which is
+      unusual enough that the OS message is a better report than a status of
+      its own.
     - ``not_directory``      -- project root is not a directory; failure.
     - ``not_worktree``       -- project root has no git repository at all; skip.
     - ``not_toplevel``       -- inside a worktree but not its root; skip.
@@ -106,13 +119,14 @@ def check_project_agent_skills_link(project_dir, agent_skills_link_value):
     treats an explicit null as absent, so there is no way to observe one
     here).
     """
-    agents_path = os.path.join(project_dir, AGENTS_DIRNAME)
+    link_path = os.path.join(project_dir, AGENTS_DIRNAME, SKILLS_DIRNAME)
 
-    # Step 1 (design step 3): the .agents quick-exit runs before ANYTHING
-    # else -- config lookup, Codex detection, source inspection, VCS
-    # commands -- so a manually-managed .agents always wins.
+    # Step 1 (design step 3): the .agents/skills quick-exit runs before
+    # ANYTHING else -- config lookup, Codex detection, source inspection, VCS
+    # commands -- so a manually-managed link always wins. lstat, not stat: a
+    # dangling link is still somebody's link and is not ours to repair.
     try:
-        os.lstat(agents_path)
+        os.lstat(link_path)
     except FileNotFoundError:
         pass
     except OSError as exc:
@@ -217,27 +231,49 @@ class SkillsLinkFixResult:
 
 
 def create_agent_skills_link(project_dir):
-    """Create .agents, apply VCS exclusions, then create .agents/skills.
+    """Ensure .agents exists, apply VCS exclusions, then create .agents/skills.
+
+    ``.agents`` is created only when ABSENT and adopted when present -- see
+    the module docstring: it is shared with Codex's own ``.agents/plugins/``,
+    so its existence says nothing about whether the skills link is wanted.
 
     Every failure branch removes only what THIS attempt created (design
     EDGE CASES: a failed creation must not touch pre-existing content, and
     successful VCS exclusions may remain after a later failure -- they are
-    harmless and make the next attempt cheaper).
+    harmless and make the next attempt cheaper). Adoption sharpens that rule
+    rather than relaxing it: an ``.agents`` this attempt did not create is
+    never removed, however the attempt ends.
     """
     agents_path = os.path.join(project_dir, AGENTS_DIRNAME)
     source_path = os.path.join(project_dir, SOURCE_REL)
+    link_path = os.path.join(agents_path, SKILLS_DIRNAME)
 
+    created_agents = True
     try:
         os.mkdir(agents_path)
     except FileExistsError:
-        # Another process won the race; do not inspect what it made.
-        return SkillsLinkFixResult(False, "race_existing")
+        created_agents = False
+        if not os.path.isdir(agents_path):
+            # A regular file or a dangling symlink at .agents. The check half
+            # reports this as lstat_error and never reaches the fixer, so this
+            # is the race/direct-call guard, not the usual path.
+            return SkillsLinkFixResult(
+                False, "mkdir_failed",
+                detail="%s exists and is not a directory" % agents_path)
     except OSError as exc:
         return SkillsLinkFixResult(False, "mkdir_failed", detail=str(exc))
 
+    if os.path.lexists(link_path):
+        # Another process created the link between the check and here. The
+        # race used to be caught by mkdir; adopting .agents moves it down to
+        # the child, which is the thing that actually has one owner. Checked
+        # BEFORE the VCS phase: there is nothing left to exclude for, and the
+        # winner has already done it.
+        return SkillsLinkFixResult(False, "race_existing")
+
     vcs_ok, vcs_result = _apply_vcs_exclusions(project_dir, agents_path)
     if not vcs_ok:
-        cleanup_err = _rmdir_or_none(agents_path)
+        cleanup_err = _cleanup_after_failure(link_path, agents_path, created_agents)
         if cleanup_err:
             return SkillsLinkFixResult(
                 False, "vcs_failed_cleanup_failed",
@@ -245,10 +281,14 @@ def create_agent_skills_link(project_dir):
             )
         return SkillsLinkFixResult(False, "vcs_failed", detail=vcs_result)
 
-    link_path = os.path.join(agents_path, SKILLS_DIRNAME)
     link_ok, mechanism, link_detail = _create_link(source_path, link_path, agents_path)
     if not link_ok:
-        cleanup_err = _cleanup_failed_link(link_path, agents_path)
+        if os.path.lexists(link_path):
+            # Absent moments ago, present now, and _create_link removes its
+            # own partial artifacts -- so this is the loser of a race. Leave
+            # it: cleaning up here would delete the WINNER's link.
+            return SkillsLinkFixResult(False, "race_existing")
+        cleanup_err = _cleanup_after_failure(link_path, agents_path, created_agents)
         if cleanup_err:
             return SkillsLinkFixResult(
                 False, "link_failed_cleanup_failed",
@@ -270,9 +310,22 @@ def create_agent_skills_link(project_dir):
     return SkillsLinkFixResult(True, "created", mechanism=mechanism, vcs_result=vcs_result)
 
 
-def _rmdir_or_none(path):
+def _cleanup_after_failure(link_path, agents_path, created_agents):
+    """Remove only what this attempt created; returns an error string or None.
+
+    ``created_agents`` is the whole point: an adopted ``.agents`` may hold
+    Codex's ``.agents/plugins/`` config that this code did not create, so a
+    failed link must not take it down.
+    """
     try:
-        os.rmdir(path)
+        if os.path.lexists(link_path):
+            _remove_link_artifact(link_path)
+    except OSError as exc:
+        return str(exc)
+    if not created_agents:
+        return None
+    try:
+        os.rmdir(agents_path)
     except OSError as exc:
         return str(exc)
     return None
@@ -298,19 +351,6 @@ def _remove_link_artifact(link_path):
         os.rmdir(link_path)
     elif os.path.lexists(link_path):
         os.unlink(link_path)
-
-
-def _cleanup_failed_link(link_path, agents_path):
-    try:
-        if os.path.lexists(link_path):
-            _remove_link_artifact(link_path)
-    except OSError as exc:
-        return str(exc)
-    try:
-        os.rmdir(agents_path)
-    except OSError as exc:
-        return str(exc)
-    return None
 
 
 def _create_link(source_path, link_path, agents_dir):

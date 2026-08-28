@@ -132,14 +132,14 @@ class TestExactMessagesAndOneOutcomePerRoot:
 
     def test_existing_agents_message_is_exact(self, tmp_path):
         repo = _init_repo(str(tmp_path / "repo"))
-        os.makedirs(os.path.join(repo, ".agents"))
+        os.makedirs(os.path.join(repo, ".agents", "skills"))
         actions, oks, failures = _run(repo, None)
         label = "project:%s" % os.path.abspath(repo)
         assert failures == []
         assert actions == []
         assert oks == [
-            "agent skills link (%s): skipped; .agents already exists; "
-            "delete .agents to rebuild" % label
+            "agent skills link (%s): skipped; .agents/skills already exists; "
+            "delete it to rebuild" % label
         ]
 
 
@@ -168,7 +168,7 @@ class TestReCheckGatesSuccess:
         assert len(failures) == 1
         assert failures[0]["type"] == "agent_skills_link"
         assert actions == [
-            "agent skills link (project:%s): failed; .agents is absent after "
+            "agent skills link (project:%s): failed; .agents/skills is absent after "
             "creation" % os.path.abspath(repo)
         ]
 

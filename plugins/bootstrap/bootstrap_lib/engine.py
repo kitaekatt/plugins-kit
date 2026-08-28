@@ -3973,11 +3973,11 @@ def _run_agent_skills_link_check(project_dir, agent_skills_link_value,
 
     if status == "existing":
         ctx.ok(
-            "agent skills link (%s): skipped; .agents already exists; "
-            "delete .agents to rebuild" % root_label
+            "agent skills link (%s): skipped; .agents/skills already exists; "
+            "delete it to rebuild" % root_label
         )
     elif status == "lstat_error":
-        _fail("cannot stat .agents: %s" % outcome.detail, outcome.detail)
+        _fail("cannot stat .agents/skills: %s" % outcome.detail, outcome.detail)
     elif status == "not_directory":
         _fail("root is not a directory", "root is not a directory")
     elif status == "not_worktree":
@@ -4034,8 +4034,8 @@ def _resolve_agent_skills_fix(ctx, root_label, project_dir,
 
     if fix.status == "race_existing":
         ctx.ok(
-            "agent skills link (%s): skipped; .agents already exists; "
-            "delete .agents to rebuild" % root_label
+            "agent skills link (%s): skipped; .agents/skills already exists; "
+            "delete it to rebuild" % root_label
         )
         return
     if fix.status == "mkdir_failed":
@@ -4079,7 +4079,8 @@ def _resolve_agent_skills_fix(ctx, root_label, project_dir,
         _fail("cannot verify .agents after creation: %s" % recheck.detail, recheck.detail)
         return
     if recheck.status != "existing":
-        _fail(".agents is absent after creation", ".agents is absent after creation")
+        _fail(".agents/skills is absent after creation",
+              ".agents/skills is absent after creation")
         return
 
     ctx.action(
