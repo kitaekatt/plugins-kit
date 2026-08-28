@@ -6,6 +6,12 @@
 
 This repo is a **Claude Code plugin marketplace** — it extends Claude Code with skills, commands, and hooks via the `.claude-plugin/marketplace.json` manifest. Plugins are loaded either via `--plugin-dir` (local development) or `enabledPlugins` in settings (production installs from the remote repo).
 
+## Harness ownership
+
+Develop plugin features **Claude-first** in this repository. Establish the Claude Code skill, command, hook, or plugin-root invocation before you adapt the reusable seam.
+
+The sibling `../codex-plugins-kit` repository owns thin Codex-first adapters and its `AGENTS.md`. Reusable behavior stays here. Codex-specific packaging stays there.
+
 ## Architecture
 
 ```

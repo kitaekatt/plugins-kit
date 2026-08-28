@@ -2,9 +2,25 @@
 
 Guidance for an AI agent working in this plugin. llm-scripting-kit is the
 fleet's LLM ACCESS layer: it answers which endpoint, which model, which key,
-and which transport -- then makes one call. `README.md` is the human-facing
+which transport, and how a configured local model server starts. `README.md` is
+the human-facing
 description of the same surface; `skills/openrouter-account/` owns key
 management.
+
+## Local model server entry points
+
+`scripts/model-server.sh` is the canonical Claude-first launcher. Invoke it as
+`${CLAUDE_PLUGIN_ROOT}/scripts/model-server.sh qwen36|qwen38`; this works from
+the plugin root Claude actually loaded and does not assume a plugin `bin/`
+directory is on PATH. `bin/qwen36-server` and `bin/qwen38-server` are thin shell
+adapters for interactive environments that deliberately put them on PATH.
+
+The two profiles preserve their measured GPU settings while keeping paths and
+ports overridable through environment variables. Qwen3.6 resolves NInfer from
+`NINFER_ROOT` or conventional dev roots and uses INT8 KV plus MTP3. Qwen3.8
+resolves llama.cpp and its GGUF from their existing environment overrides and
+uses full GPU offload plus Q8 KV. Both bind localhost by default; broader
+network exposure is an explicit host override.
 
 ## Scope: one call, made correctly
 

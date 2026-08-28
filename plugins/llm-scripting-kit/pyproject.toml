@@ -1,7 +1,7 @@
 [project]
 name = "llm-scripting-kit"
-version = "0.11.0"
-description = "LLM key resolution, model registry, named OpenAI-compatible endpoints, and a completion seam (OpenRouter, claude-cli, and codex-cli backends) for Claude Code plugins"
+version = "0.12.0"
+description = "LLM access, local model launch profiles, and completion backends for Claude Code plugins"
 requires-python = ">=3.10"
 
 dependencies = ["pyyaml"]
