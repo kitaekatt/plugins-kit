@@ -150,6 +150,17 @@ N similar units you would otherwise brief individually.
 **Test:** does it survive collapsing into one shell command? If not, it is one unit.
 **Gloss:** "N similar units that resist collapsing into one command"
 
+### `parallel-leaf` `[skill]` `render: glossed`
+One implementation unit that passed every test in the rendered
+parallel-development razor.
+**Test:** did this implementation unit pass every test in that razor?
+**Gloss:** "an independently executable implementation leaf admitted by the
+parallel-development razor"
+
+*Consequence:* the term applies to each admitted leaf, not to the collection.
+Each leaf is routed and dispatched independently. The same-frontier leaves run
+concurrently.
+
 ### `bulk-output` `[skill]` `render: glossed`
 The unit emits substantially more than you need to keep.
 **Test:** would you skim and discard most of the output?
@@ -164,6 +175,22 @@ a different failure mode?
 ### `schema` `[skill]` `render: bare`
 The return shape must be machine-validated.
 **Test:** will you parse the result rather than read it?
+
+### `rule-applying` `[skill]` `render: glossed`
+The unit applies a stated rule instead of deciding which rule applies.
+**Test:** does it apply a stated rule, rather than decide which rule applies?
+**Gloss:** "applies a stated rule rather than deciding which rule applies"
+
+### `latency-tolerant` `[skill]` `render: glossed`
+Nothing downstream and no user-visible result waits for this unit.
+**Test:** would anything start sooner if this unit finished sooner?
+**Gloss:** "nothing starts sooner if it finishes sooner"
+
+### `mutating` `[skill]` `render: glossed`
+The unit changes state that a sandbox or git checkout cannot restore.
+**Test:** would any effect survive a git checkout, such as a push, deploy,
+service call, or state outside the tree?
+**Gloss:** "takes effects no sandbox confines and no checkout reverts"
 
 ---
 

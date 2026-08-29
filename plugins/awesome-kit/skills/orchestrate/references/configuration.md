@@ -114,6 +114,14 @@ first-occurrence gloss. The shape terms in a routing row must resolve to live sk
 does not consume space in the per-unit artifact. `without_backend` maps a backend id to a
 clause shown only when that backend is absent; use it to disclose a real routing hole.
 
+`parallel-development-razor` is the shipped parallelism knob. Override that test record by id
+to tune when implementation is split; do not copy the whole `shape.tests` list. The shipped
+`[parallel-leaf, known, rule-applying]` row routes each admitted leaf independently. Higher
+priority rows keep `unverifiable` or `mutating` leaves on a stronger worker. To use a local
+implementation worker, replace the complete `routing` list and put its discovered
+llm-scripting-kit model-entry id first in that row; keep a fallback model for machines where
+the entry or harness is absent.
+
 ## `agent_types`, `effort`, and `announce`
 
 `agent_types.items[]` contains `{id, name, text}` records rendered as role bullets.

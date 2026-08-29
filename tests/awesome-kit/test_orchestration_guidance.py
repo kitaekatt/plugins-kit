@@ -184,10 +184,27 @@ class TestShippedDefaults:
             assert row["models"]
             assert all(isinstance(model, str) for model in row["models"])
 
+        shapes = [row["shape"] for row in data["routing"]]
+        assert shapes.index(["parallel-leaf", "unverifiable"]) < shapes.index(
+            ["parallel-leaf", "known", "rule-applying"]
+        )
+        assert shapes.index(["parallel-leaf", "mutating"]) < shapes.index(
+            ["parallel-leaf", "known", "rule-applying"]
+        )
+
     def test_shipped_routing_uses_only_the_two_namespaces(self):
         data = shipped()
         models = [model for row in data["routing"] for model in row["models"]]
-        assert models == ["sol", "agent:fable", "sol", "luna", "agent:sonnet"]
+        assert models == [
+            "sol",
+            "agent:fable",
+            "sol",
+            "agent:sonnet",
+            "agent:sonnet",
+            "luna",
+            "luna",
+            "agent:sonnet",
+        ]
         assert all(model.startswith("agent:") or ":" not in model for model in models)
 
     def test_shipped_defaults_render_with_the_expected_sections(
@@ -208,6 +225,8 @@ class TestShippedDefaults:
         text = capsys.readouterr().out
         for section in ("Shape the unit", "Routing", "Agent type", "Effort", "Announce", "Dispatch backends", "Capacity"):
             assert section in text
+        assert "parallel-development razor" in text
+        assert "At least two leaves must be runnable now" in text
 
     def test_lexicon_and_routing_shape_terms_stay_in_sync(self):
         data = shipped()
@@ -1130,6 +1149,28 @@ class TestLayeringOverridesTheTree:
         layered("user", {"lexicon": [{"id": "known", "gloss": "my own gloss"}]})
         config, provenance = og.resolve_config(layered.project_root)
         assert "`known` (my own gloss)" in og.render(config, provenance)
+
+    def test_a_user_layer_tunes_only_the_parallel_development_razor(self, layered):
+        base = yaml.safe_load(_shipped_path().read_text(encoding="utf-8"))
+        layered("shipped", base)
+        layered(
+            "user",
+            {
+                "shape": {
+                    "tests": [
+                        {
+                            "id": "parallel-development-razor",
+                            "text": "CUSTOM PARALLEL THRESHOLD",
+                        }
+                    ]
+                }
+            },
+        )
+        config, provenance = og.resolve_config(layered.project_root)
+        assert len(config["shape"]["tests"]) == len(base["shape"]["tests"])
+        text = og.render(config, provenance)
+        assert "CUSTOM PARALLEL THRESHOLD" in text
+        assert "Split implementation only when EVERY" not in text
 
 
 

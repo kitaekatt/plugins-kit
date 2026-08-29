@@ -131,6 +131,11 @@ lexicon:
   render: glossed
   test: Does it survive collapsing into one shell command? If not, it is one unit.
   gloss: N similar units that resist collapsing into one command
+- id: parallel-leaf
+  kind: skill
+  render: glossed
+  test: Did this implementation unit pass every test in the parallel-development razor?
+  gloss: an independently executable implementation leaf admitted by the parallel-development razor
 - id: bulk-output
   kind: skill
   render: glossed
@@ -147,13 +152,11 @@ lexicon:
   kind: skill
   render: bare
   test: Will you parse the result rather than read it?
-# The three terms below ship WITHOUT a routing row, which is the norm here rather
-# than an omission -- inference, condensation, bulk-output, schema, abortable,
-# conversational, plan-checkpoint and authored-here are all rowless too, working
-# through the shape, agent_types and effort prose instead. They exist so a policy
-# layer that adds a slow, cheap, or unconfined lane has vocabulary to route on:
-# a routing row may only name live `kind: skill` terms, and a user layer's
-# `routing` list replaces this one in full, so the terms must exist here first.
+# These terms support cheap, slow, or unconfined lanes. `rule-applying` and
+# `mutating` participate in the shipped parallel-leaf rows; `latency-tolerant`
+# remains available for user routing. A routing row may only name live
+# `kind: skill` terms, and a user layer's `routing` list replaces this one in
+# full, so the vocabulary must exist before an override can use it.
 - id: rule-applying
   kind: skill
   render: glossed
@@ -224,6 +227,20 @@ shape:
     without_backend:
       codex: A genuine fan-out then has no other route -- sequence the units or handle them
         inline.
+  - id: parallel-development-razor
+    principle: P0.9
+    text: >-
+      Split implementation only when EVERY candidate leaf passes all four tests: (a) its
+      interface is fixed before launch, not decided inside it; (b) it has exclusive file
+      ownership stated in the brief, plus backend isolation when writers share a checkout;
+      (c) its standalone brief states what `done`
+      looks like without requiring discovery inside the leaf; and (d) it runs a named cheap
+      objective check itself. At least two leaves must be runnable now on the same dependency
+      frontier. One runnable leaf at a time is sequencing, not parallelism. Cut along existing
+      module and test seams. Mark each admitted unit {parallel-leaf}. A weak or cheap implementor
+      takes only a {known} {rule-applying} leaf that is neither {unverifiable} nor {mutating};
+      interface design, cross-cutting decisions, integration, and conflict resolution stay with
+      the orchestrator or the strongest available model.
   - id: plan-is-a-unit
     principle: P0.6
     text: >-
@@ -277,6 +294,15 @@ routing:
   guards:
   - fable draws from a different usage pool; a pool does not degrade gracefully when spent, it stops.
   - Never choose a cheaper model for a unit that meets the fable bar to harvest the discount.
+- shape: [parallel-leaf, unverifiable]
+  models: [agent:sonnet]
+- shape: [parallel-leaf, mutating]
+  models: [agent:sonnet]
+- shape: [parallel-leaf, known, rule-applying]
+  models: [luna]
+  guards:
+  - This row routes one admitted leaf, never the whole batch. Dispatch every runnable leaf on
+    the current frontier separately at low or medium effort.
 - shape: [fan-out]
   models: [luna]
 - shape: []
@@ -317,9 +343,10 @@ effort:
     backend: codex
     requires_model: [luna, sol]
     text: >-
-      Codex-side, effort is a real dial set per dispatch -- model-entry defaults are above. luna
-      carries the higher default because units arrive there for dispatch shape, not difficulty,
-      so deliberation is the only compensation on the default route that takes everything by fall-through.
+      Codex-side, effort is a real dial set per dispatch -- model-entry defaults are above. A
+      {parallel-leaf} + {known} + {rule-applying} unit uses `low` or `medium`: its fixed interface and cheap
+      check are the quality controls, and max-effort leaves erase the wall-clock gain. luna
+      otherwise carries the higher default because units arrive there for dispatch shape, not difficulty.
       Raise sol from `high` to `max` when the unit is `unverifiable`; a `cross-check`
       stays at `high`.
   note: >-

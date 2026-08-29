@@ -94,12 +94,11 @@ technique_skill:
         - n: 1
           action: Confirm the task warrants orchestration.
           detail: |
-            Delegate by persistent context footprint, not difficulty or duration. Significant =
-            multiple independent work units, or units that read a lot / emit a lot (bulk reads,
-            diffs, logs, drafts) relative to their conclusions. One small self-contained unit whose
-            result feeds the very next decision stays inline -- an agent round-trip there costs as
-            much context as the work. Classify by shape in one glance; if classifying takes more
-            thought than that, treat it as delegate-shaped.
+            Delegate for one of two reasons: footprint -- the unit reads or emits far more than
+            its conclusion -- or parallelism -- the rendered razor yields at least two leaves
+            runnable now. Neither means do it inline. One small self-contained unit whose result
+            feeds the next decision stays inline; an agent round-trip costs as much context as the
+            work. Difficulty and indecision are not reasons to delegate.
         - n: 2
           action: Render the orchestration policy by running the script in the policy block above.
           detail: >-
@@ -108,15 +107,16 @@ technique_skill:
             review, never route the plan's creation. Keep the output in view for steps 3-5;
             it is the source of truth for routing, backends and capacity on this machine.
         - n: 3
-          action: Decompose into self-contained units and classify each -- the plan itself is the first candidate unit.
+          action: Decompose into self-contained units, apply the rendered parallel-development razor, and classify each -- the plan itself is the first candidate unit.
           detail: |
             The decomposition you are about to author is a unit (the policy's plan-checkpoint
             shaping tests): route it through the rendered tree before briefing anything from
             it, which may mean delegating its creation, or authoring it and delegating its
-            review. Then per unit note (a) dependencies -- independent units run in parallel,
-            dependent ones sequence; (b) compression profile -- does the result compress to a
-            small conclusion? High-generation-cost / small-conclusion units are the ideal
-            delegations.
+            review. A delegated plan-creation brief includes the rendered parallel-development
+            razor and returns candidate leaves labelled against each of its tests. Then per unit
+            note (a) dependencies; (b) whether the razor admits it as a parallel leaf; and (c)
+            compression profile -- does the result compress to a small conclusion?
+            High-generation-cost / small-conclusion units are the ideal footprint delegations.
         - n: 4
           action: Match the unit to the rendered routing rows and choose the first available model.
           detail: >-
@@ -132,8 +132,9 @@ technique_skill:
           detail: |
             Use the launch mechanics the rendered policy gives for the chosen backend; they
             differ materially between backends (a CLI backend has no built-in isolation or
-            completion report). Launch independent units in one message so they run
-            concurrently. The return shape must require disclosure of any critical
+            completion report). Launch every admitted leaf on the current dependency frontier in
+            one message. A leaf whose dependency has not completed waits for the next frontier.
+            The return shape must require disclosure of any critical
             infrastructure the unit created, moved, retired, or changed -- generated
             artifacts and their generators, build/commit-time gates, load-bearing paths other
             code or docs resolve against, or the only remaining link/reference to something

@@ -45,6 +45,12 @@ anti_patterns:
     why_it_seems_right: "It's quick, I'm already here, and dispatching an agent costs a prompt and a relay."
     why_it_is_wrong: Sessions run hundreds of messages; every file read and diff emitted inline stays in the orchestrating context for all of them. Difficulty and duration are the wrong axis -- persistent context footprint is.
     alternative: Classify by shape in one glance (step 1); reads-a-lot or emits-a-lot goes to a background agent even when it is easy.
+  - id: parallelism_by_unit_count
+    name: Splitting because several edits exist
+    keywords: [parallelism, implementation shards, unit count, merge overhead]
+    why_it_seems_right: More workers should finish any multi-file change sooner.
+    why_it_is_wrong: Repeated orientation, overlapping ownership, serial dependencies, and integration can make the split slower than one implementation unit.
+    alternative: Apply the rendered parallel-development razor; launch only admitted leaves on the current dependency frontier.
   - id: vague_dispatch
     name: Under-specified agent prompts
     keywords: [vague prompt, missing context, wrong question]
