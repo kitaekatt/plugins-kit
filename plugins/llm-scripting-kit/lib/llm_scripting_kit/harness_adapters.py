@@ -27,6 +27,7 @@ EffortMenu = Optional[frozenset[str]]
 CODEX_HARNESS = "codex"
 OPENCODE_HARNESS = "opencode"
 OPENCODE_EXECUTABLE = "opencode"
+OPENCODE_AGENT = "build"
 
 # `xhigh` is intentionally present even though some Codex help output omits
 # it. The accepted menu is a runtime contract, not a transcription of one
@@ -292,8 +293,8 @@ def detect_opencode() -> bool:
 class OpencodeAdapter(HarnessAdapter):
     """Build the OpenCode one-shot command.
 
-    The command is ``opencode run --dir DIR -m MODEL [--variant EFFORT]
-    --auto`` and the brief is piped on stdin. ``--auto`` is REQUIRED for a
+    The command is ``opencode run --pure --dir DIR -m MODEL --agent build
+    [--variant EFFORT] --auto`` and the brief is piped on stdin. ``--auto`` is REQUIRED for a
     non-interactive run; it also BYPASSES PERMISSIONS, so it is a security
     decision rather than a convenience flag.
 
@@ -360,7 +361,10 @@ class OpencodeAdapter(HarnessAdapter):
             )
 
         argv = [str(part) for part in prefix]
-        argv += ["run", "--dir", cwd_text, "-m", entry.model]
+        argv += [
+            "run", "--pure", "--dir", cwd_text, "-m", entry.model,
+            "--agent", OPENCODE_AGENT,
+        ]
         if effective_effort is not None:
             argv += ["--variant", effective_effort]
         # --auto is required for a background/non-interactive invocation and
@@ -408,6 +412,7 @@ __all__ = [
     "HarnessInvocation",
     "KNOWN_HARNESSES",
     "OPENCODE_EFFORT_MENU",
+    "OPENCODE_AGENT",
     "OPENCODE_EXECUTABLE",
     "OPENCODE_HARNESS",
     "CodexAdapter",

@@ -6,6 +6,7 @@ live model server.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from llm_scripting_kit.completion.opencode_backend import (
     OpencodeCliBackend,
     OpencodeRunError,
     PROMPT_SEPARATOR,
+    _confined_opencode_env,
     compose_prompt,
 )
 from llm_scripting_kit.completion.types import BackendOptions, LLMBackend
@@ -253,7 +255,7 @@ def test_timeout_is_passed_explicitly_and_default_exceeds_refusal_window(tmp_pat
     assert runner2.calls[0]["timeout_s"] == 7
 
 
-def test_filesystem_posture_is_explicitly_unconfined(tmp_path, capsys):
+def test_filesystem_posture_is_explicitly_workspace_guarded(tmp_path, capsys):
     runner = _StubRunner()
     backend = _backend(runner)
     backend.complete(
@@ -262,10 +264,69 @@ def test_filesystem_posture_is_explicitly_unconfined(tmp_path, capsys):
     )
 
     assert backend.filesystem_posture == OPENCODE_FILESYSTEM_POSTURE
-    assert OPENCODE_FILESYSTEM_POSTURE == "unconfined"
+    assert OPENCODE_FILESYSTEM_POSTURE == "workspace-guarded"
     notice = capsys.readouterr().err
-    assert "--auto bypasses permissions" in notice
-    assert "does not confine writes" in notice
+    assert "external-directory access" in notice
+    assert "explicitly denied" in notice
+
+    inline = json.loads(runner.calls[0]["env"]["OPENCODE_CONFIG_CONTENT"])
+    assert inline["permission"] == {
+        "external_directory": "deny",
+        "task": "deny",
+    }
+    assert inline["agent"]["build"]["permission"] == {
+        "external_directory": "deny",
+        "task": "deny",
+    }
+
+
+def test_confinement_preserves_unrelated_inline_config():
+    base = {
+        "PATH": "/tools",
+        "OPENCODE_CONFIG_CONTENT": json.dumps(
+            {
+                "provider": {"local": {"name": "Local"}},
+                "permission": {
+                    "bash": "allow",
+                    "external_directory": "allow",
+                    "task": "allow",
+                },
+                "agent": {
+                    "build": {
+                        "model": "provider/model",
+                        "permission": {
+                            "external_directory": "allow",
+                            "task": "allow",
+                        },
+                    }
+                },
+            }
+        ),
+    }
+
+    env = _confined_opencode_env(base)
+    inline = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+
+    assert env["PATH"] == "/tools"
+    assert inline["provider"] == {"local": {"name": "Local"}}
+    assert inline["permission"] == {
+        "bash": "allow",
+        "external_directory": "deny",
+        "task": "deny",
+    }
+    assert inline["agent"]["build"] == {
+        "model": "provider/model",
+        "permission": {
+            "external_directory": "deny",
+            "task": "deny",
+        },
+    }
+
+
+@pytest.mark.parametrize("raw", ["not-json", "[]", '"value"'])
+def test_invalid_inline_config_fails_closed(raw):
+    with pytest.raises(OpencodeRunError, match="refusing unconfined"):
+        _confined_opencode_env({"OPENCODE_CONFIG_CONTENT": raw})
 
 
 class TestHaltClassificationScansStderrOnly:

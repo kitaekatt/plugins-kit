@@ -115,8 +115,8 @@ ignore the ones they do not understand. The CLI backends use a shared,
 battle-tested runner (UTF-8 pipes, daemon stdout/stderr drains, and a bounded
 per-call timeout raising `AgentTimeoutError`). `OpencodeCliBackend` returns
 default-format stdout, reports zero usage because that format supplies no
-usage envelope, and explicitly warns that required `--auto` bypasses
-permissions while `--dir` does not confine writes. Persistent failures classify
+usage envelope, and injects a workspace-confining policy around required `--auto`
+permissions because `--dir` alone does not confine writes. Persistent failures classify
 into one halt taxonomy (`classify_halt_text`, `HaltError`, `HALT_*`) so an
 orchestrator can halt-and-resume identically regardless of provider. The seam
 types and the runner are stdlib-only; only `OpenRouterBackend` reaches for the

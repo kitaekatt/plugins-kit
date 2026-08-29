@@ -60,11 +60,13 @@ and out of the message. Inlining a channel into that message makes a healthy run
 that merely discusses a rate limit classify as a persistent halt and abort the
 caller's whole run.
 
-**OpenCode is explicitly unconfined.** Its required `--auto` flag bypasses
-permissions, and its `--dir` argument sets a working directory but does NOT
-confine absolute writes. `OpencodeCliBackend` announces this posture at
-dispatch time; callers must supply any stronger filesystem policy outside this
-layer.
+**OpenCode is workspace-guarded by policy.** Its required `--auto` flag
+approves permission prompts, so `OpencodeCliBackend` injects a highest-
+precedence `OPENCODE_CONFIG_CONTENT` policy that denies `external_directory`
+and `task` globally and on the explicitly selected `build` agent for every
+unattended run. The adapter also passes `--pure` to disable external plugins.
+`--dir` selects the intended workspace. Shell work remains available, so this
+is a practical OpenCode guardrail rather than an OS sandbox guarantee.
 
 ## The seam is uniform; the transports are not
 

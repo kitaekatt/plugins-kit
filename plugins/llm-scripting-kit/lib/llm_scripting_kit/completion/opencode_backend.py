@@ -15,10 +15,10 @@ The OpenCode shape is deliberately not copied from the Codex transport:
   from the requested model and passed to :class:`OpencodeAdapter`, which owns
   ``run``, ``--dir``, ``--variant``, and the required ``--auto`` flag. This
   module owns only completion policy and subprocess execution.
-* **A directory is not a write boundary.** ``--auto`` bypasses permissions and
-  ``--dir`` does not confine absolute writes. The backend makes that posture
-  visible at dispatch time instead of turning a working directory into a
-  pretend sandbox.
+* **Workspace confinement is explicit.** ``--auto`` remains necessary for a
+  non-interactive run, so the backend injects a highest-precedence OpenCode
+  policy that denies external-directory access and subagent delegation. The
+  adapter also disables external plugins while retaining normal shell work.
 
 The failure rule is intentionally narrow: a nonzero exit or the runner's
 bounded wall-clock timeout is a transport failure. A zero exit with stdout is
@@ -28,13 +28,16 @@ re-dispatch.
 """
 from __future__ import annotations
 
+import json
+import os
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from ..harness_adapters import OPENCODE_HARNESS, OpencodeAdapter
+from ..harness_adapters import OPENCODE_AGENT, OPENCODE_HARNESS, OpencodeAdapter
 from ..model_endpoints import HARNESS_KIND, EndpointEntry
 from . import halt
 from .claude_runner import AgentTimeoutError, run_cli_streaming
@@ -52,12 +55,13 @@ OPENCODE_PROMPT_SEPARATOR = "\n\n---\n\n"
 # name; it is not exported as the Codex module's package-level name.
 PROMPT_SEPARATOR = OPENCODE_PROMPT_SEPARATOR
 
-# This is a policy value, not a claim that OpenCode has a filesystem sandbox.
-OPENCODE_FILESYSTEM_POSTURE = "unconfined"
+# This is an OpenCode permission boundary, not an OS-level filesystem sandbox.
+OPENCODE_FILESYSTEM_POSTURE = "workspace-guarded"
 _FILESYSTEM_NOTICE = (
-    "opencode filesystem posture is unconfined: --auto bypasses permissions; "
-    "--dir sets the working directory only and does not confine writes"
+    "opencode filesystem posture is workspace-guarded: external-directory "
+    "access and subagent delegation are explicitly denied; this is not an OS sandbox"
 )
+_INLINE_CONFIG_ENV = "OPENCODE_CONFIG_CONTENT"
 
 
 class OpencodeRunError(RuntimeError):
@@ -196,10 +200,10 @@ class OpencodeCliBackend:
             prompt=prompt,
             effort=opts.effort,
         )
+        env = _confined_opencode_env()
 
-        # This is deliberately a runtime notice, not just a docstring. The
-        # required --auto flag bypasses permission prompts, while --dir is not
-        # a sandbox; a caller must see the actual posture alongside the call.
+        # This is deliberately a runtime notice, not just a docstring. A caller
+        # must see that this is an OpenCode policy boundary, not an OS sandbox.
         self._announce_filesystem_posture(opts.log_prefix)
 
         start = time.monotonic()
@@ -212,6 +216,7 @@ class OpencodeCliBackend:
                 timeout_s=timeout_s,
                 hard_stop_markers=(),
                 label="opencode run",
+                env=env,
             )
         except AgentTimeoutError as exc:
             # run_cli_streaming historically includes channel tails in its
@@ -270,6 +275,59 @@ class OpencodeCliBackend:
         )
 
 
+def _confined_opencode_env(
+    base_env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Return an OpenCode environment with a fail-closed workspace policy.
+
+    Inline configuration has higher precedence than user and project config.
+    Preserve unrelated inline settings, but replace the two security-sensitive
+    permissions so ``--auto`` cannot approve an external path or delegate to an
+    agent with a looser policy.
+    """
+    env = dict(os.environ if base_env is None else base_env)
+    raw = env.get(_INLINE_CONFIG_ENV, "").strip()
+    if raw:
+        try:
+            config = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise OpencodeRunError(
+                f"{_INLINE_CONFIG_ENV} is not valid JSON; refusing unconfined "
+                "OpenCode dispatch"
+            ) from exc
+        if not isinstance(config, dict):
+            raise OpencodeRunError(
+                f"{_INLINE_CONFIG_ENV} must contain a JSON object; refusing "
+                "unconfined OpenCode dispatch"
+            )
+    else:
+        config = {}
+
+    permission = config.setdefault("permission", {})
+    if not isinstance(permission, dict):
+        permission = {}
+        config["permission"] = permission
+    permission["external_directory"] = "deny"
+    permission["task"] = "deny"
+
+    agents = config.setdefault("agent", {})
+    if not isinstance(agents, dict):
+        agents = {}
+        config["agent"] = agents
+    selected_agent = agents.setdefault(OPENCODE_AGENT, {})
+    if not isinstance(selected_agent, dict):
+        selected_agent = {}
+        agents[OPENCODE_AGENT] = selected_agent
+    agent_permission = selected_agent.setdefault("permission", {})
+    if not isinstance(agent_permission, dict):
+        agent_permission = {}
+        selected_agent["permission"] = agent_permission
+    agent_permission["external_directory"] = "deny"
+    agent_permission["task"] = "deny"
+
+    env[_INLINE_CONFIG_ENV] = json.dumps(config, separators=(",", ":"))
+    return env
+
 __all__ = [
     "DEFAULT_OPENCODE_TIMEOUT_S",
     "OPENCODE_FILESYSTEM_POSTURE",
@@ -277,5 +335,6 @@ __all__ = [
     "OpencodeCliBackend",
     "OpencodeRunError",
     "PROMPT_SEPARATOR",
+    "_confined_opencode_env",
     "compose_prompt",
 ]

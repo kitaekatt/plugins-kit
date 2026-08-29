@@ -31,6 +31,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 
@@ -110,6 +111,7 @@ def run_cli_streaming(
     timeout_s: float,
     hard_stop_markers: tuple[str, ...] = HARD_STOP_STDERR_MARKERS,
     label: str = "claude -p",
+    env: Mapping[str, str] | None = None,
 ) -> tuple[str, str, int]:
     """Run a prompt-on-stdin CLI with streamed stderr and a per-call timeout.
 
@@ -145,6 +147,7 @@ def run_cli_streaming(
         errors="replace",
         cwd=str(cwd),
         bufsize=1,
+        env=dict(env) if env is not None else None,
     )
 
     stderr_chunks: list[str] = []

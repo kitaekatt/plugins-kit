@@ -126,10 +126,13 @@ class TestOpenCodeAdapter:
         assert argv == [
             "opencode",
             "run",
+            "--pure",
             "--dir",
             str(root),
             "-m",
             "qwen38-local/qwen3.8-27b",
+            "--agent",
+            "build",
             "--variant",
             "high",
             "--auto",
