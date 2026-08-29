@@ -1,11 +1,12 @@
 {
-  "$comment": "The venv exists for the CLI, not for the library: models.resolve_endpoint() reads the layered config.yaml via bootstrap_lib.config_resolve, which requires PyYAML. The standalone Python the shims used to call carries only .pth links and no third-party packages, so every subcommand -- set-key included -- died on ModuleNotFoundError: yaml. bootstrap_lib is linked in because config_resolve lives there.",
+  "$comment": "The venv exists for the CLI, not for the library: models.resolve_endpoint() reads layered config through bootstrap_lib + PyYAML, and OpenAI-compatible completion commands require the OpenAI SDK. The standalone Python carries only .pth links and no third-party packages. bootstrap_lib is linked in because config_resolve lives there.",
   "shared_libs": [
     { "name": "llm_scripting_kit", "src": "lib" }
   ],
   "shared_lib_imports": ["bootstrap_lib"],
   "venv": {
-    "check_imports": ["yaml"]
+    "extras": ["sdk"],
+    "check_imports": ["openai", "yaml"]
   },
   "config": {
     "file": "config.yaml",

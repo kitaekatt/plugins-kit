@@ -77,8 +77,8 @@ def make_openai_client(
     except ImportError as e:
         raise ImportError(
             "The 'openai' package is required for make_openai_client. "
-            "Install it via `pip install openai` (or pull it as an extra "
-            "via `llm-scripting-kit[sdk]`)."
+            "Use the bootstrap-provisioned llm-scripting-kit CLI environment "
+            "or declare the 'sdk' extra in the consuming project."
         ) from e
 
     return OpenAI(api_key=api_key, base_url=base_url)

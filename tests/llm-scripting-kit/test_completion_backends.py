@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import time as _time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -250,10 +251,12 @@ class _FakeUsage:
 
 class _FakeMessage:
     content = "router-response"
+    reasoning_content = None
 
 
 class _FakeChoice:
     message = _FakeMessage()
+    finish_reason = "stop"
 
 
 class _FakeResponse:
@@ -335,6 +338,27 @@ class TestOpenRouterBackend:
         )
         assert client.sink[0]["max_tokens"] == 256
         assert client.sink[0]["temperature"] == 0.7
+
+    def test_reasoning_truncation_is_not_returned_as_empty_success(self):
+        client = _FakeClient()
+        client.chat.completions.create = lambda **_kwargs: SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(
+                    content="",
+                    reasoning_content="thinking without a final answer",
+                ),
+                finish_reason="length",
+            )],
+            usage=_FakeUsage(),
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"exhausted max_tokens=4096.*finish_reason=length",
+        ):
+            OpenRouterBackend(client=client).complete(
+                "s", "u", model="test/slug"
+            )
 
     def test_classify_halt_uses_openai_taxonomy(self):
         assert OpenRouterBackend().classify_halt(ValueError("boom")) is None

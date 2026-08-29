@@ -176,6 +176,25 @@ def test_nonzero_exit_is_a_transport_error_and_keeps_channels_on_attributes(
     assert backend.classify_halt(exc) is None
 
 
+def test_zero_exit_with_empty_stdout_is_a_transport_error(tmp_path: Path):
+    stderr = "provider emitted diagnostics without a final answer"
+    runner = _StubRunner(result=("\n", stderr, 0))
+    backend = _backend(runner)
+
+    with pytest.raises(OpencodeRunError, match="produced no final answer") as excinfo:
+        backend.complete(
+            "s", "u", model="provider/model",
+            options=BackendOptions(cwd=tmp_path.resolve()),
+        )
+
+    exc = excinfo.value
+    assert exc.returncode == 0
+    assert exc.stdout == "\n"
+    assert exc.stderr == stderr
+    assert stderr not in str(exc)
+    assert backend.classify_halt(exc) is None
+
+
 def test_timeout_is_a_transport_error_and_model_text_stays_out_of_message(
     tmp_path: Path,
 ):

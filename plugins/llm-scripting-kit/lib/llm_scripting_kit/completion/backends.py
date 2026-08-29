@@ -185,6 +185,19 @@ class OpenRouterBackend:
         wall_ms = int((time.monotonic() - start) * 1000)
 
         text = response.choices[0].message.content or ""
+        finish_reason = getattr(response.choices[0], "finish_reason", None)
+        if not text and finish_reason == "length":
+            reasoning = getattr(
+                response.choices[0].message, "reasoning_content", None
+            )
+            reasoning_note = (
+                " after generating reasoning content" if reasoning else ""
+            )
+            raise RuntimeError(
+                f"OpenAI-compatible completion exhausted max_tokens="
+                f"{opts.max_tokens}{reasoning_note} before producing final "
+                "content (finish_reason=length); raise max_tokens"
+            )
         usage = getattr(response, "usage", None)
         input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
         output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)

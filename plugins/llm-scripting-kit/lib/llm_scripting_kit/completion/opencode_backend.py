@@ -20,11 +20,11 @@ The OpenCode shape is deliberately not copied from the Codex transport:
   policy that denies external-directory access and subagent delegation. The
   adapter also disables external plugins while retaining normal shell work.
 
-The failure rule is intentionally narrow: a nonzero exit or the runner's
-bounded wall-clock timeout is a transport failure. A zero exit with stdout is
-an answer, even when the answer text says that the provider failed. Trying to
-interpret that text here would turn a model judgment into an automatic
-re-dispatch.
+The failure rule is intentionally narrow: a nonzero exit, empty stdout, or the
+runner's bounded wall-clock timeout is a transport failure. A zero exit with
+stdout is an answer, even when the answer text says that the provider failed.
+Trying to interpret that text here would turn a model judgment into an
+automatic re-dispatch.
 """
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ _INLINE_CONFIG_ENV = "OPENCODE_CONFIG_CONTENT"
 
 
 class OpencodeRunError(RuntimeError):
-    """An OpenCode run that exited nonzero.
+    """An OpenCode run that did not produce a usable final answer.
 
     The raw channels ride on ATTRIBUTES, never in the message. OpenCode's
     answer is model-authored stdout, and a provider diagnostic can be echoed
@@ -233,6 +233,14 @@ class OpencodeCliBackend:
             # is available to a caller through OpencodeRunError.stdout/stderr.
             raise OpencodeRunError(
                 f"opencode run failed (exit {returncode})",
+                stdout=stdout,
+                stderr=stderr,
+                returncode=returncode,
+                cmd=list(invocation.argv),
+            )
+        if not stdout.strip():
+            raise OpencodeRunError(
+                "opencode run exited 0 but produced no final answer",
                 stdout=stdout,
                 stderr=stderr,
                 returncode=returncode,
