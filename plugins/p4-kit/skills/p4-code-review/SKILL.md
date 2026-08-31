@@ -97,30 +97,32 @@ technique_skill:
           tool: Read + python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py
         - n: 5
           action: |
-            If bundle.submit_gates is non-empty, surface each gate as a checklist item the
-            author must confirm BEFORE the review renders. Issue ONE AskUserQuestion call
-            with `multiSelect: true`, one option per gate.
-            WRITE THE PROMPT FOR SOMEONE WHO HAS NEVER SEEN A SUBMIT GATE. The reader did
-            not author these, is not told elsewhere what they are, and cannot tell from the
-            prompt alone whether ignoring one is safe. So the question text MUST carry three
-            things: that these are reminders authored in this repo's CLAUDE.md files, that
-            they are NOT review findings, and that nothing blocks either way. A prompt that
-            just says "confirm your obligations" leaves the reader guessing at all three.
-            Phrase the question as: "<G> pre-submit reminder(s) from this repo's CLAUDE.md
-            apply to CL <CL>. They are notes someone authored for changes like this one,
-            not review findings -- nothing blocks either way, and anything you leave
-            unticked is just marked as unconfirmed in the output. Which have you already
-            done?"
-            Each option: a SHORT label (a few words -- a paraphrase, never the raw summary,
-            which is routinely a full sentence and unreadable as a label), and a description
-            carrying the gate's summary in plain words, the source CLAUDE.md path it was
-            authored in, and the files that triggered it.
-            - Selected options become CONFIRMED gates.
-            - Unselected options become UNCONFIRMED gates -- still rendered, just marked.
-            Do NOT skip a gate, do NOT collapse multiple gates into one option, do NOT
-            re-prompt. The author's answer (or lack thereof) is final.
+            If bundle.submit_gates is non-empty, DISCHARGE each gate yourself. Do NOT ask the
+            user to confirm it.
+            A submit gate is an instruction to whoever performed the work in this range. In an
+            agent-driven session that is YOU: you made these edits, so you are the one who can
+            say whether the obligation is met. Asking the user "which of these have you already
+            done?" asks them to account for work they did not do -- they cannot answer it, and
+            an "I don't know" is neither a confirmation nor a decline, so the gate collects
+            nothing. A gate is preflight, and preflight is the operator's job, not the
+            passenger's.
+            For each gate, decide from the change itself and record ONE verdict:
+              - MET -- the obligation is satisfied. State HOW, citing the specific evidence in
+                this range (a file, a key and its default, a test, a command you ran and its
+                result). A bare "yes" is not a discharge.
+              - NOT APPLICABLE -- the gate's scope matched a file but its subject is absent from
+                this change. State what the gate asks for and why nothing here triggers it.
+              - NOT MET -- the obligation applies and is not satisfied. State what is missing.
+                This is a finding: render it, and do not present the review as clean.
+              - NEEDS THE USER -- reserved for a gate that turns on a fact NOT derivable from the
+                repo, the diff, or this session (a check that only runs on their hardware, an
+                external system's state, an intent only they hold). Only here may you ask, and
+                you ask for THAT SPECIFIC FACT -- never "did you do it". Reaching for this
+                verdict because a gate is laborious to evaluate is the failure mode it exists to
+                prevent; evaluate it.
+            Do NOT skip a gate and do NOT collapse several into one verdict.
             Skip this step entirely if bundle.submit_gates is empty.
-          tool: AskUserQuestion
+          tool: Read + the repo itself (AskUserQuestion ONLY for a NEEDS THE USER gate)
         - n: 6
           action: |
             Select one profile from the RESOLVED table fetched in step 4, using
@@ -307,7 +309,7 @@ technique_skill:
         - Context bundled via prepare_review.py
         - Unreconciled files surfaced (and either folded in via `p4 reconcile -c <CL>` with a re-run, or explicitly declined)
         - All CLAUDE.md files read
-        - Submit gates surfaced (if any) and author confirmation collected via a single AskUserQuestion
+        - Submit gates discharged by the agent (if any), each with a MET / NOT APPLICABLE / NOT MET / NEEDS THE USER verdict and its evidence
         - Executable review-profile table resolved via render_review_profiles.py (step 4); profile selected from the resolved table using review_profiles guidance
         - Reviewers launched in parallel (single message, R × K Agent calls -- one per (reviewer × chunk) pair, where K = len(bundle.diff_chunks))
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
@@ -330,9 +332,10 @@ technique_skill:
         - The unreconciled check must happen BEFORE reviewers spawn. Folding in forgotten files after agents have already reviewed the diff wastes their work and produces a stale review.
         - On the post-reconcile re-run, do NOT prompt again about unreconciled files. The user already chose. Re-prompting on the same list is annoying; re-prompting on a smaller list (because they only added some) implies the rest were forgotten when they were declined.
         - Submit gates are reminders, not findings -- they do NOT go through reviewer or validator subagents. They are parsed deterministically by prepare_review.py and rendered verbatim in a separate output section. Do not try to validate, score, or filter them.
-        - The submit-gate prompt must explain ITSELF. A reader who has never seen a submit gate cannot tell where the question came from, whether it was generated from their code, or what happens if they ignore it -- and a prompt that assumes otherwise gets answered with "I don't know how to answer this", which is neither a confirmation nor a decline. Name the provenance (authored in a CLAUDE.md), the nature (reminders, not findings), and the stakes (nothing blocks) in the question text itself, every time.
-        - The submit-gates AskUserQuestion fires once, regardless of gate count. multiSelect bundles all gates into one prompt. Re-prompting per gate is rude and adds no value -- the author's response is final either way.
-        - Unconfirmed submit gates are NOT errors. Render them with ✗ so they're visible, but do not block the review or refuse to render the rest.
+        - A submit gate is addressed to whoever did the work, and in an agent-driven session that is YOU. Discharge it yourself against the change; never ask the user which obligations they have completed. They did not make these edits and cannot answer, and an "I don't know how to answer this" is neither a confirmation nor a decline -- the gate then collects nothing while appearing to have run. Preflight is the operator's job, not the passenger's.
+        - "MET" means MET WITH EVIDENCE. Name the file, the key and its default, the test, or the command and its result. A verdict with no evidence is the same empty signal as an unanswered prompt, just harder to notice.
+        - NEEDS THE USER is for a fact you cannot derive -- an external system's state, a check that only runs on their hardware, an intent only they hold. It is not an escape hatch for a gate that is tedious to evaluate, and when you do use it, ask for that specific fact rather than asking whether they did the work.
+        - A NOT MET gate is a finding. Render it and do not describe the review as clean.
         - Unresolved merges are NOT findings -- they do NOT go through reviewer or validator subagents. They are detected deterministically by prepare_review.py (`p4 resolve -n -c <CL>`) and rendered verbatim in a separate output section. The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the unresolved section is a separate informational warning to the user.
         - Auto-shelf cleanup (step 10) must run whenever `bundle.auto_shelved` is true, no matter what happened in steps 3-9. The cleanup script is deterministic and safe (it only deletes the shelf when the live fingerprint exactly matches what we recorded), so there is no scenario where skipping it is the right call. Skipping leaves an orphan shelf the author didn't ask for.
         - --claim requires a PENDING CL. On a submitted CL, `#have` pre-images are POST-change once the workspace synced past the CL, so prepare_review exits with an error when --claim is passed on a submitted CL; re-run without --claim for a plain informational review.
@@ -550,11 +553,21 @@ technique_skill:
       When bundle.submit_gates is non-empty, the rendered review prepends a
       `## Submit checklist` section ABOVE the per-file review body. Each gate renders as:
 
-        - **[✓|✗] <summary>** -- per `<source>`, triggered by `<file>` (+N more if many).
+        - **[✓|✗|-|?] <summary>** -- per `<source>`, triggered by `<file>` (+N more if many).
+          <the step-5 verdict, then the evidence for it, on one line>
           > <rationale, indented as blockquote, omitted if empty>
 
-      ✓ = author confirmed in the step-5 AskUserQuestion.
-      ✗ = author did not confirm. NOT an error; the review still renders.
+      ✓ = MET. The evidence line names what satisfies it -- a file, a key and its
+              default, a test, or a command and its result.
+      ✗ = NOT MET. The obligation applies and is unsatisfied; this is a finding, and
+              the review is not clean.
+      -     = NOT APPLICABLE. Scope matched but the subject is absent from this change;
+              the evidence line says why.
+      ?     = NEEDS THE USER. Turns on a fact not derivable from the repo, the diff, or
+              this session; the evidence line names the specific fact wanted.
+
+      Every gate carries a verdict. A gate rendered without one means step 5 was skipped,
+      which is a defect, not a neutral outcome.
 
       Always show the section when gates applied -- including in the "no issues" path.
   output_format:
