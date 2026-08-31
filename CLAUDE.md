@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Currently ships (published): **awesome-kit** (plugin-ecosystem poster, /html-pdf, task tracking), **agent-glue** (graph-orchestration kit for pipelines that interleave LLM inference, deterministic logic, and config-driven rules), **bootstrap** (dependency management), **bootstrap-stuck-fix** (temporary remediation shim for a wedged bootstrap registry record), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **codex-kit** (Codex CLI integration for Claude Code), **content-pipeline-kit** (library + skills for LLM-in-the-loop batch content pipelines), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **hue-kit** (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), **llm-scripting-kit** (LLM key resolution, shared model registry, and named OpenAI-compatible endpoints -- OpenRouter is the default endpoint; importable package `llm_scripting_kit`, CLI `llm-scripting-kit`), **opencode-kit** (opencode integration for Claude Code), **p4-kit** (Perforce multi-agent code review), **prototypes** (experimental skills awaiting graduation), **secrets-kit** (fleet secrets provisioning), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md, folded into a single domain-skill: /md-domain, plus knowledge-encoding, update-documentation, materialized-output), **unreal-kit** (Unreal Engine Python API automation), and **workflow-kit** (declarative .workflow.yaml compiler and node strategies). Dev-only (not published, `published: false`): **yaml-data-editor-kit**.
+**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Published plugins: **agent-glue** (graph-orchestration kit for pipelines that interleave LLM inference, deterministic logic, and config-driven rules), **awesome-kit** (plugin-ecosystem poster, /html-pdf, task tracking), **bootstrap** (dependency management), **bootstrap-stuck-fix** (temporary remediation shim for a wedged bootstrap registry record), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **codex-kit** (Codex CLI integration for Claude Code), **content-pipeline-kit** (library + skills for LLM-in-the-loop batch content pipelines), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **hue-kit** (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), **llm-scripting-kit** (LLM key resolution, shared model registry, and named OpenAI-compatible endpoints -- OpenRouter is the default endpoint; importable package `llm_scripting_kit`, CLI `llm-scripting-kit`), **opencode-kit** (opencode integration for Claude Code), **p4-kit** (Perforce multi-agent code review), **prototypes** (experimental skills awaiting graduation), **secrets-kit** (fleet secrets provisioning), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md, folded into a single domain-skill: /md-domain, plus knowledge-encoding, update-documentation, materialized-output), **unreal-kit** (Unreal Engine Python API automation), and **workflow-kit** (declarative .workflow.yaml compiler and node strategies). Dev-only (not published, `published: false`): **yaml-data-editor-kit**.
 
 This repo is a **Claude Code plugin marketplace** — it extends Claude Code with skills, commands, and hooks via the `.claude-plugin/marketplace.json` manifest. Plugins are loaded either via `--plugin-dir` (local development) or `enabledPlugins` in settings (production installs from the remote repo).
 
@@ -108,26 +108,6 @@ A hand-repair fails twice over:
 
 The second cost is the one that gets underestimated, because the machine looks *better* afterwards. It isn't. A healthy machine with an unknown root cause is strictly worse than a wedged machine you can still read.
 
-**Worked example (2026-07-27).** Nine plugins reported `Plugin "<name>" not cached at <path>` in the Claude Code plugin list; a restart did not clear it. The on-disk state was inspected and found coherent -- every `installPath` in `installed_plugins.json` existed, cached `plugin.json` versions matched the registry, and the registry matched the marketplace clone -- so the cause was in Claude Code's cache resolution and was not reproducible from disk. At that point the correct move was to snapshot the state and ship a repair. Instead the engine was invoked by hand:
-
-```bash
-# ANTI-PATTERN -- do not do this to a wedged machine before capturing its state
-python .../bootstrap/0.63.0/engine/bootstrap_engine.py \
-  --plugin-root .../bootstrap/0.63.0 --data-dir .../data/plugins-kit/bootstrap \
-  --project-dir <project> --console
-```
-
-The pass fetched the marketplace, installed 0.64.1 into the cache, and rewrote the registry, and the wedge stopped being observable.
-
-Read the consequences carefully, because they are the reason this is an anti-pattern rather than a shortcut:
-
-- **The root cause is permanently unrecoverable.** The failing state existed only while it was failing. It cannot be reconstructed, so no repair can be written and no test can be built against it.
-- **Nothing shipped.** Every other machine that hits the same wedge is still wedged. The one machine that could have specified the fix was spent clearing itself.
-- **The "fix" was never even verified.** Afterwards, only bootstrap was confirmed to load (its hook fired at 0.64.1). The other eight affected plugins were never re-checked. "The machine recovered" was asserted, believed, and written into documentation without evidence -- a hand-repair produces a *feeling* of resolution that outruns what was actually established.
-- **The causal link is unproven.** What the pass did -- a routine version update -- has no evident connection to a cache-resolution error. It is entirely possible the wedge cleared for an unrelated reason, which means even the folk remedy this produced ("run the engine by hand") may be worthless.
-
-The wedge was a specification. It was spent as a chore, and it did not even demonstrably complete the chore.
-
 **Both entry points are the anti-pattern.** This applies equally to the engine (`bootstrap_engine.py`) and to the hook (`plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh`). Hand-invoking either runs a full live pass outside the conditions bootstrap is designed for, so what you observe generalizes to nobody. (An earlier insight in this file, `run_bootstrap_hook_directly`, advised the opposite; it is retracted and replaced by `never_run_bootstrap_hook_directly`.)
 
 **The legitimate way to make bootstrap run again** is to clear the throttle and let a real session start do the work:
@@ -175,31 +155,7 @@ Only run the full suite when explicitly asked or before a release -- and when yo
 uv run --extra dev pytest -n 12 -q      # full suite, ~3 min
 ```
 
-`pytest-xdist` is in the `dev` extra. `-n` is deliberately NOT in `addopts`, and adding
-it there would be a regression rather than a convenience: worker startup is a fixed
-~1.6-2.9s toll, which is free on a 13-minute run and ruinous on the targeted runs above.
-Measured on a 24-core box, `tests/bootstrap/test_cache.py` alone costs **0.40s serial,
-2.03s at `-n 12`, 3.33s at `-n auto`** -- so a config-level `-n` makes the tight TDD loop
-5-8x SLOWER while making the full run faster. Pass `-n` explicitly, per run.
-
-Pick the worker count deliberately too; more is not better. This suite is process-spawn
-bound (real `git`, `uv`, and Git Bash subprocesses), so past a point extra workers just
-contend for the same spawns. Full-suite wall time on that 24-core box: `-n 8` 4:00,
-**`-n 12` 2:54**, `-n 16` 3:10, `-n auto` (=24) 3:21. Roughly half the core count is the
-sweet spot; `-n auto` is portable but not optimal on a many-core machine.
-
-Two consequences of parallelism worth knowing before you blame your change for a failure:
-
-- **Timing-sensitive tests can fail under load and pass serially.** The SessionStart
-  display hook spawns ~10 Git Bash processes and its foreground takes 11-22s on a
-  saturated machine, against ~1s idle. `tests/bootstrap/test_sessionstart_rescue.py` is
-  hardened for this (generous *polling* for positive assertions; a causal observable
-  instead of a fixed sleep for negative ones). If you add a test that waits on a
-  subprocess, follow that pattern -- never a bare `time.sleep` sized for an idle machine.
-- **The three root-conftest leak guards run in ONE worker under `-n`** (see the comment in
-  `tests/conftest.py`), because they snapshot machine-global state that xdist cannot
-  isolate. Leak detection is therefore complete only in a SERIAL run. Run serially when
-  the question is "is something leaking into my real `~/.claude`".
+`-n` is deliberately not in `addopts`: worker startup is a fixed toll that is free on the full run and ruinous on a targeted one. Full suite: `-n 12`, ~3 min. Leak guards are only complete in a SERIAL run. Measurements and the worker-count table: [docs/reference/testing.md](docs/reference/testing.md).
 
 **Interpreter: the repo is pinned to Python 3.12** via a repo-root `.python-version`, so bare `uv run` / `uv venv` select 3.12 everywhere — no `-p 3.12` needed. Nothing needs 3.14 (four plugins exclude it: `requires-python ">=3.12,!=3.14.*"`); it used to leak in only as uv's global default when no pin was present.
 
@@ -215,35 +171,8 @@ claude --plugin-dir ~/Dev/plugins-kit/plugins/my-plugin
 
 **Reload vs restart (measured — see [plugin-reload-lifecycle.md](plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md)).** Three layers, not one rule: (1) a hook/engine/skill's **script content** is read fresh from disk on every invocation, so editing it is live with no reload/restart; (2) **registration** (`hooks.json` command map, which skills/commands exist) is reloaded **in-session by `/reload-plugins`** — including a changed hook command (the old "hooks require a full restart" claim is wrong as a blanket rule); (3) a **`SessionStart`** hook's registration reloads but it only **re-fires on a new session**, so re-running bootstrap's pass needs a restart. For a **real version update** (cache version dir moves), restart Claude / your IDE — it re-resolves install paths and re-fires SessionStart reliably.
 
-**Publishing changes** — the plugin cache syncs from the remote repository's default branch, not the local working copy. Develop on the `dev` branch; merge to `master` only when releasing a version bump. This prevents the silent divergence explained under **The cache keys on version** below.
-
-**How.** Commit your code and the version bump on `dev`, then:
-
-```bash
-uv run python scripts/publish.py            # preflight, publish, verify
-uv run python scripts/publish.py --check    # preflight only; no writes, no pushes
-```
-
-**`scripts/publish.py` is the source of truth for the flow** — steps, guards, and post-verification live in code so this file cannot drift from what actually runs. Read its module docstring for the mechanics. Do not hand-run the steps; the script exists because three of them are easy to get wrong in ways that fail silently (a half-restored dev-tree that makes your next session load plugins from the working copy; a merge that publishes a dev-only plugin; an `index.html` that lands outside the release commit).
-
-**Definition.** "Publish" means **all** of: version bump + regenerated `marketplace.json`, regenerated `index.html` inside the release commit, `dev` pushed, and `master` fast-forwarded and pushed. Anything less is not a publish -- a bump without the master merge, a bare `git push`, or a master merge without a bump each leaves consumers on the old release (`master` is the cache source, and the cache keys on version). `publish.py` refuses each of these rather than half-shipping.
-
-`.claude-plugin/marketplace.json` is **derived data** — rebuilt from each plugin's `plugin.json`, filtered by `"published"` (missing = `true`; `false` = excluded). Never hand-edit its plugin entries; the pre-commit hook rejects drift.
-
-That hook check is **index-aware and scoped to the commit** (`regen_marketplace.py --check --staged`): it judges the staged blobs, and stays out of the way entirely when a commit stages neither `marketplace.json` nor any `plugin.json`. This is what makes "commit and push freely" work in a tree shared with concurrent sessions — a worktree-wide check blocked every commit over an in-flight bump it did not contain, while still passing an inconsistent pair that *was* staged, since history is built from the index. Nothing is given up: `publish.py` regenerates and re-verifies before pushing, so drift cannot reach master. A bare `--check` (no `--staged`) keeps the full worktree behaviour for standalone and CI use.
-
-**That is the convention for every check in `scripts/pre-commit-version-check.sh`, not a quirk of one of them.** A check must judge the COMMIT (the git index) and must return success when the commit stages none of *its* inputs. Both halves are load-bearing, and the second is the one that gets missed: a check that reads staged blobs but gates on "is anything staged at all" still blocks an unrelated commit whenever another session has something in flight. `scripts/_gitindex.py` is the shared implementation (`classify_scope` -> `SCOPE_SKIP` / `SCOPE_INDEX` / `SCOPE_WORKTREE`); do not re-copy its helpers into a check. When the index cannot be read, fall back to the worktree **loudly** — an unavailable input must never read as a pass.
-
-Two facts worth not rediscovering:
-
-- **`git commit -- <paths>` is safe under this, and it was established empirically.** That form commits the working-tree contents of the named paths, so a `--cached` check looks like it would see an empty staged set and skip. It does not: git builds a temporary index holding those paths' contents and exports it to hooks as `GIT_INDEX_FILE`, so the checks see exactly the commit. (Reproduced on git 2.55.0.windows.3.) This matters because `git commit -F <msg> -- <paths>` is the form this file tells you to use in a shared tree.
-- **Test a check against a temporary `GIT_INDEX_FILE`, never the real index** — staging things to prove a hook works is how you end up committing another session's work.
-
-**Dev-only commits are EXCLUDED, not a reason to refuse.** When `origin/master..dev` holds commits touching a dev-only (`published: false`) plugin, the script publishes a **filtered release**: it replays only the shippable commits onto master in a temporary worktree and pushes from there, printing every commit it held back. `dev` is untouched and keeps that work. This is the field doing its job — `published: false` already recorded the decision that the plugin does not go to consumers, so honouring it per-commit is not the script guessing.
-
-It still refuses one case: a single commit touching **both** a dev-only plugin and files that would otherwise ship. Excluding it withholds released work, including it puts dev-only files on master, and splitting someone else's commit is a judgement call. Split it, or pass `--allow-dev-only <plugin>` to ship that plugin's commits deliberately.
-
-**What the script will NOT do:** decide that a plugin's `published` status has changed. That edit is yours.
+**Publishing** is `uv run python scripts/publish.py` -- the only user-gated action in this repo, and the source of truth for the flow; do not hand-run its steps. Definition of a publish, `marketplace.json` as derived data, the commit-scoped pre-commit check, dev-only filtering, and `index.html` regeneration:
+[docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
 
 Publishing is reversible-but-visible: nothing is destroyed, but it goes out to other machines. The bar is "user has expressed publish intent for this work," not "user has reconfirmed each git command." Treat unambiguous go-signals — `go`, `ship it`, `publish`, `do it`, `close the loop`, `push` — as authorizing the whole flow; run `publish.py` and let its preflight be the safety net. Confirm only when intent is genuinely ambiguous (partial work, no version bump in sight, unrelated WIP staged, or the user is mid-thought).
 
@@ -252,29 +181,15 @@ After publish:
 - Users with `autoUpdate: true` receive the update on next session start.
 - Users without auto-update run `/plugin marketplace update` then `/plugin update`.
 
-### The marketplace landing page (`index.html`) — regenerate at publish time
-
-The repo-root **`index.html`** is the marketplace's public landing page (the GitHub-Pages-style poster listing every plugin and its skills). It is **generated, not hand-edited** — by awesome-kit's plugin-ecosystem skill, invoked by **`scripts/publish.py`**, which is the source of truth for the invocation. Do not assemble the command yourself; `regenerate()` in that script carries the flags and a comment explaining what each one is holding back.
-
-**The generator's default job is to describe the MACHINE it runs on**, which is the wrong job here and fails in a way a glance at a 100KB generated file will not catch. Five flags redirect its inputs at the working copy — `--marketplace`, `--public`, `--marketplace-json`, `--poster`, `--config` — and **`--marketplace` is the one whose omission leaks rather than misreports**: without it the page carries every other marketplace installed on the build machine, private ones included, into a public repo. `verify()` re-parses the generated page and refuses on a foreign marketplace or embedded machine state, so a future edit that drops a flag fails the publish instead of shipping.
-
-Repo-side inputs the page reads, all under `.claude-plugin/`: `marketplace.json` (the listing), `poster.yaml` (marketplace subtitle + url), and `index-page.yaml` (page copy — it exists to shadow the per-machine `~/.claude/.local-data/awesome-kit/plugin-ecosystem-poster.yaml` the generator defaults to).
-
-**It crawls installPaths, not the working directory.** `generate.py` reads `~/.claude/plugins/installed_plugins.json` and walks each plugin's **`installPath`**, filtered by `marketplace.json`. In a normal session those paths point at the **cache** (`~/.claude/plugins/cache/<mkt>/<plugin>/<version>/`), which only refetches from **master** — so a plain regen before the merge reproduces the *old* page. That constraint is what used to force the regen after the merge. **Registry v2 caveat:** newer Claude Code keeps that registry at `{"plugins": {}}`; since awesome-kit 0.10.0 `generate.py` falls back to scanning the cache layout for refs the registry doesn't record (see the `registry_v2_empty` insight below), so a normal-mode regen renders the machine's cached plugins rather than an empty page.
-
-**At publish time this is `publish.py`'s job — don't hand-run it.** The script repoints installPaths at the working copy via `dev-tree.py` (which, since the 0.47.0 release, also **synthesizes** entries for repo plugins the registry doesn't record — the registry-v2 case), regenerates, restores in a `finally`, and post-verifies the restore landed. It also lands `index.html` *inside* the release commit, so master is never in a state where its page disagrees with its own `marketplace.json`. The manual sequence below is for **previewing** only.
-
-**Previewing the page by hand** (dev-tree regen, the load-bearing `--public`/`--marketplace-json` flags, always-restore discipline, preview-vs-publish commit rule): see [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md). The one rule that must stay front-of-mind: if you ever run `dev-tree.py dev` by hand, run `normal` in the same breath -- leaving dev-tree mode on silently repoints every plugin at the working copy for all later sessions.
-
 ### Dev-only plugins — do not publish to master
 
 Some plugins live on `dev` for in-development work and must not reach consumers until they are ready. Each such plugin sets `"published": false` in its `plugins/<name>/.claude-plugin/plugin.json`. The marketplace regenerator (`scripts/regen_marketplace.py`) filters those plugins out of `marketplace.json`, so they are excluded structurally — not by memory — even if their files land on master via a cherry-pick.
 
 `publish.py`'s preflight **refuses** when `origin/master..dev` holds commits touching one, naming the commits. That is a backstop for the listing *and* the files; the regenerator only filters the listing. Picking which commits ship stays a human judgement call — branch from master and cherry-pick.
 
-**Current dev-only plugins** (the field, not this list, is load-bearing — this is just a human-readable inventory):
+**Dev-only plugins** (the field, not this list, is load-bearing -- this is just a human-readable inventory):
 
-- **yaml-data-editor-kit** (not yet published).
+- **yaml-data-editor-kit**.
 
 When you see commits for a dev-only plugin in `git log origin/master..origin/dev`, that's still gotcha 1 territory — branch from master, cherry-pick only the publish-ready commits, and leave the dev-only commits on `dev`. The regenerator is a backstop for the marketplace listing, not a substitute for picking the right commits to merge.
 
@@ -311,22 +226,11 @@ The failure is not that a branch is untidy; it is that **another session's commi
 land on your branch instead of `dev`**, and it happens with no error and no warning.
 The other session keeps working, runs `git commit`, and git faithfully commits to
 whatever branch the tree is on. If your branch was cut from `master` (the natural
-choice for a review or a cherry-pick), those commits are now parented on `master` and
+choice for a review or a cherry-pick), those commits are parented on `master` and
 have silently lost every `dev` commit beneath them.
 
-**Worked example (2026-08-08).** A `review-bootstrap-cli` branch was created off
-`origin/master` to scope a code review to two commits, avoiding the 15 unrelated
-commits sitting in `origin/master..origin/dev`. The intent was good and the review
-itself was scoped correctly. But `git checkout review-bootstrap-cli` moved the shared
-tree, and a concurrent session then committed twice — `agent-glue: state the consumer
-feedback as requirements` and `repo: drop incidental references to a private consuming
-project`. Both landed on the throwaway master-based branch. `git branch --contains`
-confirmed they existed on that branch and nowhere else: two commits of another
-session's work, stranded, one `git branch -D` away from being unreachable.
-
-Recovery took a commit of in-flight work, three cherry-picks, a content-identity check
-per commit, and a force-delete. Nothing was lost, but only because the branch was still
-there to find. That is the good outcome, not the expected one.
+A worked incident where this stranded another session's commits:
+[docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md).
 
 **Scope a review or a diff with a range, never with a branch.** `git log`, `git diff`,
 and `prepare_review.py` all take `<a>..<b>` / `<a>...<b>` and read history without
@@ -422,19 +326,8 @@ available from the start, was:
 git commit -F <msg> -- <your paths>     # commits those paths; index untouched
 ```
 
-**Second worked example, same day -- the exception in practice.** Later that day a
-publish preflight refused on 37 dirty files across four plugins. They looked like
-another session's in-flight refactor. They were not: `git diff HEAD` was empty (the
-working tree was byte-identical to HEAD), while the index held a pre-HEAD snapshot --
-`plugins/unreal-kit/.claude-plugin/plugin.json` staged at `0.11.4` against HEAD's
-`0.11.5`, and docstrings staged at wording HEAD had already superseded. Committing that
-index would have downgraded a published plugin version and reverted 37 files. Nothing
-was staged as a deletion. The index was discarded and the tree went clean. Note the
-limit of that check: the empty-`git diff HEAD` and no-deletion clauses were verified
-across all 37 paths mechanically, but "superseded by HEAD" was confirmed by reading two
-files and generalized to the rest. The clause is only as strong as the sample -- read
-enough of the staged diff to be sure, and say what you actually checked. The first example and this one differ on exactly one axis: whether the
-index was the only record of the decision.
+The exception applied correctly in a second incident:
+[docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md).
 
 If you have already unstaged something that was not yours, say so plainly rather than
 quietly reconstructing it -- the other session can restate its intent in one line, and
@@ -501,112 +394,22 @@ neither surfaces as a test failure. A Windows session cannot self-check these
 
 **Skill-based document placement** (package cohesion): when creating a document, ask "what skill does this belong to?" and place it by the CCP/CRP/ADP framework -- `plugins/skills-kit/skills/md-domain/references/cohesion-principles.md` is the SSOT for those principles and the placement algorithm. If no existing skill fits, create a stub skill and let the document live as a progressively-disclosed reference inside it.
 
-### The plugin-opinion razor
-
-**The vision: the default is awesome and opinionated. Configurability is earned, not
-assumed.** These plugins exist to expose powerful customizations that let a user produce
-their best experience -- but an option nobody needs is a worse default plus a maintenance
-burden. So a plugin holds its opinions confidently, and a setting appears only when the
-opinion demonstrably costs a real user something.
-
-The test that earns a config seam:
-
-> **Can I articulate ONE SERIOUS, or TWO DISTINCT, user-preference scenarios in which this
-> not being configurable leaves the user needing or wanting to uninstall the plugin, or to
-> take remedial action against the default?**
-
-The scenarios must be grounded in **realistic preferences of Claude Code power users** --
-this marketplace's actual audience. Not hypothetical teams, not "someone might". A scenario
-you cannot picture a power user actually having does not count, and neither does one whose
-remedy is a single self-explaining error message.
-
-If the test PASSES, the opinion must become configurable, with the opinionated default
-preserved so nothing changes for everyone else. If it FAILS, leave it hardcoded -- that is
-the correct outcome, not a deferred TODO.
-
-The remediation for a passing test is always a configuration seam -- never prose telling the
-reader to tolerate the default. When THIS repo cannot live with one of its own plugins'
-opinions, that is a scenario, already evidenced: documenting the resulting warnings as noise
-fixes one machine and converges nobody.
-
-Criteria (OP-1..OP-7), how to detect each, worked examples of the test both passing and
-failing, the findings table with per-finding verdicts, and the audit procedure:
+**The plugin-opinion razor.** Every workflow opinion a plugin imposes is
+configurable-with-a-default or registered as a deliberate stance. Criteria,
+register and submit gate: `plugins/CLAUDE.md` and
 [docs/reference/plugin-opinion-razor.md](docs/reference/plugin-opinion-razor.md).
 
-#### The register -- opinions that PASS the test but we decline to configure anyway
-
-Rare by construction. An entry here concedes that real users will want this changed, and
-states why we refuse regardless, plus what they should do instead. An unregistered,
-unconfigurable opinion whose test passes is a finding.
-
-- **bootstrap owns dependency provisioning.** Manifests are the single source of truth;
-  there is no supported path for a consumer to hand-install into a plugin venv. A team that
-  wants manual control should not enable the plugin -- partial adoption produces a machine
-  whose bootstrap is permanently wrong.
-- **skills-kit's Architectural rule tier is not configurable.** The type contracts are what
-  make an audit comparable across projects; a project that disables them is not running the
-  same audit. Optional-tier rules and thresholds ARE configurable, and
-  `references/configuring-standards.md` documents the boundary. A team disagreeing with a
-  contract adds its own criteria via an additive standards file.
-- **Code review renders to chat and is never persisted.** git-kit and p4-kit scope
-  themselves to a conversational review; a team needing PR/Swarm comments or a CI artifact
-  wants a different tool, and both SKILL.md scope blocks say so rather than assuming it
-  silently.
-
-An opinion that FAILS the test needs neither a register entry nor a seam -- it is simply a
-good default. Opinions that PASS and are still unconfigurable are findings, tracked with
-per-finding verdicts in the reference above; today those are the task system's durability
-roots and git privilege, and the code-review reviewer roster and model tiers.
-
-**Submit gate:** Apply the plugin-opinion razor to every workflow opinion this change adds or hardcodes -- for each, either name the config key and its default, or state the scenarios you tried and why the test fails.
-Applies to:
-- plugins/
-
-`plugins/` is where plugin development happens, and everything under it ships to other
-developers. The razor only works if it is applied per opinion at submit time, while the
-change is still cheap to reshape -- once an opinionated default is published, teams have
-built around it. One line per opinion discharges this, and "no new opinions" is a valid and
-common answer. Criteria and audit procedure:
-[docs/reference/plugin-opinion-razor.md](docs/reference/plugin-opinion-razor.md).
-
-### Instructions we ship to Claude must be checkable
-
-The razor's companion, one level over: it governs the OPINIONS a plugin imposes,
-this governs the INSTRUCTIONS a plugin gives the agent. Some of our text arrives in a
-consumer's session as `additionalContext` -- the same channel that carries untrusted
-content -- so a receiving agent cannot tell a real standing authorization from injected
-text claiming one, except by checking it. Three requirements, and they are not
-negotiable by tone:
-
-1. **True** as written, without a qualifier the reader does not have.
-2. **Checkable** -- any claim of policy, permission, or prior user agreement names a
-   file in version control the agent could open. A pointer into the same document that
-   makes the claim is self-certification, not verification.
-3. **Non-suppressive** -- never direct the agent to withhold from the user, or to move
-   past a checkpoint the user would otherwise have. Text restraining CLAUDE on the
-   user's behalf ("do not run it yourself, it needs their elevation") is the opposite
-   and is always fine.
-
-Two traps worth naming. When no record of user agreement exists, do not manufacture one
--- ground the instruction in what actually authorizes it and cite the document
-describing that job; claimed consent that was never given is worse than none. And an
-acknowledgement emitted before an action resolves ("Running.") paired with an
-instruction not to elaborate makes a failed call indistinguishable from a success --
-report outcomes, not intentions.
-
-**Submit gate:** For every instruction to Claude this change adds or edits, confirm it is true, names a file backing any authority it claims, and neither withholds from the user nor bypasses them -- or state which criterion you judged not to apply.
-Applies to:
-- plugins/
-
-Criteria AD-1..AD-5, detection methods, the findings table with per-site verdicts, and
-the audit procedure:
+**Instructions we ship to Claude must be checkable.** Text a plugin ships to
+an agent must be true as written, name a file in version control backing any
+authority it claims, and neither withhold from the user nor bypass them.
+Criteria and submit gate: `plugins/CLAUDE.md` and
 [docs/reference/agent-directive-standards.md](docs/reference/agent-directive-standards.md).
 
-**A published plugin ships to other developers -- keep this repo's build machinery out of it.** Everything under `plugins/<name>/` is copied into a consumer's plugin cache, so a file that only makes sense inside plugins-kit is noise at best and misleading at worst: a generated fingerprint or baseline whose header names a `scripts/` tool the consumer does not have, a design doc recording our derivation rounds and remaining work, or generator plumbing embedded in a reference a consumer reads for guidance. Before adding content to a shipped plugin, ask **who reads this on a machine that is not ours** -- if the honest answer is "nobody", it belongs in the repo (`docs/`, `scripts/`, or a task folder), not in the plugin. The trap is incremental: maintainer material rarely arrives as a new file, it accretes inside a reference that already ships, so a file can double in size without anyone deciding to publish the additions. Watch for it particularly when a build step colocates its inputs with the artifact for convenience -- that convenience is a publishing decision.
-
-**Plugin boundaries are hard boundaries for cohesion work.** Never move content between plugins — or into a new plugin — to achieve skill cohesion. Plugins are independently versioned, installed, and bootstrapped units; relocating a skill/reference across a plugin boundary to satisfy CCP/CRP/ADP breaks that independence (cross-plugin caches, dependency edges, version coupling) and is never worth the cohesion gain. Cohesion refactors operate *within* a plugin only. When you spot a genuine cohesion opportunity that spans plugins — two doer-skills in different plugins sharing a subject (e.g. git-kit `git-code-review` + p4-kit `p4-code-review`), a reference duplicated across plugins, a shared substrate two plugins both consume — **surface it as an insight** (a `claude_md:` insight or a note in the relevant skill), do **not** act on it by relocation or by spawning a unifying plugin. Sharing across plugins is done through a library both depend on (e.g. `bootstrap_lib.code_review`), not by merging the skills.
-
-**Reference file design** (within a skill): each reference serves a single audience and changes for a single reason (same cohesion framework). See `plugins/bootstrap/skills/bootstrap/` for the gold standard -- references split by audience with clean change boundaries.
+**A published plugin ships to other developers.** Before adding content to a
+shipped plugin, ask **who reads this on a machine that is not ours** -- if the
+answer is "nobody", it belongs in `docs/`, `scripts/` or a task folder.
+Plugin boundaries, and reference-file design within a skill:
+`plugins/CLAUDE.md`.
 
 ## Plugin System
 
@@ -616,21 +419,10 @@ Plugins follow the Claude Code plugin spec:
 - **Skill discovery**: Claude Code scans `skills/` directories for `SKILL.md` files
 - **Variable expansion**: `${CLAUDE_PLUGIN_ROOT}` resolves to the plugin's install path at runtime
 
-### Plugin dependencies on bootstrap (declared + guarded)
-
-Every plugin in this marketplace rides on **bootstrap** (venv, `bootstrap_lib`, `uv`, installed config). We make that dependency explicit in **two complementary layers**:
-
-1. **Declared dependency (install-time).** The Claude Code plugin spec supports inter-plugin dependencies — installing a dependent auto-installs/enables its dependencies, blocks disabling a still-needed dependency, and honors version constraints. Every plugin that depends on bootstrap declares it in its `.claude-plugin/plugin.json` as a **bare string** (bootstrap lives in the *same* marketplace, so `name` resolves within `plugins-kit`):
-   ```json
-   "dependencies": ["bootstrap"]
-   ```
-   This is the canonical fix for "user installed the plugin without bootstrap." Official docs (source of truth — fetch when in doubt): https://code.claude.com/docs/en/plugin-dependencies and the `dependencies` field in https://code.claude.com/docs/en/plugins-reference.
-   - **Same-marketplace deps are bare strings.** Do NOT add a `"marketplace"` field for a dep in this marketplace — that field is *only* for a **different** marketplace and triggers the `allowCrossMarketplaceDependenciesOn` allowlist (a same-marketplace value gets treated as cross-marketplace and can fail installs).
-   - **Unversioned on purpose.** A version constraint (`{ "name": "bootstrap", "version": "~0.12" }`) resolves against `{plugin}--v{version}` git tags (`claude plugin tag --push`), which this repo does not use — pinning would cause `no-matching-tag`. Bare = "whatever the marketplace provides."
-   - Declare it on **every** plugin **except** bootstrap itself — whether or not the plugin ships a `bootstrap.json`. The edge is universal by design, so anything built on "bootstrap is present wherever a plugin is" holds without a per-plugin check; the fleet-wide user posture bootstrap owns ([docs/reference/first-run-experience.md](docs/reference/first-run-experience.md)) is the load-bearing case. The former carve-out for `bootstrap.json`-less plugins is **retired** — `agent-glue`, its only occupant, now declares the edge like everything else. Enforced at pre-commit by `scripts/check_bootstrap_dependency.py` (chained from `pre-commit-version-check.sh`; spec mirrored in `tests/repo-scripts/test_bootstrap_dependency.py`) and again, unbypassably, in `publish.py`'s preflight — the hook can be skipped with `--no-verify`, a publish cannot.
-   - It belongs in **both** `plugin.json` and the generated marketplace entry; `scripts/regen_marketplace.py` propagates it automatically. A `dependencies` edit is a manifest change: it needs a version bump to reach consumers (same rule as any `plugin.json`/`bootstrap.json` edit).
-
-2. **Runtime guard (provision-time).** A declared dependency guarantees bootstrap is *installed*, not that it has *run* — on first install bootstrap provisions each plugin's venv at the next SessionStart (and the cooldown can defer it). For that "installed-but-not-yet-provisioned" window, plugins that would otherwise crash with a raw `ModuleNotFoundError`/missing-interpreter error use the vendored **`bootstrap_guard.py`** (canonical: `plugins/bootstrap/bootstrap_lib/bootstrap_guard.py`). It is **stdlib-only** and **must never import `bootstrap_lib`** (that's the thing that may be missing); it detects absence via the per-plugin `~/.claude/plugins/data/<marketplace>/<plugin>/bootstrap.log` and exits with one actionable "install/enable plugins-kit:bootstrap" message instead of a raw traceback. It is **vendored** per plugin (copied next to the entry script and imported as a plain module), exactly like `path_repair.py`, with a drift test asserting copies match the canonical.
+**Plugin dependencies on bootstrap.** Every plugin except bootstrap declares
+`"dependencies": ["bootstrap"]`, enforced at pre-commit and again in
+publish preflight. Mechanics and the bootstrap_guard runtime shim:
+`plugins/CLAUDE.md`.
 
 ### Anti-pattern: hand-creating an artifact a plugin is supposed to produce
 
@@ -671,55 +463,22 @@ python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootst
 
 ## Task folders live in a private tasks repo, linked in at `dev/tasks`
 
-`dev/tasks` in a working copy is **not a directory in this repo** -- it is a
-directory junction (Windows) or symlink pointing into the private
-`kitaekatt/tasks` repo, at that repo's `plugins-kit/` subdirectory. Task
-folders are version-controlled there, not here. This repo is public and task
-folders are working state; keeping them in a private repo gives them durability
-without putting them in the history other people pull.
-
 `.gitignore` carries `dev/tasks/`, and that entry is **load-bearing**: it is
 what stops this repo's git from traversing the link and staging private task
 content into a public repo. Do not remove it, and do not add a `!dev/tasks`
 negation.
 
-Consequences to know rather than rediscover:
-
-- **One task set per project, shared by every clone of it.** Two clones of
-  plugins-kit link to the same directory, so a task folder is visible from
-  whichever checkout you are in. Task state follows the project, not the
-  checkout -- which also means two concurrent sessions in two clones can edit
-  the same task folder, exactly as two sessions in one tree already can.
-- **A fresh clone has no link.** Nothing in this repo creates it, so
-  `dev/tasks` is simply absent until the junction/symlink is made. An absent
-  task root is a missing link, not a missing task.
-- `awesome-kit:task`'s `dev/tasks` contract ("version control is the record")
-  applies again, which it did not while the task root was ignored. The
-  `durable_outputs` rule still holds for anything that must outlive the task --
-  a spec belongs in the repo it describes at authoring time, not because the
-  folder is fragile, but because a document nobody can find is not durable.
-- **The task CLI used to misreport this setup** (fixed in awesome-kit 0.35.0).
-  It discovered the tasks repo correctly (`git -C <folder> rev-parse
-  --show-toplevel`), then passed the *logical* path through the link as a
-  pathspec against the *resolved* root, so git exited 128 with "is outside
-  repository" and the caught error surfaced as `version-control state
-  unverified: ... is not in a git repo`. That was a note rather than a blocking
-  warning, so `list`/`work`/`validate` behaved normally -- but `archive`
-  silently degraded to the `vcs_ignored` disposition, the one disposition where
-  the folder is the only copy and `delete` is unrecoverable. A false negative
-  reaching the one unrecoverable path is why this mattered more than the note
-  suggested. Every git-invoking helper in `validate.py` and `location_ops.py`
-  now resolves the folder (and the repo root where it takes one) before handing
-  it to git. Note the count: the four call sites originally identified were
-  real but not exhaustive -- eight functions had the pattern, and the live
-  archive bug was in one of the four that had NOT been named.
+Link model, the task-CLI contract, and the 0.35.0 misreporting bug:
+[docs/reference/task-folders.md](docs/reference/task-folders.md).
 
 ## Preferences
 
-- **No temporal deixis in documentation.** Never "recent(ly)", "new", "just
-  shipped", or similar now-relative phrasing in docs, READMEs, or outward
-  content -- state what a thing IS, cite a source, and use absolute dates
-  when a date matters. Now-relative claims rot silently and are unverifiable.
+- **No temporal deixis in tracked documents.** Never "recent(ly)", "new", "just
+  shipped", or similar now-relative phrasing in any tracked document, including
+  agent-facing internal documents such as this `CLAUDE.md` -- state what a thing
+  IS, cite a source, and use absolute dates when a date matters. Now-relative
+  claims rot silently and are unverifiable. The two stale claims in this file
+  that produced FAIL findings used exactly the forbidden now-relative wording.
 - **Never use the memory system** (`~/.claude/projects/*/memory/`). Always update `CLAUDE.md` instead — it is machine-independent and checked into the repo, so all machines and sessions share the same context.
 
 ## Insights
@@ -815,7 +574,7 @@ claude_md:
       added: "2026-06-27"
     - id: registry_v2_empty
       keywords: [installed_plugins.json, empty registry, registry v2, "plugins {}", fresh machine, deleted plugins dir, provisions nothing, rescue, sessionstart missed, sessionstart-rescue, cache fallback, discover_cache_plugins, enabledPlugins, index.html empty, dev-tree synthesize, harvest blind, new machine test]
-      summary: Newer Claude Code keeps installed_plugins.json PERMANENTLY EMPTY ({"version":2,"plugins":{}}) for marketplace installs -- enablement lives in settings enabledPlugins, code in the cache layout. Everything that read the registry needed a cache-scan fallback (bootstrap 0.47.0) and a SessionStart that races the fresh-machine plugin sync is caught by the UserPromptSubmit rescue (0.46.0).
+      summary: Claude Code registry v2 keeps installed_plugins.json PERMANENTLY EMPTY ({"version":2,"plugins":{}}) for marketplace installs -- enablement lives in settings enabledPlugins, code in the cache layout. Everything that read the registry needed a cache-scan fallback (bootstrap 0.47.0) and a SessionStart that races the fresh-machine plugin sync is caught by the UserPromptSubmit rescue (0.46.0).
       detail: |
         Engine-side fixes (rescue 0.46.0, cache-scan fallback 0.47.0) are owned by the bootstrap
         skill references (engine-internals.md, plugin-reload-lifecycle.md) -- consult those for
@@ -899,7 +658,7 @@ claude_md:
         "needs a shared abstraction first" blocker is gone. They are still NOT merged because:
         (1) the members are in separate plugins (git-kit, p4-kit) and a domain router cannot
         span plugins without relocating a member or spawning a new home plugin -- both barred by
-        "Plugin boundaries are hard boundaries for cohesion work" above; (2) routing value is low
+        "Plugin boundaries are hard boundaries for cohesion work" in `plugins/CLAUDE.md`; (2) routing value is low
         -- git-vs-p4 is unambiguous from the workspace, so a natural-language front door adds
         little over the two already-auto-triggering skills. Correct cross-plugin sharing is the
         library both depend on (bootstrap_lib.code_review), which already exists. Do not
@@ -924,31 +683,17 @@ claude_md:
         JSON output only; the pass still fetches marketplaces, installs versions into the
         cache, and rewrites installed_plugins.json. Misreading it as a safe probe is exactly
         what converted the 2026-07-27 investigation into a repair.
-        Full narrative and the worked example: "Anti-pattern: repairing a wedged machine by
-        hand" in the Bootstrap section above.
+        For the discipline and --console correction, see "Anti-pattern: repairing a wedged
+        machine by hand" in the Bootstrap section above.
       origin: "User directive 2026-07-27 after nine plugins reported 'not cached' and the engine was run by hand to clear it -- the machine recovered, the root cause became unrecoverable, and no fix shipped to any other machine."
       added: "2026-07-27"
     - id: never_hand_make_a_plugins_output
       keywords: [hand-create artifact, hand-place file, copy the file myself, plugin should generate it, refresh action, generated stub, index, report, prove the workflow, publish and run, skip the round trip, missing prerequisite, written not working, verify by running]
       summary: Never hand-create an artifact a plugin's workflow is supposed to produce. Build or fix the producing action, publish it, install it, and run it -- a hand-placed file cannot distinguish a working workflow from a broken one.
       detail: |
-        Sibling of never_hand_repair_a_wedge, one level up: that one is about not
-        hand-fixing a MACHINE, this one about not hand-making an OUTPUT. When a plugin
-        owns a workflow that produces something -- a generated stub, an index, a config,
-        a report -- producing it yourself proves nothing about the workflow, and the
-        workflow was the deliverable. It also looks like success in the way that stops
-        anyone looking further.
-        The temptation is honest: the real path costs an edit, a version bump, a
-        publish, a restart to pick it up, then a run. That is the cost of shipping, not
-        an obstacle. Publishes are gated on the user, so when the action is not yet
-        published, SAY SO AND WAIT rather than substituting a hand-made result.
-        If a PREREQUISITE is missing (a source file, a credential, an editor build),
-        report the prerequisite -- satisfying it by producing the final output directly
-        discards the signal that it was missing.
-        Corollary: a plugin change is not verified by re-reading the diff, nor by a
-        background agent's report of what it intended. It is verified by the published
-        plugin doing the thing on a machine that installed it. Until then its status is
-        "written", not "working".
+        Hand-making a plugin-owned output proves nothing about its workflow and can hide a
+        broken action or missing prerequisite; verify the published plugin by running it, and
+        treat the result as "written", not "working", until it does so.
         Full narrative: "Anti-pattern: hand-creating an artifact a plugin is supposed to
         produce" in the Plugin System section above.
       origin: "User directive 2026-08-08 -- on a task that moved a generated artifact onto the durable-project-data pattern, the user directed that the artifact be created by the published refresh workflow rather than copied into place by hand."
@@ -980,9 +725,9 @@ claude_md:
         PREFERENCE, not when it is an observable FACT. Note also what the prose remedy
         cost while it stood: the unhandled case was not merely noisy, it CRASHED archive
         mid-write, and the "noise" framing is why that read as expected friction for weeks.
-        Criteria OP-1..OP-7, detection methods, examples both ways, the table of known
-        unremediated findings, and the audit procedure:
-        docs/reference/plugin-opinion-razor.md. OP-1 (no maintainer-only material on the
+        Full razor narrative: `plugins/CLAUDE.md`. Criteria OP-1..OP-7, detection methods,
+        examples both ways, the table of known unremediated findings, and the audit
+        procedure: `docs/reference/plugin-opinion-razor.md`. OP-1 (no maintainer-only material on the
         published surface) is PARTLY reachable by md-domain: skill-standards.md SR-4
         (reader fit) flags maintainer-only material inside a skill's references/*.md,
         which those claims used to carve out. It is one judgment criterion over one
@@ -1039,8 +784,9 @@ claude_md:
         staged as a deletion or untrack. Then the index is a stale re-add whose content is
         already in history. The operative question behind both the rule and its exception
         is whether the index holds information that exists nowhere else.
-        Full narrative and both worked examples: "Anti-pattern: unstaging another session's
-        work to scope your own commit" in Development Workflow.
+        The full narrative and first worked example are in "Anti-pattern: unstaging another
+        session's work to scope your own commit" in Development Workflow; the second worked
+        example is in `docs/reference/shared-tree-git-discipline.md`.
       origin: "2026-08-08 -- a unreal-kit stub staged as 588,614 deletions was `git restore --staged`-ed to scope an orchestrate commit; it was a deliberate `git rm --cached` paired with a staged .gitignore change, and putting it back required inferring that intent by hand."
       added: "2026-08-08"
     - id: never_create_or_switch_branches
@@ -1060,33 +806,17 @@ claude_md:
         without moving this tree. Publishing needs no branch -- publish.py owns dev -> master,
         and gotcha 1 (unrelated dev commits) is a decision to escalate to the user, not to
         solve by creating a branch.
-        Full narrative and the worked example: "Anti-pattern: creating a branch, or
-        switching the one that is checked out" in the Development Workflow section above.
+        The rule and range-scoping alternative remain in "Anti-pattern: creating a branch, or
+        switching the one that is checked out" in Development Workflow; the worked example is
+        in `docs/reference/shared-tree-git-discipline.md`.
       origin: "2026-08-08 -- a review-bootstrap-cli branch was created off origin/master to scope a code review; a concurrent session then committed twice onto it, stranding both commits on a master-based throwaway branch that git branch --contains showed existed nowhere else."
       added: "2026-08-08"
     - id: orchestration_yaml_is_generated
       keywords: [orchestration.yaml, generated decision half, tier-principles.md, generate_orchestration.py, hand-edit orchestration.yaml, one-way authorship, orchestrate skill policy, retracted, superseded, routing]
       summary: "RETRACTED 2026-08-26. orchestration.yaml is HAND-WRITTEN configuration; its generator, its principles source, and its pre-commit and publish drift gates are deleted. The former rule -- never hand-edit it -- no longer applies."
       detail: |
-        This insight stated that the decision half of orchestrate's policy was
-        GENERATED from a maintainer-only principles source, and that authorship
-        was one-way: change a principle, re-derive the data, never edit the
-        rendered tree. That was true until the decision half was replaced by a
-        hand-written `routing:` list.
-        What replaced it: `backend` and `ladders` are gone; an ordered
-        `routing:` list of shapes, each naming models in priority order, is the
-        decision policy, and the whole file is now hand-maintained
-        configuration at `schema_version: 3`. `scripts/generate_orchestration.py`,
-        `docs/reference/orchestrate/tier-principles.md`, the derivation docs,
-        `tests/awesome-kit/test_orchestration_generator.py`, the pre-commit
-        drift check and `publish.py`'s `_require_generated_orchestration` are
-        all deleted. Two tests in tests/awesome-kit -- shipped-defaults-render
-        and lexicon-sync -- replace the protection the deleted gates gave.
-        Kept as a retraction rather than deleted because the removed disclosure
-        (`docs/reference/orchestrate/CLAUDE.md`) was the only record that the
-        one-way rule ever existed, and an agent that remembers the old rule
-        needs to find out here that it is dead rather than conclude the file is
-        undocumented.
+        RETRACTED: the former "orchestration.yaml is generated, never hand-edit it" rule is dead.
+        `orchestration.yaml` is hand-written configuration at `schema_version: 3` with an ordered `routing:` list.
       origin: "2026-08-08 -- disclosure gap identified after the unshipping move removed the in-plugin links that used to name this chain. RETRACTED 2026-08-26 when config-driven routing replaced the generated decision half."
       added: "2026-08-08"
       updated: "2026-08-26"
@@ -1094,99 +824,9 @@ claude_md:
       keywords: [codex, codex exec, sandbox, workspace-write, windows.sandbox, absolute -C, add-dir, exit 0, no approval channel, permission spam, danger-full-access, reads unrestricted, bootstrap_lib.codex, CodexCliBackend, run_cli_streaming]
       summary: Every way a codex dispatch can be misconfigured fails SILENTLY at exit 0, so codex machinery is built to refuse bad input rather than trust it. bootstrap_lib.codex is the single source of truth for detection and argv; orchestrate deliberately does NOT consume it.
       detail: |
-        Every way a codex dispatch can be misconfigured fails silently at exit 0 --
-        judge a run by its `-o` file, never `$?`, and do not relax the sandbox to
-        stop "permission spam" (there is no approval channel either way). The
-        flags, the three verified misconfigurations, the read boundary and the
-        `-s danger-full-access` escape hatch:
-        plugins/awesome-kit/skills/orchestrate/references/codex-dispatch.md.
-        `bootstrap_lib/codex.py` owns detection (which + PATHEXT + `cmd /c` wrap for
-        batch launchers), version parsing, and `build_codex_exec_argv`, which RAISES
-        on a relative path rather than emitting one. Its consumer is dispatch-side
-        (llm-scripting-kit's CodexCliBackend). orchestrate's `detect_backend` stays
-        stdlib-only and generic on purpose: coupling a policy renderer to a
-        codex-specific module would cost a manifest change, a version bump and a
-        venv re-exec guard to dedupe three lines.
-        Publish ordering: bootstrap must ship before or with llm-scripting-kit, or
-        CodexCliBackend raises ModuleNotFoundError on every consumer -- shared libs
-        resolve to the INSTALLED copy via .pth, not the dev tree.
-        Weak spot to replace with observed strings: `halt.classify_codex_exception`'s
-        markers are inferred from OpenAI surfaces, not read off an observed codex
-        failure.
+        A codex dispatch can fail silently at exit 0 -- judge it by its `-o` file, never `$?`.
+        Dispatch reference: plugins/awesome-kit/skills/orchestrate/references/codex-dispatch.md.
       origin: "2026-08-10 -- empirical probing of codex-cli 0.146.0 while adding codex as a work backend; the shipped policy had hardcoded network-on, no windows.sandbox, and framed the missing approval flag as a mere gotcha."
-      added: "2026-08-10"
-    - id: codex_is_a_harness_over_a_responses_endpoint
-      keywords: [codex custom provider, model_providers, wire_api, responses api, chat completions removed, local model, llama.cpp, openai-compatible, keyless endpoint, env_key, harness vs transport, agent loop, do work, base_url]
-      summary: Codex speaks the Responses API ONLY, so it drives an OpenAI-compatible endpoint only when that endpoint serves /v1/responses -- and what it contributes is the HARNESS (agent loop, tools, AGENTS.md, sandbox, cwd, parseable result), not transport. Both halves are routinely got wrong in opposite directions.
-      detail: |
-        WIRE API. `wire_api = "chat"` was REMOVED from codex (2026-02-05, upstream
-        discussion #7782); the enum is Responses-only and passing "chat" is a hard
-        config error, not a fallback. The built-in ollama and lmstudio providers moved
-        to Responses too.
-        THE TRAP, and it is a wrong INFERENCE rather than a wrong fact: reading
-        "chat was removed" and concluding "codex cannot drive a chat-completions
-        server" is false. llama.cpp ships a Responses->Chat conversion layer, so a
-        llama-server endpoint works -- verified live against one (SSE with
-        response.created / response.output_item.added / response.reasoning_text.delta,
-        function_call items carrying call_id). This inference was drawn, from issue
-        trackers and without testing, during the very research that then disproved it.
-        Test the endpoint; do not reason from the enum. The real predicate is "does it
-        serve /v1/responses", NOT "is it OpenAI-compatible" -- but that is NECESSARY
-        AND NOT SUFFICIENT, and the insufficiency was found only by running it. xAI
-        serves /v1/responses (verified live, 200 on grok-4.6) and codex still cannot
-        drive it: codex emits a tool of type "namespace", which xAI's deserializer
-        rejects, failing the whole request with 422 `unknown variant "namespace",
-        expected one of function, web_search, x_search, ... shell`. Auth and provider
-        selection succeed first, so it looks like it is working until the first turn.
-        Disabling MCP servers and eleven feature flags shifted the tool index but did
-        not remove it -- "namespace" is a core codex tool, so no consumer-side config
-        fixes this. The full predicate is therefore "serves /v1/responses AND accepts
-        codex's tool schema", and only a live run answers the second half.
-        KEYLESS IS NATIVE, not a workaround: ModelProviderInfo.env_key is
-        Option<String> and requires_openai_auth defaults false, so omitting env_key
-        sends no Authorization header -- how the built-in OSS providers are built. Do
-        not fabricate a dummy key for a keyless server.
-        HARNESS VS TRANSPORT, the half that decides architecture. A raw endpoint
-        yields text; codex yields WORK -- the agent loop, shell/file/apply_patch
-        tools, AGENTS.md (and CLAUDE.md via project_doc_fallback_filenames) ingestion,
-        sandboxing, a working directory, and a machine-parseable result. That is why
-        it is a delegation backend rather than a client. It is also why it is not free:
-        a harness costs roughly 11k-34k tokens of fixed prompt overhead and turns a
-        seconds-long call into a minutes-long session. THE RULE: a harness is
-        warranted exactly when the information needed is not knowable when the prompt
-        is written -- the unit must discover what to read, verify its own output,
-        iterate, edit in place across files, or honour instruction files it was not
-        handed. Pure transformation of a fully-supplied context (summarize, classify,
-        translate, rewrite, extract, score) is a completions call and must stay one.
-        Dispatch mechanics, flags, and the operational gotchas (harmless per-run
-        stderr from a /v1/models schema mismatch, model-metadata warnings, Windows
-        BOM/CRLF on written files) live in
-        plugins/awesome-kit/skills/orchestrate/references/codex-dispatch.md, which the
-        codex_dispatch_is_silent_on_failure insight also names as the dispatch SSOT.
-      origin: "2026-08-25 -- research for adding a locally hosted model as a work backend. codex exec was run against a live llama.cpp server (three runs, including a multi-step coding task that edited files and ran pytest) by a research agent, not by the encoding session; the wire_api and env_key claims were read from codex source. The harness/no-harness line comes from measuring both paths against the same server."
-      added: "2026-08-25"
-    - id: run_cli_streaming_rename
-      keywords: [run_claude_streaming, run_cli_streaming, back-compat alias, claude_runner, content-pipeline-kit, shared lib rename, transport-neutral runner]
-      summary: llm-scripting-kit's claude -p subprocess runner is now the transport-neutral run_cli_streaming; run_claude_streaming remains as a back-compat alias because llm-scripting-kit's own completion.backends imports it by name and re-exports it.
-      detail: |
-        The runner in
-        plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/claude_runner.py
-        was always structurally generic -- cmd in, stdin written, both pipes drained
-        on daemon threads, bounded timeout, caller-supplied hard-stop markers -- but
-        was claude-BRANDED in its name and its two error strings. Adding a codex
-        backend made the branding misleading, so it took a `label` parameter and the
-        neutral name. The alias is load-bearing, not courtesy:
-        llm_scripting_kit.completion.backends imports the old name and uses it as
-        ClaudeCliBackend's default `runner`, and completion/__init__ re-exports it.
-        content-pipeline-kit depends on it only transitively (its adapter delegates
-        with runner=None and mentions the name in a docstring), so dropping the
-        alias breaks llm-scripting-kit's own import first --
-        test_completion_codex_backend.py::test_run_claude_streaming_alias_is_the_renamed_runner
-        is what pins it. Re-run tests/llm-scripting-kit before touching it.
-        Note the runner's `(stdout, stderr, returncode)` contract does NOT carry a
-        codex result -- codex returns via `-o <FILE>` -- so CodexCliBackend manages a
-        temp output file around the call rather than parsing stdout.
-      origin: "2026-08-10 -- rename performed while adding CodexCliBackend alongside ClaudeCliBackend."
       added: "2026-08-10"
     - id: stale_editable_self_install
       keywords: [editable install, __editable__ pth, venv runs old code, stale pth, plugin version change, silently old release, site-packages, venv_check, scan_editable_installs, own package not shared lib, fixed, detected and remediated]
