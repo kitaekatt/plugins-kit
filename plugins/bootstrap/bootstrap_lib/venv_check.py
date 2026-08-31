@@ -232,7 +232,8 @@ def scan_editable_installs(
     return stale, unreadable
 
 
-def check_venv(plugin_data_dir: str, plugin_root: str, check_imports: List[str]) -> Result:
+def check_venv(plugin_data_dir: str, plugin_root: str, check_imports: List[str],
+               extras: Sequence[str] = ()) -> Result:
     """Check if a Python venv exists and required imports are available.
 
     Also fails when an editable install still points outside ``plugin_root``
@@ -248,7 +249,8 @@ def check_venv(plugin_data_dir: str, plugin_root: str, check_imports: List[str])
         Result with pass/fail and optional remediation command
     """
     venv_path = os.path.join(plugin_data_dir, ".venv")
-    remediation = f"uv sync --project {plugin_root}"
+    _extra_flags = "".join(f" --extra {e}" for e in extras)
+    remediation = f"uv sync --project {plugin_root}{_extra_flags}"
 
     # Check venv directory exists
     if not os.path.isdir(venv_path):
@@ -396,7 +398,7 @@ def ensure_venv(
     data_dir = os.path.dirname(venv_path)
     entries: List[str] = []
     existed = os.path.isdir(venv_path)
-    result = check_venv(data_dir, project_dir, list(check_imports))
+    result = check_venv(data_dir, project_dir, list(check_imports), extras=extras)
 
     if result.passed and not always_sync:
         return result, entries
@@ -428,7 +430,7 @@ def ensure_venv(
         return result, entries
 
     was_passing = result.passed
-    result = check_venv(data_dir, project_dir, list(check_imports))
+    result = check_venv(data_dir, project_dir, list(check_imports), extras=extras)
     if result.passed:
         if not was_passing:
             entries.append("created" if not existed else "re-synced")

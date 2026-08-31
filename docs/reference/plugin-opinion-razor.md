@@ -281,9 +281,13 @@ so an audit neither rediscovers them as new nor re-litigates the ones that faile
 
 ### PASSES -- seam required, not yet built
 
-| Plugin | Opinion | Scenarios | Seam (default = today) |
-|---|---|---|---|
-| awesome-kit:task | git is the privileged, automated VCS | **Serious:** a Perforce user -- an audience this marketplace explicitly serves via p4-kit and unreal-kit -- gets a permanently degraded path where `archive` silently does no VCS work and every retirement is manual. | `vcs: git\|p4\|none`, default auto-detect-git |
+None outstanding.
+
+### REGISTERED -- passes the test, declined deliberately
+
+| Plugin | Opinion | Disposition |
+|---|---|---|
+| awesome-kit:task | git is the privileged, automated VCS | Registered as a deliberate stance in `plugins/CLAUDE.md`, with the rationale OP-5 requires and the bounded degradation a Perforce consumer actually gets. Not a seam. |
 
 ### SEAMS BUILT -- verdict discharged
 

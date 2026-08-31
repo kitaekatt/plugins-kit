@@ -54,6 +54,17 @@ unconfigurable opinion whose test passes is a finding.
   same audit. Optional-tier rules and thresholds ARE configurable, and
   `skills-kit/skills/md-domain/references/configuring-standards.md` documents the boundary. A team disagreeing with a
   contract adds its own criteria via an additive standards file.
+- **awesome-kit:task privileges git as the automated VCS.** `archive` commits a
+  dev/tasks folder's final state and removes it only where git is present. This is imposed
+  rather than configured because a second VCS backend would be carried without being
+  exercised: the maintainers track tasks in git, so a p4 path would ship untested and its
+  first real failure would be on a consumer's machine. The degradation is deliberate and
+  bounded, not silent -- outside a git repo the scripts run NO VCS commands, record the
+  final state, keep the folder (`vcs_pending`), and hand submission to the agent. A
+  Perforce team therefore gets a working task system whose retirement step is manual, and
+  should either accept that or drive submission themselves; there is no half-working git
+  path to be surprised by.
+
 - **Code review renders to chat and is never persisted.** git-kit and p4-kit scope
   themselves to a conversational review; a team needing PR/Swarm comments or a CI artifact
   wants a different tool, and both SKILL.md scope blocks say so rather than assuming it

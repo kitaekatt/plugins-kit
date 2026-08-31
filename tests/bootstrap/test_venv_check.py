@@ -390,7 +390,7 @@ class TestEnsureVenvEditableRemediation:
             Result(passed=True, subject=venv_path, message="venv ok (0 imports verified)"),
         ]
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i: states.pop(0))
+                            lambda d, r, i, extras=(): states.pop(0))
         monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
 
         class _Proc:
@@ -580,7 +580,7 @@ class TestEnsureVenv:
         """When the check passes and always_sync is off, nothing runs."""
         venv_path = str(tmp_path / ".venv")
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i: self._passing_result(venv_path))
+                            lambda d, r, i, extras=(): self._passing_result(venv_path))
         ran = []
         monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run",
                             lambda *a, **k: ran.append(a))
@@ -594,7 +594,7 @@ class TestEnsureVenv:
         venv_path = str(tmp_path / ".venv")
         states = [self._failing_result(venv_path), self._passing_result(venv_path)]
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i: states.pop(0))
+                            lambda d, r, i, extras=(): states.pop(0))
         monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
 
         class _Proc:
@@ -617,7 +617,7 @@ class TestEnsureVenv:
         """uv sync errors are logged with exit code + stderr (B8: never swallowed)."""
         venv_path = str(tmp_path / ".venv")
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i: self._failing_result(venv_path))
+                            lambda d, r, i, extras=(): self._failing_result(venv_path))
         monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
 
         class _Proc:
@@ -634,7 +634,7 @@ class TestEnsureVenv:
         """A subprocess exception is logged, not swallowed (B8)."""
         venv_path = str(tmp_path / ".venv")
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i: self._failing_result(venv_path))
+                            lambda d, r, i, extras=(): self._failing_result(venv_path))
         monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
 
         def _boom(cmd, **k):
@@ -648,7 +648,7 @@ class TestEnsureVenv:
     def test_uv_missing_logged(self, tmp_path, monkeypatch):
         venv_path = str(tmp_path / ".venv")
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i: self._failing_result(venv_path))
+                            lambda d, r, i, extras=(): self._failing_result(venv_path))
         monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: None)
         result, entries = ensure_venv(str(tmp_path / "proj"), venv_path)
         assert not result.passed
@@ -658,7 +658,7 @@ class TestEnsureVenv:
         """Self-setup mode: sync runs on a passing check, silently when clean."""
         venv_path = str(tmp_path / ".venv")
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i: self._passing_result(venv_path))
+                            lambda d, r, i, extras=(): self._passing_result(venv_path))
         monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
 
         class _Proc:
@@ -672,3 +672,71 @@ class TestEnsureVenv:
         assert result.passed
         assert entries == []  # clean no-op sync stays silent
         assert ran  # but the sync did run
+
+
+class TestManifestExtrasReachEnsureVenv:
+    """A plugin's declared venv extras must survive the engine's wiring.
+
+    Regression: `_phase_venv` and bootstrap's self-setup call site both dropped
+    `extras`, so a plugin declaring `"venv": {"extras": ["sdk"]}` in its
+    bootstrap.json had that silently ignored and `uv sync` ran without it. The
+    venv then failed its own `check_imports` forever, and the remediation the
+    engine printed omitted the extras too, so running it by hand could not fix
+    it either. Only the project-venv call site passed them through.
+    """
+
+    def _capture(self, monkeypatch):
+        seen = {}
+
+        def fake_ensure_venv(project_dir, venv_path, extras=(), check_imports=(),
+                             always_sync=False):
+            seen["extras"] = list(extras)
+            from bootstrap_lib.venv_check import Result
+            return Result(subject="venv", passed=True, message="ok"), []
+
+        monkeypatch.setattr("bootstrap_lib.venv_check.ensure_venv", fake_ensure_venv)
+        return seen
+
+    def test_phase_venv_forwards_manifest_extras(self, tmp_path, monkeypatch):
+        from bootstrap_lib import engine
+
+        seen = self._capture(monkeypatch)
+
+        class Ctx:
+            manifest = {"venv": {"extras": ["sdk"], "check_imports": ["openai"]}}
+            data_dir = str(tmp_path / "data")
+            plugin_root = str(tmp_path / "root")
+            prefix = ""
+            plugin_name = "llm-scripting-kit"
+            action_entries: list = []
+            ok_entries: list = []
+            failures: list = []
+
+        engine._phase_venv(Ctx())
+        assert seen["extras"] == ["sdk"]
+
+    def test_phase_venv_without_extras_passes_empty(self, tmp_path, monkeypatch):
+        from bootstrap_lib import engine
+
+        seen = self._capture(monkeypatch)
+
+        class Ctx:
+            manifest = {"venv": {"check_imports": ["yaml"]}}
+            data_dir = str(tmp_path / "data")
+            plugin_root = str(tmp_path / "root")
+            prefix = ""
+            plugin_name = "some-plugin"
+            action_entries: list = []
+            ok_entries: list = []
+            failures: list = []
+
+        engine._phase_venv(Ctx())
+        assert seen["extras"] == []
+
+    def test_reported_remediation_includes_extras(self, tmp_path):
+        from bootstrap_lib.venv_check import check_venv
+
+        result = check_venv(str(tmp_path / "data"), str(tmp_path / "root"),
+                            ["openai"], extras=["sdk"])
+        assert not result.passed
+        assert "--extra sdk" in result.remediation_cmd

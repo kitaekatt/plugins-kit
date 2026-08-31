@@ -3017,6 +3017,7 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
             venv_def, data_dir, plugin_root, p, "venv",
             action_entries, ok_entries, failures,
             plugin_name=plugin_name, failure_plugin="bootstrap", always_sync=True,
+            extras=venv_def.get("extras", []),
         )
 
     return failures
@@ -3810,6 +3811,7 @@ def _phase_venv(ctx):
         ctx.manifest["venv"], ctx.data_dir, ctx.plugin_root, ctx.prefix, "venv",
         ctx.action_entries, ctx.ok_entries, ctx.failures,
         plugin_name=ctx.plugin_name,
+        extras=ctx.manifest["venv"].get("extras", []),
     )
 
 
