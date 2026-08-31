@@ -113,10 +113,11 @@ one guard that prevents silently dropping a master-only fix:
   (In practice these conflicts are usually textual-only: dev already contains
   master's content via a different commit, so the `+` set is empty and the
   clobber is safe.)
-- **`published: false` plugins** (agent-glue, workflow-kit): dev-only by
-  design and filtered out of `marketplace.json` by the regenerator, so their
-  divergence never reaches consumers -- take dev and move on; don't agonize
-  over their conflicts.
+- **`published: false` plugins**: dev-only by design and filtered out of
+  `marketplace.json` by the regenerator, so their divergence never reaches
+  consumers -- take dev and move on; don't agonize over their conflicts. Read
+  the current set from the field rather than from memory; the field is the
+  load-bearing record and this list has gone stale before.
 
 Mechanics: `git checkout master && git merge --no-commit --no-ff dev`, resolve
 each conflict per the rules above (`git checkout --theirs <file>` takes dev
@@ -137,8 +138,15 @@ against `origin/dev`'s committed state (never the live dev working tree),
 keeping dev-only plugins back:
 
 ```bash
+# Derive the dev-only set from the field; never hardcode plugin names here.
+DEVONLY=$(for f in plugins/*/.claude-plugin/plugin.json; do
+  python3 -c "import json,sys,os;d=json.load(open(sys.argv[1]));\
+print(os.path.basename(os.path.dirname(os.path.dirname(sys.argv[1])))) \
+if d.get('published', True) is False else None" "$f"
+done | grep . | paste -sd'|' -)
+
 git diff --name-only origin/master origin/dev \
-  | grep -vE '^(plugins|tests)/(agent-glue|workflow-kit)/' \
+  | grep -vE "^(plugins|tests)/(${DEVONLY})/" \
   | xargs git checkout origin/dev --
 ```
 

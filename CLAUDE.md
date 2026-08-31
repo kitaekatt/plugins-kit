@@ -22,7 +22,7 @@ plugins-kit/                          # Marketplace root
       .claude-plugin/plugin.json      # Plugin manifest
       bootstrap.json                  # Bootstrap plugin's own manifest
       engine/                         # Bootstrap engine + config
-      bootstrap_lib/                  # Shared libraries (cache, tool_check, etc.) — installable Python package
+      bootstrap_lib/                  # Shared libraries (tool_check, venv_check, etc.) — installable Python package
       hooks/sessionstart/             # SessionStart hook (bash wrapper)
       defaults/                       # Default config files
     p4-kit/                           # P4 multi-agent code review plugin (Claude subagents)
@@ -46,7 +46,6 @@ plugins-kit/                          # Marketplace root
 | File | Purpose |
 |------|---------|
 | `plugins/bootstrap/engine/bootstrap_engine.py` | Main engine — processes manifests, runs checks, emits hook JSON |
-| `plugins/bootstrap/bootstrap_lib/cache.py` | Content-hash caching (compute, check, write) |
 | `plugins/bootstrap/bootstrap_lib/tool_check.py` | System tool availability checks |
 | `plugins/bootstrap/bootstrap_lib/platform_detect.py` | OS detection |
 | `plugins/bootstrap/bootstrap_lib/log.py` | File-based bootstrap logging |
@@ -126,7 +125,7 @@ That exercises the same code path under the same conditions a user gets, so the 
 
 A hand-run engine invocation is a diagnostic of last resort, valid only *after* step 1 -- and even then, prefer a read-only probe over a full pass.
 
-**`--console` is not read-only.** It suppresses log-file writes and JSON output; it does **not** suppress provisioning. A `--console` pass still fetches marketplaces, installs plugin versions into the cache, and rewrites `installed_plugins.json`. Do not reach for it as a safe way to look at a wedged machine -- it is a live pass with quieter output. (This misreading is what turned the 2026-07-27 investigation above into a repair.)
+**`--console` is not read-only.** It suppresses log-file writes and JSON output; it does **not** suppress provisioning. A `--console` pass still fetches marketplaces, installs plugin versions into the cache, and rewrites `installed_plugins.json`. Do not reach for it as a safe way to look at a wedged machine -- it is a live pass with quieter output. (Misreading `--console` as read-only is what turned a 2026-07-27 wedge investigation into a repair -- nine plugins reported `not cached`, the engine was hand-invoked, and the failing state was destroyed before it could be diagnosed; see the `never_hand_repair_a_wedge` insight.)
 
 **Bootstrap cannot patch itself -- ship the escape hatch in `bootstrap-stuck-fix`.** When a bug is in the *delivery path* (update, harvest, registry record selection, install scope), fixing it in bootstrap is a no-op for everyone it affects: the fix reaches a machine only by the mechanism that is broken there. Publishing it looks like progress, converges nobody, and strands every LATER bootstrap fix behind the same wedge. Such bugs are also self-masking -- the machine reports one stable error forever, so it reads as a known annoyance rather than a stuck update.
 
