@@ -74,6 +74,18 @@ The useful mental model is that you write the prompt pair once and choose the
 executor separately -- but the separation is incomplete, and a caller who
 believes it is clean will get burned. These things travel with the executor:
 
+**Codex contributes a harness, not transport.** A raw endpoint returns text;
+Codex adds the agent loop, shell/file/apply_patch tools, AGENTS.md and
+CLAUDE.md ingestion, sandbox, working directory, and a machine-parseable
+result. That fixed harness costs roughly 11k-34k tokens of prompt overhead and
+can turn a seconds-long call into a minutes-long session. Use it exactly when
+the information needed is not knowable when the prompt is written: the unit
+must discover what to read, verify its output, iterate, edit files in place, or
+honor instruction files it was not handed. A fully supplied transformation --
+summarize, classify, translate, rewrite, extract, or score -- is a plain
+completions call and stays one call. For endpoint compatibility (wire, tool
+schema, and keyless auth), see [the Codex endpoint compatibility reference](../../docs/reference/codex-endpoint-compatibility.md).
+
 **The `model` id is not portable.** An OpenRouter slug means nothing to
 `claude -p`, and codex requires fully-qualified ids. Nothing here translates
 them, so choosing a backend is really choosing a backend AND a model id.
@@ -116,3 +128,41 @@ are properties of the subprocess it spawns, not run-level policy, and 429 / 401
 never retry because they persist. `OpenRouterBackend` makes exactly one attempt
 and leaves retry to the caller, which holds the run-level context that decision
 needs.
+
+## Insights
+
+```yaml
+claude_md:
+  _schema_version: "1"
+  scope:
+    directory: plugins/llm-scripting-kit
+    covers:
+      - the runner seam shared by the CLI-backed completion backends
+    excludes:
+      - codex dispatch mechanics (orchestrate's codex-dispatch.md)
+      - endpoint compatibility (docs/reference/codex-endpoint-compatibility.md)
+  insights:
+    - id: run_cli_streaming_rename
+      keywords: [run_claude_streaming, run_cli_streaming, back-compat alias, claude_runner, content-pipeline-kit, shared lib rename, transport-neutral runner]
+      summary: llm-scripting-kit's claude -p subprocess runner is now the transport-neutral run_cli_streaming; run_claude_streaming remains as a back-compat alias because llm-scripting-kit's own completion.backends imports it by name and re-exports it.
+      detail: |
+        The runner in
+        plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/claude_runner.py
+        was always structurally generic -- cmd in, stdin written, both pipes drained
+        on daemon threads, bounded timeout, caller-supplied hard-stop markers -- but
+        was claude-BRANDED in its name and its two error strings. Adding a codex
+        backend made the branding misleading, so it took a `label` parameter and the
+        neutral name. The alias is load-bearing, not courtesy:
+        llm_scripting_kit.completion.backends imports the old name and uses it as
+        ClaudeCliBackend's default `runner`, and completion/__init__ re-exports it.
+        content-pipeline-kit depends on it only transitively (its adapter delegates
+        with runner=None and mentions the name in a docstring), so dropping the
+        alias breaks llm-scripting-kit's own import first --
+        test_completion_codex_backend.py::test_run_claude_streaming_alias_is_the_renamed_runner
+        is what pins it. Re-run tests/llm-scripting-kit before touching it.
+        Note the runner's `(stdout, stderr, returncode)` contract does NOT carry a
+        codex result -- codex returns via `-o <FILE>` -- so CodexCliBackend manages a
+        temp output file around the call rather than parsing stdout.
+      origin: "2026-08-10 -- rename performed while adding CodexCliBackend alongside ClaudeCliBackend."
+      added: "2026-08-10"
+```

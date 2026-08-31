@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Currently ships (published): **awesome-kit** (plugin-ecosystem poster, /html-pdf, task tracking), **bootstrap** (dependency management), **bootstrap-stuck-fix** (temporary remediation shim for a wedged bootstrap registry record), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **content-pipeline-kit** (library + skills for LLM-in-the-loop batch content pipelines), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **hue-kit** (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), **llm-scripting-kit** (LLM key resolution, shared model registry, and named OpenAI-compatible endpoints -- OpenRouter is the default endpoint; importable package `llm_scripting_kit`, CLI `llm-scripting-kit`), **p4-kit** (Perforce multi-agent code review), **prototypes** (experimental skills awaiting graduation), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md, folded into a single domain-skill: /md-domain, plus knowledge-encoding, update-documentation, materialized-output), and **unreal-kit** (Unreal Engine Python API automation). Dev-only (not published, `published: false`): **agent-glue**, **workflow-kit**.
+**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Currently ships (published): **awesome-kit** (plugin-ecosystem poster, /html-pdf, task tracking), **agent-glue** (graph-orchestration kit for pipelines that interleave LLM inference, deterministic logic, and config-driven rules), **bootstrap** (dependency management), **bootstrap-stuck-fix** (temporary remediation shim for a wedged bootstrap registry record), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **codex-kit** (Codex CLI integration for Claude Code), **content-pipeline-kit** (library + skills for LLM-in-the-loop batch content pipelines), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **hue-kit** (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), **llm-scripting-kit** (LLM key resolution, shared model registry, and named OpenAI-compatible endpoints -- OpenRouter is the default endpoint; importable package `llm_scripting_kit`, CLI `llm-scripting-kit`), **opencode-kit** (opencode integration for Claude Code), **p4-kit** (Perforce multi-agent code review), **prototypes** (experimental skills awaiting graduation), **secrets-kit** (fleet secrets provisioning), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md, folded into a single domain-skill: /md-domain, plus knowledge-encoding, update-documentation, materialized-output), **unreal-kit** (Unreal Engine Python API automation), and **workflow-kit** (declarative .workflow.yaml compiler and node strategies). Dev-only (not published, `published: false`): **yaml-data-editor-kit**.
 
 This repo is a **Claude Code plugin marketplace** — it extends Claude Code with skills, commands, and hooks via the `.claude-plugin/marketplace.json` manifest. Plugins are loaded either via `--plugin-dir` (local development) or `enabledPlugins` in settings (production installs from the remote repo).
 
@@ -274,7 +274,7 @@ Some plugins live on `dev` for in-development work and must not reach consumers 
 
 **Current dev-only plugins** (the field, not this list, is load-bearing — this is just a human-readable inventory):
 
-- (none — `agent-glue` and `workflow-kit` graduated to published 2026-07-28; the mechanism above stays for future dev-only plugins.)
+- **yaml-data-editor-kit** (not yet published).
 
 When you see commits for a dev-only plugin in `git log origin/master..origin/dev`, that's still gotcha 1 territory — branch from master, cherry-pick only the publish-ready commits, and leave the dev-only commits on `dev`. The regenerator is a backstop for the marketplace listing, not a substitute for picking the right commits to merge.
 
@@ -879,7 +879,7 @@ claude_md:
         Implication: --plugin-dir smoke tests can exercise the new engine code paths (the
         engine binary is loaded from dev), but they cannot exercise new bootstrap.json content
         for any plugin without first publishing that plugin. Workarounds: (a) bump versions
-        and publish to test for real; (b) use the `pk-dev` mode helper, which rewrites
+        and publish to test for real; (b) use the `claude-dev` mode helper (`scripts/dev-tree.py`), which rewrites
         installed_plugins.json to point installPaths at the dev tree -- that does exercise
         new bootstrap.json content; (c) test new bootstrap.json content via layered manifests
         in `~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`, which DO go
