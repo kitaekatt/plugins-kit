@@ -29,6 +29,8 @@ tests/bootstrap/.
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GEN_PATH = REPO_ROOT / "scripts" / "gen_code_review_skills.py"
 
@@ -305,3 +307,64 @@ class TestVcsSeamsRendered:
         assert "auto-created shelf" in body     # p4-only cleanup step content
         assert "python3` interpreter" in body  # p4-only launch gotcha
         assert "Branch: <branch>" not in body  # no git output header
+
+
+class TestGeneratedYamlBlockParses:
+    """The rendered SKILL.md contract block must be machine-readable YAML.
+
+    The drift guard above compares the rendered bytes to the template, so a
+    template that renders INVALID YAML drifts nothing and passes. That is how
+    three unparseable lines reached the published skills: YAML reserves a
+    leading backtick, so a plain scalar may not start with one, and a `: `
+    inside a plain scalar splits it into a key and a value whose own first
+    character is then a backtick. Every consumer of the block --
+    skills_kit_lib.document_walker.safe_load_block among them -- returns None
+    on such a document rather than raising, so nothing was ever noticed.
+
+    Parse both rendered skills, not one: the shared template means a bad
+    gotcha line lands in git-kit and p4-kit at once.
+    """
+
+    SKILLS = (
+        "plugins/git-kit/skills/git-code-review/SKILL.md",
+        "plugins/p4-kit/skills/p4-code-review/SKILL.md",
+    )
+
+    @staticmethod
+    def _first_yaml_block(text):
+        out, inside = [], False
+        for line in text.splitlines():
+            if not inside and line.startswith("```yaml"):
+                inside = True
+                continue
+            if inside and line.startswith("```"):
+                break
+            if inside:
+                out.append(line)
+        return "\n".join(out)
+
+    @pytest.mark.parametrize("rel", SKILLS)
+    def test_contract_block_is_parseable_yaml(self, rel):
+        import yaml
+
+        path = REPO_ROOT / rel
+        block = self._first_yaml_block(path.read_text(encoding="utf-8"))
+        assert block.strip(), f"{rel}: no ```yaml block found"
+        try:
+            data = yaml.safe_load(block)
+        except yaml.YAMLError as exc:
+            mark = getattr(exc, "problem_mark", None)
+            where = ""
+            if mark is not None:
+                lines = block.splitlines()
+                if 0 <= mark.line < len(lines):
+                    where = f"\n  offending line {mark.line + 1}: {lines[mark.line].strip()}"
+            raise AssertionError(
+                f"{rel}: contract block is not valid YAML: "
+                f"{getattr(exc, 'problem', exc)}{where}\n"
+                "  Fix the template in scripts/gen_code_review_skills.py and regenerate. "
+                "A list item may not begin with a backtick, and a plain scalar may not "
+                "contain ': ' -- reword to '--' or quote the scalar."
+            ) from None
+        assert isinstance(data, dict), f"{rel}: contract block is not a mapping"
+        assert "technique_skill" in data, f"{rel}: contract block lost technique_skill"
