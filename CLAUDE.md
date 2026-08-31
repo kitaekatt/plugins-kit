@@ -347,9 +347,11 @@ git log --oneline origin/master..origin/dev
 
 If that list contains anything beyond the commits you intend to publish, **stop** — do not fast-forward. Pick a safe path instead:
 
-1. **Branch from master, cherry-pick, PR to master.** Cleanest when dev has unrelated WIP. `git checkout -b <feature> origin/master`, cherry-pick the feature commit(s), push, open a PR. Doesn't touch `dev`. After master merges, merge master back into dev to keep dev current.
+1. **Let `publish.py` filter.** Commits touching only a `published: false` plugin are EXCLUDED automatically -- replayed onto master in a temporary worktree, `dev` untouched, every held-back commit printed. Nothing to do by hand.
 2. **Wait for the other dev work to ship first.** If those commits are nearly ready, finish their version bumps and publish them properly (every plugin you're shipping needs its own `plugin.json` + `marketplace.json` bump — without that, fresh installs silently diverge). Then publish your feature on top.
-3. **Squash-merge a feature branch.** Same as (1) but one squashed commit on master.
+3. **Escalate to the user.** When the range holds unrelated commits that are NOT dev-only, picking which ship is the user's call, not yours.
+
+**Do NOT branch from master to route around this.** `git checkout -b` in this shared tree silently reparents whatever a concurrent session commits next -- the harm is documented under "Anti-pattern: creating a branch" below and in [docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md). If a genuinely separate checkout is required, use `git worktree add`, which leaves this tree's branch alone. (Earlier revisions of this section recommended `git checkout -b <feature> origin/master` and a squash-merged feature branch; both are retired.)
 
 Fast-forward `dev` → `master` is only safe when `git log origin/master..origin/dev` shows *exactly* the commits you intend to publish.
 
@@ -365,7 +367,7 @@ Read every line. If anything is unrelated to the feature, `git restore --staged 
 
 **Gotcha 3: a botched publish burns the version number.** Cache entries on consumer machines key off `(plugin, version)`. If a bad version is pushed to master, retracting it doesn't evict caches that already pulled it — same version = same code, forever, from the cache's view. The fix is a patch-bump *past* the burned number (e.g. 0.11.0 broken → don't ship 0.11.1, jump to 0.12.0) so every consumer's cache invalidates cleanly. The 0.11.1 / `patch-bump 4 plugins to force-refresh post-retraction caches` commits on master are an example of this recovery pattern.
 
-**Gotcha 4: unauthorized publish.** The go-signal rule above scopes authorization to the work the user actually approved -- it does **not** authorize sweeping in adjacent unrelated work that happens to be staged or sitting on `dev`. A clean feature commit next to unrelated dev commits is gotcha 1 territory: branch from master.
+**Gotcha 4: unauthorized publish.** The go-signal rule above scopes authorization to the work the user actually approved -- it does **not** authorize sweeping in adjacent unrelated work that happens to be staged or sitting on `dev`. A clean feature commit next to unrelated dev commits is gotcha 1 territory: let `publish.py` filter, or escalate the decision -- never branch from master.
 
 **Recovery: how to retract.** A bad publish on master is fixed forward, never with `push --force` to master. Push a follow-up commit that either (a) reverts the bad commit and patch-bumps the affected plugins past the burned version, or (b) re-implements correctly under a new version. Consumers with `autoUpdate: true` then refresh on their next session start. Never rewrite master history — other machines have already fetched it.
 
