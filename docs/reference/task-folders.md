@@ -33,8 +33,8 @@ the task. A specification belongs in the repository it describes at authoring
 time. The task folder is not a reason to make a document hard to find. A
 document nobody can find is not durable.
 
-The root `.gitignore` carries `dev/tasks/`, and that entry is load-bearing. It
-Git for this repository does not traverse the link or stage private task
+The root `.gitignore` carries `dev/tasks/`, and that entry is load-bearing: it
+stops this repository's git from traversing the link and staging private task
 content into the public repository. Do not remove the entry or add a
 `!dev/tasks` negation.
 

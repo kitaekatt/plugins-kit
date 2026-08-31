@@ -6,10 +6,16 @@ rules remain in the root `CLAUDE.md`: do not alter another session's staged stat
 and do not create or switch branches in the shared tree. This document keeps the
 detailed narratives available on demand.
 
+The first incident turns on the narrow exception to the staging rule, so the
+exception is restated here as orientation (the root `CLAUDE.md` remains the
+governing statement). Discarding another session's staged state is permitted
+only when ALL of: `git diff HEAD` is empty for those paths; the staged content
+is demonstrably superseded by HEAD; and nothing is staged as a deletion or an
+untrack. Outside that conjunction the index is assumed load-bearing.
+
 ## Unstaging another session's work: the exception in practice
 
-**The exception in practice (2026-08-08).** A publish preflight refused on 37
-dirty files across four plugins. They looked like
+**2026-08-08.** A publish preflight refused on 37 dirty files across four plugins. They looked like
 another session's in-flight refactor. They were not: `git diff HEAD` was empty (the
 working tree was byte-identical to HEAD), while the index held a pre-HEAD snapshot --
 `plugins/unreal-kit/.claude-plugin/plugin.json` staged at `0.11.4` against HEAD's
@@ -19,8 +25,9 @@ was staged as a deletion. The index was discarded and the tree went clean. Note 
 limit of that check: the empty-`git diff HEAD` and no-deletion clauses were verified
 across all 37 paths mechanically, but "superseded by HEAD" was confirmed by reading two
 files and generalized to the rest. The clause is only as strong as the sample -- read
-enough of the staged diff to be sure, and say what you actually checked. This incident
-turns on exactly one axis: whether the index was the only record of the decision.
+enough of the staged diff to be sure, and say what you actually checked. The deciding question, here and in the
+counterpart incident recorded in the root `CLAUDE.md`, is whether the index held
+information that existed nowhere else. Here it did not; there it did.
 
 ## Creating or switching a branch
 

@@ -74,17 +74,13 @@ The useful mental model is that you write the prompt pair once and choose the
 executor separately -- but the separation is incomplete, and a caller who
 believes it is clean will get burned. These things travel with the executor:
 
-**Codex contributes a harness, not transport.** A raw endpoint returns text;
-Codex adds the agent loop, shell/file/apply_patch tools, AGENTS.md and
-CLAUDE.md ingestion, sandbox, working directory, and a machine-parseable
-result. That fixed harness costs roughly 11k-34k tokens of prompt overhead and
-can turn a seconds-long call into a minutes-long session. Use it exactly when
-the information needed is not knowable when the prompt is written: the unit
-must discover what to read, verify its output, iterate, edit files in place, or
-honor instruction files it was not handed. A fully supplied transformation --
-summarize, classify, translate, rewrite, extract, or score -- is a plain
-completions call and stays one call. For endpoint compatibility (wire, tool
-schema, and keyless auth), see [the Codex endpoint compatibility reference](../../docs/reference/codex-endpoint-compatibility.md).
+**Codex contributes a harness, not transport, and a harness is warranted only
+when what the unit needs is not knowable when the prompt is written.** A fully
+supplied transformation is a completions call and stays one. The overhead
+figure, the full rule, endpoint compatibility (wire, tool schema, keyless
+auth), and the dispatch traps are all owned by the orchestrate skill's
+`references/codex-dispatch.md` in awesome-kit -- read it there rather than
+relying on a figure restated here.
 
 **The `model` id is not portable.** An OpenRouter slug means nothing to
 `claude -p`, and codex requires fully-qualified ids. Nothing here translates
@@ -137,10 +133,15 @@ claude_md:
   scope:
     directory: plugins/llm-scripting-kit
     covers:
-      - the runner seam shared by the CLI-backed completion backends
+      - the local model-server entry points and their profiles
+      - the single-call altitude and the shared halt taxonomy
+      - the runner seam shared by the CLI-backed completion backends, and where
+        that seam is NOT uniform across transports
+      - the per-transport rules the Codex and OpenCode backends carry
     excludes:
       - codex dispatch mechanics (orchestrate's codex-dispatch.md)
-      - endpoint compatibility (docs/reference/codex-endpoint-compatibility.md)
+      - codex dispatch mechanics and endpoint compatibility (awesome-kit's
+        orchestrate skill, references/codex-dispatch.md)
   insights:
     - id: run_cli_streaming_rename
       keywords: [run_claude_streaming, run_cli_streaming, back-compat alias, claude_runner, content-pipeline-kit, shared lib rename, transport-neutral runner]

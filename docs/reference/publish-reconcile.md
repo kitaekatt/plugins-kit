@@ -1,9 +1,10 @@
-# Publish reconcile + landing-page preview procedures
+# Publish, reconcile, and landing-page procedures
 
-Rare-event procedures extracted from the root CLAUDE.md (2026-07-22 md-audit).
-Read when: publishing a release, doing a full dev/master reconcile, syncing
-master's infra drift, or previewing the marketplace landing page against dev
-work. The safe-publish gotchas, recovery procedure, and cache-version trap stay
+The publish flow and its adjacent procedures, extracted from the root CLAUDE.md
+(2026-07-22 md-audit; publish mechanics added 2026-08-31). Read when: publishing
+a release, authoring a commit-scoped pre-commit check, doing a full dev/master
+reconcile, syncing master's infra drift, or previewing the marketplace landing
+page against dev work. The safe-publish gotchas, recovery procedure, and cache-version trap stay
 in CLAUDE.md. `scripts/publish.py` remains the source of truth for the publish
 flow itself.
 
@@ -227,8 +228,8 @@ awesome-kit 0.47.0 and above also **synthesizes** entries for repo plugins the
 registry does not record (the registry-v2 case). It regenerates, restores in a
 `finally`, and post-verifies that the restore landed. It also lands `index.html`
 *inside* the release commit, so `master` is never in a state where its page
-disagrees with its own `marketplace.json`. The manual sequence below is for
-**previewing** only.
+disagrees with its own `marketplace.json`. The manual sequence in
+"Landing-page preview" above is for **previewing** only.
 
 **Preview vs publish -- same mechanism, different commit rule.** At publish
 time dev is the about-to-be master, so its page is the published page --

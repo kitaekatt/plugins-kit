@@ -155,7 +155,7 @@ Only run the full suite when explicitly asked or before a release -- and when yo
 uv run --extra dev pytest -n 12 -q      # full suite, ~3 min
 ```
 
-`-n` is deliberately not in `addopts`: worker startup is a fixed toll that is free on the full run and ruinous on a targeted one. Full suite: `-n 12`, ~3 min. Leak guards are only complete in a SERIAL run. Measurements and the worker-count table: [docs/reference/testing.md](docs/reference/testing.md).
+`-n` is deliberately not in `addopts`: worker startup is a fixed toll that is free on the full run and ruinous on a targeted one. Full suite: `-n 12`, ~3 min. Leak guards are only complete in a SERIAL run. **A test that fails only under `-n` is usually load, not your change -- and never write a bare `time.sleep` sized for an idle machine; poll for a causal observable instead.** Measurements, the worker-count table, the timing-sensitivity trap and the leak-guard explanation: [docs/reference/testing.md](docs/reference/testing.md).
 
 **Interpreter: the repo is pinned to Python 3.12** via a repo-root `.python-version`, so bare `uv run` / `uv venv` select 3.12 everywhere — no `-p 3.12` needed. Nothing needs 3.14 (four plugins exclude it: `requires-python ">=3.12,!=3.14.*"`); it used to leak in only as uv's global default when no pin was present.
 
@@ -185,13 +185,13 @@ After publish:
 
 Some plugins live on `dev` for in-development work and must not reach consumers until they are ready. Each such plugin sets `"published": false` in its `plugins/<name>/.claude-plugin/plugin.json`. The marketplace regenerator (`scripts/regen_marketplace.py`) filters those plugins out of `marketplace.json`, so they are excluded structurally — not by memory — even if their files land on master via a cherry-pick.
 
-`publish.py`'s preflight **refuses** when `origin/master..dev` holds commits touching one, naming the commits. That is a backstop for the listing *and* the files; the regenerator only filters the listing. Picking which commits ship stays a human judgement call — branch from master and cherry-pick.
+`publish.py` **EXCLUDES** such commits rather than refusing: it replays only the shippable commits onto master in a temporary worktree and pushes from there, printing every commit it held back. `dev` is untouched. The preflight refuses exactly one case -- a single commit touching **both** a dev-only plugin and files that would otherwise ship. Split that commit, or pass `--allow-dev-only <plugin>` to ship it deliberately. Filtered-release mechanics: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
 
 **Dev-only plugins** (the field, not this list, is load-bearing -- this is just a human-readable inventory):
 
 - **yaml-data-editor-kit**.
 
-When you see commits for a dev-only plugin in `git log origin/master..origin/dev`, that's still gotcha 1 territory — branch from master, cherry-pick only the publish-ready commits, and leave the dev-only commits on `dev`. The regenerator is a backstop for the marketplace listing, not a substitute for picking the right commits to merge.
+Commits for a dev-only plugin in `git log origin/master..origin/dev` need no action: the filtered release leaves them on `dev`. Do NOT branch from master to cherry-pick around them -- creating or switching a branch in this shared tree is its own anti-pattern (see below). The regenerator remains a backstop for the marketplace listing, not a substitute for the per-commit filtering.
 
 ### dev -> master reconcile: conflict-resolution policy
 
@@ -408,8 +408,9 @@ Criteria and submit gate: `plugins/CLAUDE.md` and
 **A published plugin ships to other developers.** Before adding content to a
 shipped plugin, ask **who reads this on a machine that is not ours** -- if the
 answer is "nobody", it belongs in `docs/`, `scripts/` or a task folder.
-Plugin boundaries, and reference-file design within a skill:
-`plugins/CLAUDE.md`.
+**Plugin boundaries are hard boundaries for cohesion work** -- never relocate a
+skill or reference across one to improve cohesion; surface it as an insight
+instead. That rule, and reference-file design within a skill: `plugins/CLAUDE.md`.
 
 ## Plugin System
 
@@ -477,8 +478,7 @@ Link model, the task-CLI contract, and the 0.35.0 misreporting bug:
   shipped", or similar now-relative phrasing in any tracked document, including
   agent-facing internal documents such as this `CLAUDE.md` -- state what a thing
   IS, cite a source, and use absolute dates when a date matters. Now-relative
-  claims rot silently and are unverifiable. The two stale claims in this file
-  that produced FAIL findings used exactly the forbidden now-relative wording.
+  claims rot silently and are unverifiable.
 - **Never use the memory system** (`~/.claude/projects/*/memory/`). Always update `CLAUDE.md` instead — it is machine-independent and checked into the repo, so all machines and sessions share the same context.
 
 ## Insights

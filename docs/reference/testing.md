@@ -11,8 +11,9 @@ This document records the measurements and the reasons for those commands.
 `addopts` with `-n` creates a regression, not a convenience. Worker
 startup has a fixed ~1.6-2.9s toll. This toll is free on a 13-minute run but
 ruins a targeted run. Measured on a 24-core box,
-`tests/bootstrap/test_cache.py` alone costs **0.40s serial, 2.03s at `-n 12`,
-3.33s at `-n auto`**. A config-level `-n` makes the tight TDD loop 5-8x
+a single small bootstrap test file alone cost **0.40s serial, 2.03s at `-n 12`,
+3.33s at `-n auto`**. (That measurement named `tests/bootstrap/test_cache.py`,
+which no longer exists; the ratio is what carries, not the file.) A config-level `-n` makes the tight TDD loop 5-8x
 SLOWER. It makes the full run faster. Pass `-n` explicitly per run.
 
 ## Worker-count measurements
