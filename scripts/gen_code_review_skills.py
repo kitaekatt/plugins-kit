@@ -443,9 +443,18 @@ technique_skill:
           action: |
             If bundle.submit_gates is non-empty, surface each gate as a checklist item the
             author must confirm BEFORE the review renders. Issue ONE AskUserQuestion call
-            with `multiSelect: true`, one option per gate, labeled with the gate's summary
-            and (in the description) the source CLAUDE.md path and the triggering files.
+            with `multiSelect: true`, one option per gate.
+            WRITE THE PROMPT FOR SOMEONE WHO HAS NEVER SEEN A SUBMIT GATE. The reader did
+            not author these, is not told elsewhere what they are, and cannot tell from the
+            prompt alone whether ignoring one is safe. So the question text MUST carry three
+            things: that these are reminders authored in this repo's CLAUDE.md files, that
+            they are NOT review findings, and that nothing blocks either way. A prompt that
+            just says "confirm your obligations" leaves the reader guessing at all three.
 @STEP5_PHRASE@
+            Each option: a SHORT label (a few words -- a paraphrase, never the raw summary,
+            which is routinely a full sentence and unreadable as a label), and a description
+            carrying the gate's summary in plain words, the source CLAUDE.md path it was
+            authored in, and the files that triggered it.
             - Selected options become CONFIRMED gates.
             - Unselected options become UNCONFIRMED gates -- still rendered, just marked.
             Do NOT skip a gate, do NOT collapse multiple gates into one option, do NOT
@@ -760,12 +769,18 @@ P4_STEP3 = """\
           tool: AskUserQuestion + p4 reconcile + prepare_review.py"""
 
 GIT_STEP5_PHRASE = """\
-            Phrase the question as: "Confirm each pre-push obligation you've already
-            completed for <range>." """.rstrip()
+            Phrase the question as: "<G> pre-push reminder(s) from this repo's CLAUDE.md
+            apply to <range>. They are notes someone authored for changes like this one,
+            not review findings -- nothing blocks either way, and anything you leave
+            unticked is just marked as unconfirmed in the output. Which have you already
+            done?" """.rstrip()
 
 P4_STEP5_PHRASE = """\
-            Phrase the question as: "Confirm each pre-submit obligation you've already
-            completed for CL <CL>." """.rstrip()
+            Phrase the question as: "<G> pre-submit reminder(s) from this repo's CLAUDE.md
+            apply to CL <CL>. They are notes someone authored for changes like this one,
+            not review findings -- nothing blocks either way, and anything you leave
+            unticked is just marked as unconfirmed in the output. Which have you already
+            done?" """.rstrip()
 
 GIT_STEP9_TAIL = """\
             - When `bundle.merge_conflicts` is non-empty, prepend a `## Unresolved merge conflicts`
@@ -849,6 +864,7 @@ GIT_GOTCHAS = f"""\
         - The untracked/unstaged check must happen BEFORE reviewers spawn. Folding in forgotten files after agents have already reviewed the diff wastes their work and produces a stale review.
         - On the post-fold re-run, do NOT prompt again about untracked_or_unstaged files. The user already chose. Re-prompting on the same list is annoying; re-prompting on a smaller list (because they only added some) implies the rest were forgotten when they were declined.
         - Submit gates are reminders, not findings -- they do NOT go through reviewer or validator subagents. They are parsed deterministically by prepare_review.py and rendered verbatim in a separate output section. Do not try to validate, score, or filter them.
+        - The submit-gate prompt must explain ITSELF. A reader who has never seen a submit gate cannot tell where the question came from, whether it was generated from their code, or what happens if they ignore it -- and a prompt that assumes otherwise gets answered with "I don't know how to answer this", which is neither a confirmation nor a decline. Name the provenance (authored in a CLAUDE.md), the nature (reminders, not findings), and the stakes (nothing blocks) in the question text itself, every time.
         - The submit-gates AskUserQuestion fires once, regardless of gate count. multiSelect bundles all gates into one prompt. Re-prompting per gate is rude and adds no value -- the author's response is final either way.
         - Unconfirmed submit gates are NOT errors. Render them with {CRS} so they're visible, but do not block the review or refuse to render the rest.
         - Merge conflicts are NOT findings -- they do NOT go through reviewer subagents. They are detected deterministically by prepare_review.py (`git ls-files -u`). The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the merge-conflicts section is a separate informational warning to the user.
@@ -865,6 +881,7 @@ P4_GOTCHAS = f"""\
         - The unreconciled check must happen BEFORE reviewers spawn. Folding in forgotten files after agents have already reviewed the diff wastes their work and produces a stale review.
         - On the post-reconcile re-run, do NOT prompt again about unreconciled files. The user already chose. Re-prompting on the same list is annoying; re-prompting on a smaller list (because they only added some) implies the rest were forgotten when they were declined.
         - Submit gates are reminders, not findings -- they do NOT go through reviewer or validator subagents. They are parsed deterministically by prepare_review.py and rendered verbatim in a separate output section. Do not try to validate, score, or filter them.
+        - The submit-gate prompt must explain ITSELF. A reader who has never seen a submit gate cannot tell where the question came from, whether it was generated from their code, or what happens if they ignore it -- and a prompt that assumes otherwise gets answered with "I don't know how to answer this", which is neither a confirmation nor a decline. Name the provenance (authored in a CLAUDE.md), the nature (reminders, not findings), and the stakes (nothing blocks) in the question text itself, every time.
         - The submit-gates AskUserQuestion fires once, regardless of gate count. multiSelect bundles all gates into one prompt. Re-prompting per gate is rude and adds no value -- the author's response is final either way.
         - Unconfirmed submit gates are NOT errors. Render them with {CRS} so they're visible, but do not block the review or refuse to render the rest.
         - Unresolved merges are NOT findings -- they do NOT go through reviewer or validator subagents. They are detected deterministically by prepare_review.py (`p4 resolve -n -c <CL>`) and rendered verbatim in a separate output section. The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the unresolved section is a separate informational warning to the user.
