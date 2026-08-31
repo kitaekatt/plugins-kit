@@ -50,6 +50,8 @@ GIT_MD_DOMAIN_REVIEW = REPO_ROOT / "plugins/git-kit/skills/git-code-review/refer
 P4_MD_DOMAIN_REVIEW = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/md-domain-review.md"
 GIT_DECLINED_LEDGER = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/declined-ledger.md"
 P4_DECLINED_LEDGER = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/declined-ledger.md"
+GIT_CONFIGURATION = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/configuration.md"
+P4_CONFIGURATION = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/configuration.md"
 
 # Non-ASCII glyphs the rendered files use, escaped so THIS source stays ASCII
 # (matching gen_workflow_js.py's EM convention).
@@ -318,6 +320,20 @@ LEDGER_GOTCHAS = """
         - The declined-findings ledger is advisory memory, not a gate. A collapsed finding is one the author already declined for THIS change at THIS baseline; when the baseline moves (@BASELINE_DESC@) the entry goes stale and the finding re-surfaces on its own. Never let a ledger hit suppress a SERIOUS md-domain finding.
         - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed."""
 
+# ===========================================================================
+# CONFIGURABLE REVIEW-PROFILE RESOLUTION (this phase).
+# ---------------------------------------------------------------------------
+# The `review_profiles` block in the template carries SELECTION GUIDANCE and
+# RATIONALE prose only. The executable table (profile ids, reviewer rosters,
+# per-reviewer models, validator_models) lives in bootstrap_lib's shipped
+# defaults and is resolved per review by render_review_profiles.py, which
+# layers a user and a project override on top. Appended to both gotcha blocks.
+# ===========================================================================
+PROFILE_GOTCHAS = """
+        - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by @RENDER_TOOL@ (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
+        - `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
+        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), and the shipped default table."""
+
 
 # ===========================================================================
 # LAUNCH NARRATION (deliverable 1 -- shared by BOTH skills).
@@ -411,8 +427,18 @@ technique_skill:
 @STEP2@
 @STEP3@
         - n: 4
-          action: Read every CLAUDE.md path in unique_claude_mds. Subagents do not need to re-read.
-          tool: Read
+          action: |
+            Read every CLAUDE.md path in unique_claude_mds. Subagents do not need to re-read.
+            Also resolve the EXECUTABLE review-profile table -- profile ids, reviewer rosters,
+            per-reviewer models, and validator_models -- by running @RENDER_TOOL@ with
+            `--project-root <bundle.project_root>` (omit the flag when bundle.project_root is
+            unset; the resolver then falls back to the process cwd). NEVER merge the
+            review-profile config layers (shipped / user / project) yourself -- the renderer is
+            the only merge. Its stdout is the merged `profiles` table as YAML, followed by a
+            `---` separator and layer provenance; parse only the YAML above the separator. Keep
+            the resolved `profiles` list for steps 6 and 7. See references/configuration.md for
+            the full layer/merge/override contract.
+          tool: Read + @RENDER_TOOL@
         - n: 5
           action: |
             If bundle.submit_gates is non-empty, surface each gate as a checklist item the
@@ -428,10 +454,13 @@ technique_skill:
           tool: AskUserQuestion
         - n: 6
           action: |
-            Select one profile from `review_profiles` using its `selection.guidance` -- this is
-            an inference call, not regex. Read each profile's guidance, weigh the actual contents
-            of `bundle.changed_files`, and pick the most appropriate profile. Default to `code`
-            when uncertain.
+            Select one profile from the RESOLVED table fetched in step 4, using
+            `review_profiles.profiles[].selection.guidance` above (this SKILL's guidance prose,
+            each entry naming the profile it documents) -- this is an inference call, not regex.
+            Read each profile's guidance, weigh the actual contents of `bundle.changed_files`, and
+            pick the most appropriate profile id from the resolved table. Default to `code` when
+            uncertain. `profile` below is that resolved-table entry -- its `reviewers` and
+            `validator_models` come from step 4, never hand-constructed.
 @DISPATCH@
 @MD_DOMAIN_LAUNCH@
             Then launch one subagent per (reviewer @X@ chunk) pair in parallel via
@@ -447,7 +476,8 @@ technique_skill:
         - n: 7
           action: |
             Launch one validator subagent per candidate issue, all in parallel via a single message.
-            Use the selected profile's `validator_models[reason]` to pick the model per issue.
+            Use the selected profile's `validator_models[reason]` (from the RESOLVED table fetched
+            in step 4) to pick the model per issue.
           tool: Agent
           expected: CONFIRMED or REJECTED per issue.
         - n: 8
@@ -477,14 +507,18 @@ technique_skill:
     description: |
       Routing table for selecting reviewers and models based on @DIFF_OR_CL@ content. Exactly one
       profile is selected per review. Selection is an inference call -- read each profile's
-      `selection.guidance` and pick the most appropriate one based on the actual contents
+      `selection.guidance` below and pick the most appropriate one based on the actual contents
       of `bundle.changed_files`. Default to `code` when uncertain.
+      The EXECUTABLE table -- profile ids, reviewer rosters, per-reviewer models, and
+      validator_models -- is NOT inline here. It is resolved at review time by step 4
+      (@RENDER_TOOL@), which merges the shipped bootstrap_lib defaults with any user/project
+      override. Never merge those layers by hand. See references/configuration.md for the full
+      layer/merge/override contract and the shipped default table.
     profiles:
       - id: data_only
         selection:
-          data_only_extensions: [".csv", ".yaml", ".yml", ".json", ".tsv", ".md"]
           guidance: |
-            Select this profile when every changed file is either:
+            Select the `data_only` profile when every changed file is either:
               (a) in `data_only_extensions` (flat data / docs), OR
               (b) an inert binary asset -- images, audio, video, fonts, compiled binaries,
                   3D/animation assets -- whose presence wouldn't change what a code-grade
@@ -504,26 +538,13 @@ technique_skill:
           at near-parity with Opus. `reviewer_c_introduced_code`'s scope is essentially empty
           for data/doc files; running it just burns tokens and generates hallucinations the
           validator must reject.
-        reviewers:
-          - { name: reviewer_a_claude_md_compliance, model: sonnet }
-          - { name: reviewer_b_diff_only_bugs,       model: sonnet }
-        validator_models:
-          bug: sonnet
-          claude_md: sonnet
       - id: code
         selection:
           guidance: |
-            Default profile. Use whenever any changed file contains executable logic
+            Default profile (`code`). Use whenever any changed file contains executable logic
             (source code, scripts, build configuration that runs code) -- i.e. anytime
             `data_only` doesn't clearly apply.
         rationale: "Full reviewer set with Opus where deep semantic reasoning pays off."
-        reviewers:
-          - { name: reviewer_a_claude_md_compliance, model: sonnet }
-          - { name: reviewer_b_diff_only_bugs,       model: opus }
-          - { name: reviewer_c_introduced_code,      model: opus }
-        validator_models:
-          bug: opus
-          claude_md: sonnet
   # subagents: reviewer/validator definitions (scope, input, restrictions).
   # Models are NOT set here -- they are bound by the selected `review_profiles` entry.
   subagents:
@@ -692,7 +713,7 @@ __LAUNCH_EMIT__
           tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
-            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
+            JSON with vcs, range, head_sha, branch, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
           on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
     "__CLAIM_PROBE__", CLAIM_PROBE
 ).replace(
@@ -708,7 +729,7 @@ __LAUNCH_EMIT__
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<CL>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
-            JSON with cl, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
+            JSON with cl, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
             Surface the stderr message to the user and stop. No retry.
             Launch note: ALWAYS invoke with an explicit `python3` interpreter (as shown in `tool:`), never as a bare path. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any python3 launcher is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
@@ -787,7 +808,7 @@ GIT_CHECKLIST = f"""\
         - Untracked/unstaged files surfaced (and either folded in via `git add`/`git commit` with a re-run, or explicitly declined)
         - All CLAUDE.md files read
         - Submit gates surfaced (if any) and author confirmation collected via a single AskUserQuestion
-        - Review profile selected from review_profiles
+        - Executable review-profile table resolved via render_review_profiles.py (step 4); profile selected from the resolved table using review_profiles guidance
         - Reviewers launched in parallel (single message, R {X} K Agent calls -- one per (reviewer {X} chunk) pair, where K = len(bundle.diff_chunks))
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
@@ -805,7 +826,7 @@ P4_CHECKLIST = f"""\
         - Unreconciled files surfaced (and either folded in via `p4 reconcile -c <CL>` with a re-run, or explicitly declined)
         - All CLAUDE.md files read
         - Submit gates surfaced (if any) and author confirmation collected via a single AskUserQuestion
-        - Review profile selected from review_profiles
+        - Executable review-profile table resolved via render_review_profiles.py (step 4); profile selected from the resolved table using review_profiles guidance
         - Reviewers launched in parallel (single message, R {X} K Agent calls -- one per (reviewer {X} chunk) pair, where K = len(bundle.diff_chunks))
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
@@ -832,7 +853,7 @@ GIT_GOTCHAS = f"""\
         - Unconfirmed submit gates are NOT errors. Render them with {CRS} so they're visible, but do not block the review or refuse to render the rest.
         - Merge conflicts are NOT findings -- they do NOT go through reviewer subagents. They are detected deterministically by prepare_review.py (`git ls-files -u`). The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the merge-conflicts section is a separate informational warning to the user.
         - Auto-detect is convenient, not authoritative. Always restate the chosen range in the step-1 narration line; a user reviewing the wrong branch will catch it there before subagents spawn.
-        - Detached HEAD with no main/master fallback is a real failure mode; surface the error and ask for an explicit range. Do not guess at a "probably right" base.""" + MD_DOMAIN_GOTCHAS + GENERATED_GOTCHAS + LEDGER_GOTCHAS
+        - Detached HEAD with no main/master fallback is a real failure mode; surface the error and ask for an explicit range. Do not guess at a "probably right" base.""" + MD_DOMAIN_GOTCHAS + GENERATED_GOTCHAS + LEDGER_GOTCHAS + PROFILE_GOTCHAS
 
 P4_GOTCHAS = f"""\
         - Always quote the exact CLAUDE.md rule text when flagging a claude_md issue. If you cannot quote it verbatim, do not flag it.
@@ -848,7 +869,7 @@ P4_GOTCHAS = f"""\
         - Unconfirmed submit gates are NOT errors. Render them with {CRS} so they're visible, but do not block the review or refuse to render the rest.
         - Unresolved merges are NOT findings -- they do NOT go through reviewer or validator subagents. They are detected deterministically by prepare_review.py (`p4 resolve -n -c <CL>`) and rendered verbatim in a separate output section. The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the unresolved section is a separate informational warning to the user.
         - Auto-shelf cleanup (step 10) must run whenever `bundle.auto_shelved` is true, no matter what happened in steps 3-9. The cleanup script is deterministic and safe (it only deletes the shelf when the live fingerprint exactly matches what we recorded), so there is no scenario where skipping it is the right call. Skipping leaves an orphan shelf the author didn't ask for.
-        - --claim requires a PENDING CL. On a submitted CL, `#have` pre-images are POST-change once the workspace synced past the CL, so prepare_review exits with an error when --claim is passed on a submitted CL; re-run without --claim for a plain informational review.""" + MD_DOMAIN_GOTCHAS + GENERATED_GOTCHAS + LEDGER_GOTCHAS
+        - --claim requires a PENDING CL. On a submitted CL, `#have` pre-images are POST-change once the workspace synced past the CL, so prepare_review exits with an error when --claim is passed on a submitted CL; re-run without --claim for a plain informational review.""" + MD_DOMAIN_GOTCHAS + GENERATED_GOTCHAS + LEDGER_GOTCHAS + PROFILE_GOTCHAS
 
 GIT_NARRATION_TEMPLATES = f"""\
       - when: "Before step 2"
@@ -1109,6 +1130,11 @@ _SHARED = {
     "LEDGER_STEP9": LEDGER_STEP9,
     "LEDGER_RECORD_STEP": LEDGER_RECORD_STEP,
     "LAUNCH_NARRATION": LAUNCH_NARRATION,
+    # render_review_profiles.py resolves the review-profile config layers; its
+    # launch gotcha (missing shebang / lost exec bit on Windows checkouts making
+    # a bare path parse as sh) matches PREPARE_TOOL's p4 form, so BOTH kits use
+    # the explicit python3 launcher here even though only p4's PREPARE_TOOL does.
+    "RENDER_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
     "X": X,
     "CHK": CHK,
     "CRS": CRS,
@@ -1130,7 +1156,7 @@ _SKILL_TOKEN_ORDER = [
     "STEP1", "STEP2", "STEP3", "STEP5_PHRASE", "STEP9_TAIL", "STEP10",
     "CHECKLIST", "GOTCHAS", "NARRATION_TEMPLATES", "NARRATION_VARIABLES",
     "DIFF_OR_CL", "RANGE_OR_CL", "FILEPATHS", "CHANGE_DESC", "ISSUE_PATH",
-    "SG_DESC", "OUTPUT_FORMAT", "PREPARE_TOOL", "LEDGER_RECORD_N", "BASELINE_DESC",
+    "SG_DESC", "OUTPUT_FORMAT", "PREPARE_TOOL", "RENDER_TOOL", "LEDGER_RECORD_N", "BASELINE_DESC",
     # glyph tokens last -- they appear inside already-substituted blocks too,
     # but those blocks embed the literal glyph (via f-strings), so the only
     # remaining @X@/@CHK@/@CRS@ markers are in the template body.
@@ -1556,6 +1582,138 @@ def render_declined_ledger(vcs: str) -> str:
     return out
 
 
+# ===========================================================================
+# configuration.md -- one parameterized source rendering both references.
+# The consumer-facing OP-4 documentation for the review-profile config: the
+# three layer paths, the merge rules bootstrap_lib.code_review.review_profiles
+# actually implements, the shipped default table (reproduced verbatim from
+# bootstrap_lib/code_review/defaults/review_profiles.yaml), and a worked
+# override example. The SKILL body's review_profiles.description points here.
+# ===========================================================================
+CONFIGURATION_TEMPLATE = """\
+# Configuring review profiles
+
+`@SKILL_NAME@` selects a review profile -- reviewer roster, per-reviewer model, and
+validator_models per reason -- from configuration resolved at review time, not from a table
+baked into SKILL.md. The SKILL body's `review_profiles` block carries only the SELECTION
+GUIDANCE and RATIONALE prose that helps pick a profile; the EXECUTABLE table lives in
+bootstrap_lib's shipped defaults (reproduced below) and is resolved per review by
+`bootstrap_lib.code_review.review_profiles`, invoked through this plugin's venv entry point:
+
+    @RENDER_TOOL@ --project-root <project root>
+
+## Layers
+
+Three layers are merged from lowest to highest precedence:
+
+| Layer | Path | Use for |
+|---|---|---|
+| shipped | `bootstrap_lib/code_review/defaults/review_profiles.yaml`, bundled with the bootstrap plugin's shared lib | the opinionated default reviewer/model table |
+| user | `~/.claude/config/review_profiles.yaml` | this user's policy, across every project |
+| project | `<project_root>/.claude/review_profiles.yaml` | policy for one repository |
+
+`<project root>` is `bundle.project_root` from the step-2 prepare bundle. When it is unset
+(a workspace prepare could not resolve one), omit `--project-root` -- the resolver then falls
+back to the process working directory.
+
+## Merge rules
+
+- Top-level `profiles` is a list of records identified by `id`: a layer patching a known `id`
+  is deep-merged into it; an unknown `id` is appended as a new profile.
+- Within one profile record, `reviewers` is a list of records identified by `name`, merged the
+  same way -- a higher layer only needs to restate the reviewer it is changing.
+- Every other mapping -- a profile's `selection`, and `validator_models` -- deep-merges key by
+  key, so a higher layer states only the keys it changes.
+- `validator_models` reason keys (`bug`, `claude_md`, ...) are extensible: a higher layer can
+  add a new reason without restating the shipped ones.
+- `disabled: true` on a profile or a reviewer record removes that record entirely from the
+  resolved table, not just its fields.
+- Every other list -- currently only `selection.data_only_extensions` -- is a PLAIN list, and a
+  higher layer replaces it outright rather than merging entries.
+
+Malformed or unreadable YAML in any layer is a hard error (`ConfigError`); resolution never
+falls back to a partial or best-effort merge.
+
+## Shipped defaults
+
+```yaml
+profiles:
+- id: data_only
+  selection:
+    data_only_extensions:
+    - .csv
+    - .yaml
+    - .yml
+    - .json
+    - .tsv
+    - .md
+  reviewers:
+  - name: reviewer_a_claude_md_compliance
+    model: sonnet
+  - name: reviewer_b_diff_only_bugs
+    model: sonnet
+  validator_models:
+    bug: sonnet
+    claude_md: sonnet
+- id: code
+  selection: {}
+  reviewers:
+  - name: reviewer_a_claude_md_compliance
+    model: sonnet
+  - name: reviewer_b_diff_only_bugs
+    model: opus
+  - name: reviewer_c_introduced_code
+    model: opus
+  validator_models:
+    bug: opus
+    claude_md: sonnet
+```
+
+## Worked override example
+
+To run the `code` profile's `reviewer_c_introduced_code` on Sonnet instead of Opus for one
+project (cheaper, lower-fidelity), add to `<project_root>/.claude/review_profiles.yaml`:
+
+```yaml
+profiles:
+- id: code
+  reviewers:
+  - name: reviewer_c_introduced_code
+    model: sonnet
+```
+
+Only the changed reviewer needs restating -- `reviewer_a_claude_md_compliance` and
+`reviewer_b_diff_only_bugs` keep their shipped models via the by-name merge, and `selection`
+and `validator_models` are untouched because the patch omits them.
+
+## Inspecting the resolved table
+
+    @RENDER_TOOL@ --project-root <project root>
+
+prints the merged `profiles` table as YAML, then a `---` separator, then which layers were
+applied and (for any absent override) the path that would create it. This is the same
+resolution step 4 of `@SKILL_NAME@` performs -- never merge the layers by hand.
+"""
+
+CONFIGURATION_FRAGMENTS = {
+    "git": {
+        "SKILL_NAME": "git-code-review",
+        "RENDER_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
+    },
+    "p4": {
+        "SKILL_NAME": "p4-code-review",
+        "RENDER_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
+    },
+}
+
+
+def render_configuration(vcs: str) -> str:
+    out = CONFIGURATION_TEMPLATE
+    for token, value in CONFIGURATION_FRAGMENTS[vcs].items():
+        out = out.replace(f"@{token}@", value)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Targets + write/check driver.
 # ---------------------------------------------------------------------------
@@ -1571,6 +1729,8 @@ def targets() -> dict[Path, str]:
         P4_MD_DOMAIN_REVIEW: render_md_domain_review("p4"),
         GIT_DECLINED_LEDGER: render_declined_ledger("git"),
         P4_DECLINED_LEDGER: render_declined_ledger("p4"),
+        GIT_CONFIGURATION: render_configuration("git"),
+        P4_CONFIGURATION: render_configuration("p4"),
     }
 
 

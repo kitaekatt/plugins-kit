@@ -1,0 +1,30 @@
+profiles:
+- id: data_only
+  selection:
+    data_only_extensions:
+    - .csv
+    - .yaml
+    - .yml
+    - .json
+    - .tsv
+    - .md
+  reviewers:
+  - name: reviewer_a_claude_md_compliance
+    model: sonnet
+  - name: reviewer_b_diff_only_bugs
+    model: sonnet
+  validator_models:
+    bug: sonnet
+    claude_md: sonnet
+- id: code
+  selection: {}
+  reviewers:
+  - name: reviewer_a_claude_md_compliance
+    model: sonnet
+  - name: reviewer_b_diff_only_bugs
+    model: opus
+  - name: reviewer_c_introduced_code
+    model: opus
+  validator_models:
+    bug: opus
+    claude_md: sonnet

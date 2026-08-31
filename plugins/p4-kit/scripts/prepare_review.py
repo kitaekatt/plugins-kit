@@ -62,6 +62,7 @@ Output schema:
     {
       "cl": "<CL>",
       "description": "<change description>",
+      "project_root": "<absolute path to the p4 workspace root, or null if unresolvable>",
       "bundle_dir": "<absolute path to bundle directory>",
       "diff_chunks": [
         {"index": 0, "path": "chunks/chunk-000.diff",
@@ -1086,6 +1087,7 @@ def build_bundle(
     bundle: dict = {
         "cl": cl,
         "description": description,
+        "project_root": str(workspace_root) if workspace_root else None,
         "bundle_dir": core["bundle_dir"],
         "diff_chunks": core["diff_chunks"],
         "changed_files": changed_files,

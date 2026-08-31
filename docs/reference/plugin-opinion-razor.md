@@ -145,11 +145,11 @@ their reviewer roster and model routing inside SKILL.md: sonnet for compliance, 
 bug lanes, opus validators. (1) A power user near their weekly usage limit wants sonnet
 everywhere to protect the opus pool -- an acutely realistic preference, since the
 orchestrate policy this marketplace ships renders a live capacity readout precisely because
-users run close to those limits. Their only remedies today are forking the plugin or not
+users run close to those limits. Absent the seam their only remedies are forking the plugin or not
 running review. (2) A different user wants to ADD a lane -- a security reviewer, or one
 routed to a non-Claude backend for independence. Two distinct users, two distinct wants,
 neither addressable. PASSES; the seam is a layered `review_profiles.yaml` defaulting to
-today's profiles.
+the pre-seam profiles. Built -- see the SEAMS BUILT table below.
 
 *Evidence from practice:* this exact gap was hit while authoring this document. A review
 needed its opus lanes routed to a different backend, and with no seam the only way through
@@ -283,9 +283,13 @@ so an audit neither rediscovers them as new nor re-litigates the ones that faile
 
 | Plugin | Opinion | Scenarios | Seam (default = today) |
 |---|---|---|---|
-| awesome-kit:task | `dev/tasks/<stub>` is durable and must be committed | **Serious, and evidenced:** this repo gitignores `dev/` and had to instruct readers to treat the resulting blocking warnings as noise. Second: a user whose durable folder is `docs/tasks` or `.tasks` cannot express it -- the two prefixes are argparse `choices`. | `durability_roots` mapping + an off switch for the uncommitted-folder rule |
 | awesome-kit:task | git is the privileged, automated VCS | **Serious:** a Perforce user -- an audience this marketplace explicitly serves via p4-kit and unreal-kit -- gets a permanently degraded path where `archive` silently does no VCS work and every retirement is manual. | `vcs: git\|p4\|none`, default auto-detect-git |
-| git-kit, p4-kit | reviewer roster and model routing fixed in SKILL.md | **Two distinct** (see OP-2 above): the usage-limited user wanting cheaper models, and the user wanting to add or re-route a lane. Hit in practice while writing this doc. | layered `review_profiles.yaml` |
+
+### SEAMS BUILT -- verdict discharged
+
+| Plugin | Opinion | Seam, as built |
+|---|---|---|
+| git-kit, p4-kit | reviewer roster and model routing fixed in SKILL.md | Layered `review_profiles.yaml`. Shipped defaults and the resolver live in `bootstrap_lib.code_review`; precedence is shipped -> `~/.claude/config/review_profiles.yaml` -> `<project_root>/.claude/review_profiles.yaml`. Each plugin's `references/configuration.md` documents the keys and the shipped table (OP-4). The default is pinned byte-for-byte by `test_shipped_only_render_matches_pre_seam_bytes`. |
 
 ### FAILS -- correctly hardcoded, do not open these
 
@@ -301,6 +305,7 @@ so an audit neither rediscovers them as new nor re-litigates the ones that faile
 
 | Plugin | Opinion | Why unresolved |
 |---|---|---|
+| awesome-kit:task | `dev/tasks/<stub>` is durable and must be committed | RE-RUN, verdict downgraded from PASSES. The scenario that made it serious -- this repo gitignoring `dev/` and having to call the resulting blocking warnings noise -- was discharged by DETECTION rather than a seam: `validate.py` classes a git-ignored task root as an advisory note, never a warning, so it cannot gate `work`, and `location_ops.py` carries the matching `vcs_ignored` archive disposition. What remains is one non-serious scenario: a user whose durable root is `docs/tasks` or `.tasks` cannot express it, because the two prefixes are argparse `choices`. One weak scenario is below the bar of one serious or two distinct. Re-test if a second appears. |
 | bootstrap | 3600s cooldown, 24h env-recheck TTL | A plugin developer iterating locally wants a shorter cooldown -- a real audience here, since this marketplace is public and others develop against it. But `bootstrap-reset-cooldown.sh` already gives a one-command remedy, which blunts "repeated manual remediation". Needs one more distinct scenario to pass. Notable that the four-layer manifest that would hold the key **already exists** -- a plugin with a configuration system can still fail the razor by not routing an opinion through it. |
 
 Verdicts are evidence-based, so they expire. A FAILS entry that later acquires a real

@@ -81,7 +81,7 @@ technique_skill:
           tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
-            JSON with vcs, range, head_sha, branch, description, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
+            JSON with vcs, range, head_sha, branch, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
           on_failure: Surface the stderr message to the user and stop. No retry.
         - n: 3
           action: |
@@ -93,8 +93,18 @@ technique_skill:
             Skip this step entirely if bundle.untracked_or_unstaged is empty.
           tool: AskUserQuestion + git add/commit + prepare_review.py
         - n: 4
-          action: Read every CLAUDE.md path in unique_claude_mds. Subagents do not need to re-read.
-          tool: Read
+          action: |
+            Read every CLAUDE.md path in unique_claude_mds. Subagents do not need to re-read.
+            Also resolve the EXECUTABLE review-profile table -- profile ids, reviewer rosters,
+            per-reviewer models, and validator_models -- by running python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py with
+            `--project-root <bundle.project_root>` (omit the flag when bundle.project_root is
+            unset; the resolver then falls back to the process cwd). NEVER merge the
+            review-profile config layers (shipped / user / project) yourself -- the renderer is
+            the only merge. Its stdout is the merged `profiles` table as YAML, followed by a
+            `---` separator and layer provenance; parse only the YAML above the separator. Keep
+            the resolved `profiles` list for steps 6 and 7. See references/configuration.md for
+            the full layer/merge/override contract.
+          tool: Read + python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py
         - n: 5
           action: |
             If bundle.submit_gates is non-empty, surface each gate as a checklist item the
@@ -111,10 +121,13 @@ technique_skill:
           tool: AskUserQuestion
         - n: 6
           action: |
-            Select one profile from `review_profiles` using its `selection.guidance` -- this is
-            an inference call, not regex. Read each profile's guidance, weigh the actual contents
-            of `bundle.changed_files`, and pick the most appropriate profile. Default to `code`
-            when uncertain.
+            Select one profile from the RESOLVED table fetched in step 4, using
+            `review_profiles.profiles[].selection.guidance` above (this SKILL's guidance prose,
+            each entry naming the profile it documents) -- this is an inference call, not regex.
+            Read each profile's guidance, weigh the actual contents of `bundle.changed_files`, and
+            pick the most appropriate profile id from the resolved table. Default to `code` when
+            uncertain. `profile` below is that resolved-table entry -- its `reviewers` and
+            `validator_models` come from step 4, never hand-constructed.
             Dispatch rule (deterministic -- compute the number, do not eyeball it): let
             lanes = R x K, where R = len(profile.reviewers) (2 for data_only, 3 for code)
             and K = len(bundle.diff_chunks). If lanes <= 6, launch the reviewer subagents
@@ -178,7 +191,8 @@ technique_skill:
         - n: 7
           action: |
             Launch one validator subagent per candidate issue, all in parallel via a single message.
-            Use the selected profile's `validator_models[reason]` to pick the model per issue.
+            Use the selected profile's `validator_models[reason]` (from the RESOLVED table fetched
+            in step 4) to pick the model per issue.
           tool: Agent
           expected: CONFIRMED or REJECTED per issue.
         - n: 8
@@ -274,7 +288,7 @@ technique_skill:
         - Untracked/unstaged files surfaced (and either folded in via `git add`/`git commit` with a re-run, or explicitly declined)
         - All CLAUDE.md files read
         - Submit gates surfaced (if any) and author confirmation collected via a single AskUserQuestion
-        - Review profile selected from review_profiles
+        - Executable review-profile table resolved via render_review_profiles.py (step 4); profile selected from the resolved table using review_profiles guidance
         - Reviewers launched in parallel (single message, R × K Agent calls -- one per (reviewer × chunk) pair, where K = len(bundle.diff_chunks))
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
@@ -314,6 +328,9 @@ technique_skill:
         - `--review-machine-emitted` is the override and it is the AUTHOR's call, never an inference. Pass it only when the user or the author explicitly asks for the machine-emitted files to be reviewed.
         - The declined-findings ledger is advisory memory, not a gate. A collapsed finding is one the author already declined for THIS change at THIS baseline; when the baseline moves (the range base SHA advances -- origin/main moves, or HEAD changes for a working-tree review) the entry goes stale and the finding re-surfaces on its own. Never let a ledger hit suppress a SERIOUS md-domain finding.
         - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed.
+        - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
+        - `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
+        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), and the shipped default table.
   narration:
     note: Reviews involve long silent stretches (batched file reads, parallel subagents that take 30s+). Post one short status line per step using these templates verbatim, filling in the bracketed counts. Do not paraphrase, omit, or add extras.
     templates:
@@ -395,14 +412,18 @@ technique_skill:
     description: |
       Routing table for selecting reviewers and models based on diff content. Exactly one
       profile is selected per review. Selection is an inference call -- read each profile's
-      `selection.guidance` and pick the most appropriate one based on the actual contents
+      `selection.guidance` below and pick the most appropriate one based on the actual contents
       of `bundle.changed_files`. Default to `code` when uncertain.
+      The EXECUTABLE table -- profile ids, reviewer rosters, per-reviewer models, and
+      validator_models -- is NOT inline here. It is resolved at review time by step 4
+      (python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py), which merges the shipped bootstrap_lib defaults with any user/project
+      override. Never merge those layers by hand. See references/configuration.md for the full
+      layer/merge/override contract and the shipped default table.
     profiles:
       - id: data_only
         selection:
-          data_only_extensions: [".csv", ".yaml", ".yml", ".json", ".tsv", ".md"]
           guidance: |
-            Select this profile when every changed file is either:
+            Select the `data_only` profile when every changed file is either:
               (a) in `data_only_extensions` (flat data / docs), OR
               (b) an inert binary asset -- images, audio, video, fonts, compiled binaries,
                   3D/animation assets -- whose presence wouldn't change what a code-grade
@@ -422,26 +443,13 @@ technique_skill:
           at near-parity with Opus. `reviewer_c_introduced_code`'s scope is essentially empty
           for data/doc files; running it just burns tokens and generates hallucinations the
           validator must reject.
-        reviewers:
-          - { name: reviewer_a_claude_md_compliance, model: sonnet }
-          - { name: reviewer_b_diff_only_bugs,       model: sonnet }
-        validator_models:
-          bug: sonnet
-          claude_md: sonnet
       - id: code
         selection:
           guidance: |
-            Default profile. Use whenever any changed file contains executable logic
+            Default profile (`code`). Use whenever any changed file contains executable logic
             (source code, scripts, build configuration that runs code) -- i.e. anytime
             `data_only` doesn't clearly apply.
         rationale: "Full reviewer set with Opus where deep semantic reasoning pays off."
-        reviewers:
-          - { name: reviewer_a_claude_md_compliance, model: sonnet }
-          - { name: reviewer_b_diff_only_bugs,       model: opus }
-          - { name: reviewer_c_introduced_code,      model: opus }
-        validator_models:
-          bug: opus
-          claude_md: sonnet
   # subagents: reviewer/validator definitions (scope, input, restrictions).
   # Models are NOT set here -- they are bound by the selected `review_profiles` entry.
   subagents:

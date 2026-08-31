@@ -51,6 +51,7 @@ Output schema:
       "branch": "<current branch name or 'DETACHED'>",
       "auto_detected_reason": "<human-readable reason chosen, omitted if explicit>",
       "description": "<one or more commit subjects joined by '; '>",
+      "project_root": "<absolute path to the git repo root>",
       "bundle_dir": "<absolute path to bundle directory>",
       "diff_chunks": [
         {"index": 0, "path": "chunks/chunk-000.diff",
@@ -783,6 +784,7 @@ def build_bundle(
         "head_sha": head_sha,
         "branch": branch,
         "description": description,
+        "project_root": str(repo_root),
         "bundle_dir": core["bundle_dir"],
         "diff_chunks": core["diff_chunks"],
         "changed_files": changed_files,

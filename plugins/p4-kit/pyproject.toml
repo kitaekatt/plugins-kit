@@ -1,6 +1,6 @@
 [project]
 name = "p4-kit"
-version = "0.28.4"
+version = "0.29.0"
 description = "Host-side dependencies for p4-kit plugin (importable package: p4kit_vcs)"
 requires-python = ">=3.12,!=3.14.*"
 
