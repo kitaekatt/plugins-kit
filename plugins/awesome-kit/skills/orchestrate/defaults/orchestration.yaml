@@ -4,7 +4,7 @@
 # plugin and is replaced on every version update. Override it instead, in
 # either or both of:
 #
-#   user:    ~/.claude/plugins/data/plugins-kit/awesome-kit/orchestration.yaml
+#   user:    ~/.claude/config/orchestration.yaml
 #   project: <project_root>/.claude/orchestration.yaml
 #
 # Later layers win. Override files are SPARSE -- write only the keys you are

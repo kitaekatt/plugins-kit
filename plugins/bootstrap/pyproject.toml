@@ -1,6 +1,6 @@
 [project]
 name = "bootstrap"
-version = "0.90.0"
+version = "0.90.1"
 requires-python = ">=3.12,!=3.14.*"
 dependencies = ["pyyaml"]
 

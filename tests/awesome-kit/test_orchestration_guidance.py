@@ -1411,3 +1411,125 @@ class TestRenderedCodexCommandKeepsItsSilentFailureFlags:
             "the rendered codex command dropped --add-dir; the scratchpad is "
             "outside the writable root, so a write there fails silently"
         )
+
+
+# --------------------------------------------------------------------------
+# User-layer location
+# --------------------------------------------------------------------------
+
+
+class TestUserConfigLocation:
+    """The user layer lives in the tracked config directory.
+
+    ``~/.claude/config/`` is the conventional home for portable user
+    configuration; a plugin's data directory is chartered for machine-global
+    values that stay out of version control. The legacy data-dir path is still
+    read so an existing file keeps working, but only when the conventional one
+    is absent.
+    """
+
+    def test_conventional_path_is_the_tracked_config_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
+        assert og.user_config_dir_path() == tmp_path / ".claude" / "config" / og.CONFIG_NAME
+
+    def test_legacy_path_is_the_plugin_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
+        expected = (
+            tmp_path / ".claude" / "plugins" / "data"
+            / og.MARKETPLACE / og.PLUGIN / og.CONFIG_NAME
+        )
+        assert og.legacy_user_config_path() == expected
+
+    def test_prefers_conventional_when_present(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
+        conventional = og.user_config_dir_path()
+        conventional.parent.mkdir(parents=True)
+        conventional.write_text("resolution: from-config-dir\n", encoding="utf-8")
+        assert og.user_config_path() == conventional
+
+    def test_falls_back_to_legacy_when_conventional_absent(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
+        legacy = og.legacy_user_config_path()
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("resolution: from-data-dir\n", encoding="utf-8")
+        assert og.user_config_path() == legacy
+
+    def test_conventional_wins_and_legacy_is_never_merged(self, monkeypatch, tmp_path):
+        """Only ONE user file is ever read.
+
+        `routing` replaces rather than merges, so two user layers combining
+        would silently drop one table. Ignoring the legacy file is the safe
+        failure; merging it is not.
+        """
+        monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
+        conventional = og.user_config_dir_path()
+        conventional.parent.mkdir(parents=True)
+        conventional.write_text("resolution: from-config-dir\n", encoding="utf-8")
+        legacy = og.legacy_user_config_path()
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("resolution: from-data-dir\n", encoding="utf-8")
+
+        assert og.user_config_path() == conventional
+        loaded = og.load_layer(og.user_config_path())
+        assert loaded == {"resolution": "from-config-dir"}
+
+    def test_defaults_to_conventional_when_neither_exists(self, monkeypatch, tmp_path):
+        """An absent layer reports the path a user should create, not the legacy one."""
+        monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
+        assert og.user_config_path() == og.user_config_dir_path()
+
+    def test_legacy_use_is_flagged_in_provenance(self, monkeypatch, tmp_path):
+        """--explain nudges toward the conventional path instead of failing silently."""
+        monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr(og, "DEFAULTS_PATH", tmp_path / "absent-shipped.yaml")
+        legacy = og.legacy_user_config_path()
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("resolution: from-data-dir\n", encoding="utf-8")
+
+        project_root = tmp_path / "project"
+        (project_root / ".claude").mkdir(parents=True)
+        _config, provenance = og.resolve_config(project_root)
+
+        user_entries = [row for row in provenance if row[0] == "user"]
+        assert len(user_entries) == 1
+        _layer, path, status = user_entries[0]
+        assert path == legacy
+        assert "legacy location" in status
+        assert str(og.user_config_dir_path()) in status
+
+
+class TestAppliedStatusDecoration:
+    """A decorated 'applied' status still counts as applied.
+
+    Two provenance statuses carry a suffix -- the project layer's
+    stripped-executable-fields note and the user layer's legacy-location note.
+    An exact match on "applied" reported those layers as NOT applied, so a
+    user's in-force policy vanished from the rendered "Layers applied" line.
+    """
+
+    def test_bare_applied_counts(self):
+        assert og.status_is_applied("applied")
+
+    def test_absent_and_empty_do_not_count(self):
+        assert not og.status_is_applied("absent")
+        assert not og.status_is_applied("empty")
+
+    def test_legacy_location_decoration_counts(self):
+        assert og.status_is_applied("applied (legacy location; move it to /x/y.yaml ...)")
+
+    def test_executable_stripped_decoration_counts(self):
+        assert og.status_is_applied("applied (1 executable field(s) ignored: command)")
+
+    def test_legacy_user_layer_is_listed_as_applied(self, monkeypatch, tmp_path, capsys):
+        """End to end: a legacy-path user layer appears in 'Layers applied'."""
+        monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
+        legacy = og.legacy_user_config_path()
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("resolution: from-data-dir\n", encoding="utf-8")
+
+        project_root = tmp_path / "project"
+        (project_root / ".claude").mkdir(parents=True)
+        _config, provenance = og.resolve_config(project_root)
+
+        applied = [layer for layer, _p, status in provenance if og.status_is_applied(status)]
+        assert "user" in applied

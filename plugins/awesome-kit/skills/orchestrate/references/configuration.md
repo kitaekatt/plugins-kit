@@ -27,7 +27,7 @@ Three layers are merged from lowest to highest precedence:
 | Layer | Path | Use for |
 |---|---|---|
 | shipped | `<plugin>/skills/orchestrate/defaults/orchestration.yaml` | defaults bundled with the plugin |
-| user | `~/.claude/plugins/data/plugins-kit/awesome-kit/orchestration.yaml` | this user's machine policy |
+| user | `~/.claude/config/orchestration.yaml` | this user's policy, across every project |
 | project | `<project_root>/.claude/orchestration.yaml` | policy for one repository |
 
 Mappings merge key by key. The record lists `lexicon`, `tests`, `gates`, `pulls`, `items`,
@@ -36,6 +36,17 @@ an unknown id is appended. A record with `disabled: true` is removed from render
 The `routing` list is a plain list and therefore replaces the value from lower layers in full.
 Other lists and scalar values replace outright. Project-layer executable fields are stripped;
 the project file cannot select a program for the renderer to execute.
+
+The user layer lives in `~/.claude/config/`, the conventional home for portable user
+configuration, so it travels with a config repo rather than sitting in a plugin data
+directory that is machine-local by charter. Bootstrap's `manifest-reference.md` describes
+the split between the two locations.
+
+As a fallback, `~/.claude/plugins/data/plugins-kit/awesome-kit/orchestration.yaml` is read
+when the conventional path holds no file. Exactly one of the two is ever used --
+they are never merged, because `routing` replaces rather than merges and a silent
+combination would drop one table without saying so. `--explain` marks the legacy path when
+it is in use.
 
 Use `--explain` to print layer provenance, detection results, model-discovery notes, routing
 notes, and the resolved configuration. Use `--paths` to print the three layer paths.

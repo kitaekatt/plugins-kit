@@ -798,8 +798,17 @@ Both forms are supported; the dict form is preferred for new plugins.
 ### When to use `project_config` vs `config`
 
 - **`project_config`** holds per-project values that are machine- or developer-specific (the `.uproject` path on this developer's box, this developer's Perforce username), so they live under `<project>/.local-data/<plugin>/config.yaml` and are gitignored. Good for: project-scoped identifiers each developer fills in for themselves, and any per-project default the user may want to override (e.g. `DEFAULT_AGENT`).
-- **`config`** holds machine-global values that don't belong in version control (API keys, local install paths). Lives in `~/.claude/plugins/data/<plugin>/config.yaml`.
-- The razor: if it should be checked into source control, it goes in `<project>/.claude/`. If it shouldn't, it goes in `<project>/.local-data/<plugin>/` (project-scoped) or `~/.claude/plugins/data/<plugin>/` (user-scoped).
+- **`config`** holds machine-global values that don't belong in version control (API keys, local install paths). Lives in `~/.claude/plugins/data/<marketplace>/<plugin>/config.yaml`.
+- The razor has two axes -- scope (project or user) and durability (tracked or not) -- so there are four homes, not three:
+
+| | Checked into source control | Not checked in |
+|---|---|---|
+| **Project-scoped** | `<project>/.claude/` | `<project>/.local-data/<plugin>/` |
+| **User-scoped** | `~/.claude/config/` | `~/.claude/plugins/data/<marketplace>/<plugin>/` |
+
+- **`~/.claude/config/<thing>.yaml` is the home for portable user configuration** -- hand-authored policy the user would want on every machine and would be sorry to lose. It is a plain directory the user's own config repo tracks; a plugin reads a file there by convention rather than through a manifest phase. `llm-scripting-kit`'s model registry (`~/.claude/config/model-endpoints.yaml`) and `awesome-kit`'s orchestration policy (`~/.claude/config/orchestration.yaml`) both live there.
+- A plugin's data directory is the **opposite** charter: machine-global values that deliberately stay out of version control. A user config repo can reasonably gitignore its whole `plugins/` subtree on exactly that basis, so anything durable placed there is untracked by construction, not by oversight -- and the loss is silent, because the file keeps working on the machine that wrote it.
+- Ask which column before which row. The common mistake is picking a location by scope alone, landing in the data directory because the value is user-scoped, and only discovering the durability half when a machine is rebuilt.
 
 Values set in `project_config` are automatically mirrored into the data-dir config after the project_config phase, so downstream code that reads the data-dir config (e.g. for simple getenv-style lookups) works unchanged.
 

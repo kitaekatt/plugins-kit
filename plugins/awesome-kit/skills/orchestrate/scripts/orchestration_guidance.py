@@ -11,7 +11,7 @@ an ordered routing policy plus machine data:
 Configuration resolves over three layers, later winning:
 
     1. shipped   <plugin>/skills/orchestrate/defaults/orchestration.yaml
-    2. user      ~/.claude/plugins/data/plugins-kit/awesome-kit/orchestration.yaml
+    2. user      ~/.claude/config/orchestration.yaml
     3. project   <project_root>/.claude/orchestration.yaml
 
 Override files are sparse. Mappings deep-merge; the record lists in
@@ -96,7 +96,13 @@ CAPABILITY_KEYS = ("isolation", "effort", "network", "returns")
 # --------------------------------------------------------------------------
 
 
-def user_config_path() -> Path:
+def user_config_dir_path() -> Path:
+    """The conventional home: the user's tracked config directory."""
+    return Path.home() / ".claude" / "config" / CONFIG_NAME
+
+
+def legacy_user_config_path() -> Path:
+    """Where this layer used to live, inside the plugin's data directory."""
     return (
         Path.home()
         / ".claude"
@@ -106,6 +112,30 @@ def user_config_path() -> Path:
         / PLUGIN
         / CONFIG_NAME
     )
+
+
+def user_config_path() -> Path:
+    """The user layer, preferring the conventional path over the legacy one.
+
+    ``~/.claude/config/`` is the established home for portable user
+    configuration; a plugin's data directory holds machine-global values that
+    deliberately stay out of version control (bootstrap's manifest-reference
+    calls out that split). This layer is hand-authored policy that should
+    travel with the user, so it belongs in the former.
+
+    The legacy path is still honoured so an existing file keeps working, but
+    only when the conventional one is absent -- never merged with it. Two
+    resolved routing tables silently combining is worse than one of them being
+    ignored, because `routing` REPLACES rather than merges and the loser would
+    vanish without a word.
+    """
+    conventional = user_config_dir_path()
+    if conventional.is_file():
+        return conventional
+    legacy = legacy_user_config_path()
+    if legacy.is_file():
+        return legacy
+    return conventional
 
 
 def project_config_path(project_root: Path) -> Path:
@@ -195,6 +225,18 @@ def strip_executable_fields(data: Dict[str, Any]) -> Tuple[Dict[str, Any], List[
     return result, removed
 
 
+def status_is_applied(status: str) -> bool:
+    """True when a provenance status means the layer WAS merged.
+
+    An applied layer may carry a decorated status -- the project layer's
+    stripped-executable-fields note, or the user layer's legacy-location note.
+    Matching the bare string "applied" reports a decorated layer as not
+    applied, which is how a user's in-force policy came to be omitted from the
+    "Layers applied" line. Every decoration must keep the "applied" prefix.
+    """
+    return status.startswith("applied")
+
+
 def resolve_config(project_root: Path) -> Tuple[Dict[str, Any], List[Tuple[str, Path, str]]]:
     """Merge the layers. Returns (config, provenance) where provenance is
     (layer, path, status) with status in {applied, empty, absent}, or
@@ -210,6 +252,11 @@ def resolve_config(project_root: Path) -> Tuple[Dict[str, Any], List[Tuple[str, 
             provenance.append((layer, path, "empty"))
             continue
         status = "applied"
+        if layer == "user" and path == legacy_user_config_path():
+            status = (
+                "applied (legacy location; move it to "
+                f"{user_config_dir_path()} so it travels with your config repo)"
+            )
         if layer == "project":
             data, removed = strip_executable_fields(data)
             if removed:
@@ -1370,7 +1417,7 @@ def render(config: Dict[str, Any], provenance: List[Tuple[str, Path, str]]) -> s
     render_capacity(config, out)
     out.append("---")
     out.append("")
-    applied = [layer for layer, _, status in provenance if status == "applied"]
+    applied = [layer for layer, _, status in provenance if status_is_applied(status)]
     out.append("Layers applied: " + (", ".join(applied) if applied else "none") + ".")
     absent = [
         f"{layer} ({path})" for layer, path, status in provenance if status == "absent"
@@ -1383,7 +1430,7 @@ def render(config: Dict[str, Any], provenance: List[Tuple[str, Path, str]]) -> s
         overrides = [
             f"{layer} ({path})"
             for layer, path, status in provenance
-            if status == "applied" and layer != "shipped"
+            if status_is_applied(status) and layer != "shipped"
         ]
         out.append("")
         out.append(
