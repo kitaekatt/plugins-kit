@@ -230,20 +230,24 @@ its own directory cannot know whether the fact holds of code it never opened, an
 everything below it, and no shallower -- in `../cohesion-principles.md`,
 under `principles_applied_to_placement`.
 
-**WORDING is the only test; there is no separate repetition trigger.** A fact
-found in a single child's document may hoist, provided it passes the test below.
-The repetition trigger that used to gate a hoist first was dropped, by owner
-decision on 2026-08-12, because this document already conceded the gap it left
-open: "a fact true of every child that only one child noticed never triggers at
-all" -- and that concession is the evidence the decision acts on, not a new
-observation. The failure direction the old trigger guarded against is still real
-and still governs the test: a fact stated by 2 of 20 children and hoisted
-verbatim becomes ambient for 18 directories it does not govern. So a hoisted
-fact must be WORDED so it is true as stated of everything below its new home,
-usually by naming its subjects explicitly ("Tools and stack-traces both ...").
-Scope lives in the sentence; there is no separate scoping mechanism. When no
-such wording exists short of a list of exceptions, the fact does not hoist --
-it stays in the children.
+**WORDING and a cited shared cause are the tests; there is no separate
+repetition trigger.** A fact found in a single child's document may hoist,
+provided it passes both tests below. The repetition trigger that used to gate a
+hoist first was dropped, by owner decision on 2026-08-12, because this document
+already conceded the gap it left open: "a fact true of every child that only
+one child noticed never triggers at all" -- and that concession is the evidence
+the decision acts on, not a new observation. The failure direction the old
+trigger guarded against is still real and still governs the test: a fact stated
+by 2 of 20 children and hoisted verbatim becomes ambient for 18 directories it
+does not govern. So a hoisted fact must be WORDED so it is true as stated of
+everything below its new home, usually by naming its subjects explicitly
+("Tools and stack-traces both ..."), AND the children must share the cause
+behind that wording, cited against an anchor in each contributing child
+(`common_cause_gate` in `../cohesion-principles.md`). Scope lives in the
+sentence, but the sentence alone is not sufficient -- coincidental wording
+overlap without a shared cause does not hoist. When no such wording exists
+short of a list of exceptions, or no shared cause can be cited, the fact does
+not hoist -- it stays in the children.
 
 **A hoisted fact leaves duplication behind.** Once the parent carries it, each
 child's copy is a near-verbatim restatement of an ancestor instruction that

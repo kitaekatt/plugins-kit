@@ -91,25 +91,32 @@ standards_set:
         line -- read the site and state whether commentary there already
         carries the proposition. If it does, the fact is recoverable and is
         REJECTED. If it does not but a comment there would reach the reader who
-        would make the mistake, report that a comment is the remedy and do NOT
-        admit the fact: an ambient document loads for every reader beneath it to
-        deliver something the one reader who needs it would have seen anyway.
-        A single-site fact is admissible only when a comment at the site would
-        NOT serve. The governing question is whether a comment there REACHES THE
-        READER WHO WOULD MAKE THE MISTAKE; everything below is that one question
+        would make the mistake, ADMIT the fact, worded to name its own better
+        home: "Suggest moving this to a comment on <filename>, as it applies
+        only to that file." The reader gets the fact and the relocation
+        suggestion in one line, rather than the fact being discarded with no
+        trace it was ever found -- nothing downstream of this criterion can
+        write the comment itself, and a report carries only surviving
+        candidates.
+        The governing question is whether a comment there REACHES THE READER
+        WHO WOULD MAKE THE MISTAKE; everything below is that one question
         applied to the cases seen so far, and it is the question you answer, not
-        a checklist you match. Known cases: the fact's other end is in another
-        file; it must reach an author writing NEW code rather than reading the
-        existing code; it holds across the directory; the file cannot be edited;
-        or the reader who would make the mistake never opens the file at all
-        because they INVOKE this code or CONSUME ITS OUTPUT rather than read it
-        -- a caller relying on an exit code, a schema, a file format, or a
-        printed result is not reading the site that documents it, so a comment
-        there reaches nobody.
-        Name which case holds and why a comment fails to reach. Judge by that,
-        never by how important the fact is; a very important fact about one line
-        is still a comment. If no case holds and you cannot articulate a new one
-        in those terms, the answer is a comment.
+        a checklist you match. When a comment there would NOT reach that
+        reader, admit the fact plainly, with no relocation suggestion. Known
+        cases where a comment fails to reach: the fact's other end is in
+        another file; it must reach an author writing NEW code rather than
+        reading the existing code; it holds across the directory; the file
+        cannot be edited; or the reader who would make the mistake never opens
+        the file at all because they INVOKE this code or CONSUME ITS OUTPUT
+        rather than read it -- a caller relying on an exit code, a schema, a
+        file format, or a printed result is not reading the site that
+        documents it, so a comment there reaches nobody.
+        Name which case holds and why a comment fails to reach, or admit with
+        the relocation suggestion. Judge by that, never by how important the
+        fact is; a very important fact about one line still gets the
+        relocation suggestion. If no case holds and you cannot articulate a new
+        one in those terms, admit the fact with the suggestion that it move to
+        a comment.
 
     - id: already-ambient-suppressed
       statement: >-

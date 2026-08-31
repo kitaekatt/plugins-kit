@@ -303,9 +303,10 @@ from below --
 forbids an assessment from placing a fact outside the directory it read.
 
 Depth is `shallowest_true_depth` in `references/cohesion-principles.md`: a fact
-sits at the shallowest directory where it is true of everything below it, and
-wording is the only test -- a hoisted fact must read as true at its new depth or
-it stays in the children.
+sits at the shallowest directory where it is true of everything below it.
+Wording and a cited shared cause are the tests -- a hoisted fact must read as
+true at its new depth AND the children must share the cited cause behind that
+wording, or it stays in the children.
 
 ### Lane records
 

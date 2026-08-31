@@ -384,9 +384,9 @@ claude_md:
         removes an inference the resolver was making from one-line facts without
         access to the evidence behind them.
 
-        WORDING IS THE ONLY TEST; THERE IS NO SEPARATE REPETITION TRIGGER. This
-        record used to gate a hoist on repetition first and treat wording as a
-        second check. That trigger was dropped by owner decision on 2026-08-12,
+        WORDING AND SHARED CAUSE ARE THE TESTS; THERE IS NO SEPARATE REPETITION
+        TRIGGER. This record used to gate a hoist on repetition first and treat
+        wording as a second check. That trigger was dropped by owner decision on 2026-08-12,
         because this same record already conceded the gap it left open: "a fact
         true of every child that only one child noticed never triggers at all"
         -- and that concession is the evidence the decision acts on, not a new
@@ -395,11 +395,14 @@ claude_md:
         hoisted verbatim becomes ambient for 18 directories it does not govern.
         The resolution is that a hoisted fact must be WORDED so it is true as
         stated at its new depth, usually by naming its subjects ("Tools and
-        stack-traces both ..."). Scope lives in the sentence, not in a separate
-        mechanism. The escape clause -- it stays in the children when no such
-        wording exists short of a list of exceptions -- protects the observed
-        case of a mirrored-directory rule whose honest wording at the parent
-        would enumerate fifteen exclusions.
+        stack-traces both ..."), and the children must share the cited cause
+        behind that wording (`common_cause_gate` in
+        `references/cohesion-principles.md`). Scope lives in the sentence, not
+        in a separate mechanism, but the sentence alone is not sufficient. The
+        escape clause -- it stays in the children when no such wording exists
+        short of a list of exceptions -- protects the observed case of a
+        mirrored-directory rule whose honest wording at the parent would
+        enumerate fifteen exclusions.
 
         ORDERING IS A HARD DEPENDENCY, WITH TWO CONSEQUENCES THAT MUST BE STATED.
         Bottom-up: regenerating D commits to regenerating every descendant first.

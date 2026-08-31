@@ -275,6 +275,28 @@ content_allocation:
         Hoist: a fact stated in a child's document moves to the common ancestor when it
         can be WORDED so it is true as stated of everything below that ancestor.
         Stay: if no such wording exists short of an exception list, it stays in the children.
+      common_cause_gate: |
+        Wording truth is necessary but not sufficient: a hoist also requires the
+        children to share the REASON the fact holds, not merely to satisfy the
+        same sentence for unrelated reasons. Two children can read as true of
+        the same wording by coincidental overlap -- different mechanisms that
+        happen to produce the same observable sentence today. Hoisting on that
+        basis produces a parent-level statement that is one unrelated edit away
+        from false, and it invites a reader to infer a shared mechanism that
+        does not exist. Duplication is the cheaper error.
+        This is the same question `placement_algorithm` step 1 (CCP: what
+        changes force this fact to update?) already asks when a fact is placed
+        new; the hoist test answers it too.
+        The shared cause must be ESTABLISHED, never asserted. A hoist proposal
+        must NAME the cause and CITE it -- an anchor in each contributing child
+        showing the same mechanism. Children citing different mechanisms for
+        the same wording fail the gate on their face. No cited cause, no hoist.
+        Because the parent reads its children's finished documents and never
+        their source (the bound this principle shares with the rest of the
+        tree-hoist test), the parent PROPOSES the hoist with its stated cause,
+        and the existing verify phase -- propose, verify as a phase, then write
+        -- establishes the citation against the actual files. This reuses that
+        phase; it is not a new pass or stage.
       worked_examples:
         - fact: "tool scripts and stack-trace parsers both resolve paths through the shared resolver"
           stated_in: one child directory's CLAUDE.md
@@ -284,6 +306,10 @@ content_allocation:
           stated_in: one mirrored child
           correct: stays in the child -- an honest parent-level wording would enumerate every non-mirrored sibling as an exception
           wrong: hoisting it to the parent, where it becomes ambient for directories that touch neither side of the sync
+        - fact: "each validates its own input at the boundary"
+          stated_in: two unrelated children
+          correct: stays in both children -- one cites a schema check and the other a type guard as the mechanism behind the same wording, so no shared cause anchors a hoist
+          wrong: hoisting to the parent as one sentence, which reads as a single shared mechanism when the children have two
       audit_violations:
         - name: fact hoisted past the depth its wording supports
           test: read the hoisted sentence at its new home and ask whether it is true of every directory below it. If it needs an unstated exception list, it hoisted too far.
@@ -291,8 +317,11 @@ content_allocation:
           test: a fact true of everything below the parent belongs at the parent even if only one child noticed it. Repetition is not required to trigger a hoist.
         - name: destination nominated from below
           test: a per-directory assessment naming a destination above itself. It read only its own directory, so it cannot know the fact holds of code it never opened; `fact-scoped-to-this-directory` in standards/coverage-standards.md forbids it.
+        - name: hoist with an asserted, uncited cause
+          test: the hoist proposal states a shared cause but names no anchor in each contributing child showing that mechanism. Assertion without citation fails the common-cause gate; the fact stays in the children until the verify phase can cite one, or permanently if it cannot.
       note_on_wording: |
-        WORDING IS THE ONLY TEST; there is no separate repetition trigger. A fact stated
+        WORDING AND SHARED CAUSE ARE THE TESTS; there is no separate repetition
+        trigger. A fact stated
         by one child may hoist, and a fact stated by many may not. The failure direction
         it guards is real: a fact stated by 2 of 20 children and hoisted verbatim becomes
         ambient for 18 directories it does not govern. The fix is to name the subjects
