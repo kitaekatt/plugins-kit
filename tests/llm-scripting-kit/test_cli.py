@@ -1,5 +1,8 @@
+import dataclasses
 import io
 import json
+
+import pytest
 
 from llm_scripting_kit import cli
 from llm_scripting_kit.completion.factory import BackendSelection
@@ -167,3 +170,214 @@ def test_resolve_emits_selection(monkeypatch, capsys):
         "backend": "fake", "effort": "high", "endpoint": "chosen",
         "kind": "harness", "model": "model-id",
     }
+
+
+# ---------------------------------------------------------------------------
+# The versioned request/result protocol
+# ---------------------------------------------------------------------------
+
+
+def _request(tmp_path, payload, name="req.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return str(path)
+
+
+def _protocol_error(capsys):
+    """The stderr envelope of a refused request."""
+    captured = capsys.readouterr()
+    assert captured.out == "", "a protocol error must not write to the result channel"
+    return json.loads(captured.err)
+
+
+def test_result_envelope_carries_the_protocol_version(monkeypatch, capsys):
+    backend = FakeBackend(LLMResponse(text="answer", model="model-id"))
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
+
+    assert cli.main(["complete", "--prompt", "hi"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["protocol"] == cli.PROTOCOL_VERSION
+    # the pre-version keys are untouched: adding a field cannot break a reader
+    assert {"endpoint", "kind", "backend", "response"} <= set(payload)
+
+
+def test_a_request_reaches_the_backend_with_its_options(monkeypatch, capsys, tmp_path):
+    """The four params that had no CLI path before, all on one surface."""
+    backend = FakeBackend(LLMResponse(text="ok", model="model-id"))
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
+    path = _request(
+        tmp_path,
+        {
+            "protocol": 1,
+            "system": "instructions",
+            "prompt": "question",
+            "options": {
+                "allowed_tools": "Read",
+                "disallowed_tools": "Bash",
+                "system_prompt_mode": "append",
+                "extras": {"top_k": 40},
+            },
+        },
+    )
+
+    assert cli.main(["complete", "--request-file", path]) == cli.EXIT_OK
+    system, user, model, options = backend.call
+    assert (system, user, model) == ("instructions", "question", "model-id")
+    assert options.allowed_tools == "Read"
+    assert options.disallowed_tools == "Bash"
+    assert options.system_prompt_mode == "append"
+    assert options.extras == {"top_k": 40}
+    json.loads(capsys.readouterr().out)
+
+
+def test_a_request_reads_stdin_when_asked(monkeypatch, capsys):
+    backend = FakeBackend(LLMResponse(text="ok", model="model-id"))
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
+    monkeypatch.setattr(
+        cli.sys, "stdin", io.StringIO(json.dumps({"protocol": 1, "prompt": "hi"}))
+    )
+
+    assert cli.main(["complete", "--request-file", "-"]) == cli.EXIT_OK
+    assert backend.call[1] == "hi"
+    json.loads(capsys.readouterr().out)
+
+
+def test_the_cli_still_owns_effort_fallback_and_log_prefix(monkeypatch, capsys, tmp_path):
+    backend = FakeBackend(LLMResponse(text="ok", model="model-id"))
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
+    path = _request(tmp_path, {"protocol": 1, "prompt": "hi"})
+
+    assert cli.main(["complete", "--request-file", path]) == cli.EXIT_OK
+    # the selection's effort fills in, exactly as it does on the flag surface
+    assert backend.call[3].effort == "high"
+    assert backend.call[3].log_prefix == "[chosen]"
+    json.loads(capsys.readouterr().out)
+
+
+def test_a_request_may_not_be_combined_with_call_flags(monkeypatch, capsys, tmp_path):
+    """Refused rather than merged: a precedence rule is invisible at the call site."""
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: pytest.fail("no call"))
+    path = _request(tmp_path, {"protocol": 1, "prompt": "hi"})
+
+    assert (
+        cli.main(["complete", "--request-file", path, "--effort", "high"])
+        == cli.EXIT_PROTOCOL
+    )
+    assert "--effort" in _protocol_error(capsys)["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "payload, expected",
+    [
+        ({"prompt": "hi"}, "missing 'protocol'"),
+        ({"protocol": 99, "prompt": "hi"}, "unsupported protocol"),
+        ({"protocol": 1, "nonsense": 1}, "unknown request key"),
+        ({"protocol": 1, "options": {"nonsense": 1}}, "unknown option"),
+        ({"protocol": 1, "options": {"log_prefix": "[x]"}}, "derived by the CLI"),
+        ({"protocol": 1, "options": {"max_tokens": "many"}}, "must be an integer"),
+        ({"protocol": 1, "options": {"temperature": "hot"}}, "must be a number"),
+        ({"protocol": 1, "options": {"extras": 5}}, "must be a JSON object"),
+        ({"protocol": 1, "options": {"cwd": 5}}, "must be a string path"),
+        ({"protocol": 1, "cheap": "yes"}, "cheap must be a boolean"),
+        ({"protocol": 1, "prompt": 5}, "prompt must be a string"),
+        ([1, 2], "request must be a JSON object"),
+    ],
+)
+def test_a_malformed_request_is_a_protocol_error(
+    monkeypatch, capsys, tmp_path, payload, expected
+):
+    """No call is attempted, so the failure is neither an endpoint error nor a result."""
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: pytest.fail("no call"))
+    path = _request(tmp_path, payload)
+
+    assert cli.main(["complete", "--request-file", path]) == cli.EXIT_PROTOCOL
+    envelope = _protocol_error(capsys)
+    assert envelope["protocol"] == cli.PROTOCOL_VERSION
+    assert envelope["error"]["kind"] == "protocol"
+    assert expected in envelope["error"]["message"]
+    # there is no call to describe, so no response object is invented for one
+    assert "response" not in envelope
+
+
+def test_invalid_json_is_a_protocol_error(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: pytest.fail("no call"))
+    path = tmp_path / "bad.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    assert cli.main(["complete", "--request-file", str(path)]) == cli.EXIT_PROTOCOL
+    assert "not valid JSON" in _protocol_error(capsys)["error"]["message"]
+
+
+def test_a_protocol_error_is_distinct_from_a_failed_call(monkeypatch, capsys, tmp_path):
+    """The distinction the separate exit code exists for.
+
+    A malformed request never ran and retrying the same bytes cannot help; a
+    failed call ran and may succeed on retry. Collapsing them would tell a
+    caller to retry what can only fail, or to fix what was already correct.
+    """
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: pytest.fail("no call"))
+    path = _request(tmp_path, {"protocol": 1, "options": {"max_tokens": "many"}})
+    assert cli.main(["complete", "--request-file", path]) == cli.EXIT_PROTOCOL
+    capsys.readouterr()
+
+    backend = FakeBackend(error=RuntimeError("boom"))
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
+    assert cli.main(["complete", "--prompt", "hi"]) == cli.EXIT_FAILURE
+    # the failed call DOES get a result envelope on stdout
+    assert json.loads(capsys.readouterr().out)["response"]["status"] == "error"
+
+
+def test_the_request_schema_is_derived_from_backend_options(capsys):
+    """A hand-written schema would be a second source of truth."""
+    from llm_scripting_kit.completion import BackendOptions
+
+    assert cli.main(["request-schema"]) == cli.EXIT_OK
+    schema = json.loads(capsys.readouterr().out)
+    settable = {f.name for f in dataclasses.fields(BackendOptions)} - {"log_prefix"}
+    assert set(schema["options"]) == settable
+    assert schema["protocol"] == cli.PROTOCOL_VERSION
+    assert "log_prefix" in schema["rejected_options"]
+
+
+@pytest.mark.parametrize(
+    "flag, value",
+    [
+        ("--max-tokens", "99"),
+        ("--temperature", "0.9"),
+        ("--timeout", "0"),
+        ("--system", ""),
+    ],
+)
+def test_no_call_flag_is_silently_discarded_beside_a_request(
+    monkeypatch, capsys, tmp_path, flag, value
+):
+    """Every call flag must be REFUSED, never quietly ignored.
+
+    The falsy cases are the ones that hide: `--max-tokens` and `--temperature`
+    once carried non-None argparse defaults, so a named value was
+    indistinguishable from silence; and `0 == False` in Python, so a falsy
+    conflict test would wave `--timeout 0` through.
+    """
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: pytest.fail("no call"))
+    path = _request(tmp_path, {"protocol": 1, "prompt": "hi"})
+
+    argv = ["complete", "--request-file", path, flag]
+    if value != "":
+        argv.append(value)
+    else:
+        argv.append("")
+    assert cli.main(argv) == cli.EXIT_PROTOCOL
+    assert flag in _protocol_error(capsys)["error"]["message"]
+
+
+def test_the_flag_surface_keeps_its_defaults(monkeypatch, capsys):
+    """Moving the defaults off argparse must not change what a bare call sends."""
+    backend = FakeBackend(LLMResponse(text="ok", model="model-id"))
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
+
+    assert cli.main(["complete", "--prompt", "hi"]) == cli.EXIT_OK
+    options = backend.call[3]
+    assert options.max_tokens == 4096
+    assert options.temperature == 0.3
+    assert backend.call[0] == ""
+    json.loads(capsys.readouterr().out)

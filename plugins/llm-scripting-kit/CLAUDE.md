@@ -230,6 +230,40 @@ a success (`status` of `completed` / `timeout` / `error`, plus an `error` object
 carrying the halt classification as its `code`), on stdout, with exit codes
 unchanged as the shell-level signal.
 
+**The `complete` verb speaks a versioned protocol in BOTH directions.** The
+result envelope carries `protocol` (`request_protocol.PROTOCOL_VERSION`)
+alongside the unchanged `endpoint` / `kind` / `backend` / `response` keys, and
+`--request-file <path|->` accepts a versioned JSON request instead of flags.
+`request-schema` prints the accepted shape, derived from `BackendOptions` rather
+than hand-written.
+
+The request half exists because flags ran out, not for symmetry: `extras` is an
+open JSON map whose per-key handling is observable in the response, and no flag
+spelling expresses it. `allowed_tools`, `disallowed_tools` and
+`system_prompt_mode` had no CLI path at all. A request and the call-describing
+flags are REFUSED together rather than merged -- a precedence rule is invisible
+at the call site, so a flag silently overriding a request field would be the
+kind of lie this contract removes.
+
+**`request_protocol.py` is where declared types become enforced ones.**
+`capabilities.py` says `ParamCapability.type` is a declared expectation and that
+"validation belongs at the CLI request boundary"; this is that boundary. Note
+the one place it deliberately does NOT follow the seam's drop-and-report rule:
+an unknown `options` key is a protocol ERROR, not a dropped param. The seam
+drops what an ADAPTER does not read -- a fact about the adapter, reported
+truthfully -- whereas a key that is no `BackendOptions` field at all is a fact
+about the caller, which nothing advertises and no adapter could read, so there
+is no honest per-call report to make.
+
+**A protocol error is not an endpoint error, and the exit codes say so.**
+`EXIT_PROTOCOL` (4) means the request could not be understood and no call was
+attempted; it writes its envelope to STDERR, leaving stdout as the result
+channel a consumer parses for one shape only. That is distinct from
+`EXIT_USAGE` (2), which is argparse's territory -- a person typing a command
+wrong -- and from `EXIT_FAILURE` (1), which means a call ran and failed and may
+succeed on retry. Retrying a malformed request cannot help; the codes exist so a
+consumer can tell those apart without parsing prose.
+
 **The same call does not behave the same way.** Retry, timeout defaults, token
 accounting (codex reports one undifferentiated `total_tokens` and no
 input/output split at all; opencode's default output reports no usage), cost

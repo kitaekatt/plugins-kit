@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import getpass
 import json
 import sys
@@ -28,6 +29,13 @@ from .completion import (
 from .constants import USER_ENV_FILE
 from .env_file import read_env_file, write_env_file
 from .model_endpoints import EndpointRegistryError
+from .request_protocol import (
+    PROTOCOL_VERSION,
+    ProtocolError,
+    describe_request_schema,
+    parse_request,
+    protocol_error_envelope,
+)
 from .models import (
     EndpointResolveError,
     ModelResolveError,
@@ -42,6 +50,17 @@ EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_USAGE = 2
 EXIT_HALT = 3
+EXIT_PROTOCOL = 4
+"""The request could not be understood, so no call was attempted.
+
+Separate from EXIT_USAGE (2) on purpose, even though both mean "bad input".
+EXIT_USAGE is argparse's territory -- a human typing a command wrong. This code
+is for a MACHINE consumer's structured request, and the two want opposite
+responses: a person re-reads --help, a program fixes its serializer. Separate
+from EXIT_FAILURE (1) for the reason the protocol exists at all: 1 means a call
+ran and failed, and retrying it may work; 4 means nothing ran and retrying the
+same bytes cannot.
+"""
 
 
 def _json(value: Any, *, stream: Any = None) -> None:
@@ -83,18 +102,34 @@ def _parser() -> argparse.ArgumentParser:
     _add_endpoint_arg(complete)
     _add_project_arg(complete)
     complete.add_argument("--model")
-    complete.add_argument("--cheap", action="store_true")
-    complete.add_argument("--system", default="")
+    # Every call-describing flag defaults to None so "unset" is distinguishable
+    # from "set to a falsy value". Their real defaults live in _FLAG_DEFAULTS --
+    # keeping them here would make `--max-tokens 4096` indistinguishable from
+    # silence, and the --request-file conflict check below would then let a
+    # named flag be silently discarded.
+    complete.add_argument("--cheap", action="store_true", default=None)
+    complete.add_argument("--system", default=None)
     complete.add_argument("--system-file", type=Path)
     prompt = complete.add_mutually_exclusive_group()
     prompt.add_argument("--prompt")
     prompt.add_argument("--prompt-file", type=Path)
-    complete.add_argument("--max-tokens", type=int, default=4096)
-    complete.add_argument("--temperature", type=float, default=0.3)
+    complete.add_argument("--max-tokens", type=int)
+    complete.add_argument("--temperature", type=float)
     complete.add_argument("--timeout", type=float)
     complete.add_argument("--effort")
     complete.add_argument("--cwd", type=Path)
     complete.add_argument("--format", choices=("json", "text"), default="json")
+    # The protocol surface. `-` reads stdin, which is unambiguous here because a
+    # request carries its own prompt -- the stdin-as-prompt fallback below
+    # applies only to the flag surface.
+    complete.add_argument(
+        "--request-file",
+        help="Read a versioned JSON request (see `request-schema`); - for stdin.",
+    )
+    sub.add_parser(
+        "request-schema",
+        help="Print the accepted `complete --request-file` request shape.",
+    )
     return parser
 
 
@@ -113,6 +148,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             return _cmd_models(args.endpoint, args.project_root)
         if args.cmd == "resolve":
             return _cmd_resolve(args.endpoint, args.model, args.cheap, args.project_root)
+        if args.cmd == "request-schema":
+            _json(describe_request_schema())
+            return EXIT_OK
         if args.cmd == "complete":
             return _cmd_complete(args)
     except (EndpointResolveError, ModelResolveError, EndpointRegistryError, OSError, ValueError) as exc:
@@ -214,13 +252,120 @@ def _read_text(path: Optional[Path], inline: Optional[str], *, stdin_fallback: b
     return sys.stdin.read() if stdin_fallback else ""
 
 
-def _cmd_complete(args: argparse.Namespace) -> int:
-    system = _read_text(args.system_file, args.system)
+#: `complete` flags that describe the call itself. Naming one alongside
+#: --request-file is refused rather than merged: a precedence rule is invisible
+#: at the call site, so a flag silently overriding a request field would be a
+#: lie of exactly the kind this contract exists to remove. --format and
+#: --project-root are absent because they describe the CLI's own behaviour
+#: rather than the request, so they compose with either surface.
+_COMPLETE_CALL_FLAGS = (
+    "endpoint",
+    "model",
+    "cheap",
+    "system",
+    "system_file",
+    "prompt",
+    "prompt_file",
+    "max_tokens",
+    "temperature",
+    "timeout",
+    "effort",
+    "cwd",
+)
+
+#: The flag surface's own defaults, applied in _request_from_flags rather than by
+#: argparse. They are the values argparse used to carry and match BackendOptions'
+#: declared defaults, so moving them changes no behaviour -- it only makes
+#: "unset" observable, which is what the conflict check above needs.
+_FLAG_DEFAULTS = {"max_tokens": 4096, "temperature": 0.3, "system": "", "cheap": False}
+
+
+def _request_from_flags(args: argparse.Namespace) -> "tuple[str, str, Any, BackendOptions]":
+    """The original flag surface, unchanged.
+
+    Kept whole rather than re-expressed through the protocol parser: every
+    existing caller is a shell script, and routing them through a new code path
+    to save duplication would risk their behaviour for no benefit they asked
+    for.
+    """
+    def flag(name: str) -> Any:
+        value = getattr(args, name)
+        return _FLAG_DEFAULTS[name] if value is None else value
+
+    system = _read_text(args.system_file, flag("system"))
     user = _read_text(args.prompt_file, args.prompt, stdin_fallback=True)
-    selection = create_backend(args.endpoint, model=args.model, cheap=args.cheap, project_root=args.project_root)
-    options = BackendOptions(max_tokens=args.max_tokens, temperature=args.temperature,
-                             timeout_s=args.timeout, effort=args.effort or selection.effort,
-                             cwd=args.cwd, log_prefix=f"[{selection.endpoint}]")
+    selection = create_backend(
+        args.endpoint,
+        model=args.model,
+        cheap=flag("cheap"),
+        project_root=args.project_root,
+    )
+    options = BackendOptions(
+        max_tokens=flag("max_tokens"),
+        temperature=flag("temperature"),
+        timeout_s=args.timeout,
+        effort=args.effort or selection.effort,
+        cwd=args.cwd,
+        log_prefix=f"[{selection.endpoint}]",
+    )
+    return system, user, selection, options
+
+
+def _request_from_protocol(
+    args: argparse.Namespace,
+) -> "tuple[str, str, Any, BackendOptions]":
+    """Parse a versioned request, then resolve the same way the flags do."""
+    # `is not None` rather than a falsy test: `0 in (None, False, "")` is True
+    # in Python, so a falsy comparison would let `--timeout 0` through as though
+    # it had never been named.
+    named = [
+        flag for flag in _COMPLETE_CALL_FLAGS if getattr(args, flag, None) is not None
+    ]
+    if named:
+        raise ProtocolError(
+            "--request-file cannot be combined with "
+            + ", ".join("--" + flag.replace("_", "-") for flag in sorted(named))
+            + "; the request carries those values itself"
+        )
+    raw = sys.stdin.read() if args.request_file == "-" else Path(
+        args.request_file
+    ).read_text(encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ProtocolError(f"request is not valid JSON: {exc}") from exc
+
+    request = parse_request(payload)
+    selection = create_backend(
+        request.endpoint,
+        model=request.model,
+        cheap=request.cheap,
+        project_root=args.project_root,
+    )
+    # The two values the CLI owns rather than the caller: log_prefix is a
+    # diagnostic tag (the parser refuses it outright), and an unset effort falls
+    # back to the endpoint's configured one exactly as the flag surface does.
+    options = dataclasses.replace(
+        request.options,
+        effort=request.options.effort or selection.effort,
+        log_prefix=f"[{selection.endpoint}]",
+    )
+    return request.system, request.prompt, selection, options
+
+
+def _cmd_complete(args: argparse.Namespace) -> int:
+    try:
+        if args.request_file:
+            system, user, selection, options = _request_from_protocol(args)
+        else:
+            system, user, selection, options = _request_from_flags(args)
+    except ProtocolError as exc:
+        # A protocol error never reached an endpoint, so it gets neither the
+        # result envelope (there is no call to describe) nor an endpoint exit
+        # code. Emitted on stderr because stdout is the result channel and a
+        # consumer parsing it must not find a different shape there.
+        _json(protocol_error_envelope(str(exc)), stream=sys.stderr)
+        return EXIT_PROTOCOL
     # Bracket the call HERE too. A failure never reaches an adapter's own
     # timestamping, and a failed call still ran -- a timeout by definition
     # burned the whole budget -- so the CLI has to record what it can see.
@@ -314,6 +459,11 @@ def _complete_envelope(selection: Any, response: LLMResponse) -> dict[str, Any]:
         payload.pop("execution_controls_applied", None)
         payload.pop("structured", None)
     return {
+        # Versioned so a consumer can tell which payload shape it is holding.
+        # The other keys are unchanged from the unversioned envelope: adding a
+        # field cannot break a reader, while renaming one would, and there is no
+        # reason to spend a compatibility break on tidiness.
+        "protocol": PROTOCOL_VERSION,
         "endpoint": selection.endpoint,
         "kind": selection.kind,
         "backend": selection.backend.name,
