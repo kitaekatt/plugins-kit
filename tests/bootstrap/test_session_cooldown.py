@@ -434,3 +434,25 @@ class TestResetLeverInstall:
         assert "command -v bootstrap-reset-cooldown" in text, (
             "must fall back to PATH"
         )
+
+
+class TestLeverExecutableBits:
+    """A PATH shim nobody can invoke is the same as no shim at all.
+
+    bootstrap-reset-cooldown.sh shipped mode 100644 for its whole life, so the
+    documented bare `bootstrap-reset-cooldown` command only ever worked when
+    spelled `bash <path>`. The symlink existed and pointed at a file the shell
+    refused to execute.
+    """
+
+    def test_installed_levers_are_executable_in_git(self) -> None:
+        import subprocess as sp
+        for name in ("bootstrap-reset-cooldown", "env-reset-cooldown"):
+            rel = f"plugins/bootstrap/scripts/{name}.sh"
+            mode = sp.run(["git", "-C", str(REPO_ROOT), "ls-files", "-s", rel],
+                          capture_output=True, text=True).stdout.split()
+            assert mode and mode[0] == "100755", (
+                f"{rel} is committed {mode[0] if mode else '(missing)'}; it is "
+                "symlinked onto PATH, so a non-executable mode makes the "
+                "documented command fail with 'permission denied'"
+            )
