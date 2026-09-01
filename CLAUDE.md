@@ -677,9 +677,18 @@ claude_md:
         `codex exec` command the ORCHESTRATOR types and runs itself, rendered through
         CodexAdapter.build_argv; CODEX_CAPABILITIES describes what CodexCliBackend emits
         through the COMPLETION SEAM. They are siblings converging only at
-        bootstrap_lib.codex.build_codex_exec_argv -- which is already the single source of the
-        argv spellings, so the genuine duplication is already deduplicated. Most of the YAML
-        block is not capability fact at all (unrestricted reads outside -C, silent HTTP-000
+        bootstrap_lib.codex.build_codex_exec_argv, which is the single source of the argv
+        CONSTRUCTION CODE. Scope that precisely: the construction is deduplicated, the argv
+        SPELLINGS are not. Fourteen flags are restated as string literals across up to five
+        files (`codex exec`, `-s workspace-write`, `windows.sandbox="unelevated"`,
+        `sandbox_workspace_write.network_access=true`, `-m`, `model_reasoning_effort=`, `-C`,
+        `--add-dir`, `-o`, `--output-schema`, `--skip-git-repo-check`, `--color never`,
+        `--json`, trailing `-`), and the effort menu is stated at FOUR sites --
+        orchestration.yaml, CODEX_EFFORT_MENU in harness_adapters.py, a prose note inside
+        CODEX_CAPABILITIES, and codex-dispatch.md. An earlier revision of this insight said the
+        genuine duplication was already deduplicated; that is too strong and misled a follow-up
+        task into expecting to find nothing. Most of the YAML block is still not capability
+        fact at all (unrestricted reads outside -C, silent HTTP-000
         egress, the TUI dying when backgrounded, worktree advice, judging by the -o file);
         references/codex-dispatch.md owns those.
         THE CONCRETE DAMAGE, which is why this is an insight and not a preference: the YAML
@@ -696,6 +705,16 @@ claude_md:
         plugins/CLAUDE.md bars relocating ownership across a plugin boundary to remove apparent
         duplication. Separately, there is NO capability fallback -- deleting the block and
         having discovery fail would silently drop the safety summary.
+        SETTLED, SECOND TIME: a follow-up task investigated the harness-owned display/dispatch
+        contract on its own merits and returned DO-NOT-BUILD. The deciding evidence: the ONE
+        drift defect in this history (commit 7e4b18ab -- CodexAdapter dropped `--add-dir`, so a
+        dispatched unit exited 0 having written nothing) was orchestration.yaml <-> CodexAdapter,
+        the DIRECT-DISPATCH axis, NOT <-> CODEX_CAPABILITIES. A contract consuming the
+        completion-seam advertisement would not have prevented it. Its fix was already a test.
+        The plugin-opinion razor also fails for removing the config seam -- no serious, and no
+        two distinct, power-user scenarios could be named. A drift TEST across the boundary
+        remains the cheap alternative if the maintenance ever bites; it was scoped and
+        deliberately not built.
         If the idea is ever revisited, it is a NEW design (a harness-owned display/dispatch
         contract distinct from CODEX_CAPABILITIES, with explicit fallback and precedence rules),
         not a retirement of a duplicate. A drift TEST across the boundary is the cheap
