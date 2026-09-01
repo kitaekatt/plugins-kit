@@ -38,7 +38,27 @@ reset_stamp() {
     fi
     # Clear the per-project bootstrap cooldown (and session-id guard) so the
     # next SessionStart actually runs the pass that includes the env phase.
-    bash "$SCRIPT_DIR/bootstrap-reset-cooldown.sh"
+    #
+    # The sibling is resolved rather than assumed: this script is invoked both
+    # from the plugin tree (where it sits beside bootstrap-reset-cooldown.SH)
+    # and via the ~/.local/bin shim (where the sibling is installed WITHOUT the
+    # .sh extension). Hardcoding either name breaks the other -- and the shim
+    # is the form the docs tell people to run.
+    local sibling=""
+    for sibling in "$SCRIPT_DIR/bootstrap-reset-cooldown.sh" \
+                   "$SCRIPT_DIR/bootstrap-reset-cooldown" \
+                   "$(command -v bootstrap-reset-cooldown 2>/dev/null)"; do
+        [ -n "$sibling" ] && [ -f "$sibling" ] && break
+        sibling=""
+    done
+    if [ -n "$sibling" ]; then
+        bash "$sibling"
+    else
+        echo "env-reset-cooldown: bootstrap-reset-cooldown not found; the env" >&2
+        echo "  stamp is cleared but the per-project cooldown still gates the" >&2
+        echo "  pass, so the env phase may not run until it expires." >&2
+        return 1
+    fi
 }
 
 print_status() {

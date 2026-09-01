@@ -11,7 +11,8 @@
 #   bootstrap-reset-cooldown --all               reset cooldown for every project
 #   bootstrap-reset-cooldown --project <dir>     reset cooldown for an explicit project dir
 #   bootstrap-reset-cooldown --status            list cooldowns and ages, no writes
-#   bootstrap-reset-cooldown --clear-alerts      also clear bootstrap_alert.json + display.pending
+#   bootstrap-reset-cooldown --clear-alerts      also clear bootstrap_alert.json
+#   bootstrap-reset-cooldown --clear-alerts --force  also delete undelivered pass output
 #   bootstrap-reset-cooldown -h | --help         show this help
 #
 # Resolves the bootstrap data dir under ~/.claude/plugins/data/<marketplace>/bootstrap.
@@ -86,10 +87,21 @@ clear_alerts() {
         echo "cleared $ALERT_FILE"
         cleared=1
     fi
+    # The pending file is the ONLY channel any pass has to the user, and the
+    # shell's pre-Python failure paths write nothing else. Deleting it
+    # unconditionally between a pass and the next prompt silently discards
+    # that pass's verdict -- including, in the worst case, the message saying
+    # bootstrap could not run at all. Clearing an ALERT is the stated purpose;
+    # destroying an undelivered message is collateral. So it goes only with
+    # --force, and says what it is withholding otherwise.
     if [ -f "$PENDING_FILE" ]; then
-        rm -f "$PENDING_FILE"
-        echo "cleared $PENDING_FILE"
-        cleared=1
+        if [ "$FORCE" -eq 1 ]; then
+            rm -f "$PENDING_FILE"
+            echo "cleared $PENDING_FILE"
+            cleared=1
+        else
+            echo "kept $PENDING_FILE (undelivered pass output; --force to delete)"
+        fi
     fi
     if [ $cleared -eq 0 ]; then
         echo "no alerts to clear"
@@ -128,6 +140,7 @@ print_status() {
 MODE="current"
 EXPLICIT_DIR=""
 DO_CLEAR_ALERTS=""
+FORCE=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -140,6 +153,7 @@ while [ $# -gt 0 ]; do
             MODE="explicit"
             ;;
         --clear-alerts) DO_CLEAR_ALERTS=1 ;;
+        --force) FORCE=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
