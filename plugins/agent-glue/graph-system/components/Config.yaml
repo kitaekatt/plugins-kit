@@ -1,8 +1,0 @@
-kind: Config
-description: Graph-level settings. Open-shaped to admit per-graph tuning without schema churn.
-fields:
-  settings:
-    type: map
-    required: true
-    value_type:
-      type: any

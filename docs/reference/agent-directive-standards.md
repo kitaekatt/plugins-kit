@@ -185,7 +185,7 @@ weight.
 | `plugins/claude-ui-kit/scripts/install_statusline.py` | -- | The model citizen: names the settings file, names the declined-record path, mandates one question, and states that the record never blocks a later switch. |
 
 Swept and clean: `secrets-kit`, `cache-kit`, `workflow-kit`, `content-pipeline-kit`,
-`agent-glue`, `bootstrap-stuck-fix`, `prototypes`.
+`bootstrap-stuck-fix`, `prototypes`.
 
 ## Running the audit
 

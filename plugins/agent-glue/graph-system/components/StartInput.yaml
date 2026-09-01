@@ -1,6 +1,0 @@
-kind: StartInput
-description: The input passed to the graph's start node when a Fixture is replayed. Shape is whatever the start node's Topology.in contract expects; the loader does not validate the shape (the runtime does at replay time).
-fields:
-  value:
-    type: any
-    required: true

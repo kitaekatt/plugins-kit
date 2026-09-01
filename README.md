@@ -81,7 +81,8 @@ rest declare it as a dependency, so installing any of them pulls it in.
 | **skills-kit** | Authoring | Authoring/auditing skills and `CLAUDE.md` -- verb x artifact matrix (`/md-domain`). |
 | **unreal-kit** | Automation | Unreal Engine automation -- Python asset API, MCP editor control, redirector cleanup. |
 | **hue-kit** | Automation | Philips Hue layered-scene framework -- bridge sync, YAML scenes, meta-group solver. |
-| **awesome-kit** | Utility | Cross-domain skills -- communication framework, `/plugin-ecosystem`, `/html-pdf`, task tracking. |
+| **awesome-kit** | Utility | Cross-domain skills -- communication framework, `/plugin-ecosystem`, background-agent orchestration, task tracking. |
+| **pdf-kit** | Utility | Convert an HTML file to a PDF via headless Chromium (`/html-pdf`). |
 | **llm-scripting-kit** | Utility | LLM key resolution, shared model registry, and named OpenAI-compatible endpoints (OpenRouter is the default). |
 | **claude-ui-kit** | Utility | Status line with context-window and rate-limit threshold colors, plus `/statusline`. |
 | **cache-kit** | Utility | Cache-usage reporting from transcripts -- per-request and session-level hit analysis. |

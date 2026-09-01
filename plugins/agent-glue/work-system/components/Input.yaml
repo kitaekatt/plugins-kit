@@ -1,6 +1,0 @@
-kind: Input
-description: The data the worker should operate on. Shape is worker-and-request specific; the work subsystem stores it opaquely and validates only at the worker boundary.
-fields:
-  value:
-    type: any
-    required: true

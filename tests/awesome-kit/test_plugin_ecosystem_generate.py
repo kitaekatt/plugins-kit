@@ -1,7 +1,8 @@
 """Tests for the plugin-ecosystem generator's pure core (publish-flow load-bearing).
 
-generate.py is imported by file path (the test_html_pdf.py pattern) so the test
-does not depend on the plugin being on sys.path. Covered here: the minimal YAML
+generate.py is imported by file path so the test does not depend on the plugin
+being on sys.path. The same pattern is used by the pdf-kit converter tests.
+Covered here: the minimal YAML
 reader (the single parser shared by poster.yaml and SKILL.md frontmatter),
 normalize_state, the compute_state 5-level precedence, and collect_plugins'
 phantom-install filtering. HTML rendering and the browser-open path are not

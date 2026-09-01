@@ -1,6 +1,0 @@
-kind: RequestHash
-description: SHA-256 of the full canonicalized WorkRequest yaml. The cache key for the record.
-fields:
-  sha256:
-    type: string
-    required: true

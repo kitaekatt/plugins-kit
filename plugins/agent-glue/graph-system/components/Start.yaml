@@ -1,6 +1,0 @@
-kind: Start
-description: Names the entry node of a graph. The named node must exist in the graph's nodes/ directory.
-fields:
-  node:
-    type: string
-    required: true

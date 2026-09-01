@@ -1,6 +1,0 @@
-kind: TerminalNode
-description: Asserts the name of the node the replay run must end on. Used by ExpectedOutcome.
-fields:
-  node_name:
-    type: string
-    required: true

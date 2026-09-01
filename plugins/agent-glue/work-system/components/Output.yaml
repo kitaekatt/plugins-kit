@@ -1,6 +1,0 @@
-kind: Output
-description: The worker's result data, conforming to the request's OutputSchema. Mutually exclusive with the Errored component on the same WorkResult.
-fields:
-  value:
-    type: any
-    required: true

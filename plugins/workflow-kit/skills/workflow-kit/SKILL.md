@@ -28,7 +28,7 @@ domain_skill:
   identity: workflow-kit owns the authoring and running of workflow-kit workflows -- declarative .workflow.yaml plus the node-strategy infrastructure (script / openrouter executors) layered on the native Workflow tool.
   companions:
     siblings: []
-    note: No siblings within plugins-kit. agent-glue is a separate, shelved graph-orchestration kit (custom runtime), not a sibling domain.
+    note: No siblings within plugins-kit.
   scope:
     covers:
       - validating, compiling, and running a declarative .workflow.yaml via the native Workflow tool
@@ -37,7 +37,7 @@ domain_skill:
     excludes:
       - one-off Workflow scripts Claude writes directly (call the native Workflow tool itself)
       - executing workflows outside the native Workflow tool (there is no other runtime)
-      - graph / state-machine orchestration with a custom runtime (that was agent-glue; shelved)
+      - graph / state-machine orchestration with a custom runtime
   orientation:
     summary: |
       workflow-kit sits ON TOP of the native Workflow tool and never replaces its execution.

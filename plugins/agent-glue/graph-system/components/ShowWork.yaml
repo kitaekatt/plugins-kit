@@ -1,7 +1,0 @@
-kind: ShowWork
-description: Show-your-work override at graph or node scope. Graph-scope sets the default for every node; node-scope overrides for that node only.
-fields:
-  value:
-    type: enum
-    required: true
-    values: [default, always, never]

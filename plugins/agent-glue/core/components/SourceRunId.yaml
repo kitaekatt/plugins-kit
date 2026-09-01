@@ -1,6 +1,0 @@
-kind: SourceRunId
-description: Reference to the live run that produced this entity. Run identifiers are opaque strings (typically timestamp-prefixed slugs); no Run entity exists, runs are ephemeral.
-fields:
-  run_id:
-    type: string
-    required: true

@@ -1,6 +1,0 @@
-kind: Status
-description: Lifecycle status of an entity. Allowed values are entity-type specific; the schema permits any string and lets the consuming subsystem constrain it.
-fields:
-  value:
-    type: string
-    required: true

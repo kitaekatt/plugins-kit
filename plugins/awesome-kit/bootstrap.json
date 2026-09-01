@@ -1,5 +1,5 @@
 {
-  "$comment": "awesome-kit depends on plugins-kit:skills-kit for the plugin-ecosystem audit framework and skills_kit_lib, and orchestrate optionally consumes llm_scripting_kit plus bootstrap_lib for harness model definitions and presence detection. Auto-install skills-kit when missing. The html-pdf skill needs Playwright (venv) + a Chromium browser, installed by custom_bootstrap.py.",
+  "$comment": "awesome-kit depends on plugins-kit:skills-kit for the plugin-ecosystem audit framework and skills_kit_lib, and orchestrate optionally consumes llm_scripting_kit plus bootstrap_lib for harness model definitions and presence detection. Auto-install skills-kit when missing.",
   "plugins": [
     {
       "ref": "plugins-kit:skills-kit",
@@ -10,11 +10,7 @@
     }
   ],
   "venv": {
-    "check_imports": ["playwright", "pypdf", "yaml"]
+    "check_imports": ["yaml"]
   },
-  "shared_lib_imports": ["skills_kit_lib", "llm_scripting_kit", "bootstrap_lib"],
-  "script": {
-    "path": "custom_bootstrap.py",
-    "entry_point": "bootstrap"
-  }
+  "shared_lib_imports": ["skills_kit_lib", "llm_scripting_kit", "bootstrap_lib"]
 }

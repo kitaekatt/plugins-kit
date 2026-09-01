@@ -1,8 +1,0 @@
-kind: Fixtures
-description: List of fixture_ids that belong to a Cohort. Each id must match a `<fixture_id>.yaml` under the cohort's `inputs/` directory.
-fields:
-  fixture_ids:
-    type: list
-    required: true
-    items:
-      type: string

@@ -1,7 +1,0 @@
-kind: Determinism
-description: Worker-type-level cacheability behavior. `deterministic` = cacheable by default; CacheControl.determinism can override to non_deterministic per-request (inference workers). `requires_declaration` = no default; each WorkRequest must declare CacheControl.determinism or submit() raises (claude_agent, python_script).
-fields:
-  value:
-    type: enum
-    required: true
-    values: [deterministic, requires_declaration]

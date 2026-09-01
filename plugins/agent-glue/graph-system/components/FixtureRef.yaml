@@ -1,6 +1,0 @@
-kind: FixtureRef
-description: Reference from an ExpectedOutcome to the Fixture it asserts against, by fixture_id.
-fields:
-  fixture_id:
-    type: string
-    required: true

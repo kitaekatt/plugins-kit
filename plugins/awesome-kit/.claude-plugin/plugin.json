@@ -1,7 +1,7 @@
 {
   "name": "awesome-kit",
-  "version": "0.41.0",
-  "description": "Render your installed marketplaces, plugins, and skills as a clickable HTML poster; plus file-backed task tracking.",
+  "version": "0.42.0",
+  "description": "Provides plugin-ecosystem, task, orchestrate, recap, and verbose-updates skills for plugin browsing, task tracking, delegated work, response distillation, and progress communication.",
   "author": {
     "name": "Christina"
   },
@@ -20,7 +20,6 @@
     "issue-tracking",
     "verbose-updates",
     "plugin-ecosystem",
-    "html-pdf",
-    "pdf"
+    "recap"
   ]
 }

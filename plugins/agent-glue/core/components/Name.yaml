@@ -1,6 +1,0 @@
-kind: Name
-description: Human-readable identifier for the entity. Unique within its entity-type scope.
-fields:
-  name:
-    type: string
-    required: true

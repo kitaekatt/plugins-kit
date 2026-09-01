@@ -25,8 +25,7 @@ plugin precisely because of that (docs/reference/first-run-experience.md).
 
 Superseded: this check previously scoped itself to plugins that ship a
 bootstrap.json, and CLAUDE.md told plugins without one NOT to declare the
-edge. That carve-out is retired -- agent-glue, its only occupant, now
-declares the dependency like everything else.
+edge. That carve-out is retired; every plugin declares the dependency.
 
 Enforced at pre-commit (chained from scripts/pre-commit-version-check.sh),
 not only as a test: this repo's history shows suite-only invariants lose

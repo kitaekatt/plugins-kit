@@ -1,6 +1,0 @@
-kind: WorkerRef
-description: Reference to the Worker that produced a WorkRecord, by worker_type name. Used by cohort-mode lookup to choose the right per-worker recordings subdirectory.
-fields:
-  worker_type:
-    type: string
-    required: true

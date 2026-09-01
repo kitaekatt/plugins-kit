@@ -1,6 +1,0 @@
-kind: WorkerType
-description: Names a worker type. The name is the registry key used by WorkerSelection.type to select this worker.
-fields:
-  name:
-    type: string
-    required: true

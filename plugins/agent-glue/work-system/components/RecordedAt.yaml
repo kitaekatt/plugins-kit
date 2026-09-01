@@ -1,6 +1,0 @@
-kind: RecordedAt
-description: ISO-8601 timestamp marking when a WorkRecord was written to disk.
-fields:
-  timestamp:
-    type: string
-    required: true

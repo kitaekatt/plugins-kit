@@ -1,20 +1,16 @@
 {
   "name": "prototypes",
-  "version": "0.3.1",
-  "description": "Experimental skills awaiting graduation; currently /claude-explorer, an HTML browser of your Claude configuration.",
+  "version": "0.4.0",
+  "description": "Nursery for experimental skills awaiting graduation. Ships no skills at present.",
   "author": {
     "name": "Christina"
   },
   "keywords": [
     "prototypes",
     "experimental",
-    "claude-explorer",
-    "viewer",
-    "browser",
-    "omarchy"
+    "nursery"
   ],
   "dependencies": [
-    "skills-kit",
     "bootstrap"
   ]
 }

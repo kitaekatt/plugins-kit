@@ -1,7 +1,0 @@
-kind: OutputSchema
-description: JSON Schema describing the shape the worker's output must take. Authored as yaml; validated by the `jsonschema` Python package at submit time.
-fields:
-  schema:
-    type: any
-    required: true
-    description: A JSON Schema document (any valid Draft 2020-12 schema).

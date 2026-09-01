@@ -147,7 +147,7 @@ does not have opinions about my process.*
 `awesome-kit`. Multi-agent review before push; SKILL.md, CLAUDE.md, and
 project-doc auditing and authoring; durable task folders; background-agent
 delegation under a rendered routing policy; plus the smaller conveniences
-those plugins carry (recap, the poster, `/html-pdf`). This preset changes how
+those plugins carry (recap, the poster). This preset changes how
 the user is made to work -- review becomes a gate, task folders want
 committing, delegated work spends tokens without a hard ceiling -- so it is
 deliberately not the default, and it is deliberately the preset the picker
@@ -248,8 +248,8 @@ notice afterward repairs that.
 the plugin version. A posture captured in session state is not captured; it is
 re-asked, which is the failure the pattern exists to remove.
 
-**The home is `bootstrap`.** Every plugin in this marketplace but one declares a
-`bootstrap.json` and depends on bootstrap (the exception is `agent-glue`), so
+**The home is `bootstrap`.** Every plugin in this marketplace declares a
+`bootstrap.json` and depends on bootstrap, so
 bootstrap is the single layer every other plugin can rely on being present. It
 already owns exactly this job: it runs at SessionStart, provisions per-user
 config, and propagates it across the fleet. Storing the posture anywhere else

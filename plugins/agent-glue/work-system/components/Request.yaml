@@ -1,6 +1,0 @@
-kind: Request
-description: The full original WorkRequest payload captured in a WorkRecord. Stored as the canonical yaml the cache was keyed on.
-fields:
-  value:
-    type: any
-    required: true

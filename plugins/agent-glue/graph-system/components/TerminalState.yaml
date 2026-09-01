@@ -1,8 +1,0 @@
-kind: TerminalState
-description: Optional assertion target for the PipelineState at the end of a replay run. Asserts the accumulated-field values; init fields are excluded from comparison (they are inputs, not outputs).
-fields:
-  values:
-    type: map
-    required: true
-    value_type:
-      type: any

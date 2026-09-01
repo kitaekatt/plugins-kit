@@ -1,6 +1,0 @@
-kind: Result
-description: The full WorkResult payload captured in a WorkRecord. Returned verbatim on cache hit.
-fields:
-  value:
-    type: any
-    required: true

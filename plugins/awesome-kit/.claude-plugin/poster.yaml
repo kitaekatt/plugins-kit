@@ -10,6 +10,5 @@
 
 skills:
   task: "File-backed task tracking: a task owns a folder, documents reference it, and every verb names its task explicitly. Init, work, move, archive -- 13 verbs. Evolved from hand-off."
-  html-pdf: "Convert an HTML file to a PDF -- rendered by a real browser engine, so it looks right -- and pop it open."
   plugin-ecosystem: "Generates the html page you're reading right now!"
   verbose-updates: "Ideal when claude is doing a lot of work, and you aren't paying a lot of attention. Makes claude give thorough updates at end of turn."
