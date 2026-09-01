@@ -2,8 +2,9 @@
 
 The schema is deliberately job-shaped and independent of content-pipeline-kit.
 Every public operation opens its own connection. Each connection enables WAL,
-``busy_timeout`` and foreign-key enforcement. Attempts are inserts only; a
-job in a terminal state refuses every later attempt.
+``busy_timeout`` and foreign-key enforcement. Attempt seam records are inserts
+only; GC may annotate their workspace lifecycle. A job in a terminal state
+refuses every later attempt.
 """
 
 from __future__ import annotations
@@ -125,6 +126,18 @@ _MIGRATIONS: list[list[str]] = [
     [
         "ALTER TABLE jobs ADD COLUMN error_message TEXT",
     ],
+    [
+        "ALTER TABLE attempts ADD COLUMN base_ref TEXT",
+        "ALTER TABLE attempts ADD COLUMN workspace_status TEXT NOT NULL DEFAULT 'none'",
+        "ALTER TABLE attempts ADD COLUMN workspace_reason TEXT",
+        "ALTER TABLE attempts ADD COLUMN workspace_removed_at REAL",
+    ],
+    [
+        "ALTER TABLE runs ADD COLUMN workspace_base_refs_json TEXT",
+    ],
+    [
+        "ALTER TABLE attempts ADD COLUMN workspace_removal_forced INTEGER NOT NULL DEFAULT 0",
+    ],
 ]
 
 
@@ -239,6 +252,19 @@ def _row_to_attempt(row: sqlite3.Row) -> Attempt:
         usage=usage,
         response_text=row["response_text"],
         workspace=Path(workspace) if workspace is not None else None,
+        base_ref=(str(row["base_ref"]) if row["base_ref"] is not None else None),
+        workspace_status=str(row["workspace_status"] or "none"),
+        workspace_reason=(
+            str(row["workspace_reason"])
+            if row["workspace_reason"] is not None
+            else None
+        ),
+        workspace_removed_at=(
+            float(row["workspace_removed_at"])
+            if row["workspace_removed_at"] is not None
+            else None
+        ),
+        workspace_removal_forced=bool(row["workspace_removal_forced"]),
         acceptance=_acceptance_from_json(row["acceptance_json"]),
     )
 
@@ -390,6 +416,16 @@ class JobStore:
         row: sqlite3.Row, job_rows: Sequence[sqlite3.Row]
     ) -> RunRecord:
         """Convert a run row and its state rows into a public record."""
+        raw_base_refs = _load_json(row["workspace_base_refs_json"])
+        if raw_base_refs is None:
+            base_refs: Mapping[str, str] = {}
+        elif isinstance(raw_base_refs, Mapping):
+            base_refs = {
+                str(job_id): str(base_ref)
+                for job_id, base_ref in raw_base_refs.items()
+            }
+        else:
+            raise StoreError("ledger workspace base refs are not a JSON mapping")
         return RunRecord(
             id=str(row["id"]),
             created_at=float(row["created_at"]),
@@ -397,6 +433,7 @@ class JobStore:
             max_parallel=int(row["max_parallel"]),
             workspace_root=(Path(row["workspace_root"]) if row["workspace_root"] else None),
             status=_derive_run_state(job_rows),
+            workspace_base_refs=base_refs,
         )
 
     def create_run(
@@ -407,6 +444,7 @@ class JobStore:
         jobs_path: Optional[str | Path] = None,
         max_parallel: int = 1,
         workspace_root: Optional[str | Path] = None,
+        workspace_base_refs: Optional[Mapping[str, str]] = None,
         created_at: Optional[float] = None,
     ) -> RunRecord:
         """Create a run and register all job definitions in one transaction."""
@@ -424,11 +462,27 @@ class JobStore:
             if workspace_root is not None
             else None
         )
+        if workspace_base_refs is None:
+            from .workspace import capture_base_refs
+
+            base_refs = capture_base_refs(jobs)
+        else:
+            base_refs = {
+                str(job_id): str(base_ref)
+                for job_id, base_ref in workspace_base_refs.items()
+            }
         with self._writer() as conn:
             conn.execute(
-                "INSERT INTO runs(id, created_at, jobs_path, max_parallel, workspace_root) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (run_id, when, str(path) if path is not None else None, max_parallel, str(root) if root is not None else None),
+                "INSERT INTO runs(id, created_at, jobs_path, max_parallel, workspace_root, "
+                "workspace_base_refs_json) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    when,
+                    str(path) if path is not None else None,
+                    max_parallel,
+                    str(root) if root is not None else None,
+                    _json_or_none(base_refs),
+                ),
             )
             conn.executemany(
                 "INSERT INTO jobs(run_id, id, ordinal, definition_json, state, created_at, updated_at) "
@@ -461,6 +515,28 @@ class JobStore:
                 "SELECT state FROM jobs WHERE run_id = ? ORDER BY ordinal", (run_id,)
             ).fetchall()
         return self._run_record(row, jobs)
+
+    def ensure_workspace_root(
+        self, run_id: str, workspace_root: str | Path
+    ) -> RunRecord:
+        """Bind a run to one workspace root without changing an existing binding."""
+        root = Path(workspace_root).expanduser().resolve()
+        with self._writer() as conn:
+            row = self._require_run(conn, run_id)
+            existing = row["workspace_root"]
+            if existing is not None and Path(existing).expanduser().resolve() != root:
+                raise StoreError(
+                    f"run {run_id!r} already uses workspace root {existing}"
+                )
+            if existing is None:
+                conn.execute(
+                    "UPDATE runs SET workspace_root = ? WHERE id = ?",
+                    (str(root), run_id),
+                )
+        record = self.get_run(run_id)
+        if record is None:  # pragma: no cover - protected by the transaction
+            raise UnknownRunError(run_id)
+        return record
 
     def list_jobs(self, run_id: str) -> list[JobRecord]:
         """List jobs in declaration order."""
@@ -536,6 +612,42 @@ class JobStore:
             raise UnknownJobError(f"{run_id!r}/{job_id!r}")
         return _row_to_job(updated)
 
+    def mark_failed(
+        self,
+        run_id: str,
+        job_id: str,
+        reason: str,
+        *,
+        at: Optional[float] = None,
+    ) -> JobRecord:
+        """Terminalize a job failure that happened before seam invocation."""
+        when = time.time() if at is None else at
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            row = self._require_job(conn, run_id, job_id)
+            state = JobState(row["state"])
+            if state in TERMINAL_STATES:
+                raise TerminalStateError(
+                    f"{run_id!r}/{job_id!r} is already {state.value}"
+                )
+            conn.execute(
+                "UPDATE jobs SET state = ?, error_message = ?, updated_at = ? "
+                "WHERE run_id = ? AND id = ?",
+                (
+                    JobState.FAILED.value,
+                    str(reason)[:ERROR_LIMIT],
+                    when,
+                    run_id,
+                    job_id,
+                ),
+            )
+            updated = conn.execute(
+                "SELECT * FROM jobs WHERE run_id = ? AND id = ?", (run_id, job_id)
+            ).fetchone()
+        if updated is None:  # pragma: no cover - protected by the transaction
+            raise UnknownJobError(f"{run_id!r}/{job_id!r}")
+        return _row_to_job(updated)
+
     def append_attempt(
         self,
         attempt: Attempt,
@@ -585,8 +697,13 @@ class JobStore:
                     error_code, error_message, halt_kind, dropped_params_json,
                     execution_controls_applied_json, started_at, ended_at,
                     input_tokens, output_tokens, cache_hit_tokens, total_tokens,
-                    response_text, workspace, acceptance_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    response_text, workspace, base_ref, workspace_status,
+                    workspace_reason, workspace_removed_at, workspace_removal_forced,
+                    acceptance_json
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
                 """,
                 (
                     attempt.run_id,
@@ -617,6 +734,11 @@ class JobStore:
                     usage.total_tokens if usage is not None else None,
                     attempt.response_text,
                     str(attempt.workspace) if attempt.workspace is not None else None,
+                    attempt.base_ref,
+                    attempt.workspace_status,
+                    attempt.workspace_reason,
+                    attempt.workspace_removed_at,
+                    int(attempt.workspace_removal_forced),
                     _json_or_none(
                         attempt.acceptance.to_mapping()
                         if attempt.acceptance is not None
@@ -649,11 +771,115 @@ class JobStore:
                 ).fetchall()
         return [_row_to_attempt(row) for row in rows]
 
+    def record_workspace_removed(
+        self,
+        attempt_id: int,
+        *,
+        at: Optional[float] = None,
+        forced: bool = False,
+    ) -> Attempt:
+        """Annotate an attempt after its worktree was removed by GC."""
+        when = time.time() if at is None else at
+        with self._writer() as conn:
+            row = conn.execute(
+                "SELECT * FROM attempts WHERE id = ?", (attempt_id,)
+            ).fetchone()
+            if row is None:
+                raise StoreError(f"attempt does not exist: {attempt_id}")
+            if row["workspace"] is None:
+                raise StoreError(f"attempt has no workspace: {attempt_id}")
+            if row["workspace_status"] == "removed":
+                return _row_to_attempt(row)
+            if row["workspace_status"] not in {"isolated", "removing"}:
+                raise StoreError(f"attempt has no removable workspace: {attempt_id}")
+            removal_forced = bool(forced) or bool(row["workspace_removal_forced"])
+            conn.execute(
+                "UPDATE attempts SET workspace_status = ?, workspace_removed_at = ?, "
+                "workspace_removal_forced = ? "
+                "WHERE id = ?",
+                ("removed", when, int(removal_forced), attempt_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM attempts WHERE id = ?", (attempt_id,)
+            ).fetchone()
+        if updated is None:  # pragma: no cover - protected by the transaction
+            raise StoreError(f"attempt does not exist: {attempt_id}")
+        return _row_to_attempt(updated)
+
+    def mark_workspace_removing(
+        self, attempt_id: int, *, forced: bool = False
+    ) -> Attempt:
+        """Record cleanup intent, including whether a forced removal was requested."""
+        with self._writer() as conn:
+            row = conn.execute(
+                "SELECT * FROM attempts WHERE id = ?", (attempt_id,)
+            ).fetchone()
+            if row is None:
+                raise StoreError(f"attempt does not exist: {attempt_id}")
+            if row["workspace"] is None:
+                raise StoreError(f"attempt has no workspace: {attempt_id}")
+            if row["workspace_status"] == "removing":
+                if forced and not bool(row["workspace_removal_forced"]):
+                    conn.execute(
+                        "UPDATE attempts SET workspace_removal_forced = ? WHERE id = ?",
+                        (1, attempt_id),
+                    )
+                    updated = conn.execute(
+                        "SELECT * FROM attempts WHERE id = ?", (attempt_id,)
+                    ).fetchone()
+                    if updated is None:  # pragma: no cover - protected by the transaction
+                        raise StoreError(f"attempt does not exist: {attempt_id}")
+                    return _row_to_attempt(updated)
+                return _row_to_attempt(row)
+            if row["workspace_status"] != "isolated":
+                raise StoreError(f"attempt has no isolated workspace: {attempt_id}")
+            conn.execute(
+                "UPDATE attempts SET workspace_status = ?, workspace_removal_forced = ? "
+                "WHERE id = ?",
+                ("removing", int(forced), attempt_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM attempts WHERE id = ?", (attempt_id,)
+            ).fetchone()
+        if updated is None:  # pragma: no cover - protected by the transaction
+            raise StoreError(f"attempt does not exist: {attempt_id}")
+        return _row_to_attempt(updated)
+
+    def restore_workspace_isolated(self, attempt_id: int) -> Attempt:
+        """Clear cleanup intent when Git refused to remove a worktree."""
+        with self._writer() as conn:
+            row = conn.execute(
+                "SELECT * FROM attempts WHERE id = ?", (attempt_id,)
+            ).fetchone()
+            if row is None:
+                raise StoreError(f"attempt does not exist: {attempt_id}")
+            if row["workspace_status"] != "removing":
+                raise StoreError(f"attempt is not being removed: {attempt_id}")
+            conn.execute(
+                "UPDATE attempts SET workspace_status = ?, workspace_removal_forced = ? "
+                "WHERE id = ?",
+                ("isolated", 0, attempt_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM attempts WHERE id = ?", (attempt_id,)
+            ).fetchone()
+        if updated is None:  # pragma: no cover - protected by the transaction
+            raise StoreError(f"attempt does not exist: {attempt_id}")
+        return _row_to_attempt(updated)
+
     def get_attempt(self, attempt_id: int) -> Optional[Attempt]:
         """Read one attempt by its database identifier."""
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM attempts WHERE id = ?", (attempt_id,)).fetchone()
         return _row_to_attempt(row) if row is not None else None
+
+    def list_run_ids(self) -> list[str]:
+        """List run identifiers in creation order for all-run GC."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM runs ORDER BY created_at, id"
+            ).fetchall()
+        return [str(row["id"]) for row in rows]
 
     def halted_endpoints(self, run_id: str) -> frozenset[str]:
         """Return endpoints with a persistent halt recorded in this run."""

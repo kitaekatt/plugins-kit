@@ -39,6 +39,8 @@ def _attempt(run_id: str, job_id: str, directory: Path) -> Attempt:
         usage=Usage(input_tokens=4, output_tokens=6, cache_hit_tokens=0),
         response_text="done",
         workspace=directory,
+        base_ref="base-ref",
+        workspace_status="isolated",
         acceptance=Acceptance(
             command=("true",),
             directory=directory,
@@ -73,6 +75,8 @@ def test_store_round_trip_and_terminal_refusal(tmp_path: Path) -> None:
     assert snapshot.attempts[0].acceptance is not None
     assert snapshot.attempts[0].acceptance.exit_code == 0
     assert snapshot.attempts[0].acceptance.outcome == "observed"
+    assert snapshot.attempts[0].base_ref == "base-ref"
+    assert snapshot.attempts[0].workspace_status == "isolated"
 
     with pytest.raises(TerminalStateError):
         reopened.mark_running("run-1", job.id)
@@ -130,6 +134,17 @@ def test_store_migrates_the_job_error_column_from_schema_v1(tmp_path: Path) -> N
         connection.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
         connection.execute(
             """
+            CREATE TABLE runs (
+                id TEXT PRIMARY KEY,
+                created_at REAL NOT NULL,
+                jobs_path TEXT,
+                max_parallel INTEGER NOT NULL,
+                workspace_root TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE jobs (
                 run_id TEXT NOT NULL,
                 id TEXT NOT NULL,
@@ -142,6 +157,34 @@ def test_store_migrates_the_job_error_column_from_schema_v1(tmp_path: Path) -> N
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                job_id TEXT NOT NULL,
+                attempt_no INTEGER NOT NULL,
+                endpoint TEXT NOT NULL,
+                backend TEXT NOT NULL,
+                model TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error_code TEXT,
+                error_message TEXT,
+                halt_kind TEXT,
+                dropped_params_json TEXT,
+                execution_controls_applied_json TEXT,
+                started_at TEXT,
+                ended_at TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_hit_tokens INTEGER,
+                total_tokens INTEGER,
+                response_text TEXT,
+                workspace TEXT,
+                acceptance_json TEXT
+            )
+            """
+        )
         connection.execute("INSERT INTO schema_version(version) VALUES (1)")
 
     JobStore(db_path, create=False)
@@ -151,7 +194,18 @@ def test_store_migrates_the_job_error_column_from_schema_v1(tmp_path: Path) -> N
             row[1]
             for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
         }
+        attempt_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(attempts)").fetchall()
+        }
     assert "error_message" in columns
+    assert {
+        "base_ref",
+        "workspace_status",
+        "workspace_reason",
+        "workspace_removed_at",
+        "workspace_removal_forced",
+    } <= attempt_columns
 
 
 def test_store_connection_posture_is_applied_per_connection(tmp_path: Path) -> None:

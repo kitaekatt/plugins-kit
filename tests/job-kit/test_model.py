@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from job_kit.model import Acceptance, load_job_file
+from job_kit.model import Acceptance, WorkspaceSpec, load_job_file
 
 
 def test_load_job_file_resolves_relative_job_paths(tmp_path: Path) -> None:
@@ -36,6 +36,24 @@ def test_load_job_file_resolves_relative_job_paths(tmp_path: Path) -> None:
     assert job.requirements == {"params": ["cwd"]}
     assert job.directory == (tmp_path / "workspace").resolve()
     assert job.contract.directory is None
+
+
+def test_workspace_isolate_option_defaults_true_and_round_trips_false(
+    tmp_path: Path,
+) -> None:
+    """The job-file workspace opt-out is a durable boolean setting."""
+    default = WorkspaceSpec.from_value({"directory": "."}, base_dir=tmp_path)
+    declined = WorkspaceSpec.from_value(
+        {"directory": ".", "isolate": False}, base_dir=tmp_path
+    )
+
+    assert default is not None
+    assert default.isolate is True
+    assert declined is not None
+    assert declined.isolate is False
+    assert declined.to_mapping()["isolate"] is False
+    with pytest.raises(ValueError, match="workspace isolate"):
+        WorkspaceSpec.from_value({"isolate": "false"})
 
 
 def test_acceptance_outcome_is_validated_and_accepted_comes_from_exit_code(

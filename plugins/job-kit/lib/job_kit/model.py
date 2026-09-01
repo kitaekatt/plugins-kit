@@ -14,10 +14,14 @@ The package consumes a small YAML document with one flat list of jobs::
         contract:
           command: [python, -m, pytest, tests/lint]
 
-The job's directory is the contract working directory. The
-workspace field is recorded as input for later isolation work; no worktree is
-created by this package. A contract accepts only when its command exits with
-code zero.
+The job's directory is the declared working directory. Git repositories use
+that directory as the starting point for per-attempt isolation. A contract
+accepts only when its command exits with code zero.
+
+The optional ``workspace`` mapping accepts ``directory``, ``base_ref`` and
+``isolate``. ``base_ref`` defaults to the repository HEAD captured at run
+start. Isolation defaults to true; set ``isolate: false`` when a job must run
+in its declared directory.
 
 Usage is nullable because a transport can complete without exposing token
 counts. Unknown usage is represented by ``None`` rather than zero.
@@ -154,13 +158,22 @@ class Contract:
 
 @dataclass(frozen=True)
 class WorkspaceSpec:
-    """A declared workspace location; this package creates no isolation."""
+    """Declared workspace inputs used by the runner's isolation policy."""
 
     directory: Optional[Path] = None
+    base_ref: Optional[str] = None
+    isolate: bool = True
 
     def __post_init__(self) -> None:
         if self.directory is not None:
             object.__setattr__(self, "directory", Path(self.directory).expanduser().resolve())
+        if self.base_ref is not None:
+            base_ref = str(self.base_ref).strip()
+            if not base_ref:
+                raise ValueError("workspace base_ref must not be empty")
+            object.__setattr__(self, "base_ref", base_ref)
+        if not isinstance(self.isolate, bool):
+            raise ValueError("workspace isolate must be a boolean")
 
     @classmethod
     def from_value(
@@ -173,7 +186,16 @@ class WorkspaceSpec:
             directory = _resolve_directory(
                 value.get("directory", value.get("path", value.get("cwd"))), base_dir
             )
-            return cls(directory=directory)
+            base_ref_value = value.get("base_ref")
+            base_ref = (
+                str(base_ref_value).strip()
+                if base_ref_value is not None
+                else None
+            )
+            isolate = value.get("isolate", True)
+            if not isinstance(isolate, bool):
+                raise ValueError("workspace isolate must be a boolean")
+            return cls(directory=directory, base_ref=base_ref, isolate=isolate)
         return cls(directory=_resolve_directory(value, base_dir))
 
     def to_mapping(self) -> dict[str, object]:
@@ -181,6 +203,9 @@ class WorkspaceSpec:
         result: dict[str, object] = {}
         if self.directory is not None:
             result["directory"] = str(self.directory)
+        if self.base_ref is not None:
+            result["base_ref"] = self.base_ref
+        result["isolate"] = self.isolate
         return result
 
 
@@ -514,6 +539,11 @@ class Attempt:
     workspace: Optional[Path] = None
     acceptance: Optional[Acceptance] = None
     id: Optional[int] = None
+    base_ref: Optional[str] = None
+    workspace_status: str = "none"
+    workspace_reason: Optional[str] = None
+    workspace_removed_at: Optional[float] = None
+    workspace_removal_forced: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "dropped_params", _optional_tuple(self.dropped_params))
@@ -524,6 +554,18 @@ class Attempt:
         )
         if self.workspace is not None:
             object.__setattr__(self, "workspace", Path(self.workspace).expanduser().resolve())
+        status = str(self.workspace_status)
+        if status not in {"isolated", "none", "removing", "removed"}:
+            raise ValueError(
+                "workspace_status must be one of: isolated, none, removing, removed"
+            )
+        object.__setattr__(self, "workspace_status", status)
+        if self.base_ref is not None:
+            object.__setattr__(self, "base_ref", str(self.base_ref))
+        if self.workspace_reason is not None:
+            object.__setattr__(self, "workspace_reason", str(self.workspace_reason))
+        if not isinstance(self.workspace_removal_forced, bool):
+            raise ValueError("workspace_removal_forced must be a boolean")
 
     @property
     def error_code(self) -> Optional[str]:
@@ -558,6 +600,11 @@ class Attempt:
             "usage": self.usage.to_mapping() if self.usage is not None else None,
             "response_text": self.response_text,
             "workspace": str(self.workspace) if self.workspace is not None else None,
+            "base_ref": self.base_ref,
+            "workspace_status": self.workspace_status,
+            "workspace_reason": self.workspace_reason,
+            "workspace_removed_at": self.workspace_removed_at,
+            "workspace_removal_forced": self.workspace_removal_forced,
             "acceptance": self.acceptance.to_mapping() if self.acceptance is not None else None,
         }
         if self.id is not None:
@@ -612,6 +659,7 @@ class RunRecord:
     max_parallel: int
     workspace_root: Optional[Path]
     status: RunState = RunState.PENDING
+    workspace_base_refs: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.jobs_path is not None:
@@ -622,6 +670,17 @@ class RunRecord:
             )
         if not isinstance(self.status, RunState):
             object.__setattr__(self, "status", RunState(str(self.status)))
+        if isinstance(self.workspace_base_refs, Mapping):
+            object.__setattr__(
+                self,
+                "workspace_base_refs",
+                {
+                    str(job_id): str(base_ref)
+                    for job_id, base_ref in self.workspace_base_refs.items()
+                },
+            )
+        else:
+            raise ValueError("workspace_base_refs must be a mapping")
 
     def to_mapping(self) -> dict[str, object]:
         """Return a JSON-compatible run mapping."""
@@ -632,6 +691,7 @@ class RunRecord:
             "max_parallel": self.max_parallel,
             "workspace_root": str(self.workspace_root) if self.workspace_root is not None else None,
             "status": self.status.value,
+            "workspace_base_refs": dict(self.workspace_base_refs),
         }
 
 

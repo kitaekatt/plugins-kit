@@ -1,4 +1,9 @@
 {
+  "tools": [
+    {
+      "name": "git"
+    }
+  ],
   "plugins": [
     {
       "ref": "plugins-kit:llm-scripting-kit",

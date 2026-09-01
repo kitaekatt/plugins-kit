@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import time
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
@@ -37,7 +38,8 @@ from .model import (
     load_job_file,
 )
 from .select import SelectionError, select_endpoint
-from .store import JobStore, UnknownRunError
+from .store import JobStore, StoreError, UnknownRunError
+from .workspace import WorkspaceError, WorkspaceManager, WorkspaceResolution
 
 
 DEFAULT_TIMEOUT_S = 900.0
@@ -69,7 +71,7 @@ def default_store_path(project_root: Optional[str | Path] = None) -> Path:
 
 def default_workspace_root(run_id: str) -> Path:
     """Return the plugin data location reserved for workspace isolation."""
-    return (
+    root = (
         Path.home()
         / ".claude"
         / "plugins"
@@ -77,8 +79,15 @@ def default_workspace_root(run_id: str) -> Path:
         / "plugins-kit"
         / "job-kit"
         / "workspaces"
-        / run_id
-    )
+    ).resolve()
+    if not run_id.strip():
+        raise ValueError("run_id must not be empty")
+    candidate = (root / run_id).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("run_id must stay within the workspace data directory") from exc
+    return candidate
 
 
 def _output_text(value: object) -> str:
@@ -152,7 +161,7 @@ def _attempt_number(store: JobStore, run_id: str, job_id: str) -> int:
     return len(store.list_attempts(run_id, job_id)) + 1
 
 
-def _halt_for_exception(backend: object, exc: Exception) -> Optional[str]:
+def _halt_for_exception(backend: object, exc: BaseException) -> Optional[str]:
     """Classify a typed transport failure without inspecting its text."""
     if isinstance(exc, HaltError):
         return exc.kind
@@ -183,7 +192,8 @@ def _exception_attempt(
     attempt_no: int,
     started_at: str,
     ended_at: str,
-    exc: Exception,
+    exc: BaseException,
+    workspace: WorkspaceResolution,
 ) -> tuple[Attempt, JobState]:
     """Build the durable attempt record for a raised seam exception."""
     halt_kind = _halt_for_exception(selection.backend, exc)
@@ -193,7 +203,11 @@ def _exception_attempt(
         if capabilities is not None
         else None
     )
-    message = exc.detail if isinstance(exc, HaltError) else str(exc)
+    message = (
+        exc.detail
+        if isinstance(exc, HaltError)
+        else str(exc) or exc.__class__.__name__
+    )
     attempt = Attempt(
         run_id=run_id,
         job_id=job.id,
@@ -210,7 +224,10 @@ def _exception_attempt(
         execution_controls_applied=None,
         usage=None,
         response_text="",
-        workspace=None,
+        workspace=workspace.path,
+        base_ref=workspace.base_ref,
+        workspace_status=workspace.status,
+        workspace_reason=workspace.reason,
         acceptance=None,
     )
     return attempt, JobState.HALTED if halt_kind is not None else JobState.FAILED
@@ -223,6 +240,7 @@ def _response_attempt(
     selection: BackendSelection,
     attempt_no: int,
     response: object,
+    workspace: WorkspaceResolution,
 ) -> tuple[Attempt, Optional[JobState]]:
     """Copy the truthful fields from one successful seam return."""
     response_error_value = getattr(response, "error", None)
@@ -256,7 +274,10 @@ def _response_attempt(
         execution_controls_applied=controls,
         usage=Usage.from_response(response),
         response_text=str(getattr(response, "text", "")),
-        workspace=None,
+        workspace=workspace.path,
+        base_ref=workspace.base_ref,
+        workspace_status=workspace.status,
+        workspace_reason=workspace.reason,
         acceptance=None,
     )
     if status != COMPLETED:
@@ -273,6 +294,8 @@ def run_job(
     timeout_s: float = DEFAULT_TIMEOUT_S,
     capabilities_provider: Optional[CapabilitiesProvider] = None,
     backend_factory: Optional[BackendFactory] = None,
+    workspace_root: Optional[str | Path] = None,
+    workspace_manager: Optional[WorkspaceManager] = None,
 ) -> Attempt:
     """Execute one non-terminal job with exactly one seam invocation."""
     if timeout_s <= 0:
@@ -288,14 +311,51 @@ def run_job(
         project_root=str(job.declared_directory),
     )
     store.mark_running(run_id, job.id)
+    attempt_no = _attempt_number(store, run_id, job.id)
+    manager = workspace_manager
+    if manager is None:
+        run_record = store.get_run(run_id)
+        root = (
+            Path(workspace_root).expanduser().resolve()
+            if workspace_root is not None
+            else (
+                run_record.workspace_root
+                if run_record is not None and run_record.workspace_root is not None
+                else default_workspace_root(run_id)
+            )
+        )
+        base_refs = (
+            run_record.workspace_base_refs
+            if run_record is not None
+            else {}
+        )
+        try:
+            store.ensure_workspace_root(run_id, root)
+        except StoreError as exc:
+            store.mark_failed(run_id, job.id, str(exc))
+            raise
+        manager = WorkspaceManager(root, (job,), base_refs=base_refs)
+    try:
+        workspace = manager.prepare(job, attempt_no)
+    except WorkspaceError as exc:
+        store.mark_failed(run_id, job.id, str(exc))
+        raise
+    except (KeyboardInterrupt, SystemExit) as exc:
+        reason = str(exc) or exc.__class__.__name__
+        store.mark_failed(run_id, job.id, reason)
+        raise
+    working_directory = (
+        workspace.working_directory
+        if workspace.path is not None
+        else job.declared_directory
+    )
     options = BackendOptions(
         timeout_s=float(timeout_s),
-        cwd=job.declared_directory,
+        cwd=working_directory,
         effort=selection.effort,
         log_prefix=f"[job:{job.id}]",
     )
     capabilities = _capabilities_for(selection, advertised)
-    attempt_no = _attempt_number(store, run_id, job.id)
     started_at = utc_now_iso()
     try:
         response = selection.backend.complete(
@@ -315,31 +375,102 @@ def run_job(
             started_at=started_at,
             ended_at=utc_now_iso(),
             exc=exc,
+            workspace=workspace,
         )
         return store.append_attempt(attempt, terminal_state=terminal_state)
+    except (KeyboardInterrupt, SystemExit) as exc:
+        attempt, terminal_state = _exception_attempt(
+            run_id=run_id,
+            job=job,
+            selection=selection,
+            options=options,
+            capabilities=capabilities,
+            attempt_no=attempt_no,
+            started_at=started_at,
+            ended_at=utc_now_iso(),
+            exc=exc,
+            workspace=workspace,
+        )
+        store.append_attempt(attempt, terminal_state=terminal_state)
+        raise
 
-    attempt, terminal_state = _response_attempt(
-        run_id=run_id,
-        job=job,
-        selection=selection,
-        attempt_no=attempt_no,
-        response=response,
-    )
+    try:
+        attempt, terminal_state = _response_attempt(
+            run_id=run_id,
+            job=job,
+            selection=selection,
+            attempt_no=attempt_no,
+            response=response,
+            workspace=workspace,
+        )
+    except (KeyboardInterrupt, SystemExit) as exc:
+        interrupted_attempt, _ = _exception_attempt(
+            run_id=run_id,
+            job=job,
+            selection=selection,
+            options=options,
+            capabilities=capabilities,
+            attempt_no=attempt_no,
+            started_at=started_at,
+            ended_at=utc_now_iso(),
+            exc=exc,
+            workspace=workspace,
+        )
+        interrupted_attempt = replace(
+            interrupted_attempt,
+            error=AttemptError(
+                code="response_interrupted",
+                message=str(exc) or exc.__class__.__name__,
+            ),
+        )
+        store.append_attempt(interrupted_attempt, terminal_state=JobState.FAILED)
+        raise
     if terminal_state is not None:
         return store.append_attempt(attempt, terminal_state=terminal_state)
 
-    acceptance = run_contract(
-        job.contract,
-        directory=job.declared_directory,
-        timeout_s=timeout_s,
-    )
-    attempt = replace_attempt_acceptance(attempt, acceptance)
-    if acceptance.outcome == "not_run":
-        terminal_state = JobState.FAILED
-    elif acceptance.accepted:
-        terminal_state = JobState.ACCEPTED
-    else:
-        terminal_state = JobState.REJECTED
+    try:
+        acceptance = run_contract(
+            job.contract,
+            directory=working_directory,
+            timeout_s=timeout_s,
+        )
+    except (KeyboardInterrupt, SystemExit) as exc:
+        interrupted_attempt = replace(
+            attempt,
+            error=AttemptError(
+                code="contract_interrupted",
+                message=str(exc) or exc.__class__.__name__,
+            ),
+        )
+        store.append_attempt(interrupted_attempt, terminal_state=JobState.FAILED)
+        raise
+    except Exception as exc:
+        failed_attempt = replace(
+            attempt,
+            error=AttemptError(
+                code="contract",
+                message=str(exc) or exc.__class__.__name__,
+            ),
+        )
+        return store.append_attempt(failed_attempt, terminal_state=JobState.FAILED)
+    try:
+        attempt = replace_attempt_acceptance(attempt, acceptance)
+        if acceptance.outcome == "not_run":
+            terminal_state = JobState.FAILED
+        elif acceptance.accepted:
+            terminal_state = JobState.ACCEPTED
+        else:
+            terminal_state = JobState.REJECTED
+    except (KeyboardInterrupt, SystemExit) as exc:
+        interrupted_attempt = replace(
+            attempt,
+            error=AttemptError(
+                code="acceptance_interrupted",
+                message=str(exc) or exc.__class__.__name__,
+            ),
+        )
+        store.append_attempt(interrupted_attempt, terminal_state=JobState.FAILED)
+        raise
     return store.append_attempt(attempt, terminal_state=terminal_state)
 
 
@@ -362,6 +493,11 @@ def replace_attempt_acceptance(attempt: Attempt, acceptance: Acceptance) -> Atte
         usage=attempt.usage,
         response_text=attempt.response_text,
         workspace=attempt.workspace,
+        base_ref=attempt.base_ref,
+        workspace_status=attempt.workspace_status,
+        workspace_reason=attempt.workspace_reason,
+        workspace_removed_at=attempt.workspace_removed_at,
+        workspace_removal_forced=attempt.workspace_removal_forced,
         acceptance=acceptance,
         id=attempt.id,
     )
@@ -376,12 +512,30 @@ def _run_pending(
     store: JobStore,
     run_id: str,
     *,
+    workspace_root: Optional[str | Path],
     timeout_s: float,
     capabilities_provider: Optional[CapabilitiesProvider],
     backend_factory: Optional[BackendFactory],
+    workspace_manager: Optional[WorkspaceManager] = None,
 ) -> RunSnapshot:
     """Process pending and interrupted jobs in declaration order."""
-    for record in store.list_jobs(run_id):
+    records = store.list_jobs(run_id)
+    root = (
+        Path(workspace_root).expanduser().resolve()
+        if workspace_root is not None
+        else default_workspace_root(run_id)
+    )
+    store.ensure_workspace_root(run_id, root)
+    manager = workspace_manager
+    if manager is None:
+        run_record = store.get_run(run_id)
+        base_refs = run_record.workspace_base_refs if run_record is not None else {}
+        manager = WorkspaceManager(
+            root,
+            tuple(record.job for record in records if not record.terminal),
+            base_refs=base_refs,
+        )
+    for record in records:
         if record.terminal:
             continue
         try:
@@ -393,9 +547,13 @@ def _run_pending(
                 timeout_s=timeout_s,
                 capabilities_provider=capabilities_provider,
                 backend_factory=backend_factory,
+                workspace_root=root,
+                workspace_manager=manager,
             )
         except SelectionError as exc:
             store.mark_unroutable(run_id, record.job.id, str(exc))
+        except WorkspaceError:
+            continue
     return store.snapshot(run_id)
 
 
@@ -414,20 +572,29 @@ def run_jobs(
     """Create and execute a flat sequential run of jobs."""
     store_object = _store_object(store)
     identifier = run_id or uuid.uuid4().hex
-    root = workspace_root or default_workspace_root(identifier)
+    root = (
+        Path(workspace_root).expanduser().resolve()
+        if workspace_root is not None
+        else default_workspace_root(identifier)
+    )
+    job_values = tuple(jobs)
+    workspace_manager = WorkspaceManager(root, job_values)
     store_object.create_run(
         identifier,
-        tuple(jobs),
+        job_values,
         jobs_path=jobs_path,
         max_parallel=max_parallel,
         workspace_root=root,
+        workspace_base_refs=workspace_manager.base_refs,
     )
     return _run_pending(
         store_object,
         identifier,
+        workspace_root=root,
         timeout_s=timeout_s,
         capabilities_provider=capabilities_provider,
         backend_factory=backend_factory,
+        workspace_manager=workspace_manager,
     )
 
 
@@ -465,11 +632,14 @@ def resume_run(
 ) -> RunSnapshot:
     """Reopen a ledger and execute its non-terminal jobs."""
     store_object = _store_object(store)
-    if store_object.get_run(run_id) is None:
+    run = store_object.get_run(run_id)
+    if run is None:
         raise UnknownRunError(run_id)
+    root = run.workspace_root or default_workspace_root(run_id)
     return _run_pending(
         store_object,
         run_id,
+        workspace_root=root,
         timeout_s=timeout_s,
         capabilities_provider=capabilities_provider,
         backend_factory=backend_factory,

@@ -1,4 +1,4 @@
-"""Command-line entry point for job-kit run, status and resume."""
+"""Command-line entry point for job-kit run, status, resume and gc."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ EXIT_USAGE = 2
 EXIT_RUNNER_FAILURE = 3
 
 _EXIT_EPILOG = """Exit codes:
-  0 -- every job accepted (or the verb succeeded)
+  0 -- every job accepted, or the verb succeeded (GC refusals are reported)
   1 -- the verb ran but a job was not accepted (rejected / failed / halted / unroutable)
   2 -- usage error (argparse exits with this code)
   3 -- the runner itself failed (unreadable jobs file, missing store, or unexpected exception)
@@ -53,6 +53,12 @@ def _parser() -> argparse.ArgumentParser:
     resume.add_argument("run")
     resume.add_argument("--store", type=Path)
     resume.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S)
+
+    gc = subcommands.add_parser("gc", help="reclaim eligible attempt worktrees")
+    gc.add_argument("run", nargs="?")
+    gc.add_argument("--store", type=Path)
+    gc.add_argument("--accepted-only", action="store_true")
+    gc.add_argument("--force", action="store_true")
     return parser
 
 
@@ -111,12 +117,29 @@ def _resume(args: argparse.Namespace) -> int:
     return _exit_for_snapshot(snapshot)
 
 
+def _gc(args: argparse.Namespace) -> int:
+    """Handle the conservative workspace garbage collector."""
+    from .workspace import gc_workspaces
+
+    store_path = _store_path(args.store)
+    report = gc_workspaces(
+        JobStore(store_path, create=False),
+        args.run,
+        accepted_only=args.accepted_only,
+        force=args.force,
+    )
+    payload = report.to_mapping()
+    payload["store"] = str(store_path)
+    print(json.dumps(payload, sort_keys=True))
+    return EXIT_OK
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run the CLI and return its documented exit status.
 
-    Returns 0 when every job is accepted or a read-only verb succeeds, 1 when
-    a job is rejected, failed, halted, or unroutable, and 3 when the runner
-    itself fails. Argparse exits with 2 for usage errors.
+    Returns 0 when every job is accepted or a verb succeeds, 1 when a run job
+    is rejected, failed, halted, or unroutable, and 3 when the runner itself
+    fails. Argparse exits with 2 for usage errors.
     """
     parser = _parser()
     args = parser.parse_args(argv)
@@ -127,6 +150,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return _status(args)
         if args.command == "resume":
             return _resume(args)
+        if args.command == "gc":
+            return _gc(args)
     except Exception as exc:
         print(f"job-kit: {exc}", file=sys.stderr)
         return EXIT_RUNNER_FAILURE

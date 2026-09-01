@@ -48,6 +48,23 @@ from .store import (
     UnknownJobError,
     UnknownRunError,
 )
+from .workspace import (
+    WORKSPACE_REASON_DECLINED,
+    WORKSPACE_REASON_NONE,
+    WORKSPACE_STATUSES,
+    WorkspaceCreationError,
+    WorkspaceDetectionError,
+    WorkspaceError,
+    WorkspaceGCEntry,
+    WorkspaceGCReport,
+    WorkspaceManager,
+    WorkspaceResolution,
+    create_worktree,
+    detect_repo_root,
+    gc_workspaces,
+    prepare_workspace,
+    resolve_base_ref,
+)
 
 __all__ = [
     "Acceptance",
@@ -90,4 +107,19 @@ __all__ = [
     "TerminalStateError",
     "UnknownJobError",
     "UnknownRunError",
+    "WORKSPACE_REASON_NONE",
+    "WORKSPACE_REASON_DECLINED",
+    "WORKSPACE_STATUSES",
+    "WorkspaceCreationError",
+    "WorkspaceDetectionError",
+    "WorkspaceError",
+    "WorkspaceGCEntry",
+    "WorkspaceGCReport",
+    "WorkspaceManager",
+    "WorkspaceResolution",
+    "create_worktree",
+    "detect_repo_root",
+    "gc_workspaces",
+    "prepare_workspace",
+    "resolve_base_ref",
 ]
