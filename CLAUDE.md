@@ -493,8 +493,11 @@ claude_md:
       - dependency management posture across plugins
       - how to install or update plugin dependencies
       - bootstrap engine / hook invocation
+      - cross-plugin observations no single plugin owns -- a cohesion opportunity
+        spanning two plugins, or a refuted proposal to couple them
     excludes:
-      - per-plugin internals (covered by per-plugin CLAUDE.md / bootstrap.json)
+      - per-plugin internals confined to ONE plugin (covered by per-plugin
+        CLAUDE.md / bootstrap.json)
   insights:
     - id: bootstrap_json_for_deps
       keywords: [bootstrap.json, plugin dependencies, venv, pyyaml, uv, no manual install, dependency manifest]
@@ -666,6 +669,39 @@ claude_md:
         re-investigate a code-review domain; the answer is "surface, don't merge."
       origin: Surfaced 2026-05-31 during the cohesion refactor -- after W2-proper, an Explore feasibility sweep found the shared lib already exists; user ruled cross-plugin relocation/new-plugin out of bounds for cohesion work.
       added: "2026-05-31"
+    - id: orchestrate_yaml_capabilities_are_not_a_duplicate
+      keywords: [orchestration.yaml, capabilities block, codex capabilities, adapter advertisement, CODEX_CAPABILITIES, guidance-migration, retire the yaml block, duplicate source of truth, xhigh, CODEX_EFFORT_MENU, display contract, direct dispatch vs completion seam, do not build, refuted]
+      summary: orchestration.yaml's per-backend `capabilities:` block is NOT a stale copy of llm-scripting-kit's adapter advertisement -- they describe different code paths answering to different validators. Deriving the rendered codex effort menu from the advertisement would ERASE xhigh. Do not re-propose retiring the block.
+      detail: |
+        The two look like one fact stated twice and are not. orchestration.yaml describes a
+        `codex exec` command the ORCHESTRATOR types and runs itself, rendered through
+        CodexAdapter.build_argv; CODEX_CAPABILITIES describes what CodexCliBackend emits
+        through the COMPLETION SEAM. They are siblings converging only at
+        bootstrap_lib.codex.build_codex_exec_argv -- which is already the single source of the
+        argv spellings, so the genuine duplication is already deduplicated. Most of the YAML
+        block is not capability fact at all (unrestricted reads outside -C, silent HTTP-000
+        egress, the TUI dying when backgrounded, worktree advice, judging by the -o file);
+        references/codex-dispatch.md owns those.
+        THE CONCRETE DAMAGE, which is why this is an insight and not a preference: the YAML
+        asserts the effort menu low|medium|high|xhigh|max and the advertisement deliberately
+        carries NO `values` for codex effort. Not a contradiction -- CodexAdapter owns and
+        VALIDATES that menu (CODEX_EFFORT_MENU, harness_adapters.py, whose comment says the
+        accepted menu is a runtime contract rather than a transcription of one version's help
+        text), while CodexCliBackend BYPASSES that validator, which is exactly why its
+        advertisement advertises no menu. Deriving the rendered menu from the advertisement
+        deletes xhigh, a value verified against a live run and carrying an explicit
+        do-not-remove warning in two places.
+        Also load-bearing: backend capabilities in orchestration.yaml are USER-OVERRIDABLE
+        CONFIGURATION, so removing the seam must pass the plugin-opinion razor, and
+        plugins/CLAUDE.md bars relocating ownership across a plugin boundary to remove apparent
+        duplication. Separately, there is NO capability fallback -- deleting the block and
+        having discovery fail would silently drop the safety summary.
+        If the idea is ever revisited, it is a NEW design (a harness-owned display/dispatch
+        contract distinct from CODEX_CAPABILITIES, with explicit fallback and precedence rules),
+        not a retirement of a duplicate. A drift TEST across the boundary is the cheap
+        alternative worth evaluating first.
+      origin: "2026-09-01 -- the guidance-migration item of the llm-invoke task was investigated (codex/sol, adversarial brief) and returned DO-NOT-BUILD; the decisive claims were re-verified by hand against harness_adapters.py and adapter_capabilities.py. No code changed."
+      added: "2026-09-01"
     - id: never_hand_repair_a_wedge
       keywords: [hand repair, manual fix, wedged machine, not cached, snapshot first, evidence destroyed, converges nobody, console not read-only, anti-pattern, ship the repair, diagnostic of last resort]
       summary: Never unwedge a machine by hand. A wedge is a specification for a repair that ships -- hand-fixing it converges nobody and destroys the only evidence of the defect. Snapshot the state first, then write the repair into bootstrap or bootstrap-stuck-fix.
