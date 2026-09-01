@@ -121,6 +121,7 @@ def test_cache_roundtrips_truthfulness_fields_without_live_timestamps(
         status="error",
         error={"code": "example", "message": "details"},
         dropped_params=("temperature", "max_tokens"),
+        forwarded_params=("extras.top_k",),
         execution_controls_applied=("allowed-tools",),
         structured={"answer": "hello"},
         started_at="2026-09-01T12:00:00Z",
@@ -132,6 +133,7 @@ def test_cache_roundtrips_truthfulness_fields_without_live_timestamps(
     assert payload["status"] == "error"
     assert payload["error"] == {"code": "example", "message": "details"}
     assert payload["dropped_params"] == ["temperature", "max_tokens"]
+    assert payload["forwarded_params"] == ["extras.top_k"]
     assert payload["execution_controls_applied"] == ["allowed-tools"]
     assert payload["structured"] == {"answer": "hello"}
     assert payload["started_at"] == "2026-09-01T12:00:00Z"
@@ -142,6 +144,7 @@ def test_cache_roundtrips_truthfulness_fields_without_live_timestamps(
     assert got.status == "error"
     assert got.error == {"code": "example", "message": "details"}
     assert got.dropped_params == ("temperature", "max_tokens")
+    assert got.forwarded_params == ("extras.top_k",)
     assert got.execution_controls_applied == ("allowed-tools",)
     assert got.structured == {"answer": "hello"}
     assert got.started_at is None

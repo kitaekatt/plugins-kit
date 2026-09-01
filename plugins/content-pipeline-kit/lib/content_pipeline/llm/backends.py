@@ -197,6 +197,7 @@ def _from_completion_response(resp: Any) -> LLMResponse:
         # `error.code` working live and breaking on a cached response.
         error=_error_to_data(getattr(resp, "error", None)),
         dropped_params=getattr(resp, "dropped_params", ()),
+        forwarded_params=getattr(resp, "forwarded_params", ()),
         execution_controls_applied=getattr(resp, "execution_controls_applied", ()),
         structured=getattr(resp, "structured", None),
         started_at=getattr(resp, "started_at", None),

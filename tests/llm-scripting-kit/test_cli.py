@@ -94,6 +94,28 @@ def test_complete_failure_envelope_does_not_lie_about_a_call_that_ran(
     # so the key is ABSENT rather than an empty list asserting "none emitted"
     assert "execution_controls_applied" not in resp
     assert "structured" not in resp
+    # dropped/forwarded do NOT depend on the outcome -- whether the adapter
+    # reads or validates a param is a property of the adapter, not the result
+    assert resp["dropped_params"] == []
+    assert resp["forwarded_params"] == []
+
+
+def test_complete_envelope_carries_forwarded_params(monkeypatch, capsys):
+    """A param sent downstream unvalidated is reported apart from the dropped."""
+    backend = FakeBackend(
+        LLMResponse(
+            text="answer",
+            model="model-id",
+            dropped_params=("extras.alpha",),
+            forwarded_params=("extras.top_k",),
+        )
+    )
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
+
+    assert cli.main(["complete", "--prompt", "hello"]) == cli.EXIT_OK
+    resp = json.loads(capsys.readouterr().out)["response"]
+    assert resp["dropped_params"] == ["extras.alpha"]
+    assert resp["forwarded_params"] == ["extras.top_k"]
 
 
 def test_complete_timeout_is_a_result_not_a_traceback(monkeypatch, capsys):

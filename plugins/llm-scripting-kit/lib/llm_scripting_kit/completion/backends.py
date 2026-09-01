@@ -44,7 +44,12 @@ from .claude_runner import (
 )
 from .adapter_capabilities import CLAUDE_CAPABILITIES, OPENROUTER_CAPABILITIES
 from .capabilities import Capabilities
-from .results import check_applied_controls, derive_dropped_params, utc_now_iso
+from .results import (
+    check_applied_controls,
+    derive_dropped_params,
+    derive_forwarded_params,
+    utc_now_iso,
+)
 from .types import BackendOptions, LLMResponse
 
 
@@ -182,6 +187,11 @@ class OpenRouterBackend:
             # rides as TOP-LEVEL request parameters (``reasoning_effort`` is the
             # motivating case). Omitted entirely when empty, so the request
             # shape for existing callers is byte-identical.
+            #
+            # Nothing here validates a key, which is why every one of them is
+            # reported in ``forwarded_params`` rather than ``dropped_params``:
+            # the key really is sent, and the only claim this adapter makes is
+            # that it did not check it.
             create_kwargs["extra_body"] = dict(opts.extras)
 
         started_at = utc_now_iso()
@@ -226,6 +236,7 @@ class OpenRouterBackend:
             attempts=1,
             from_cache=False,
             dropped_params=derive_dropped_params(self.capabilities, opts),
+            forwarded_params=derive_forwarded_params(self.capabilities, opts),
             # This adapter emits no execution control: it builds an HTTP request,
             # which has no sandbox, tool or permission surface to constrain.
             execution_controls_applied=(),
@@ -452,6 +463,7 @@ class ClaudeCliBackend:
             attempts=attempts_made,
             from_cache=False,
             dropped_params=derive_dropped_params(self.capabilities, opts),
+            forwarded_params=derive_forwarded_params(self.capabilities, opts),
             execution_controls_applied=self._applied_controls(),
             started_at=started_at,
             ended_at=utc_now_iso(),

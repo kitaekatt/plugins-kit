@@ -43,7 +43,12 @@ from . import halt
 from .claude_runner import AgentTimeoutError, run_cli_streaming
 from .adapter_capabilities import OPENCODE_CAPABILITIES
 from .capabilities import Capabilities
-from .results import derive_dropped_params, fixed_control_ids, utc_now_iso
+from .results import (
+    derive_dropped_params,
+    derive_forwarded_params,
+    fixed_control_ids,
+    utc_now_iso,
+)
 from .types import BackendOptions, LLMResponse
 
 
@@ -152,8 +157,11 @@ class OpencodeCliBackend:
     - ``max_tokens`` / ``temperature`` / ``cache_salt`` /
       ``user_cache_prefix`` / ``allowed_tools`` / ``extras`` -- OpenCode's
       adapter contract exposes no corresponding completion flag. They are
-      accepted for protocol compatibility and silently ignored, as the other
-      CLI backends do for their inapplicable fields.
+      accepted for protocol compatibility and dropped, as the other CLI
+      backends do for their inapplicable fields -- and REPORTED as dropped
+      rather than silently discarded, ``extras`` per key. This backend reads
+      no extras key, so every key the caller sent comes back in
+      ``dropped_params`` as ``extras.<key>``.
 
     Usage and cost: the default stdout format supplies answer text but no
     token envelope and no cost. ``input_tokens``, ``output_tokens``,
@@ -263,6 +271,7 @@ class OpencodeCliBackend:
             attempts=1,
             from_cache=False,
             dropped_params=derive_dropped_params(self.capabilities, opts),
+            forwarded_params=derive_forwarded_params(self.capabilities, opts),
             # Every control this adapter advertises is source=FIXED -- the
             # injected permission scalars and the four fixed flags go out on
             # every invocation -- so the applied set is the advertised set and

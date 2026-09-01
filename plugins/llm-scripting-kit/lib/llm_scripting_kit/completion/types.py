@@ -93,6 +93,16 @@ class LLMResponse:
       advertised ``dropped_params`` (see :mod:`.results`), never from a second
       hand-maintained list, and narrowed to params the caller actually set:
       reporting a default the caller never touched would be noise, not truth.
+      An ``extras`` key appears here per key (``extras.foo``), never as the bare
+      field name, because on an adapter that reads some extras keys and not
+      others the field name has no single answer.
+    - ``forwarded_params`` -- params the adapter sent downstream WITHOUT
+      validating them: openrouter copies every ``extras`` key into the request
+      as a top-level parameter and makes no claim the provider accepts any of
+      them. Deliberately not folded into ``dropped_params``, because the two
+      carry opposite advice -- a dropped param had no effect and should be
+      removed, a forwarded one reached the provider and may be doing its job.
+      Merging them would tell a caller to delete a param that works.
     - ``execution_controls_applied`` -- ids of the advertised
       :class:`~.capabilities.ExecutionControl` records this call emitted. It
       reports EMISSION only, exactly as the advertisement does -- never that the
@@ -107,8 +117,9 @@ class LLMResponse:
     A note for anyone adding another field here, learned from ``total_tokens``
     above: think about what a consumer will SUM or COUNT. None of the fields
     added above is summable across backends, which is deliberate --
-    ``dropped_params`` and ``execution_controls_applied`` are sets of names, not
-    magnitudes, so no downstream aggregate can double-count them.
+    ``dropped_params``, ``forwarded_params`` and ``execution_controls_applied``
+    are sets of names, not magnitudes, so no downstream aggregate can
+    double-count them.
     """
 
     text: str
@@ -123,6 +134,7 @@ class LLMResponse:
     status: str = COMPLETED
     error: Optional[ResponseError] = None
     dropped_params: Tuple[str, ...] = ()
+    forwarded_params: Tuple[str, ...] = ()
     execution_controls_applied: Tuple[str, ...] = ()
     structured: Optional[Any] = None
     started_at: Optional[str] = None
@@ -156,6 +168,11 @@ class BackendOptions:
     - ``log_prefix`` -- stderr tag so mixed logs from parallel runs stay
       attributable.
     - ``extras`` -- open map for consumer-specific knobs a backend may read.
+      What happens to a key is per-adapter and advertised per key: codex reads
+      a named set (``output_schema``, ``sandbox``, ...), openrouter forwards
+      every key unvalidated, and claude-cli and opencode-cli read none. A key
+      that reaches nothing is reported in ``LLMResponse.dropped_params``; one
+      forwarded without validation is reported in ``forwarded_params``.
     """
 
     max_tokens: int = 4096

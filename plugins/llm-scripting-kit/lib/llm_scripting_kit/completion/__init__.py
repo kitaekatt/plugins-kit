@@ -61,6 +61,8 @@ from .results import (
     caller_set_params,
     check_applied_controls,
     derive_dropped_params,
+    derive_extras_report,
+    derive_forwarded_params,
     fixed_control_ids,
     utc_now_iso,
 )
@@ -93,6 +95,8 @@ __all__ = [
     "utc_now_iso",
     "caller_set_params",
     "derive_dropped_params",
+    "derive_extras_report",
+    "derive_forwarded_params",
     "fixed_control_ids",
     "check_applied_controls",
     # capability advertisement

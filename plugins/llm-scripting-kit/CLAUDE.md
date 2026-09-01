@@ -135,7 +135,8 @@ the advertisement replaces.
 
 **What the advertisement is BEFORE the call, the response is AFTER it.**
 `LLMResponse` carries what actually happened on one call: `dropped_params` (the
-params this caller requested that the adapter does not read),
+params this caller requested that the adapter does not read), `forwarded_params`
+(params sent downstream without the adapter validating them),
 `execution_controls_applied` (the ids of advertised controls the request
 actually emitted), `structured` (schema-backed output, parsed), `started_at` /
 `ended_at`, and `status` / `error`. The two halves are one system, not two
@@ -145,6 +146,27 @@ what the caller actually set, and `check_applied_controls` refuses an id the
 advertisement does not carry. A second hand-maintained list is exactly the drift
 the SSOT rule forbids, and here it would be a drift between two claims about the
 same call.
+
+**`extras` is reported per KEY, and dropped is not the only verdict.** The
+`extras` map is where the seam's inequality is sharpest: codex reads a named
+set, advertised as `extras.<key>` params in `completion/adapter_capabilities.py`
+and pinned against the argv builder's own list by
+`test_codex_extra_keys_match_the_advertisement`; openrouter copies EVERY key
+into the request as a top-level parameter without validating it; and claude-cli
+and opencode-cli read none. So the report answers per key,
+via `derive_extras_report`, and the bare field name `extras` never survives into
+a response -- on codex it would have no single answer, and on the others it
+would not say WHICH key went nowhere.
+
+The third verdict is the one that is easy to get wrong. An unadvertised
+openrouter extra is FORWARDED, not dropped: reporting it as dropped would be a
+fresh overclaim in place of the old silence, since the key really is sent and
+the adapter's only claim is that it did not check it. `dropped_params` and
+`forwarded_params` therefore stay separate fields, because they carry opposite
+advice -- remove this param, versus this param reached the provider and may be
+doing its job. The advertisement is what distinguishes them: a generic `extras`
+param with `handling: passthrough` means forwarded, a per-key
+`extras.<name>` entry means honored, and neither means dropped.
 
 Reporting the applied controls is per-adapter work, and deliberately so: only
 the code that builds the request knows what it emitted. `source` does not settle

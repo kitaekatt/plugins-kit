@@ -22,6 +22,7 @@ from .completion import (
     adapter_capabilities,
     create_backend,
     derive_dropped_params,
+    derive_forwarded_params,
     utc_now_iso,
 )
 from .constants import USER_ENV_FILE
@@ -245,6 +246,7 @@ def _cmd_complete(args: argparse.Namespace) -> int:
             # have read them either way, so this is as true of a failed call as
             # of a completed one.
             dropped_params=_dropped_for(selection.backend, options),
+            forwarded_params=_forwarded_for(selection.backend, options),
             started_at=started_at,
             ended_at=utc_now_iso(),
         )
@@ -275,6 +277,19 @@ def _dropped_for(backend: Any, options: BackendOptions) -> tuple:
     if capabilities is None:
         return ()
     return derive_dropped_params(capabilities, options)
+
+
+def _forwarded_for(backend: Any, options: BackendOptions) -> tuple:
+    """Params this request would have forwarded unvalidated, or () if unknowable.
+
+    Read defensively for the same reason as :func:`_dropped_for`, and true of a
+    failed call for the same reason: whether the adapter validates a param does
+    not depend on how the call came out.
+    """
+    capabilities = getattr(backend, "capabilities", None)
+    if capabilities is None:
+        return ()
+    return derive_forwarded_params(capabilities, options)
 
 
 def _complete_envelope(selection: Any, response: LLMResponse) -> dict[str, Any]:

@@ -118,7 +118,11 @@ class LLMResponse:
     - ``status`` / ``error`` -- the result status and optional structured error
       detail from the completion seam.
     - ``dropped_params`` -- options requested by the caller but ignored by the
-      adapter.
+      adapter. An ``extras`` key appears per key (``extras.foo``).
+    - ``forwarded_params`` -- options the adapter sent downstream without
+      validating them. Kept separate from ``dropped_params`` because the two
+      carry opposite advice: a dropped param had no effect, a forwarded one
+      reached the provider and may be working.
     - ``execution_controls_applied`` -- execution controls emitted by the
       adapter for this call.
     - ``structured`` -- schema-backed parsed output when the adapter provides
@@ -140,6 +144,7 @@ class LLMResponse:
     status: str = "completed"
     error: Optional[Any] = None
     dropped_params: tuple[str, ...] = ()
+    forwarded_params: tuple[str, ...] = ()
     execution_controls_applied: tuple[str, ...] = ()
     structured: Optional[Any] = None
     started_at: Optional[str] = None
@@ -646,6 +651,7 @@ class ResponseCache:
             status=data.get("status", "completed"),
             error=data.get("error"),
             dropped_params=tuple(data.get("dropped_params", ())),
+            forwarded_params=tuple(data.get("forwarded_params", ())),
             execution_controls_applied=tuple(
                 data.get("execution_controls_applied", ())
             ),
@@ -699,6 +705,7 @@ class ResponseCache:
             "status": response.status,
             "error": _serialize_response_error(response.error),
             "dropped_params": response.dropped_params,
+            "forwarded_params": response.forwarded_params,
             "execution_controls_applied": response.execution_controls_applied,
             "structured": response.structured,
             "started_at": response.started_at,

@@ -423,3 +423,22 @@ def test_opencode_dropped_params_change_no_argv(tmp_path, dropped):
     values = {"max_tokens": 999, "temperature": 0.9, "allowed_tools": "Read"}
     assert _opencode_run(tmp_path, **{dropped: values[dropped]})["cmd"] == baseline
     assert dropped in OPENCODE_CAPABILITIES.dropped_params
+
+
+def test_codex_extra_keys_match_the_advertisement():
+    """The argv-forwarding list and the advertised extras params are one fact.
+
+    CODEX_EXTRA_KEYS decides which extras keys reach the argv builder; the
+    ``extras.<key>`` entries in the advertisement decide which ones the per-call
+    report treats as honored. A key in one and not the other is a silent lie in
+    whichever direction it drifts -- applied but reported dropped, or reported
+    honored while reaching nothing.
+    """
+    from llm_scripting_kit.completion.codex_backend import CODEX_EXTRA_KEYS
+
+    advertised = {
+        name.split(".", 1)[1]
+        for name in CODEX_CAPABILITIES.params
+        if name.startswith("extras.")
+    }
+    assert advertised == set(CODEX_EXTRA_KEYS)

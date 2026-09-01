@@ -44,7 +44,12 @@ from . import halt
 from .claude_runner import run_cli_streaming
 from .adapter_capabilities import CODEX_CAPABILITIES
 from .capabilities import Capabilities
-from .results import check_applied_controls, derive_dropped_params, utc_now_iso
+from .results import (
+    check_applied_controls,
+    derive_dropped_params,
+    derive_forwarded_params,
+    utc_now_iso,
+)
 from .types import BackendOptions, LLMResponse
 
 
@@ -78,7 +83,13 @@ class CodexRunError(RuntimeError):
 PROMPT_SEPARATOR = "\n\n---\n\n"
 
 #: ``options.extras`` keys this backend forwards to ``build_codex_exec_argv``.
-#: Anything else in ``extras`` is ignored (it belongs to another consumer).
+#: Anything else in ``extras`` reaches no argv element (it belongs to another
+#: consumer) and is reported per key in ``dropped_params`` as ``extras.<key>``.
+#: This tuple and the ``extras.*`` params in the advertisement are the same
+#: fact stated twice -- one drives argv, the other drives the report -- so a
+#: key added here without an advertisement record would be applied yet
+#: reported as dropped. ``test_codex_extra_keys_match_the_advertisement`` in
+#: tests/llm-scripting-kit/test_completion_capabilities.py pins them together.
 CODEX_EXTRA_KEYS = (
     "scratch_dir",
     "add_dirs",
@@ -193,10 +204,14 @@ class CodexCliBackend:
       writable roots), ``sandbox`` (``-s`` value), ``network`` (bool, network
       access inside the sandbox), ``output_schema`` (JSON-schema file). Each is
       optional and forwarded to the builder only when present, so the builder's
-      defaults (``-s workspace-write``, network on) stand otherwise.
+      defaults (``-s workspace-write``, network on) stand otherwise. Any OTHER
+      extras key reaches nothing and comes back in ``dropped_params`` as
+      ``extras.<key>`` -- per key, because half of this map IS read and the
+      bare field name would have no single answer here.
     - ``temperature`` / ``max_tokens`` / ``allowed_tools`` / ``cache_salt`` /
       ``user_cache_prefix`` -- codex exposes no such knobs. Accepted for
-      protocol compatibility and ignored, exactly as ClaudeCliBackend does.
+      protocol compatibility and dropped, exactly as ClaudeCliBackend does --
+      and reported in ``dropped_params``, not discarded in silence.
 
     Usage/cost: codex emits no PER-DIRECTION usage envelope on the default
     (non-``--json``) path, so ``input_tokens`` / ``output_tokens`` /
@@ -301,6 +316,7 @@ class CodexCliBackend:
             attempts=1,
             from_cache=False,
             dropped_params=derive_dropped_params(self.capabilities, opts),
+            forwarded_params=derive_forwarded_params(self.capabilities, opts),
             execution_controls_applied=self._applied_controls(argv),
             structured=self._parse_structured(text, opts.extras),
             started_at=started_at,

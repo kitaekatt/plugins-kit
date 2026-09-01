@@ -477,6 +477,7 @@ def test_response_adapter_carries_truthfulness_fields() -> None:
         status = "completed"
         error = None
         dropped_params = ("temperature",)
+        forwarded_params = ("extras.top_k",)
         execution_controls_applied = ("allowed-tools",)
         structured = {"answer": "x"}
         started_at = "2026-09-01T12:00:00Z"
@@ -486,6 +487,7 @@ def test_response_adapter_carries_truthfulness_fields() -> None:
     assert adapted.status == "completed"
     assert adapted.error is None
     assert adapted.dropped_params == ("temperature",)
+    assert adapted.forwarded_params == ("extras.top_k",)
     assert adapted.execution_controls_applied == ("allowed-tools",)
     assert adapted.structured == {"answer": "x"}
     assert adapted.started_at == "2026-09-01T12:00:00Z"
@@ -510,6 +512,7 @@ def test_response_adapter_tolerates_older_shared_lib():
     assert adapted.status == "completed"
     assert adapted.error is None
     assert adapted.dropped_params == ()
+    assert adapted.forwarded_params == ()
     assert adapted.execution_controls_applied == ()
     assert adapted.structured is None
     assert adapted.started_at is None

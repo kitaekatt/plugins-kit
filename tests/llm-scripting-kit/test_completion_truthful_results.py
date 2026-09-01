@@ -33,6 +33,8 @@ from llm_scripting_kit.completion import (
     caller_set_params,
     check_applied_controls,
     derive_dropped_params,
+    derive_extras_report,
+    derive_forwarded_params,
     fixed_control_ids,
 )
 from llm_scripting_kit.completion.adapter_capabilities import (
@@ -114,6 +116,77 @@ def test_fixed_control_ids_selects_only_unconditional_controls():
 
 
 # ---------------------------------------------------------------------------
+# extras: three outcomes per key, one of which is NOT "dropped"
+# ---------------------------------------------------------------------------
+
+
+def test_extras_key_the_adapter_reads_is_reported_nowhere():
+    """codex advertises extras.output_schema, so honoring it is silent."""
+    opts = BackendOptions(extras={"output_schema": "/tmp/s.json"})
+    dropped, forwarded = derive_extras_report(CODEX_CAPABILITIES, opts)
+    assert dropped == () and forwarded == ()
+
+
+def test_codex_reports_only_the_extras_keys_it_does_not_read():
+    opts = BackendOptions(extras={"sandbox": "read-only", "invented": 1})
+    dropped, forwarded = derive_extras_report(CODEX_CAPABILITIES, opts)
+    assert dropped == ("extras.invented",)
+    assert forwarded == ()
+
+
+def test_openrouter_extras_are_forwarded_not_dropped():
+    """The one adapter that sends every key: calling these dropped would lie."""
+    opts = BackendOptions(extras={"response_format": {}, "top_k": 40})
+    dropped, forwarded = derive_extras_report(OPENROUTER_CAPABILITIES, opts)
+    assert dropped == ()
+    assert forwarded == ("extras.response_format", "extras.top_k")
+    assert derive_dropped_params(OPENROUTER_CAPABILITIES, opts) == ()
+
+
+@pytest.mark.parametrize(
+    "caps", [CLAUDE_CAPABILITIES, OPENCODE_CAPABILITIES], ids=["claude", "opencode"]
+)
+def test_an_adapter_that_reads_no_extras_drops_every_key(caps):
+    opts = BackendOptions(extras={"alpha": 1, "beta": 2})
+    dropped, forwarded = derive_extras_report(caps, opts)
+    assert dropped == ("extras.alpha", "extras.beta")
+    assert forwarded == ()
+
+
+def test_the_bare_word_extras_never_reaches_the_report():
+    """The field name has no single answer on an adapter reading some keys."""
+    opts = BackendOptions(extras={"alpha": 1})
+    for caps in adapter_capabilities().values():
+        assert "extras" not in derive_dropped_params(caps, opts)
+        assert "extras" not in derive_forwarded_params(caps, opts)
+
+
+def test_extras_verdicts_are_stable_across_calls_with_the_same_keys():
+    """An extras key has no advertisement order to borrow, so it is sorted."""
+    a = derive_dropped_params(
+        CLAUDE_CAPABILITIES, BackendOptions(extras={"z": 1, "a": 2})
+    )
+    b = derive_dropped_params(
+        CLAUDE_CAPABILITIES, BackendOptions(extras={"a": 2, "z": 1})
+    )
+    assert a == b == ("extras.a", "extras.z")
+
+
+def test_empty_extras_reports_nothing():
+    for caps in adapter_capabilities().values():
+        assert derive_dropped_params(caps, BackendOptions(extras={})) == ()
+        assert derive_forwarded_params(caps, BackendOptions(extras={})) == ()
+
+
+def test_field_drops_and_extras_drops_are_both_reported():
+    """The two derivations are separate rules feeding one list."""
+    opts = BackendOptions(allowed_tools="Read", extras={"alpha": 1})
+    reported = derive_dropped_params(OPENCODE_CAPABILITIES, opts)
+    assert "allowed_tools" in reported
+    assert "extras.alpha" in reported
+
+
+# ---------------------------------------------------------------------------
 # openrouter
 # ---------------------------------------------------------------------------
 
@@ -145,6 +218,14 @@ def test_openrouter_reports_dropped_params_and_no_controls():
     assert "allowed_tools" in resp.dropped_params
     # an HTTP request has no sandbox, tool or permission surface to constrain
     assert resp.execution_controls_applied == ()
+
+
+def test_openrouter_forwards_an_unrecognised_extra_unvalidated():
+    resp = _openrouter().complete(
+        "s", "u", model="m", options=BackendOptions(extras={"top_k": 40})
+    )
+    assert resp.forwarded_params == ("extras.top_k",)
+    assert "extras.top_k" not in resp.dropped_params
 
 
 def test_openrouter_brackets_the_call_with_iso_timestamps():
@@ -204,6 +285,16 @@ def test_claude_reports_the_param_it_drops():
         "s", "u", model="opus", options=BackendOptions(cache_salt=4)
     )
     assert "cache_salt" in resp.dropped_params
+
+
+def test_claude_reports_each_extras_key_it_drops():
+    runner = _ClaudeRunner(json.dumps({"result": "hi", "is_error": False}))
+    resp = _claude(runner).complete(
+        "s", "u", model="opus", options=BackendOptions(extras={"output_schema": "/s"})
+    )
+    # named per key, not as the bare field: the caller needs to know WHICH key
+    assert "extras.output_schema" in resp.dropped_params
+    assert resp.forwarded_params == ()
 
 
 def test_claude_run_once_reports_one_attempt():
@@ -314,6 +405,22 @@ def test_codex_unparseable_schema_result_is_none_not_a_failure(tmp_path: Path):
     assert resp.text == "not json at all"
 
 
+def test_codex_reports_an_unrecognised_extra_while_honoring_a_known_one(
+    tmp_path: Path,
+):
+    schema = tmp_path / "s.json"
+    schema.write_text("{}", encoding="utf-8")
+    resp = _codex(_CodexRunner('{"a": 1}')).complete(
+        "s", "u", model="m",
+        options=BackendOptions(
+            cwd=tmp_path.resolve(),
+            extras={"output_schema": str(schema), "invented": True},
+        ),
+    )
+    assert resp.dropped_params == ("extras.invented",)
+    assert resp.forwarded_params == ()
+
+
 def test_codex_advertises_parsed_now_that_the_field_exists():
     assert CODEX_CAPABILITIES.structured_output.result == "parsed"
 
@@ -357,6 +464,15 @@ def test_opencode_reports_the_param_it_drops(monkeypatch, tmp_path: Path):
     assert "allowed_tools" in resp.dropped_params
 
 
+def test_opencode_reports_each_extras_key_it_drops(monkeypatch, tmp_path: Path):
+    resp = _opencode(monkeypatch).complete(
+        "s", "u", model="p/m",
+        options=BackendOptions(cwd=tmp_path.resolve(), extras={"variant": "x"}),
+    )
+    assert "extras.variant" in resp.dropped_params
+    assert resp.forwarded_params == ()
+
+
 # ---------------------------------------------------------------------------
 # The response type itself
 # ---------------------------------------------------------------------------
@@ -367,6 +483,7 @@ def test_a_response_is_completed_and_error_free_by_default():
     assert resp.status == COMPLETED
     assert resp.error is None
     assert resp.dropped_params == ()
+    assert resp.forwarded_params == ()
     assert resp.execution_controls_applied == ()
     assert resp.structured is None
     assert resp.started_at is None and resp.ended_at is None
@@ -387,7 +504,8 @@ def test_a_failure_carries_its_detail_as_data(status):
 def test_every_adapter_reports_the_same_truthfulness_surface():
     """No adapter may quietly omit a field the contract promises."""
     for field in (
-        "status", "error", "dropped_params", "execution_controls_applied",
+        "status", "error", "dropped_params", "forwarded_params",
+        "execution_controls_applied",
         "structured", "started_at", "ended_at",
     ):
         assert field in LLMResponse.__dataclass_fields__
