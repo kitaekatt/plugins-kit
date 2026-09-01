@@ -1,8 +1,0 @@
-kind: Attribution
-description: Worker-specific identity metadata for a WorkRecord (model name and version, agent_type, etc.). Open-shaped because each worker emits different attribution keys.
-fields:
-  values:
-    type: map
-    required: true
-    value_type:
-      type: any

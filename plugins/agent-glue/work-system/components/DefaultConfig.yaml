@@ -1,8 +1,0 @@
-kind: DefaultConfig
-description: "Kit-strongly-encouraged config defaults a worker applies to a WorkRequest's WorkerSelection.config when keys are absent. Per the *Demand choices; default only to guide* principle in core/ARCHITECTURE.md, this component is for fields where the kit has an opinion it wants to guide consumers toward -- not a fill-in-the-blank for missing user input. No shipped v1 worker uses this component; every meaningful config field is required on the WorkRequest. Open-shaped because each worker type accepts different keys."
-fields:
-  values:
-    type: map
-    required: true
-    value_type:
-      type: any

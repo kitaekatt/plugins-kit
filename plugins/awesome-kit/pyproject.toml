@@ -1,11 +1,9 @@
 [project]
 name = "awesome-kit"
-version = "0.41.0"
-description = "Runtime dependencies for awesome-kit skills. html-pdf renders HTML to PDF via headless Chromium (Playwright)."
+version = "0.42.0"
+description = "Runtime dependencies for awesome-kit skills, including YAML support."
 requires-python = ">=3.10"
 dependencies = [
-    "playwright>=1.40",
-    "pypdf>=4.0",
     "pyyaml>=6.0",
 ]
 

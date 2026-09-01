@@ -1,8 +1,0 @@
-kind: Expected
-description: List of fixture_ids in a Cohort that have an ExpectedOutcome assertion. Each id must match a `<fixture_id>.yaml` under the cohort's `expected/` directory.
-fields:
-  fixture_ids:
-    type: list
-    required: true
-    items:
-      type: string

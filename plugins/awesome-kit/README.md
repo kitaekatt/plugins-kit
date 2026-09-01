@@ -14,8 +14,6 @@ repo's own landing page (`index.html`) is its output, built with
 
 Also in the box, one line each:
 
-- `/html-pdf` -- convert an HTML file to a PDF via headless Chromium
-  (single-page or `--a4` paginated).
 - A task-folder system (the `task` skill) -- file-backed task folders
   with a CLI for create/list/work/close/archive/move.
 - `orchestrate` -- delegate significant work to background agents so the

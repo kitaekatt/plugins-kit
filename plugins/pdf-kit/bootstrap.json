@@ -1,0 +1,10 @@
+{
+  "$comment": "pdf-kit provisions Playwright and pypdf for the html-pdf skill. Its custom bootstrap downloads the Chromium browser binary (~180 MB) into Playwright's shared cache, so installing pdf-kit opts into that download.",
+  "venv": {
+    "check_imports": ["playwright", "pypdf"]
+  },
+  "script": {
+    "path": "custom_bootstrap.py",
+    "entry_point": "bootstrap"
+  }
+}

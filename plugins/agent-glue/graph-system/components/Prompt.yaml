@@ -1,7 +1,0 @@
-kind: Prompt
-description: Path to a Jinja prompt template (markdown) sidecar that the runtime renders and passes to the node's execute function as a `prompt` kwarg. Presence on a Node entity declares the node calls an LLM.
-fields:
-  path:
-    type: string
-    required: true
-    description: Path relative to the node's directory; conventionally `prompt.md`.

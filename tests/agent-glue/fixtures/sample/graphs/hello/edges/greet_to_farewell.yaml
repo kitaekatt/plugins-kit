@@ -1,7 +1,0 @@
-type: Edge
-components:
-  source:
-    from_node: greet
-    on_variant: accepted
-  target:
-    to_node: farewell

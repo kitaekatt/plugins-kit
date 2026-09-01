@@ -1,6 +1,0 @@
-kind: CreatedAt
-description: ISO-8601 creation timestamp for a Cohort.
-fields:
-  timestamp:
-    type: string
-    required: true

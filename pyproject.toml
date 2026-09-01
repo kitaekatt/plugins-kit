@@ -12,7 +12,7 @@ testpaths = ["tests"]
 # modules tests import as bare names). Do NOT add per-skill script dirs here:
 # they share one flat namespace and risk shadowing. Single-file skill scripts
 # are loaded in tests via importlib.util.spec_from_file_location instead (see
-# tests/awesome-kit/test_html_pdf.py for the pattern).
+# tests/pdf-kit/test_html_pdf.py for the pattern).
 pythonpath = [
     "plugins/bootstrap",
     "plugins/bootstrap/engine",

@@ -1,7 +1,0 @@
-kind: Rules
-description: Path to a rules-yaml sidecar that the runtime loads and passes to the node's execute function as a `rules` kwarg. Presence on a Node entity declares the node is config-driven.
-fields:
-  path:
-    type: string
-    required: true
-    description: Path relative to the node's directory; conventionally `rules.yaml`.

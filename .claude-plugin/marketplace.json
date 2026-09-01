@@ -71,7 +71,7 @@
     {
       "name": "skills-kit",
       "description": "Author and audit every md file a project loads or ships -- CLAUDE.md, SKILL.md, project docs, and their cross-references -- for placement, cohesion, and drift.",
-      "version": "0.64.0",
+      "version": "0.65.0",
       "author": {
         "name": "Christina"
       },
@@ -96,8 +96,8 @@
     },
     {
       "name": "awesome-kit",
-      "description": "Render your installed marketplaces, plugins, and skills as a clickable HTML poster; plus file-backed task tracking.",
-      "version": "0.41.0",
+      "description": "Provides plugin-ecosystem, task, orchestrate, recap, and verbose-updates skills for plugin browsing, task tracking, delegated work, response distillation, and progress communication.",
+      "version": "0.42.0",
       "author": {
         "name": "Christina"
       },
@@ -110,15 +110,14 @@
     },
     {
       "name": "prototypes",
-      "description": "Experimental skills awaiting graduation; currently /claude-explorer, an HTML browser of your Claude configuration.",
-      "version": "0.3.1",
+      "description": "Nursery for experimental skills awaiting graduation. Ships no skills at present.",
+      "version": "0.4.0",
       "author": {
         "name": "Christina"
       },
       "source": "./plugins/prototypes",
       "category": "development",
       "dependencies": [
-        "skills-kit",
         "bootstrap"
       ]
     },
@@ -188,22 +187,9 @@
       ]
     },
     {
-      "name": "agent-glue",
-      "description": "Lightweight graph-orchestration kit for pipelines that interleave LLM inference, deterministic logic, and config-driven rules. Typed contracts at every boundary; discriminated-union dispatch; on-disk cohorts for replay-based testing. MVC layering with an ECS data model expressed in yaml primitives.",
-      "version": "0.3.1",
-      "author": {
-        "name": "Christina"
-      },
-      "source": "./plugins/agent-glue",
-      "category": "development",
-      "dependencies": [
-        "bootstrap"
-      ]
-    },
-    {
       "name": "workflow-kit",
       "description": "Incremental, native-preserving improvements on the native Workflow tool: a declarative .workflow.yaml compiler plus node strategies (deterministic script + OpenRouter model calls) that run as cheap, context-light nodes via a file-passing contract. Experimental.",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "author": {
         "name": "Christina"
       },
@@ -214,26 +200,13 @@
       ]
     },
     {
-      "name": "codex-kit",
-      "description": "Codex CLI integration for Claude Code. Placeholder: no skills or commands yet.",
+      "name": "pdf-kit",
+      "description": "Convert HTML files to PDFs with CSS and JavaScript fidelity via headless Chromium.",
       "version": "0.1.0",
       "author": {
         "name": "Christina"
       },
-      "source": "./plugins/codex-kit",
-      "category": "development",
-      "dependencies": [
-        "bootstrap"
-      ]
-    },
-    {
-      "name": "opencode-kit",
-      "description": "opencode integration for Claude Code. Placeholder: no skills or commands yet.",
-      "version": "0.1.0",
-      "author": {
-        "name": "Christina"
-      },
-      "source": "./plugins/opencode-kit",
+      "source": "./plugins/pdf-kit",
       "category": "development",
       "dependencies": [
         "bootstrap"

@@ -1,6 +1,0 @@
-kind: TerminalOutput
-description: Optional assertion target for the terminal node's output value. The replay runner compares the run's terminal node output against `value` for structural equality; mismatch is a test failure.
-fields:
-  value:
-    type: any
-    required: true

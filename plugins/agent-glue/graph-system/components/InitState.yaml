@@ -1,8 +1,0 @@
-kind: InitState
-description: Init-field values for the PipelineState when a Fixture is replayed. Keys must match the graph's StateDecl.init declarations; values are arbitrary yaml.
-fields:
-  values:
-    type: map
-    required: true
-    value_type:
-      type: any

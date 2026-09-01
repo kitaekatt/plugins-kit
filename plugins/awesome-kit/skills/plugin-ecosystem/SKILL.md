@@ -11,12 +11,12 @@ Generate `~/.claude/plugin-ecosystem.html` -- a self-contained 16:9 poster that 
 
 ## Framework
 
-This skill operationalizes the **plugin_ecosystem** viewer-kind under the shared audit framework. The shared glossary (`subject`, `primitive`, `composition`, `discovery`, `viewer-kind`, `summary projection`, layered personalization, self-parameterizing overrides) is canonical at `plugins/skills-kit/skills/md-domain/references/audit-framework.md`. The sibling viewer `prototypes:claude-explorer` operationalizes a deeper viewer-kind over the same substrate (drills into each skill instead of stopping at skill-name level, and supports leaf-primitive deep-rendering).
+This skill operationalizes the **plugin_ecosystem** viewer-kind under the shared audit framework. The shared glossary (`subject`, `primitive`, `composition`, `discovery`, `viewer-kind`, `summary projection`, layered personalization, self-parameterizing overrides) is canonical at `plugins/skills-kit/skills/md-domain/references/audit-framework.md`.
 
 In framework terms, plugin-ecosystem is:
 
 - **Subject:** `marketplace` composition; **subject_type:** corpus (every installed marketplace under `~/.claude/plugins/marketplaces/`).
-- **Compositions traversed:** `marketplace ⊃ plugin ⊃ skill` (stops at skill-name; for deeper drill use `claude-explorer`).
+- **Compositions traversed:** `marketplace ⊃ plugin ⊃ skill` (stops at skill-name).
 - **Primitives consumed:** `marketplace_manifest` (gate), `plugin_manifest` (card data), `skill_md` frontmatter (skill list), plus per-level `poster.yaml` overrides.
 - **Discovery gate:** a marketplace participates only if it ships `.claude-plugin/poster.yaml`.
 - **Layered personalization:** four `poster.yaml` layers (operator / marketplace / plugin / skill -- see "Data Model" below).

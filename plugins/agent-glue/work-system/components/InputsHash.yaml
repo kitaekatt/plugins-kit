@@ -1,6 +1,0 @@
-kind: InputsHash
-description: SHA-256 of just the inputs the worker actually consumed. Equals RequestHash by default; a worker may declare a narrower hash that excludes config keys it does not read (e.g. max_tokens) so cohort assembly can hit cache across config tweaks the worker is indifferent to.
-fields:
-  sha256:
-    type: string
-    required: true

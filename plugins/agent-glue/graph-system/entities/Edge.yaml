@@ -1,9 +1,0 @@
-name: Edge
-description: A typed transition between nodes. Routing is by discriminated-union variant of the source node's output; no conditions, no predicates, no eval.
-stored_at: inline in graph.yaml under `edges:`
-components:
-  required:
-    - Source
-    - Target
-  optional:
-    - ParallelSpec

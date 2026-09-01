@@ -1,9 +1,0 @@
-kind: Submitter
-description: Dotted reference to the Python function that fulfills a WorkRequest for this Worker. Module is a fully-qualified Python import path (e.g. `agent_glue_lib.work.workers.openrouter`).
-fields:
-  module:
-    type: string
-    required: true
-  function:
-    type: string
-    required: true

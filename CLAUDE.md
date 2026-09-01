@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Published plugins: **agent-glue** (graph-orchestration kit for pipelines that interleave LLM inference, deterministic logic, and config-driven rules), **awesome-kit** (plugin-ecosystem poster, /html-pdf, task tracking), **bootstrap** (dependency management), **bootstrap-stuck-fix** (temporary remediation shim for a wedged bootstrap registry record), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **codex-kit** (Codex CLI integration for Claude Code), **content-pipeline-kit** (library + skills for LLM-in-the-loop batch content pipelines), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **hue-kit** (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), **llm-scripting-kit** (LLM key resolution, shared model registry, and named OpenAI-compatible endpoints -- OpenRouter is the default endpoint; importable package `llm_scripting_kit`, CLI `llm-scripting-kit`), **opencode-kit** (opencode integration for Claude Code), **p4-kit** (Perforce multi-agent code review), **prototypes** (experimental skills awaiting graduation), **secrets-kit** (fleet secrets provisioning), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md, folded into a single domain-skill: /md-domain, plus knowledge-encoding, update-documentation, materialized-output), **unreal-kit** (Unreal Engine Python API automation), and **workflow-kit** (declarative .workflow.yaml compiler and node strategies). Dev-only (not published, `published: false`): **yaml-data-editor-kit**.
+**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Published plugins: **awesome-kit** (plugin-ecosystem poster, orchestrate, task tracking), **bootstrap** (dependency management), **bootstrap-stuck-fix** (temporary remediation shim for a wedged bootstrap registry record), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **content-pipeline-kit** (library + skills for LLM-in-the-loop batch content pipelines), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **hue-kit** (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), **llm-scripting-kit** (LLM key resolution, shared model registry, and named OpenAI-compatible endpoints -- OpenRouter is the default endpoint; importable package `llm_scripting_kit`, CLI `llm-scripting-kit`), **p4-kit** (Perforce multi-agent code review), **pdf-kit** (HTML-to-PDF via headless Chromium), **prototypes** (nursery for experimental skills; ships none at present), **secrets-kit** (fleet secrets provisioning), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md, folded into a single domain-skill: /md-domain, plus knowledge-encoding, update-documentation, materialized-output), **unreal-kit** (Unreal Engine Python API automation), and **workflow-kit** (declarative .workflow.yaml compiler and node strategies). Dev-only (not published, `published: false`): **job-kit** (durable sequential agent-job runner) and **yaml-data-editor-kit**.
 
 This repo is a **Claude Code plugin marketplace** — it extends Claude Code with skills, commands, and hooks via the `.claude-plugin/marketplace.json` manifest. Plugins are loaded either via `--plugin-dir` (local development) or `enabledPlugins` in settings (production installs from the remote repo).
 
@@ -188,6 +188,7 @@ Some plugins live on `dev` for in-development work and must not reach consumers 
 
 **Dev-only plugins** (the field, not this list, is load-bearing -- this is just a human-readable inventory):
 
+- **job-kit**.
 - **yaml-data-editor-kit**.
 
 Commits for a dev-only plugin in `git log origin/master..origin/dev` need no action: the filtered release leaves them on `dev`. Do NOT branch from master to cherry-pick around them -- creating or switching a branch in this shared tree is its own anti-pattern (see below). The regenerator remains a backstop for the marketplace listing, not a substitute for the per-commit filtering.
@@ -677,9 +678,18 @@ claude_md:
         `codex exec` command the ORCHESTRATOR types and runs itself, rendered through
         CodexAdapter.build_argv; CODEX_CAPABILITIES describes what CodexCliBackend emits
         through the COMPLETION SEAM. They are siblings converging only at
-        bootstrap_lib.codex.build_codex_exec_argv -- which is already the single source of the
-        argv spellings, so the genuine duplication is already deduplicated. Most of the YAML
-        block is not capability fact at all (unrestricted reads outside -C, silent HTTP-000
+        bootstrap_lib.codex.build_codex_exec_argv, which is the single source of the argv
+        CONSTRUCTION CODE. Scope that precisely: the construction is deduplicated, the argv
+        SPELLINGS are not. Fourteen flags are restated as string literals across up to five
+        files (`codex exec`, `-s workspace-write`, `windows.sandbox="unelevated"`,
+        `sandbox_workspace_write.network_access=true`, `-m`, `model_reasoning_effort=`, `-C`,
+        `--add-dir`, `-o`, `--output-schema`, `--skip-git-repo-check`, `--color never`,
+        `--json`, trailing `-`), and the effort menu is stated at FOUR sites --
+        orchestration.yaml, CODEX_EFFORT_MENU in harness_adapters.py, a prose note inside
+        CODEX_CAPABILITIES, and codex-dispatch.md. An earlier revision of this insight said the
+        genuine duplication was already deduplicated; that is too strong and misled a follow-up
+        task into expecting to find nothing. Most of the YAML block is still not capability
+        fact at all (unrestricted reads outside -C, silent HTTP-000
         egress, the TUI dying when backgrounded, worktree advice, judging by the -o file);
         references/codex-dispatch.md owns those.
         THE CONCRETE DAMAGE, which is why this is an insight and not a preference: the YAML
@@ -696,6 +706,16 @@ claude_md:
         plugins/CLAUDE.md bars relocating ownership across a plugin boundary to remove apparent
         duplication. Separately, there is NO capability fallback -- deleting the block and
         having discovery fail would silently drop the safety summary.
+        SETTLED, SECOND TIME: a follow-up task investigated the harness-owned display/dispatch
+        contract on its own merits and returned DO-NOT-BUILD. The deciding evidence: the ONE
+        drift defect in this history (commit 7e4b18ab -- CodexAdapter dropped `--add-dir`, so a
+        dispatched unit exited 0 having written nothing) was orchestration.yaml <-> CodexAdapter,
+        the DIRECT-DISPATCH axis, NOT <-> CODEX_CAPABILITIES. A contract consuming the
+        completion-seam advertisement would not have prevented it. Its fix was already a test.
+        The plugin-opinion razor also fails for removing the config seam -- no serious, and no
+        two distinct, power-user scenarios could be named. A drift TEST across the boundary
+        remains the cheap alternative if the maintenance ever bites; it was scoped and
+        deliberately not built.
         If the idea is ever revisited, it is a NEW design (a harness-owned display/dispatch
         contract distinct from CODEX_CAPABILITIES, with explicit fallback and precedence rules),
         not a retirement of a duplicate. A drift TEST across the boundary is the cheap

@@ -1,6 +1,0 @@
-kind: Target
-description: Edge target. Identifies the node the runtime dispatches to when the edge fires.
-fields:
-  to_node:
-    type: string
-    required: true

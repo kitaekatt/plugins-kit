@@ -349,33 +349,6 @@ viewer_kinds:
         owns: card description / razor / per-skill blurb overrides
     self_parameterizing: false
 
-  - id: claude_explorer
-    skill: prototypes:claude-explorer
-    status: implemented (v1 -- deterministic projections only; LLM summaries reserved)
-    subject: 'multi-root: claude_user_dir + project'
-    subject_type: 'multi-root single-pass'
-    roots:
-      - '~/.claude/'
-      - 'CWD (or --project PATH)'
-    generator_scaffolding: plugins/prototypes/skills/claude-explorer/scripts/claude_explorer.py
-    consumes_primitives: [skill_md, claude_md, reference_doc, plain_md, plugin_manifest, marketplace_manifest, bootstrap_manifest, script]
-    traverses_compositions: [claude_user_dir, project, marketplace, plugin, skill, directory]
-    drill_depth: unbounded
-    layered_overrides:
-      - layer: operator
-        path: '~/.claude/.local-data/prototypes/claude-explorer.yaml'
-        owns: title / tagline / included roots / default open-closed state
-      - layer: marketplace
-        path: '<marketplace>/.claude-plugin/claude-explorer.yaml'
-        owns: marketplace card copy / per-plugin display overrides
-      - layer: plugin
-        path: '<plugin>/.claude-plugin/claude-explorer.yaml'
-        owns: plugin card razor / per-skill display overrides
-      - layer: skill
-        path: '<skill>/claude-explorer.yaml'
-        owns: per-reference / per-script blurb overrides
-    self_parameterizing: true
-
 # ---------------------------------------------------------------------------
 # Future -- registry stubs for forward concerns. Not implemented today.
 # Listed so adding them is a registry edit + scaffolding, not a framework refactor.

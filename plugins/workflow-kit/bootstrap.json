@@ -1,4 +1,13 @@
 {
+  "$comment": "workflow-kit's openrouter node strategy imports llm_scripting_kit for endpoint, model and key resolution. The edge is declared here so the owning plugin is installed rather than assumed present.",
+  "plugins": [
+    {
+      "ref": "plugins-kit:llm-scripting-kit",
+      "enabled": true,
+      "scope": "user",
+      "install": "auto"
+    }
+  ],
   "tools": [
     {
       "name": "uv",
@@ -10,7 +19,13 @@
     }
   ],
   "venv": {
-    "check_imports": ["workflow_kit_lib.loader", "openai"]
+    "check_imports": [
+      "workflow_kit_lib.loader",
+      "openai"
+    ]
   },
-  "shared_lib_imports": ["llm_scripting_kit", "bootstrap_lib"]
+  "shared_lib_imports": [
+    "llm_scripting_kit",
+    "bootstrap_lib"
+  ]
 }

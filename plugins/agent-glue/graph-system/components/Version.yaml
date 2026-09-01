@@ -1,6 +1,0 @@
-kind: Version
-description: Integer schema version of a Graph entity. Bumped manually when a graph's contract surface changes in a way consumers must be aware of. Git commit shas are the authoritative version record; this field exists for human-facing diffs.
-fields:
-  value:
-    type: int
-    required: true

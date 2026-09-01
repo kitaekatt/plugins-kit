@@ -1,9 +1,0 @@
-kind: Implementation
-description: "Dotted reference to the Python function that executes a node. The loader resolves `module` relative to the node directory (so `module: impl` means `nodes/<node_name>/impl.py`)."
-fields:
-  module:
-    type: string
-    required: true
-  function:
-    type: string
-    required: true
