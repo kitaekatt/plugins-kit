@@ -259,6 +259,29 @@ class TestCooldownGateBehavior:
         f.write_text(str(int(time.time())))
         return f
 
+    def _plant_stub_python(self, fake_home: Path, argv_log: Path) -> Path:
+        """Plant a stub at the interpreter the hook actually resolves.
+
+        The hook resolves $HOME/.local/bin/python3 and never consults PATH.
+        Without a stub there, a test that no longer exits at the gate falls
+        through to _provision, which downloads a ~30MB standalone CPython (and
+        on MSYS writes the real, NOT HOME-scoped, Windows User PATH registry).
+        The stub keeps these tests hermetic and fast, and records the argv the
+        engine would have received. It must satisfy the hook's own `-c`
+        version probe.
+        """
+        bin_dir = fake_home / ".local" / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        stub = bin_dir / "python3"
+        stub.write_text(
+            "#!/bin/sh\n"
+            'case "$1" in -c) exit 0 ;; esac\n'
+            f'printf "%s\\n" "$@" >> "{argv_log}"\n'
+            "exit 0\n"
+        )
+        stub.chmod(0o755)
+        return stub
+
     def _bash_pwd(self, proj: Path) -> str:
         resolved = subprocess.run(
             [BASH, "-c", f'cd "{proj}" && printf %s "$PWD"'],
@@ -268,14 +291,23 @@ class TestCooldownGateBehavior:
         return resolved.stdout
 
     def test_skips_when_fresh_and_no_registry_change(self, tmp_path: Path) -> None:
-        """Fresh cooldown + no newer registry file => silent throttle. The skip
-        path prints nothing to stdout (the run-path JSON is emitted only after
-        the gate), so empty stdout == throttled."""
+        """Fresh cooldown + no newer registry file => the FULL pass is throttled.
+
+        The signal for "throttled" is the cooldown STAMP, not stdout. A
+        throttled session no longer exits at the gate: it falls through to the
+        always lane (--run-kind always), which emits the ordinary hook JSON on
+        its way past. What still must not happen is the full pass's stamp
+        write -- that stamp is what the registry `-nt` bypass compares against,
+        so an always run advancing it would re-arm the throttle for work it
+        never did.
+        """
         fake_home = tmp_path / "home"
         fake_home.mkdir()
         proj = tmp_path / "proj"
         proj.mkdir()
-        self._seed_fresh_cooldown(fake_home, self._bash_pwd(proj))
+        stamp = self._seed_fresh_cooldown(fake_home, self._bash_pwd(proj))
+        before = stamp.read_text()
+        self._plant_stub_python(fake_home, tmp_path / "argv.txt")
         # No installed_plugins.json / known_marketplaces.json under fake HOME ->
         # `-nt` is false for both -> cooldown is honored.
         result = subprocess.run(
@@ -283,8 +315,47 @@ class TestCooldownGateBehavior:
             input="", capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 0, result.stderr
-        assert result.stdout.strip() == "", (
-            f"expected a silent cooldown skip, got stdout: {result.stdout!r}"
+        assert stamp.read_text() == before, (
+            "throttled session rewrote the cooldown stamp; the always lane must "
+            "leave it alone so the registry -nt bypass stays armed"
+        )
+        pending = (fake_home / ".claude" / "plugins" / "data" / REPO_ROOT.name
+                   / "bootstrap" / "bootstrap_display.pending")
+        assert not pending.exists(), (
+            f"throttled session wrote a display payload: {pending.read_text()!r}"
+        )
+
+    def test_throttled_session_runs_always_lane(self, tmp_path: Path) -> None:
+        """A throttled session invokes the engine with --run-kind always.
+
+        This is the whole point of the fall-through: cheap must-be-current
+        work (an env_checks entry declaring `cadence: always`) runs every
+        session, while everything else keeps the 60-minute throttle. Pins the
+        flag, since the engine's filtering hangs off it entirely.
+        """
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        self._seed_fresh_cooldown(fake_home, self._bash_pwd(proj))
+        argv_log = tmp_path / "argv.txt"
+        self._plant_stub_python(fake_home, argv_log)
+        subprocess.run(
+            [BASH, "-c", f'cd "{proj}" && HOME="{fake_home}" "{BASH}" "{SESSION_BOOTSTRAP}"'],
+            input="", capture_output=True, text=True, timeout=60,
+        )
+        # The engine is launched detached; give it a moment to be exec'd.
+        deadline = time.time() + 10
+        while time.time() < deadline and not argv_log.exists():
+            time.sleep(0.1)
+        assert argv_log.exists(), "engine was never invoked on the throttled path"
+        recorded = argv_log.read_text()
+        assert "--run-kind" in recorded, (
+            f"throttled session did not pass --run-kind; argv was:\n{recorded}"
+        )
+        flags = recorded.splitlines()
+        assert flags[flags.index("--run-kind") + 1] == "always", (
+            f"throttled session passed the wrong run kind; argv was:\n{recorded}"
         )
 
     def test_session_guard_skips_repeat_same_session(self, tmp_path: Path) -> None:
