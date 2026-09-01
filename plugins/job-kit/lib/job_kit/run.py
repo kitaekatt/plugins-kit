@@ -283,10 +283,15 @@ def _backend_options(
         extras_value = {}
     if not isinstance(extras_value, Mapping):
         raise ValueError("job option extras must be a mapping")
+    # Effort otherwise comes only from the endpoint registry entry, which is a
+    # property of the ENDPOINT rather than of the work. A job that needs more
+    # deliberation than its endpoint's default says so here; unset keeps the
+    # registry value, so an existing job file emits the same argv.
+    effort = _string_option(job.options, "effort", None)
     return BackendOptions(
         timeout_s=float(timeout_s),
         cwd=working_directory,
-        effort=selection.effort,
+        effort=effort if effort is not None else selection.effort,
         allowed_tools=allowed_tools,
         disallowed_tools=_merge_disallowed_tools(run_floor, job_disallowed),
         system_prompt_mode=(

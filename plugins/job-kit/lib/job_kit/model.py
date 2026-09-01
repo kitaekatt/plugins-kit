@@ -47,7 +47,7 @@ PathLike = str | Path
 
 
 _JOB_OPTION_KEYS = frozenset(
-    {"allowed_tools", "disallowed_tools", "system_prompt_mode", "extras"}
+    {"allowed_tools", "disallowed_tools", "effort", "system_prompt_mode", "extras"}
 )
 
 
@@ -74,6 +74,10 @@ def _normalize_job_options(value: object) -> dict[str, object]:
         options["system_prompt_mode"], str
     ):
         raise ValueError("job option system_prompt_mode must be a string")
+
+    effort = options.get("effort")
+    if effort is not None and not isinstance(effort, str):
+        raise ValueError("job option effort must be a string or null")
 
     extras = options.get("extras")
     if extras is not None and not isinstance(extras, Mapping):

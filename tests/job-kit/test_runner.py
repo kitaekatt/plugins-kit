@@ -528,6 +528,39 @@ def test_job_timeout_uses_the_entire_attempt_budget(
     assert len(backend.calls) == 3
 
 
+def test_job_effort_option_overrides_the_endpoint_default(
+    tmp_path: Path,
+) -> None:
+    """A job may request more deliberation than its endpoint's registry entry."""
+    backend = SequenceBackend([None])
+    job = replace(_job(tmp_path), options={"effort": "xhigh"})
+
+    run_jobs(
+        [job],
+        tmp_path / "effort-override.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.calls[0][3].effort == "xhigh"
+
+
+def test_unset_job_effort_keeps_the_endpoint_default(
+    tmp_path: Path,
+) -> None:
+    """Omitting effort preserves the endpoint's own value, argv unchanged."""
+    backend = SequenceBackend([None])
+
+    run_jobs(
+        [_job(tmp_path)],
+        tmp_path / "effort-default.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.calls[0][3].effort != "xhigh"
+
+
 def test_transient_failure_retries_on_the_same_endpoint_as_a_new_attempt(
     tmp_path: Path,
 ) -> None:

@@ -1,6 +1,6 @@
 {
   "name": "job-kit",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Durable sequential execution for heterogeneous agent jobs with advertisement-based endpoint selection and command-shaped acceptance.",
   "author": {
     "name": "Christina"
