@@ -9,10 +9,13 @@ from typing import Callable, Sequence
 
 import pytest
 
+import job_kit.run as run_module
+
 from llm_scripting_kit.completion import (
     AgentTimeoutError,
     BackendSelection,
     Capabilities,
+    EmptyCompletionError,
     ExecutionControl,
     HALT_RATE_LIMIT,
     HaltError,
@@ -20,13 +23,14 @@ from llm_scripting_kit.completion import (
 )
 from llm_scripting_kit.completion.adapter_capabilities import CODEX_CAPABILITIES
 
-from job_kit.model import Contract, Job, JobState, Prompt
+from job_kit.model import Contract, ContractContext, Job, JobState, Prompt
 from job_kit.run import (
     default_store_path,
     resume_run,
     run_contract,
     run_job_file,
     run_jobs,
+    HALT_UNREACHABLE,
 )
 from job_kit.store import JobStore
 
@@ -218,6 +222,62 @@ def test_acceptance_exit_zero_accepts_and_nonzero_rejects(tmp_path: Path) -> Non
     assert "contract" in rejected.stdout
 
 
+def test_contract_receives_completion_text_and_attempt_context(
+    tmp_path: Path,
+) -> None:
+    """The contract subprocess receives stdin and all six JOB_KIT_* values."""
+    command = (
+        sys.executable,
+        "-c",
+        "import os, sys; print(sys.stdin.read(), end=''); print('|'.join("
+        "os.environ[name] for name in ('JOB_KIT_RUN_ID', 'JOB_KIT_JOB_ID', "
+        "'JOB_KIT_ATTEMPT_NO', 'JOB_KIT_ENDPOINT', 'JOB_KIT_BACKEND', "
+        "'JOB_KIT_MODEL')))"
+    )
+    job = replace(
+        _job(tmp_path),
+        contract=Contract(command=command, directory=tmp_path),
+    )
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "context.sqlite3",
+        run_id="context-run",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(FakeBackend()),
+    )
+
+    acceptance = snapshot.attempts[0].acceptance
+    assert acceptance is not None
+    assert acceptance.stdout == (
+        "model answer"
+        "context-run|job|1|fake-endpoint|fake|fake-model\n"
+    )
+
+
+def test_run_contract_exports_context_over_inherited_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Context values replace only the six reserved variables."""
+    monkeypatch.setenv("JOB_KIT_MODEL", "inherited")
+    contract = Contract(
+        command=(
+            sys.executable,
+            "-c",
+            "import os, sys; print(sys.stdin.read(), end=''); print(os.environ['JOB_KIT_MODEL'])",
+        ),
+        directory=tmp_path,
+    )
+    result = run_contract(
+        contract,
+        response_text="completion",
+        context=ContractContext("run", "job", 2, "endpoint", "backend", "model"),
+    )
+
+    assert result.accepted is True
+    assert result.stdout == "completionmodel\n"
+
+
 def test_acceptance_timeout_is_recorded_as_a_non_accepting_result(
     tmp_path: Path,
 ) -> None:
@@ -298,6 +358,8 @@ def test_runner_carries_forwarded_params_through_acceptance(
             dropped_params=("temperature",),
             forwarded_params=("extras.top_k",),
             execution_controls_applied=("sandbox-mode",),
+            reasoning="internal reasoning",
+            finish_reason="stop",
             started_at="2026-09-01T00:00:00Z",
             ended_at="2026-09-01T00:00:01Z",
         )
@@ -314,6 +376,8 @@ def test_runner_carries_forwarded_params_through_acceptance(
     assert attempt.dropped_params == ("temperature",)
     assert attempt.forwarded_params == ("extras.top_k",)
     assert attempt.execution_controls_applied == ("sandbox-mode",)
+    assert attempt.reasoning == "internal reasoning"
+    assert attempt.finish_reason == "stop"
 
 
 def test_job_file_floor_reaches_the_run(tmp_path: Path) -> None:
@@ -476,6 +540,28 @@ def test_typed_halt_is_recorded_without_contract_invocation(tmp_path: Path) -> N
     assert attempt.error_code == HALT_RATE_LIMIT
     assert attempt.acceptance is None
     assert len(backend.calls) == 1
+
+
+def test_empty_completion_diagnostics_are_recorded(tmp_path: Path) -> None:
+    """A typed empty completion keeps its reasoning and finish reason."""
+    backend = FakeBackend(
+        error=EmptyCompletionError(
+            "empty completion",
+            reasoning="provider reasoning",
+            finish_reason="length",
+        )
+    )
+
+    snapshot = run_jobs(
+        [_job(tmp_path)],
+        tmp_path / "empty-completion.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    attempt = snapshot.attempts[0]
+    assert attempt.reasoning == "provider reasoning"
+    assert attempt.finish_reason == "length"
 
 
 def test_job_timeout_remains_eligible_on_the_same_endpoint(
@@ -658,6 +744,40 @@ def test_persistent_halt_falls_back_to_the_next_preference(
     assert [attempt.endpoint for attempt in snapshot.attempts] == ["first", "second"]
     assert first_backend.calls and second_backend.calls
     assert factory_calls == ["first", "second"]
+
+
+def test_openai_connection_failure_rotates_to_the_next_preference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An OpenAI API connection failure excludes its endpoint for the run."""
+    monkeypatch.setattr(
+        run_module,
+        "_openai",
+        type("OpenAISurface", (), {"APIConnectionError": ConnectionError})(),
+    )
+    first_backend = SequenceBackend([ConnectionError("connection refused")])
+    second_backend = SequenceBackend([None])
+    backends = {"first": first_backend, "second": second_backend}
+
+    def factory(endpoint: str, **_: object) -> BackendSelection:
+        return BackendSelection(endpoint, "fake", backends[endpoint], "fake-model")
+
+    job = replace(
+        _job(tmp_path),
+        endpoint_preference=("first", "second"),
+        max_attempts=2,
+    )
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "unreachable.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert [attempt.endpoint for attempt in snapshot.attempts] == ["first", "second"]
+    assert snapshot.attempts[0].halt_kind == HALT_UNREACHABLE
+    assert snapshot.attempts[0].error_code == HALT_UNREACHABLE
 
 
 def test_attempts_exhausted_terminate_after_retryable_failures(

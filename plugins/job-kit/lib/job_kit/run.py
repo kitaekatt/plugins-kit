@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 import uuid
@@ -31,6 +32,7 @@ from .model import (
     Attempt,
     AttemptError,
     Contract,
+    ContractContext,
     Job,
     JobState,
     RunSnapshot,
@@ -44,9 +46,15 @@ from .workspace import WorkspaceError, WorkspaceManager, WorkspaceResolution
 
 DEFAULT_TIMEOUT_S = 900.0
 CONTRACT_OUTPUT_LIMIT = 2000
+HALT_UNREACHABLE = "unreachable"
 _HALT_KINDS = frozenset(
-    {HALT_AUTH, HALT_RATE_LIMIT, HALT_INSUFFICIENT_CREDIT}
+    {HALT_AUTH, HALT_RATE_LIMIT, HALT_INSUFFICIENT_CREDIT, HALT_UNREACHABLE}
 )
+
+try:
+    import openai as _openai
+except ImportError:  # pragma: no cover - optional until an HTTP backend runs
+    _openai = None
 
 
 CapabilitiesProvider = Callable[[], Mapping[str, Capabilities]]
@@ -115,11 +123,26 @@ def run_contract(
     *,
     directory: Optional[Path] = None,
     timeout_s: Optional[float] = None,
+    response_text: str = "",
+    context: Optional[ContractContext] = None,
 ) -> Acceptance:
     """Run a contract command and capture its observed result."""
     if timeout_s is not None and timeout_s <= 0:
         raise ValueError("timeout_s must be positive")
     working_directory = (directory or contract.directory or Path.cwd()).expanduser().resolve()
+    environment = None
+    if context is not None:
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "JOB_KIT_RUN_ID": context.run_id,
+                "JOB_KIT_JOB_ID": context.job_id,
+                "JOB_KIT_ATTEMPT_NO": str(context.attempt_no),
+                "JOB_KIT_ENDPOINT": context.endpoint,
+                "JOB_KIT_BACKEND": context.backend,
+                "JOB_KIT_MODEL": context.model,
+            }
+        )
     started = time.monotonic()
     outcome = "observed"
     try:
@@ -127,6 +150,8 @@ def run_contract(
             list(contract.command),
             cwd=str(working_directory),
             capture_output=True,
+            input=response_text,
+            env=environment,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -166,6 +191,10 @@ def _attempt_number(store: JobStore, run_id: str, job_id: str) -> int:
 
 def _halt_for_exception(backend: object, exc: BaseException) -> Optional[str]:
     """Classify a typed transport failure without inspecting its text."""
+    if _openai is not None and isinstance(
+        exc, getattr(_openai, "APIConnectionError", ())
+    ):
+        return HALT_UNREACHABLE
     if isinstance(exc, HaltError):
         return _known_halt_kind(exc.kind)
     classifier = getattr(backend, "classify_halt", None)
@@ -288,9 +317,13 @@ def _backend_options(
     # deliberation than its endpoint's default says so here; unset keeps the
     # registry value, so an existing job file emits the same argv.
     effort = _string_option(job.options, "effort", None)
+    max_tokens_value = job.options.get("max_tokens", 4096)
+    temperature_value = job.options.get("temperature", 0.3)
     return BackendOptions(
         timeout_s=float(timeout_s),
         cwd=working_directory,
+        max_tokens=int(max_tokens_value),
+        temperature=float(temperature_value),
         effort=effort if effort is not None else selection.effort,
         allowed_tools=allowed_tools,
         disallowed_tools=_merge_disallowed_tools(run_floor, job_disallowed),
@@ -332,6 +365,8 @@ def _exception_attempt(
         if isinstance(exc, HaltError)
         else str(exc) or exc.__class__.__name__
     )
+    reasoning_value = getattr(exc, "reasoning", None)
+    finish_reason_value = getattr(exc, "finish_reason", None)
     attempt = Attempt(
         run_id=run_id,
         job_id=job.id,
@@ -354,6 +389,10 @@ def _exception_attempt(
         workspace_status=workspace.status,
         workspace_reason=workspace.reason,
         acceptance=None,
+        reasoning=(str(reasoning_value) if reasoning_value is not None else None),
+        finish_reason=(
+            str(finish_reason_value) if finish_reason_value is not None else None
+        ),
     )
     outcome = JobState.HALTED if halt_kind is not None else JobState.FAILED
     return attempt, _terminal_state_after_attempt(job, attempt_no, outcome)
@@ -389,13 +428,14 @@ def _response_attempt(
         else None
     )
     controls = tuple(str(value) for value in controls_value) if controls_value is not None else None
+    response_model = str(getattr(response, "model", selection.model))
     attempt = Attempt(
         run_id=run_id,
         job_id=job.id,
         attempt_no=attempt_no,
         endpoint=selection.endpoint,
         backend=selection.backend.name,
-        model=str(getattr(response, "model", selection.model)),
+        model=response_model,
         status=status,
         started_at=getattr(response, "started_at", None),
         ended_at=getattr(response, "ended_at", None),
@@ -406,6 +446,16 @@ def _response_attempt(
         execution_controls_applied=controls,
         usage=Usage.from_response(response),
         response_text=str(getattr(response, "text", "")),
+        reasoning=(
+            str(getattr(response, "reasoning"))
+            if getattr(response, "reasoning", None) is not None
+            else None
+        ),
+        finish_reason=(
+            str(getattr(response, "finish_reason"))
+            if getattr(response, "finish_reason", None) is not None
+            else None
+        ),
         workspace=workspace.path,
         base_ref=workspace.base_ref,
         workspace_status=workspace.status,
@@ -578,6 +628,15 @@ def run_job(
             job.contract,
             directory=working_directory,
             timeout_s=timeout_s,
+            response_text=attempt.response_text or "",
+            context=ContractContext(
+                run_id=run_id,
+                job_id=job.id,
+                attempt_no=attempt_no,
+                endpoint=attempt.endpoint,
+                backend=attempt.backend,
+                model=attempt.model,
+            ),
         )
     except (KeyboardInterrupt, SystemExit) as exc:
         interrupted_attempt = replace(
@@ -653,6 +712,8 @@ def replace_attempt_acceptance(attempt: Attempt, acceptance: Acceptance) -> Atte
         execution_controls_applied=attempt.execution_controls_applied,
         usage=attempt.usage,
         response_text=attempt.response_text,
+        reasoning=attempt.reasoning,
+        finish_reason=attempt.finish_reason,
         workspace=attempt.workspace,
         base_ref=attempt.base_ref,
         workspace_status=attempt.workspace_status,
@@ -861,6 +922,7 @@ def resume_run(
 __all__ = [
     "DEFAULT_TIMEOUT_S",
     "CONTRACT_OUTPUT_LIMIT",
+    "HALT_UNREACHABLE",
     "default_store_path",
     "default_workspace_root",
     "run_contract",

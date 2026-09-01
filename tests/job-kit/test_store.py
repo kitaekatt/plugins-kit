@@ -40,6 +40,8 @@ def _attempt(run_id: str, job_id: str, directory: Path) -> Attempt:
         execution_controls_applied=(),
         usage=Usage(input_tokens=4, output_tokens=6, cache_hit_tokens=0),
         response_text="done",
+        reasoning="internal reasoning",
+        finish_reason="stop",
         workspace=directory,
         base_ref="base-ref",
         workspace_status="isolated",
@@ -88,6 +90,8 @@ def test_store_round_trip_and_terminal_refusal(tmp_path: Path) -> None:
     assert snapshot.attempts[0].base_ref == "base-ref"
     assert snapshot.attempts[0].workspace_status == "isolated"
     assert snapshot.attempts[0].forwarded_params == ("extras.top_k",)
+    assert snapshot.attempts[0].reasoning == "internal reasoning"
+    assert snapshot.attempts[0].finish_reason == "stop"
 
     with pytest.raises(TerminalStateError):
         reopened.mark_running("run-1", job.id)
@@ -219,6 +223,8 @@ def test_store_migrates_the_job_error_column_from_schema_v1(tmp_path: Path) -> N
         "workspace_removed_at",
         "workspace_removal_forced",
         "forwarded_params_json",
+        "reasoning",
+        "finish_reason",
     } <= attempt_columns
 
 

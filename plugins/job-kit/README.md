@@ -56,8 +56,12 @@ jobs:
 ## Options
 
 A job's optional `options` mapping carries `allowed_tools`,
-`disallowed_tools`, `system_prompt_mode` and `extras` through to the
-completion seam. `workspace` accepts `directory`, `base_ref` and `isolate`.
+`disallowed_tools`, `system_prompt_mode`, `max_tokens`, `temperature` and
+`extras` through to the completion seam. `max_tokens` must be at least 1 and
+`temperature` must be in the range 0 to 2. If omitted, they default to 4096 and
+0.3. A contract receives the completion text on stdin and attempt metadata in
+the `JOB_KIT_*` environment variables.
+`workspace` accepts `directory`, `base_ref` and `isolate`.
 
 Usage counts are nullable: a transport can complete without reporting tokens,
 and unknown usage is recorded as unknown rather than as zero.

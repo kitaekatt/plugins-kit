@@ -144,6 +144,10 @@ _MIGRATIONS: list[list[str]] = [
     [
         "ALTER TABLE attempts ADD COLUMN forwarded_params_json TEXT",
     ],
+    [
+        "ALTER TABLE attempts ADD COLUMN reasoning TEXT",
+        "ALTER TABLE attempts ADD COLUMN finish_reason TEXT",
+    ],
 ]
 
 
@@ -258,6 +262,12 @@ def _row_to_attempt(row: sqlite3.Row) -> Attempt:
         ),
         usage=usage,
         response_text=row["response_text"],
+        reasoning=(str(row["reasoning"]) if row["reasoning"] is not None else None),
+        finish_reason=(
+            str(row["finish_reason"])
+            if row["finish_reason"] is not None
+            else None
+        ),
         workspace=Path(workspace) if workspace is not None else None,
         base_ref=(str(row["base_ref"]) if row["base_ref"] is not None else None),
         workspace_status=str(row["workspace_status"] or "none"),
@@ -758,12 +768,13 @@ class JobStore:
                     forwarded_params_json, execution_controls_applied_json,
                     started_at, ended_at,
                     input_tokens, output_tokens, cache_hit_tokens, total_tokens,
-                    response_text, workspace, base_ref, workspace_status,
+                    response_text, reasoning, finish_reason, workspace, base_ref,
+                    workspace_status,
                     workspace_reason, workspace_removed_at, workspace_removal_forced,
                     acceptance_json
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 (
@@ -799,6 +810,8 @@ class JobStore:
                     usage.cache_hit_tokens if usage is not None else None,
                     usage.total_tokens if usage is not None else None,
                     attempt.response_text,
+                    attempt.reasoning,
+                    attempt.finish_reason,
                     str(attempt.workspace) if attempt.workspace is not None else None,
                     attempt.base_ref,
                     attempt.workspace_status,
