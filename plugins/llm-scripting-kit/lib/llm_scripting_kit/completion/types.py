@@ -25,6 +25,48 @@ ERROR = "error"
 """The call failed for any other reason; ``error`` carries the detail."""
 
 
+class EmptyCompletionError(RuntimeError):
+    """The provider returned a response carrying no assistant content.
+
+    Raised rather than returned, per this module's contract: the package API
+    signals failure with typed exceptions, and an empty ``text`` returned as a
+    success is indistinguishable at the call site from a model that genuinely
+    had nothing to say. That ambiguity is the whole hazard -- a batch consumer
+    reads the empty string as a real answer and reports the unit clean.
+
+    Raised ONLY for ``finish_reason == "length"`` -- an exhausted output budget,
+    where retrying the same request unchanged cannot help. An empty answer for
+    any OTHER reason is returned as an ordinary response carrying ``reasoning``
+    and ``finish_reason``, because this layer classifies and the CALLER halts
+    (see this plugin's CLAUDE.md). That split is not stylistic: the provider
+    bills for an empty answer, and a consumer that prices a call only on its
+    success path would lose the charge and then retry the call.
+
+    The exception carries the reasoning as DIAGNOSTIC payload, not a recoverable
+    answer. Measured on Qwen3.8-27B via NInfer, 2026-09-01: an empty response
+    ended in a repetition loop -- the reasoning block explains the failure and
+    does not contain the answer.
+
+    - ``reasoning`` -- ``reasoning_content`` as returned, "" when absent.
+    - ``finish_reason`` -- the provider's own token; ``"length"`` means the
+      budget was exhausted, ``"stop"`` means the model chose to end.
+    - ``output_tokens`` -- completion tokens billed for the empty answer.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reasoning: str = "",
+        finish_reason: Optional[str] = None,
+        output_tokens: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.reasoning = reasoning
+        self.finish_reason = finish_reason
+        self.output_tokens = output_tokens
+
+
 @dataclass(frozen=True)
 class ResponseError:
     """A failure reported AS DATA rather than raised.
@@ -53,6 +95,20 @@ class LLMResponse:
 
     - ``text`` -- assistant message content ("" when the provider returned
       nothing).
+    - ``reasoning`` -- the provider's thinking block (``reasoning_content``)
+      when it surfaced one, else "". Populated by the OpenAI-compatible
+      transport only; the CLI transports leave it "". Present because an empty
+      ``text`` says nothing about WHY it is empty, and the thinking block
+      usually does -- a repetition loop and a model with nothing to report look
+      identical without it.
+    - ``finish_reason`` -- the provider's own stop token, or None where the
+      transport has no equivalent (every CLI transport). This is what separates
+      the two causes of an empty ``text``: ``"length"`` means the output budget
+      really was exhausted and raising ``max_tokens`` may help, while anything
+      else -- notably ``"stop"`` -- means the model ended its own turn, and
+      raising ``max_tokens`` will not help. A consumer inferring exhaustion
+      from empty-text-plus-nonzero-tokens alone cannot tell those apart and
+      will give the wrong remedy for the second.
     - ``model`` -- the model id that ACTUALLY served the call.
     - ``input_tokens`` / ``output_tokens`` -- usage reported by the provider.
     - ``cache_hit_tokens`` -- prompt-cache hit tokens the provider surfaced
@@ -124,6 +180,8 @@ class LLMResponse:
 
     text: str
     model: str
+    reasoning: str = ""
+    finish_reason: Optional[str] = None
     input_tokens: int = 0
     output_tokens: int = 0
     cache_hit_tokens: int = 0

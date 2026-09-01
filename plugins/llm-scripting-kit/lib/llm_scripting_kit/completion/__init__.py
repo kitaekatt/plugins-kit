@@ -71,6 +71,7 @@ from .types import (
     ERROR,
     TIMEOUT,
     BackendOptions,
+    EmptyCompletionError,
     LLMBackend,
     LLMResponse,
     ResponseError,
@@ -87,6 +88,7 @@ from .opencode_backend import (
 __all__ = [
     # seam types
     "LLMResponse",
+    "EmptyCompletionError",
     "ResponseError",
     "COMPLETED",
     "TIMEOUT",

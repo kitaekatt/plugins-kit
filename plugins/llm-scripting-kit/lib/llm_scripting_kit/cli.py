@@ -386,6 +386,15 @@ def _cmd_complete(args: argparse.Namespace) -> int:
             model=selection.model,
             status=TIMEOUT if isinstance(exc, AgentTimeoutError) else ERROR,
             error=ResponseError(code=halt or "execution", message=str(exc)),
+            # An EmptyCompletionError carries the diagnostic the caller most
+            # needs and cannot reconstruct -- the thinking block behind an empty
+            # answer, and the stop token that says why it was empty. The
+            # envelope already serializes both fields, so a failure that drops
+            # them reports less than it holds. Every other exception leaves the
+            # defaults.
+            reasoning=getattr(exc, "reasoning", "") or "",
+            finish_reason=getattr(exc, "finish_reason", None),
+            output_tokens=getattr(exc, "output_tokens", 0) or 0,
             wall_ms=int((time.monotonic() - started_monotonic) * 1000),
             # Dropped params do not depend on the outcome: the adapter would not
             # have read them either way, so this is as true of a failed call as
