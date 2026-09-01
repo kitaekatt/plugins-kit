@@ -69,6 +69,11 @@ framework dependency.
   `shared_lib_imports: ["content_pipeline"]` and a `plugins[]` entry for
   `plugins-kit:content-pipeline-kit` with `install: "auto"`; without them
   the import resolves in development and fails on a consumer's machine.
-- `editor/` -- the web surface. Node-side code will live here; today it
-  holds only the package placeholder. Communicates with `dispatch/` solely
-  through the file seam above.
+- `editor/` -- the web surface, which this kit does NOT build. **Databench**
+  owns it: a separate local web workbench that browses and edits a project's
+  data files, including the safe-write path that puts bytes on disk. This kit
+  supplies what Databench validates and annotates against (`schema/`,
+  `comments/`); it ships no editor of its own and no code here imports
+  Databench or is imported by it. They meet only at the file seam above. The
+  package survives as the name of that boundary -- do not grow an editor in
+  it; add to `schema/` or `comments/` instead.
