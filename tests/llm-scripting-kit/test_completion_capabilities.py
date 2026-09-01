@@ -27,11 +27,13 @@ from llm_scripting_kit.completion.adapter_capabilities import (
 from llm_scripting_kit.completion.backends import ClaudeCliBackend, OpenRouterBackend
 from llm_scripting_kit.completion.capabilities import (
     APPEND,
+    DENY,
     NATIVE,
     NONE,
     PASSTHROUGH,
     PROMPT_FOLD,
     REPLACE,
+    REQUEST,
     PARSED_RESULT,
     TEXT_RESULT,
 )
@@ -178,6 +180,8 @@ def test_openrouter_dropped_params_change_nothing(dropped):
         "cache_salt": 7,
         "effort": "high",
         "allowed_tools": "Read",
+        "disallowed_tools": "Bash",
+        "system_prompt_mode": "append",
         "cwd": Path.cwd(),
         "log_prefix": "[x]",
     }
@@ -205,11 +209,111 @@ def _claude_argv(**opts):
     return captured
 
 
-def test_claude_emits_each_advertised_control():
+#: The one claude control the adapter emits only on request. Named here rather
+#: than filtered by ``source`` because ``source`` does NOT decide it:
+#: ``allowed-tools`` is ``source=REQUEST`` too and is still emitted on every
+#: call, so a ``source == FIXED`` filter would quietly stop asserting
+#: ``--allowedTools`` in a default argv. That is the same trap ``results.py``
+#: documents for codex's ``sandbox-mode``.
+_CLAUDE_CONDITIONAL_CONTROLS = {"disallowed-tools"}
+
+
+def test_claude_emits_each_unconditionally_advertised_control():
+    """Every control the adapter emits on EVERY call appears in a default argv.
+
+    ``disallowed-tools`` is the only exclusion: the adapter emits nothing for it
+    unless the caller sets the param, so asserting it here would demand the very
+    flag-without-a-request that "suppressing a flag is not a control" forbids.
+    Its emission is asserted by
+    ``test_claude_emits_the_deny_list_only_when_the_caller_sets_it`` instead.
+    """
     argv = _claude_argv()["cmd"]
+    asserted = 0
     for control in CLAUDE_CAPABILITIES.execution_controls:
+        if control.id in _CLAUDE_CONDITIONAL_CONTROLS:
+            continue
         head = control.emits.split()[0]
         assert head in argv, control.id
+        asserted += 1
+    assert asserted, "expected at least one unconditional claude control"
+
+
+def test_claude_emits_an_empty_allow_list_when_the_caller_names_no_tools():
+    """The asymmetry with the deny flag, asserted rather than merely described.
+
+    An empty ALLOW-list is a real restriction (allow nothing) and is emitted on
+    every call, which is why ClaudeCliBackend reports ``allowed-tools`` as
+    applied even for a caller who set nothing. An empty DENY-list would restrict
+    nothing, so that flag stays absent. Without this test the claim rests on a
+    docstring, since every other --allowedTools assertion sets the param.
+    """
+    argv = _claude_argv()["cmd"]
+    assert argv[argv.index("--allowedTools") + 1] == ""
+    assert "--disallowedTools" not in argv
+
+
+def test_claude_emits_the_deny_list_only_when_the_caller_sets_it():
+    """The one real tool-DENY channel, and its absence when unrequested."""
+    assert "--disallowedTools" not in _claude_argv()["cmd"]
+    argv = _claude_argv(disallowed_tools="Bash(git *) Edit")["cmd"]
+    assert argv[argv.index("--disallowedTools") + 1] == "Bash(git *) Edit"
+
+
+def test_claude_deny_is_advertised_as_a_request_control():
+    control = next(
+        c for c in CLAUDE_CAPABILITIES.execution_controls if c.id == "disallowed-tools"
+    )
+    assert control.effect == DENY
+    assert control.source == REQUEST
+    assert control.parameter == "disallowed_tools"
+    # no subject list: the names are caller-supplied, not native identifiers
+    assert control.subjects == ()
+
+
+def test_claude_allow_and_deny_are_separate_channels():
+    """An allow-list is not a deny-list; the adapter emits both flags."""
+    argv = _claude_argv(allowed_tools="Read", disallowed_tools="Bash")["cmd"]
+    assert argv[argv.index("--allowedTools") + 1] == "Read"
+    assert argv[argv.index("--disallowedTools") + 1] == "Bash"
+
+
+def test_claude_replaces_the_system_prompt_by_default():
+    argv = _claude_argv()["cmd"]
+    assert argv[argv.index("--system-prompt") + 1] == "sys"
+    assert "--append-system-prompt" not in argv
+    assert CLAUDE_CAPABILITIES.system_prompt.mode == REPLACE
+
+
+def test_claude_appends_the_system_prompt_when_asked():
+    """The distinction the advertisement claims, asserted in the argv itself."""
+    argv = _claude_argv(system_prompt_mode="append")["cmd"]
+    assert argv[argv.index("--append-system-prompt") + 1] == "sys"
+    # the REPLACE flag is gone -- append is not "both", it is a different flag
+    assert "--system-prompt" not in argv
+
+
+def test_claude_advertises_each_system_prompt_mode_it_can_emit():
+    cap = CLAUDE_CAPABILITIES.system_prompt
+    assert set(cap.modes) == {REPLACE, APPEND}
+    assert cap.parameter == "system_prompt_mode"
+    for mode, flag in cap.emits_by_mode.items():
+        argv = _claude_argv(system_prompt_mode=mode)["cmd"]
+        assert flag in argv, mode
+
+
+def test_claude_rejects_an_unadvertised_system_prompt_mode():
+    """The rejection is what earns the advertised `values` menu.
+
+    Forwarding an unknown mode would silently give the caller REPLACE while
+    they believed they had asked for an append -- and would make the advertised
+    menu a claim no code backs.
+    """
+    with pytest.raises(ValueError, match="system_prompt_mode"):
+        _claude_argv(system_prompt_mode="prepend")
+    assert CLAUDE_CAPABILITIES.params["system_prompt_mode"].values == (
+        "append",
+        "replace",
+    )
 
 
 def test_claude_permission_bypass_and_allowlist_coexist():

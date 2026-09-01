@@ -163,6 +163,19 @@ class BackendOptions:
     - ``allowed_tools`` -- claude-cli ``--allowedTools`` value. ``None`` (the
       default) means a pure completion (no tools). Only read-only vision use
       (``"Read"``) is sanctioned; agentic tool sets are out of scope here.
+    - ``disallowed_tools`` -- claude-cli ``--disallowedTools`` value: a
+      comma/space-separated deny-list (``"Bash(git *) Edit"``). ``None`` (the
+      default) emits the flag nowhere, which is an absence rather than an empty
+      deny-list, so no deny control is reported for that call. This is the one
+      real tool DENIAL channel across the four adapters -- ``allowed_tools`` is
+      an allow-list and cannot express denying an arbitrary tool without a
+      complete tool universe, which no adapter has.
+    - ``system_prompt_mode`` -- claude-cli only: ``"replace"`` (the default,
+      ``--system-prompt``) or ``"append"`` (``--append-system-prompt``). The two
+      differ in what the model ends up with, not merely in spelling: replace
+      makes the caller's text the WHOLE system prompt, while append adds it to
+      the CLI's own default one. An unknown value is rejected before dispatch,
+      which is why claude advertises a ``values`` menu for it.
     - ``cwd`` -- CLI working directory. ``None`` uses the process cwd; an
       OpenCode ``--dir`` is not a filesystem-confinement boundary.
     - ``log_prefix`` -- stderr tag so mixed logs from parallel runs stay
@@ -182,6 +195,8 @@ class BackendOptions:
     user_cache_prefix: str = ""
     effort: Optional[str] = None
     allowed_tools: Optional[str] = None
+    disallowed_tools: Optional[str] = None
+    system_prompt_mode: str = "replace"
     cwd: Optional[Path] = None
     log_prefix: str = "[llm]"
     extras: Mapping[str, Any] = field(default_factory=dict)

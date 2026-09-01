@@ -19,10 +19,12 @@ identically regardless of provider.
 
 A *completion* here is strictly one system prompt + one user prompt -> one text
 response. The claude CLI exposes no temperature / max_tokens controls, so
-:class:`ClaudeCliBackend` accepts and ignores those options (documented). The
+:class:`ClaudeCliBackend` accepts those options and drops them -- reported in
+``LLMResponse.dropped_params``, not discarded in silence. The
 agentic features (a default ``--allowedTools`` set, ``--mcp-config``) are
 deliberately absent; ``allowed_tools`` exists for read-only vision use and
-nothing more.
+nothing more, and ``disallowed_tools`` narrows that further rather than opening
+anything up.
 """
 from __future__ import annotations
 
@@ -42,7 +44,11 @@ from .claude_runner import (
     looks_like_hard_stop,
     run_claude_streaming,
 )
-from .adapter_capabilities import CLAUDE_CAPABILITIES, OPENROUTER_CAPABILITIES
+from .adapter_capabilities import (
+    _CLAUDE_SYSTEM_PROMPT_FLAGS,
+    CLAUDE_CAPABILITIES,
+    OPENROUTER_CAPABILITIES,
+)
 from .capabilities import Capabilities
 from .results import (
     check_applied_controls,
@@ -350,12 +356,23 @@ class ClaudeCliBackend:
         cwd = opts.cwd if opts.cwd is not None else Path.cwd()
         executable = self.executable or _resolve_claude_executable()
 
+        # Validated, not merely forwarded -- which is what earns the advertised
+        # `values` menu on this param. An unknown mode would otherwise emit
+        # nothing and silently give the caller REPLACE semantics while they
+        # believed they had asked for an append.
+        if opts.system_prompt_mode not in _CLAUDE_SYSTEM_PROMPT_FLAGS:
+            raise ValueError(
+                f"unknown system_prompt_mode {opts.system_prompt_mode!r}; "
+                f"expected one of "
+                f"{', '.join(sorted(_CLAUDE_SYSTEM_PROMPT_FLAGS))}"
+            )
+
         cmd = [
             executable,
             "-p",
             "--model",
             model,
-            "--system-prompt",
+            _CLAUDE_SYSTEM_PROMPT_FLAGS[opts.system_prompt_mode],
             system,
             "--output-format",
             "json",
@@ -365,6 +382,13 @@ class ClaudeCliBackend:
             "--allowedTools",
             opts.allowed_tools if opts.allowed_tools is not None else "",
         ]
+        # Emitted only when the caller named tools to deny. The empty-string
+        # treatment `--allowedTools` gets above would be wrong here: an empty
+        # ALLOW-list is a meaningful restriction (allow nothing), while an empty
+        # DENY-list restricts nothing at all, so emitting it would advertise a
+        # control the request does not actually carry.
+        if opts.disallowed_tools is not None:
+            cmd.extend(["--disallowedTools", opts.disallowed_tools])
         if opts.effort is not None:
             cmd.extend(["--effort", opts.effort])
 
@@ -464,24 +488,30 @@ class ClaudeCliBackend:
             from_cache=False,
             dropped_params=derive_dropped_params(self.capabilities, opts),
             forwarded_params=derive_forwarded_params(self.capabilities, opts),
-            execution_controls_applied=self._applied_controls(),
+            execution_controls_applied=self._applied_controls(opts),
             started_at=started_at,
             ended_at=utc_now_iso(),
         )
 
-    def _applied_controls(self) -> "tuple[str, ...]":
+    def _applied_controls(self, opts: BackendOptions) -> "tuple[str, ...]":
         """The advertised controls this adapter's argv carries, per call.
 
-        All three are unconditional, ``allowed-tools`` included: the argv above
+        Three are unconditional, ``allowed-tools`` included: the argv above
         emits ``--allowedTools`` on every call, passing "" when the caller named
         no tools. An empty allow-list is still an emitted allow-list -- the
         adapter suppresses nothing -- so reporting it only when the caller set
         the param would under-report what the request actually contained.
+
+        ``disallowed-tools`` is the one CONDITIONAL control here, and the
+        asymmetry with ``allowed-tools`` is deliberate rather than an
+        inconsistency: an unset deny-list emits no flag at all, and reporting a
+        control for a flag the argv does not carry is precisely the overclaim
+        this contract exists to prevent.
         """
-        return check_applied_controls(
-            self.capabilities,
-            ("allowed-tools", "permission-bypass", "no-session-persistence"),
-        )
+        applied = ["allowed-tools", "permission-bypass", "no-session-persistence"]
+        if opts.disallowed_tools is not None:
+            applied.append("disallowed-tools")
+        return check_applied_controls(self.capabilities, tuple(applied))
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
         return halt.classify_claude_exception(exc)

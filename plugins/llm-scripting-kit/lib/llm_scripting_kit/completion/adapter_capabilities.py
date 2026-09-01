@@ -16,6 +16,7 @@ from dataclasses import fields
 
 from .capabilities import (
     ALLOW,
+    APPEND,
     BYPASS,
     Capabilities,
     CONFINE,
@@ -126,6 +127,21 @@ OPENROUTER_CAPABILITIES = Capabilities(
 # --output-format json flag selects claude's TRANSPORT envelope, which the
 # adapter parses to reach data["result"], and is not a structured-output channel.
 
+#: The claude-cli flag each ``system_prompt_mode`` emits, consumed by
+#: ClaudeCliBackend to BUILD the argv and by the record below to ADVERTISE the
+#: menu. One map, both jobs: the advertised ``values`` are its keys and the
+#: emitted flag is its value, so a mode cannot be added to the adapter without
+#: appearing in the advertisement. It lives on this side of the pair because
+#: backends.py already imports this module -- the reverse edge would be a cycle.
+#:
+#: The two flags are not interchangeable spellings: ``--system-prompt`` makes
+#: the caller's text the whole system prompt, while ``--append-system-prompt``
+#: adds it to the CLI's own default one.
+_CLAUDE_SYSTEM_PROMPT_FLAGS = {
+    "replace": "--system-prompt",
+    "append": "--append-system-prompt",
+}
+
 _CLAUDE_PARAMS = {
     "timeout_s": ParamCapability(
         type="number", default=900.0, emits="runner timeout_s"
@@ -143,6 +159,25 @@ _CLAUDE_PARAMS = {
         default="",
         emits="--allowedTools",
         note="None becomes the empty string, i.e. a pure completion with no tools",
+    ),
+    "disallowed_tools": ParamCapability(
+        type="string",
+        emits="--disallowedTools",
+        note=(
+            "emitted ONLY when not None; unlike --allowedTools no empty value "
+            "is sent, because an empty deny-list restricts nothing"
+        ),
+    ),
+    "system_prompt_mode": ParamCapability(
+        type="string",
+        default="replace",
+        values=tuple(sorted(_CLAUDE_SYSTEM_PROMPT_FLAGS)),
+        emits="--system-prompt | --append-system-prompt",
+        note=(
+            "the menu is advertised because ClaudeCliBackend REJECTS an unknown "
+            "mode before dispatch; the two flags differ in meaning, not just "
+            "spelling (see system_prompt.emits_by_mode)"
+        ),
     ),
     "log_prefix": ParamCapability(
         type="string", default="[llm]", emits="runner log_prefix"
@@ -165,6 +200,22 @@ CLAUDE_CAPABILITIES = Capabilities(
                 "cannot express denial of an arbitrary tool without a complete "
                 "tool universe. The record makes no claim about how it composes "
                 "with the permission bypass below"
+            ),
+        ),
+        ExecutionControl(
+            id="disallowed-tools",
+            emits="--disallowedTools",
+            effect=DENY,
+            source=REQUEST,
+            parameter="disallowed_tools",
+            note=(
+                "the only real tool DENY channel across the four adapters. "
+                "Emitted only when the caller sets the param, so an unset "
+                "deny-list reports no control -- suppressing a flag is not a "
+                "control. The record claims the EMISSION only: nothing here "
+                "establishes that the CLI honors the deny, and the subjects are "
+                "caller-supplied rather than a native identifier list, so none "
+                "are enumerated"
             ),
         ),
         ExecutionControl(
@@ -192,10 +243,19 @@ CLAUDE_CAPABILITIES = Capabilities(
     system_prompt=SystemPromptCapability(
         mode=REPLACE,
         emits="--system-prompt",
+        modes=(REPLACE, APPEND),
+        parameter="system_prompt_mode",
+        emits_by_mode={
+            REPLACE: "--system-prompt",
+            APPEND: "--append-system-prompt",
+        },
         note=(
-            "REPLACES the system prompt. The installed CLI exposes "
-            "--append-system-prompt, but this adapter emits it nowhere and no "
-            "test backs an append, so append is not advertised"
+            "REPLACE is the default and makes the caller's text the WHOLE "
+            "system prompt; APPEND emits --append-system-prompt, which adds it "
+            "to the CLI's own default prompt. That difference is why append is "
+            "a separate mode rather than a spelling of the same thing. Both "
+            "claims are about the argv this adapter builds; neither asserts "
+            "what the CLI then does with the text"
         ),
     ),
 )
@@ -442,4 +502,5 @@ __all__ = [
     "CLAUDE_CAPABILITIES",
     "CODEX_CAPABILITIES",
     "OPENCODE_CAPABILITIES",
+    "_CLAUDE_SYSTEM_PROMPT_FLAGS",
 ]

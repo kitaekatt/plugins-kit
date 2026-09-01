@@ -155,7 +155,8 @@ class OpencodeCliBackend:
       an execution directory only, never a confinement boundary.
     - ``log_prefix`` -> the runner's stderr tag.
     - ``max_tokens`` / ``temperature`` / ``cache_salt`` /
-      ``user_cache_prefix`` / ``allowed_tools`` / ``extras`` -- OpenCode's
+      ``user_cache_prefix`` / ``allowed_tools`` / ``disallowed_tools`` /
+      ``system_prompt_mode`` / ``extras`` -- OpenCode's
       adapter contract exposes no corresponding completion flag. They are
       accepted for protocol compatibility and dropped, as the other CLI
       backends do for their inapplicable fields -- and REPORTED as dropped

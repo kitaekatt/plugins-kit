@@ -95,11 +95,12 @@ content-pipeline-kit's `routed_model()` is the in-fleet compensation for this,
 and its existence is the evidence: a genuinely uniform seam would not need it.
 
 **`BackendOptions` is a union, not a neutral description of the work.**
-`user_cache_prefix` is OpenRouter-only; `allowed_tools` is claude-cli-only;
-`effort` reaches claude-cli, codex, and opencode but not OpenRouter; `cwd`
+`user_cache_prefix` is OpenRouter-only; `allowed_tools`, `disallowed_tools` and
+`system_prompt_mode` are claude-cli-only; `effort` reaches claude-cli, codex,
+and opencode but not OpenRouter; `cwd`
 reaches the three CLI backends and not OpenRouter, which is why `cwd` is not a
 core param of this seam. `temperature` and `max_tokens` are accepted and then
-ignored by all CLI backends.
+dropped by all CLI backends -- dropped and REPORTED, not ignored.
 
 That inequality is no longer folklore: **each adapter ADVERTISES it.** Every
 backend class carries a `capabilities: ClassVar[Capabilities]`
@@ -167,6 +168,40 @@ advice -- remove this param, versus this param reached the provider and may be
 doing its job. The advertisement is what distinguishes them: a generic `extras`
 param with `handling: passthrough` means forwarded, a per-key
 `extras.<name>` entry means honored, and neither means dropped.
+
+**Tool denial exists on exactly one adapter, and the record says so.**
+claude-cli's `--disallowedTools` is the only real DENY channel across the four:
+`allowed_tools` is an ALLOW-list and cannot express denying an arbitrary tool
+without a complete tool universe, which no adapter has. codex constrains
+RESOURCES (sandbox, network) rather than tools, opencode injects fixed scalar
+permission denials of its own, and openrouter has no tool surface at all. So
+the honest answer differs per adapter, which is why there is no flat
+`tool_deny` enum -- one word would be false for at least two of them.
+
+The deny control is the adapter's one CONDITIONAL control, and the asymmetry
+with `allowed-tools` beside it is deliberate. `--allowedTools` is emitted on
+every call, passing `""` when the caller named no tools, because an empty
+ALLOW-list is a real restriction (allow nothing) and is therefore reported.
+An empty DENY-list restricts nothing, so an unset `disallowed_tools` emits no
+flag and reports no control -- suppressing a flag is not a control.
+
+**`system_prompt_mode` is a real mode choice, not two spellings.**
+`--system-prompt` makes the caller's text the WHOLE system prompt;
+`--append-system-prompt` adds it to the CLI's own default prompt. The model
+ends up with different text, so the advertisement carries both under
+`system_prompt.modes` with a per-mode `emits_by_mode`, and `replace` remains
+the default so an existing caller's request is unchanged. The param advertises
+a `values` menu because the adapter REJECTS an unknown mode before dispatch --
+forwarding one would silently hand the caller `replace` while they believed
+they had asked for an append, and would make the advertised menu a claim no
+code backs. `_CLAUDE_SYSTEM_PROMPT_FLAGS` is the single map behind both the
+validation and the advertised menu, so a mode cannot reach the argv without
+appearing in the record.
+
+As everywhere here, both are claims about the argv this adapter BUILDS. Nothing
+establishes that the CLI honors a deny or that the appended text survives --
+no seam test can, and claiming it would be the overclaim the advertisement
+exists to prevent.
 
 Reporting the applied controls is per-adapter work, and deliberately so: only
 the code that builds the request knows what it emitted. `source` does not settle

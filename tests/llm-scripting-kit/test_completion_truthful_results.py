@@ -264,6 +264,52 @@ def test_claude_reports_its_three_unconditional_controls():
     )
 
 
+def test_claude_reports_the_deny_control_only_when_it_emitted_one():
+    """The conditional counterpart to allowed-tools below.
+
+    An unset deny-list emits no flag, so reporting the control would assert
+    something the argv does not contain.
+    """
+    runner = _ClaudeRunner(json.dumps({"result": "hi", "is_error": False}))
+    plain = _claude(runner).complete("s", "u", model="opus")
+    assert "disallowed-tools" not in plain.execution_controls_applied
+
+    runner = _ClaudeRunner(json.dumps({"result": "hi", "is_error": False}))
+    denied = _claude(runner).complete(
+        "s", "u", model="opus", options=BackendOptions(disallowed_tools="Bash")
+    )
+    assert "disallowed-tools" in denied.execution_controls_applied
+    assert "--disallowedTools" in runner.calls[0]
+
+
+def test_claude_reports_the_system_prompt_mode_it_actually_emitted():
+    """A mode is reported through the argv, never through the caller's word."""
+    runner = _ClaudeRunner(json.dumps({"result": "hi", "is_error": False}))
+    _claude(runner).complete(
+        "s", "u", model="opus", options=BackendOptions(system_prompt_mode="append")
+    )
+    assert "--append-system-prompt" in runner.calls[0]
+    assert "--system-prompt" not in runner.calls[0]
+    # and the mode the caller chose is not reported as dropped
+    assert "system_prompt_mode" not in _claude(
+        _ClaudeRunner(json.dumps({"result": "hi", "is_error": False}))
+    ).complete(
+        "s", "u", model="opus", options=BackendOptions(system_prompt_mode="append")
+    ).dropped_params
+
+
+@pytest.mark.parametrize("param", ["disallowed_tools", "system_prompt_mode"])
+def test_the_other_adapters_report_the_claude_only_params_as_dropped(param):
+    """A field added to BackendOptions is dropped-by-default everywhere else."""
+    for caps in (
+        OPENROUTER_CAPABILITIES,
+        CODEX_CAPABILITIES,
+        OPENCODE_CAPABILITIES,
+    ):
+        assert param in caps.dropped_params, caps.adapter
+    assert param not in CLAUDE_CAPABILITIES.dropped_params
+
+
 def test_claude_reports_allowed_tools_even_when_the_caller_named_none():
     """An empty allow-list is still an emitted allow-list, not a suppression."""
     runner = _ClaudeRunner(json.dumps({"result": "hi", "is_error": False}))

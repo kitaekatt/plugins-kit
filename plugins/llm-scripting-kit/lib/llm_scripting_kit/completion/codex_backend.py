@@ -208,7 +208,8 @@ class CodexCliBackend:
       extras key reaches nothing and comes back in ``dropped_params`` as
       ``extras.<key>`` -- per key, because half of this map IS read and the
       bare field name would have no single answer here.
-    - ``temperature`` / ``max_tokens`` / ``allowed_tools`` / ``cache_salt`` /
+    - ``temperature`` / ``max_tokens`` / ``allowed_tools`` /
+      ``disallowed_tools`` / ``system_prompt_mode`` / ``cache_salt`` /
       ``user_cache_prefix`` -- codex exposes no such knobs. Accepted for
       protocol compatibility and dropped, exactly as ClaudeCliBackend does --
       and reported in ``dropped_params``, not discarded in silence.

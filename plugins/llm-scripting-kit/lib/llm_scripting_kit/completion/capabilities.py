@@ -197,11 +197,27 @@ class StructuredOutputCapability:
 
 @dataclass(frozen=True)
 class SystemPromptCapability:
-    """How system text reaches the model. Only ``append`` claims an append."""
+    """How system text reaches the model. Only ``append`` claims an append.
+
+    ``mode`` is the mode a caller who selects nothing gets, and ``emits`` is
+    what THAT mode produces. Where the caller can choose, ``modes`` lists every
+    mode the adapter can emit (including the default), ``parameter`` names the
+    :class:`~.types.BackendOptions` field that selects one, and
+    ``emits_by_mode`` gives the concrete emission per mode -- one falsifiable
+    string each, exactly as :attr:`ExecutionControl.emits` is.
+
+    An empty ``modes`` means the adapter emits ``mode`` and nothing else; it is
+    not a claim that the target supports no other mode, only that this adapter
+    reaches none. Same rule as everywhere here: a mode is advertised where the
+    adapter EMITS it, never where a CLI merely documents a flag.
+    """
 
     mode: str
     separator: Optional[str] = None
     emits: Optional[str] = None
+    modes: Tuple[str, ...] = ()
+    parameter: Optional[str] = None
+    emits_by_mode: Mapping[str, str] = field(default_factory=dict)
     note: str = ""
 
     def to_json(self) -> Dict[str, Any]:
@@ -210,6 +226,12 @@ class SystemPromptCapability:
             result["separator"] = self.separator
         if self.emits is not None:
             result["emits"] = self.emits
+        if self.modes:
+            result["modes"] = list(self.modes)
+        if self.parameter is not None:
+            result["parameter"] = self.parameter
+        if self.emits_by_mode:
+            result["emits_by_mode"] = dict(self.emits_by_mode)
         if self.note:
             result["note"] = self.note
         return result
