@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,7 @@ def _attempt(run_id: str, job_id: str, directory: Path) -> Attempt:
         started_at="2026-09-01T00:00:00Z",
         ended_at="2026-09-01T00:00:01Z",
         dropped_params=(),
+        forwarded_params=("extras.top_k",),
         execution_controls_applied=(),
         usage=Usage(input_tokens=4, output_tokens=6, cache_hit_tokens=0),
         response_text="done",
@@ -57,8 +59,14 @@ def test_store_round_trip_and_terminal_refusal(tmp_path: Path) -> None:
     """A fresh store instance reads the same run and refuses terminal writes."""
     db_path = tmp_path / "run.sqlite3"
     store = JobStore(db_path)
-    job = _job(tmp_path)
-    store.create_run("run-1", [job], created_at=10.0, workspace_root=tmp_path / "workspaces")
+    job = replace(_job(tmp_path), options={"extras": {"sandbox": "read-only"}})
+    store.create_run(
+        "run-1",
+        [job],
+        created_at=10.0,
+        workspace_root=tmp_path / "workspaces",
+        disallowed_tools="Bash",
+    )
     store.mark_running("run-1", job.id, at=11.0)
 
     stored_attempt = store.append_attempt(
@@ -69,7 +77,9 @@ def test_store_round_trip_and_terminal_refusal(tmp_path: Path) -> None:
     reopened = JobStore(db_path)
     snapshot = reopened.snapshot("run-1")
     assert snapshot.run.status.value == "completed"
+    assert snapshot.run.disallowed_tools == "Bash"
     assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert snapshot.jobs[0].job.options == {"extras": {"sandbox": "read-only"}}
     assert snapshot.attempts[0].usage is not None
     assert snapshot.attempts[0].usage.input_tokens == 4
     assert snapshot.attempts[0].acceptance is not None
@@ -77,6 +87,7 @@ def test_store_round_trip_and_terminal_refusal(tmp_path: Path) -> None:
     assert snapshot.attempts[0].acceptance.outcome == "observed"
     assert snapshot.attempts[0].base_ref == "base-ref"
     assert snapshot.attempts[0].workspace_status == "isolated"
+    assert snapshot.attempts[0].forwarded_params == ("extras.top_k",)
 
     with pytest.raises(TerminalStateError):
         reopened.mark_running("run-1", job.id)
@@ -114,7 +125,9 @@ def test_unknown_usage_round_trips_as_null_not_zero(tmp_path: Path) -> None:
             "FROM attempts"
         ).fetchone()
     assert row == (None, None, None, None)
-    assert JobStore(db_path).snapshot("run-2").attempts[0].usage is None
+    stored_attempt = JobStore(db_path).snapshot("run-2").attempts[0]
+    assert stored_attempt.usage is None
+    assert stored_attempt.forwarded_params is None
 
 
 def test_noncreating_store_requires_an_existing_database(tmp_path: Path) -> None:
@@ -205,6 +218,7 @@ def test_store_migrates_the_job_error_column_from_schema_v1(tmp_path: Path) -> N
         "workspace_reason",
         "workspace_removed_at",
         "workspace_removal_forced",
+        "forwarded_params_json",
     } <= attempt_columns
 
 

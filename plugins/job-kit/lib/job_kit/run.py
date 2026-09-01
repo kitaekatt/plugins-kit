@@ -182,6 +182,95 @@ def _capabilities_for(
     return advertised.get(backend_name)
 
 
+def _validate_disallowed_tools(value: Optional[str]) -> Optional[str]:
+    """Validate one run-level deny-list value."""
+    if value is not None and not isinstance(value, str):
+        raise ValueError("run disallowed_tools must be a string or null")
+    return value
+
+
+def _merge_disallowed_tools(
+    floor: Optional[str], requested: Optional[str]
+) -> Optional[str]:
+    """Combine a run floor and a job deny-list without rewriting either value."""
+    if floor is None:
+        return requested
+    if requested is None:
+        return floor
+    if not floor:
+        return requested
+    if not requested or floor == requested:
+        return floor
+    return f"{floor} {requested}"
+
+
+def _string_option(
+    options: Mapping[str, object], name: str, default: Optional[str]
+) -> Optional[str]:
+    """Read and validate one string-valued job option."""
+    value = options.get(name, default)
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"job option {name} must be a string or null")
+    return value
+
+
+def _require_disallowed_control(job: Job) -> Job:
+    """Require the existing selection contract to honor a run deny floor."""
+    requirements = dict(job.requirements)
+    if "controls" in requirements:
+        key = "controls"
+    elif "execution_controls" in requirements:
+        key = "execution_controls"
+    else:
+        key = "controls"
+    existing = requirements.get(key)
+    if isinstance(existing, Mapping):
+        controls = dict(existing)
+        controls["disallowed-tools"] = True
+        requirements[key] = controls
+    elif isinstance(existing, str):
+        requirements[key] = (existing, "disallowed-tools")
+    elif isinstance(existing, Sequence) and not isinstance(
+        existing, (str, bytes, bytearray)
+    ):
+        requirements[key] = tuple(existing) + ("disallowed-tools",)
+    else:
+        requirements[key] = ("disallowed-tools",)
+    return replace(job, requirements=requirements)
+
+
+def _backend_options(
+    job: Job,
+    selection: BackendSelection,
+    working_directory: Path,
+    timeout_s: float,
+    run_floor: Optional[str],
+) -> BackendOptions:
+    """Build seam options from one job and its run-level deny floor."""
+    allowed_tools = _string_option(job.options, "allowed_tools", None)
+    job_disallowed = _string_option(job.options, "disallowed_tools", None)
+    system_prompt_mode = _string_option(
+        job.options, "system_prompt_mode", "replace"
+    )
+    extras_value = job.options.get("extras", {})
+    if extras_value is None:
+        extras_value = {}
+    if not isinstance(extras_value, Mapping):
+        raise ValueError("job option extras must be a mapping")
+    return BackendOptions(
+        timeout_s=float(timeout_s),
+        cwd=working_directory,
+        effort=selection.effort,
+        allowed_tools=allowed_tools,
+        disallowed_tools=_merge_disallowed_tools(run_floor, job_disallowed),
+        system_prompt_mode=(
+            system_prompt_mode if system_prompt_mode is not None else "replace"
+        ),
+        log_prefix=f"[job:{job.id}]",
+        extras=dict(extras_value),
+    )
+
+
 def _exception_attempt(
     *,
     run_id: str,
@@ -221,6 +310,7 @@ def _exception_attempt(
         error=AttemptError(code=halt_kind or "execution", message=message),
         halt_kind=halt_kind,
         dropped_params=dropped,
+        forwarded_params=None,
         execution_controls_applied=None,
         usage=None,
         response_text="",
@@ -255,8 +345,14 @@ def _response_attempt(
     halt_kind = error_code if error_code in halt_kinds else None
     status = str(getattr(response, "status", COMPLETED))
     dropped_value = getattr(response, "dropped_params", None)
+    forwarded_value = getattr(response, "forwarded_params", None)
     controls_value = getattr(response, "execution_controls_applied", None)
     dropped = tuple(str(value) for value in dropped_value) if dropped_value is not None else None
+    forwarded = (
+        tuple(str(value) for value in forwarded_value)
+        if forwarded_value is not None
+        else None
+    )
     controls = tuple(str(value) for value in controls_value) if controls_value is not None else None
     attempt = Attempt(
         run_id=run_id,
@@ -271,6 +367,7 @@ def _response_attempt(
         error=response_error,
         halt_kind=halt_kind,
         dropped_params=dropped,
+        forwarded_params=forwarded,
         execution_controls_applied=controls,
         usage=Usage.from_response(response),
         response_text=str(getattr(response, "text", "")),
@@ -292,6 +389,7 @@ def run_job(
     *,
     halted_endpoints: Sequence[str] = (),
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    disallowed_tools: Optional[str] = None,
     capabilities_provider: Optional[CapabilitiesProvider] = None,
     backend_factory: Optional[BackendFactory] = None,
     workspace_root: Optional[str | Path] = None,
@@ -303,8 +401,14 @@ def run_job(
     advertised = dict(
         (capabilities_provider or adapter_capabilities)()
     )
+    run_record = store.get_run(run_id)
+    run_floor = _merge_disallowed_tools(
+        run_record.disallowed_tools if run_record is not None else None,
+        _validate_disallowed_tools(disallowed_tools),
+    )
+    selection_job = _require_disallowed_control(job) if run_floor is not None else job
     selection = select_endpoint(
-        job,
+        selection_job,
         halted_endpoints=halted_endpoints,
         capabilities=advertised,
         backend_factory=backend_factory or create_backend,
@@ -314,7 +418,6 @@ def run_job(
     attempt_no = _attempt_number(store, run_id, job.id)
     manager = workspace_manager
     if manager is None:
-        run_record = store.get_run(run_id)
         root = (
             Path(workspace_root).expanduser().resolve()
             if workspace_root is not None
@@ -349,11 +452,12 @@ def run_job(
         if workspace.path is not None
         else job.declared_directory
     )
-    options = BackendOptions(
-        timeout_s=float(timeout_s),
-        cwd=working_directory,
-        effort=selection.effort,
-        log_prefix=f"[job:{job.id}]",
+    options = _backend_options(
+        job,
+        selection,
+        working_directory,
+        timeout_s,
+        run_floor,
     )
     capabilities = _capabilities_for(selection, advertised)
     started_at = utc_now_iso()
@@ -498,6 +602,7 @@ def replace_attempt_acceptance(attempt: Attempt, acceptance: Acceptance) -> Atte
         workspace_reason=attempt.workspace_reason,
         workspace_removed_at=attempt.workspace_removed_at,
         workspace_removal_forced=attempt.workspace_removal_forced,
+        forwarded_params=attempt.forwarded_params,
         acceptance=acceptance,
         id=attempt.id,
     )
@@ -526,9 +631,10 @@ def _run_pending(
         else default_workspace_root(run_id)
     )
     store.ensure_workspace_root(run_id, root)
+    run_record = store.get_run(run_id)
+    run_floor = run_record.disallowed_tools if run_record is not None else None
     manager = workspace_manager
     if manager is None:
-        run_record = store.get_run(run_id)
         base_refs = run_record.workspace_base_refs if run_record is not None else {}
         manager = WorkspaceManager(
             root,
@@ -545,6 +651,7 @@ def _run_pending(
                 record.job,
                 halted_endpoints=store.halted_endpoints(run_id),
                 timeout_s=timeout_s,
+                disallowed_tools=run_floor,
                 capabilities_provider=capabilities_provider,
                 backend_factory=backend_factory,
                 workspace_root=root,
@@ -566,6 +673,7 @@ def run_jobs(
     max_parallel: int = 1,
     workspace_root: Optional[str | Path] = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    disallowed_tools: Optional[str] = None,
     capabilities_provider: Optional[CapabilitiesProvider] = None,
     backend_factory: Optional[BackendFactory] = None,
 ) -> RunSnapshot:
@@ -578,6 +686,7 @@ def run_jobs(
         else default_workspace_root(identifier)
     )
     job_values = tuple(jobs)
+    run_floor = _validate_disallowed_tools(disallowed_tools)
     workspace_manager = WorkspaceManager(root, job_values)
     store_object.create_run(
         identifier,
@@ -586,6 +695,7 @@ def run_jobs(
         max_parallel=max_parallel,
         workspace_root=root,
         workspace_base_refs=workspace_manager.base_refs,
+        disallowed_tools=run_floor,
     )
     return _run_pending(
         store_object,
@@ -616,6 +726,7 @@ def run_job_file(
         jobs_path=path,
         max_parallel=job_file.max_parallel,
         workspace_root=job_file.workspace_root,
+        disallowed_tools=job_file.disallowed_tools,
         timeout_s=timeout_s,
         capabilities_provider=capabilities_provider,
         backend_factory=backend_factory,

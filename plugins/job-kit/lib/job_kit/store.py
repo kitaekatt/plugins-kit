@@ -138,6 +138,12 @@ _MIGRATIONS: list[list[str]] = [
     [
         "ALTER TABLE attempts ADD COLUMN workspace_removal_forced INTEGER NOT NULL DEFAULT 0",
     ],
+    [
+        "ALTER TABLE runs ADD COLUMN disallowed_tools TEXT",
+    ],
+    [
+        "ALTER TABLE attempts ADD COLUMN forwarded_params_json TEXT",
+    ],
 ]
 
 
@@ -246,6 +252,7 @@ def _row_to_attempt(row: sqlite3.Row) -> Attempt:
         error=error,
         halt_kind=row["halt_kind"],
         dropped_params=_optional_tuple(row["dropped_params_json"]),
+        forwarded_params=_optional_tuple(row["forwarded_params_json"]),
         execution_controls_applied=_optional_tuple(
             row["execution_controls_applied_json"]
         ),
@@ -434,6 +441,11 @@ class JobStore:
             workspace_root=(Path(row["workspace_root"]) if row["workspace_root"] else None),
             status=_derive_run_state(job_rows),
             workspace_base_refs=base_refs,
+            disallowed_tools=(
+                str(row["disallowed_tools"])
+                if row["disallowed_tools"] is not None
+                else None
+            ),
         )
 
     def create_run(
@@ -445,6 +457,7 @@ class JobStore:
         max_parallel: int = 1,
         workspace_root: Optional[str | Path] = None,
         workspace_base_refs: Optional[Mapping[str, str]] = None,
+        disallowed_tools: Optional[str] = None,
         created_at: Optional[float] = None,
     ) -> RunRecord:
         """Create a run and register all job definitions in one transaction."""
@@ -452,6 +465,8 @@ class JobStore:
             raise ValueError("job-kit job-core supports max_parallel=1 only")
         if not run_id.strip():
             raise ValueError("run_id must not be empty")
+        if disallowed_tools is not None and not isinstance(disallowed_tools, str):
+            raise ValueError("run disallowed_tools must be a string or null")
         ids = [job.id for job in jobs]
         if len(ids) != len(set(ids)):
             raise DuplicateJobError("job ids must be unique within a run")
@@ -474,7 +489,7 @@ class JobStore:
         with self._writer() as conn:
             conn.execute(
                 "INSERT INTO runs(id, created_at, jobs_path, max_parallel, workspace_root, "
-                "workspace_base_refs_json) VALUES (?, ?, ?, ?, ?, ?)",
+                "workspace_base_refs_json, disallowed_tools) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     when,
@@ -482,6 +497,7 @@ class JobStore:
                     max_parallel,
                     str(root) if root is not None else None,
                     _json_or_none(base_refs),
+                    disallowed_tools,
                 ),
             )
             conn.executemany(
@@ -695,14 +711,15 @@ class JobStore:
                 INSERT INTO attempts(
                     run_id, job_id, attempt_no, endpoint, backend, model, status,
                     error_code, error_message, halt_kind, dropped_params_json,
-                    execution_controls_applied_json, started_at, ended_at,
+                    forwarded_params_json, execution_controls_applied_json,
+                    started_at, ended_at,
                     input_tokens, output_tokens, cache_hit_tokens, total_tokens,
                     response_text, workspace, base_ref, workspace_status,
                     workspace_reason, workspace_removed_at, workspace_removal_forced,
                     acceptance_json
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 (
@@ -719,6 +736,11 @@ class JobStore:
                     _json_or_none(
                         list(attempt.dropped_params)
                         if attempt.dropped_params is not None
+                        else None
+                    ),
+                    _json_or_none(
+                        list(attempt.forwarded_params)
+                        if attempt.forwarded_params is not None
                         else None
                     ),
                     _json_or_none(

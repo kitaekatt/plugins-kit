@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -11,13 +12,21 @@ import pytest
 from llm_scripting_kit.completion import (
     BackendSelection,
     Capabilities,
+    ExecutionControl,
     HALT_RATE_LIMIT,
     HaltError,
     LLMResponse,
 )
+from llm_scripting_kit.completion.adapter_capabilities import CODEX_CAPABILITIES
 
 from job_kit.model import Contract, Job, JobState, Prompt
-from job_kit.run import default_store_path, resume_run, run_contract, run_jobs
+from job_kit.run import (
+    default_store_path,
+    resume_run,
+    run_contract,
+    run_job_file,
+    run_jobs,
+)
 from job_kit.store import JobStore
 
 
@@ -78,6 +87,24 @@ def _contract_job(tmp_path: Path, job_id: str, command: tuple[str, ...]) -> Job:
 def _advertisement() -> dict[str, Capabilities]:
     """Return the only capability record used by fake runs."""
     return {"fake": Capabilities(adapter="fake")}
+
+
+def _deny_advertisement() -> dict[str, Capabilities]:
+    """Return fake capabilities that can emit the deny-floor control."""
+    return {
+        "fake": Capabilities(
+            adapter="fake",
+            execution_controls=(
+                ExecutionControl(
+                    id="disallowed-tools",
+                    emits="fake deny control",
+                    effect="deny",
+                    source="request",
+                    parameter="disallowed_tools",
+                ),
+            ),
+        )
+    }
 
 
 def _factory_for(backend: FakeBackend) -> Callable[..., BackendSelection]:
@@ -182,6 +209,143 @@ def test_runner_sets_timeout_and_records_truthful_response(tmp_path: Path) -> No
     assert snapshot.attempts[0].acceptance.exit_code == 0
     assert len(backend.calls) == 1
     assert backend.calls[0][3].timeout_s == 17.0
+
+
+def test_runner_carries_forwarded_params_through_acceptance(
+    tmp_path: Path,
+) -> None:
+    """The response field remains present after the contract is attached."""
+    backend = FakeBackend(
+        response=LLMResponse(
+            text="model answer",
+            model="fake-model",
+            dropped_params=("temperature",),
+            forwarded_params=("extras.top_k",),
+            execution_controls_applied=("sandbox-mode",),
+            started_at="2026-09-01T00:00:00Z",
+            ended_at="2026-09-01T00:00:01Z",
+        )
+    )
+
+    snapshot = run_jobs(
+        [_job(tmp_path)],
+        tmp_path / "forwarded.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    attempt = snapshot.attempts[0]
+    assert attempt.dropped_params == ("temperature",)
+    assert attempt.forwarded_params == ("extras.top_k",)
+    assert attempt.execution_controls_applied == ("sandbox-mode",)
+
+
+def test_job_file_floor_reaches_the_run(tmp_path: Path) -> None:
+    """The top-level job-file floor reaches the seam and the run ledger."""
+    jobs_path = tmp_path / "jobs.yaml"
+    jobs_path.write_text(
+        """disallowed_tools: Bash
+jobs:
+  - id: file-floor
+    prompt: run
+    endpoint_preference: [fake-endpoint]
+    directory: .
+    contract:
+      command: [true]
+""",
+        encoding="utf-8",
+    )
+    backend = FakeBackend()
+
+    snapshot = run_job_file(
+        jobs_path,
+        store_path=tmp_path / "job-file.sqlite3",
+        capabilities_provider=_deny_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.calls[0][3].disallowed_tools == "Bash"
+    assert snapshot.run.disallowed_tools == "Bash"
+
+
+def test_run_deny_floor_beats_a_job_allow_list(tmp_path: Path) -> None:
+    """The floor remains denied when a job allows the same tool."""
+    backend = FakeBackend()
+    job = replace(_job(tmp_path), options={"allowed_tools": "Bash"})
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "floor.sqlite3",
+        disallowed_tools="Bash",
+        capabilities_provider=_deny_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    options = backend.calls[0][3]
+    assert options.allowed_tools == "Bash"
+    assert options.disallowed_tools == "Bash"
+    assert snapshot.run.disallowed_tools == "Bash"
+
+
+def test_job_disallowed_tools_are_added_to_the_run_floor(tmp_path: Path) -> None:
+    """A job deny-list extends the floor and cannot replace it."""
+    backend = FakeBackend()
+    job = replace(_job(tmp_path), options={"disallowed_tools": "Edit"})
+
+    run_jobs(
+        [job],
+        tmp_path / "union.sqlite3",
+        disallowed_tools="Bash",
+        capabilities_provider=_deny_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.calls[0][3].disallowed_tools == "Bash Edit"
+
+
+def test_run_floor_rejects_a_backend_that_drops_it(tmp_path: Path) -> None:
+    """A concrete deny floor cannot run through an adapter that drops it."""
+    backend = FakeBackend()
+    backend.name = "codex-cli"
+
+    def codex_advertisement() -> dict[str, Capabilities]:
+        return {"codex-cli": CODEX_CAPABILITIES}
+
+    snapshot = run_jobs(
+        [_job(tmp_path)],
+        tmp_path / "unsupported-floor.sqlite3",
+        disallowed_tools="Bash",
+        capabilities_provider=codex_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert snapshot.jobs[0].state is JobState.UNROUTABLE
+    assert snapshot.attempts == ()
+    assert backend.calls == []
+
+
+def test_job_extras_reach_a_codex_shaped_backend(tmp_path: Path) -> None:
+    """The job options channel passes codex-specific extras to the backend."""
+    backend = FakeBackend()
+    backend.name = "codex-cli"
+    extras = {
+        "sandbox": "read-only",
+        "network": False,
+        "scratch_dir": str(tmp_path / "scratch"),
+    }
+    job = replace(_job(tmp_path), options={"extras": extras})
+
+    def codex_advertisement() -> dict[str, Capabilities]:
+        return {"codex-cli": CODEX_CAPABILITIES}
+
+    run_jobs(
+        [job],
+        tmp_path / "codex-extras.sqlite3",
+        capabilities_provider=codex_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.calls[0][3].extras == extras
 
 
 def test_runner_marks_not_run_failed_and_timeout_rejected(tmp_path: Path) -> None:

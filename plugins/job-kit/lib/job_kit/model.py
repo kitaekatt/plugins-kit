@@ -23,6 +23,13 @@ The optional ``workspace`` mapping accepts ``directory``, ``base_ref`` and
 start. Isolation defaults to true; set ``isolate: false`` when a job must run
 in its declared directory.
 
+The optional job ``options`` mapping accepts ``allowed_tools``,
+``disallowed_tools``, ``system_prompt_mode`` and ``extras``. The top-level
+``disallowed_tools`` job-file key sets a deny floor for every job in the run.
+The option defaults are ``None`` for both tool lists, ``"replace"`` for
+``system_prompt_mode``, and an empty mapping for ``extras``. The floor defaults
+to ``None`` and does not change the adapter default.
+
 Usage is nullable because a transport can complete without exposing token
 counts. Unknown usage is represented by ``None`` rather than zero.
 """
@@ -37,6 +44,43 @@ from typing import Mapping, Optional, Sequence
 
 
 PathLike = str | Path
+
+
+_JOB_OPTION_KEYS = frozenset(
+    {"allowed_tools", "disallowed_tools", "system_prompt_mode", "extras"}
+)
+
+
+def _normalize_job_options(value: object) -> dict[str, object]:
+    """Validate and copy a job's completion options mapping."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("job options must be a mapping")
+
+    unknown = [
+        key for key in value if not isinstance(key, str) or key not in _JOB_OPTION_KEYS
+    ]
+    if unknown:
+        raise ValueError(f"job options contain unknown keys: {unknown!r}")
+
+    options = {str(key): option for key, option in value.items()}
+    for name in ("allowed_tools", "disallowed_tools"):
+        option = options.get(name)
+        if option is not None and not isinstance(option, str):
+            raise ValueError(f"job option {name} must be a string or null")
+
+    if "system_prompt_mode" in options and not isinstance(
+        options["system_prompt_mode"], str
+    ):
+        raise ValueError("job option system_prompt_mode must be a string")
+
+    extras = options.get("extras")
+    if extras is not None and not isinstance(extras, Mapping):
+        raise ValueError("job option extras must be a mapping")
+    if extras is not None:
+        options["extras"] = dict(extras)
+    return options
 
 
 class JobState(str, Enum):
@@ -221,6 +265,7 @@ class Job:
     directory: Optional[Path] = None
     workspace: Optional[WorkspaceSpec] = None
     max_attempts: int = 1
+    options: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         job_id = str(self.id).strip()
@@ -255,6 +300,8 @@ class Job:
             object.__setattr__(self, "requirements", {"params": list(self.requirements)})
         else:
             raise ValueError("job requirements must be a mapping or list")
+
+        object.__setattr__(self, "options", _normalize_job_options(self.options))
 
         if self.directory is not None:
             object.__setattr__(self, "directory", Path(self.directory).expanduser().resolve())
@@ -343,6 +390,7 @@ class Job:
 
         requirements = value.get("requirements", {})
         max_attempts = int(value.get("max_attempts", 1))
+        options = value.get("options", {})
         return cls(
             id=str(value["id"]),
             prompt=prompt,
@@ -352,6 +400,7 @@ class Job:
             directory=directory,
             workspace=workspace,
             max_attempts=max_attempts,
+            options=options if options is not None else {},
         )
 
     def to_mapping(self) -> dict[str, object]:
@@ -363,6 +412,7 @@ class Job:
             "requirements": dict(self.requirements),
             "contract": self.contract.to_mapping(),
             "max_attempts": self.max_attempts,
+            "options": dict(self.options),
         }
         if self.directory is not None:
             result["directory"] = str(self.directory)
@@ -378,6 +428,7 @@ class JobFile:
     jobs: tuple[Job, ...]
     max_parallel: int = 1
     workspace_root: Optional[Path] = None
+    disallowed_tools: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.max_parallel != 1:
@@ -389,6 +440,21 @@ class JobFile:
             object.__setattr__(
                 self, "workspace_root", Path(self.workspace_root).expanduser().resolve()
             )
+        if self.disallowed_tools is not None and not isinstance(
+            self.disallowed_tools, str
+        ):
+            raise ValueError("job-file disallowed_tools must be a string or null")
+
+    def to_mapping(self) -> dict[str, object]:
+        """Return the YAML-compatible job-file mapping."""
+        return {
+            "jobs": [job.to_mapping() for job in self.jobs],
+            "max_parallel": self.max_parallel,
+            "workspace_root": (
+                str(self.workspace_root) if self.workspace_root is not None else None
+            ),
+            "disallowed_tools": self.disallowed_tools,
+        }
 
 
 def load_job_file(path: PathLike) -> JobFile:
@@ -427,6 +493,7 @@ def load_job_file(path: PathLike) -> JobFile:
         jobs=jobs,
         max_parallel=int(document.get("max_parallel", 1)),
         workspace_root=workspace_root,
+        disallowed_tools=document.get("disallowed_tools"),
     )
 
 
@@ -533,6 +600,7 @@ class Attempt:
     error: Optional[AttemptError] = None
     halt_kind: Optional[str] = None
     dropped_params: Optional[tuple[str, ...]] = None
+    forwarded_params: Optional[tuple[str, ...]] = None
     execution_controls_applied: Optional[tuple[str, ...]] = None
     usage: Optional[Usage] = None
     response_text: Optional[str] = None
@@ -547,6 +615,7 @@ class Attempt:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "dropped_params", _optional_tuple(self.dropped_params))
+        object.__setattr__(self, "forwarded_params", _optional_tuple(self.forwarded_params))
         object.__setattr__(
             self,
             "execution_controls_applied",
@@ -592,6 +661,11 @@ class Attempt:
             "error": self.error.to_mapping() if self.error is not None else None,
             "halt_kind": self.halt_kind,
             "dropped_params": list(self.dropped_params) if self.dropped_params is not None else None,
+            "forwarded_params": (
+                list(self.forwarded_params)
+                if self.forwarded_params is not None
+                else None
+            ),
             "execution_controls_applied": (
                 list(self.execution_controls_applied)
                 if self.execution_controls_applied is not None
@@ -660,6 +734,7 @@ class RunRecord:
     workspace_root: Optional[Path]
     status: RunState = RunState.PENDING
     workspace_base_refs: Mapping[str, str] = field(default_factory=dict)
+    disallowed_tools: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.jobs_path is not None:
@@ -681,6 +756,10 @@ class RunRecord:
             )
         else:
             raise ValueError("workspace_base_refs must be a mapping")
+        if self.disallowed_tools is not None and not isinstance(
+            self.disallowed_tools, str
+        ):
+            raise ValueError("run disallowed_tools must be a string or null")
 
     def to_mapping(self) -> dict[str, object]:
         """Return a JSON-compatible run mapping."""
@@ -692,6 +771,7 @@ class RunRecord:
             "workspace_root": str(self.workspace_root) if self.workspace_root is not None else None,
             "status": self.status.value,
             "workspace_base_refs": dict(self.workspace_base_refs),
+            "disallowed_tools": self.disallowed_tools,
         }
 
 
