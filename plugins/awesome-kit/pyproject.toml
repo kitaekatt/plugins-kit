@@ -1,10 +1,11 @@
 [project]
 name = "awesome-kit"
-version = "0.42.0"
+version = "0.42.1"
 description = "Runtime dependencies for awesome-kit skills, including YAML support."
 requires-python = ">=3.10"
 dependencies = [
     "pyyaml>=6.0",
+    "openai>=1.0.0",
 ]
 
 # awesome-kit is not an importable package -- this pyproject exists only to

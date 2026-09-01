@@ -25,6 +25,7 @@ import bootstrap_lib.path_repair as path_repair
 import bootstrap_lib.tool_paths as tool_paths
 import bootstrap_lib.downloader as downloader
 import bootstrap_lib.scoop as scoop_mod
+import bootstrap_lib.platform_detect as platform_detect
 from bootstrap_lib.manifest_merge import merge_manifests
 
 
@@ -33,6 +34,20 @@ def _stub(monkeypatch):
     monkeypatch.setattr(path_check, "add_path_to_shell_config", lambda d: (True, "stub"))
     monkeypatch.setattr(tool_paths, "record", lambda *a, **k: None)
     monkeypatch.setattr(path_repair, "repair_path", lambda: None)
+
+
+def _stub_amd64(monkeypatch):
+    """Pin arch detection to amd64.
+
+    _resolve_download_def keys on f"{current_os}-{detect_arch()}", and
+    detect_arch() reads the REAL host CPU (platform.machine()), independent
+    of whatever current_os a test passes in. Fixtures below use the
+    "windows-amd64" spelling (p4-kit's real manifest key) with a faked
+    current_os="windows", so on any non-amd64 host (e.g. Apple Silicon)
+    detect_arch() returns "arm64" and the key silently fails to match unless
+    pinned here.
+    """
+    monkeypatch.setattr(platform_detect, "detect_arch", lambda: "amd64")
 
 
 # --------------------------------------------------------------------------- #
@@ -110,18 +125,20 @@ class TestNormalizeScoop:
         # scoop stripped from the download block (canonical form owns it).
         assert "scoop" not in out["download"]["windows"]
 
-    def test_download_scoop_os_arch_key_moves_to_os_install(self):
+    def test_download_scoop_os_arch_key_moves_to_os_install(self, monkeypatch):
         # p4-kit's real spelling: download.windows-amd64.scoop.
+        _stub_amd64(monkeypatch)
         out = engine._normalize_tool_entry(
             {"name": "p4", "download": {"windows-amd64": {"scoop": "main/p4"}}},
             "windows",
         )
         assert out["install"]["windows"] == {"scoop": "main/p4"}
 
-    def test_scoop_takes_precedence_over_install_command(self):
+    def test_scoop_takes_precedence_over_install_command(self, monkeypatch):
         # p4-kit shape: install.windows "manual" + a scoop download. Dispatch
         # runs scoop before the install command, so canonical install.windows
         # must be the scoop spec, NOT the "manual" command.
+        _stub_amd64(monkeypatch)
         out = engine._normalize_tool_entry(
             {"name": "p4",
              "install": {"windows": "manual", "macos": "brew install --cask perforce"},
@@ -220,6 +237,7 @@ class TestParityScoop:
 
     def _run(self, tool_def, tmp_path, monkeypatch):
         _stub(monkeypatch)
+        _stub_amd64(monkeypatch)
         monkeypatch.setenv("PATH", str(tmp_path))  # tool absent from PATH
         monkeypatch.setattr(scoop_mod, "ensure_scoop",
                             lambda: scoop_mod.ScoopResult(True, None, "already installed"))
@@ -258,6 +276,7 @@ class TestScoopOverUrlPrecedence:
 
     def _run(self, tool_def, tmp_path, monkeypatch):
         _stub(monkeypatch)
+        _stub_amd64(monkeypatch)
         monkeypatch.setenv("PATH", str(tmp_path))  # tool absent
         monkeypatch.setattr(scoop_mod, "ensure_scoop",
                             lambda: scoop_mod.ScoopResult(True, None, "already installed"))
@@ -318,8 +337,9 @@ class TestMergeComposition:
         assert norm["install"]["ubuntu"] == {
             "command": "apt install t", "elevated": False}
 
-    def test_user_adds_scoop_download_over_legacy_install(self):
+    def test_user_adds_scoop_download_over_legacy_install(self, monkeypatch):
         # base declares only an install string; user layer adds a scoop download.
+        _stub_amd64(monkeypatch)
         base = {"tools": [{"name": "p4", "install": {"windows": "manual"}}]}
         user = {"tools": [{"name": "p4", "download": {
             "windows-amd64": {"scoop": "main/p4"}}}]}

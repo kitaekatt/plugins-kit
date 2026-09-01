@@ -1,6 +1,6 @@
 {
   "name": "awesome-kit",
-  "version": "0.42.0",
+  "version": "0.42.1",
   "description": "Provides plugin-ecosystem, task, orchestrate, recap, and verbose-updates skills for plugin browsing, task tracking, delegated work, response distillation, and progress communication.",
   "author": {
     "name": "Christina"
