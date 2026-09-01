@@ -21,11 +21,15 @@ Public surface:
 - :class:`BackendOptions` -- per-call knobs (some understood by only one
   transport, documented on the field).
 - :class:`LLMBackend` -- the completion protocol.
-- :class:`HaltError` and :func:`classify_openai_exception` /
-  :func:`classify_halt_text` -- the shared halt taxonomy. A *halt* is a
-  failure that persists across subsequent calls (rate-limit / auth /
-  insufficient-credit), so a bulk runner catching :class:`HaltError` stops
-  cleanly instead of burning the rest of the corpus.
+- :class:`PipelineHaltError` (aliased as ``HaltError`` for compatibility) and
+  :func:`classify_openai_exception` / :func:`classify_halt_text` -- the shared
+  halt taxonomy. A *halt* is a failure that persists across subsequent calls
+  (rate-limit / auth / insufficient-credit), so a bulk runner catching
+  :class:`PipelineHaltError` stops cleanly instead of burning the rest of the
+  corpus. Distinct from and unrelated to
+  ``llm_scripting_kit.completion.halt.HaltError``, which shares only the old
+  name -- see ``plugins/CLAUDE.md`` ("Duplicated seam types across a
+  shared-lib boundary").
 - :func:`call_llm` -- the single entry point: budget guard, cache, retry,
   halt-mapping, cost accounting.
 - :func:`is_likely_reasoning_exhaustion` / :func:`describe_likely_reasoning_exhaustion`
@@ -235,7 +239,7 @@ that entry -- not this constant -- is where the exception belongs.
 """
 
 
-class HaltError(Exception):
+class PipelineHaltError(Exception):
     """A failure that persists across subsequent calls -- stop the bulk run.
 
     Carries a machine-readable ``kind`` (one of :data:`HALT_AUTH`,
@@ -243,12 +247,25 @@ class HaltError(Exception):
     runner can halt-and-resume without parsing the message text. ``call_llm``
     raises this when a backend classifies the underlying exception as a halt;
     a non-halt failure propagates as its original exception type.
+
+    Named distinctly from ``llm_scripting_kit.completion.halt.HaltError`` --
+    the two share no relationship beyond the pre-rename name, and a caller
+    that caught the old name around an ``llm_scripting_kit`` call while
+    meaning this class (or vice versa) would get a handler that silently
+    never fired. See ``plugins/CLAUDE.md`` ("Duplicated seam types across a
+    shared-lib boundary").
     """
 
     def __init__(self, kind: str, detail: str = "") -> None:
         self.kind = kind
         self.detail = detail
         super().__init__(f"{kind}: {detail}" if detail else kind)
+
+
+#: Compatibility alias for the pre-rename name. Prefer
+#: :class:`PipelineHaltError` in new code; this alias exists so importers of
+#: the old ``content_pipeline.llm.platform.HaltError`` name keep working.
+HaltError = PipelineHaltError
 
 
 # Marker substrings signalling a text-channel hard stop. Two shape families
@@ -286,14 +303,20 @@ def classify_halt_text(text: str) -> Optional[str]:
     return None
 
 
-def classify_openai_exception(exc: BaseException) -> Optional[str]:
-    """Map an OpenAI-SDK exception (or one wrapping it) to a halt kind.
+def _classify_openai_exception_local(exc: BaseException) -> Optional[str]:
+    """CPK's own OpenAI-SDK exception classifier (no delegation).
 
     Returns :data:`HALT_AUTH`, :data:`HALT_RATE_LIMIT`, or
     :data:`HALT_INSUFFICIENT_CREDIT` for the known persistent failures;
     ``None`` otherwise. The ``openai`` import is optional -- when absent, the
     text-marker fallback still catches the common shapes. Recurses on
     ``__cause__`` so a wrapped SDK exception is still classified.
+
+    This is the fallback :func:`classify_openai_exception` uses when
+    ``llm_scripting_kit`` is not importable, and its own logic when it is --
+    the two are kept as separate functions so the delegation in
+    :func:`classify_openai_exception` is a single, obvious try/except rather
+    than interleaved with the classification rules themselves.
     """
     try:
         import openai  # noqa: PLC0415
@@ -315,8 +338,40 @@ def classify_openai_exception(exc: BaseException) -> Optional[str]:
         return from_text
     cause = getattr(exc, "__cause__", None)
     if cause is not None and cause is not exc:
-        return classify_openai_exception(cause)
+        return _classify_openai_exception_local(cause)
     return None
+
+
+def classify_openai_exception(exc: BaseException) -> Optional[str]:
+    """Map an OpenAI-SDK exception (or one wrapping it) to a halt kind.
+
+    Returns :data:`HALT_AUTH`, :data:`HALT_RATE_LIMIT`, or
+    :data:`HALT_INSUFFICIENT_CREDIT` for the known persistent failures;
+    ``None`` otherwise.
+
+    Delegates to ``llm_scripting_kit.completion.halt.classify_openai_exception``
+    when that shared lib is importable -- the two classifiers implement the
+    same rules against the same category vocabulary (``HALT_AUTH == "auth"``,
+    ``HALT_RATE_LIMIT == "rate_limit"``, ``HALT_INSUFFICIENT_CREDIT ==
+    "insufficient_credit"`` on both sides, verified against
+    ``tests/llm-scripting-kit/test_completion_halt.py`` and this module's own
+    tests), so delegating changes no observable behaviour today and avoids
+    maintaining the duplicate. The import is lazy and optional, matching the
+    pattern used elsewhere in this module (see
+    :func:`_classify_openai_exception_local` above and
+    ``backends._is_connection_error``): when ``llm_scripting_kit`` is absent,
+    this falls back to CPK's own classifier so content-pipeline-kit keeps
+    working without the shared lib installed.
+    """
+    try:
+        from llm_scripting_kit.completion.halt import (  # noqa: PLC0415
+            classify_openai_exception as _lsk_classify_openai_exception,
+        )
+    except ImportError:
+        _lsk_classify_openai_exception = None  # type: ignore[assignment]
+    if _lsk_classify_openai_exception is not None:
+        return _lsk_classify_openai_exception(exc)
+    return _classify_openai_exception_local(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +529,7 @@ def model_alias(model: str, *, pricing: Optional[Mapping[str, Any]] = None) -> s
 class LLMUnavailableError(Exception):
     """The selected backend cannot be used, established BEFORE any work ran.
 
-    Distinct from :class:`HaltError`, which reports a run that started and then
+    Distinct from :class:`PipelineHaltError`, which reports a run that started and then
     hit a wall. This is raised at selection time -- by :func:`route` after a
     reachability probe fails -- so no unit has been attempted and none needs
     resuming. The message names the remedy in terms of the env vars a consumer
@@ -782,7 +837,7 @@ def call_llm(
        immediately with ``from_cache=True``.
     3. **Backend call + retry** -- ``backend.complete`` is attempted up to
        ``retries + 1`` times. A failure the backend classifies as a halt is
-       re-raised as :class:`HaltError` and NOT retried; any other failure is
+       re-raised as :class:`PipelineHaltError` and NOT retried; any other failure is
        retried (sleeping ``retry_sleep`` between attempts) and, once the
        budget is exhausted, propagates as its original type.
     4. **Cost accounting** -- when ``pricing`` is bound the response is
@@ -832,12 +887,12 @@ def call_llm(
         try:
             response = backend.complete(system, user, model=model, options=opts)
             break
-        except HaltError:
+        except PipelineHaltError:
             raise
         except BaseException as exc:  # noqa: BLE001 -- classify then re-raise
             halt = backend.classify_halt(exc)
             if halt is not None:
-                raise HaltError(halt, str(exc)) from exc
+                raise PipelineHaltError(halt, str(exc)) from exc
             last_exc = exc
             if attempt < retries:
                 if retry_sleep:
@@ -1086,6 +1141,7 @@ __all__ = [
     "HALT_AUTH",
     "HALT_RATE_LIMIT",
     "HALT_INSUFFICIENT_CREDIT",
+    "PipelineHaltError",
     "HaltError",
     "HALT_UNREACHABLE",
     "LLMUnavailableError",

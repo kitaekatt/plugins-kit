@@ -13,7 +13,7 @@ not "which provider / which key," which stays llm-scripting-kit's job.
 Submodules:
 
 - ``platform`` -- the transport-agnostic core: ``LLMResponse`` /
-  ``BackendOptions`` / the ``LLMBackend`` protocol, the ``HaltError`` taxonomy,
+  ``BackendOptions`` / the ``LLMBackend`` protocol, the ``PipelineHaltError`` taxonomy,
   the content-addressed ``ResponseCache``, cost (``estimate_cost``, unknown
   model == hard ``KeyError``), the budget guards, ``call_llm`` (the single
   entry point), and ``submit_validated`` (the validate-until-valid loop over
@@ -107,7 +107,7 @@ The surface (both live under ``platform`` unless noted):
 - ``call_llm`` / ``submit_validated`` -- the entry point and the
   validate-until-valid loop.
 - ``LLMResponse`` / ``BackendOptions`` / ``LLMBackend`` -- the seam types.
-- ``HaltError`` + ``HALT_AUTH`` / ``HALT_RATE_LIMIT`` /
+- ``PipelineHaltError`` + ``HALT_AUTH`` / ``HALT_RATE_LIMIT`` /
   ``HALT_INSUFFICIENT_CREDIT`` -- the halt taxonomy.
 - ``ResponseCache`` / ``CostBudget`` -- the cache and budget guard.
 - ``OpenRouterBackend`` / ``ClaudeCliBackend`` / ``CodexCliBackend`` /
@@ -138,6 +138,7 @@ from content_pipeline.llm.platform import (
     BackendOptions,
     CostBudget,
     HaltError,
+    PipelineHaltError,
     LLMUnavailableError,
     LLMBackend,
     LLMResponse,
@@ -152,6 +153,7 @@ __all__ = [
     "LLMResponse",
     "BackendOptions",
     "LLMBackend",
+    "PipelineHaltError",
     "HaltError",
     "LLMUnavailableError",
     "CodexCliBackend",

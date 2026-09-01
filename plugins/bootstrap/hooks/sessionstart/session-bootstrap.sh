@@ -377,13 +377,19 @@ esac
 # Python install/install-path logic further down.
 OS="$(uname -s)"
 
-# --- Install bootstrap-reset-cooldown into ~/.local/bin ---
-# A user-facing tool to clear the per-project cooldown when bootstrap needs to
-# re-run sooner than the throttle allows. Re-installed every session so it
-# stays in sync with the cached plugin version.
-_RESET_SRC="$PLUGIN_ROOT/scripts/bootstrap-reset-cooldown.sh"
-_RESET_DST="$LOCAL_BIN/bootstrap-reset-cooldown"
-if [ -f "$_RESET_SRC" ]; then
+# --- Install the user-facing reset levers into ~/.local/bin ---
+# bootstrap-reset-cooldown clears the per-project cooldown when bootstrap needs
+# to re-run sooner than the throttle allows; env-reset-cooldown additionally
+# drops env_state.json, which is the documented "re-converge my machine" lever.
+# BOTH are installed: env-reset-cooldown is named by SKILL.md and
+# manifest-reference.md as the thing to run, and for as long as only its
+# sibling was installed, a user following that guidance verbatim got
+# `command not found`. Re-installed every session so they stay in sync with
+# the cached plugin version.
+for _lever in bootstrap-reset-cooldown env-reset-cooldown; do
+    _RESET_SRC="$PLUGIN_ROOT/scripts/${_lever}.sh"
+    _RESET_DST="$LOCAL_BIN/${_lever}"
+    [ -f "$_RESET_SRC" ] || continue
     mkdir -p "$LOCAL_BIN"
     if [[ "$OS" == MINGW* ]] || [[ "$OS" == MSYS* ]]; then
         # Windows: symlinks need elevation; just copy.
@@ -396,7 +402,8 @@ if [ -f "$_RESET_SRC" ]; then
             ln -sf "$_RESET_SRC" "$_RESET_DST"
         fi
     fi
-fi
+done
+unset _lever
 
 # --- Ensure Python is installed in ~/.local/bin ---
 # We always use our standalone Python in ~/.local/bin. System Python is not used.

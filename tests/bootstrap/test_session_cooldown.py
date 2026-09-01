@@ -209,17 +209,42 @@ class TestResetScript:
         assert f.exists(), "--status must not delete cooldown files"
         assert "age=" in result.stdout
 
-    def test_clear_alerts(self, tmp_path: Path) -> None:
-        fake_home = tmp_path / "home"
-        fake_home.mkdir()
+    def _seed_alerts(self, fake_home: Path):
         plugin_data = fake_home / ".claude" / "plugins" / "data" / "plugins-kit" / "bootstrap"
-        plugin_data.mkdir(parents=True)
+        plugin_data.mkdir(parents=True, exist_ok=True)
         alert = plugin_data / "bootstrap_alert.json"
         pending = plugin_data / "bootstrap_display.pending"
         alert.write_text("{}")
         pending.write_text("{}")
+        return alert, pending
+
+    def test_clear_alerts_keeps_undelivered_pass_output(self, tmp_path: Path) -> None:
+        """--clear-alerts clears the ALERT; the pending file survives.
+
+        bootstrap_display.pending is the only channel any pass has to the
+        user, and the shell's pre-Python failure paths write nothing else, so
+        deleting it between a pass and the next prompt silently discards that
+        pass's verdict -- possibly the message saying bootstrap could not run
+        at all. Clearing an alert is the stated purpose; destroying an
+        undelivered message was collateral.
+        """
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        alert, pending = self._seed_alerts(fake_home)
 
         result = self._run("--all", "--clear-alerts", env_overrides={"HOME": str(fake_home)})
+        assert result.returncode == 0, result.stderr
+        assert not alert.exists(), "the alert itself must still be cleared"
+        assert pending.exists(), "undelivered pass output must survive"
+        assert "--force" in result.stdout, "the user must be told how to delete it"
+
+    def test_clear_alerts_force_deletes_pending(self, tmp_path: Path) -> None:
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        alert, pending = self._seed_alerts(fake_home)
+
+        result = self._run("--all", "--clear-alerts", "--force",
+                           env_overrides={"HOME": str(fake_home)})
         assert result.returncode == 0, result.stderr
         assert not alert.exists()
         assert not pending.exists()
@@ -380,4 +405,32 @@ class TestCooldownGateBehavior:
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "", (
             f"expected a silent session-guard skip, got stdout: {result.stdout!r}"
+        )
+
+
+class TestResetLeverInstall:
+    """Both reset levers must land on PATH.
+
+    env-reset-cooldown is what SKILL.md and manifest-reference.md name as the
+    "re-converge my machine" lever, but only its sibling was ever installed,
+    so a user following that guidance verbatim got `command not found`.
+    """
+
+    def test_both_levers_are_installed(self) -> None:
+        text = SESSION_BOOTSTRAP.read_text()
+        assert "for _lever in bootstrap-reset-cooldown env-reset-cooldown" in text, (
+            "both levers must be installed into ~/.local/bin"
+        )
+
+    def test_env_reset_resolves_its_sibling_without_the_extension(self) -> None:
+        """Installed as a shim the sibling has no .sh, so a hardcoded
+        '<dir>/bootstrap-reset-cooldown.sh' misses in exactly the invocation
+        the docs recommend."""
+        reset = REPO_ROOT / "plugins" / "bootstrap" / "scripts" / "env-reset-cooldown.sh"
+        text = reset.read_text()
+        assert '"$SCRIPT_DIR/bootstrap-reset-cooldown"' in text, (
+            "must also try the extension-less installed shim"
+        )
+        assert "command -v bootstrap-reset-cooldown" in text, (
+            "must fall back to PATH"
         )

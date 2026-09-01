@@ -128,6 +128,27 @@ The `claude-cli` backend needs the `claude` executable on PATH, and the
 provisioned via the `bootstrap` dependency (which declares `claude` as a tool);
 OpenCode is a caller-provided CLI.
 
+### Capability requirements
+
+`llm_scripting_kit.completion.match_capabilities(capabilities, requirements)`
+answers whether one adapter's advertised `Capabilities` (or its serialized
+`to_json()` mapping) satisfies a requirement. It is the matching language for
+the advertisement above, so a caller selecting among endpoints does not
+maintain its own capability vocabulary.
+
+`requirements` is `None` or `{}` to match anything, a list as shorthand for
+`{"params": [...]}`, or a mapping using named convenience keys: `params`
+(aliases `required_params`, `honors` -- a list of required param names, or a
+mapping for nested per-param requirements, where `False` means "must be
+absent"), `execution_controls` (alias `controls` -- required control ids),
+`dropped_params` (required dropped-param names), `structured_output` (alias
+`structured` -- a mode string, a result string, or a mapping), and
+`system_prompt` (alias `system_prompt_mode` -- a mode string or a mapping).
+Any other key is read as a dotted path over `Capabilities.to_json()` (e.g.
+`"adapter"`, `"structured_output.mode"`), so the function carries no
+capability table of its own -- it only knows how to walk the advertisement's
+JSON shape.
+
 ## Key handling
 
 Interactive `set-key` uses a hidden prompt (`getpass`), the `.env` file is

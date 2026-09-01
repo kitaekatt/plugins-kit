@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 """workflow-kit openrouter node-strategy runner.
 
-Make ONE OpenRouter chat-completion call using llm-scripting-kit's openai runner
-support (`llm_scripting_kit.make_openai_client`) and write the reply text to --out.
+Make ONE OpenRouter chat-completion call through llm-scripting-kit's completion
+seam (`llm_scripting_kit.completion.OpenRouterBackend`) and write the reply
+text to --out.
 
 Run this with WORKFLOW-KIT's OWN venv python, which bootstrap provisions with:
   - `llm_scripting_kit` -- owned by the llm-scripting-kit plugin, published as a shared
@@ -10,7 +11,9 @@ Run this with WORKFLOW-KIT's OWN venv python, which bootstrap provisions with:
     workflow-kit declares `shared_lib_imports: ["llm_scripting_kit"]`. No path
     discovery -- just import.
   - the `openai` SDK -- a declared workflow-kit dependency (pyproject.toml +
-    venv.check_imports), installed into this venv by bootstrap.
+    venv.check_imports), installed into this venv by bootstrap. The seam's
+    OpenRouterBackend uses it internally (lazily, via make_openai_client); this
+    script never touches the SDK or the client directly.
 
 Run it with workflow-kit's venv python (which has both):
 
@@ -20,7 +23,9 @@ Run it with workflow-kit's venv python (which has both):
 
 Contract: writes the reply to --out; exits 0 on success, non-zero on failure
 (the workflow-kit-agent reports the exit code). Optionally writes a small JSON
-status object to --status for routing.
+status object to --status for routing. The seam classifies the transport, HTTP,
+and halt-taxonomy failures (auth / rate limit / insufficient credit); this
+script does not reimplement any of that classification, it only reports it.
 """
 from __future__ import annotations
 
@@ -49,7 +54,7 @@ def _write_status(path, obj):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="workflow-kit: one OpenRouter call via llm-scripting-kit's openai runner."
+        description="workflow-kit: one OpenRouter call via llm-scripting-kit's completion seam."
     )
     ap.add_argument(
         "--model",
@@ -76,9 +81,11 @@ def main(argv=None):
     # llm_scripting_kit is linked onto workflow-kit's venv by the bootstrap shared-libs
     # .pth (workflow-kit declares shared_lib_imports). No path discovery -- just
     # import. It owns model resolution (alias / slug / default / defaultCheap) and
-    # the openai client factory; workflow-kit does not reimplement either.
+    # the completion seam (transport, response normalization, halt classification);
+    # workflow-kit does not reimplement any of it.
     try:
-        from llm_scripting_kit import ModelResolveError, make_openai_client, resolve_model
+        from llm_scripting_kit import ModelResolveError, resolve_model
+        from llm_scripting_kit.completion import BackendOptions, OpenRouterBackend
     except ImportError:
         print(
             "llm_scripting_kit not importable. Enable the llm-scripting-kit plugin and run this "
@@ -94,10 +101,18 @@ def main(argv=None):
         return 2
 
     prompt = args.prompt if args.prompt is not None else Path(args.prompt_file).read_text(encoding="utf-8")
-    messages = build_messages(prompt, args.system)
+
+    backend_kwargs = {}
+    if args.temperature is not None:
+        backend_kwargs["temperature"] = args.temperature
+    if args.max_tokens is not None:
+        backend_kwargs["max_tokens"] = args.max_tokens
+    options = BackendOptions(**backend_kwargs)
+
+    backend = OpenRouterBackend(project_root=Path(os.getcwd()))
 
     try:
-        client = make_openai_client()
+        resp = backend.complete(args.system or "", prompt, model=args.model, options=options)
     except ImportError as e:
         print("openai SDK not available: " + str(e), file=sys.stderr)
         print(
@@ -105,28 +120,25 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 2
-    except RuntimeError as e:  # no API key resolved
+    except RuntimeError as e:  # no API key resolved, or an empty completion (seam-classified)
         print(str(e), file=sys.stderr)
-        return 2
-
-    kwargs = {"model": args.model, "messages": messages}
-    if args.temperature is not None:
-        kwargs["temperature"] = args.temperature
-    if args.max_tokens is not None:
-        kwargs["max_tokens"] = args.max_tokens
-
-    try:
-        resp = client.chat.completions.create(**kwargs)
-        text = resp.choices[0].message.content or ""
-    except Exception as e:  # noqa: BLE001 -- any SDK/API error is a node failure
-        print("OpenRouter call failed: " + str(e), file=sys.stderr)
         _write_status(args.status, {"ok": False, "error": type(e).__name__})
         return 1
+    except Exception as e:  # noqa: BLE001 -- any other transport/API error is a node failure
+        halt_kind = backend.classify_halt(e)
+        print("OpenRouter call failed: " + str(e), file=sys.stderr)
+        status = {"ok": False, "error": type(e).__name__}
+        if halt_kind:
+            status["halt"] = halt_kind
+        _write_status(args.status, status)
+        return 1
+
+    text = resp.text
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")
-    _write_status(args.status, {"ok": True, "model": args.model, "bytes": len(text.encode("utf-8"))})
+    _write_status(args.status, {"ok": True, "model": resp.model, "bytes": len(text.encode("utf-8"))})
     return 0
 
 

@@ -15,7 +15,7 @@ cache; instead the WARM callable owns whatever priming the consumer needs
 (seeding a ``ResponseCache`` directory, loading a shared glossary), and the
 WORKER owns the per-unit call -- so this module stays free of ``llm`` and of any
 cache substrate. Halt handling is delegated to ``cli.budget.guarded_sweep``
-when the caller opts in, keeping the ``HaltError`` import in one place.
+when the caller opts in, keeping the ``PipelineHaltError`` import in one place.
 """
 
 from __future__ import annotations
@@ -68,8 +68,8 @@ def run_bulk(
        failed prime means the run cannot proceed correctly).
     2. **Worker phase** -- process each unit via ``worker``. With ``guard_halts``
        (default) the loop runs through :func:`~content_pipeline.cli.budget.
-       guarded_sweep`, so a ``HaltError`` halts cleanly with partial progress
-       and the remaining units recorded; without it, a ``HaltError`` propagates.
+       guarded_sweep`, so a ``PipelineHaltError`` halts cleanly with partial progress
+       and the remaining units recorded; without it, a ``PipelineHaltError`` propagates.
        A non-halt error is isolated per unit when ``isolate_errors``.
 
     Returns a :class:`BulkResult`. A resume run passes ``result.remaining`` (or

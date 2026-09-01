@@ -93,6 +93,7 @@ from .completion import (
     classify_halt_text,
     classify_opencode_exception,
     classify_openai_exception,
+    match_capabilities,
 )
 
 __all__ = [
@@ -163,4 +164,5 @@ __all__ = [
     "classify_codex_exception",
     "classify_opencode_exception",
     "AgentTimeoutError",
+    "match_capabilities",
 ]

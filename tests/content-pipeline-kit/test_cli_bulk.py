@@ -2,14 +2,14 @@
 
 Pins the two-phase cache-warm bulk worker: the warm phase runs once before the
 loop, per-unit error isolation keeps one bad unit from aborting the batch, and
-a HaltError halts cleanly (delegating to budget.guarded_sweep) with a resume
+a PipelineHaltError halts cleanly (delegating to budget.guarded_sweep) with a resume
 list.
 """
 
 import pytest
 
 from content_pipeline.cli.bulk import run_bulk
-from content_pipeline.llm.platform import HALT_RATE_LIMIT, HaltError
+from content_pipeline.llm.platform import HALT_RATE_LIMIT, PipelineHaltError
 
 
 def test_warm_runs_once_before_worker():
@@ -44,7 +44,7 @@ def test_per_unit_error_isolation():
 def test_halt_stops_with_remaining():
     def worker(unit):
         if unit == 2:
-            raise HaltError(HALT_RATE_LIMIT, "429")
+            raise PipelineHaltError(HALT_RATE_LIMIT, "429")
         return unit
 
     result = run_bulk([1, 2, 3, 4], worker)

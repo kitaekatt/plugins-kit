@@ -427,7 +427,7 @@ Add, as needed:
 - **`cli.budget`** -- the preflight / hard-stop guard. `preflight_check(probe)`
   re-raises an auth/credit halt as `BudgetStop` before any unit runs;
   `guarded_sweep(units, worker)` halts the sweep cleanly on the first
-  `HaltError` (429/401), recording done/remaining for a resume.
+  `PipelineHaltError` (429/401), recording done/remaining for a resume.
 - **`cli.bulk`** -- `run_bulk(units, worker, warm=...)`, the two-phase
   cache-warm bulk worker. The `warm` callable owns cache priming; the worker
   phase composes `guarded_sweep`, so a halt stops cleanly with partial

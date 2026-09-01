@@ -725,7 +725,7 @@ class MockBackend:
     - both empty -- every call raises ``RuntimeError("MockBackend exhausted")``.
 
     ``classify_halt`` maps a raised entry to a halt kind when its message
-    carries a marker, so a scripted ``HaltError``-shaped exception halts. Every
+    carries a marker, so a scripted ``PipelineHaltError``-shaped exception halts. Every
     call's kwargs are recorded on ``self.calls``.
 
     THREAD SAFETY: one instance may be shared across worker threads. The
@@ -803,7 +803,7 @@ class MockBackend:
         return self._coerce(entry, effective_model)
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
-        if isinstance(exc, platform.HaltError):
+        if isinstance(exc, platform.PipelineHaltError):
             return exc.kind
         return platform.classify_halt_text(str(exc))
 

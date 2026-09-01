@@ -1,7 +1,7 @@
 # workflow-kit
 
-**Dev-only. Not published** (`"published": false` in plugin.json) -- it lives
-on the `dev` branch and is excluded from the marketplace listing until ready.
+**Experimental.** Published and listed in the marketplace, per `plugin.json` /
+`marketplace.json`.
 
 A kit of incremental, native-preserving improvements on top of Claude Code's
 native Workflow tool. A human authors a durable workflow as a declarative

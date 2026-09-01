@@ -113,6 +113,7 @@ def test_llm_package_reexports_advertised_surface(plugin_root):
         "LLMResponse",
         "BackendOptions",
         "LLMBackend",
+        "PipelineHaltError",
         "HaltError",
         "HALT_AUTH",
         "HALT_RATE_LIMIT",
