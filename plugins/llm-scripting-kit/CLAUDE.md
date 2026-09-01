@@ -10,17 +10,23 @@ management.
 ## Local model server entry points
 
 `scripts/model-server.sh` is the canonical Claude-first launcher. Invoke it as
-`${CLAUDE_PLUGIN_ROOT}/scripts/model-server.sh qwen36|qwen38`; this works from
-the plugin root Claude actually loaded and does not assume a plugin `bin/`
-directory is on PATH. `bin/qwen36-server` and `bin/qwen38-server` are thin shell
-adapters for interactive environments that deliberately put them on PATH.
+`${CLAUDE_PLUGIN_ROOT}/scripts/model-server.sh qwen36|qwen38|qwen38l`; this
+works from the plugin root Claude actually loaded and does not assume a plugin
+`bin/` directory is on PATH. `bin/qwen36-server`, `bin/qwen38-server`, and
+`bin/qwen38l-server` are thin shell adapters for interactive environments that
+deliberately put them on PATH.
 
-The two profiles preserve their measured GPU settings while keeping paths and
-ports overridable through environment variables. Qwen3.6 resolves NInfer from
-`NINFER_ROOT` or conventional dev roots and uses INT8 KV plus MTP3. Qwen3.8
-resolves llama.cpp and its GGUF from their existing environment overrides and
-uses full GPU offload plus Q8 KV. Both bind localhost by default; broader
-network exposure is an explicit host override.
+Each profile preserves its measured GPU settings while keeping paths and ports
+overridable through environment variables. `qwen36` resolves NInfer from
+`NINFER_ROOT` or conventional dev roots and uses INT8 KV plus MTP3. `qwen38`
+serves the same model through NInfer's NVFP4 artifact with FP8 KV and MTP3, the
+profile the artifact's model card measures for an RTX 5090. `qwen38l` is the
+llama.cpp GGUF path for the same model, kept as a comparable second backend --
+it resolves llama.cpp and its GGUF from their existing environment overrides and
+uses full GPU offload plus Q8 KV. The trailing `l` is for llama.cpp; an
+unsuffixed name always means the NInfer path. All bind localhost by default;
+broader network exposure is an explicit host override. They all default to port
+8080, so only one can serve at a time.
 
 ## Scope: one call, made correctly
 

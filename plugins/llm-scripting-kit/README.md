@@ -61,9 +61,10 @@ registry from this plugin, so keys are set up once and consumed everywhere.
   `default` / `defaultCheap` selectors) to concrete slugs, per endpoint. One
   project override changes the model for every consumer at once.
 - **Local server launch profiles.** The canonical `model-server.sh` script owns
-  the measured Qwen3.6/NInfer and Qwen3.8/llama.cpp argument sets. Claude calls
-  it through `${CLAUDE_PLUGIN_ROOT}`; `qwen36-server` and `qwen38-server` are
-  thin PATH adapters for interactive shells.
+  the measured NInfer argument sets for Qwen3.6 and Qwen3.8, plus a `qwen38l`
+  llama.cpp profile for the same model as a comparable second backend. Claude
+  calls it through `${CLAUDE_PLUGIN_ROOT}`; `qwen36-server`, `qwen38-server`,
+  and `qwen38l-server` are thin PATH adapters for interactive shells.
 
 ## API
 
