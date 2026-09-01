@@ -1,0 +1,26 @@
+[project]
+name = "job-kit"
+version = "0.1.5"
+description = "Durable sequential execution for heterogeneous agent jobs."
+requires-python = ">=3.12"
+dependencies = [
+    "pyyaml>=6.0",
+    # Reached transitively through llm_scripting_kit.completion, which the
+    # endpoint selector imports. Declared directly for the same reason
+    # content-pipeline-kit declares it: the dependency is real at import time
+    # whether or not this package names the module itself.
+    "openai>=1.0.0",
+]
+
+[project.scripts]
+job-kit = "job_kit.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["lib"]

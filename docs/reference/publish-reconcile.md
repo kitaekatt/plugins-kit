@@ -133,17 +133,26 @@ The publish flow cherry-picks feature commits (plugin code + version bumps) to
 master; it never carries not-tied-to-a-feature changes -- a CLAUDE.md gotcha, a
 test file, a `.gitignore` tweak, dev tooling. Master silently falls behind
 dev on repo infrastructure. This is expected (per-publish scoping causes it),
-not a bug -- reconcile it from time to time. Do it in the **master tree**,
+not a bug -- reconcile it from time to time. Do it in a **master worktree** (`git worktree add <dir> origin/master` -- never
+`git checkout` in the shared dev tree, which redirects concurrent sessions' commits),
 against `origin/dev`'s committed state (never the live dev working tree),
 keeping dev-only plugins back:
 
 ```bash
-# Derive the dev-only set from the field; never hardcode plugin names here.
-DEVONLY=$(for f in plugins/*/.claude-plugin/plugin.json; do
-  python3 -c "import json,sys,os;d=json.load(open(sys.argv[1]));\
-print(os.path.basename(os.path.dirname(os.path.dirname(sys.argv[1])))) \
-if d.get('published', True) is False else None" "$f"
-done | grep . | paste -sd'|' -)
+# Derive the dev-only set from the field, reading ORIGIN/DEV -- never the
+# checked-out master tree, and never hardcode plugin names here. A dev-only
+# plugin that does not exist on master yet is absent from the master tree, so
+# deriving there yields an incomplete set and the filter below leaks that whole
+# plugin onto master.
+DEVONLY=$(git ls-tree -r --name-only origin/dev \
+  | grep 'plugins/.*/\.claude-plugin/plugin\.json' \
+  | while read -r f; do
+      git show "origin/dev:$f" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+print('$f'.split('/')[1] if d.get('published', True) is False else '')"
+    done | grep . | paste -sd'|' -)
+test -n "$DEVONLY" || { echo "refusing: empty DEVONLY"; exit 1; }
 
 git diff --name-only origin/master origin/dev \
   | grep -vE "^(plugins|tests)/(${DEVONLY})/" \

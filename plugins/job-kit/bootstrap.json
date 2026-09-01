@@ -1,0 +1,19 @@
+{
+  "tools": [
+    {
+      "name": "git"
+    }
+  ],
+  "plugins": [
+    {
+      "ref": "plugins-kit:llm-scripting-kit",
+      "enabled": true,
+      "scope": "user",
+      "install": "auto"
+    }
+  ],
+  "shared_lib_imports": ["llm_scripting_kit", "bootstrap_lib"],
+  "venv": {
+    "check_imports": ["yaml", "job_kit", "llm_scripting_kit", "bootstrap_lib"]
+  }
+}

@@ -83,6 +83,12 @@ DEFAULT_MODEL_CONFIG = {
         # so there is no default that would resolve anywhere but here.
         "sol": {"harness": "codex", "model": "gpt-5.6-sol", "effort": "high"},
         "luna": {"harness": "codex", "model": "gpt-5.6-luna", "effort": "max"},
+        # Claude subscription models, shipped for the same reason: the
+        # claude-cli adapter had no endpoint pointing at it. Effort is a
+        # per-call mapped param on this adapter, so none is set here.
+        "sonnet": {"harness": "claude", "model": "claude-sonnet-5"},
+        "opus": {"harness": "claude", "model": "claude-opus-5"},
+        "fable": {"harness": "claude", "model": "claude-fable-5"},
     },
     "models": {
         "qwen": {"slug": "qwen/qwen3-32b"},

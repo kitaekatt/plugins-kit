@@ -124,7 +124,7 @@
     {
       "name": "llm-scripting-kit",
       "description": "LLM access for scripts and pipelines: credentials, endpoint/model resolution, local Qwen server profiles, and one completion seam over HTTP, Claude, Codex, and OpenCode.",
-      "version": "0.21.0",
+      "version": "0.22.0",
       "author": {
         "name": "Christina"
       },
@@ -207,6 +207,19 @@
         "name": "Christina"
       },
       "source": "./plugins/pdf-kit",
+      "category": "development",
+      "dependencies": [
+        "bootstrap"
+      ]
+    },
+    {
+      "name": "job-kit",
+      "description": "Durable sequential execution for heterogeneous agent jobs with advertisement-based endpoint selection and command-shaped acceptance.",
+      "version": "0.1.5",
+      "author": {
+        "name": "Christina"
+      },
+      "source": "./plugins/job-kit",
       "category": "development",
       "dependencies": [
         "bootstrap"

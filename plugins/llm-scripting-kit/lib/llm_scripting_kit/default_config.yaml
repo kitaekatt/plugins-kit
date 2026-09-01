@@ -69,6 +69,22 @@ endpoints:
     model: gpt-5.6-luna
     effort: max
 
+  # Claude subscription models, shipped for the same reason as the codex pair
+  # above: nothing about them is machine-specific, so a fresh machine with the
+  # claude CLI reproduces the fleet's routing from shipped defaults alone. The
+  # claude-cli adapter existed with no endpoint pointing at it, which made
+  # Claude reachable in principle and unusable in practice. Effort is a
+  # per-call mapped param on this adapter, so none is set here.
+  sonnet:
+    harness: claude
+    model: claude-sonnet-5
+  opus:
+    harness: claude
+    model: claude-opus-5
+  fable:
+    harness: claude
+    model: claude-fable-5
+
 # Top-level model registry (the openrouter endpoint's registry). Named
 # selection: `default` for general use, `defaultCheap` for cheap/smoke work.
 # Each references a key under `models` (or may be a raw slug).
