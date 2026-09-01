@@ -133,6 +133,46 @@ is what they exist to catch. Never keep a second copy of these facts in YAML or
 a docs table: that copy is free to disagree with the adapter, which is the drift
 the advertisement replaces.
 
+**What the advertisement is BEFORE the call, the response is AFTER it.**
+`LLMResponse` carries what actually happened on one call: `dropped_params` (the
+params this caller requested that the adapter does not read),
+`execution_controls_applied` (the ids of advertised controls the request
+actually emitted), `structured` (schema-backed output, parsed), `started_at` /
+`ended_at`, and `status` / `error`. The two halves are one system, not two
+lists: `completion/results.py` DERIVES the per-call report from the adapter's
+own record -- `derive_dropped_params` intersects the advertised dropped set with
+what the caller actually set, and `check_applied_controls` refuses an id the
+advertisement does not carry. A second hand-maintained list is exactly the drift
+the SSOT rule forbids, and here it would be a drift between two claims about the
+same call.
+
+Reporting the applied controls is per-adapter work, and deliberately so: only
+the code that builds the request knows what it emitted. `source` does not settle
+it -- codex's `sandbox-mode` is `source=REQUEST` yet emitted on every call
+because it has a default -- so `CodexCliBackend` reads its controls off the
+BUILT ARGV (the argv is the emission, and codex's argv is built in another
+plugin), `OpencodeCliBackend` reads its advertised `FIXED` set because all of
+its controls are unconditional, and `ClaudeCliBackend` names its three
+unconditional ones. `--allowedTools` goes out even when the caller named no
+tools: an empty allow-list is an emitted allow-list, not a suppression, so it is
+reported.
+
+**Structured output is parsed only under a caller schema.** codex advertises
+`result: parsed` and the adapter parses its `-o` file into `structured` when --
+and only when -- `extras.output_schema` was sent. Valid JSON a model produced
+unbidden is not schema-backed output, and presenting it as such would be the
+overclaim the advertisement exists to prevent; an unparseable result under a
+schema leaves `structured` None rather than failing the call, because `text`
+still carries the answer verbatim.
+
+**Error-as-data lives at the CLI surface only.** The package API keeps RAISING
+typed exceptions -- every existing consumer branches on them, and returning a
+failure there would make it read as a SUCCESS at call sites that never asked for
+this contract. The `complete` verb emits a failure in the same envelope shape as
+a success (`status` of `completed` / `timeout` / `error`, plus an `error` object
+carrying the halt classification as its `code`), on stdout, with exit codes
+unchanged as the shell-level signal.
+
 **The same call does not behave the same way.** Retry, timeout defaults, token
 accounting (codex reports one undifferentiated `total_tokens` and no
 input/output split at all; opencode's default output reports no usage), cost
@@ -157,12 +197,22 @@ driving only `claude-cli` installs no SDK. content-pipeline-kit's
 layer above.
 
 **Two behaviours look like exceptions to that split and are not.**
-`ClaudeCliBackend` retries a transient 5xx envelope (`retry_max_attempts`,
-`retry_cooldown_s`; 3 attempts over 60s) and enforces a per-call timeout -- both
-are properties of the subprocess it spawns, not run-level policy, and 429 / 401
-never retry because they persist. `OpenRouterBackend` makes exactly one attempt
-and leaves retry to the caller, which holds the run-level context that decision
-needs.
+`ClaudeCliBackend` CAN retry a transient 5xx envelope (`retry_max_attempts`,
+`retry_cooldown_s`) and enforces a per-call timeout -- both are properties of
+the subprocess it spawns, not run-level policy, and 429 / 401 never retry
+because they persist. `OpenRouterBackend` makes exactly one attempt and leaves
+retry to the caller, which holds the run-level context that decision needs.
+
+**The seam is RUN-ONCE by default: one request, at most one invocation.**
+`retry_max_attempts` defaults to 1, so the claude retry is opt-in and
+`LLMResponse.attempts` above 1 is evidence of a caller's own policy rather than
+of hidden adapter behaviour. The budget was kept rather than deleted because the
+transient-5xx case is real; what was wrong was doing it invisibly underneath a
+caller that runs its own retry loop. One consequence is worth stating because it
+was a latent bug: a transient envelope that survives the budget now RAISES, in
+the canonical `"api_error_status":NNN` form the halt matchers read. It used to
+fall through and be reported as a completed call with empty text -- the retry
+loop had been hiding a failure the contract now names.
 
 ## Insights
 

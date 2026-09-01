@@ -113,6 +113,10 @@ def test_claude_cli_backend_requires_lib_when_driven():
         backend.complete("s", "u", model="x")
 
 
+def test_claude_cli_backend_defaults_to_run_once() -> None:
+    assert ClaudeCliBackend().retry_max_attempts == 1
+
+
 # --- lazy-delegate build under concurrency -----------------------------------
 
 
@@ -459,6 +463,35 @@ def test_response_adapter_carries_total_tokens():
     assert adapted.output_tokens == 0
 
 
+def test_response_adapter_carries_truthfulness_fields() -> None:
+    class _Resp:
+        text = "x"
+        model = "m"
+        input_tokens = 1
+        output_tokens = 2
+        cache_hit_tokens = 3
+        wall_ms = 5
+        attempts = 1
+        from_cache = False
+        total_tokens = 0
+        status = "completed"
+        error = None
+        dropped_params = ("temperature",)
+        execution_controls_applied = ("allowed-tools",)
+        structured = {"answer": "x"}
+        started_at = "2026-09-01T12:00:00Z"
+        ended_at = "2026-09-01T12:00:05Z"
+
+    adapted = backends._from_completion_response(_Resp())
+    assert adapted.status == "completed"
+    assert adapted.error is None
+    assert adapted.dropped_params == ("temperature",)
+    assert adapted.execution_controls_applied == ("allowed-tools",)
+    assert adapted.structured == {"answer": "x"}
+    assert adapted.started_at == "2026-09-01T12:00:00Z"
+    assert adapted.ended_at == "2026-09-01T12:00:05Z"
+
+
 def test_response_adapter_tolerates_older_shared_lib():
     """A shared lib reaches every consumer at once with no version pin."""
 
@@ -472,4 +505,34 @@ def test_response_adapter_tolerates_older_shared_lib():
         attempts = 1
         from_cache = False
 
-    assert backends._from_completion_response(_OldResp()).total_tokens == 0
+    adapted = backends._from_completion_response(_OldResp())
+    assert adapted.total_tokens == 0
+    assert adapted.status == "completed"
+    assert adapted.error is None
+    assert adapted.dropped_params == ()
+    assert adapted.execution_controls_applied == ()
+    assert adapted.structured is None
+    assert adapted.started_at is None
+    assert adapted.ended_at is None
+
+
+def test_seam_error_is_normalized_to_data_at_the_boundary():
+    """A live call and a cache hit must yield the same shape for `error`.
+
+    The response cache can only hold JSON, so an error object crossing the
+    boundary unchanged would read as an object live and as a dict from cache.
+    """
+    from content_pipeline.llm.backends import _error_to_data
+
+    class _SeamError:
+        code = "halt_rate_limit"
+
+        def to_json(self):
+            return {"code": "halt_rate_limit", "message": "hit your limit"}
+
+    assert _error_to_data(None) is None
+    assert _error_to_data(_SeamError()) == {
+        "code": "halt_rate_limit", "message": "hit your limit"
+    }
+    # an older shared lib without the type is passed through untouched
+    assert _error_to_data("legacy") == "legacy"

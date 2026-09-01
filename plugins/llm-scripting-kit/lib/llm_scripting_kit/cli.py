@@ -5,13 +5,25 @@ import argparse
 import getpass
 import json
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional
 
 from .account import AccountCheckError, validate_endpoint
 from .api_key import get_api_key
-from .completion import BackendOptions, adapter_capabilities, create_backend
+from .completion import (
+    ERROR,
+    TIMEOUT,
+    AgentTimeoutError,
+    BackendOptions,
+    LLMResponse,
+    ResponseError,
+    adapter_capabilities,
+    create_backend,
+    derive_dropped_params,
+    utc_now_iso,
+)
 from .constants import USER_ENV_FILE
 from .env_file import read_env_file, write_env_file
 from .model_endpoints import EndpointRegistryError
@@ -208,19 +220,90 @@ def _cmd_complete(args: argparse.Namespace) -> int:
     options = BackendOptions(max_tokens=args.max_tokens, temperature=args.temperature,
                              timeout_s=args.timeout, effort=args.effort or selection.effort,
                              cwd=args.cwd, log_prefix=f"[{selection.endpoint}]")
+    # Bracket the call HERE too. A failure never reaches an adapter's own
+    # timestamping, and a failed call still ran -- a timeout by definition
+    # burned the whole budget -- so the CLI has to record what it can see.
+    started_at = utc_now_iso()
+    started_monotonic = time.monotonic()
     try:
         response = selection.backend.complete(system, user, model=selection.model, options=options)
     except Exception as exc:  # transport implementations expose heterogeneous exception types
+        # ERROR-AS-DATA, and only here. The package API keeps RAISING -- every
+        # existing consumer branches on typed exceptions, and returning a
+        # failure there would make it read as a success at call sites that never
+        # asked for this contract. The CLI is a protocol surface with no such
+        # history, so a failure comes back in the SAME envelope shape as a
+        # success and a caller parses one thing instead of two.
         halt = selection.backend.classify_halt(exc)
-        _json({"error": {"kind": halt or "execution", "message": str(exc)},
-               "endpoint": selection.endpoint, "backend": selection.backend.name}, stream=sys.stderr)
+        failed = LLMResponse(
+            text="",
+            model=selection.model,
+            status=TIMEOUT if isinstance(exc, AgentTimeoutError) else ERROR,
+            error=ResponseError(code=halt or "execution", message=str(exc)),
+            wall_ms=int((time.monotonic() - started_monotonic) * 1000),
+            # Dropped params do not depend on the outcome: the adapter would not
+            # have read them either way, so this is as true of a failed call as
+            # of a completed one.
+            dropped_params=_dropped_for(selection.backend, options),
+            started_at=started_at,
+            ended_at=utc_now_iso(),
+        )
+        if args.format == "text":
+            # the text format carries no envelope, so the diagnostic channel is
+            # the only place a failure can be stated
+            print(f"{failed.error.code}: {failed.error.message}", file=sys.stderr)
+        else:
+            _json(_complete_envelope(selection, failed))
+        # Exit codes are UNCHANGED: they stay the shell-level signal, and the
+        # envelope is the machine-readable one. A caller may read either.
         return EXIT_HALT if halt else EXIT_FAILURE
     if args.format == "text":
         print(response.text)
     else:
-        _json({"endpoint": selection.endpoint, "kind": selection.kind,
-               "backend": selection.backend.name, "response": asdict(response)})
+        _json(_complete_envelope(selection, response))
     return EXIT_OK
+
+
+def _dropped_for(backend: Any, options: BackendOptions) -> tuple:
+    """Params this request would have had dropped, or () if unknowable.
+
+    Read defensively: ``capabilities`` is a ClassVar on every shipped adapter,
+    but the backend here is whatever the factory produced, and a caller-injected
+    or test backend need not carry one.
+    """
+    capabilities = getattr(backend, "capabilities", None)
+    if capabilities is None:
+        return ()
+    return derive_dropped_params(capabilities, options)
+
+
+def _complete_envelope(selection: Any, response: LLMResponse) -> dict[str, Any]:
+    """One result shape for a completed, timed-out, or failed call.
+
+    ``error`` is rendered through :meth:`ResponseError.to_json` rather than
+    ``asdict``'s nested dict so the payload stays the record's own declared
+    shape, and it is omitted entirely when the call completed -- a null error
+    beside a "completed" status is noise a consumer has to branch on twice.
+    """
+    payload = asdict(response)
+    payload.pop("error", None)
+    if response.error is not None:
+        payload["error"] = response.error.to_json()
+        # OMITTED, not emptied. The CLI catches an exception, which carries no
+        # record of the argv the adapter built, so what the request emitted is
+        # UNKNOWN here -- and an empty list does not mean "unknown", it means
+        # "this call emitted no controls". For claude, codex and opencode that
+        # would be false, since each emits unconditional controls on every
+        # invocation. A missing key is the only honest way to say "not known";
+        # `structured` goes with it for the same reason.
+        payload.pop("execution_controls_applied", None)
+        payload.pop("structured", None)
+    return {
+        "endpoint": selection.endpoint,
+        "kind": selection.kind,
+        "backend": selection.backend.name,
+        "response": payload,
+    }
 
 
 def _resolve_endpoint_or_exit(endpoint: Optional[str]) -> Optional[dict]:

@@ -8,6 +8,7 @@ Everything runs on MockBackend -- no network, no subprocess.
 import json
 import os
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -108,6 +109,43 @@ def test_cache_roundtrip(tmp_path):
     assert got.text == "hello"
     assert got.from_cache is True
     assert got.wall_ms == 42  # original wall time preserved
+
+
+def test_cache_roundtrips_truthfulness_fields_without_live_timestamps(
+    tmp_path: Path,
+) -> None:
+    cache = ResponseCache(tmp_path)
+    response = LLMResponse(
+        text="hello",
+        model="m",
+        status="error",
+        error={"code": "example", "message": "details"},
+        dropped_params=("temperature", "max_tokens"),
+        execution_controls_applied=("allowed-tools",),
+        structured={"answer": "hello"},
+        started_at="2026-09-01T12:00:00Z",
+        ended_at="2026-09-01T12:00:05Z",
+    )
+
+    assert cache.store("k", response) is True
+    payload = json.loads((tmp_path / "k.json").read_text(encoding="utf-8"))
+    assert payload["status"] == "error"
+    assert payload["error"] == {"code": "example", "message": "details"}
+    assert payload["dropped_params"] == ["temperature", "max_tokens"]
+    assert payload["execution_controls_applied"] == ["allowed-tools"]
+    assert payload["structured"] == {"answer": "hello"}
+    assert payload["started_at"] == "2026-09-01T12:00:00Z"
+    assert payload["ended_at"] == "2026-09-01T12:00:05Z"
+
+    got = cache.lookup("k")
+    assert got is not None
+    assert got.status == "error"
+    assert got.error == {"code": "example", "message": "details"}
+    assert got.dropped_params == ("temperature", "max_tokens")
+    assert got.execution_controls_applied == ("allowed-tools",)
+    assert got.structured == {"answer": "hello"}
+    assert got.started_at is None
+    assert got.ended_at is None
 
 
 def test_cache_miss_returns_none(tmp_path):

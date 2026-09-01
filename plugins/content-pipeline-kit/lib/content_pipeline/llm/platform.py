@@ -115,6 +115,16 @@ class LLMResponse:
       construction sites (a cache hit, a hand-built ``LLMResponse`` in a
       test) are unaffected. Use :func:`describe_likely_reasoning_exhaustion`
       for a human-readable diagnostic naming the likely cause and remedy.
+    - ``status`` / ``error`` -- the result status and optional structured error
+      detail from the completion seam.
+    - ``dropped_params`` -- options requested by the caller but ignored by the
+      adapter.
+    - ``execution_controls_applied`` -- execution controls emitted by the
+      adapter for this call.
+    - ``structured`` -- schema-backed parsed output when the adapter provides
+      it, otherwise ``None``.
+    - ``started_at`` / ``ended_at`` -- ISO-8601 UTC timestamps for a live call;
+      both are ``None`` on a cache hit.
     """
 
     text: str
@@ -127,6 +137,13 @@ class LLMResponse:
     from_cache: bool = False
     total_tokens: int = 0
     likely_reasoning_exhausted: bool = False
+    status: str = "completed"
+    error: Optional[Any] = None
+    dropped_params: tuple[str, ...] = ()
+    execution_controls_applied: tuple[str, ...] = ()
+    structured: Optional[Any] = None
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -585,6 +602,14 @@ def build_cache_key(
     return hashing.content_hash(payload, length=hashing.FULL_DIGEST_LENGTH)
 
 
+def _serialize_response_error(error: Any) -> Any:
+    """Convert a seam error to JSON data without importing the optional seam."""
+    if error is None:
+        return None
+    to_json = getattr(error, "to_json", None)
+    return to_json() if callable(to_json) else error
+
+
 class ResponseCache:
     """File-per-key content-addressed cache for :class:`LLMResponse`.
 
@@ -618,6 +643,16 @@ class ResponseCache:
             wall_ms=int(data.get("wall_ms", 0)),
             attempts=1,
             from_cache=True,
+            status=data.get("status", "completed"),
+            error=data.get("error"),
+            dropped_params=tuple(data.get("dropped_params", ())),
+            execution_controls_applied=tuple(
+                data.get("execution_controls_applied", ())
+            ),
+            structured=data.get("structured"),
+            # These timestamps bracket a live call, not a cache lookup.
+            started_at=None,
+            ended_at=None,
         )
 
     def store(self, key: str, response: LLMResponse) -> bool:
@@ -661,6 +696,13 @@ class ResponseCache:
             "output_tokens": response.output_tokens,
             "cache_hit_tokens": response.cache_hit_tokens,
             "wall_ms": response.wall_ms,
+            "status": response.status,
+            "error": _serialize_response_error(response.error),
+            "dropped_params": response.dropped_params,
+            "execution_controls_applied": response.execution_controls_applied,
+            "structured": response.structured,
+            "started_at": response.started_at,
+            "ended_at": response.ended_at,
         }
         target = self._path(key)
         fd, tmp_name = tempfile.mkstemp(

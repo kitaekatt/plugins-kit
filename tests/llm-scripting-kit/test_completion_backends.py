@@ -170,11 +170,28 @@ class TestClaudeCliBackend:
             (json.dumps({"result": "", "api_error_status": 500}), "", 0),
             (_envelope("recovered"), "", 0),
         ])
-        resp = _cli(runner, retry_cooldown_s=60).complete("s", "u", model="opus")
+        # retry is OPT-IN under run-once; the default would stop at one call
+        resp = _cli(
+            runner, retry_max_attempts=3, retry_cooldown_s=60
+        ).complete("s", "u", model="opus")
         assert resp.text == "recovered"
         assert resp.attempts == 2
         assert len(runner.calls) == 2
         assert sleeps == [60]
+
+    def test_run_once_is_the_default(self, monkeypatch):
+        """One request, at most one CLI invocation, unless the caller opts in."""
+        sleeps: list = []
+        monkeypatch.setattr(_time, "sleep", lambda s: sleeps.append(s))
+        runner = _StubRunner([
+            (json.dumps({"result": "", "api_error_status": 500}), "", 0),
+            (_envelope("recovered"), "", 0),
+        ])
+        # the transient 500 is now surfaced rather than silently retried
+        with pytest.raises(RuntimeError):
+            _cli(runner).complete("s", "u", model="opus")
+        assert len(runner.calls) == 1
+        assert sleeps == []
 
     def test_transient_exhaustion_surfaces_last_envelope(self, monkeypatch):
         monkeypatch.setattr(_time, "sleep", lambda _s: None)

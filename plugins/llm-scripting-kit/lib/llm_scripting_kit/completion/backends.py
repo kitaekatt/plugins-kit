@@ -44,6 +44,7 @@ from .claude_runner import (
 )
 from .adapter_capabilities import CLAUDE_CAPABILITIES, OPENROUTER_CAPABILITIES
 from .capabilities import Capabilities
+from .results import check_applied_controls, derive_dropped_params, utc_now_iso
 from .types import BackendOptions, LLMResponse
 
 
@@ -183,9 +184,11 @@ class OpenRouterBackend:
             # shape for existing callers is byte-identical.
             create_kwargs["extra_body"] = dict(opts.extras)
 
+        started_at = utc_now_iso()
         start = time.monotonic()
         response = client.chat.completions.create(**create_kwargs)
         wall_ms = int((time.monotonic() - start) * 1000)
+        ended_at = utc_now_iso()
 
         text = response.choices[0].message.content or ""
         finish_reason = getattr(response.choices[0], "finish_reason", None)
@@ -222,6 +225,12 @@ class OpenRouterBackend:
             wall_ms=wall_ms,
             attempts=1,
             from_cache=False,
+            dropped_params=derive_dropped_params(self.capabilities, opts),
+            # This adapter emits no execution control: it builds an HTTP request,
+            # which has no sandbox, tool or permission surface to constrain.
+            execution_controls_applied=(),
+            started_at=started_at,
+            ended_at=ended_at,
         )
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
@@ -283,7 +292,14 @@ class ClaudeCliBackend:
             stall a bulk run.
         retry_max_attempts / retry_cooldown_s: Transient-5xx retry budget (the
             envelope can carry api_error_status 5xx with exit 0). Hard stops
-            (429/401) never retry.
+            (429/401) never retry. The default is 1 -- RUN-ONCE: one request,
+            at most one CLI invocation. Retry is caller policy, and it was made
+            visible here rather than removed because the transient-5xx case is
+            real; what was wrong was doing it invisibly. A caller that wants the
+            old behavior asks for it (``retry_max_attempts=3``) and then reads
+            ``LLMResponse.attempts`` to see what it got. A caller that owns its
+            own retry loop -- as the one seam consumer does -- no longer runs a
+            second, hidden loop underneath its own.
         diagnostics_dir: Where timeout diagnostics dump. ``None`` disables
             dumping (the raised error still carries inline stdout/stderr tails).
         executable: Explicit path to the ``claude`` binary. ``None`` resolves it
@@ -297,7 +313,7 @@ class ClaudeCliBackend:
     """
 
     default_timeout_s: float = 900.0
-    retry_max_attempts: int = 3
+    retry_max_attempts: int = 1
     retry_cooldown_s: float = 60.0
     diagnostics_dir: Optional[Path] = None
     executable: Optional[str] = None
@@ -341,6 +357,7 @@ class ClaudeCliBackend:
         if opts.effort is not None:
             cmd.extend(["--effort", opts.effort])
 
+        started_at = utc_now_iso()
         start = time.monotonic()
         last_stdout = ""
         last_stderr = ""
@@ -409,6 +426,19 @@ class ClaudeCliBackend:
             raise RuntimeError(
                 f"claude -p returned error: {data.get('result', 'unknown')}"
             )
+        if transient is not None:
+            # A transient envelope that survived the retry budget is a FAILED
+            # call, and under run-once (the default budget of 1) that is every
+            # transient envelope. Before this check it fell through to the
+            # return below and was reported as a successful completion with an
+            # empty result -- the retry loop had been hiding it. Raising keeps
+            # it classifiable: the message carries the canonical
+            # `"api_error_status":NNN` form the halt matchers read.
+            raise RuntimeError(
+                f'claude -p transient server error ("api_error_status":'
+                f'{transient}) after {attempts_made} attempt(s); retry is '
+                "caller policy (retry_max_attempts)"
+            )
 
         usage = data.get("usage") or {}
         wall_ms = int((time.monotonic() - start) * 1000)
@@ -421,6 +451,24 @@ class ClaudeCliBackend:
             wall_ms=wall_ms,
             attempts=attempts_made,
             from_cache=False,
+            dropped_params=derive_dropped_params(self.capabilities, opts),
+            execution_controls_applied=self._applied_controls(),
+            started_at=started_at,
+            ended_at=utc_now_iso(),
+        )
+
+    def _applied_controls(self) -> "tuple[str, ...]":
+        """The advertised controls this adapter's argv carries, per call.
+
+        All three are unconditional, ``allowed-tools`` included: the argv above
+        emits ``--allowedTools`` on every call, passing "" when the caller named
+        no tools. An empty allow-list is still an emitted allow-list -- the
+        adapter suppresses nothing -- so reporting it only when the caller set
+        the param would under-report what the request actually contained.
+        """
+        return check_applied_controls(
+            self.capabilities,
+            ("allowed-tools", "permission-bypass", "no-session-persistence"),
         )
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:

@@ -32,6 +32,7 @@ from llm_scripting_kit.completion.capabilities import (
     PASSTHROUGH,
     PROMPT_FOLD,
     REPLACE,
+    PARSED_RESULT,
     TEXT_RESULT,
 )
 from llm_scripting_kit.completion.codex_backend import CodexCliBackend
@@ -329,8 +330,8 @@ def test_codex_output_schema_is_native(tmp_path):
     argv = _codex_argv(tmp_path, extras={"output_schema": schema})["cmd"]
     assert argv[argv.index("--output-schema") + 1] == str(schema)
     assert CODEX_CAPABILITIES.structured_output.mode == NATIVE
-    # native schema control, but the result is still delivered as text
-    assert CODEX_CAPABILITIES.structured_output.result == TEXT_RESULT
+    # a native schema control whose result the adapter parses into `structured`
+    assert CODEX_CAPABILITIES.structured_output.result == PARSED_RESULT
 
 
 def test_codex_folds_system_into_the_prompt(tmp_path):

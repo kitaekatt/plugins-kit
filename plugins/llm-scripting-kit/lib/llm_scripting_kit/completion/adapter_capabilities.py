@@ -33,6 +33,7 @@ from .capabilities import (
     REQUEST,
     StructuredOutputCapability,
     SystemPromptCapability,
+    PARSED_RESULT,
     TEXT_RESULT,
     WINDOWS,
 )
@@ -304,11 +305,12 @@ CODEX_CAPABILITIES = Capabilities(
     structured_output=StructuredOutputCapability(
         mode=NATIVE,
         request_param="extras.output_schema",
-        result=TEXT_RESULT,
+        result=PARSED_RESULT,
         note=(
-            "--output-schema is a first-class CLI schema control, but the adapter "
-            "reads the -o result file as raw text; nothing parses it, so the "
-            "normalized response carries no structured field yet"
+            "--output-schema is a first-class CLI schema control, and the adapter "
+            "parses the -o result file into the normalized structured field when "
+            "-- and only when -- a caller schema was sent. Unparseable output "
+            "leaves structured None; text still carries the result verbatim"
         ),
     ),
     system_prompt=SystemPromptCapability(

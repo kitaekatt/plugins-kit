@@ -57,7 +57,22 @@ from .capabilities import (
     StructuredOutputCapability,
     SystemPromptCapability,
 )
-from .types import BackendOptions, LLMBackend, LLMResponse
+from .results import (
+    caller_set_params,
+    check_applied_controls,
+    derive_dropped_params,
+    fixed_control_ids,
+    utc_now_iso,
+)
+from .types import (
+    COMPLETED,
+    ERROR,
+    TIMEOUT,
+    BackendOptions,
+    LLMBackend,
+    LLMResponse,
+    ResponseError,
+)
 from .factory import BackendSelection, create_backend
 from .opencode_backend import (
     DEFAULT_OPENCODE_TIMEOUT_S,
@@ -70,6 +85,16 @@ from .opencode_backend import (
 __all__ = [
     # seam types
     "LLMResponse",
+    "ResponseError",
+    "COMPLETED",
+    "TIMEOUT",
+    "ERROR",
+    # per-call truthfulness derivations
+    "utc_now_iso",
+    "caller_set_params",
+    "derive_dropped_params",
+    "fixed_control_ids",
+    "check_applied_controls",
     # capability advertisement
     "Capabilities",
     "ParamCapability",

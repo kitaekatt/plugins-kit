@@ -10,7 +10,41 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, Mapping, Optional, Protocol, Tuple, runtime_checkable
+
+
+# -- call status -----------------------------------------------------------
+
+COMPLETED = "completed"
+"""The adapter produced a result; ``error`` is None."""
+
+TIMEOUT = "timeout"
+"""The per-call wall-clock budget was spent and the target was killed."""
+
+ERROR = "error"
+"""The call failed for any other reason; ``error`` carries the detail."""
+
+
+@dataclass(frozen=True)
+class ResponseError:
+    """A failure reported AS DATA rather than raised.
+
+    ``code`` is a stable, machine-branchable token (the halt taxonomy's own
+    labels where one applies, else a short adapter-neutral slug). ``message``
+    is human text and is never parsed by this layer.
+
+    Where this appears is deliberate and narrow: the PACKAGE API keeps raising
+    typed exceptions -- every existing consumer branches on them, and turning a
+    raise into a return would make a failure read as a success at call sites
+    that never asked for the new contract. The error-as-data envelope is
+    emitted at the CLI surface, which is a new protocol with no such history.
+    """
+
+    code: str
+    message: str = ""
+
+    def to_json(self) -> Dict[str, Any]:
+        return {"code": self.code, "message": self.message}
 
 
 @dataclass
@@ -39,8 +73,42 @@ class LLMResponse:
     - ``wall_ms`` -- wall-clock duration of the live call in milliseconds. On a
       cache hit this is the ORIGINAL live call's duration.
     - ``attempts`` -- number of completion attempts made (1 on first-try
-      success; 1 on a cache hit).
+      success; 1 on a cache hit). Under run-once this is 1 unless the CALLER
+      opted a backend into a retry budget, so a value above 1 is now evidence
+      of caller policy rather than of hidden adapter behavior.
     - ``from_cache`` -- True when served from a response cache.
+
+    Truthfulness fields -- what actually happened on this call, as opposed to
+    what the adapter can do in general (that is the advertisement's job):
+
+    - ``status`` -- :data:`COMPLETED`, :data:`TIMEOUT` or :data:`ERROR`. The
+      package API still RAISES on failure, so a response handed back by
+      ``complete()`` always reads ``completed``; the other two are produced
+      where failures become data (the CLI envelope, a consumer that adapts a
+      caught exception into a result).
+    - ``error`` -- the :class:`ResponseError` detail, present iff ``status`` is
+      not ``completed``.
+    - ``dropped_params`` -- the params this CALL requested that the adapter does
+      not read, so nothing is silently ignored. Derived from the adapter's own
+      advertised ``dropped_params`` (see :mod:`.results`), never from a second
+      hand-maintained list, and narrowed to params the caller actually set:
+      reporting a default the caller never touched would be noise, not truth.
+    - ``execution_controls_applied`` -- ids of the advertised
+      :class:`~.capabilities.ExecutionControl` records this call emitted. It
+      reports EMISSION only, exactly as the advertisement does -- never that the
+      target complied.
+    - ``structured`` -- parsed schema-backed output, present only where the
+      adapter advertises ``result: parsed`` AND a schema was honored natively.
+      ``None`` everywhere else, including where a schema was sent but the result
+      came back as text.
+    - ``started_at`` / ``ended_at`` -- ISO-8601 UTC timestamps bracketing the
+      live call (``None`` on a cache hit, where no live call happened).
+
+    A note for anyone adding another field here, learned from ``total_tokens``
+    above: think about what a consumer will SUM or COUNT. None of the fields
+    added above is summable across backends, which is deliberate --
+    ``dropped_params`` and ``execution_controls_applied`` are sets of names, not
+    magnitudes, so no downstream aggregate can double-count them.
     """
 
     text: str
@@ -52,6 +120,13 @@ class LLMResponse:
     wall_ms: int = 0
     attempts: int = 1
     from_cache: bool = False
+    status: str = COMPLETED
+    error: Optional[ResponseError] = None
+    dropped_params: Tuple[str, ...] = ()
+    execution_controls_applied: Tuple[str, ...] = ()
+    structured: Optional[Any] = None
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -113,4 +188,12 @@ class LLMBackend(Protocol):
     def classify_halt(self, exc: BaseException) -> Optional[str]: ...
 
 
-__all__ = ["LLMResponse", "BackendOptions", "LLMBackend"]
+__all__ = [
+    "LLMResponse",
+    "BackendOptions",
+    "LLMBackend",
+    "ResponseError",
+    "COMPLETED",
+    "TIMEOUT",
+    "ERROR",
+]

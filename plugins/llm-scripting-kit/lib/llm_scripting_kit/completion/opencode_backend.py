@@ -43,6 +43,7 @@ from . import halt
 from .claude_runner import AgentTimeoutError, run_cli_streaming
 from .adapter_capabilities import OPENCODE_CAPABILITIES
 from .capabilities import Capabilities
+from .results import derive_dropped_params, fixed_control_ids, utc_now_iso
 from .types import BackendOptions, LLMResponse
 
 
@@ -209,6 +210,7 @@ class OpencodeCliBackend:
         # must see that this is an OpenCode policy boundary, not an OS sandbox.
         self._announce_filesystem_posture(opts.log_prefix)
 
+        started_at = utc_now_iso()
         start = time.monotonic()
         try:
             stdout, stderr, returncode = self.runner(
@@ -260,6 +262,14 @@ class OpencodeCliBackend:
             wall_ms=wall_ms,
             attempts=1,
             from_cache=False,
+            dropped_params=derive_dropped_params(self.capabilities, opts),
+            # Every control this adapter advertises is source=FIXED -- the
+            # injected permission scalars and the four fixed flags go out on
+            # every invocation -- so the applied set is the advertised set and
+            # is read from it rather than restated here.
+            execution_controls_applied=fixed_control_ids(self.capabilities),
+            started_at=started_at,
+            ended_at=utc_now_iso(),
         )
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:

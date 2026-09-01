@@ -31,18 +31,20 @@ flag is hand-assembled here; a new codex knob is added there and forwarded from
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Dict, Optional
+from typing import Any, Callable, ClassVar, Dict, Mapping, Optional
 
 from . import halt
 from .claude_runner import run_cli_streaming
 from .adapter_capabilities import CODEX_CAPABILITIES
 from .capabilities import Capabilities
+from .results import check_applied_controls, derive_dropped_params, utc_now_iso
 from .types import BackendOptions, LLMResponse
 
 
@@ -251,6 +253,7 @@ class CodexCliBackend:
             )
             prompt = compose_prompt(system, user)
 
+            started_at = utc_now_iso()
             start = time.monotonic()
             stdout, stderr, returncode = self.runner(
                 argv,
@@ -297,7 +300,59 @@ class CodexCliBackend:
             wall_ms=wall_ms,
             attempts=1,
             from_cache=False,
+            dropped_params=derive_dropped_params(self.capabilities, opts),
+            execution_controls_applied=self._applied_controls(argv),
+            structured=self._parse_structured(text, opts.extras),
+            started_at=started_at,
+            ended_at=utc_now_iso(),
         )
+
+    def _applied_controls(self, argv: "list") -> "tuple[str, ...]":
+        """Which advertised controls THIS argv actually carries.
+
+        Read off the built argv rather than re-derived from the options,
+        deliberately: argv construction is delegated to ``bootstrap_lib.codex``
+        in another plugin, so an option value is only a request for a flag and
+        this adapter is not the code that decides whether one is emitted. The
+        argv is the emission, and the advertisement's rule is that a control is
+        advertised only where something is emitted -- so reading the emission is
+        the only report that cannot drift from the builder.
+        """
+        joined = " ".join(str(a) for a in argv)
+        applied = []
+        if "-s" in [str(a) for a in argv]:
+            applied.append("sandbox-mode")
+        if "sandbox_workspace_write.network_access=true" in joined:
+            applied.append("network-enable")
+        if 'windows.sandbox="unelevated"' in joined:
+            applied.append("windows-sandbox-mode")
+        if "--skip-git-repo-check" in joined:
+            applied.append("skip-git-repo-check")
+        return check_applied_controls(self.capabilities, applied)
+
+    @staticmethod
+    def _parse_structured(text: str, extras: Any) -> Optional[Any]:
+        """Parse the result as JSON, but only when a caller schema was sent.
+
+        ``--output-schema`` is a first-class CLI schema control, so a result
+        produced under one is schema-backed output and the contract can carry it
+        in ``structured``. Two restraints keep the claim honest:
+
+        - Absent ``extras.output_schema`` nothing is parsed, even when the text
+          happens to be valid JSON. A model that returned JSON unbidden was not
+          honoring a schema, and presenting it as though it were would be the
+          overclaim this contract exists to prevent.
+        - A parse failure yields ``None`` rather than raising. The call
+          succeeded and ``text`` still carries the result verbatim; the honest
+          report is that no structured output is available, not that the call
+          failed.
+        """
+        if not isinstance(extras, Mapping) or not extras.get("output_schema"):
+            return None
+        try:
+            return json.loads(text)
+        except (ValueError, TypeError):
+            return None
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
         return halt.classify_codex_exception(exc)

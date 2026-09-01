@@ -154,6 +154,20 @@ def _to_completion_options(opts: BackendOptions) -> Any:
     )
 
 
+def _error_to_data(error: Any) -> Any:
+    """Reduce a seam ``ResponseError`` to plain data, duck-typed.
+
+    ``getattr``-based rather than an isinstance check for the same reason
+    ``total_tokens`` is read with ``getattr`` below: this package must keep
+    working against a shared lib that predates the type, and it must not import
+    the seam to do it.
+    """
+    if error is None:
+        return None
+    to_json = getattr(error, "to_json", None)
+    return to_json() if callable(to_json) else error
+
+
 def _from_completion_response(resp: Any) -> LLMResponse:
     """Adapt an ``llm_scripting_kit.completion.LLMResponse`` into ours.
 
@@ -162,7 +176,8 @@ def _from_completion_response(resp: Any) -> LLMResponse:
     and this one earns its keep the same way. ``total_tokens`` is read with
     ``getattr`` because a consumer may be running against an older shared lib
     that predates the field -- the shared lib reaches every consumer at once
-    with no version pin, so the two can legitimately be out of step here.
+    with no version pin, so the two can legitimately be out of step here. The
+    same compatibility rule applies to every truthfulness field below.
     """
     return LLMResponse(
         text=resp.text,
@@ -174,6 +189,18 @@ def _from_completion_response(resp: Any) -> LLMResponse:
         attempts=resp.attempts,
         from_cache=resp.from_cache,
         total_tokens=getattr(resp, "total_tokens", 0),
+        status=getattr(resp, "status", "completed"),
+        # normalized to its JSON form AT THE BOUNDARY, so this field is one type
+        # everywhere. The seam hands back a ResponseError object; the response
+        # cache can only store JSON. Converting on the way out means a cache hit
+        # and a live call yield the same shape, instead of a consumer's
+        # `error.code` working live and breaking on a cached response.
+        error=_error_to_data(getattr(resp, "error", None)),
+        dropped_params=getattr(resp, "dropped_params", ()),
+        execution_controls_applied=getattr(resp, "execution_controls_applied", ()),
+        structured=getattr(resp, "structured", None),
+        started_at=getattr(resp, "started_at", None),
+        ended_at=getattr(resp, "ended_at", None),
     )
 
 
@@ -260,7 +287,10 @@ class ClaudeCliBackend:
     Config fields forward to the delegate; ``runner`` is the subprocess seam
     (``None`` uses the shared lib's battle-tested ``run_claude_streaming``). The
     delegate is built lazily so constructing this adapter never requires the
-    shared lib.
+    shared lib. ``retry_max_attempts`` defaults to 1 (run-once: one request,
+    at most one CLI invocation). Retry is this adapter's explicit policy; the
+    higher-level pipeline retry policy should leave it at 1 to avoid a second
+    retry loop.
 
     THREAD SAFETY: one instance may be shared across worker threads; the lazy
     delegate build is guarded by double-checked locking (see
@@ -268,7 +298,7 @@ class ClaudeCliBackend:
     """
 
     default_timeout_s: float = 900.0
-    retry_max_attempts: int = 3
+    retry_max_attempts: int = 1
     retry_cooldown_s: float = 60.0
     diagnostics_dir: Optional[Path] = None
     executable: Optional[str] = None
