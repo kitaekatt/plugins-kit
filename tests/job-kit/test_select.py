@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from llm_scripting_kit.completion import BackendSelection, Capabilities, ParamCapability
+from llm_scripting_kit.completion import (
+    BackendSelection,
+    Capabilities,
+    ParamCapability,
+    match_capabilities,
+)
 from llm_scripting_kit.models import EndpointResolveError
 
 from job_kit.model import Contract, Job, Prompt
-from job_kit.select import select_endpoint
+from job_kit.select import requirements_match, select_endpoint
 
 
 class FakeBackend:
@@ -106,3 +111,33 @@ def test_selection_skips_an_unknown_endpoint_name(tmp_path: Path) -> None:
 
     assert selected.endpoint == "second"
     assert calls == ["unknown", "second"]
+
+
+def test_requirements_match_delegates_to_llm_scripting_kit_list_shorthand() -> None:
+    """The list shorthand ({"params": [...]}) matches through the LSK matcher."""
+    capabilities = Capabilities(
+        adapter="fake", params={"effort": ParamCapability(type="string")}
+    )
+    requirements = ["effort"]
+
+    assert requirements_match(capabilities, requirements) == match_capabilities(
+        capabilities, requirements
+    )
+    assert requirements_match(capabilities, requirements) is True
+
+
+def test_requirements_match_delegates_to_llm_scripting_kit_dotted_path() -> None:
+    """A dotted-path key matches through the LSK matcher's advertisement walk."""
+    capabilities = Capabilities(adapter="fake")
+    requirements = {"adapter": "fake"}
+
+    assert requirements_match(capabilities, requirements) == match_capabilities(
+        capabilities, requirements
+    )
+    assert requirements_match(capabilities, requirements) is True
+
+    mismatched = {"adapter": "other"}
+    assert requirements_match(capabilities, mismatched) == match_capabilities(
+        capabilities, mismatched
+    )
+    assert requirements_match(capabilities, mismatched) is False

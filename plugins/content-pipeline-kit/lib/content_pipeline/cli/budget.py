@@ -8,7 +8,7 @@ against a dead credential). The whole point is a CLEAN stop with PARTIAL
 progress reported, so a resume loop picks up where it left off.
 
 This module (per the dependency contract) may import ``llm`` for the
-:class:`~content_pipeline.llm.platform.HaltError` taxonomy and stdlib -- nothing
+:class:`~content_pipeline.llm.platform.PipelineHaltError` taxonomy and stdlib -- nothing
 else from ``content_pipeline``. It consumes the halt signal the ``llm`` layer
 already raises; it does not re-implement provider-error classification.
 """
@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 from content_pipeline.llm.platform import (
-    HaltError,
+    PipelineHaltError,
     classify_halt_text,
 )
 
@@ -27,7 +27,7 @@ from content_pipeline.llm.platform import (
 class BudgetStop(Exception):
     """A bulk sweep hit a hard-stop and halted with partial progress.
 
-    - ``reason`` -- the halt kind (``HaltError.kind``: auth / rate_limit /
+    - ``reason`` -- the halt kind (``PipelineHaltError.kind``: auth / rate_limit /
       insufficient_credit).
     - ``unit_id`` -- the unit whose call tripped the stop (``""`` for a
       preflight stop before any unit ran).
@@ -59,7 +59,7 @@ def preflight_check(probe: Callable[[], Any]) -> None:
     """Run ``probe`` before a sweep; re-raise a halt as :class:`BudgetStop`.
 
     ``probe`` is a cheap credential/budget check the caller supplies (e.g. a
-    zero-cost auth ping). A :class:`~content_pipeline.llm.platform.HaltError`
+    zero-cost auth ping). A :class:`~content_pipeline.llm.platform.PipelineHaltError`
     from the probe means the run would burn against a dead credential, so it is
     re-raised as a :class:`BudgetStop` with no units done -- the auth-expiry
     preflight. A probe that returns normally lets the run proceed; any non-halt
@@ -67,17 +67,17 @@ def preflight_check(probe: Callable[[], Any]) -> None:
     """
     try:
         probe()
-    except HaltError as exc:
+    except PipelineHaltError as exc:
         raise BudgetStop(exc.kind) from exc
 
 
 def check_response(response: Any) -> None:
-    """Raise :class:`~content_pipeline.llm.platform.HaltError` on a hard-stop response.
+    """Raise :class:`~content_pipeline.llm.platform.PipelineHaltError` on a hard-stop response.
 
     Inspects a response's text channel (``response.text`` or ``str(response)``)
     for a persistent-failure marker via ``llm.classify_halt_text`` -- the
     text-channel hard-stop the CLI backend surfaces even on a 200 envelope. A
-    marker raises ``HaltError`` (so a surrounding :func:`guarded_sweep` catches
+    marker raises ``PipelineHaltError`` (so a surrounding :func:`guarded_sweep` catches
     it); a clean response returns ``None``.
     """
     text = getattr(response, "text", None)
@@ -85,7 +85,7 @@ def check_response(response: Any) -> None:
         text = str(response)
     kind = classify_halt_text(text)
     if kind is not None:
-        raise HaltError(kind, text[:200])
+        raise PipelineHaltError(kind, text[:200])
 
 
 @dataclass
@@ -119,7 +119,7 @@ def guarded_sweep(
     """Run ``worker`` over ``units``, halting cleanly on the first hard-stop.
 
     For each unit the worker runs; a
-    :class:`~content_pipeline.llm.platform.HaltError` halts the whole sweep
+    :class:`~content_pipeline.llm.platform.PipelineHaltError` halts the whole sweep
     (records a :class:`BudgetStop` carrying done/remaining and stops -- the
     remaining units are NOT attempted, since the credential is dead). A non-halt
     exception is isolated per unit when ``isolate_errors`` (recorded on
@@ -132,7 +132,7 @@ def guarded_sweep(
     for index, unit in enumerate(units):
         try:
             outcome = worker(unit)
-        except HaltError as exc:
+        except PipelineHaltError as exc:
             remaining = units[index + 1 :]
             done_units = [u for u, _ in result.done]
             result.halted = BudgetStop(

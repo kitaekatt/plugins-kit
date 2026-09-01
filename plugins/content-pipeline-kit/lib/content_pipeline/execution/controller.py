@@ -145,7 +145,7 @@ from content_pipeline.execution.model import (
 from content_pipeline.execution.store import ExecutionStore
 from content_pipeline.execution.wave import _last_apply_kind, is_graph_strategy, ready_wave
 from content_pipeline.freshness.classify import FreshnessState, needs_generation
-from content_pipeline.llm.platform import HaltError
+from content_pipeline.llm.platform import PipelineHaltError
 from content_pipeline.pipeline.single_pass import Gate, run_gates
 from content_pipeline.pipeline.workunit import WorkUnit, WorkUnitStrategy
 
@@ -618,7 +618,7 @@ def record_halt(
     run_id: str,
     unit_id: str,
     fencing_token: int,
-    exc: HaltError,
+    exc: PipelineHaltError,
     *,
     at: Optional[float] = None,
 ) -> None:
@@ -628,7 +628,7 @@ def record_halt(
     failure, and stays eligible for a future wave once the run resumes.
 
     Does not stop the caller's own claim loop; a driver calls this from its
-    ``except HaltError`` handler and is responsible for not claiming further
+    ``except PipelineHaltError`` handler and is responsible for not claiming further
     units afterward (see ``drivers/inline.py``'s "Halt handling" section for
     the concurrency-one shape of that responsibility -- a later driver with a
     different concurrency model satisfies the same "stop claiming" contract

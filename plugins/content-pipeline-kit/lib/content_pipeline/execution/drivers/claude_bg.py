@@ -126,7 +126,7 @@ from content_pipeline.execution.workerpack import (
     reclaimable_units,
     worker_envelopes_for,
 )
-from content_pipeline.llm.platform import HALT_AUTH, HALT_RATE_LIMIT, HaltError, classify_halt_text
+from content_pipeline.llm.platform import HALT_AUTH, HALT_RATE_LIMIT, PipelineHaltError, classify_halt_text
 
 # The names above live in workerpack.py and are re-imported here as
 # module-level aliases -- claude_bg.X is workerpack.X for every one of them
@@ -1253,7 +1253,7 @@ def _classify_and_maybe_halt(
     Returns the classified kind, or ``None`` for an ordinary unit failure."""
     kind = classify_settled_failure(open_dispatch.session_id, job_id=open_dispatch.id)
     if kind in (HALT_RATE_LIMIT, HALT_AUTH):
-        exc = HaltError(kind, detail=f"classified from settled session {open_dispatch.session_id!r}")
+        exc = PipelineHaltError(kind, detail=f"classified from settled session {open_dispatch.session_id!r}")
         record_halt(store, run_id, open_dispatch.unit_id, open_dispatch.fencing_token, exc, at=at)
         return kind
     return None

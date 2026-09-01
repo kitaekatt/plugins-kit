@@ -42,6 +42,24 @@ is what they exist to catch. Never keep a second copy of these facts in YAML or
 a docs table: that copy is free to disagree with the adapter, which is the drift
 the advertisement replaces.
 
+**The advertisement has one matching language, and this package owns it.**
+`completion/requirements.py::match_capabilities(capabilities, requirements)`
+answers whether one adapter's `Capabilities` (or its `to_json()` mapping)
+satisfies a requirement, so a consumer selecting among endpoints (job-kit's
+`select.py` is one) does not keep a capability vocabulary of its own.
+`requirements` is `None` or `{}` to match anything, a list as shorthand for
+`{"params": [...]}`, or a mapping whose named convenience keys read the
+advertisement's public shape: `params` (aliases `required_params`, `honors`; a
+list of required param names, or a per-param mapping where `False` means the
+param must be absent), `execution_controls` (alias `controls`; required control
+ids), `dropped_params` (required dropped-param names), `structured_output`
+(alias `structured`; a mode string, a result string, or a mapping) and
+`system_prompt` (alias `system_prompt_mode`; a mode string or a mapping). Any
+other key is a dotted path over `Capabilities.to_json()`, e.g.
+`structured_output.mode`. The function walks the JSON shape and nothing else,
+so adding a capability to an adapter needs no change here; pinned by
+`tests/llm-scripting-kit/test_completion_requirements.py`.
+
 **What the advertisement is BEFORE the call, the response is AFTER it.**
 `LLMResponse` carries what actually happened on one call: `dropped_params` (the
 params this caller requested that the adapter does not read), `forwarded_params`

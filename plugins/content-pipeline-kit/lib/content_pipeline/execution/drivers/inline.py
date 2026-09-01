@@ -75,7 +75,7 @@ for the regression test that pins this byte-for-byte against the REAL
 Halt handling (D4)
 --------------------
 
-A :class:`~content_pipeline.llm.platform.HaltError` caught while producing a
+A :class:`~content_pipeline.llm.platform.PipelineHaltError` caught while producing a
 unit's text (from either path -- ``generate`` may raise it directly, and
 ``submit_validated``/``call_llm`` raise it internally) is handled as:
 
@@ -112,7 +112,7 @@ invalid text.
 A halt already set when this loop reaches the NEXT unit's claim
 ------------------------------------------------------------------
 
-The ``HaltError`` handling above covers a halt raised BY this call's own
+The ``PipelineHaltError`` handling above covers a halt raised BY this call's own
 ``generate``/``submit_validated``. It does not cover a halt that is already
 set by the time this loop reaches ``store.claim_unit`` for a later unit in
 the same ``wave`` -- a peer process calling ``store.set_halt`` directly, or
@@ -120,7 +120,7 @@ this call's own previous iteration setting the halt and still returning text
 for that unit. ``store.claim_unit`` raises
 :class:`~content_pipeline.execution.model.RunHaltedError` in that case (D4:
 halt blocks new claims). :func:`run_wave` catches it around the claim,
-stopping the loop the same way the ``HaltError`` path does, and returns
+stopping the loop the same way the ``PipelineHaltError`` path does, and returns
 whatever was accepted so far -- it does not re-raise or swallow the halt
 silently: the run is already durably marked halted (by whoever set it), so
 returning the partial ``accepted`` list is the correct, documented behavior
@@ -135,7 +135,7 @@ from typing import Any, Callable, List, Optional, Sequence
 from content_pipeline.execution.controller import RunAdapter, record_halt
 from content_pipeline.execution.model import ExecutionError, RunHaltedError, UnitRecord
 from content_pipeline.execution.store import ExecutionStore, lease_for
-from content_pipeline.llm.platform import HaltError, LLMBackend, submit_validated
+from content_pipeline.llm.platform import PipelineHaltError, LLMBackend, submit_validated
 from content_pipeline.pipeline.workunit import WorkUnit
 
 DEFAULT_INLINE_WORKER_ID = "inline"
@@ -192,7 +192,7 @@ def run_wave(
 
     Returns the ids of units accepted during this call, in the order they
     were processed. Stops early (returning what was accepted so far) on a
-    caught :class:`~content_pipeline.llm.platform.HaltError` -- see the
+    caught :class:`~content_pipeline.llm.platform.PipelineHaltError` -- see the
     module docstring's "Halt handling" section.
 
     ``lease_seconds`` (item 2, A-min.4): ``None`` (the default) derives a
@@ -227,7 +227,7 @@ def run_wave(
             # (a peer's set_halt, or our own previous iteration setting the
             # halt while still returning text) -- see the module docstring's
             # "A halt already set..." section. Stop claiming; return what was
-            # accepted so far, same contract as the HaltError path below.
+            # accepted so far, same contract as the PipelineHaltError path below.
             break
 
         try:
@@ -248,7 +248,7 @@ def run_wave(
                 if not result.accepted:
                     raise UnacceptedSubmissionError(unit.unit_id, result.rejections)
                 text = result.responses[-1].text
-        except HaltError as exc:
+        except PipelineHaltError as exc:
             record_halt(store, run_id, unit.unit_id, claim.fencing_token, exc, at=at)
             break
 

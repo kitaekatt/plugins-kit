@@ -395,12 +395,14 @@ content-pipeline-kit's `llm/backends.py` does exactly this over
 `llm_scripting_kit.completion`.
 
 The duplication has a cost to state wherever the seam is documented: two
-identically-named types in a dependency chain are still two types.
-`llm_scripting_kit.completion.halt.HaltError` and
-`content_pipeline.llm.platform.HaltError` share a name and nothing else, so a
-consumer that catches the former around a `content_pipeline` call gets a
-handler that never fires and no error anywhere. When adding a duplicated type
-to a seam, name it distinctly or document which side a caller must import from.
+identically-named types in a dependency chain are still two types. Until
+content-pipeline-kit 0.20.0, `llm_scripting_kit.completion.halt.HaltError` and
+`content_pipeline.llm.platform.HaltError` shared a name and nothing else, so a
+consumer that caught the former around a `content_pipeline` call got a handler
+that never fired and no error anywhere. content-pipeline-kit's type is
+`PipelineHaltError` (`HaltError` remains there as a compatibility alias). When
+adding a duplicated type to a seam, name it distinctly or document which side
+a caller must import from.
 
 ## Describing a plugin
 

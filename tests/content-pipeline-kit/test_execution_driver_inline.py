@@ -22,7 +22,7 @@ from content_pipeline.execution.store import ExecutionStore
 from content_pipeline.execution.wave import ready_wave
 from content_pipeline.execution.drivers.inline import run_wave
 from content_pipeline.llm.backends import MockBackend
-from content_pipeline.llm.platform import BackendOptions, HaltError, build_cache_key
+from content_pipeline.llm.platform import BackendOptions, PipelineHaltError, build_cache_key
 from content_pipeline.pipeline.workunit import FlatChunkStrategy, WorkUnit
 
 
@@ -55,7 +55,7 @@ def test_halt_stops_claiming_further_units_on_the_tracked_path(tmp_path):
 
     def generate(work_unit):
         if work_unit.id == "u0":
-            raise HaltError("rate_limit", "hit your limit")
+            raise PipelineHaltError("rate_limit", "hit your limit")
         raise AssertionError("u1 must never be reached: claiming must have stopped")
 
     accepted = run_wave(store, "run-1", wave, generate=generate)
@@ -76,7 +76,7 @@ def test_halt_triggering_unit_returns_to_pending_and_is_in_the_unfinished_set(tm
 
     def generate(work_unit):
         if work_unit.id == "u0":
-            raise HaltError("auth", "bad creds")
+            raise PipelineHaltError("auth", "bad creds")
         return "text"
 
     run_wave(store, "run-1", wave, generate=generate)
@@ -96,7 +96,7 @@ def test_run_wave_returns_accepted_units_instead_of_raising_when_halt_is_already
     tmp_path,
 ):
     """Defect (finding 2): a peer sets the halt WHILE unit 0's own generation
-    is in flight, and unit 0's generate still returns text (no HaltError
+    is in flight, and unit 0's generate still returns text (no PipelineHaltError
     raised for THIS call). D4 means unit 0's accept still lands (a valid
     fence is never blocked by halt). But the loop's second iteration then
     calls store.claim_unit for unit 1 against an ALREADY-halted run, which
@@ -110,7 +110,7 @@ def test_run_wave_returns_accepted_units_instead_of_raising_when_halt_is_already
     def generate(work_unit):
         if work_unit.id == "u0":
             # Simulate a peer process halting the run out-of-band, mid
-            # generation, WITHOUT this call raising HaltError itself.
+            # generation, WITHOUT this call raising PipelineHaltError itself.
             store.set_halt("run-1", "rate_limit", "a peer worker hit the limit")
             return "text-u0"
         raise AssertionError("u1's generate must never run: claiming must have stopped")
@@ -133,7 +133,7 @@ def test_resume_completes_a_run_without_replaying_accepted_units(tmp_path):
 
     def halting_generate(work_unit):
         if work_unit.id == "u1":
-            raise HaltError("rate_limit", "hit your limit")
+            raise PipelineHaltError("rate_limit", "hit your limit")
         return f"text-{work_unit.id}"
 
     first_pass = run_wave(store, "run-1", wave, generate=halting_generate)

@@ -21,6 +21,7 @@ from content_pipeline.llm.platform import (
     EvaluationResult,
     HaltError,
     LLMResponse,
+    PipelineHaltError,
     ResponseCache,
     ValidationSpec,
     build_cache_key,
@@ -358,11 +359,11 @@ def test_call_llm_gives_up_after_retries(monkeypatch):
 
 def test_call_llm_halt_is_not_retried_and_maps_to_halt_error(monkeypatch):
     monkeypatch.setattr(platform.time, "sleep", lambda *_: None)
-    # A halt exception (rate-limit marker) must raise HaltError on attempt 1.
+    # A halt exception (rate-limit marker) must raise PipelineHaltError on attempt 1.
     backend = MockBackend(
         responses=[RuntimeError('api_error_status:429 hit your limit'), "unreached"]
     )
-    with pytest.raises(HaltError) as ei:
+    with pytest.raises(PipelineHaltError) as ei:
         call_llm(backend, "s", "u", model="test/model", retries=3)
     assert ei.value.kind == platform.HALT_RATE_LIMIT
     assert len(backend.calls) == 1  # halted immediately, no retry
@@ -375,6 +376,114 @@ def test_classify_halt_text_precedence():
     both = 'authentication_error and "api_error_status":429'
     assert platform.classify_halt_text(both) == platform.HALT_RATE_LIMIT
     assert platform.classify_halt_text("all good") is None
+
+
+# --- HaltError rename: PipelineHaltError + compatibility alias --------------
+
+
+def test_halt_error_is_pipeline_halt_error_alias():
+    """``HaltError`` is the SAME object as ``PipelineHaltError``, not a copy.
+
+    Disambiguates content_pipeline.llm.platform.PipelineHaltError from the
+    unrelated llm_scripting_kit.completion.halt.HaltError (see
+    plugins/CLAUDE.md, "Duplicated seam types across a shared-lib boundary").
+    A consumer still importing the old name must get the identical class, so
+    ``except HaltError`` and ``except PipelineHaltError`` both catch the same
+    exception and ``isinstance`` checks agree either way.
+    """
+    assert HaltError is PipelineHaltError
+    exc = PipelineHaltError(platform.HALT_AUTH, "detail")
+    assert isinstance(exc, HaltError)
+    assert isinstance(PipelineHaltError(platform.HALT_AUTH, "x"), HaltError)
+
+
+# --- classify_openai_exception: delegates to llm_scripting_kit --------------
+#
+# llm_scripting_kit is not a declared dependency of this plugin (it is an
+# optional, lazily-imported shared lib) and is not importable from this
+# repo's root test venv -- see test_llm_backends.py's
+# `_has_llm_scripting_kit` / sys.modules-injection pattern, followed here for
+# the same reason: these tests must not depend on the real package being on
+# sys.path.
+
+
+def _install_fake_lsk_halt(monkeypatch, classify_openai_exception):
+    """Put a fake ``llm_scripting_kit.completion.halt`` in sys.modules.
+
+    Mirrors ``test_llm_backends.py``'s ``_install_counting_completion``: a
+    module tree is registered directly in ``sys.modules`` so the delegation
+    path is exercised without requiring the real shared lib to be installed.
+    """
+    import sys
+    import types
+
+    pkg = types.ModuleType("llm_scripting_kit")
+    completion = types.ModuleType("llm_scripting_kit.completion")
+    halt_mod = types.ModuleType("llm_scripting_kit.completion.halt")
+    halt_mod.classify_openai_exception = classify_openai_exception
+    completion.halt = halt_mod
+    pkg.completion = completion
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", pkg)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.completion", completion)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.completion.halt", halt_mod)
+
+
+def test_classify_openai_exception_delegates_to_llm_scripting_kit(monkeypatch):
+    """When llm_scripting_kit is importable, its classifier's result wins."""
+    sentinel = "sentinel-kind"
+    _install_fake_lsk_halt(monkeypatch, lambda exc: sentinel)
+    assert platform.classify_openai_exception(RuntimeError("whatever")) == sentinel
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ('"api_error_status":401 invalid authentication credentials', platform.HALT_AUTH),
+        ('"api_error_status":429 hit your limit', platform.HALT_RATE_LIMIT),
+    ],
+)
+def test_classify_openai_exception_routes_lsk_auth_and_rate_categories(monkeypatch, text, expected):
+    """A fake LSK classifier returning CPK's own category vocabulary
+    (HALT_AUTH == "auth", HALT_RATE_LIMIT == "rate_limit" on both sides,
+    verified by reading llm-scripting-kit's halt.py source alongside CPK's)
+    is routed through CPK's wrapper unchanged.
+    """
+    _install_fake_lsk_halt(monkeypatch, lambda exc: platform.classify_halt_text(str(exc)))
+    result = platform.classify_openai_exception(RuntimeError(text))
+    assert result == expected
+
+
+def test_classify_openai_exception_routes_lsk_insufficient_credit_category(monkeypatch):
+    """A fake LSK classifier returning ``insufficient_credit`` is routed
+    through CPK's wrapper unchanged -- covers the third category besides
+    auth/rate_limit exercised by the parametrized test above.
+    """
+    _install_fake_lsk_halt(
+        monkeypatch, lambda exc: platform.HALT_INSUFFICIENT_CREDIT
+    )
+    result = platform.classify_openai_exception(RuntimeError("payment required"))
+    assert result == platform.HALT_INSUFFICIENT_CREDIT
+
+
+def test_classify_openai_exception_falls_back_when_llm_scripting_kit_absent(monkeypatch):
+    """content-pipeline-kit must keep working when llm_scripting_kit is not
+    installed -- same lazy-import-tolerant contract as backends.py's
+    ``_is_connection_error`` and platform.py's own openai-SDK probing.
+    """
+    real_import = __import__("builtins").__import__
+
+    def _raising_import(name, *args, **kwargs):
+        if name == "llm_scripting_kit" or name.startswith("llm_scripting_kit."):
+            raise ImportError(f"simulated absence of {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", _raising_import)
+    # Falls back to CPK's own local classifier, which still classifies the
+    # text-marker shape correctly.
+    result = platform.classify_openai_exception(
+        RuntimeError('"api_error_status":429 hit your limit')
+    )
+    assert result == platform.HALT_RATE_LIMIT
 
 
 # --- submit_validated --------------------------------------------------------

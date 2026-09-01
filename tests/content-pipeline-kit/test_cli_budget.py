@@ -2,7 +2,7 @@
 
 Pins the budget guard: auth-expiry preflight (a halt before any unit runs),
 text-channel hard-stop detection on a response, and a guarded sweep that halts
-cleanly with partial progress + a resume list on the first HaltError while
+cleanly with partial progress + a resume list on the first PipelineHaltError while
 isolating non-halt per-unit errors.
 """
 
@@ -14,14 +14,14 @@ from content_pipeline.cli.budget import (
     guarded_sweep,
     preflight_check,
 )
-from content_pipeline.llm.platform import HALT_AUTH, HALT_RATE_LIMIT, HaltError
+from content_pipeline.llm.platform import HALT_AUTH, HALT_RATE_LIMIT, PipelineHaltError
 
 
 # -- preflight ----------------------------------------------------------------
 
 def test_preflight_reraises_halt_as_budget_stop():
     def probe():
-        raise HaltError(HALT_AUTH, "logged out")
+        raise PipelineHaltError(HALT_AUTH, "logged out")
 
     with pytest.raises(BudgetStop) as exc:
         preflight_check(probe)
@@ -44,7 +44,7 @@ def test_check_response_raises_on_rate_limit_marker():
     class R:
         text = 'error: "api_error_status":429 hit your limit'
 
-    with pytest.raises(HaltError) as exc:
+    with pytest.raises(PipelineHaltError) as exc:
         check_response(R())
     assert exc.value.kind == HALT_RATE_LIMIT
 
@@ -67,7 +67,7 @@ def test_sweep_completes_when_no_halt():
 def test_sweep_halts_cleanly_with_partial_progress():
     def worker(unit):
         if unit == "c":
-            raise HaltError(HALT_RATE_LIMIT, "429")
+            raise PipelineHaltError(HALT_RATE_LIMIT, "429")
         return f"ok-{unit}"
 
     result = guarded_sweep(["a", "b", "c", "d", "e"], worker)

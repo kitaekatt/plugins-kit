@@ -57,6 +57,7 @@ from .capabilities import (
     StructuredOutputCapability,
     SystemPromptCapability,
 )
+from .requirements import match_capabilities
 from .results import (
     caller_set_params,
     check_applied_controls,
@@ -109,6 +110,7 @@ __all__ = [
     "SystemPromptCapability",
     "ADAPTER_CAPABILITIES",
     "adapter_capabilities",
+    "match_capabilities",
     "BackendOptions",
     "LLMBackend",
     "BackendSelection",

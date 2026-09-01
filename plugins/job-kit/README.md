@@ -34,7 +34,12 @@ jobs:
 - **Advertisement-based endpoint selection.** `endpoint_preference` is tried in
   order, but an endpoint is skipped unless it advertises the `requirements` the
   job states. Preference alone would dispatch a job to a backend that cannot
-  serve it; the requirements are what make the order safe.
+  serve it; the requirements are what make the order safe. The `requirements`
+  mapping is llm-scripting-kit's requirement language over an adapter's
+  advertised `Capabilities` -- see llm-scripting-kit's README, "Capability
+  requirements" subsection, for the named convenience keys and dotted-path
+  fallback. job-kit consumes that language and that advertisement; it does not
+  define its own.
 - **Command-shaped acceptance.** A `contract` command must exit zero for the
   attempt to be accepted. Model output that does not satisfy it is a failure,
   not a result, so nothing downstream has to trust the text.

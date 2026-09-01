@@ -41,13 +41,19 @@ code. Anything `bash -c` can run is a script node.
 
 ## openrouter strategy
 
-One non-Claude model call via llm-scripting-kit's openai runner
-(`scripts/openrouter_run.py`, which uses `llm_scripting_kit.make_openai_client`),
-writing the reply text to `$OUT`. workflow-kit reuses `llm_scripting_kit` (owned by
+One non-Claude model call via llm-scripting-kit's completion seam
+(`scripts/openrouter_run.py`, which uses
+`llm_scripting_kit.completion.OpenRouterBackend.complete`), writing the reply
+text to `$OUT`. The script does not build an `openai` client or call
+`chat.completions.create` itself -- the seam owns the transport, response
+normalization, and halt classification (auth / rate limit / insufficient
+credit); the script only resolves the model (alias/slug/default/defaultCheap)
+and reports the seam's result. workflow-kit reuses `llm_scripting_kit` (owned by
 the llm-scripting-kit plugin) WITHOUT declaring a dependency on that plugin -- it
 gets the library on its venv via the bootstrap shared-libs `.pth`. The one
 third-party dep the call needs, `openai`, IS declared by workflow-kit (its own
-`pyproject.toml`).
+`pyproject.toml`) -- the seam uses it internally; workflow-kit shares the source,
+not the SDK.
 
 Run the runner with **workflow-kit's own venv python** -- bootstrap provisions it
 with `openai` (declared) and links `llm_scripting_kit` onto it (declared via

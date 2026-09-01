@@ -16,7 +16,7 @@ argparse tree from scratch:
   (0 success, 2 usage/unknown-command, 1 handler error).
 
 Stdlib + ``pyyaml`` only; imports nothing else from ``content_pipeline`` (the
-LLM ``HaltError`` handling lives in ``cli.budget``, which this scaffold's
+LLM ``PipelineHaltError`` handling lives in ``cli.budget``, which this scaffold's
 handlers compose -- it is not wired in here).
 """
 
