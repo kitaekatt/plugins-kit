@@ -35,12 +35,14 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, ClassVar, Optional
 
 from ..harness_adapters import OPENCODE_AGENT, OPENCODE_HARNESS, OpencodeAdapter
 from ..model_endpoints import HARNESS_KIND, EndpointEntry
 from . import halt
 from .claude_runner import AgentTimeoutError, run_cli_streaming
+from .adapter_capabilities import OPENCODE_CAPABILITIES
+from .capabilities import Capabilities
 from .types import BackendOptions, LLMResponse
 
 
@@ -165,6 +167,7 @@ class OpencodeCliBackend:
     runner: Callable[..., "tuple[str, str, int]"] = run_cli_streaming
     adapter: Optional[OpencodeAdapter] = None
     name: str = field(default="opencode-cli", init=False)
+    capabilities: ClassVar[Capabilities] = OPENCODE_CAPABILITIES
     filesystem_posture: str = field(
         default=OPENCODE_FILESYSTEM_POSTURE, init=False
     )

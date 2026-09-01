@@ -96,9 +96,42 @@ and its existence is the evidence: a genuinely uniform seam would not need it.
 
 **`BackendOptions` is a union, not a neutral description of the work.**
 `user_cache_prefix` is OpenRouter-only; `allowed_tools` is claude-cli-only;
-`effort` reaches claude-cli, codex, and opencode but not OpenRouter.
-`temperature` and `max_tokens` are accepted and then SILENTLY IGNORED by all
-CLI backends.
+`effort` reaches claude-cli, codex, and opencode but not OpenRouter; `cwd`
+reaches the three CLI backends and not OpenRouter, which is why `cwd` is not a
+core param of this seam. `temperature` and `max_tokens` are accepted and then
+ignored by all CLI backends.
+
+That inequality is no longer folklore: **each adapter ADVERTISES it.** Every
+backend class carries a `capabilities: ClassVar[Capabilities]`
+(`completion/adapter_capabilities.py`), naming the params it honors, the ones it
+drops, the constraints it emits, its structured-output mode, and how system text
+reaches the model. Read it from the package API via `adapter_capabilities()`, or
+from the `endpoints` CLI verb, whose payload carries a `capabilities` block
+keyed by adapter family plus an `adapter` field on each endpoint.
+
+**The one rule the advertisement obeys: a capability describes what the adapter
+EMITS, never what the provider or CLI does with it.** `ExecutionControl.emits`
+names the exact argv element, environment key path, or request field produced,
+and a seam test in `tests/llm-scripting-kit/test_completion_capabilities.py`
+asserts every one of them. No fake seam can establish that a target HONORS a
+control, so nothing here claims it. Two corollaries that were each got wrong
+once and are now pinned by tests:
+
+- **Suppressing a flag is not a control.** codex emits nothing at all for
+  `network=False`; the absence of a flag is not a deny, and no such control is
+  advertised.
+- **A value menu is advertised only where the request-building code validates
+  it.** `CodexCliBackend` calls the shared argv builder directly and bypasses
+  `CodexAdapter`'s effort validation, so codex advertises no effort `values`.
+
+When an adapter changes what it emits, its record changes in the same commit.
+The capability facts live in adapter code and are hand-authored per adapter --
+codex's argv is built in `bootstrap_lib.codex`, a different plugin, so deriving
+the map mechanically would mean reaching across that boundary. The seam tests
+are what keep the hand-authored record honest; a param applied but unadvertised
+is what they exist to catch. Never keep a second copy of these facts in YAML or
+a docs table: that copy is free to disagree with the adapter, which is the drift
+the advertisement replaces.
 
 **The same call does not behave the same way.** Retry, timeout defaults, token
 accounting (codex reports one undifferentiated `total_tokens` and no

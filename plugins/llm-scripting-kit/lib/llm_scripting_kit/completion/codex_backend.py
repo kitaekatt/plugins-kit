@@ -37,10 +37,12 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, ClassVar, Dict, Optional
 
 from . import halt
 from .claude_runner import run_cli_streaming
+from .adapter_capabilities import CODEX_CAPABILITIES
+from .capabilities import Capabilities
 from .types import BackendOptions, LLMResponse
 
 
@@ -207,6 +209,7 @@ class CodexCliBackend:
     argv_prefix: Optional[tuple] = None
     runner: Callable[..., "tuple[str, str, int]"] = run_cli_streaming
     name: str = field(default="codex-cli", init=False)
+    capabilities: ClassVar[Capabilities] = CODEX_CAPABILITIES
 
     def complete(
         self,

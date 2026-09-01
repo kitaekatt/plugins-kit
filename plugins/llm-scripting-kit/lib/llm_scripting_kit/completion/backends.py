@@ -34,7 +34,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, ClassVar, Dict, Optional
 
 from . import halt
 from .claude_runner import (
@@ -42,6 +42,8 @@ from .claude_runner import (
     looks_like_hard_stop,
     run_claude_streaming,
 )
+from .adapter_capabilities import CLAUDE_CAPABILITIES, OPENROUTER_CAPABILITIES
+from .capabilities import Capabilities
 from .types import BackendOptions, LLMResponse
 
 
@@ -71,6 +73,7 @@ class OpenRouterBackend:
     project_root: Optional[Path] = None
     client: Any = None
     name: str = field(default="openrouter", init=False)
+    capabilities: ClassVar[Capabilities] = OPENROUTER_CAPABILITIES
     _build_lock: "threading.Lock" = field(
         default_factory=threading.Lock, init=False, repr=False, compare=False
     )
@@ -300,6 +303,7 @@ class ClaudeCliBackend:
     executable: Optional[str] = None
     runner: Callable[..., "tuple[str, str, int]"] = run_claude_streaming
     name: str = field(default="claude-cli", init=False)
+    capabilities: ClassVar[Capabilities] = CLAUDE_CAPABILITIES
 
     def complete(
         self,

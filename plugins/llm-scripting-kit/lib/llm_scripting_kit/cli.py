@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from .account import AccountCheckError, validate_endpoint
 from .api_key import get_api_key
-from .completion import BackendOptions, create_backend
+from .completion import BackendOptions, adapter_capabilities, create_backend
 from .constants import USER_ENV_FILE
 from .env_file import read_env_file, write_env_file
 from .model_endpoints import EndpointRegistryError
@@ -125,11 +125,38 @@ def _cmd_endpoints(project_root: Optional[str]) -> int:
         values[str(name)] = {
             "kind": "transport", "base_url": endpoint["base_url"],
             "key_env": endpoint["key_env"], "default_model": endpoint.get("default"),
+            "adapter": "openrouter",
         }
     for name, entry in discovery.items():
         values.setdefault(name, _entry_json(entry))
-    _json({"default": default_endpoint_name(config), "endpoints": values, "notes": discovery.notes})
+    _json({
+        "default": default_endpoint_name(config),
+        "endpoints": values,
+        # Keyed by adapter family, not by endpoint: the facts are properties of
+        # adapter code, and duplicating them per endpoint would be the drift the
+        # advertisement exists to remove.
+        "capabilities": {
+            name: cap.to_json() for name, cap in sorted(adapter_capabilities().items())
+        },
+        "notes": discovery.notes,
+    })
     return EXIT_OK
+
+
+# Which adapter family serves an endpoint. Mirrors create_backend's harness
+# dispatch; capabilities are per ADAPTER FAMILY while endpoints are per registry
+# entry, and several entries share one adapter (sol and luna are both codex).
+_HARNESS_ADAPTERS = {
+    "claude": "claude-cli",
+    "codex": "codex-cli",
+    "opencode": "opencode-cli",
+}
+
+
+def _adapter_for(entry: Any) -> Optional[str]:
+    if getattr(entry, "kind", None) == "harness":
+        return _HARNESS_ADAPTERS.get((getattr(entry, "harness", "") or "").lower())
+    return "openrouter"
 
 
 def _entry_json(entry: Any) -> dict[str, Any]:
@@ -138,6 +165,9 @@ def _entry_json(entry: Any) -> dict[str, Any]:
         result.update({"harness": entry.harness, "effort": entry.effort})
     else:
         result.update({"base_url": entry.base_url, "key_env": entry.key_env})
+    adapter = _adapter_for(entry)
+    if adapter is not None:
+        result["adapter"] = adapter
     return result
 
 

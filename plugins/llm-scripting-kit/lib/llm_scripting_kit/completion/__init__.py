@@ -49,6 +49,14 @@ from .halt import (
     classify_opencode_exception,
     classify_openai_exception,
 )
+from .adapter_capabilities import ADAPTER_CAPABILITIES, adapter_capabilities
+from .capabilities import (
+    Capabilities,
+    ExecutionControl,
+    ParamCapability,
+    StructuredOutputCapability,
+    SystemPromptCapability,
+)
 from .types import BackendOptions, LLMBackend, LLMResponse
 from .factory import BackendSelection, create_backend
 from .opencode_backend import (
@@ -62,6 +70,14 @@ from .opencode_backend import (
 __all__ = [
     # seam types
     "LLMResponse",
+    # capability advertisement
+    "Capabilities",
+    "ParamCapability",
+    "ExecutionControl",
+    "StructuredOutputCapability",
+    "SystemPromptCapability",
+    "ADAPTER_CAPABILITIES",
+    "adapter_capabilities",
     "BackendOptions",
     "LLMBackend",
     "BackendSelection",
