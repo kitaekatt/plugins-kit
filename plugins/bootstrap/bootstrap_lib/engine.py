@@ -70,7 +70,7 @@ def main():
     _LOCK_RETRY_SECONDS instead; engines that are not newer keep the
     immediate stand-down.
     """
-    data_dir, project_dir, plugin_root, console, background = _peek_lock_args()
+    data_dir, project_dir, plugin_root, console, background, run_kind = _peek_lock_args()
     if not data_dir:
         # --data-dir is a required arg; _main()'s own parser will reject a
         # genuinely missing one with the standard argparse error.
@@ -82,6 +82,15 @@ def main():
         if acquired:
             _run_with_containment()
             return
+
+    if run_kind == "always":
+        # An always run is opportunistic and repeats next session, so a
+        # contended lock is not an event: exit silently. Emphatically do NOT
+        # take _stand_down_lock_contended's path -- it rolls back the cooldown
+        # stamp, and an always run never consumed one (the shell skips the
+        # stamp write on that path), so "rolling it back" would clear a stamp
+        # some OTHER launch legitimately owns and force a full pass.
+        return
 
     if _carries_update(data_dir, plugin_root):
         with _retry_engine_lock(data_dir) as acquired:
@@ -169,9 +178,10 @@ def _peek_lock_args() -> tuple:
     parser.add_argument("--plugin-root", default=None)
     parser.add_argument("--console", action="store_true")
     parser.add_argument("--background", action="store_true")
+    parser.add_argument("--run-kind", dest="run_kind", default="full")
     args, _ = parser.parse_known_args()
     return (args.data_dir or "", args.project_dir or "", args.plugin_root or "",
-            args.console, args.background)
+            args.console, args.background, args.run_kind or "full")
 
 
 def _stand_down_lock_contended(data_dir, project_dir, plugin_root="",
@@ -499,6 +509,10 @@ def _main():
     parser.add_argument("--console", action="store_true", help="Plain text output, no JSON/log writes")
     parser.add_argument("--background", action="store_true",
         help="Write display output to bootstrap_display.json instead of stdout")
+    parser.add_argument("--run-kind", dest="run_kind", default="full",
+                        choices=("full", "always"),
+                        help="full: the ordinary pass. always: only env_checks entries "
+                             "declaring cadence 'always', run silently, writing no stamps.")
     parser.add_argument("--fix-all", dest="fix_all", action="store_true",
         help="Interactive remediation run triggered by the user typing "
              "'fix-all'. This is user consent for elevation: on Windows the "
@@ -543,6 +557,50 @@ def _main():
         current_os = detect_os()
     except UnsupportedPlatformError as e:
         _emit_unsupported_platform(str(e), data_dir, args)
+        return
+
+    # The throttled always-lane branches out here, before self-setup, the
+    # layered manifests, the env gate, and the per-plugin loop. It is not a
+    # cut-down pass; it is a different, tiny one -- see _run_always_pass for
+    # the state it must not touch and why. Placed after config load and OS
+    # detection because both are needed to evaluate an entry at all, and
+    # before everything else because none of it may run.
+    if getattr(args, "run_kind", "full") == "always":
+        # Containment is LOCAL and deliberate. _main runs inside
+        # _run_with_containment, whose handlers (_emit_engine_crash,
+        # _defer_transient_retry) clear the per-project cooldown and write
+        # bootstrap_display.pending. The always lane never consumed a cooldown
+        # stamp -- the shell skips that write on this path -- so letting a
+        # crash reach them would clear a stamp another launch owns, and, since
+        # this lane runs nearly every session, a persistently crashing entry
+        # would force a full pass every session forever. Swallow here, record
+        # in the log, and let the next full pass surface the entry properly.
+        entries = []
+        try:
+            failures, actions = _run_always_pass(
+                args.project_dir, current_os, data_dir, plugin_root,
+            )
+            # Log ACTIONS as well as failures. An always entry that remediates
+            # is doing real work -- cloning, pulling, committing, pushing --
+            # and an unlogged mutation is exactly what the repo's
+            # "Anti-pattern: silent bootstrap operations" rule forbids. Silent
+            # to the USER is the design; silent in the log is a defect.
+            entries.extend(actions)
+            entries.extend(
+                f"env_check {f.get('name', '?')}: {f.get('message', 'FAILED')}"
+                for f in failures)
+        except Exception as e:
+            import traceback
+            entries.append(f"always lane crashed: {type(e).__name__}: {e}")
+            traceback.print_exc()
+        if args.console:
+            for line in entries:
+                print(line)
+        elif entries:
+            # Log only. This block is the always lane's ONLY output surface --
+            # it never writes bootstrap_display.pending, so nothing here can
+            # reach the user this session; the next full pass reports it.
+            write_log_block(data_dir, "bootstrap always", entries)
         return
     # Re-arm the apt backend's once-per-pass `apt-get update` guard so the first
     # direct apt install of THIS pass refreshes package lists (see apt.py).
@@ -4908,7 +4966,7 @@ class _EnvManifestContext(_ManifestContext):
 
     def __init__(self, manifest, current_os, data_dir, plugin_root,
                  action_entries, ok_entries, project_dir,
-                 hostname, machines):
+                 hostname, machines, cadence_filter=None):
         super().__init__(
             manifest, current_os, data_dir, plugin_root,
             action_entries, ok_entries, "env", project_dir, True,
@@ -4917,6 +4975,13 @@ class _EnvManifestContext(_ManifestContext):
         self.machines = machines
         self.machine_key = None
         self.machine = None
+        # None on a full pass with the env gate OPEN: every applicable entry
+        # runs, whatever its cadence, so an always-entry keeps the ordinary
+        # reporting path. "always" on the throttled lane AND on a full pass
+        # whose env gate is CLOSED (see _process_env_pass): only entries
+        # declaring that cadence run. Between those three cases an
+        # always-entry runs on every session, which is the guarantee.
+        self.cadence_filter = cadence_filter
 
     def entry_applies(self, entry):
         from .env_manifest import entry_applies
@@ -5420,6 +5485,10 @@ def _env_phase_env_checks(ctx):
     if entries is None:
         return
     for entry in entries:
+        if ctx.cadence_filter is not None and (
+                not isinstance(entry, dict)
+                or entry.get("cadence") != ctx.cadence_filter):
+            continue
         name = entry.get("name") if isinstance(entry, dict) else None
         check = entry.get("check") if isinstance(entry, dict) else None
         fix = entry.get("fix") if isinstance(entry, dict) else None
@@ -5768,6 +5837,16 @@ def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
             stamp_age=env_state_age(data_dir))
     if reason is None:
         ok_entries.append("up to date (merged manifest unchanged, last pass clean)")
+        # The gate is closed for the manifest as a whole -- but `cadence: always`
+        # entries are exempt by definition. Without this, an always-entry runs on
+        # NEITHER lane in the one session per cooldown window that takes the full
+        # path: the shell picks RUN_KIND=full (so the always lane never starts)
+        # and this early return skips env_checks entirely. That periodic hole is
+        # the whole guarantee the cadence exists to make, so run them here too --
+        # silently, and WITHOUT restamping env_state.json, which still describes
+        # the last time the FULL manifest converged.
+        _run_always_entries_only(
+            merged, current_os, data_dir, plugin_root, project_dir, hostname)
         return []
     ok_entries.append(f"running ({reason})")
 
@@ -5811,6 +5890,78 @@ def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
     result = "failed" if ctx.failures else "clean"
     write_env_state(data_dir, manifest_hash, engine_version, result)
     return ctx.failures
+
+
+def _run_always_entries_only(merged, current_os, data_dir, plugin_root,
+                             project_dir, hostname=None):
+    """Run only the `cadence: always` env_checks entries of an already-loaded
+    manifest. Shared by the always lane and by the full pass's closed-gate
+    path, so the two can never disagree about what "always" means.
+
+    Returns (failures, action_entries, ok_entries). Writes no stamp of any
+    kind -- the caller decides what, if anything, to record.
+    """
+    from .env_manifest import current_hostname
+
+    if not merged or not merged.get("env_checks"):
+        return [], [], []
+    action_entries = []
+    ok_entries = []
+    ctx = _EnvManifestContext(
+        merged, current_os, data_dir, plugin_root,
+        action_entries, ok_entries, project_dir,
+        hostname or current_hostname(), merged.get("machines") or {},
+        cadence_filter="always",
+    )
+    if not _validate_env_machines(ctx, merged, ctx.hostname, current_os):
+        # Unknown machine: the full pass reports that loudly on its own path.
+        # Here it only means host filters cannot be evaluated, so run nothing.
+        return ctx.failures, action_entries, ok_entries
+    _env_phase_env_checks(ctx)
+    return ctx.failures, action_entries, ok_entries
+
+
+def _run_always_pass(project_dir, current_os, data_dir, plugin_root,
+                     engine_version=""):
+    """The throttled lane: run ONLY env_checks entries declaring
+    `cadence: always`, then exit having changed no engine state.
+
+    This exists because the per-project cooldown (60 min) and the env gate
+    (24 h TTL) are both pass-level, so work that must be current EVERY
+    session -- a repo pulled to head -- had no way to run without paying the
+    whole pass. The lane is deliberately tiny and deliberately silent.
+
+    What it must never do, and why each one matters:
+
+    - No env_state.json read or write. Reading it would let the 24h gate
+      suppress the lane (the exact wall this exists to get past); writing it
+      would let a partial run mark the FULL env manifest converged, so the
+      real pass would skip entries this lane never looked at.
+    - No cooldown stamp, engine_ran_version, plugins_state_hash, alert file,
+      or bootstrap_display.pending. Each is a completion signal for a full
+      pass; advancing one here would report work that did not happen, and
+      several of them are read as "something changed, re-run" triggers --
+      writing them every session is precisely the self-triggering shape the
+      change-gating discipline elsewhere in this file exists to prevent.
+    - No user-visible output. Outcomes are logged, never displayed. A
+      failure here is not silently dropped: the entry is still an ordinary
+      env_checks entry, so the next full pass runs it through the normal
+      reporting path.
+
+    Returns (failures, action_entries) for the log block only.
+    """
+    from .env_manifest import (
+        current_hostname, load_layered_env_manifests,
+    )
+
+    merged, parse_errors = load_layered_env_manifests(project_dir)
+    if not merged:
+        # A parse error is a real problem, but it is the FULL pass's to
+        # report -- this lane has no display channel and must not grow one.
+        return [], []
+    failures, action_entries, _ok = _run_always_entries_only(
+        merged, current_os, data_dir, plugin_root, project_dir)
+    return failures, action_entries
 
 
 def _load_plugin_config(data_dir, action_entries=None, *, project_dir=None,

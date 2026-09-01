@@ -29,6 +29,11 @@ FLAG_CONSOLE=""
 # The guarded form expands to nothing when unset/empty and to the identical
 # properly-quoted word list otherwise, on bash 3.2 and 5.x alike.
 ENGINE_FLAGS=()
+FLAG_FIX_ALL=""
+# full: the ordinary pass. always: the cooldown said no, so only entries
+# declaring `cadence: always` run, silently (set at the Layer-2 gate below).
+# An explicit --console/--fix-all invocation is always a full pass.
+RUN_KIND=full
 for arg in "$@"; do
     case "$arg" in
         --verbose) FLAG_VERBOSE=1; ENGINE_FLAGS+=(--verbose) ;;
@@ -37,7 +42,7 @@ for arg in "$@"; do
         # may launch the elevation script itself. Only ever present on an
         # explicit invocation -- hooks.json wires SessionStart with no
         # arguments, so a background pass can never carry it.
-        --fix-all) ENGINE_FLAGS+=(--fix-all) ;;
+        --fix-all) FLAG_FIX_ALL=1; ENGINE_FLAGS+=(--fix-all) ;;
     esac
 done
 
@@ -211,19 +216,41 @@ if [ -f "$_COOLDOWN_FILE" ] && [ ! -f "$_ALERT_FILE" ] \
     _NOW=$(date +%s 2>/dev/null || echo "0")
     _AGE=$((_NOW - _LAST_RUN))
     if [ $_AGE -lt $_COOLDOWN_SECS ]; then
-        # Cooldown skip is silent: it isn't a remediation, it's a throttle. The
-        # cooldown file's mtime ($_COOLDOWN_FILE) records when bootstrap last
-        # ran, which is enough to distinguish "throttled" from "passed clean"
-        # during debugging. Use 'bootstrap-reset-cooldown' to force a re-run.
-        HOOK_OUTPUT_EMITTED=1
-        exit 0
+        # Throttled, but no longer a full stop. The pass still runs, restricted
+        # to entries declaring `cadence: always` (RUN_KIND=always), which is how
+        # cheap must-be-current work -- a single repo pulled to head -- happens
+        # every session without paying the full pass. It stays SILENT: the
+        # engine downgrades every outcome of an always run to `quiet`, so this
+        # remains indistinguishable from the old skip unless something is
+        # actually wrong. The cooldown skip was never a remediation, only a
+        # throttle, and it still is one for everything not flagged `always`.
+        #
+        # The stamp write and the marker prune below are deliberately NOT
+        # reached on this path. Writing the cooldown stamp here would advance
+        # the very signal the registry `-nt` bypass reads, re-arming the
+        # throttle on a pass that converged almost nothing and defeating the
+        # stale-shared-lib fix the bypass exists for. A trigger signal is only
+        # ever advanced by the thing it signals.
+        # NOT for --console or --fix-all. Both are explicit, interactive
+        # invocations whose whole purpose is the full pass -- the fix-all
+        # elevation flow lives PAST the engine's always-branch early return,
+        # so handing them the always lane would print nothing and exit 0.
+        # That is the "empty output reads as success" failure this file works
+        # hard elsewhere to avoid.
+        if [ -z "$FLAG_CONSOLE" ] && [ -z "$FLAG_FIX_ALL" ]; then
+            RUN_KIND=always
+        fi
     fi
 fi
-printf '%s' "$HOOK_START_EPOCH" > "$_COOLDOWN_FILE"
 
-# Prune stale per-session markers (and rescue locks) on real passes only --
-# session ids are never reused, so week-old markers are dead weight.
-find "$PLUGIN_DATA/sessions" -type f -mtime +7 -delete 2>/dev/null || true
+if [ "$RUN_KIND" = "full" ]; then
+    printf '%s' "$HOOK_START_EPOCH" > "$_COOLDOWN_FILE"
+
+    # Prune stale per-session markers (and rescue locks) on real passes only --
+    # session ids are never reused, so week-old markers are dead weight.
+    find "$PLUGIN_DATA/sessions" -type f -mtime +7 -delete 2>/dev/null || true
+fi
+ENGINE_FLAGS+=(--run-kind "$RUN_KIND")
 
 # --- Emit hook JSON immediately (fire-and-forget) ---
 # In normal mode, emit JSON now so Claude Code doesn't block waiting for engine output.
@@ -588,15 +615,25 @@ if [ -z "$FLAG_CONSOLE" ]; then
     # relaunch both start a new engine within seconds -- so a crash traceback
     # routinely vanished before anyone could read it. One rotation is enough to
     # survive the relaunch that would otherwise erase the evidence.
-    [ -f "$PLUGIN_DATA/engine_output.log" ] && \
-        mv -f "$PLUGIN_DATA/engine_output.log" "$PLUGIN_DATA/engine_output.log.1" 2>/dev/null
+    # An always run gets its OWN log and never rotates the full pass's. The
+    # always lane fires on nearly every session, so letting it through here
+    # would push a crashed full pass's traceback out of BOTH generations
+    # within two sessions -- destroying exactly the evidence this rotation
+    # exists to preserve.
+    if [ "$RUN_KIND" = "always" ]; then
+        ENGINE_OUTPUT_LOG="$PLUGIN_DATA/engine_output.always.log"
+    else
+        ENGINE_OUTPUT_LOG="$PLUGIN_DATA/engine_output.log"
+        [ -f "$ENGINE_OUTPUT_LOG" ] && \
+            mv -f "$ENGINE_OUTPUT_LOG" "$PLUGIN_DATA/engine_output.log.1" 2>/dev/null
+    fi
     "$PYTHON" "${PLUGIN_ROOT}/engine/bootstrap_engine.py" \
         --plugin-root "$PLUGIN_ROOT" \
         --data-dir "$PLUGIN_DATA" \
         --hook-start-epoch "$HOOK_START_EPOCH" \
         --project-dir "$PWD" \
         --background \
-        ${ENGINE_FLAGS[@]+"${ENGINE_FLAGS[@]}"} > "$PLUGIN_DATA/engine_output.log" 2>&1 &
+        ${ENGINE_FLAGS[@]+"${ENGINE_FLAGS[@]}"} > "$ENGINE_OUTPUT_LOG" 2>&1 &
 else
     # Console mode: synchronous, plain text to stdout
     exec "$PYTHON" "${PLUGIN_ROOT}/engine/bootstrap_engine.py" \
