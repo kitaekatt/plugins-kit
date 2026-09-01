@@ -158,7 +158,7 @@ uv run --extra dev pytest -n 12 -q      # full suite, ~3 min
 
 **Interpreter: the repo is pinned to Python 3.12** via a repo-root `.python-version`, so bare `uv run` / `uv venv` select 3.12 everywhere — no `-p 3.12` needed. Nothing needs 3.14 (four plugins exclude it: `requires-python ">=3.12,!=3.14.*"`); it used to leak in only as uv's global default when no pin was present.
 
-The two formerly-documented "pre-existing failure" clusters (the `tests/skills-kit/` collection errors and the bootstrap `engine`/`venv` `CalledProcessError`s) were **fixed**, not version quirks — both were test-only issues: skills-kit imported the pre-extraction `schemas`/`_shared` modules, and the bootstrap tests spawned WSL `bash` to `source` a Windows env file and didn't isolate `HOME`. The full suite is green; investigate any failure as a real regression.
+The two formerly-documented "pre-existing failure" clusters (the `tests/skills-kit/` collection errors and the bootstrap `engine`/`venv` `CalledProcessError`s) were **fixed**, not version quirks — both were test-only issues: skills-kit imported the pre-extraction `schemas`/`_shared` modules, and the bootstrap tests spawned WSL `bash` to `source` a Windows env file and didn't isolate `HOME`. **The suite is not unconditionally green, and "green" is host-dependent.** On an arm64 machine (Apple Silicon) five `tests/bootstrap/test_manifest_normalization.py` scoop tests failed for months while passing on every amd64 box, because they fake `current_os` but not `detect_arch()`, which reads the real CPU -- see the `suite_green_is_host_dependent` insight below. Establish a baseline on YOUR machine (run the suite at the merge-base in a `git worktree`) before calling a failure your regression.
 
 **Local development** — use `--plugin-dir` to test plugins from the working copy:
 
@@ -500,6 +500,35 @@ claude_md:
       - per-plugin internals confined to ONE plugin (covered by per-plugin
         CLAUDE.md / bootstrap.json)
   insights:
+    - id: suite_green_is_host_dependent
+      keywords: [full suite green, pre-existing failure, is this my regression, baseline, arm64, apple silicon, amd64, detect_arch, platform.machine, host arch, faked current_os, monkeypatch, worktree baseline, test isolation, passes on my machine]
+      summary: "\"The full suite is green\" is a per-HOST claim, not a repo fact. Establish a baseline at the merge-base on YOUR machine before treating any failure as your regression -- and when mocking the platform, mock the ARCH too, not just the OS."
+      detail: |
+        Five tests/bootstrap/test_manifest_normalization.py scoop tests failed on every arm64
+        machine and passed on every amd64 one, from their introduction (b14471bf) until
+        2026-09-01. The mechanism generalizes past this one case and is the reusable part:
+        _resolve_download_def keys on f"{current_os}-{detect_arch()}", and detect_arch() reads
+        the REAL host CPU via platform.machine() no matter what current_os a test fakes. The
+        fixtures use p4-kit's real "windows-amd64" key with current_os="windows" but never
+        monkeypatched detect_arch, so on arm64 the composed key is "windows-arm64", nothing
+        matches, and scoop promotion silently does not fire. The tests were not stale and the
+        engine was not broken -- production always derives current_os and detect_arch() from
+        the same real machine, which is exactly what lets a Windows-on-ARM box decline an
+        amd64-only binary. The fix was to pin detect_arch in the five tests.
+        TWO DURABLE RULES.
+        (1) AUTHORING: a test that fakes one axis of the platform must fake every axis the
+        code under test reads. Faking the OS while leaving the arch live produces a test that
+        is green on the author's machine and red on half the fleet, and the failure looks like
+        a defect in the feature rather than a gap in the mock.
+        (2) DIAGNOSIS: never accept a tracked document's claim that the suite is green as
+        evidence about YOUR machine. Run the suite at the merge-base in a `git worktree add`
+        (never a branch switch -- the tree is shared) and diff the failure sets. That costs a
+        couple of minutes and is the only thing that distinguishes "I broke this" from "this
+        was already red here". A standing green claim is the most misleading kind of stale
+        documentation, because it converts someone else's pre-existing failure into your
+        apparent regression.
+      origin: "2026-09-01 -- a session investigating seven standing failures found five were an arm64 artifact and one a POSIX-vs-Windows path artifact; only one (awesome-kit missing an openai declaration) was a real gap. The root CLAUDE.md had asserted the suite was green, which is why a worktree baseline had to be built by hand to trust anything."
+      added: "2026-09-01"
     - id: bootstrap_json_for_deps
       keywords: [bootstrap.json, plugin dependencies, venv, pyyaml, uv, no manual install, dependency manifest]
       summary: Plugin Python dependencies are declared in bootstrap.json + pyproject.toml and installed by the bootstrap engine using uv. Do not run pip / python -m venv manually.
