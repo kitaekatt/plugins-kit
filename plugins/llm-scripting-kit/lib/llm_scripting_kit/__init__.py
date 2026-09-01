@@ -77,6 +77,7 @@ from .completion import (
     ClaudeCliBackend,
     CodexCliBackend,
     CodexRunError,
+    EmptyCompletionError,
     OpencodeCliBackend,
     OpencodeRunError,
     HALT_AUTH,
@@ -142,6 +143,7 @@ __all__ = [
     "resolve_harness_adapter",
     # completion seam
     "LLMResponse",
+    "EmptyCompletionError",
     "BackendOptions",
     "LLMBackend",
     "OpenRouterBackend",

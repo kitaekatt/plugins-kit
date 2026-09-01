@@ -30,11 +30,16 @@ def test_awesome_kit_keeps_yaml_only_in_check_imports() -> None:
     assert "script" not in manifest
 
 
-def test_awesome_kit_version_and_description_match_remaining_skills() -> None:
+def test_awesome_kit_description_matches_remaining_skills() -> None:
     manifest = _read_json(_PLUGIN_MANIFEST)
     description = manifest["description"]
 
-    assert manifest["version"] == "0.42.0"
+    # Deliberately NOT pinned to an exact version: this test guards the
+    # description against drifting away from the skills that remain after the
+    # pdf-kit extraction, and an exact-version assert would fail on every
+    # routine bump while proving nothing about that.
+    assert manifest["version"].count(".") == 2
+    assert "html-pdf" not in description
     assert all(
         skill_name in description
         for skill_name in (

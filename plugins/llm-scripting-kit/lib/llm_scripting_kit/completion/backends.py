@@ -56,7 +56,7 @@ from .results import (
     derive_forwarded_params,
     utc_now_iso,
 )
-from .types import BackendOptions, LLMResponse
+from .types import BackendOptions, EmptyCompletionError, LLMResponse
 
 
 # ---------------------------------------------------------------------------
@@ -208,21 +208,44 @@ class OpenRouterBackend:
 
         text = response.choices[0].message.content or ""
         finish_reason = getattr(response.choices[0], "finish_reason", None)
-        if not text and finish_reason == "length":
-            reasoning = getattr(
-                response.choices[0].message, "reasoning_content", None
-            )
-            reasoning_note = (
-                " after generating reasoning content" if reasoning else ""
-            )
-            raise RuntimeError(
-                f"OpenAI-compatible completion exhausted max_tokens="
-                f"{opts.max_tokens}{reasoning_note} before producing final "
-                "content (finish_reason=length); raise max_tokens"
-            )
+        reasoning = (
+            getattr(response.choices[0].message, "reasoning_content", None) or ""
+        )
         usage = getattr(response, "usage", None)
         input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
         output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        # An empty answer with a nonzero token count is a real failure, but it
+        # is CLASSIFIED here and not raised: this layer "classifies; it does not
+        # halt" (plugins/llm-scripting-kit/CLAUDE.md), and the caller holds the
+        # context the decision needs. Raising instead was tried and reverted --
+        # the provider BILLED for these tokens, and platform.py prices a call
+        # only after its retry loop breaks on success, so a raise moves a paid
+        # call into an uncharged path AND (classify_halt returns None for it)
+        # gets retried `retries` more times, multiplying untracked spend on the
+        # exact failure being diagnosed.
+        #
+        # `finish_reason` is surfaced because it is what separates the two
+        # causes, and no consumer could previously tell them apart: "length"
+        # means the budget really was exhausted and raising max_tokens may
+        # help; anything else -- notably "stop" -- means the model ended its
+        # turn on its own and raising max_tokens will NOT help. Measured on
+        # Qwen3.8-27B via NInfer, 2026-09-01: 4 of 11 empty responses at high
+        # effort, every one finish_reason="stop", one having spent 29k of a
+        # 60k budget, with the reasoning block ending in a repetition loop.
+        # The pre-existing finish_reason == "length" raise is left exactly as
+        # it was; this change widens nothing.
+        if not text and finish_reason == "length":
+            reasoning_note = (
+                " after generating reasoning content" if reasoning else ""
+            )
+            raise EmptyCompletionError(
+                f"OpenAI-compatible completion exhausted max_tokens="
+                f"{opts.max_tokens}{reasoning_note} before producing final "
+                "content (finish_reason=length); raise max_tokens",
+                reasoning=reasoning,
+                finish_reason=finish_reason,
+                output_tokens=output_tokens,
+            )
         cache_hit_tokens = 0
         ptd = getattr(usage, "prompt_tokens_details", None)
         if isinstance(ptd, dict):
@@ -235,6 +258,8 @@ class OpenRouterBackend:
         return LLMResponse(
             text=text,
             model=resolved_model,
+            reasoning=reasoning,
+            finish_reason=finish_reason,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_hit_tokens=cache_hit_tokens,

@@ -171,3 +171,35 @@ channel a consumer parses for one shape only. That is distinct from
 wrong -- and from `EXIT_FAILURE` (1), which means a call ran and failed and may
 succeed on retry. Retrying a malformed request cannot help; the codes exist so a
 consumer can tell those apart without parsing prose.
+
+**An empty answer is CLASSIFIED, not raised -- except on an exhausted budget.**
+A reasoning model can end its turn having emitted no content at all:
+`finish_reason` is `stop`, not `length`, the token budget is nowhere near spent,
+and `message.content` is the empty string. `OpenRouterBackend` returns that as an
+ordinary response carrying `reasoning` and `finish_reason`, and leaves the halt
+decision to the caller, per this layer's altitude. Only `finish_reason ==
+"length"` raises `EmptyCompletionError` (a `RuntimeError`, so existing
+`except RuntimeError` sites keep working) -- the trigger it always had.
+
+Raising on EVERY empty answer was tried and reverted, and the reason generalizes:
+**the provider bills for an empty answer.** content-pipeline-kit prices a call
+only after its retry loop breaks on success, and `classify_halt` does not
+classify an `EmptyCompletionError`, so raising would move a paid call into an
+uncharged path and then retry it `retries` more times -- multiplying untracked
+spend on the exact failure being diagnosed. A seam that halts on a caller's
+behalf cannot see that; the caller can.
+
+`finish_reason` is on `LLMResponse` because it is what separates the two causes,
+and no consumer could previously tell them apart. Inferring exhaustion from
+empty-text-plus-nonzero-tokens alone -- as content-pipeline-kit's
+`likely_reasoning_exhausted` does -- gives the right answer for `length` and the
+WRONG remedy ("consider raising max_tokens") for `stop`. Measured on Qwen3.8-27B
+through NInfer, 2026-09-01: 4 of 11 requests at high effort returned empty, every
+one `finish_reason="stop"`, one having spent 29k of a 60k budget.
+
+`reasoning` surfaces the thinking block on both paths (OpenAI-compatible
+transport only; the CLI transports leave it `""`). It is DIAGNOSTIC, not a
+recoverable answer -- in the measured case the block ended in a repetition loop
+and contained no answer to salvage. It is what makes an empty response
+explicable at all; without it, a repetition loop and a model with nothing to
+report are indistinguishable.

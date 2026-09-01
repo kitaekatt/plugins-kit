@@ -129,6 +129,17 @@ class TestBuildHappyPath:
         assert printed["subjectCount"] == 2
         assert Path(printed["subjectsFile"]) == out.resolve()
 
+    @pytest.mark.skipif(
+        sys.platform != "win32",
+        reason=(
+            "backslash is a legal ordinary filename character on POSIX, not a "
+            "path separator -- 'build' resolves the directory argument through "
+            "pathlib per host-OS convention (Path.resolve()), and only "
+            "canonicalizes AFTER that resolution succeeds, for anchor/dedup "
+            "comparison. A backslash-joined argument is only a valid directory "
+            "shape on Windows."
+        ),
+    )
     def test_a_windows_shaped_root_argument_works(self, tmp_path):
         src = make_tree(tmp_path, {"pkg": ["a.py"]})
         out = tmp_path / "s.jsonl"

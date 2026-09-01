@@ -27,11 +27,29 @@ find_ninfer_root() {
 
 show_help() {
     printf '%s\n' \
-        "Usage: ${profile}-server [--help|--print-command] [SERVER_ARGS...]" \
+        "Usage: ${profile}-server [--serial] [--help|--print-command] [SERVER_ARGS...]" \
         '' \
         "Starts the ${profile} OpenAI-compatible local model server." \
-        'Extra arguments are appended after the measured defaults.'
+        'Extra arguments are appended after the measured defaults.' \
+        '' \
+        '  --serial   Serve ONE request at a time, giving it the whole KV pool.' \
+        '             For a single very large prompt. The default serves several' \
+        '             at once, which is faster for many independent requests but' \
+        '             splits the pool between them.' \
+        '' \
+        'Concurrency can also be set outright with QWEN38_MAX_CONCURRENCY /' \
+        'QWEN36_MAX_CONCURRENCY; --serial is shorthand for setting it to 1.'
 }
+
+# --serial is consumed HERE rather than passed through: it is not a server flag,
+# it selects one of this launcher's two measured configurations. Parsed before
+# the profile blocks so it can set the env default they read.
+if [[ "${1:-}" == "--serial" ]]; then
+    QWEN36_MAX_CONCURRENCY=1
+    QWEN38_MAX_CONCURRENCY=1
+    export QWEN36_MAX_CONCURRENCY QWEN38_MAX_CONCURRENCY
+    shift
+fi
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     show_help
@@ -53,7 +71,13 @@ case "$profile" in
             --model-id qwen3.6-35b-a3b
             --max-context "${QWEN36_CTX:-262144}"
             --kv-capacity auto
-            --max-concurrency 1
+            # Left at 1 DELIBERATELY, unlike qwen38 below: the concurrency
+            # arithmetic was measured on qwen38 only and does not transfer. This
+            # is a 35B MoE with int8 KV and an `auto` KV pool, so its weights
+            # footprint, its workspace-per-slot cost and even the pool's SIZE
+            # are all different numbers. Raise it once someone has measured
+            # this profile the way qwen38 was measured.
+            --max-concurrency "${QWEN36_MAX_CONCURRENCY:-1}"
             --prefill-chunk 1024
             --kv-dtype int8
             --spec mtp
@@ -84,7 +108,24 @@ case "$profile" in
             --model-id qwen3.8-27b
             --max-context "${QWEN38_CTX:-240000}"
             --kv-capacity "${QWEN38_KV_CAPACITY:-${QWEN38_CTX:-240000}}"
-            --max-concurrency 1
+            # 4 is the BATCH default; export QWEN38_MAX_CONCURRENCY=1 for a
+            # single huge prompt. Measured on an RTX 5090 (2026-09-01):
+            #   - This flag pre-allocates workspace whether or not requests
+            #     arrive: 9.53 GiB at 4, and the server REFUSES to start at 8
+            #     (wants 11.85 GiB, 11.24 available). ~0.58 GiB per slot, so 5
+            #     just fits the 1.02 GiB of slack at 4 and 6+ needs the KV pool
+            #     cut to pay for it. Do not raise this past 5 at a 240k pool.
+            #   - It is only a CAP. Actual parallelism is the KV pool divided by
+            #     each request's reservation, and a request reserves
+            #     (prompt + max_tokens) up front rather than what it consumes --
+            #     so a 30k prompt with a 60k budget reserves 90k and only THREE
+            #     run at once here. A client wanting more parallelism should
+            #     lower ITS max_tokens; raising this flag will not do it.
+            #   - Over-admission is backpressure, not failure: the extra request
+            #     waits and is 503'd after ~30s ("inference request expired while
+            #     waiting for admission"). Clients must retry a 503 or they
+            #     silently drop work.
+            --max-concurrency "${QWEN38_MAX_CONCURRENCY:-4}"
             --prefill-chunk 1024
             --kv-dtype fp8
             --spec mtp

@@ -17,7 +17,12 @@ from llm_scripting_kit.completion import backends as backends_mod
 from llm_scripting_kit.completion import halt
 from llm_scripting_kit.completion.backends import ClaudeCliBackend, OpenRouterBackend
 from llm_scripting_kit.completion.claude_runner import AgentTimeoutError
-from llm_scripting_kit.completion.types import BackendOptions, LLMBackend, LLMResponse
+from llm_scripting_kit.completion.types import (
+    BackendOptions,
+    EmptyCompletionError,
+    LLMBackend,
+    LLMResponse,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +381,95 @@ class TestOpenRouterBackend:
             OpenRouterBackend(client=client).complete(
                 "s", "u", model="test/slug"
             )
+
+    def test_empty_content_on_finish_stop_returns_and_does_not_raise(self):
+        """The seam classifies an empty answer; it does not halt on one.
+
+        Raising here was tried and reverted. The provider BILLS for these
+        tokens, and content-pipeline-kit prices a call only after its retry
+        loop breaks on success -- so a raise moves a paid call into an
+        uncharged path, and because `classify_halt` does not classify an
+        EmptyCompletionError, the caller's retry loop repeats it, multiplying
+        untracked spend on the exact failure being diagnosed. Only
+        finish_reason == "length" raises, which it always did.
+        """
+        client = _FakeClient()
+        client.chat.completions.create = lambda **_kwargs: SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(
+                    content="",
+                    reasoning_content="thinking that never reached an answer",
+                ),
+                finish_reason="stop",
+            )],
+            usage=_FakeUsage(),
+        )
+
+        result = OpenRouterBackend(client=client).complete(
+            "s", "u", model="test/slug"
+        )
+        assert result.text == ""
+        # the caller needs BOTH to tell an exhausted budget from a model that
+        # ended its own turn -- empty text plus a token count cannot
+        assert result.finish_reason == "stop"
+        assert result.reasoning == "thinking that never reached an answer"
+
+    def test_finish_reason_length_still_raises_and_carries_the_payload(self):
+        """The pre-existing raise is unchanged in its trigger, and now carries
+        the diagnostic a caller previously had no way to see."""
+        client = _FakeClient()
+        client.chat.completions.create = lambda **_kwargs: SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(
+                    content="", reasoning_content="ran out mid-thought",
+                ),
+                finish_reason="length",
+            )],
+            usage=_FakeUsage(),
+        )
+
+        with pytest.raises(EmptyCompletionError) as excinfo:
+            OpenRouterBackend(client=client).complete(
+                "s", "u", model="test/slug"
+            )
+        assert excinfo.value.finish_reason == "length"
+        assert excinfo.value.reasoning == "ran out mid-thought"
+        assert "raise max_tokens" in str(excinfo.value)
+
+    def test_reasoning_is_surfaced_on_a_normal_answer(self):
+        """A consumer cannot tell a thinking model's silence from its answer
+        unless the thinking block is reachable on the success path too."""
+        client = _FakeClient()
+        client.chat.completions.create = lambda **_kwargs: SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(
+                    content="the answer",
+                    reasoning_content="the thinking",
+                ),
+                finish_reason="stop",
+            )],
+            usage=_FakeUsage(),
+        )
+
+        result = OpenRouterBackend(client=client).complete(
+            "s", "u", model="test/slug"
+        )
+        assert result.text == "the answer"
+        assert result.reasoning == "the thinking"
+        assert result.finish_reason == "stop"
+
+    def test_reasoning_defaults_empty_when_provider_sends_none(self):
+        client = _FakeClient()
+        client.chat.completions.create = lambda **_kwargs: SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(content="plain"),
+                finish_reason="stop",
+            )],
+            usage=_FakeUsage(),
+        )
+        assert OpenRouterBackend(client=client).complete(
+            "s", "u", model="test/slug"
+        ).reasoning == ""
 
     def test_classify_halt_uses_openai_taxonomy(self):
         assert OpenRouterBackend().classify_halt(ValueError("boom")) is None
