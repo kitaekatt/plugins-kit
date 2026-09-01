@@ -628,6 +628,48 @@ class JobStore:
             raise UnknownJobError(f"{run_id!r}/{job_id!r}")
         return _row_to_job(updated)
 
+    def mark_halted(
+        self,
+        run_id: str,
+        job_id: str,
+        reason: str,
+        *,
+        at: Optional[float] = None,
+    ) -> JobRecord:
+        """Terminalize a job whose prior attempts exhausted endpoint eligibility."""
+        when = time.time() if at is None else at
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            row = self._require_job(conn, run_id, job_id)
+            state = JobState(row["state"])
+            if state in TERMINAL_STATES:
+                raise TerminalStateError(
+                    f"{run_id!r}/{job_id!r} is already {state.value}"
+                )
+            attempt = conn.execute(
+                "SELECT 1 FROM attempts WHERE run_id = ? AND job_id = ? LIMIT 1",
+                (run_id, job_id),
+            ).fetchone()
+            if attempt is None:
+                raise ValueError("halted jobs must be marked with an attempt")
+            conn.execute(
+                "UPDATE jobs SET state = ?, error_message = ?, updated_at = ? "
+                "WHERE run_id = ? AND id = ?",
+                (
+                    JobState.HALTED.value,
+                    str(reason)[:ERROR_LIMIT],
+                    when,
+                    run_id,
+                    job_id,
+                ),
+            )
+            updated = conn.execute(
+                "SELECT * FROM jobs WHERE run_id = ? AND id = ?", (run_id, job_id)
+            ).fetchone()
+        if updated is None:  # pragma: no cover - protected by the transaction
+            raise UnknownJobError(f"{run_id!r}/{job_id!r}")
+        return _row_to_job(updated)
+
     def mark_failed(
         self,
         run_id: str,
@@ -668,18 +710,20 @@ class JobStore:
         self,
         attempt: Attempt,
         *,
-        terminal_state: JobState,
+        terminal_state: Optional[JobState] = None,
         at: Optional[float] = None,
     ) -> Attempt:
-        """Append one attempt and terminalize its job atomically.
+        """Append one attempt and update its job state atomically.
 
         The attempt number must be the next append-only number. The method
-        never updates an attempt row and refuses a terminal job.
+        never updates an attempt row and refuses a terminal job. A null
+        ``terminal_state`` leaves the job pending for another attempt.
         """
-        if terminal_state not in TERMINAL_STATES:
-            raise ValueError("append_attempt requires a terminal job state")
+        if terminal_state is not None and terminal_state not in TERMINAL_STATES:
+            raise ValueError("append_attempt requires a terminal or null job state")
         if terminal_state is JobState.UNROUTABLE:
             raise ValueError("unroutable jobs must be marked without an attempt")
+        next_state = terminal_state or JobState.PENDING
         when = time.time() if at is None else at
         with self._writer() as conn:
             self._require_run(conn, attempt.run_id)
@@ -772,7 +816,7 @@ class JobStore:
             conn.execute(
                 "UPDATE jobs SET state = ?, error_message = NULL, updated_at = ? "
                 "WHERE run_id = ? AND id = ?",
-                (terminal_state.value, when, attempt.run_id, attempt.job_id),
+                (next_state.value, when, attempt.run_id, attempt.job_id),
             )
         return replace(attempt, id=attempt_id)
 

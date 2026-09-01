@@ -5,11 +5,12 @@ from __future__ import annotations
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 import pytest
 
 from llm_scripting_kit.completion import (
+    AgentTimeoutError,
     BackendSelection,
     Capabilities,
     ExecutionControl,
@@ -59,6 +60,70 @@ class FakeBackend:
     def classify_halt(self, exc: BaseException) -> str | None:
         """Leave typed HaltError classification to the runner."""
         return None
+
+
+class SequenceBackend(FakeBackend):
+    """A fake backend whose one-call outcomes are consumed in order."""
+
+    def __init__(self, outcomes: Sequence[object]) -> None:
+        super().__init__()
+        self.outcomes = list(outcomes)
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        model: str,
+        options: object = None,
+    ) -> LLMResponse:
+        """Return or raise exactly the next configured outcome."""
+        self.calls.append((system, user, model, options))
+        outcome = self.outcomes.pop(0) if self.outcomes else None
+        if isinstance(outcome, BaseException):
+            raise outcome
+        if outcome is None:
+            return self.response
+        if isinstance(outcome, LLMResponse):
+            return outcome
+        raise TypeError(f"unsupported fake outcome: {outcome!r}")
+
+
+class TimeoutSequenceBackend(SequenceBackend):
+    """A fake backend whose classifier gives timeouts the upstream halt label."""
+
+    def classify_halt(self, exc: BaseException) -> str | None:
+        """Mirror the seam mapping that job-kit must override for its deadline."""
+        return HALT_RATE_LIMIT
+
+
+class MarkerSequenceBackend(SequenceBackend):
+    """A sequence backend that makes acceptance change on a later attempt."""
+
+    def __init__(self, outcomes: Sequence[object], marker: Path) -> None:
+        super().__init__(outcomes)
+        self.marker = marker
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        model: str,
+        options: object = None,
+    ) -> LLMResponse:
+        """Write rejection first and acceptance on the third seam call."""
+        call_number = len(self.calls) + 1
+        if call_number == 1:
+            self.marker.write_text("reject", encoding="utf-8")
+        elif call_number == 3:
+            self.marker.write_text("accept", encoding="utf-8")
+        return super().complete(
+            system,
+            user,
+            model=model,
+            options=options,
+        )
 
 
 def _job(tmp_path: Path, job_id: str = "job", exit_code: int = 0) -> Job:
@@ -113,6 +178,17 @@ def _factory_for(backend: FakeBackend) -> Callable[..., BackendSelection]:
         return BackendSelection(endpoint, "fake", backend, "fake-model")
 
     return factory
+
+
+def _agent_timeout() -> AgentTimeoutError:
+    """Build a typed timeout with the seam exception's required diagnostics."""
+    return AgentTimeoutError(
+        "job-kit deadline exceeded",
+        cmd=["fake-agent"],
+        elapsed_s=17,
+        stdout="",
+        stderr="",
+    )
 
 
 def test_default_store_path_uses_ephemeral_project_data(tmp_path: Path) -> None:
@@ -400,6 +476,278 @@ def test_typed_halt_is_recorded_without_contract_invocation(tmp_path: Path) -> N
     assert attempt.error_code == HALT_RATE_LIMIT
     assert attempt.acceptance is None
     assert len(backend.calls) == 1
+
+
+def test_job_timeout_remains_eligible_on_the_same_endpoint(
+    tmp_path: Path,
+) -> None:
+    """A job-owned timeout does not exclude its endpoint from the next attempt."""
+    backend = TimeoutSequenceBackend([_agent_timeout(), None])
+    job = replace(_job(tmp_path), max_attempts=2)
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "timeout-retry.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert [attempt.attempt_no for attempt in snapshot.attempts] == [1, 2]
+    assert [attempt.endpoint for attempt in snapshot.attempts] == [
+        "fake-endpoint",
+        "fake-endpoint",
+    ]
+    assert snapshot.attempts[0].status == "timeout"
+    assert snapshot.attempts[0].halt_kind is None
+    assert len(backend.calls) == 2
+
+
+def test_job_timeout_uses_the_entire_attempt_budget(
+    tmp_path: Path,
+) -> None:
+    """Repeated job-owned timeouts create one row and seam call per attempt."""
+    backend = TimeoutSequenceBackend([_agent_timeout() for _ in range(3)])
+    job = replace(_job(tmp_path), max_attempts=3)
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "timeout-budget.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert snapshot.jobs[0].state is JobState.FAILED
+    assert [attempt.attempt_no for attempt in snapshot.attempts] == [1, 2, 3]
+    assert [attempt.status for attempt in snapshot.attempts] == [
+        "timeout",
+        "timeout",
+        "timeout",
+    ]
+    assert all(attempt.halt_kind is None for attempt in snapshot.attempts)
+    assert len(backend.calls) == 3
+
+
+def test_transient_failure_retries_on_the_same_endpoint_as_a_new_attempt(
+    tmp_path: Path,
+) -> None:
+    """A retryable exception creates a second ledger row and seam call."""
+    backend = SequenceBackend([RuntimeError("temporary transport failure"), None])
+    job = replace(_job(tmp_path), max_attempts=2)
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "transient-retry.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert [attempt.attempt_no for attempt in snapshot.attempts] == [1, 2]
+    assert [attempt.endpoint for attempt in snapshot.attempts] == [
+        "fake-endpoint",
+        "fake-endpoint",
+    ]
+    assert snapshot.attempts[0].error_code == "execution"
+    assert [call[2] for call in backend.calls] == ["fake-model", "fake-model"]
+
+
+def test_noncompleted_response_is_recorded_before_the_next_attempt(
+    tmp_path: Path,
+) -> None:
+    """A failed response never reaches acceptance in the same attempt."""
+    backend = SequenceBackend(
+        [
+            LLMResponse(text="", model="fake-model", status="error"),
+            None,
+        ]
+    )
+    job = replace(_job(tmp_path), max_attempts=2)
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "response-retry.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert [attempt.status for attempt in snapshot.attempts] == ["error", "completed"]
+    assert snapshot.attempts[0].acceptance is None
+
+
+def test_accepted_attempt_terminates_before_the_retry_budget_is_spent(
+    tmp_path: Path,
+) -> None:
+    """Acceptance is terminal even when a job has unused retry capacity."""
+    backend = SequenceBackend([None, RuntimeError("must not be called")])
+    job = replace(_job(tmp_path), max_attempts=2)
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "accepted-early.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert len(snapshot.attempts) == 1
+    assert len(backend.calls) == 1
+
+
+def test_persistent_halt_falls_back_to_the_next_preference(
+    tmp_path: Path,
+) -> None:
+    """A taxonomy halt excludes only its endpoint for the next attempt."""
+    first_backend = SequenceBackend([HaltError(HALT_RATE_LIMIT, "quota")])
+    second_backend = SequenceBackend([None])
+    backends = {"first": first_backend, "second": second_backend}
+    factory_calls: list[str] = []
+
+    def factory(endpoint: str, **_: object) -> BackendSelection:
+        factory_calls.append(endpoint)
+        return BackendSelection(endpoint, "fake", backends[endpoint], "fake-model")
+
+    job = replace(
+        _job(tmp_path),
+        endpoint_preference=("first", "second"),
+        max_attempts=2,
+    )
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "fallback.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert [attempt.attempt_no for attempt in snapshot.attempts] == [1, 2]
+    assert [attempt.endpoint for attempt in snapshot.attempts] == ["first", "second"]
+    assert first_backend.calls and second_backend.calls
+    assert factory_calls == ["first", "second"]
+
+
+def test_attempts_exhausted_terminate_after_retryable_failures(
+    tmp_path: Path,
+) -> None:
+    """A job becomes failed after its declared attempt budget is spent."""
+    backend = SequenceBackend(
+        [RuntimeError("temporary one"), RuntimeError("temporary two")]
+    )
+    job = replace(_job(tmp_path), max_attempts=2)
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "exhausted.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert snapshot.jobs[0].state is JobState.FAILED
+    assert [attempt.attempt_no for attempt in snapshot.attempts] == [1, 2]
+    assert len(backend.calls) == 2
+
+
+def test_running_out_of_endpoints_halts_after_a_recorded_attempt(
+    tmp_path: Path,
+) -> None:
+    """A persistent halt with no surviving preference reaches HALTED."""
+    backend = SequenceBackend([HaltError(HALT_RATE_LIMIT, "quota")])
+    job = replace(
+        _job(tmp_path),
+        endpoint_preference=("only-endpoint",),
+        max_attempts=3,
+    )
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "no-endpoints.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert snapshot.jobs[0].state is JobState.HALTED
+    assert snapshot.jobs[0].error is not None
+    assert "excluded" in snapshot.jobs[0].error
+    assert HALT_RATE_LIMIT in snapshot.jobs[0].error
+    assert "no compatible endpoint" not in snapshot.jobs[0].error
+    assert len(snapshot.attempts) == 1
+    assert snapshot.attempts[0].halt_kind == HALT_RATE_LIMIT
+    assert len(backend.calls) == 1
+
+
+def test_resume_mid_retry_uses_the_next_append_only_attempt_number(
+    tmp_path: Path,
+) -> None:
+    """An interrupted second attempt resumes at attempt three."""
+    marker = tmp_path / "acceptance-state"
+    contract = Contract(
+        command=(
+            sys.executable,
+            "-c",
+            f"from pathlib import Path; import sys; "
+            f"sys.exit(0 if Path({str(marker)!r}).read_text() == 'accept' else 1)",
+        ),
+        directory=tmp_path,
+    )
+    job = replace(
+        _job(tmp_path),
+        max_attempts=3,
+        contract=contract,
+    )
+    backend = MarkerSequenceBackend(
+        [None, KeyboardInterrupt(), None],
+        marker,
+    )
+    db_path = tmp_path / "mid-retry.sqlite3"
+    run_id = "mid-retry"
+
+    with pytest.raises(KeyboardInterrupt):
+        run_jobs(
+            [job],
+            db_path,
+            run_id=run_id,
+            capabilities_provider=_advertisement,
+            backend_factory=_factory_for(backend),
+        )
+
+    interrupted = JobStore(db_path).snapshot(run_id)
+    assert interrupted.jobs[0].state is JobState.PENDING
+    assert [attempt.attempt_no for attempt in interrupted.attempts] == [1, 2]
+    assert interrupted.attempts[0].acceptance is not None
+    assert interrupted.attempts[0].acceptance.accepted is False
+    assert interrupted.attempts[1].acceptance is None
+
+    resumed = resume_run(
+        run_id,
+        db_path,
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert resumed.jobs[0].state is JobState.ACCEPTED
+    assert [attempt.attempt_no for attempt in resumed.attempts] == [1, 2, 3]
+    assert len(backend.calls) == 3
+
+
+def test_run_deny_floor_is_applied_to_each_retry(
+    tmp_path: Path,
+) -> None:
+    """The run-level deny floor is forwarded on every attempt."""
+    backend = SequenceBackend([RuntimeError("temporary"), None])
+    job = replace(_job(tmp_path), max_attempts=2)
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "retry-floor.sqlite3",
+        disallowed_tools="Bash",
+        capabilities_provider=_deny_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert len(backend.calls) == 2
+    assert [call[3].disallowed_tools for call in backend.calls] == ["Bash", "Bash"]
 
 
 def test_unroutable_job_is_terminal_with_reason_and_survives_resume(

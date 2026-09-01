@@ -103,6 +103,47 @@ def test_job_options_reject_unknown_keys(tmp_path: Path) -> None:
         )
 
 
+def test_job_max_attempts_accepts_positive_retry_budgets(tmp_path: Path) -> None:
+    """A job can opt into multiple recorded attempts while zero is invalid."""
+    job = Job(
+        id="retryable",
+        prompt=Prompt(user="run"),
+        endpoint_preference=("fake",),
+        directory=tmp_path,
+        contract=Contract(command=("true",), directory=tmp_path),
+        max_attempts=3,
+    )
+
+    assert job.max_attempts == 3
+    with pytest.raises(ValueError, match="positive integer"):
+        Job(
+            id="invalid-retries",
+            prompt=Prompt(user="run"),
+            endpoint_preference=("fake",),
+            directory=tmp_path,
+            contract=Contract(command=("true",), directory=tmp_path),
+            max_attempts=0,
+        )
+
+
+@pytest.mark.parametrize("max_attempts", [True, 2.5, "2"])
+def test_job_mapping_rejects_non_integer_retry_budgets(
+    tmp_path: Path, max_attempts: object
+) -> None:
+    """The YAML shape does not coerce non-integer retry budgets."""
+    with pytest.raises(ValueError, match="positive integer"):
+        Job.from_mapping(
+            {
+                "id": "invalid-mapping-retries",
+                "prompt": "run",
+                "endpoint_preference": ["fake"],
+                "directory": str(tmp_path),
+                "contract": {"command": ["true"]},
+                "max_attempts": max_attempts,
+            }
+        )
+
+
 def test_acceptance_outcome_is_validated_and_accepted_comes_from_exit_code(
     tmp_path: Path,
 ) -> None:

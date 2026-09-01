@@ -320,8 +320,12 @@ class Job:
                 "directory",
                 (effective_directory or Path.cwd()).expanduser().resolve(),
             )
-        if self.max_attempts != 1:
-            raise ValueError("job-kit job-core supports max_attempts=1 only")
+        if (
+            not isinstance(self.max_attempts, int)
+            or isinstance(self.max_attempts, bool)
+            or self.max_attempts < 1
+        ):
+            raise ValueError("job max_attempts must be a positive integer")
 
     @property
     def system(self) -> str:
@@ -389,7 +393,10 @@ class Job:
             directory = contract.directory
 
         requirements = value.get("requirements", {})
-        max_attempts = int(value.get("max_attempts", 1))
+        raw_max_attempts = value.get("max_attempts", 1)
+        if isinstance(raw_max_attempts, bool) or not isinstance(raw_max_attempts, int):
+            raise ValueError("job max_attempts must be a positive integer")
+        max_attempts = raw_max_attempts
         options = value.get("options", {})
         return cls(
             id=str(value["id"]),

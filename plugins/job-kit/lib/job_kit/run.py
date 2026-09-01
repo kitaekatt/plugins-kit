@@ -7,7 +7,7 @@ import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Mapping, Optional, Sequence
+from typing import Callable, Collection, Mapping, Optional, Sequence
 
 from llm_scripting_kit.completion import (
     AgentTimeoutError,
@@ -44,6 +44,9 @@ from .workspace import WorkspaceError, WorkspaceManager, WorkspaceResolution
 
 DEFAULT_TIMEOUT_S = 900.0
 CONTRACT_OUTPUT_LIMIT = 2000
+_HALT_KINDS = frozenset(
+    {HALT_AUTH, HALT_RATE_LIMIT, HALT_INSUFFICIENT_CREDIT}
+)
 
 
 CapabilitiesProvider = Callable[[], Mapping[str, Capabilities]]
@@ -164,11 +167,34 @@ def _attempt_number(store: JobStore, run_id: str, job_id: str) -> int:
 def _halt_for_exception(backend: object, exc: BaseException) -> Optional[str]:
     """Classify a typed transport failure without inspecting its text."""
     if isinstance(exc, HaltError):
-        return exc.kind
+        return _known_halt_kind(exc.kind)
     classifier = getattr(backend, "classify_halt", None)
     if callable(classifier):
-        return classifier(exc)
+        return _known_halt_kind(classifier(exc))
     return None
+
+
+def _known_halt_kind(value: object) -> Optional[str]:
+    """Accept only halt labels defined by llm-scripting-kit's taxonomy."""
+    if isinstance(value, str) and value in _HALT_KINDS:
+        return value
+    return None
+
+
+def _terminal_state_after_attempt(
+    job: Job, attempt_no: int, outcome: JobState
+) -> Optional[JobState]:
+    """Terminalize an outcome only when this attempt exhausts the policy."""
+    if outcome not in {
+        JobState.ACCEPTED,
+        JobState.REJECTED,
+        JobState.FAILED,
+        JobState.HALTED,
+    }:
+        raise ValueError(f"invalid attempt outcome: {outcome.value}")
+    if outcome is JobState.ACCEPTED:
+        return outcome
+    return outcome if attempt_no >= job.max_attempts else None
 
 
 def _capabilities_for(
@@ -283,9 +309,13 @@ def _exception_attempt(
     ended_at: str,
     exc: BaseException,
     workspace: WorkspaceResolution,
-) -> tuple[Attempt, JobState]:
+) -> tuple[Attempt, Optional[JobState]]:
     """Build the durable attempt record for a raised seam exception."""
-    halt_kind = _halt_for_exception(selection.backend, exc)
+    if isinstance(exc, AgentTimeoutError):
+        # Job-kit owns this deadline, so its timeout is retryable, not a provider halt.
+        halt_kind = None
+    else:
+        halt_kind = _halt_for_exception(selection.backend, exc)
     status = TIMEOUT if isinstance(exc, AgentTimeoutError) else ERROR
     dropped = (
         derive_dropped_params(capabilities, options)
@@ -320,7 +350,8 @@ def _exception_attempt(
         workspace_reason=workspace.reason,
         acceptance=None,
     )
-    return attempt, JobState.HALTED if halt_kind is not None else JobState.FAILED
+    outcome = JobState.HALTED if halt_kind is not None else JobState.FAILED
+    return attempt, _terminal_state_after_attempt(job, attempt_no, outcome)
 
 
 def _response_attempt(
@@ -341,8 +372,7 @@ def _response_attempt(
             message=str(getattr(response_error_value, "message", "")),
         )
     error_code = response_error.code if response_error is not None else None
-    halt_kinds = {HALT_AUTH, HALT_RATE_LIMIT, HALT_INSUFFICIENT_CREDIT}
-    halt_kind = error_code if error_code in halt_kinds else None
+    halt_kind = error_code if error_code in _HALT_KINDS else None
     status = str(getattr(response, "status", COMPLETED))
     dropped_value = getattr(response, "dropped_params", None)
     forwarded_value = getattr(response, "forwarded_params", None)
@@ -378,7 +408,8 @@ def _response_attempt(
         acceptance=None,
     )
     if status != COMPLETED:
-        return attempt, JobState.HALTED if halt_kind is not None else JobState.FAILED
+        outcome = JobState.HALTED if halt_kind is not None else JobState.FAILED
+        return attempt, _terminal_state_after_attempt(job, attempt_no, outcome)
     return attempt, None
 
 
@@ -527,9 +558,14 @@ def run_job(
                 message=str(exc) or exc.__class__.__name__,
             ),
         )
-        store.append_attempt(interrupted_attempt, terminal_state=JobState.FAILED)
+        store.append_attempt(
+            interrupted_attempt,
+            terminal_state=_terminal_state_after_attempt(
+                job, attempt_no, JobState.FAILED
+            ),
+        )
         raise
-    if terminal_state is not None:
+    if terminal_state is not None or attempt.status != COMPLETED:
         return store.append_attempt(attempt, terminal_state=terminal_state)
 
     try:
@@ -546,7 +582,12 @@ def run_job(
                 message=str(exc) or exc.__class__.__name__,
             ),
         )
-        store.append_attempt(interrupted_attempt, terminal_state=JobState.FAILED)
+        store.append_attempt(
+            interrupted_attempt,
+            terminal_state=_terminal_state_after_attempt(
+                job, attempt_no, JobState.FAILED
+            ),
+        )
         raise
     except Exception as exc:
         failed_attempt = replace(
@@ -556,15 +597,21 @@ def run_job(
                 message=str(exc) or exc.__class__.__name__,
             ),
         )
-        return store.append_attempt(failed_attempt, terminal_state=JobState.FAILED)
+        return store.append_attempt(
+            failed_attempt,
+            terminal_state=_terminal_state_after_attempt(
+                job, attempt_no, JobState.FAILED
+            ),
+        )
     try:
         attempt = replace_attempt_acceptance(attempt, acceptance)
         if acceptance.outcome == "not_run":
-            terminal_state = JobState.FAILED
+            outcome = JobState.FAILED
         elif acceptance.accepted:
-            terminal_state = JobState.ACCEPTED
+            outcome = JobState.ACCEPTED
         else:
-            terminal_state = JobState.REJECTED
+            outcome = JobState.REJECTED
+        terminal_state = _terminal_state_after_attempt(job, attempt_no, outcome)
     except (KeyboardInterrupt, SystemExit) as exc:
         interrupted_attempt = replace(
             attempt,
@@ -573,7 +620,12 @@ def run_job(
                 message=str(exc) or exc.__class__.__name__,
             ),
         )
-        store.append_attempt(interrupted_attempt, terminal_state=JobState.FAILED)
+        store.append_attempt(
+            interrupted_attempt,
+            terminal_state=_terminal_state_after_attempt(
+                job, attempt_no, JobState.FAILED
+            ),
+        )
         raise
     return store.append_attempt(attempt, terminal_state=terminal_state)
 
@@ -613,6 +665,34 @@ def _store_object(store: JobStore | str | Path) -> JobStore:
     return store if isinstance(store, JobStore) else JobStore(store)
 
 
+def _selection_halted_reason(
+    job: Job,
+    attempts: Sequence[Attempt],
+    halted_endpoints: Collection[str],
+) -> str:
+    """Explain the endpoint exclusions that followed a recorded attempt."""
+    exclusions: list[str] = []
+    described: set[str] = set()
+    for attempt in attempts:
+        if attempt.halt_kind is None or attempt.endpoint in described:
+            continue
+        exclusions.append(f"{attempt.endpoint!r} ({attempt.halt_kind})")
+        described.add(attempt.endpoint)
+    for endpoint in job.endpoint_preference:
+        if endpoint in halted_endpoints and endpoint not in described:
+            exclusions.append(f"{endpoint!r} (persistent halt)")
+            described.add(endpoint)
+    if exclusions:
+        return (
+            f"job {job.id!r} halted: endpoint(s) {', '.join(exclusions)} "
+            "were excluded by persistent halt classification"
+        )
+    return (
+        f"job {job.id!r} halted: no endpoint remained after "
+        f"{len(attempts)} attempt(s); the remaining endpoints were excluded"
+    )
+
+
 def _run_pending(
     store: JobStore,
     run_id: str,
@@ -644,23 +724,39 @@ def _run_pending(
     for record in records:
         if record.terminal:
             continue
-        try:
-            run_job(
-                store,
-                run_id,
-                record.job,
-                halted_endpoints=store.halted_endpoints(run_id),
-                timeout_s=timeout_s,
-                disallowed_tools=run_floor,
-                capabilities_provider=capabilities_provider,
-                backend_factory=backend_factory,
-                workspace_root=root,
-                workspace_manager=manager,
-            )
-        except SelectionError as exc:
-            store.mark_unroutable(run_id, record.job.id, str(exc))
-        except WorkspaceError:
-            continue
+        while True:
+            current = store.get_job(run_id, record.job.id)
+            if current is None or current.terminal:
+                break
+            halted_endpoints = store.halted_endpoints(run_id)
+            try:
+                run_job(
+                    store,
+                    run_id,
+                    record.job,
+                    halted_endpoints=halted_endpoints,
+                    timeout_s=timeout_s,
+                    disallowed_tools=run_floor,
+                    capabilities_provider=capabilities_provider,
+                    backend_factory=backend_factory,
+                    workspace_root=root,
+                    workspace_manager=manager,
+                )
+            except SelectionError as exc:
+                attempts = store.list_attempts(run_id, record.job.id)
+                if attempts:
+                    store.mark_halted(
+                        run_id,
+                        record.job.id,
+                        _selection_halted_reason(
+                            record.job, attempts, halted_endpoints
+                        ),
+                    )
+                else:
+                    store.mark_unroutable(run_id, record.job.id, str(exc))
+                break
+            except WorkspaceError:
+                break
     return store.snapshot(run_id)
 
 

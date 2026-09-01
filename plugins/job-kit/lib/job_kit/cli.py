@@ -40,7 +40,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
 
-    run = subcommands.add_parser("run", help="run each job in a YAML file once")
+    run = subcommands.add_parser("run", help="run the jobs in a YAML file")
     run.add_argument("jobs", type=Path)
     run.add_argument("--store", type=Path)
     run.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S)
