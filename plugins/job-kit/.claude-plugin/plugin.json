@@ -15,6 +15,5 @@
     "llm",
     "sqlite",
     "bootstrap"
-  ],
-  "published": false
+  ]
 }

@@ -211,6 +211,19 @@
       "dependencies": [
         "bootstrap"
       ]
+    },
+    {
+      "name": "job-kit",
+      "description": "Durable sequential execution for heterogeneous agent jobs with advertisement-based endpoint selection and command-shaped acceptance.",
+      "version": "0.1.3",
+      "author": {
+        "name": "Christina"
+      },
+      "source": "./plugins/job-kit",
+      "category": "development",
+      "dependencies": [
+        "bootstrap"
+      ]
     }
   ]
 }
