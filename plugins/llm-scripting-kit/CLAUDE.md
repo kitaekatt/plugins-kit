@@ -28,6 +28,62 @@ unsuffixed name always means the NInfer path. All bind localhost by default;
 broader network exposure is an explicit host override. They all default to port
 8080, so only one can serve at a time.
 
+## Reachability is not configuration, and it is never a completion
+
+`endpoints` lists what is CONFIGURED and is pure static data -- always
+instant, never touches the network. `endpoints --verify` and the `probe` verb
+answer a different question, whether a configured endpoint is ACTUALLY USABLE
+right now, through one shared code path (`reachability.py`) that a consumer
+can also call directly. Both surfaces are opt-in / explicit-target only: a
+bare `endpoints` call must never start paying for a network or subprocess
+call silently.
+
+Verification costs zero LLM calls, on either endpoint kind. A **transport**
+entry (the `openrouter` adapter, including a self-hosted OpenAI-compatible
+server) gets a `GET {base_url}/models` metadata probe -- proof the server
+answers HTTP, not that a completion would succeed, which is why a passing
+verdict is `status: "reachable"` rather than `available` or `healthy`. A
+**harness** entry (claude-cli, codex-cli, opencode-cli) gets a
+CLI-resolution-plus-`--version` check -- proof the CLI is invocable, weaker
+still, since a real completion would spawn an agent and cost real time/quota
+and is therefore never attempted. Do not add a probe path that runs
+`backend.complete(...)`, even with `max_tokens=1` -- that was the original
+design and was reversed once it reached review: a caller reaching for a
+liveness check explicitly does not want to spend a token finding out.
+
+**Status is a three-way string, `reachable` / `unreachable` / `unknown`, never
+a bool.** `unknown` means the check itself could not be run to a verdict (an
+optional dependency was unavailable, or the check machinery raised
+unexpectedly) -- and it is NEVER reported as `unreachable`. "I could not
+check" and "I checked and it is down" are different facts, and a bool
+collapses them: a consumer gating on `reachable is False` would silently skip
+a perfectly usable endpoint whose check never ran. `check_entry` wraps every
+dispatch in a catch-all that maps an unanticipated exception to `unknown`
+rather than letting it escape or misreporting it, so this invariant holds even
+for a failure mode nobody has hit yet. `probe` propagates the same three-way
+split to its exit codes: `0` reachable, `1` unreachable, `5` unknown --
+`EXIT_INDETERMINATE`, deliberately a different code AND a different axis from
+`EXIT_USAGE` (2), which means the endpoint *name* never resolved to
+configuration at all, decided before any check is attempted. See
+`EXIT_INDETERMINATE`'s docstring in `cli.py` for the full mapping.
+
+**`codex-cli` prefers `bootstrap_lib.detect_codex` and falls back, it does not
+report the import failure as a verdict.** `bootstrap_lib` is this plugin's own
+OPTIONAL shared-lib dependency (see "Its consumers must declare `bootstrap_lib`
+themselves" below) -- its absence says nothing about whether codex ITSELF is
+installed and working on the machine. Reporting an `ImportError` there as
+`unreachable` was a live false negative (codex-cli 0.150.1 installed and in
+active use, reported unreachable purely because this plugin's own optional
+import failed) fixed by falling back to the identical PATH + `--version` check
+claude-cli and opencode-cli already use. `detect_codex` stays the preferred
+path when importable -- it is cached and reads a structured version -- but its
+absence must degrade to the ordinary check, never to a wrong answer. Any
+future per-harness check that has a "preferred path, PATH-based fallback"
+shape should follow this same rule: an optional dependency failing to import
+is `unknown`-shaped information about the CHECK, not `unreachable`-shaped
+information about the TARGET, unless (as here) a real fallback check exists to
+produce an actual verdict.
+
 ## Scope: one call, made correctly
 
 This layer owns everything a SINGLE completion needs -- endpoint resolution,
