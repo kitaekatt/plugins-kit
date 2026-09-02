@@ -195,8 +195,26 @@ def _attempt_number(store: JobStore, run_id: str, job_id: str) -> int:
     return len(store.list_attempts(run_id, job_id)) + 1
 
 
+def _is_own_deadline(exc: BaseException) -> bool:
+    """True when the failure is job-kit's own timeout budget expiring.
+
+    Job-kit passes its ``timeout_s`` down as the transport's timeout, so an
+    expiry is this layer's deadline, not evidence about the endpoint. HTTP
+    transports raise ``openai.APITimeoutError`` -- a SUBCLASS of
+    ``APIConnectionError`` -- so it must be excluded before the unreachable
+    test below, or a slow endpoint is wrongly excluded for the rest of the run.
+    """
+    if isinstance(exc, AgentTimeoutError):
+        return True
+    if _openai is not None:
+        return isinstance(exc, getattr(_openai, "APITimeoutError", ()))
+    return False
+
+
 def _halt_for_exception(backend: object, exc: BaseException) -> Optional[str]:
     """Classify a typed transport failure without inspecting its text."""
+    if _is_own_deadline(exc):
+        return None
     if _openai is not None and isinstance(
         exc, getattr(_openai, "APIConnectionError", ())
     ):
@@ -355,12 +373,9 @@ def _exception_attempt(
     workspace: WorkspaceResolution,
 ) -> tuple[Attempt, Optional[JobState]]:
     """Build the durable attempt record for a raised seam exception."""
-    if isinstance(exc, AgentTimeoutError):
-        # Job-kit owns this deadline, so its timeout is retryable, not a provider halt.
-        halt_kind = None
-    else:
-        halt_kind = _halt_for_exception(selection.backend, exc)
-    status = TIMEOUT if isinstance(exc, AgentTimeoutError) else ERROR
+    # Job-kit owns this deadline, so its timeout is retryable, not a provider halt.
+    halt_kind = _halt_for_exception(selection.backend, exc)
+    status = TIMEOUT if _is_own_deadline(exc) else ERROR
     dropped = (
         derive_dropped_params(capabilities, options)
         if capabilities is not None

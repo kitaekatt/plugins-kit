@@ -780,6 +780,62 @@ def test_openai_connection_failure_rotates_to_the_next_preference(
     assert snapshot.attempts[0].error_code == HALT_UNREACHABLE
 
 
+def test_openai_timeout_is_our_deadline_not_an_unreachable_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An HTTP timeout is job-kit's own budget expiring, so it halts nothing.
+
+    ``openai.APITimeoutError`` SUBCLASSES ``APIConnectionError``, and job-kit
+    passes its own ``timeout_s`` down as the transport timeout -- so without an
+    explicit exemption a slow endpoint is excluded for the rest of the run on
+    evidence that is really about our deadline.
+    """
+
+    class _APIConnectionError(Exception):
+        pass
+
+    class _APITimeoutError(_APIConnectionError):
+        pass
+
+    monkeypatch.setattr(
+        run_module,
+        "_openai",
+        type(
+            "OpenAISurface",
+            (),
+            {
+                "APIConnectionError": _APIConnectionError,
+                "APITimeoutError": _APITimeoutError,
+            },
+        )(),
+    )
+    first_backend = SequenceBackend([_APITimeoutError("timed out"), None])
+    second_backend = SequenceBackend([None])
+    backends = {"first": first_backend, "second": second_backend}
+
+    def factory(endpoint: str, **_: object) -> BackendSelection:
+        return BackendSelection(endpoint, "fake", backends[endpoint], "fake-model")
+
+    job = replace(
+        _job(tmp_path),
+        endpoint_preference=("first", "second"),
+        max_attempts=2,
+    )
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "http-timeout.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    # The endpoint was NOT excluded: attempt 2 went back to "first".
+    assert [attempt.endpoint for attempt in snapshot.attempts] == ["first", "first"]
+    assert snapshot.attempts[0].halt_kind is None
+    assert snapshot.attempts[0].status == "timeout"
+    assert not second_backend.calls
+
+
 def test_attempts_exhausted_terminate_after_retryable_failures(
     tmp_path: Path,
 ) -> None:
