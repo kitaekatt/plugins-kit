@@ -288,6 +288,9 @@ def _config_model_entry(
 
     if "model" not in ep:
         return None
+    # Note: key_file (see resolve_endpoint) is not plumbed into EndpointEntry
+    # here -- this helper feeds merged model DISCOVERY, which has no api_key
+    # consumer; key_file only matters where a key is actually resolved.
     return EndpointEntry(
         id=ep_name,
         base_url=_config_required_str(ep_name, ep, kind=kind, key="base_url"),
@@ -357,8 +360,8 @@ def resolve_endpoint(
 ) -> dict:
     """Resolve a named endpoint to its effective settings.
 
-    Returns a dict with keys ``name``, ``base_url``, ``key_env``, ``models``,
-    ``default``, ``defaultCheap``, and ``account_check``. Fields the endpoint
+    Returns a dict with keys ``name``, ``base_url``, ``key_env``, ``key_file``,
+    ``models``, ``default``, ``defaultCheap``, and ``account_check``. Fields the endpoint
     omits inherit the top-level ``models`` / ``default`` / ``defaultCheap``, so a
     pre-endpoints config (top-level registry only) resolves the default
     ``openrouter`` endpoint from its constants + that registry.
@@ -369,6 +372,12 @@ def resolve_endpoint(
     An endpoint declaring ``key_env: null`` explicitly resolves KEYLESS
     (``key_env`` is None in the returned dict); an endpoint that merely OMITS
     ``key_env`` still raises, so a dropped line cannot silently disable auth.
+
+    An endpoint may also declare ``key_file: <path>``: a bare-value credential
+    file (its whole, stripped content is the key) consulted by
+    ``api_key.get_api_key`` as the lowest-precedence layer, below ``key_env``'s
+    env var and every ``.env`` layer. ``key_file`` in the returned dict is the
+    declared path (unexpanded) or None.
 
     A name that no config layer declares is looked up in the model-endpoints
     registry (:mod:`llm_scripting_kit.model_endpoints`), whose entry ids are
@@ -440,6 +449,16 @@ def resolve_endpoint(
                 f"(declare `key_env: null` explicitly for a keyless endpoint)"
             )
 
+    # key_file: a path whose whole, stripped content is the key -- the
+    # lowest-precedence layer api_key.get_api_key() consults, below the
+    # key_env env var and every .env layer (see api_key.py's module
+    # docstring). Optional; None means this endpoint has no such layer.
+    key_file = ep.get("key_file")
+    if not isinstance(key_file, str) or not key_file.strip():
+        key_file = None
+    else:
+        key_file = key_file.strip()
+
     # A DIRECT model entry (the config-store counterpart to a registry entry)
     # supplies its own one-model alias map and its own selectors. All three
     # decisions below hang off this single predicate on purpose: gating the map
@@ -466,6 +485,7 @@ def resolve_endpoint(
         "name": ep_name,
         "base_url": base_url,
         "key_env": key_env,
+        "key_file": key_file,
         "models": models,
         "default": default_sel,
         "defaultCheap": default_cheap_sel,
