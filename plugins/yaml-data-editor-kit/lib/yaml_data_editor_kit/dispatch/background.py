@@ -19,7 +19,7 @@ from content_pipeline.execution.store import ExecutionStore
 from .adapter import adapter_for
 from .planner import CommentPlanStore, CommentPlanner, PlannerPolicy
 from .request import DispatchRequest, DispatchRequestSet, load_request
-from .run import RunSummary, StaleSliceError, _assert_fresh, _load_attributed, _request_value, _write_machine_result
+from .run import RunSummary, _apply_machine_result, _load_attributed, _request_value
 from .state import DispatchPlan, load_plan, write_plan
 from .units import unit_targets, validation_spec_for_unit
 from .worker_mount import build_worker_command
@@ -89,6 +89,7 @@ class BackgroundDispatchStatus:
     applied: int
     stale: tuple[str, ...]
     failed: Mapping[str, str]
+    rejected: Mapping[str, str]
     halted: bool
     halt_kind: str | None
     unfinished: tuple[str, ...]
@@ -122,7 +123,7 @@ def _make_adapter(plan: DispatchPlan, run_dir: Path) -> Any:
 
     def apply(unit_id: str, result: Any) -> None:
         unit = unit_for(unit_id)
-        _write_machine_result(unit, result, attributed, profile, plan.corpus_path)
+        _apply_machine_result(unit, result, attributed, profile, plan.corpus_path)
 
     base.unit_for = unit_for
     base.validation_spec_for = validation
@@ -190,93 +191,67 @@ def get_background_dispatch_status(run: BackgroundRef) -> BackgroundDispatchStat
     execution = ExecutionStore(prepared.execution_store)
     states: dict[str, str] = {}
     failed: dict[str, str] = {}
+    rejected: dict[str, str] = {}
     stale: list[str] = []
     applied = 0
     for unit in execution.list_units(plan.run_id):
         state = unit.state.value
+        attempts = execution.list_attempts(plan.run_id, unit.unit_id)
+        last_apply = next(
+            (
+                attempt
+                for attempt in reversed(attempts)
+                if attempt.kind
+                in (
+                    AttemptKind.APPLY_STARTED,
+                    AttemptKind.APPLY_SUCCEEDED,
+                    AttemptKind.APPLY_REJECTED,
+                )
+            ),
+            None,
+        )
         if unit.state is UnitState.ACCEPTED and unit.accepted_text is not None:
-            applied_kind = [a.kind for a in execution.list_attempts(plan.run_id, unit.unit_id) if a.kind is AttemptKind.APPLY_SUCCEEDED]
-            if applied_kind:
+            if last_apply is not None and last_apply.kind is AttemptKind.APPLY_SUCCEEDED:
                 state = "applied"
                 applied += 1
+            elif last_apply is not None and last_apply.kind is AttemptKind.APPLY_REJECTED:
+                reason = last_apply.error or ""
+                rejected[unit.unit_id] = reason
+                state = "stale" if reason.startswith("stale:") else "rejected"
+                if state == "stale":
+                    stale.append(unit.unit_id)
             else:
                 state = "accepted"
         elif unit.state is UnitState.FAILED:
-            attempts = execution.list_attempts(plan.run_id, unit.unit_id)
             detail = next((a.error or "" for a in reversed(attempts) if a.kind is AttemptKind.FAIL), "")
             failed[unit.unit_id] = detail
+            # Staleness arrives on TWO axes: the worker terminally failing a
+            # unit during generation (worker_mount.stale_fail writes
+            # "stale:<anchor>"), and the apply boundary refusing it above.
+            # Counting only the second understates the stale total.
             if detail.startswith("stale:"):
                 stale.append(unit.unit_id)
         states[unit.unit_id] = state
     record = execution.get_run(plan.run_id)
     unfinished = tuple(uid for uid, state in states.items() if state in {"planned", "pending", "claimed", "accepted"})
-    return BackgroundDispatchStatus(plan.run_id, len(plan.units), states, applied, tuple(stale), failed, bool(record and record.halted), record.halted_kind if record else None, unfinished)
-
-
-class StaleAtFinalizeError(StaleSliceError):
-    """One or more accepted units went stale before finalize could apply them.
-
-    Distinct from ``StaleSliceError`` so a caller can tell "this unit's slice moved
-    mid-run" from "the run cannot be finalized until these anchors are re-anchored",
-    and so the message names every affected unit rather than only the first.
-    """
-
-    def __init__(self, stale: list[tuple[str, str]]) -> None:
-        self.stale = tuple(stale)
-        detail = "; ".join("{}: {}".format(unit_id, reason) for unit_id, reason in stale)
-        super().__init__(
-            ", ".join(unit_id for unit_id, _ in stale),
-            "fresh",
-            "stale",
-        )
-        self._message = "cannot finalize -- {} accepted unit(s) went stale: {}".format(len(stale), detail)
-
-    def __str__(self) -> str:
-        return self._message
-
-    def __reduce__(self):
-        # Exception.__reduce__ rebuilds from self.args, which does not match this
-        # constructor's single argument; rebuild from the stale list instead so the
-        # error survives pickling and copying.
-        return (self.__class__, (list(self.stale),))
+    return BackgroundDispatchStatus(plan.run_id, len(plan.units), states, applied, tuple(stale), failed, rejected, bool(record and record.halted), record.halted_kind if record else None, unfinished)
 
 
 def finalize_background_dispatch(run: BackgroundRef, *, at: float | None = None) -> RunSummary:
     prepared = _prepared(run)
     plan = load_plan(prepared.plan_path)
     execution = ExecutionStore(prepared.execution_store)
-    profile = load_profile(plan.corpus_path / "profile" if (plan.corpus_path / "profile").exists() else plan.corpus_path)
-    # A corpus edit between acceptance and finalize makes ONE unit stale, not the run.
-    # Rejecting it the way the inline lane does keeps the rest applicable and leaves the
-    # run finalizable; letting StaleSliceError escape here stranded every accepted unit
-    # and made each later finalize raise again.
-    stale_at_finalize: list[tuple[str, str]] = []
-    for unit in execution.list_units(plan.run_id):
-        if unit.state is UnitState.ACCEPTED and unit.accepted_text is not None:
-            try:
-                _assert_fresh(
-                    unit.unit_id,
-                    plan.unit_for(unit.unit_id).get("payload", {}),
-                    profile,
-                    plan.corpus_path,
-                )
-            except StaleSliceError as exc:
-                # KNOWN GAP, deliberately surfaced rather than papered over. A unit that
-                # goes stale between acceptance and finalize cannot be settled: ACCEPTED
-                # is terminal in the execution store's state machine, so fail_unit refuses
-                # the transition, and an adapter that silently skipped the unit would have
-                # finalize record an apply that never happened. Raising names every stale
-                # unit so an operator can re-anchor and retry; the healthy units in the
-                # batch do not apply, which is the cost of not lying about the stale one.
-                stale_at_finalize.append((unit.unit_id, str(exc)))
-    if stale_at_finalize:
-        raise StaleAtFinalizeError(stale_at_finalize)
     applied_ids = finalize_run(execution, plan.run_id, _make_adapter(plan, prepared.run_dir), at=at)
     status = get_background_dispatch_status(prepared)
-    # `failed` already contains every stale unit -- `stale` is a labelled subset of
-    # it, matching the inline lane, where one stale unit reports rejected=1 stale=1.
-    rejected = len(status.failed)
-    accepted = sum(state in {"accepted", "applied"} for state in status.states.values())
+    rejected = len(status.failed) + len(status.rejected)
+    # "accepted" counts the SUBMIT verdict, which an apply rejection does not
+    # undo -- the unit stays in UnitState.ACCEPTED by design. Omitting the
+    # refused states here made this lane report a different accepted total
+    # than the inline lane for the identical stale-at-finalize scenario.
+    accepted = sum(
+        state in {"accepted", "applied", "stale", "rejected"}
+        for state in status.states.values()
+    )
     return RunSummary(plan.run_id, "claude_bg", status.planned, accepted, status.applied, rejected, len(status.stale), status.halted, prepared.attributed_store, prepared.execution_store, status.states)
 
 

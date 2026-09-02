@@ -32,7 +32,7 @@ fail is legal against them (``execution.store`` raises
 submit-time adjudication (parsing, validation, the accepted-verdict-is-final
 rule) belongs to the adapter/protocol layer added in a later phase.
 
-Accepted text and the apply tri-state (A-min.2)
+Accepted text and the apply outcomes (A-min.2)
 -------------------------------------------------
 
 ``UnitRecord.accepted_text`` is the durable text recorded by
@@ -47,7 +47,10 @@ the append-only attempts log via the :data:`AttemptKind.APPLY_STARTED` /
 adapter ``apply`` call (plan D6). A unit whose last apply-related attempt is
 ``APPLY_STARTED`` with no following ``APPLY_SUCCEEDED`` is ``apply_unknown``;
 resuming finalize with any unit in that state refuses to proceed unless the
-adapter supplies a reconciliation hook (fail closed).
+adapter supplies a reconciliation hook (fail closed). An adapter may also
+record ``APPLY_REJECTED`` when it declines the side effect before writing
+anything; that outcome is terminal on the apply axis while the unit remains
+``ACCEPTED``.
 """
 
 from __future__ import annotations
@@ -98,6 +101,7 @@ class AttemptKind(str, Enum):
     SUPERSEDED = "superseded"  # a fenced-out accept/fail: recorded, never applied (invariant 4)
     APPLY_STARTED = "apply_started"  # finalize is about to call the adapter's apply (D6)
     APPLY_SUCCEEDED = "apply_succeeded"  # the adapter's apply returned without raising (D6)
+    APPLY_REJECTED = "apply_rejected"  # the adapter declined before any side effect
 
 
 @dataclass(frozen=True)
@@ -243,6 +247,26 @@ class ExecutionError(Exception):
     """Base class for every execution-store error."""
 
 
+MAX_APPLY_REJECTION_REASON_LENGTH = 500
+
+
+class ApplyRejected(ExecutionError):
+    """The adapter declined apply and guarantees that no side effect occurred.
+
+    Adapters MUST raise this exception only when they know that no external
+    write, commit, or other delivery side effect occurred. If apply may have
+    partly landed, the adapter MUST raise another exception so D6 leaves the
+    ``APPLY_STARTED`` outcome available for reconciliation. The reason is
+    capped because it is persisted in the attempts error column.
+    """
+
+    def __init__(self, reason: str) -> None:
+        if not isinstance(reason, str):
+            raise TypeError("ApplyRejected reason must be a string")
+        self.reason = reason[:MAX_APPLY_REJECTION_REASON_LENGTH]
+        super().__init__(self.reason)
+
+
 class UnknownRunError(ExecutionError):
     """No run with this id exists."""
 
@@ -345,6 +369,8 @@ __all__ = [
     "ClaimResult",
     "DispatchRecord",
     "ExecutionError",
+    "MAX_APPLY_REJECTION_REASON_LENGTH",
+    "ApplyRejected",
     "UnknownRunError",
     "UnknownUnitError",
     "DuplicateUnitError",

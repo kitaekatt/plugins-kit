@@ -135,6 +135,7 @@ from typing import Any, Callable, List, Optional, Sequence
 
 from content_pipeline.execution.adapter import RunAdapter
 from content_pipeline.execution.model import (
+    ApplyRejected,
     AttemptKind,
     ExecutionError,
     SKIP_ERROR_PREFIX,
@@ -260,19 +261,36 @@ class UnappliedPredecessorError(ExecutionError):
     that case). See :class:`ApplyUnknownError`.
     """
 
+    def __init__(self, run_id: str, unit_id: str, *, apply_unknown: bool = False) -> None:
+        self.run_id = run_id
+        self.unit_id = unit_id
+        self.apply_unknown = apply_unknown
+        if apply_unknown:
+            detail = (
+                "the last apply is unresolved; use finalize_run with an "
+                "adapter.reconcile hook"
+            )
+        else:
+            detail = "finalize has not run for this unit"
+        super().__init__(
+            f"run {run_id!r}: unit {unit_id!r} is ACCEPTED but its last "
+            "apply-kind attempt is not APPLY_SUCCEEDED; "
+            f"{detail} -- prepare_run refuses to compute a wave until the "
+            "predecessor is settled (D1's one-unit-wave guarantee)"
+        )
+
+
+class ApplyRejectedPredecessorError(UnappliedPredecessorError):
+    """A graph predecessor was permanently refused on the apply axis."""
+
     def __init__(self, run_id: str, unit_id: str) -> None:
         self.run_id = run_id
         self.unit_id = unit_id
-        super().__init__(
-            f"run {run_id!r}: unit {unit_id!r} is ACCEPTED but its last "
-            "apply-kind attempt is not APPLY_SUCCEEDED (either no apply "
-            "attempt at all, or an apply_unknown APPLY_STARTED with no "
-            "following APPLY_SUCCEEDED -- check list_attempts to tell them "
-            "apart); prepare_run refuses to compute a wave until "
-            "finalize_run has applied it (with an adapter.reconcile hook if "
-            "it is apply_unknown) -- otherwise a successor could become "
-            "ready before this unit's payload has landed (D1's "
-            "one-unit-wave guarantee)"
+        self.apply_unknown = False
+        ExecutionError.__init__(
+            self,
+            f"run {run_id!r}: unit {unit_id!r} is ACCEPTED but its apply was "
+            "refused; plan another run before computing a successor wave",
         )
 
 
@@ -364,8 +382,15 @@ def _validate_no_unapplied_accepted(
     for unit in units:
         if unit.state is not UnitState.ACCEPTED:
             continue
-        if _last_apply_kind(attempts_by_unit.get(unit.unit_id, [])) is not AttemptKind.APPLY_SUCCEEDED:
-            raise UnappliedPredecessorError(run_id, unit.unit_id)
+        last_apply_kind = _last_apply_kind(attempts_by_unit.get(unit.unit_id, []))
+        if last_apply_kind is not AttemptKind.APPLY_SUCCEEDED:
+            if last_apply_kind is AttemptKind.APPLY_REJECTED:
+                raise ApplyRejectedPredecessorError(run_id, unit.unit_id)
+            raise UnappliedPredecessorError(
+                run_id,
+                unit.unit_id,
+                apply_unknown=last_apply_kind is AttemptKind.APPLY_STARTED,
+            )
 
 
 def prepare_run(
@@ -507,7 +532,8 @@ def finalize_run(
     for the last apply-kind attempt per unit (see :func:`_last_apply_kind`):
 
     - No apply-kind attempt -- not yet applied; apply now.
-    - Last is ``APPLY_SUCCEEDED`` -- already applied; skipped (never replayed).
+    - Last is ``APPLY_SUCCEEDED`` or ``APPLY_REJECTED`` -- terminal on the
+      apply axis; skipped (never replayed).
     - Last is ``APPLY_STARTED`` with no following ``APPLY_SUCCEEDED`` --
       ``apply_unknown``. Refuses via :class:`ApplyUnknownError` unless
       ``adapter.reconcile`` is supplied. When it is: ``reconcile(unit_id)``
@@ -548,6 +574,9 @@ def finalize_run(
         if last_kind is AttemptKind.APPLY_SUCCEEDED:
             continue  # already applied; idempotence
 
+        if last_kind is AttemptKind.APPLY_REJECTED:
+            continue  # refused without a side effect; terminal disposition
+
         if last_kind is AttemptKind.APPLY_STARTED:
             if adapter.reconcile is None:
                 raise ApplyUnknownError(unit.unit_id)
@@ -583,7 +612,11 @@ def finalize_run(
         parse_fn = adapter.resolve_validation_spec(work_unit).parse_fn
         payload = parse_fn(unit.accepted_text)
         store.record_apply_started(run_id, unit.unit_id, at=at)
-        adapter.apply(unit.unit_id, payload)
+        try:
+            adapter.apply(unit.unit_id, payload)
+        except ApplyRejected as exc:
+            store.record_apply_rejected(run_id, unit.unit_id, exc.reason, at=at)
+            continue
         store.record_apply_succeeded(run_id, unit.unit_id, at=at)
         applied.append(unit.unit_id)
 
@@ -667,7 +700,9 @@ def resume_run(store: ExecutionStore, run_id: str) -> None:
 
 
 __all__ = [
+    "ApplyRejected",
     "ApplyUnknownError",
+    "ApplyRejectedPredecessorError",
     "GraphOrderMismatchError",
     "MissingAcceptedTextError",
     "UnappliedPredecessorError",

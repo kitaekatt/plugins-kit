@@ -15,6 +15,8 @@ today". See that design doc section 6, test 8.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from content_pipeline.execution import workerpack
@@ -82,13 +84,31 @@ def test_workerpack_and_claude_bg_import_in_both_orders() -> None:
     text: both modules are already imported at collection time (via the
     module-level imports above), and re-importing them in the opposite
     order here must not raise."""
-    import importlib
+    import subprocess
+    import sys
 
-    import content_pipeline.execution.drivers.claude_bg as reimported_claude_bg
-    import content_pipeline.execution.workerpack as reimported_workerpack
-
-    importlib.reload(reimported_workerpack)
-    importlib.reload(reimported_claude_bg)
+    # Run the reload in a SUBPROCESS. importlib.reload rebinds a module's
+    # classes to new objects while every module that already did
+    # `from ... import <Class>` keeps the old one, so reloading here leaks
+    # into every later test in the session: an `except <Class>` or
+    # `pytest.raises(<Class>)` elsewhere stops matching the raised instance,
+    # which is a failure that appears only in a combined run and points
+    # nowhere near this file. The import-cycle question this test asks is
+    # answered just as well in a clean interpreter.
+    script = (
+        "import importlib\n"
+        "import content_pipeline.execution.drivers.claude_bg as cb\n"
+        "import content_pipeline.execution.workerpack as wp\n"
+        "importlib.reload(wp)\n"
+        "importlib.reload(cb)\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+    )
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_cli_run_lazy_import_still_resolves() -> None:

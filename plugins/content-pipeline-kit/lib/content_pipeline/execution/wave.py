@@ -207,7 +207,11 @@ def _last_apply_kind(attempts: Sequence[AttemptRecord]) -> Optional[AttemptKind]
     """
     last: Optional[AttemptKind] = None
     for attempt in attempts:
-        if attempt.kind in (AttemptKind.APPLY_STARTED, AttemptKind.APPLY_SUCCEEDED):
+        if attempt.kind in (
+            AttemptKind.APPLY_STARTED,
+            AttemptKind.APPLY_SUCCEEDED,
+            AttemptKind.APPLY_REJECTED,
+        ):
             last = attempt.kind
     return last
 
@@ -303,6 +307,11 @@ def graph_block_reason(store, run_id: str, strategy: WorkUnitStrategy) -> Option
                         "APPLY_STARTED attempt with no following "
                         "APPLY_SUCCEEDED) -- finalize_run with an "
                         "adapter.reconcile hook can recover it"
+                    )
+                if last is AttemptKind.APPLY_REJECTED:
+                    return (
+                        f"unit {unit.unit_id!r} is blocked: predecessor "
+                        f"{predecessor_id!r} apply was refused; plan another run"
                     )
                 return (
                     f"unit {unit.unit_id!r} is blocked: predecessor "

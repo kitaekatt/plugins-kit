@@ -5,16 +5,12 @@ alongside it -- the multi-target lane in particular passed its own tests only
 because a mock backend ignores the prompt it is given.
 """
 
-import copy
 from pathlib import Path
-import pickle
 
 import pytest
 import yaml
 
 from yaml_data_editor_kit.dispatch.adapter import prompt_for
-from yaml_data_editor_kit.dispatch.background import StaleAtFinalizeError
-from yaml_data_editor_kit.dispatch.run import StaleSliceError
 from yaml_data_editor_kit.dispatch.state import write_plan
 from yaml_data_editor_kit.dispatch.units import plain_value, prompt_for_payload
 from yaml_data_editor_kit.schema.corpus import ABSENT
@@ -122,16 +118,3 @@ def test_prompt_renders_a_slice_with_a_non_text_key() -> None:
         "content_hash": "sha256:dd",
     }
     assert "theme" in prompt_for_payload(payload)
-
-
-def test_stale_at_finalize_error_survives_pickling_and_copy() -> None:
-    """It carries a list its parent's constructor does not take, so the default
-    args-based rebuild does not work and __reduce__ has to."""
-    error = StaleAtFinalizeError([("unit-a", "hash moved"), ("unit-b", "hash moved")])
-
-    revived = pickle.loads(pickle.dumps(error))
-
-    assert revived.stale == error.stale
-    assert str(revived) == str(error)
-    assert copy.copy(error).stale == error.stale
-    assert isinstance(error, StaleSliceError)

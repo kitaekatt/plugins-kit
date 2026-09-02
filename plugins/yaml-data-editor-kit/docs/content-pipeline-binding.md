@@ -23,6 +23,14 @@ Adopt directly, do not reimplement:
 - `freshness.hashing.content_hash` -- on the ANCHORED SLICE ONLY, to detect
   that data moved under a comment while its unit was in flight.
 
+Submit acceptance and apply rejection are separate axes, and `execution/*`
+models them separately. `ACCEPTED` records that adjudication accepted a
+worker's text; `APPLY_REJECTED` records that delivery was refused without a
+side effect. A refused apply therefore keeps the unit `ACCEPTED` -- staleness
+at apply time changes whether the result is still applicable, not whether it
+was accepted -- so a stale unit settles without stranding the healthy units
+finalized alongside it.
+
 ## Dispatch implementation boundary
 
 Implemented behavior in `dispatch/`:

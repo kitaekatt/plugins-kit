@@ -26,7 +26,7 @@ from content_pipeline.execution.drivers.inline import (
     UnacceptedSubmissionError,
     run_wave,
 )
-from content_pipeline.execution.model import UnitState
+from content_pipeline.execution.model import ApplyRejected, AttemptKind, UnitState
 from content_pipeline.execution.store import ExecutionStore
 from content_pipeline.freshness.hashing import content_hash
 from content_pipeline.llm.backends import route
@@ -207,7 +207,9 @@ def dispatch(
 
     def apply(unit_id: str, result: Any) -> None:
         unit = unit_by_id[unit_id]
-        _write_machine_result(unit, result, attributed_path, profile, resolved_request.corpus_path)
+        _apply_machine_result(
+            unit, result, attributed_path, profile, resolved_request.corpus_path
+        )
         applied_ids.add(unit_id)
 
     adapter = RunAdapter(
@@ -251,24 +253,21 @@ def dispatch(
             break
 
         accepted_result_ids.add(unit.id)
-        apply_stale = False
-        try:
-            finalize_run(execution, run_id, adapter)
-        except StaleSliceError:
-            apply_stale = True
-            statuses[unit.id] = "stale"
-            rejected += 1
-            stale += 1
-        if not apply_stale:
-            if unit.id in applied_ids:
-                statuses[unit.id] = "applied"
-            else:
-                statuses[unit.id] = "accepted"
+        # The apply boundary converts a confirmed stale slice into
+        # ApplyRejected, which finalize_run records as a durable disposition
+        # rather than raising -- so StaleSliceError cannot escape here, and
+        # each unit's outcome is read back per unit below. That per-unit read
+        # is what keeps a stale unit's outcome off a healthy sibling.
+        finalize_run(execution, run_id, adapter)
+        for accepted_id in accepted_result_ids:
+            statuses[accepted_id] = _apply_status(execution, run_id, accepted_id)
 
         if execution.get_run(run_id).halted:  # type: ignore[union-attr]
             break
 
     accepted = len(accepted_result_ids)
+    rejected = sum(status in {"stale", "rejected"} for status in statuses.values())
+    stale = sum(status == "stale" for status in statuses.values())
     halted_record = execution.get_run(run_id)
     return RunSummary(
         run_id=run_id,
@@ -374,6 +373,43 @@ def _reject_claimed(
             error=error,
             terminal=True,
         )
+
+
+def _apply_status(execution: ExecutionStore, run_id: str, unit_id: str) -> str:
+    """Return a status from the unit's last apply disposition."""
+    attempts = execution.list_attempts(run_id, unit_id)
+    last_apply = next(
+        (
+            attempt
+            for attempt in reversed(attempts)
+            if attempt.kind
+            in (
+                AttemptKind.APPLY_STARTED,
+                AttemptKind.APPLY_SUCCEEDED,
+                AttemptKind.APPLY_REJECTED,
+            )
+        ),
+        None,
+    )
+    if last_apply is None or last_apply.kind is AttemptKind.APPLY_STARTED:
+        return "accepted"
+    if last_apply.kind is AttemptKind.APPLY_REJECTED:
+        return "stale" if (last_apply.error or "").startswith("stale:") else "rejected"
+    return "applied"
+
+
+def _apply_machine_result(
+    unit: Any,
+    result: Any,
+    path: Path,
+    profile: Any,
+    corpus_path: Path,
+) -> None:
+    """Apply a result, converting only a confirmed stale slice into refusal."""
+    try:
+        _write_machine_result(unit, result, path, profile, corpus_path)
+    except StaleSliceError as exc:
+        raise ApplyRejected("stale:{}".format(exc)) from exc
 
 
 def _prompt(payload: Mapping[str, Any]) -> str:

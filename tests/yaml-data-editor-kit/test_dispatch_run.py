@@ -170,6 +170,57 @@ def _multi_setup(tmp_path: Path, write, monkeypatch) -> DispatchRequest:
     return request
 
 
+def _two_independent_setup(tmp_path: Path, write) -> DispatchRequest:
+    request = _setup(tmp_path, write)
+    write(
+        "content/products.yaml",
+        "- { id: bolt, summary: fastener }\n- { id: nut, summary: hardware }\n",
+    )
+    profile = load_profile(tmp_path / "profile")
+    corpus = load_corpus(profile, tmp_path)
+    comments = CommentStore(tmp_path / "comments")
+    comments.write(
+        Comment.create(
+            profile,
+            corpus,
+            id="note-nut",
+            anchor="product/nut/summary",
+            text="Shorten nut.",
+            created="2026-08-30",
+        )
+    )
+    return request
+
+
+def test_apply_stale_status_is_attributed_to_the_stale_unit(tmp_path: Path, write, monkeypatch) -> None:
+    request = _two_independent_setup(tmp_path, write)
+    original = run_module._assert_fresh
+    calls = [0]
+
+    def check(unit_id, payload, profile, corpus_path):
+        calls[0] += 1
+        if calls[0] == 3:
+            (tmp_path / "content/products.yaml").write_text(
+                "- { id: bolt, summary: changed }\n- { id: nut, summary: hardware }\n",
+                encoding="utf-8",
+            )
+        return original(unit_id, payload, profile, corpus_path)
+
+    monkeypatch.setattr(run_module, "_assert_fresh", check)
+    summary = dispatch(
+        request,
+        backend=MockBackend(responses=["short bolt", "short nut"]),
+    )
+
+    assert summary.statuses["record:product/bolt"] == "stale"
+    assert summary.statuses["record:product/nut"] == "applied"
+    assert summary.stale == 1
+    assert summary.rejected == 1
+    stored = yaml.safe_load(summary.attributed_store.read_text(encoding="utf-8"))
+    assert "machine" not in stored["records"].get("record:product/bolt", {})
+    assert stored["records"]["record:product/nut"]["machine"] == "short nut"
+
+
 def _grouping() -> str:
     return json.dumps({"schema_version": "1", "work_units": [{"comment_ids": ["note", "note-nut"], "instruction": "Shorten both."}]})
 

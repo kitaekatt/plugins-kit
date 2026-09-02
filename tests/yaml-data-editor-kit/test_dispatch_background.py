@@ -4,6 +4,7 @@ import pytest
 import yaml
 
 from content_pipeline.llm.backends import MockBackend
+from content_pipeline.execution.model import AttemptKind, UnitState
 from content_pipeline.execution.store import ExecutionStore
 from yaml_data_editor_kit.comments import Comment, CommentStore
 from yaml_data_editor_kit.dispatch import (
@@ -110,17 +111,64 @@ path: content/products.yaml
     return DispatchRequest(tmp_path, tmp_path / "comments", tmp_path / "run", driver="claude_bg")
 
 
-@pytest.mark.xfail(
-    reason=(
-        "KNOWN GAP: a unit that goes stale between acceptance and finalize cannot be "
-        "settled -- ACCEPTED is terminal in the execution store, so fail_unit refuses "
-        "the transition. finalize raises StaleAtFinalizeError naming every stale unit "
-        "instead of applying the healthy ones. Closing this needs a settle-an-accepted-"
-        "unit transition in content-pipeline-kit, which is a state-machine change to a "
-        "published plugin and is escalated rather than taken unilaterally."
-    ),
-    strict=True,
-)
+def test_generation_time_stale_failure_is_counted_stale(tmp_path: Path, write) -> None:
+    """Staleness arrives on TWO axes and both must count. A worker that
+    terminally FAILS a unit as stale during generation (worker_mount's
+    stale_fail writes "stale:<anchor>") is a different path from the apply
+    boundary refusing an accepted unit at finalize. Deriving status from the
+    apply axis alone silently drops the first."""
+    prepared = prepare_background_dispatch(_two_unit_request(tmp_path, write))
+    execution = ExecutionStore(prepared.execution_store)
+    units = execution.list_units(prepared.run_id)
+
+    claim = execution.claim_unit(prepared.run_id, units[0].unit_id, "worker-0")
+    execution.fail_unit(
+        prepared.run_id,
+        units[0].unit_id,
+        claim.fencing_token,
+        error="stale:product/bolt/summary",
+        terminal=True,
+    )
+
+    status = get_background_dispatch_status(prepared)
+    assert units[0].unit_id in status.stale, (
+        "a generation-time stale failure must count toward stale; only the "
+        "apply-time axis was being counted"
+    )
+
+
+def test_apply_rejected_unit_still_counts_as_accepted(tmp_path: Path, write) -> None:
+    """An apply rejection does not undo the SUBMIT verdict -- the unit stays in
+    UnitState.ACCEPTED by design, so it must count toward `accepted`. Omitting
+    it made this lane disagree with the inline lane on the same scenario."""
+    prepared = prepare_background_dispatch(_two_unit_request(tmp_path, write))
+    execution = ExecutionStore(prepared.execution_store)
+    units = execution.list_units(prepared.run_id)
+
+    for index, unit in enumerate(units):
+        claim = execution.claim_unit(prepared.run_id, unit.unit_id, "worker-{}".format(index))
+        execution.accept_unit(
+            prepared.run_id,
+            unit.unit_id,
+            claim.fencing_token,
+            text="short {} summary".format("bolt" if index == 0 else "nut"),
+        )
+
+    (tmp_path / "content/products.yaml").write_text(
+        "- {id: bolt, summary: fastener}\n- {id: nut, summary: changed}\n",
+        encoding="utf-8",
+    )
+
+    summary = finalize_background_dispatch(prepared)
+    assert summary.stale == 1
+    assert summary.applied == 1
+    # Both units passed submit-time adjudication; one was refused at apply.
+    assert summary.accepted == 2, (
+        "an apply-rejected unit is still ACCEPTED -- acceptance and apply "
+        "rejection are separate axes"
+    )
+
+
 def test_finalize_rejects_one_stale_accepted_unit_and_remains_repeatable(
     tmp_path: Path, write
 ) -> None:
@@ -146,14 +194,25 @@ def test_finalize_rejects_one_stale_accepted_unit_and_remains_repeatable(
     assert summary.rejected == 1
     assert summary.stale == 1
     assert summary.applied == 1
-    assert summary.statuses["record:product/nut"] == "failed"
+    assert summary.statuses["record:product/nut"] == "stale"
     assert summary.statuses["record:product/bolt"] == "applied"
+
+    stale_unit = execution.get_unit(prepared.run_id, "record:product/nut")
+    assert stale_unit is not None
+    assert stale_unit.state is UnitState.ACCEPTED
+    stale_attempts = execution.list_attempts(prepared.run_id, "record:product/nut")
+    assert stale_attempts[-1].kind is AttemptKind.APPLY_REJECTED
+    assert stale_attempts[-1].error.startswith("stale:")
 
     records = yaml.safe_load(prepared.attributed_store.read_text(encoding="utf-8"))["records"]
     assert records["record:product/bolt"]["machine"] == "short bolt summary"
     assert "machine" not in records.get("record:product/nut", {})
 
+    before_repeat = prepared.attributed_store.read_bytes()
+    attempts_before_repeat = execution.list_attempts(prepared.run_id, "record:product/nut")
     repeated = finalize_background_dispatch(prepared)
     assert repeated.rejected == 1
     assert repeated.stale == 1
     assert repeated.applied == 1
+    assert prepared.attributed_store.read_bytes() == before_repeat
+    assert execution.list_attempts(prepared.run_id, "record:product/nut") == attempts_before_repeat
