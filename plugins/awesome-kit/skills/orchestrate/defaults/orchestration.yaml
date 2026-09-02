@@ -368,6 +368,12 @@ effort:
       otherwise carries the higher default because units arrive there for dispatch shape, not difficulty.
       Raise sol from `high` to `max` when the unit is `unverifiable`; a `cross-check`
       stays at `high`.
+      More generally, effort keys on the brief's shape, not the seat that routed it: a
+      {known} unit whose brief is {sufficient} takes `medium` on any CLI seat -- a
+      model-entry's default effort applies to {open} units, which still have to work out
+      what to do rather than execute a stated brief. Measured: the yaml-data-editor-kit
+      dispatch's first cut was a {known} {sufficient} brief and took 45 minutes on luna at
+      `max`; comparable {known} units on sonnet finished in 2-4 minutes.
   note: >-
     Claude-side, effort is NOT dialable per call: the Agent tool has no effort parameter,
     agents inherit from their type or the session, and it is settable per call only through

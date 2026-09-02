@@ -149,6 +149,13 @@ far outside its `-C` root. Assume a codex unit can read anything the invoking
 user can -- SSH keys, .env files, any repo on any drive. Brief accordingly, and
 do not treat `-C` as containment for secrets.
 
+Never brief a unit to read anything under `~/.claude/projects`. Reads are
+unrestricted and outside the `-C` root by design, so a unit told (or left) to
+go looking there can reach it -- and a unit was observed grepping the
+orchestrating session's own transcript for its brief text, wasting minutes and
+exposing other sessions' content to the unit. Give the unit the brief text
+directly; never point it at the transcript that already contains it.
+
 Escape hatch: `-s danger-full-access`, for the case where the set of writable
 roots genuinely cannot be enumerated up front. It requires the user's explicit
 sign-off for that unit. `--dangerously-bypass-approvals-and-sandbox` produced
