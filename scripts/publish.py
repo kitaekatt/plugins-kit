@@ -843,6 +843,33 @@ def _master_is_ancestor_of_dev() -> bool:
                f"{REMOTE}/{MASTER_BRANCH}", DEV_BRANCH) == 0
 
 
+def _fast_forward_is_safe() -> bool:
+    """True when a fast-forward cannot carry dev-only work onto master.
+
+    A fast-forward moves dev's TREE wholesale, so it bypasses the hold-back
+    _publish_projection applies. The exclusion set does not guard that: it is
+    populated per COMMIT from the publish range, so a range touching no
+    dev-only plugin leaves it empty while the dev-only files sit in dev's tree
+    ready to ship. What a fast-forward moves is the tree, so the question has
+    to be asked of the manifests, not of the range.
+
+    Deliberately asks whether a dev-only plugin EXISTS rather than whether
+    _held_back_paths finds files for it. The two agree in every real case -- a
+    declared plugin always has at least its own manifest on disk -- but
+    _held_back_paths lists trees with check=False, so a failing ls-tree
+    returns empty and would be indistinguishable from "nothing to hold back".
+    This guard protects a push to a public master, so it must not have a
+    branch on which a git failure reads as safe.
+
+    Unreachable while master is not an ancestor of dev, which a projection
+    release guarantees. It becomes reachable the moment anyone merges master
+    back into dev -- a move publish-reconcile.md explicitly contemplates --
+    and it is exactly then that the empty exclusion set stops meaning what it
+    appears to mean.
+    """
+    return not any(not is_published(m) for m in local_plugins().values())
+
+
 def _held_back_paths(dev_only: set[str]) -> tuple[list[str], list[str]]:
     """The dev-only files to hold at master's content: (on master, dev-only new).
 
@@ -951,9 +978,12 @@ def _rc_in(workdir, *args: str) -> int:
 def push_and_merge(excluded: dict[str, set[str]] | None = None) -> None:
     """Push dev, then land the release on master.
 
-    Fast-forward when nothing is excluded AND master is still an ancestor of
-    dev. Otherwise project (see _publish_projection): master gets dev's tree
-    with the dev-only plugins held back, and dev is untouched.
+    Fast-forward only when nothing is excluded, master is still an ancestor
+    of dev, AND no dev-only file exists on either tree (_fast_forward_is_safe).
+    All three are needed: a fast-forward moves dev's tree wholesale, so an
+    empty exclusion set alone would ship every dev-only plugin the range
+    happened not to touch. Otherwise project (see _publish_projection): master
+    gets dev's tree with the dev-only plugins held back, and dev is untouched.
 
     The worktree in the projection path is not a stylistic choice. The
     fast-forward path checks master out in THIS tree, which is shared with
@@ -965,7 +995,8 @@ def push_and_merge(excluded: dict[str, set[str]] | None = None) -> None:
     git("push", REMOTE, DEV_BRANCH)
     print(f"  pushed {DEV_BRANCH}")
 
-    if not excluded and _master_is_ancestor_of_dev():
+    if (not excluded and _master_is_ancestor_of_dev()
+            and _fast_forward_is_safe()):
         git("checkout", MASTER_BRANCH)
         try:
             git("merge", "--ff-only", DEV_BRANCH)

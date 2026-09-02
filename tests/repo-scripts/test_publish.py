@@ -635,6 +635,65 @@ class TestHeldBackPaths:
         assert publish._held_back_paths(set()) == ([], [])
 
 
+class TestFastForwardSafety:
+    """A fast-forward moves dev's TREE wholesale, so it bypasses the hold-back.
+
+    The exclusion set cannot guard it: `excluded` is populated per COMMIT from
+    the publish range, so a range touching no dev-only plugin leaves it empty
+    while the dev-only files still sit in dev's tree. Guarding on the tree is
+    the only thing that closes it.
+    """
+
+    def test_refuses_fast_forward_while_a_dev_only_plugin_exists(self, repo):
+        assert publish._fast_forward_is_safe() is False
+
+    def test_does_not_read_git_so_a_failing_ls_tree_cannot_read_as_safe(
+            self, repo, monkeypatch):
+        """The guard protects a push to a PUBLIC master, so it must have no
+        branch on which a git failure looks like an all-clear."""
+        def _boom(*a, **k):
+            raise AssertionError("_fast_forward_is_safe consulted git")
+        monkeypatch.setattr(publish, "git", _boom)
+
+        assert publish._fast_forward_is_safe() is False
+
+    def test_allows_fast_forward_when_no_plugin_is_dev_only(self, repo, monkeypatch):
+        monkeypatch.setattr(publish, "local_plugins",
+                            lambda: {"pub-kit": {"name": "pub-kit",
+                                                 "published": True}})
+        assert publish._fast_forward_is_safe() is True
+
+    def _wire(self, monkeypatch, safe):
+        calls = []
+        monkeypatch.setattr(publish, "git", lambda *a, **k: calls.append(a) or "")
+        monkeypatch.setattr(publish, "_master_is_ancestor_of_dev", lambda: True)
+        monkeypatch.setattr(publish, "_fast_forward_is_safe", lambda: safe)
+        monkeypatch.setattr(publish, "_publish_projection",
+                            lambda excluded: calls.append(("PROJECTED",)))
+        return calls
+
+    def test_push_and_merge_projects_when_the_tree_is_unsafe(self, monkeypatch):
+        """The regression this guard exists for: master an ancestor of dev and
+        nothing excluded -- precisely the state a master -> dev merge-back
+        produces -- while dev-only files still sit in dev's tree."""
+        calls = self._wire(monkeypatch, safe=False)
+
+        publish.push_and_merge({})
+
+        assert ("PROJECTED",) in calls
+        assert not any(a[:1] == ("checkout",) for a in calls), \
+            "fast-forward path was taken -- it would ship dev-only files"
+
+    def test_push_and_merge_still_fast_forwards_when_the_tree_is_safe(self, monkeypatch):
+        """The guard must not cost the fast-forward in the case it was for."""
+        calls = self._wire(monkeypatch, safe=True)
+
+        publish.push_and_merge({})
+
+        assert ("PROJECTED",) not in calls
+        assert ("merge", "--ff-only", publish.DEV_BRANCH) in calls
+
+
 class TestRepoInvariantGates:
     """The checks that exist as ESCAPABLE pre-commit hooks (--no-verify,
     PLUGINS_KIT_SKIP_BUMP_CHECK=1) and so were enforced nowhere before the
