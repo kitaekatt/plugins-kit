@@ -35,7 +35,7 @@
     {
       "name": "bootstrap",
       "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
-      "version": "0.92.2",
+      "version": "0.93.0",
       "author": {
         "name": "Christina"
       },
@@ -45,7 +45,7 @@
     {
       "name": "p4-kit",
       "description": "Multi-agent code review for pending Perforce changelists (/p4-code-review) -- auto-shelves, reviews, cleans up.",
-      "version": "0.29.1",
+      "version": "0.30.0",
       "author": {
         "name": "Christina"
       },
@@ -58,7 +58,7 @@
     {
       "name": "git-kit",
       "description": "Multi-agent pre-push code review for git (/git-code-review) with per-finding validation and declined-findings memory.",
-      "version": "0.15.2",
+      "version": "0.16.0",
       "author": {
         "name": "Christina"
       },

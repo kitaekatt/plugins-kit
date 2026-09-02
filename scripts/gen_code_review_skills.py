@@ -42,6 +42,15 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# The canonical reviewer prompts live in bootstrap_lib, NOT here, because the
+# endpoint dispatch path imports them at run time. Rendering them into SKILL.md
+# from that same source is what stops the Agent path and the endpoint path from
+# reviewing the same diff by two different standards -- and the drift test
+# (tests/bootstrap/code_review/test_skill_drift.py) turns "edited the prompt and
+# forgot to regenerate" into a suite failure.
+sys.path.insert(0, str(REPO_ROOT / "plugins" / "bootstrap"))
+from bootstrap_lib.code_review import lane_prompts  # noqa: E402
 GIT_SKILL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md"
 P4_SKILL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md"
 GIT_SUBMIT_GATES = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/submit-gates.md"
@@ -88,6 +97,48 @@ DISPATCH = """\
             reviewers, same validators, same output either way -- only the dispatch
             mechanism changes."""
 
+
+
+# ===========================================================================
+# MODEL KIND (the user-configurable override).
+# ---------------------------------------------------------------------------
+# A resolved profile's `model` has always been a free-form string consumed as
+# the Agent tool's model parameter. It now carries a SECOND meaning, which is
+# the whole override mechanism and needs no new configuration field: a value
+# that is NOT one of the Agent tool's own aliases is read as an
+# llm-scripting-kit endpoint id and dispatched through the completion seam.
+#
+# Stated as a closed alias set rather than "looks like an endpoint" so a typo
+# ("sonnett") lands in the endpoint path and fails loudly with "no such
+# endpoint", instead of silently launching some default Agent.
+#
+# There is deliberately NO fallback from a failed endpoint lane to an Agent
+# lane. A silent fallback returns a review the user reads as the configured
+# one, which is worse than no review at all: it is an unfalsifiable claim about
+# what reviewed the change.
+# ===========================================================================
+MODEL_KIND = """\
+            Model-kind rule (per lane, mechanical -- read the value, do not interpret it):
+            each reviewer's `model` and each `validator_models[reason]` value from the
+            RESOLVED table is EITHER one of the Agent tool's aliases -- `sonnet`, `opus`,
+            `haiku`, `fable` -- OR an llm-scripting-kit endpoint id. An alias launches an
+            Agent subagent (the default path; the shipped table is
+            all aliases, so an unconfigured review behaves identically to before). Any other
+            value is an endpoint id: run that lane as a parallel Bash call to
+            @LANE_TOOL@ instead of launching an Agent for it, passing `--lane <reviewer
+            name>`, `--model <the value>`, `--chunk <absolute chunk diff path>`, one
+            `--file` per repo-relative path in that chunk, `--description <the change
+            description>`, and `--project-root <bundle.project_root>` when the bundle has
+            one. Its stdout is a JSON envelope whose `issues` array is that lane's candidate
+            issues, in the same shape an Agent lane returns.
+            Endpoint lanes and Agent lanes go out in the SAME message as one another; mixing
+            the two dispatch mechanisms in one fan-out is normal and expected.
+            A NON-ZERO exit is a FAILED lane, never an empty result: do NOT retry it, do NOT
+            silently substitute an Agent, and do NOT treat its absence as "no issues found".
+            Keep its stderr line, report the lane as failed in step 9, and mark its coverage
+            missing. Only the lanes the runner supports may carry an endpoint id; it refuses
+            the rest by name and exits 2, which is a configuration error for the user to fix,
+            not something to work around."""
 
 # ===========================================================================
 # SUBJECT-LENS md-domain CONTRIBUTOR (deliverable of this phase, shared).
@@ -332,7 +383,9 @@ LEDGER_GOTCHAS = """
 PROFILE_GOTCHAS = """
         - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by @RENDER_TOOL@ (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
         - The `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
-        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), and the shipped default table."""
+        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, and what happens when an endpoint lane fails.
+        - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through @LANE_TOOL@ instead (step 6's model-kind rule). The shipped table is all aliases, so a review with no user or project override dispatches every lane as an Agent subagent.
+        - An endpoint lane that fails is a FAILED lane. There is no fallback to an Agent, by design: silently substituting one produces a review the user reads as having run on the model they configured, which is a false claim about the change's coverage. Report it and mark the coverage missing."""
 
 
 # ===========================================================================
@@ -477,6 +530,7 @@ technique_skill:
             uncertain. `profile` below is that resolved-table entry -- its `reviewers` and
             `validator_models` come from step 4, never hand-constructed.
 @DISPATCH@
+@MODEL_KIND@
 @MD_DOMAIN_LAUNCH@
             Then launch one subagent per (reviewer @X@ chunk) pair in parallel via
             a single message with R @X@ K Agent calls, where R = len(profile.reviewers) and
@@ -486,13 +540,17 @@ technique_skill:
             mapping restricted to those files. Reviewers not listed in the selected profile are
             NOT launched. If bundle.diff_chunks is empty (@RANGE_OR_CL@ has no diff content), skip
             step 6 and jump to step 9 with zero issues.
-          tool: Agent
-          expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) subagent).
+          tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to @LANE_TOOL@ instead)
+          expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
           action: |
             Launch one validator subagent per candidate issue, all in parallel via a single message.
             Use the selected profile's `validator_models[reason]` (from the RESOLVED table fetched
-            in step 4) to pick the model per issue.
+            in step 4) to pick the model per issue. The model-kind rule from step 6 applies here
+            too, but no validator lane is endpoint-eligible: the runner refuses one and
+            exits 2, because the validator is the control that suppresses a weak reviewer's noise
+            and must not be replaced in the same change as a reviewer. An endpoint id in
+            `validator_models` is therefore a configuration error to report, not a lane to run.
           tool: Agent
           expected: CONFIRMED or REJECTED per issue.
         - n: 8
@@ -500,6 +558,15 @@ technique_skill:
         - n: 9
           action: |
             Render the markdown review.
+            - When any lane FAILED (an endpoint-dispatched reviewer that exited non-zero in
+              step 6, or a lane refused as a configuration error), prepend a `## Lane failures`
+              section naming each failed lane, the model it was configured with, and the
+              runner's stderr reason. State plainly which files that lane would have covered
+              and that they did NOT receive its review. This section is not decoration: the
+              rest of the review looks identical whether a lane ran or not, so without it a
+              partial review is indistinguishable from a complete one. Never describe a
+              failed lane's files as clean, and never re-run the lane on a different model to
+              paper over the gap -- report it and let the user decide.
             - When `bundle.submit_gates` is non-empty, prepend a `## Submit checklist`
               section, each gate carrying its step-5 verdict and the evidence for it.
 @STEP9_TAIL@
@@ -575,6 +642,15 @@ technique_skill:
       subagent_type: general-purpose
       scope: obvious bugs visible in one chunk's diff alone
       input: "absolute path to ONE chunk .diff file, the @FILEPATHS@ of the files in that chunk, and the @CHANGE_DESC@"
+      canonical_prompt_note: |
+        This lane can run EITHER as an Agent subagent or, when its resolved `model` is an
+        endpoint id, as a plain completion (see the step-6 model-kind rule). Both paths must
+        review by the same standard, so the prompt below is the single source: it is rendered
+        here from bootstrap_lib.code_review.lane_prompts, which is also what the endpoint
+        runner sends. When launching this lane as an Agent, use it as the subagent's
+        instructions verbatim, then append the chunk path and file list. Do not paraphrase it.
+      canonical_prompt: |
+@REVIEWER_B_PROMPT@
       restrictions:
         - "Read the assigned chunk diff once. MUST NOT use Read for anything beyond that chunk."
         - "Only flag won't-compile, syntax/type errors, missing imports, unresolved references, definitely-wrong logic regardless of inputs."
@@ -1143,6 +1219,15 @@ FRAGMENTS = {
 # contributor regions, and the glyphs.
 _SHARED = {
     "DISPATCH": DISPATCH,
+    "MODEL_KIND": MODEL_KIND,
+    # The canonical reviewer_b prompt, rendered from the module the endpoint
+    # runner imports so the two dispatch paths cannot state different rules.
+    # Indented to sit under `canonical_prompt: |` in the subagents block.
+    "REVIEWER_B_PROMPT": "\n".join(
+        ("        " + line).rstrip()
+        for line in lane_prompts.REVIEWER_B_SYSTEM.splitlines()
+    ),
+    "LANE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
     "MD_DOMAIN_LAUNCH": MD_DOMAIN_LAUNCH,
     "MD_DOMAIN_REPORT": MD_DOMAIN_REPORT,
     "GENERATED_REPORT": GENERATED_REPORT,
@@ -1161,6 +1246,10 @@ _SHARED = {
 
 _SKILL_TOKEN_ORDER = [
     "DISPATCH",  # multi-line, contains no other @tokens@; substitute first
+    # Model-kind rule: shared body carrying a nested @LANE_TOOL@ -- substitute
+    # the block first, then that token resolves below.
+    "MODEL_KIND",
+    "REVIEWER_B_PROMPT",  # rendered prompt text, no nested @tokens@
     "MD_DOMAIN_LAUNCH", "MD_DOMAIN_REPORT",  # shared, no nested @tokens@
     "GENERATED_REPORT",  # shared, no nested @tokens@
     # Ledger regions: shared bodies that DO carry nested per-VCS @tokens@
@@ -1175,7 +1264,7 @@ _SKILL_TOKEN_ORDER = [
     "STEP1", "STEP2", "STEP3", "STEP9_TAIL", "STEP10",
     "CHECKLIST", "GOTCHAS", "NARRATION_TEMPLATES", "NARRATION_VARIABLES",
     "DIFF_OR_CL", "RANGE_OR_CL", "FILEPATHS", "CHANGE_DESC", "ISSUE_PATH",
-    "SG_DESC", "OUTPUT_FORMAT", "PREPARE_TOOL", "RENDER_TOOL", "LEDGER_RECORD_N", "BASELINE_DESC",
+    "SG_DESC", "OUTPUT_FORMAT", "PREPARE_TOOL", "RENDER_TOOL", "LANE_TOOL", "LEDGER_RECORD_N", "BASELINE_DESC",
     # glyph tokens last -- they appear inside already-substituted blocks too,
     # but those blocks embed the literal glyph (via f-strings), so the only
     # remaining @X@/@CHK@/@CRS@ markers are in the template body.
@@ -1688,6 +1777,67 @@ profiles:
     claude_md: sonnet
 ```
 
+## What a `model` value may name
+
+A `model` -- whether a reviewer's or a `validator_models` reason's -- is one of two things,
+and which one it is decides how that lane is dispatched:
+
+| Value | Dispatch |
+|---|---|
+| `sonnet`, `opus`, `haiku`, `fable` | an Agent subagent (the default) |
+| anything else | an llm-scripting-kit endpoint id, run through `@LANE_TOOL@` |
+
+The shipped table is entirely Agent aliases, so a review with no user or project override
+dispatches every lane as an Agent subagent. This is the whole override
+mechanism -- there is no separate field to set, because `model` was already a free-form
+string resolved through the three layers above.
+
+An endpoint id is resolved by llm-scripting-kit (`create_backend`), so it may name an
+OpenAI-compatible transport or a CLI harness -- whatever that plugin's configuration and
+your `~/.claude/config/model-endpoints.yaml` declare. Endpoint ids are private to your
+fleet; the example below uses a placeholder.
+
+### Which lanes may take an endpoint id
+
+Only `reviewer_b_diff_only_bugs` -- the set is `ENDPOINT_ELIGIBLE_LANES` in
+`bootstrap_lib.code_review.lane_prompts`. The runner refuses any other lane by name and exits
+2 (a configuration error), for two different reasons:
+
+- `reviewer_a_claude_md_compliance` and the validator are not qualified on a non-Claude
+  model. The validator especially: it is the control that suppresses a weak reviewer's
+  false positives, so replacing it in the same change as a reviewer would remove the
+  instrument the reviewer change has to be measured with.
+- `reviewer_c_introduced_code` reads files beyond its chunk, so it needs an agent loop. Should
+  it become eligible, the runner refuses to bind it to a plain-completion (`transport`)
+  endpoint rather than produce a reviewer that hallucinates context it cannot fetch.
+
+### When an endpoint lane fails
+
+It is reported as a failed lane and the review renders without it, with that lane's coverage
+marked missing in a `## Lane failures` section. There is deliberately no fallback to an Agent:
+a silent fallback would hand back a review you read as having run on the model you configured,
+which is a false claim about what actually reviewed your change. Causes are the endpoint being
+unreachable or halted, a chunk that does not fit its context window, or output that is not a
+valid issue array after one repair attempt -- the stderr line says which.
+
+### Worked endpoint override
+
+To run the diff-only bug reviewer on a local endpoint for every project, add to
+`~/.claude/config/review_profiles.yaml`:
+
+```yaml
+profiles:
+- id: code
+  reviewers:
+  - name: reviewer_b_diff_only_bugs
+    model: my-local-endpoint
+```
+
+`my-local-endpoint` is a placeholder: use an id your llm-scripting-kit configuration or
+`~/.claude/config/model-endpoints.yaml` actually declares. Everything else about the review
+is unchanged -- the other two reviewers and all validators stay on their Agent models, so
+the endpoint reviewer's findings still pass through the same validation.
+
 ## Worked override example
 
 To run the `code` profile's `reviewer_c_introduced_code` on Sonnet instead of Opus for one
@@ -1718,10 +1868,12 @@ CONFIGURATION_FRAGMENTS = {
     "git": {
         "SKILL_NAME": "git-code-review",
         "RENDER_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
+        "LANE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
     },
     "p4": {
         "SKILL_NAME": "p4-code-review",
         "RENDER_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
+        "LANE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
     },
 }
 

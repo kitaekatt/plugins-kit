@@ -1,6 +1,6 @@
 [project]
 name = "p4-kit"
-version = "0.29.1"
+version = "0.30.0"
 description = "Host-side dependencies for p4-kit plugin (importable package: p4kit_vcs)"
 requires-python = ">=3.12,!=3.14.*"
 
@@ -9,7 +9,12 @@ requires-python = ">=3.12,!=3.14.*"
 # PyYAML is needed because the review pipeline resolves a project's declared
 # plugin-write paths through bootstrap_lib.config_resolve, which reads the
 # project's config layer to honour a plugin_data_dir relocation.
-dependencies = ["pyyaml"]
+# openai is needed because a review lane may be routed to a configured
+# llm-scripting-kit endpoint (a non-Agent `model` in a review profile), and the
+# transport backend imports the SDK lazily. llm_scripting_kit itself arrives via
+# the shared-libs .pth, declared in bootstrap.json -- the SDK is the one piece it
+# does not bring with it.
+dependencies = ["pyyaml", "openai"]
 
 [build-system]
 requires = ["setuptools>=68"]
