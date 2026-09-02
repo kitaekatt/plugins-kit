@@ -246,13 +246,23 @@ def _blobs_along(path: str, commits: list[str]) -> list[str]:
             if len(fields) == 1]
 
 
-def _dev_state_ranks(path: str) -> dict[str, int]:
-    """How far back in dev's history each state of `path` sits; 0 is dev's tip.
+def _dev_introduction_order(path: str) -> dict[str, int]:
+    """When dev first INTRODUCED each state of `path`; 0 is the oldest.
 
-    The ranking, not mere membership, is what `_master_only_paths` needs: dev
-    holding a blob SOMEWHERE says nothing about whether dev has since moved
-    past it, and a master that sits on a state dev superseded may be sitting
-    there deliberately.
+    An ordering, not mere membership, is what `_master_only_paths` needs: dev
+    holding a blob SOMEWHERE says nothing about which of two blobs came later,
+    and a master that sits on content dev wrote EARLIER may be sitting there
+    deliberately.
+
+    The order is by INTRODUCTION -- dev's oldest commit holding the blob -- and
+    that choice is the load-bearing one. Dev can return to content it published
+    before (a revert on dev), and it then holds that old content at its TIP;
+    ordering by most recent appearance would call that content dev's newest
+    state and every state written between the two the older one, inverting the
+    real development sequence. Introducing content happens once: a later
+    re-appearance is dev going back to old content, not writing new content. So
+    "master's blob was introduced before this other one" stays well defined
+    however often either branch moves back and forth.
 
     The walk is the SIMPLIFIED one -- no `--full-history` -- and that is a
     judgement, not an omission. Simplification keeps the commits where the path
@@ -263,13 +273,15 @@ def _dev_state_ranks(path: str) -> dict[str, int]:
     operator should see.
     """
     commits = git("rev-list", DEV_BRANCH, "--", path, check=False).split()
-    ranks: dict[str, int] = {}
-    for rank, blob in enumerate(_blobs_along(path, commits)):
-        ranks.setdefault(blob, rank)
-    return ranks
+    order: dict[str, int] = {}
+    # rev-list is newest-first, so walk it backwards to number introductions
+    # from dev's oldest commit forward.
+    for rank, blob in enumerate(reversed(_blobs_along(path, commits))):
+        order.setdefault(blob, rank)
+    return order
 
 
-def _master_holds_discardable_state(path: str, base: str, master: str,
+def _master_holds_discardable_state(path: str, master_base: str, master: str,
                                     master_blob: str) -> bool:
     """True when publishing over master's state at `path` would discard it.
 
@@ -280,26 +292,60 @@ def _master_holds_discardable_state(path: str, base: str, master: str,
     content dev never picked up -- a hotfix written straight on master -- and
     losing it is the loss this guard exists to refuse.
 
-    And master must not have chosen it OVER a newer one. A state dev holds is
-    not automatically a state dev is ahead on: master can arrive at a dev state
-    by moving BACKWARDS to it. Reverting on master is the documented way to
-    retract a bad publish, and it leaves master on an earlier dev state
-    deliberately -- master held the newer one and gave it up. Publishing then
-    restores exactly what the revert withdrew. So master's state must be the
-    NEWEST dev state master has held since the base; anything older is a
-    master-side decision dev does not carry.
+    And master must not have chosen it OVER content dev wrote LATER. That is
+    the whole question, because the two cases that reach here look identical by
+    content: in both, master sits on a state dev's tip has moved past. What
+    separates them is WHICH BRANCH MOVED, and the observable difference is
+    whether master itself gave up newer content:
 
-    States master held that dev never had are ignored here. Master abandoned
-    them itself, and a publish cannot discard what master no longer holds.
+      * MASTER moved -- master held content dev introduced later and left it.
+        Reverting on master is the documented way to retract a bad publish, so
+        master is sitting on the earlier content deliberately, and a publish
+        restores exactly what the revert withdrew. REFUSE.
+      * DEV moved -- dev published one state, then another, then went back to
+        the first. Master was handed each in turn and never gave one up; the
+        state it holds is the newest content it was ever given. Dev superseded
+        that content itself, so a publish discards nothing master decided.
+        CLEAR.
+
+    So the test is: has master held, since the publish point, content dev
+    introduced later than what master holds now? States master held that dev
+    never had are ignored -- master abandoned those itself, and a publish
+    cannot discard what master no longer holds.
+
+    `master_base` must be a MASTER-side commit. A range measured from the dev
+    sha `range_base()` returns spans master's whole post-divergence history,
+    including projections older than the last publish point, which is a wider
+    claim than "what master has done since it was last given dev's tree".
+
+    The state master held AT `master_base` counts and has to be added by hand,
+    because `<master_base>..<master>` EXCLUDES that commit. It is the state the
+    release itself handed master, so a retraction of a just-published state is
+    a master-side move whose entire evidence sits on the boundary commit: the
+    revert is the only commit in the range, master's blob after it is the
+    earlier content, and without the boundary the guard would see master
+    holding old content having apparently given up nothing.
+
+    Known limit, stated because the guard has no way to see past it: if dev
+    reverts and an infra sync then carries that revert to master, master's own
+    move is backwards too and this refuses. That direction is the safe one --
+    the operator is shown a path both branches moved backwards on -- and no
+    signal in either history distinguishes it from a master-side retraction of
+    the same content.
     """
-    ranks = _dev_state_ranks(path)
-    current = ranks.get(master_blob)
+    order = _dev_introduction_order(path)
+    current = order.get(master_blob)
     if current is None:
         return True
-    held = git("rev-list", f"{base}..{master}", "--", path, check=False).split()
-    newest = min((ranks[blob] for blob in _blobs_along(path, held)
-                  if blob in ranks), default=current)
-    return current > newest
+    commits = git("rev-list", f"{master_base}..{master}", "--", path,
+                  check=False).split()
+    held = _blobs_along(path, commits)
+    boundary = blob_at(master_base, path)
+    if boundary is not None:
+        held.append(boundary)
+    newest = max((order[blob] for blob in held if blob in order),
+                 default=current)
+    return newest > current
 
 
 def range_base() -> str:
@@ -332,22 +378,41 @@ def range_base() -> str:
     than under-reports, which is the safe direction: a wider range costs noise,
     a narrower one silently drops a commit from the release.
     """
+    point = _recorded_publish_point()
+    return point[1] if point else f"{REMOTE}/{MASTER_BRANCH}"
+
+
+def _recorded_publish_point() -> tuple[str, str] | None:
+    """The last release master carries: (its own commit, the dev sha it shipped).
+
+    Both halves are needed and they are not interchangeable. The dev sha is the
+    boundary for `..dev` questions -- what has been written since the release.
+    The master commit is the boundary for master-side questions -- what master
+    has done since the release -- and only a MASTER commit can bound those: the
+    dev sha is not an ancestor of master, so `<dev sha>..<master>` reaches every
+    master commit back to the divergence, older projections included.
+
+    None when no usable trailer is found within the search window, or when the
+    ones found name objects this clone lacks or commits that are not ancestors
+    of dev (a rewritten dev). Callers then fall back to the merge base, which
+    over-reports rather than under-reports.
+    """
     master = f"{REMOTE}/{MASTER_BRANCH}"
     log = git("log", f"-{_RANGE_BASE_SEARCH_DEPTH}", "--format=%H%x1e%B%x1f",
               master, check=False)
     for entry in log.split("\x1f"):
         if not entry.strip():
             continue
-        _sha, _sep, message = entry.partition("\x1e")
+        commit, _sep, message = entry.partition("\x1e")
         for line in reversed(message.splitlines()):
             line = line.strip()
             if not line.startswith(PUBLISHED_FROM):
                 continue
             sha = line[len(PUBLISHED_FROM):].strip()
             if sha and _rc("merge-base", "--is-ancestor", sha, DEV_BRANCH) == 0:
-                return sha
+                return commit.strip(), sha
             break
-    return master
+    return None
 
 
 def _master_only_paths() -> list[str]:
@@ -374,28 +439,39 @@ def _master_only_paths() -> list[str]:
     and master's blob then differs from the base while being a state dev
     already holds, so comparing against the base alone reports a path dev is
     strictly ahead on. What settles it is
-    `_master_holds_discardable_state`: master's state must be one dev held AND
-    the newest such state master itself has held.
+    `_master_holds_discardable_state`: master's state must be one dev held, and
+    master must not have given up content dev introduced later.
 
     The prefilter still earns its place, but it answers only the paths master
     has left ALONE since the base: a blob equal to the base's is dev's own by
     construction (the base is an ancestor of dev), so an untouched path needs
     no history walk. A path master touched and returned to the base's blob is a
     revert like any other and goes to the full check.
+
+    The two boundaries are DIFFERENT COMMITS and must not be conflated. `base`
+    is a dev sha, which is what the base-blob comparison needs. Every question
+    about what MASTER has done is bounded by `master_base`, the projection
+    commit that shipped that dev sha: `<dev sha>..<master>` is not "master since
+    the release" at all, because the dev sha is not an ancestor of master, so
+    the range walks back to the divergence and sweeps in earlier projections --
+    which is exactly how a path master has not touched since the release reads
+    as one master moved.
     """
     dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
     master = f"{REMOTE}/{MASTER_BRANCH}"
-    base = range_base()
-    if base == master:
-        base = git("merge-base", master, DEV_BRANCH, check=False)
+    point = _recorded_publish_point()
+    if point:
+        master_base, base = point
+    else:
+        master_base = base = git("merge-base", master, DEV_BRANCH, check=False)
     if not base:
         return []
     stray = []
-    # Which paths master's own commits touched since the base. One walk
-    # answers it for every path, which is what lets the prefilter below
+    # Which paths master's own commits touched since the publish point. One
+    # walk answers it for every path, which is what lets the prefilter below
     # distinguish "master never moved this" from "master moved it back".
     master_touched = set(git("log", "--name-only", "--pretty=format:",
-                             f"{base}..{master}", "--",
+                             f"{master_base}..{master}", "--",
                              check=False).split("\n"))
     # The trailing "--" is required, not tidiness: this repo has a `dev/`
     # directory, so `git diff <ref> dev` is ambiguous between a revision and a
@@ -412,7 +488,7 @@ def _master_only_paths() -> list[str]:
         # a publish would undo, and there is no blob to look for. Report it and
         # let the operator judge, which is what the guard did before.
         if master_blob is None or _master_holds_discardable_state(
-                path, base, master, master_blob):
+                path, master_base, master, master_blob):
             stray.append(path)
     return stray
 

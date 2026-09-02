@@ -291,9 +291,16 @@ class TestMasterOnlyGuardAsksDevHistory:
     being a state dev already holds. Comparing against the base alone reports
     those paths as master-only and refuses a publish that would discard
     nothing. What separates the two cases is whether master's blob is a state
-    dev held AND the newest such state master itself has held -- mere presence
-    in dev's history clears a master-side revert, which sits on an earlier dev
-    state on purpose.
+    dev held AND one master did not choose over content dev wrote later -- mere
+    presence in dev's history clears a master-side revert, which sits on
+    earlier dev content on purpose.
+
+    The last pair of tests is the hard one, because by content the two are the
+    same picture: master sits on a state dev's tip has moved past. What
+    separates them is which branch moved. Master giving up later dev content is
+    a master-side decision a publish would undo; dev going back to content it
+    published before is dev superseding its own work, and master still holding
+    the later content it was handed loses nothing.
     """
 
     @staticmethod
@@ -434,6 +441,135 @@ class TestMasterOnlyGuardAsksDevHistory:
         self._on_master(repo, "shared.txt", "v1\n", "revert shared.txt to v1")
 
         assert publish._master_only_paths() == ["shared.txt"]
+
+    def test_a_retraction_of_a_just_published_state_is_master_only(self, repo):
+        """The retraction whose whole evidence sits on the publish point. Dev
+        ships A, ships B, and master is reverted to A with no infra sync in
+        between -- so the only master commit after the release is the revert
+        itself, and the state master gave up (B) is the one the release put
+        there.
+
+        A range measured from the projection EXCLUDES that commit, which would
+        leave master looking like it holds earlier content having given nothing
+        up, and clear a publish that restores exactly what the retraction
+        withdrew. The state master held at the publish point has to be counted
+        explicitly.
+        """
+        self._base(repo)
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt A")
+        self._project(repo)
+        (repo / "shared.txt").write_text("B\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt B")
+        self._project(repo)
+        self._on_master(repo, "shared.txt", "A\n", "revert shared.txt to A")
+
+        assert publish._master_only_paths() == ["shared.txt"]
+
+    def test_a_dev_side_revert_to_published_content_is_not_master_only(self, repo):
+        """The mirror image of the two tests above, and it must come out the
+        other way. Dev publishes A, publishes B, then reverts itself back to A.
+        Master's blob is B -- content dev's tip has moved past, exactly as in a
+        master-side revert -- but master never gave anything up: it was handed A
+        and then B, and B is the newest content it ever received. Dev superseded
+        B itself, so a publish discards no master-side decision.
+
+        This is the projection flavour, so it also pins the range boundary:
+        every master-side question must be measured from the projection commit.
+        Measured from the dev sha the trailer names, the range reaches back past
+        the divergence and sweeps in the earlier projection that carried A,
+        making a path master has not touched since the release read as one
+        master moved.
+        """
+        self._base(repo)
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt A")
+        self._project(repo)
+        (repo / "shared.txt").write_text("B\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt B")
+        self._project(repo)
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "revert shared.txt to A")
+        _git(repo, "push", "-q", "origin", "dev")
+
+        assert publish._master_only_paths() == []
+
+    def test_a_dev_side_revert_over_synced_content_is_not_master_only(self, repo):
+        """The same dev-side revert, with master receiving A and then B by infra
+        sync rather than by projection, so master has demonstrably TOUCHED the
+        path since the publish point and the full check has to settle it.
+
+        This pins the ordering: dev's states must be ranked by when dev
+        INTRODUCED them, not by where they last appear. Dev's revert puts A back
+        at dev's tip, so ranking by most recent appearance calls A dev's newest
+        content and B older than it -- and master holding B then reads as master
+        sitting on superseded content it chose, which is the master-side revert
+        verdict applied to the wrong branch's move.
+        """
+        self._base(repo)
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt A")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "A\n", "infra sync: carry A")
+        (repo / "shared.txt").write_text("B\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt B")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "B\n", "infra sync: carry B")
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "revert shared.txt to A")
+        _git(repo, "push", "-q", "origin", "dev")
+
+        assert publish._master_only_paths() == []
+
+    def test_a_retraction_stops_refusing_once_it_is_published(self, repo):
+        """A master-side revert is master-only until dev carries it, and no
+        longer. Dev ships A, an infra sync carries B, master is reverted to A --
+        the retraction the guard refuses on -- and the retraction is then
+        back-ported to dev and PUBLISHED, so master's A is what the release
+        itself put there. Dev moves on to C.
+
+        Master has done nothing since that release, so there is nothing left to
+        refuse. This pins the boundary for every master-side question: it is the
+        projection commit, not the dev sha the projection names. The dev sha is
+        not an ancestor of master, so a range starting there walks back past the
+        release and finds the withdrawn B again -- refusing the same retraction
+        forever, after it was resolved exactly as the documented procedure says.
+        """
+        self._base(repo)
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt A")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "A\n", "infra sync: carry A")
+        (repo / "shared.txt").write_text("B\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt B")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "B\n", "infra sync: carry B")
+        self._on_master(repo, "shared.txt", "A\n", "revert shared.txt to A")
+        # The retraction is back-ported to dev and published, which makes
+        # master's state the release's own output.
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "back-port the retraction to dev")
+        # The retraction ships as a release, which is what the recovery
+        # procedure prescribes; the bump is what gives that release a tree
+        # master does not already have.
+        _bump(repo, "pub-kit", "1.2.0", "pub-kit 1.2.0")
+        self._project(repo)
+        (repo / "shared.txt").write_text("C\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt C")
+
+        assert publish._master_only_paths() == []
 
 
 class TestDevOnlyExclusion:
