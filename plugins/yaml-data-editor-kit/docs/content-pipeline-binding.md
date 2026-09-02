@@ -2,8 +2,8 @@
 
 `dispatch/` is the only package that imports content-pipeline-kit. This
 document records WHAT it binds to and, more usefully, what it deliberately
-does not -- so the next person to open `dispatch/` does not re-litigate it or
-reimplement a concern that already ships.
+does not -- so a reader of `dispatch/` does not re-litigate it or reimplement
+a concern that already ships.
 
 The rule behind every line here: if a concern is about running MANY calls --
 cache, retry, cost, budget, leases, fencing -- it exists already. Bind to it.
@@ -23,6 +23,28 @@ Adopt directly, do not reimplement:
 - `freshness.hashing.content_hash` -- on the ANCHORED SLICE ONLY, to detect
   that data moved under a comment while its unit was in flight.
 
+## Dispatch implementation boundary
+
+Implemented behavior in `dispatch/`:
+
+- `request.py` loads the corpus path, comment-store path, optional selection,
+  driver name, and run directory from a YAML file with diagnostics.
+- `planner.py` implements `WorkUnitStrategy`. It groups comments on one
+  anchored record, gives each document-level comment its own unit, and puts
+  the anchored slice, comment text, and CPK content hash in the payload.
+- `run.py` executes the `inline` lane through CPK's execution store and inline
+  driver, then writes accepted text to `machine` in a file-backed attributed
+  store. A hash mismatch at result time is a stale rejection. Human slices
+  are preserved and never written by this lane.
+
+Deferred behavior:
+
+- agentic grouping of comments into larger tasks;
+- conversion of a worker ambiguity into a fail-to-anchored-question record;
+- `claude_bg` execution and its background-session machinery. The request
+  schema recognizes the driver so selection is explicit; dispatch raises a
+  clear `NotImplementedError` for it.
+
 Deliberately NOT adopted:
 
 - `freshness.classify`'s two-tier predicate wholesale. A comment IS an
@@ -31,27 +53,28 @@ Deliberately NOT adopted:
 - `roundtrip.questions` in its shipped direction. It is machine-asks-human;
   comments are human-asks-machine. Both directions do exist in the finished
   system -- a worker that runs `fail` on a genuine ambiguity becomes an
-  anchored question awaiting a ruling -- but that is a new path built on
+  anchored question awaiting a ruling -- but that is a path built on
   the comment model, not a reuse of `roundtrip`.
 
-Two extension points carry the new work: the planner implements CPK's
+Two extension points define the dispatch seam: the planner implements CPK's
 `pipeline.workunit.WorkUnitStrategy` protocol (`.units(store) ->
-list[WorkUnit]`) but agentically, where the shipped `FlatChunkStrategy` and
-`GraphWalkStrategy` are mechanical; and "do it inline vs spawn an agent" is
-selecting `execution/drivers/inline.py` or `claude_bg.py` per unit. Both
-lanes already ship.
+list[WorkUnit]`) with mechanical record grouping; agentic
+grouping is deferred. "Do it inline vs spawn an agent" is the driver choice.
+The `inline.py` lane is implemented; `claude_bg.py` selection is wired in the
+request schema and rejected by the runner until its background-session
+machinery is built.
 
 ## The two extension points
 
-These carry the new work; everything else above is adoption.
+These define the dispatch seam; everything else above is adoption.
 
 - **The planner implements `pipeline.workunit.WorkUnitStrategy`**
-  (`.units(store) -> list[WorkUnit]`) but AGENTICALLY, where the shipped
-  `FlatChunkStrategy` and `GraphWalkStrategy` are mechanical. Comment count is
-  not unit count.
+  (`.units(store) -> list[WorkUnit]`) with mechanical record grouping.
+  Comment count is not unit count. Agentic grouping is deferred.
 - **"Do it inline vs spawn an agent" is driver selection** --
-  `execution/drivers/inline.py` or `claude_bg.py`, per unit. Both lanes
-  already ship; nothing new is needed to choose between them.
+  `execution/drivers/inline.py` is implemented per unit. The `claude_bg`
+  choice is recognized and reports its deferred machinery through
+  `NotImplementedError`.
 
 ## Do not build a quota predictor
 

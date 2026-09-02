@@ -2,7 +2,25 @@
   "shared_libs": [
     { "name": "yaml_data_editor_kit", "src": "lib" }
   ],
+  "plugins": [
+    {
+      "ref": "plugins-kit:content-pipeline-kit",
+      "enabled": true,
+      "scope": "user",
+      "install": "auto"
+    }
+  ],
+  "shared_lib_imports": [
+    "content_pipeline",
+    "llm_scripting_kit",
+    "bootstrap_lib"
+  ],
   "venv": {
-    "check_imports": ["yaml", "yaml_data_editor_kit"]
+    "check_imports": [
+      "yaml",
+      "yaml_data_editor_kit",
+      "content_pipeline",
+      "openai"
+    ]
   }
 }

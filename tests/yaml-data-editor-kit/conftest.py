@@ -12,11 +12,17 @@ from typing import Callable
 import pytest
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "plugins" / "yaml-data-editor-kit"
+CPK_ROOT = Path(__file__).resolve().parents[2] / "plugins" / "content-pipeline-kit"
 
 # Make `lib/` importable as `yaml_data_editor_kit.*`.
 _LIB = str(PLUGIN_ROOT / "lib")
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
+
+# Make the sibling shared library importable for dispatch binding tests.
+_CPK_LIB = str(CPK_ROOT / "lib")
+if _CPK_LIB not in sys.path:
+    sys.path.insert(0, _CPK_LIB)
 
 
 # The signature of the `write` fixture, named once so every test module can

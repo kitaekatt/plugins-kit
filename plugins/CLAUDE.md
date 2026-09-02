@@ -162,6 +162,25 @@ Publish ordering: bootstrap must ship before or with llm-scripting-kit, or
 CodexCliBackend raises ModuleNotFoundError on every consumer -- shared libs
 resolve to the INSTALLED copy via .pth, not the dev tree.
 
+The `.pth` linker pins no version, so an owner's change reaches every
+consumer's venv on its next bootstrap pass, whether or not that consumer asked
+for it. A consumer that needs a symbol only a particular owner version added
+must not assume it is there: probe for it at import (a guarded `getattr` /
+`try`/`except ImportError`) and fail with a message naming the owning plugin
+and the version the symbol first shipped in, rather than crash on a raw
+`AttributeError` deep in a call path. job-kit's `select.py` is the worked
+example of this guard against `llm_scripting_kit.completion`.
+
+#### Who talks to an LLM, and through what
+
+| Plugin | Imports from llm-scripting-kit | Owns above the seam | Published |
+|---|---|---|---|
+| content-pipeline-kit | `llm_scripting_kit.completion` (lazy/optional, via `content_pipeline.llm.platform` and `.llm.backends`) | Batch-run policy: retry, cost accounting, budgeting, concurrency, caching | Yes |
+| job-kit | `llm_scripting_kit.completion` (`BackendSelection`, `Capabilities`, `adapter_capabilities`, `create_backend`, `match_capabilities`) | Deterministic endpoint selection from a job's preference order and requirements | Yes |
+| workflow-kit | `llm_scripting_kit.completion.OpenRouterBackend` (via `scripts/openrouter_run.py`) | The `openrouter` node strategy: one non-Claude model call per workflow node | Yes |
+| awesome-kit (orchestrate) | `llm_scripting_kit` (harness-model discovery, lazy/optional, via `orchestration_guidance.py`) | Backend/model advisory text for the orchestrate skill's routing decisions | Yes |
+| yaml-data-editor-kit | none directly -- reaches it via content-pipeline-kit's `content_pipeline` (the dispatch binding in `dispatch/`) | The editor's dispatch planner, not the completion transport | No (`published: false`) |
+
 `bootstrap_lib/codex.py` is stdlib-only because `bootstrap_lib` is imported from
 contexts where no third-party dependency is guaranteed to exist (SessionStart
 hooks, a plugin whose venv has not been provisioned yet), so nothing here may

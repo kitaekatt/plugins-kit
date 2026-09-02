@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Provides plugin-ecosystem, task, orchestrate, recap, and verbose-updates skills for plugin browsing, task tracking, delegated work, response distillation, and progress communication.",
-      "version": "0.42.1",
+      "version": "0.42.2",
       "author": {
         "name": "Christina"
       },
@@ -189,7 +189,7 @@
     {
       "name": "workflow-kit",
       "description": "Incremental, native-preserving improvements on the native Workflow tool: a declarative .workflow.yaml compiler plus node strategies (deterministic script + OpenRouter model calls) that run as cheap, context-light nodes via a file-passing contract. Experimental.",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "author": {
         "name": "Christina"
       },
@@ -215,7 +215,7 @@
     {
       "name": "job-kit",
       "description": "Durable sequential execution for heterogeneous agent jobs with advertisement-based endpoint selection and command-shaped acceptance.",
-      "version": "0.2.0",
+      "version": "0.2.2",
       "author": {
         "name": "Christina"
       },

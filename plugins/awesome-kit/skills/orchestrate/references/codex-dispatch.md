@@ -82,6 +82,14 @@ Every element is present because a probe showed its absence fails silently:
   `-o <FILE>`    Writes ONLY the agent's final message. This is the return
                  value; without it you are grepping a transcript that routinely
                  runs thousands of lines.
+                 Codex writes its final assistant message to the `-o` path
+                 WHEN THE TURN ENDS, overwriting whatever the unit itself wrote
+                 to that path during the run. Observed 2026-09-01 on
+                 codex-cli 0.150.1: a unit that wrote a 2,000-word report to
+                 the `-o` path had it replaced by a one-line "Done" summary.
+                 A brief that wants a deliverable file must name a SIBLING
+                 path for it and reserve `-o` for the sign-off; judge the run
+                 by the deliverable path, and treat `-o` as the summary only.
   `--skip-git-repo-check`  Allows running outside a git repo.
   `--color never`          Keeps ANSI escapes out of the captured log.
   `-` and stdin  The brief comes from a FILE on stdin, never a shell argument.

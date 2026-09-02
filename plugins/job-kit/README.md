@@ -39,7 +39,9 @@ jobs:
   advertised `Capabilities` -- see llm-scripting-kit's README, "Capability
   requirements" subsection, for the named convenience keys and dotted-path
   fallback. job-kit consumes that language and that advertisement; it does not
-  define its own.
+  define its own. Requires llm-scripting-kit >= 0.23.0, the version that added
+  `match_capabilities`; job_kit.select fails at import time with a named
+  remediation if an older llm-scripting-kit is linked in.
 - **Command-shaped acceptance.** A `contract` command must exit zero for the
   attempt to be accepted. Model output that does not satisfy it is a failure,
   not a result, so nothing downstream has to trust the text.

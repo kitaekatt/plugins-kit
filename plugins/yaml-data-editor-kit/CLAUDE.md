@@ -3,9 +3,9 @@
 ## What this plugin is
 
 **yaml-data-editor-kit** is a LIBRARY, not a tool. It ships a Python package
-(`lib/yaml_data_editor_kit/`) and, later, a web editor surface. It has no
-standalone skill or command surface of its own at this stage -- it exists to
-be consumed by a project through the packages below.
+(`lib/yaml_data_editor_kit/`); the web editor surface belongs to Databench
+(see `editor/` below). It has no standalone skill or command surface of its
+own -- it exists to be consumed by a project through the packages below.
 
 ## The profile boundary
 
@@ -60,15 +60,15 @@ framework dependency.
   persistence of comment records, and detecting that data moved underneath
   an anchor.
 - `dispatch/` -- the planner and the content-pipeline-kit binding. The
-  planner reads the UNRESOLVED comments across a corpus and shapes them
-  into work units: comment count is not unit count, and not agent count.
-  Each unit is then executed inline or delegated to an agent. This is the
-  only package that imports content-pipeline-kit -- and `bootstrap.json`
-  deliberately declares no dependency edge to it yet, because nothing here
-  imports it. The FIRST import of `content_pipeline` must add both
-  `shared_lib_imports: ["content_pipeline"]` and a `plugins[]` entry for
-  `plugins-kit:content-pipeline-kit` with `install: "auto"`; without them
-  the import resolves in development and fails on a consumer's machine.
+  request loader reads the file seam, and `CommentPlanner` groups open
+  comments mechanically into work units: comment count is not unit count,
+  and not agent count. The inline lane uses content-pipeline-kit execution
+  and writes accepted results to the `machine` slice of an attributed store;
+  stale anchored slices are rejected. The `claude_bg` name is accepted by the
+  request schema but its driver raises `NotImplementedError`. Agentic
+  grouping and the fail-to-anchored-question path are deferred. This is the
+  only package that imports content-pipeline-kit, and `bootstrap.json` carries
+  the matching plugin and shared-library declarations.
 - `editor/` -- the web surface, which this kit does NOT build. **Databench**
   owns it: a separate local web workbench that browses and edits a project's
   data files, including the safe-write path that puts bytes on disk. This kit

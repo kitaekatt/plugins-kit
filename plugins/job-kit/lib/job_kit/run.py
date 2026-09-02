@@ -10,6 +10,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Collection, Mapping, Optional, Sequence
 
+# select.py is the guarded front door for llm_scripting_kit.completion: it
+# probes for the symbols job-kit needs and raises SharedLibTooOldError with a
+# named remediation when the linked shared lib predates them. Import it first
+# so that guard fires before any unguarded import below can fail.
+from . import select as _select  # noqa: F401
+
 from llm_scripting_kit.completion import (
     AgentTimeoutError,
     BackendOptions,
