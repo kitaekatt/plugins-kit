@@ -24,7 +24,10 @@ start. Isolation defaults to true; set ``isolate: false`` when a job must run
 in its declared directory.
 
 The optional job ``options`` mapping accepts ``allowed_tools``,
-``disallowed_tools``, ``system_prompt_mode`` and ``extras``. The top-level
+``disallowed_tools``, ``effort``, ``system_prompt_mode``, ``max_tokens``,
+``temperature`` and ``extras``. ``max_tokens`` defaults to 4096 and
+``temperature`` to 0.3; ``effort`` is unset by default, which keeps whatever
+the endpoint registry entry carries. The top-level
 ``disallowed_tools`` job-file key sets a deny floor for every job in the run.
 The option defaults are ``None`` for both tool lists, ``"replace"`` for
 ``system_prompt_mode``, and an empty mapping for ``extras``. The floor defaults
