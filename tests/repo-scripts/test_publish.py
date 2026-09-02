@@ -283,6 +283,110 @@ class TestDirtyGateIgnoresDevOnlyPlugins:
         publish.preflight()  # must not raise
 
 
+class TestMasterOnlyGuardAsksDevHistory:
+    """Master receiving dev content after the base is not a reconcile.
+
+    An infra sync or a hand reconcile carries dev content to master without
+    recording a publish point, so master's blob differs from the base while
+    being a state dev already holds. Comparing against the base alone reports
+    those paths as master-only and refuses a publish that would discard
+    nothing. The question that separates the two cases is whether master's blob
+    appears anywhere in dev's history at that path.
+    """
+
+    @staticmethod
+    def _base(repo: Path) -> None:
+        """Put a projection on master so range_base has a boundary to find."""
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        _git(repo, "push", "-q", "origin", "dev")
+        shipped = _git(repo, "rev-parse", "dev")
+        _git(repo, "checkout", "-q", "--detach", "origin/master")
+        _git(repo, "read-tree", "--reset", "-u", "dev")
+        _git(repo, "commit", "-qm",
+             f"publish: projected\n\nPublished-From: {shipped}")
+        _git(repo, "push", "-q", "origin", "HEAD:refs/heads/master")
+        _git(repo, "checkout", "-q", "dev")
+
+    @staticmethod
+    def _on_master(repo: Path, path: str, text: str, subject: str) -> None:
+        _git(repo, "checkout", "-q", "master")
+        _git(repo, "reset", "-q", "--hard", "origin/master")
+        (repo / path).write_text(text)
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", subject)
+        _git(repo, "push", "-q", "origin", "master")
+        _git(repo, "checkout", "-q", "dev")
+        _git(repo, "fetch", "-q", "origin")
+
+    def test_content_dev_already_carried_is_not_master_only(self, repo):
+        """The false positive: an infra sync brings dev's content to master
+        AFTER the recorded base, and dev then moves further ahead. Master's
+        blob differs from the base's, but dev has held it, so a publish taking
+        dev's version discards nothing."""
+        self._base(repo)
+        (repo / "shared.txt").write_text("dev wrote this\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "dev wrote this\n",
+                        "infra sync: carry shared.txt to master")
+        (repo / "shared.txt").write_text("dev moved on\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "advance shared.txt")
+
+        assert publish._master_only_paths() == []
+
+    def test_content_dev_never_had_is_still_master_only(self, repo):
+        """The refusal the guard exists for must survive the fix: a hotfix
+        written straight on master has a blob dev's history never held."""
+        self._base(repo)
+        (repo / "shared.txt").write_text("dev wrote this\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "hotfixed straight on master\n",
+                        "hotfix shared.txt")
+
+        assert publish._master_only_paths() == ["shared.txt"]
+
+    def test_a_master_side_deletion_is_still_reported(self, repo):
+        """No blob to look for, and a publish would resurrect the file. The
+        operator judges it, as before the reachability check existed."""
+        self._base(repo)
+        _git(repo, "checkout", "-q", "master")
+        _git(repo, "reset", "-q", "--hard", "origin/master")
+        _git(repo, "rm", "-q", "dev/notes.md")
+        _git(repo, "commit", "-qm", "drop the scratch notes")
+        _git(repo, "push", "-q", "origin", "master")
+        _git(repo, "checkout", "-q", "dev")
+        _git(repo, "fetch", "-q", "origin")
+
+        assert publish._master_only_paths() == ["dev/notes.md"]
+
+    def test_content_dev_took_through_a_merge_counts(self, repo):
+        """Dev can reach a state through a merge rather than a direct commit.
+        The walk must follow the parent the merge actually took its content
+        from, or content dev demonstrably holds reads as master-only."""
+        self._base(repo)
+        _git(repo, "checkout", "-qb", "side")
+        (repo / "shared.txt").write_text("written on the side\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "side: add shared.txt")
+        _git(repo, "checkout", "-q", "dev")
+        _git(repo, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+        _git(repo, "branch", "-q", "-D", "side")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "written on the side\n",
+                        "infra sync: carry shared.txt to master")
+        # Dev must move on, or the path is identical on both sides and never
+        # reaches the guard at all.
+        (repo / "shared.txt").write_text("dev moved on\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "advance shared.txt")
+
+        assert publish._master_only_paths() == []
+
+
 class TestDevOnlyExclusion:
     """`published: false` is a standing decision that a plugin does not ship.
 

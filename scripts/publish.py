@@ -225,6 +225,35 @@ def blob_at(ref: str, path: str) -> str | None:
                check=False) or None
 
 
+def _blob_reached_by_dev(path: str, blob: str) -> bool:
+    """True when `path` has held `blob` somewhere in dev's history.
+
+    The question `_master_only_paths` actually needs answered. A blob dev has
+    carried at that path is content dev picked up, whatever route it took to
+    master afterwards, so a publish cannot discard it.
+
+    The walk is the SIMPLIFIED one -- no `--full-history` -- and that is a
+    judgement, not an omission. Simplification keeps the commits where the path
+    changed along the history dev's tree actually descends from, which is the
+    set of states dev held. `--full-history` would additionally reach content
+    on a side branch a merge RESOLVED AWAY, and dev rejecting a state is
+    precisely the case where master still carrying it is a real loss the
+    operator should see.
+
+    One `cat-file --batch-check` resolves the whole commit list, so the cost is
+    two processes per path rather than one per commit.
+    """
+    commits = git("rev-list", DEV_BRANCH, "--", path, check=False).split()
+    if not commits:
+        return False
+    probe = subprocess.run(
+        ["git", "cat-file", "--batch-check=%(objectname)"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+        input="".join(f"{sha}:{path}\n" for sha in commits))
+    # Missing entries print "<input> missing", which cannot collide with a sha.
+    return blob in probe.stdout.split()
+
+
 def range_base() -> str:
     """The commit `..dev` should be measured from.
 
@@ -291,6 +320,16 @@ def _master_only_paths() -> list[str]:
     master-side change. Measuring from the recorded publish point instead
     compares master to the dev tree it was actually built from. The merge base
     is only the fallback, for a master that never carried a projection.
+
+    The base comparison is a PREFILTER, not the verdict. Master legitimately
+    receives dev content after the base -- an infra sync, a hand reconcile --
+    and master's blob then differs from the base while being a state dev
+    already holds, so comparing against the base alone reports a path dev is
+    strictly ahead on. What settles it is `_blob_reached_by_dev`: content dev
+    never picked up is content whose blob appears nowhere in dev's history at
+    that path. The prefilter still earns its place because a blob equal to the
+    base's is reachable by construction (the base is an ancestor of dev), so
+    every path master has not touched is answered without a history walk.
     """
     dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
     master = f"{REMOTE}/{MASTER_BRANCH}"
@@ -307,7 +346,14 @@ def _master_only_paths() -> list[str]:
         path = path.strip()
         if not path or path in GENERATED_PATHS or _dev_only_owned(path, dev_only):
             continue
-        if blob_at(master, path) != blob_at(base, path):
+        master_blob = blob_at(master, path)
+        if master_blob == blob_at(base, path):
+            continue
+        # A path master no longer has holds no content to discard by this
+        # test, but master DELETING it since the base is a master-side change
+        # a publish would undo, and there is no blob to look for. Report it and
+        # let the operator judge, which is what the guard did before.
+        if master_blob is None or not _blob_reached_by_dev(path, master_blob):
             stray.append(path)
     return stray
 
