@@ -29,6 +29,7 @@ from .model import (
     RunState,
     TERMINAL_STATES,
     Usage,
+    validate_max_parallel,
 )
 
 
@@ -323,6 +324,22 @@ class JobStore:
             raise StoreNotFoundError(self.db_path)
         self._migrate()
 
+    def scale_busy_timeout(self, max_parallel: int) -> int:
+        """Raise the per-connection busy timeout to cover a wider worker pool.
+
+        Every write verb takes the write lock upfront (``BEGIN IMMEDIATE``) and
+        holds it for one short statement group, so ``max_parallel`` writers
+        queue rather than collide. The wait a writer can face is therefore
+        linear in the pool width, and the default budget is scaled by it so a
+        wide pool cannot exhaust a bound sized for one worker. The timeout is
+        only ever raised, never lowered below an explicit caller value.
+        """
+        bound = validate_max_parallel(max_parallel)
+        scaled = DEFAULT_BUSY_TIMEOUT_MS * bound
+        if scaled > self.busy_timeout_ms:
+            self.busy_timeout_ms = scaled
+        return self.busy_timeout_ms
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         """Open a connection and apply all per-connection pragmas."""
@@ -471,8 +488,7 @@ class JobStore:
         created_at: Optional[float] = None,
     ) -> RunRecord:
         """Create a run and register all job definitions in one transaction."""
-        if max_parallel != 1:
-            raise ValueError("job-kit job-core supports max_parallel=1 only")
+        bound = validate_max_parallel(max_parallel)
         if not run_id.strip():
             raise ValueError("run_id must not be empty")
         if disallowed_tools is not None and not isinstance(disallowed_tools, str):
@@ -504,7 +520,7 @@ class JobStore:
                     run_id,
                     when,
                     str(path) if path is not None else None,
-                    max_parallel,
+                    bound,
                     str(root) if root is not None else None,
                     _json_or_none(base_refs),
                     disallowed_tools,

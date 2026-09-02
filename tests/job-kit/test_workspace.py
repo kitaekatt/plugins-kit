@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -26,6 +27,7 @@ from job_kit.workspace import (
     WORKSPACE_REASON_NONE,
     WorkspaceCreationError,
     WorkspaceDetectionError,
+    WorkspaceManager,
     gc_workspaces,
 )
 
@@ -1041,3 +1043,39 @@ def test_gc_accepted_only_and_cli_report(tmp_path: Path, capsys: Any) -> None:
     assert len(report.removed) == 1
     assert report.removed[0].job_id == "rejected"
     assert not rejected_workspace.exists()
+
+
+def test_concurrent_prepare_in_one_repository_creates_every_worktree(
+    tmp_path: Path,
+) -> None:
+    """Serialised `git worktree add` lets one repository serve many workers."""
+    repository, _ = _git_repository(tmp_path / "repo")
+    jobs = [_job(repository, f"job-{index}", ("true",)) for index in range(6)]
+    manager = WorkspaceManager(tmp_path / "workspaces", jobs)
+    start = threading.Barrier(len(jobs))
+    resolutions: list[object] = []
+    errors: list[BaseException] = []
+    guard = threading.Lock()
+
+    def prepare(job: Job) -> None:
+        """Prepare one attempt worktree simultaneously with every other job."""
+        try:
+            start.wait(timeout=30)
+            resolution = manager.prepare(job, 1)
+            with guard:
+                resolutions.append(resolution)
+        except BaseException as exc:  # pragma: no cover - reported by the assert
+            with guard:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=prepare, args=(job,)) for job in jobs]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    assert [str(error) for error in errors] == []
+    assert len(resolutions) == len(jobs)
+    paths = {resolution.path for resolution in resolutions}
+    assert len(paths) == len(jobs)
+    assert all(path is not None and path.is_dir() for path in paths)

@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from job_kit.model import Acceptance, Attempt, AttemptError, Contract, Job, JobState, Prompt, Usage
-from job_kit.store import JobStore, StoreNotFoundError, TerminalStateError
+from job_kit.store import (
+    DEFAULT_BUSY_TIMEOUT_MS,
+    JobStore,
+    StoreNotFoundError,
+    TerminalStateError,
+)
 
 
 def _job(directory: Path, job_id: str = "job") -> Job:
@@ -258,3 +264,124 @@ def test_effective_directory_is_persisted_for_resume(
 
     assert job.directory == original_directory
     assert stored_job.declared_directory == original_directory
+
+
+def test_create_run_accepts_a_worker_pool_bound_and_refuses_a_non_positive_one(
+    tmp_path: Path,
+) -> None:
+    """The ledger records a bound above one and still validates the value."""
+    store = JobStore(tmp_path / "bound.sqlite3")
+
+    record = store.create_run("wide", [_job(tmp_path)], max_parallel=6)
+    assert record.max_parallel == 6
+    assert store.get_run("wide").max_parallel == 6
+
+    for value in (0, -2, True, 1.5, "3"):
+        with pytest.raises(ValueError, match="max_parallel must be a positive integer"):
+            store.create_run(f"bad-{value!r}", [_job(tmp_path)], max_parallel=value)
+
+
+def test_scale_busy_timeout_only_ever_raises_the_budget(tmp_path: Path) -> None:
+    """A wider pool gets proportionally more wait budget, never less."""
+    store = JobStore(tmp_path / "timeout.sqlite3")
+    assert store.busy_timeout_ms == DEFAULT_BUSY_TIMEOUT_MS
+
+    assert store.scale_busy_timeout(4) == DEFAULT_BUSY_TIMEOUT_MS * 4
+    assert store.scale_busy_timeout(1) == DEFAULT_BUSY_TIMEOUT_MS * 4
+
+
+def test_concurrent_append_attempt_keeps_per_job_numbering(tmp_path: Path) -> None:
+    """Parallel writers over distinct jobs never collide on attempt numbers."""
+    store = JobStore(tmp_path / "concurrent.sqlite3")
+    job_ids = [f"job-{index}" for index in range(8)]
+    store.create_run(
+        "concurrent",
+        [_job(tmp_path, job_id) for job_id in job_ids],
+        max_parallel=len(job_ids),
+    )
+    store.scale_busy_timeout(len(job_ids))
+    start = threading.Barrier(len(job_ids))
+    failures: list[BaseException] = []
+
+    def append(job_id: str) -> None:
+        """Append two attempts for one job, starting with every other writer."""
+        try:
+            start.wait(timeout=30)
+            for attempt_no in (1, 2):
+                store.append_attempt(
+                    replace(
+                        _attempt("concurrent", job_id, tmp_path),
+                        attempt_no=attempt_no,
+                        acceptance=None,
+                    )
+                )
+        except BaseException as exc:  # pragma: no cover - reported by the assert
+            failures.append(exc)
+
+    threads = [threading.Thread(target=append, args=(job_id,)) for job_id in job_ids]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    assert failures == []
+    for job_id in job_ids:
+        numbers = [attempt.attempt_no for attempt in store.list_attempts("concurrent", job_id)]
+        assert numbers == [1, 2]
+
+
+def test_concurrent_writers_do_not_report_a_locked_database(tmp_path: Path) -> None:
+    """Upfront write locking plus the busy timeout keeps every writer serving."""
+    store = JobStore(tmp_path / "locking.sqlite3")
+    job_ids = [f"job-{index}" for index in range(12)]
+    store.create_run(
+        "locking", [_job(tmp_path, job_id) for job_id in job_ids], max_parallel=12
+    )
+    store.scale_busy_timeout(12)
+    start = threading.Barrier(len(job_ids))
+    errors: list[BaseException] = []
+
+    def write(job_id: str) -> None:
+        """Take the write lock repeatedly against every other writer."""
+        try:
+            start.wait(timeout=30)
+            for _ in range(10):
+                store.mark_running("locking", job_id)
+        except BaseException as exc:  # pragma: no cover - reported by the assert
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write, args=(job_id,)) for job_id in job_ids]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    assert [str(error) for error in errors] == []
+
+
+def test_concurrent_store_construction_migrates_once(tmp_path: Path) -> None:
+    """Many simultaneous JobStore constructions converge on one schema."""
+    db_path = tmp_path / "migrate.sqlite3"
+    start = threading.Barrier(8)
+    stores: list[JobStore] = []
+    errors: list[BaseException] = []
+
+    def construct() -> None:
+        """Open the same fresh ledger as every other thread at once."""
+        try:
+            start.wait(timeout=30)
+            stores.append(JobStore(db_path))
+        except BaseException as exc:  # pragma: no cover - reported by the assert
+            errors.append(exc)
+
+    threads = [threading.Thread(target=construct) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    assert [str(error) for error in errors] == []
+    assert len(stores) == 8
+    with sqlite3.connect(str(db_path)) as connection:
+        versions = connection.execute("SELECT version FROM schema_version").fetchall()
+    assert len(versions) == 1

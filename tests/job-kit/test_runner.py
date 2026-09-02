@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
@@ -22,6 +23,7 @@ from llm_scripting_kit.completion import (
     LLMResponse,
 )
 from llm_scripting_kit.completion.adapter_capabilities import CODEX_CAPABILITIES
+from llm_scripting_kit.models import EndpointResolveError
 
 from job_kit.model import Contract, ContractContext, Job, JobState, Prompt
 from job_kit.run import (
@@ -1043,3 +1045,367 @@ def test_two_job_run_resumes_after_interruption_before_next_seam_call(tmp_path: 
     assert [job.state for job in resumed.jobs] == [JobState.ACCEPTED, JobState.ACCEPTED]
     assert [attempt.job_id for attempt in resumed.attempts] == ["first", "second"]
     assert len(backend.calls) == 2
+
+
+class OrderBackend(FakeBackend):
+    """A fake backend that records the order and overlap of its seam calls."""
+
+    def __init__(self, barrier: threading.Barrier | None = None) -> None:
+        super().__init__()
+        self.barrier = barrier
+        self.order: list[str] = []
+        self.active = 0
+        self.peak = 0
+        self.guard = threading.Lock()
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        model: str,
+        options: object = None,
+    ) -> LLMResponse:
+        """Record entry, rendezvous when configured, and record the peak width."""
+        with self.guard:
+            self.calls.append((system, user, model, options))
+            self.order.append(user)
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        try:
+            if self.barrier is not None:
+                self.barrier.wait(timeout=30)
+        finally:
+            with self.guard:
+                self.active -= 1
+        return self.response
+
+
+class PerJobBackend(FakeBackend):
+    """A fake backend whose per-call behaviour is chosen by the job prompt."""
+
+    def __init__(self, behaviours: dict[str, Callable[[], object]]) -> None:
+        super().__init__()
+        self.behaviours = behaviours
+        self.guard = threading.Lock()
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        model: str,
+        options: object = None,
+    ) -> LLMResponse:
+        """Run the behaviour registered for this job and return or raise it."""
+        with self.guard:
+            self.calls.append((system, user, model, options))
+        behaviour = self.behaviours.get(user)
+        outcome = behaviour() if behaviour is not None else None
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return self.response
+
+
+def _endpoint_factory(
+    backends: dict[str, FakeBackend], missing: Sequence[str] = ()
+) -> Callable[..., BackendSelection]:
+    """Return a factory that serves one backend per endpoint name."""
+    def factory(endpoint: str, **_: object) -> BackendSelection:
+        if endpoint in missing:
+            raise EndpointResolveError(f"unknown endpoint: {endpoint}")
+        return BackendSelection(endpoint, "fake", backends[endpoint], "fake-model")
+
+    return factory
+
+
+def _pool_job(
+    tmp_path: Path,
+    job_id: str,
+    *,
+    endpoints: tuple[str, ...] = ("fake-endpoint",),
+    exit_code: int = 0,
+    max_attempts: int = 1,
+) -> Job:
+    """Build a fake-backed job for worker-pool tests."""
+    code = f"import sys; sys.exit({exit_code})"
+    return Job(
+        id=job_id,
+        prompt=Prompt(system="instructions", user=job_id),
+        endpoint_preference=endpoints,
+        directory=tmp_path,
+        contract=Contract(command=(sys.executable, "-c", code), directory=tmp_path),
+        max_attempts=max_attempts,
+    )
+
+
+def test_sequential_run_preserves_declaration_order(tmp_path: Path) -> None:
+    """max_parallel 1 still drives jobs one at a time in declaration order."""
+    backend = OrderBackend()
+    jobs = [_pool_job(tmp_path, f"job-{index}") for index in range(5)]
+
+    snapshot = run_jobs(
+        jobs,
+        tmp_path / "ordered.sqlite3",
+        run_id="ordered",
+        max_parallel=1,
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.order == [job.id for job in jobs]
+    assert backend.peak == 1
+    assert [job.state for job in snapshot.jobs] == [JobState.ACCEPTED] * len(jobs)
+
+
+def test_two_jobs_overlap_at_max_parallel_two(tmp_path: Path) -> None:
+    """The run only completes because both seam calls are in flight together."""
+    backend = OrderBackend(barrier=threading.Barrier(2))
+    jobs = [_pool_job(tmp_path, "first"), _pool_job(tmp_path, "second")]
+
+    snapshot = run_jobs(
+        jobs,
+        tmp_path / "overlap.sqlite3",
+        run_id="overlap",
+        max_parallel=2,
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.peak == 2
+    assert sorted(job.state for job in snapshot.jobs) == [
+        JobState.ACCEPTED,
+        JobState.ACCEPTED,
+    ]
+
+
+def test_pool_width_never_exceeds_the_declared_bound(tmp_path: Path) -> None:
+    """Six jobs through a pool of two overlap in pairs and never wider."""
+    backend = OrderBackend(barrier=threading.Barrier(2))
+    jobs = [_pool_job(tmp_path, f"job-{index}") for index in range(6)]
+
+    snapshot = run_jobs(
+        jobs,
+        tmp_path / "bounded.sqlite3",
+        run_id="bounded",
+        max_parallel=2,
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.peak == 2
+    assert len(snapshot.attempts) == len(jobs)
+
+
+def test_a_halt_narrows_endpoints_for_later_dispatches_without_cancelling(
+    tmp_path: Path,
+) -> None:
+    """A halt excludes an endpoint at dispatch time and cancels nothing running."""
+    released = threading.Event()
+
+    def halting_first() -> BaseException:
+        """Halt the first job so its endpoint is excluded from later ones."""
+        return HaltError(HALT_RATE_LIMIT, "rate limited")
+
+    def hold_until_third_dispatch() -> None:
+        """Occupy the second pool slot until the third job has been dispatched."""
+        released.wait(timeout=30)
+        return None
+
+    def release() -> None:
+        """Report that the third job reached a backend."""
+        released.set()
+        return None
+
+    halting = PerJobBackend(
+        {
+            "first": halting_first,
+            "second": hold_until_third_dispatch,
+            "third": release,
+        }
+    )
+    backup = PerJobBackend({"third": release})
+    factory = _endpoint_factory({"halting": halting, "backup": backup})
+    jobs = [
+        _pool_job(tmp_path, "first", endpoints=("halting", "backup")),
+        _pool_job(tmp_path, "second", endpoints=("halting", "backup")),
+        _pool_job(tmp_path, "third", endpoints=("halting", "backup")),
+    ]
+
+    snapshot = run_jobs(
+        jobs,
+        tmp_path / "halt.sqlite3",
+        run_id="halt",
+        max_parallel=2,
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    by_job = {attempt.job_id: attempt for attempt in snapshot.attempts}
+    states = {job.id: job.state for job in snapshot.jobs}
+    assert by_job["first"].halt_kind == HALT_RATE_LIMIT
+    assert states["first"] is JobState.HALTED
+    # The in-flight attempt was never cancelled: it kept the halted endpoint it
+    # was dispatched with and its row is recorded truthfully.
+    assert by_job["second"].endpoint == "halting"
+    assert states["second"] is JobState.ACCEPTED
+    # The job dispatched after the halt saw the narrowed preference order.
+    assert by_job["third"].endpoint == "backup"
+    assert states["third"] is JobState.ACCEPTED
+
+
+def test_an_unexpected_worker_exception_aborts_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A future's unexpected exception is re-raised, never silently swallowed."""
+    backend = OrderBackend()
+    original = run_module.run_job
+
+    def failing_run_job(store: object, run_id: str, job: Job, **kwargs: object):
+        """Fail one job the way an unforeseen runner defect would."""
+        if job.id == "boom":
+            raise RuntimeError("worker defect")
+        return original(store, run_id, job, **kwargs)
+
+    monkeypatch.setattr(run_module, "run_job", failing_run_job)
+    jobs = [
+        _pool_job(tmp_path, "boom"),
+        _pool_job(tmp_path, "other"),
+    ]
+
+    with pytest.raises(RuntimeError, match="worker defect"):
+        run_jobs(
+            jobs,
+            tmp_path / "abort.sqlite3",
+            run_id="abort",
+            max_parallel=2,
+            capabilities_provider=_advertisement,
+            backend_factory=_factory_for(backend),
+        )
+
+
+def test_a_selection_error_in_one_worker_does_not_stop_the_others(
+    tmp_path: Path,
+) -> None:
+    """An unroutable job is terminalized while its peers keep running."""
+    backend = OrderBackend()
+    factory = _endpoint_factory(
+        {"fake-endpoint": backend}, missing=("missing-endpoint",)
+    )
+    jobs = [
+        _pool_job(tmp_path, "unroutable", endpoints=("missing-endpoint",)),
+        _pool_job(tmp_path, "first"),
+        _pool_job(tmp_path, "second"),
+    ]
+
+    snapshot = run_jobs(
+        jobs,
+        tmp_path / "selection.sqlite3",
+        run_id="selection",
+        max_parallel=3,
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    states = {job.id: job.state for job in snapshot.jobs}
+    assert states["unroutable"] is JobState.UNROUTABLE
+    assert states["first"] is JobState.ACCEPTED
+    assert states["second"] is JobState.ACCEPTED
+
+
+def test_resume_uses_the_ledger_pool_width(tmp_path: Path) -> None:
+    """A resumed run reads max_parallel off its persisted record."""
+    store = JobStore(tmp_path / "resume.sqlite3")
+    jobs = [_pool_job(tmp_path, "first"), _pool_job(tmp_path, "second")]
+    store.create_run("resume", jobs, max_parallel=2, workspace_root=tmp_path / "ws")
+    backend = OrderBackend(barrier=threading.Barrier(2))
+
+    snapshot = resume_run(
+        "resume",
+        store,
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.peak == 2
+    assert snapshot.run.max_parallel == 2
+    assert sorted(job.state for job in snapshot.jobs) == [
+        JobState.ACCEPTED,
+        JobState.ACCEPTED,
+    ]
+
+
+def test_a_resume_pool_override_is_not_written_back(tmp_path: Path) -> None:
+    """An override widens one pass without rewriting the ledger's record."""
+    store = JobStore(tmp_path / "override.sqlite3")
+    jobs = [_pool_job(tmp_path, "first"), _pool_job(tmp_path, "second")]
+    store.create_run("override", jobs, max_parallel=1, workspace_root=tmp_path / "ws")
+    backend = OrderBackend(barrier=threading.Barrier(2))
+
+    snapshot = resume_run(
+        "override",
+        store,
+        max_parallel=2,
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.peak == 2
+    assert snapshot.run.max_parallel == 1
+    assert store.get_run("override").max_parallel == 1
+
+
+def test_attempts_of_one_job_never_overlap_in_a_pool(tmp_path: Path) -> None:
+    """Parallelism is across jobs only, so a retry waits for its predecessor."""
+    barrier = threading.Barrier(2)
+    guard = threading.Lock()
+    active: set[str] = set()
+    overlaps: list[str] = []
+
+    class AttemptBackend(FakeBackend):
+        """A backend that reports any two concurrent attempts of one job."""
+
+        def complete(
+            self,
+            system: str,
+            user: str,
+            *,
+            model: str,
+            options: object = None,
+        ) -> LLMResponse:
+            """Rendezvous across jobs while asserting per-job exclusivity."""
+            with guard:
+                self.calls.append((system, user, model, options))
+                if user in active:
+                    overlaps.append(user)
+                active.add(user)
+            try:
+                barrier.wait(timeout=30)
+            finally:
+                with guard:
+                    active.discard(user)
+            return self.response
+
+    jobs = [
+        _pool_job(tmp_path, "first", exit_code=1, max_attempts=2),
+        _pool_job(tmp_path, "second", exit_code=1, max_attempts=2),
+    ]
+
+    snapshot = run_jobs(
+        jobs,
+        tmp_path / "attempts.sqlite3",
+        run_id="attempts",
+        max_parallel=2,
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(AttemptBackend()),
+    )
+
+    assert overlaps == []
+    for job_id in ("first", "second"):
+        numbers = [
+            attempt.attempt_no
+            for attempt in snapshot.attempts
+            if attempt.job_id == job_id
+        ]
+        assert numbers == [1, 2]
+    assert {job.state for job in snapshot.jobs} == {JobState.REJECTED}

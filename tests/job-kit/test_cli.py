@@ -12,8 +12,21 @@ from typing import Any, Sequence
 
 import pytest
 
+from llm_scripting_kit.completion import BackendSelection, Capabilities, LLMResponse
+
 from job_kit import cli
-from job_kit.model import Contract, Job, JobRecord, JobState, Prompt, RunRecord, RunSnapshot, RunState
+from job_kit.model import (
+    Contract,
+    Job,
+    JobRecord,
+    JobState,
+    Prompt,
+    RunRecord,
+    RunSnapshot,
+    RunState,
+    load_job_file,
+)
+import job_kit.run as run_module
 from job_kit.store import JobStore
 
 
@@ -265,13 +278,18 @@ def test_run_and_resume_cli_delegate_to_runner(
     calls: list[tuple[str, Path]] = []
 
     def fake_run(
-        jobs_path: Path, *, store_path: Path, timeout_s: float, run_id: str | None
+        jobs_path: Path,
+        *,
+        store_path: Path,
+        timeout_s: float,
+        run_id: str | None,
+        max_parallel: int | None = None,
     ) -> RunSnapshot:
         calls.append(("run", store_path))
         return snapshot
 
     def fake_resume(
-        run_id: str, store: Path, *, timeout_s: float
+        run_id: str, store: Path, *, timeout_s: float, max_parallel: int | None = None
     ) -> RunSnapshot:
         calls.append(("resume", store))
         return snapshot
@@ -298,7 +316,12 @@ def test_cli_exit_codes_distinguish_job_outcome_from_runner_failure(
     store_path = tmp_path / "exit-codes.sqlite3"
 
     def fake_run(
-        jobs_path: Path, *, store_path: Path, timeout_s: float, run_id: str | None
+        jobs_path: Path,
+        *,
+        store_path: Path,
+        timeout_s: float,
+        run_id: str | None,
+        max_parallel: int | None = None,
     ) -> RunSnapshot:
         return current
 
@@ -311,7 +334,12 @@ def test_cli_exit_codes_distinguish_job_outcome_from_runner_failure(
     capsys.readouterr()
 
     def broken_run(
-        jobs_path: Path, *, store_path: Path, timeout_s: float, run_id: str | None
+        jobs_path: Path,
+        *,
+        store_path: Path,
+        timeout_s: float,
+        run_id: str | None,
+        max_parallel: int | None = None,
     ) -> RunSnapshot:
         raise RuntimeError("runner boom")
 
@@ -328,7 +356,12 @@ def test_run_cli_preassigns_a_validated_run_id(
     seen: list[str | None] = []
 
     def fake_run(
-        jobs_path: Path, *, store_path: Path, timeout_s: float, run_id: str | None
+        jobs_path: Path,
+        *,
+        store_path: Path,
+        timeout_s: float,
+        run_id: str | None,
+        max_parallel: int | None = None,
     ) -> RunSnapshot:
         seen.append(run_id)
         return snapshot
@@ -344,3 +377,128 @@ def test_run_cli_preassigns_a_validated_run_id(
         cli.main(["run", "jobs.yaml", "--store", store, "--run-id", "bad id/with slash"])
     assert exit_info.value.code == cli.EXIT_USAGE
     assert "run id must be" in capsys.readouterr().err
+
+
+class _CliBackend:
+    """A hermetic backend so CLI verbs can run without a model transport."""
+
+    name = "fake"
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def complete(
+        self, system: str, user: str, *, model: str, options: Any = None
+    ) -> LLMResponse:
+        """Return one fixed completion and record the job it served."""
+        self.calls.append(user)
+        return LLMResponse(text="answer", model="fake-model")
+
+    def classify_halt(self, exc: BaseException) -> None:
+        """Never classify a halt in CLI transport tests."""
+        return None
+
+
+def _install_fake_transport(monkeypatch: Any) -> _CliBackend:
+    """Point the runner's default selection at a hermetic backend."""
+    backend = _CliBackend()
+    monkeypatch.setattr(
+        run_module, "adapter_capabilities", lambda: {"fake": Capabilities(adapter="fake")}
+    )
+    monkeypatch.setattr(
+        run_module,
+        "create_backend",
+        lambda endpoint, **_: BackendSelection(endpoint, "fake", backend, "fake-model"),
+    )
+    return backend
+
+
+def _jobs_file(tmp_path: Path, job_ids: Sequence[str]) -> Path:
+    """Write a jobs file whose contracts accept without a model transport."""
+    entries = "".join(
+        f"""  - id: {job_id}
+    prompt:
+      user: {job_id}
+    endpoint_preference: [fake-endpoint]
+    directory: {tmp_path}
+    contract:
+      command: [{sys.executable}, -c, "pass"]
+      directory: {tmp_path}
+"""
+        for job_id in job_ids
+    )
+    jobs_path = tmp_path / "jobs.yaml"
+    jobs_path.write_text(
+        f"max_parallel: 1\nworkspace_root: {tmp_path / 'ws'}\njobs:\n{entries}",
+        encoding="utf-8",
+    )
+    return jobs_path
+
+
+def test_run_cli_max_parallel_overrides_the_file_and_is_persisted(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    """The run override wins over the file and becomes the ledger's record."""
+    _install_fake_transport(monkeypatch)
+    jobs_path = _jobs_file(tmp_path, ["first", "second"])
+    store_path = tmp_path / "override.sqlite3"
+
+    exit_code = cli.main(
+        [
+            "run",
+            str(jobs_path),
+            "--store",
+            str(store_path),
+            "--run-id",
+            "cli-parallel",
+            "--max-parallel",
+            "2",
+        ]
+    )
+    capsys.readouterr()
+
+    assert exit_code == cli.EXIT_OK
+    store = JobStore(store_path, create=False)
+    assert store.get_run("cli-parallel").max_parallel == 2
+
+
+def test_resume_cli_max_parallel_does_not_rewrite_the_ledger(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    """The resume override applies to one pass and leaves the record alone."""
+    _install_fake_transport(monkeypatch)
+    jobs_path = _jobs_file(tmp_path, ["first", "second"])
+    store_path = tmp_path / "resume.sqlite3"
+    job_file = load_job_file(jobs_path)
+    store = JobStore(store_path)
+    store.create_run(
+        "cli-resume",
+        job_file.jobs,
+        jobs_path=jobs_path,
+        max_parallel=1,
+        workspace_root=tmp_path / "ws",
+    )
+
+    exit_code = cli.main(
+        [
+            "resume",
+            "cli-resume",
+            "--store",
+            str(store_path),
+            "--max-parallel",
+            "2",
+        ]
+    )
+    capsys.readouterr()
+
+    assert exit_code == cli.EXIT_OK
+    assert store.get_run("cli-resume").max_parallel == 1
+    assert all(job.state is JobState.ACCEPTED for job in store.list_jobs("cli-resume"))
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "two", "1.5"])
+def test_cli_rejects_a_non_positive_max_parallel(value: str) -> None:
+    """Argparse refuses a bound that is not a positive integer."""
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["run", "jobs.yaml", "--max-parallel", value])
+    assert excinfo.value.code == cli.EXIT_USAGE

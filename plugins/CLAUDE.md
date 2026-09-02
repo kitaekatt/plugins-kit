@@ -94,6 +94,35 @@ unconfigurable opinion whose test passes is a finding.
   cwd set to that directory and the attempt row says `workspace: none`. A Perforce team
   gets a working runner whose isolation is manual, not a half-working git path.
 
+- **Above `max_parallel: 1`, job-kit forfeits ordering and offers nothing to get it
+  back.** Jobs are submitted in declaration order and complete in any order; there is no
+  priority, no ordering flag, and no DAG. A team that wants "run these four in parallel
+  but that one last" has no way to say it, and their remedy is two runs. We refuse an
+  ordering seam because it is a DAG in disguise: the first key would be honored only
+  sometimes (a job whose predecessor is still running would have to block a worker), so
+  the guarantee a user would read into it is one a flat set cannot make. Ordering is
+  workflow-kit's job.
+
+- **A halt narrows dispatch, and never cancels an attempt already running.** When an
+  endpoint returns a persistent halt, job-kit excludes it from jobs dispatched afterwards
+  and lets every in-flight attempt on it finish. A team could reasonably want the run to
+  stop dead -- they are paying for calls that are likely to fail -- and their remedy is a
+  narrower `max_parallel` or a narrower endpoint preference. We refuse to make cancellation
+  available because an aborted invocation cannot be truthfully recorded: the ledger's
+  central claim is that one attempt row is exactly one seam invocation and reports what it
+  observed, and a killed attempt has no observed outcome to report. The same reasoning
+  makes Ctrl-C stop dispatch rather than work.
+
+- **One job-kit process per ledger.** A run is driven by one process; the parallelism is
+  threads inside it. Two processes over one ledger is unsupported and undetected -- there
+  is no claim or lease column, so nothing refuses the second one. A team could reasonably
+  want to fan a run across machines, and their remedy is one run per machine. We refuse a
+  lease because a HALF lease is worse than none: the crashed-process resume path exists
+  precisely to pick a run back up after its owner died, and a lease that path must ignore
+  protects nothing while making the ledger claim a guarantee it does not hold. A real
+  answer is a lease plus an expiry plus a fencing token, which is a distributed runner --
+  a different plugin, not a column.
+
 - **Only a qualified reviewer lane may run on a configured endpoint.** A review profile's
   `model` may name an llm-scripting-kit endpoint instead of an Agent alias, but the runner
   accepts that for `reviewer_b_diff_only_bugs` only; every other lane is refused by name.

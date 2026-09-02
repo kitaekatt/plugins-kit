@@ -1,15 +1,15 @@
 # job-kit
 
-Durable sequential execution for heterogeneous agent jobs.
+Durable execution for heterogeneous agent jobs through a bounded worker pool.
 
 A job file declares work; the runner executes each job once, selects an
 endpoint from what llm-scripting-kit actually advertises, and accepts a result
 only when a command says so.
 
 ```bash
-job-kit run jobs.yaml [--store PATH] [--timeout SECONDS] [--run-id ID]
+job-kit run jobs.yaml [--store PATH] [--timeout SECONDS] [--run-id ID] [--max-parallel N]
 job-kit status <run-id> [--store PATH]
-job-kit resume <run-id> [--store PATH] [--timeout SECONDS]
+job-kit resume <run-id> [--store PATH] [--timeout SECONDS] [--max-parallel N]
 job-kit gc [<run-id>] [--store PATH] [--accepted-only] [--force]
 ```
 
@@ -127,3 +127,31 @@ artifact of THIS run and reject anything else. Loose prompt, strict contract.
 gives no ordering guarantee, so a file-mediated dependency is not safe. A DAG is
 deliberately out of scope; if you need ordering beyond what declaration order
 gives you, run two runs.
+
+## What `max_parallel: N` gives up
+
+`max_parallel: N` runs up to N JOBS at once, each in its own worker. The unit is
+a whole job driven to a terminal state or to its attempt budget, so a single
+job's attempts stay strictly sequential and the attempt ledger stays
+append-only. `job-kit run --max-parallel N` overrides the file and is what the
+ledger records; `job-kit resume --max-parallel N` applies to that pass only and
+does not rewrite the record.
+
+Four properties are forfeited above 1, and none of them is recoverable by
+configuration:
+
+- **Ordering.** Jobs are submitted in declaration order and finish in whatever
+  order they finish. The file-mediated dependency above is unsafe here.
+- **Halt narrowing becomes dispatch-time only.** An endpoint that returned a
+  persistent halt is excluded from jobs dispatched AFTER the halt is recorded.
+  Jobs already in flight on that endpoint are never cancelled: they run to
+  completion and their attempt rows are recorded truthfully, because an aborted
+  invocation cannot be reported honestly.
+- **Ctrl-C stops dispatch, not work.** An interrupt stops new dispatch and waits
+  for in-flight attempts to finish. The interrupt-recording paths in the runner
+  fire in the thread that owns the attempt, so at `max_parallel: 1` an interrupt
+  is recorded against the attempt it hit; above 1 the run ends after the
+  in-flight attempts complete and are recorded as their own outcome.
+- **Interleaved stderr.** Backends stream to stderr as they go, so N workers
+  produce interleaved output. Each line carries its job through the
+  `[job:<id>]` prefix; the ledger, not the console, is the record of a run.

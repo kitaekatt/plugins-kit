@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
-from .model import JobState, RunSnapshot
+from .model import JobState, RunSnapshot, validate_max_parallel
 from .run import (
     DEFAULT_TIMEOUT_S,
     default_store_path,
@@ -46,6 +46,11 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--store", type=Path)
     run.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S)
     run.add_argument(
+        "--max-parallel",
+        type=_max_parallel_argument,
+        help="override the jobs file's max_parallel; the override is recorded in the ledger",
+    )
+    run.add_argument(
         "--run-id",
         type=_run_id_argument,
         help="preassign the run id (letters, digits, . _ -) so a caller can resume it later",
@@ -59,6 +64,11 @@ def _parser() -> argparse.ArgumentParser:
     resume.add_argument("run")
     resume.add_argument("--store", type=Path)
     resume.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S)
+    resume.add_argument(
+        "--max-parallel",
+        type=_max_parallel_argument,
+        help="pool width for this pass only; the ledger's recorded value is not rewritten",
+    )
 
     gc = subcommands.add_parser("gc", help="reclaim eligible attempt worktrees")
     gc.add_argument("run", nargs="?")
@@ -78,6 +88,14 @@ def _run_id_argument(value: str) -> str:
             "run id must be non-empty and use only letters, digits, '.', '_' or '-'"
         )
     return value
+
+
+def _max_parallel_argument(value: str) -> int:
+    """Validate a caller-supplied worker-pool bound."""
+    try:
+        return validate_max_parallel(int(value))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _store_path(explicit: Optional[Path]) -> Path:
@@ -110,6 +128,7 @@ def _run(args: argparse.Namespace) -> int:
         store_path=args.store,
         timeout_s=args.timeout,
         run_id=args.run_id,
+        max_parallel=args.max_parallel,
     )
     store_path = (
         args.store.expanduser().resolve()
@@ -131,7 +150,12 @@ def _status(args: argparse.Namespace) -> int:
 def _resume(args: argparse.Namespace) -> int:
     """Handle the resume subcommand."""
     store_path = _store_path(args.store)
-    snapshot = resume_run(args.run, store_path, timeout_s=args.timeout)
+    snapshot = resume_run(
+        args.run,
+        store_path,
+        timeout_s=args.timeout,
+        max_parallel=args.max_parallel,
+    )
     _emit(snapshot, store_path)
     return _exit_for_snapshot(snapshot)
 

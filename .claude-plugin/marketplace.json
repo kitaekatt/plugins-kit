@@ -214,8 +214,8 @@
     },
     {
       "name": "job-kit",
-      "description": "Durable sequential execution for heterogeneous agent jobs with advertisement-based endpoint selection and command-shaped acceptance.",
-      "version": "0.2.4",
+      "description": "Durable execution for heterogeneous agent jobs through a bounded worker pool, with advertisement-based endpoint selection and command-shaped acceptance.",
+      "version": "0.3.0",
       "author": {
         "name": "Christina"
       },
