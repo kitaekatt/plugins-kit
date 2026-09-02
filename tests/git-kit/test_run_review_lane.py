@@ -142,6 +142,12 @@ def seam(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "llm_scripting_kit", root)
     monkeypatch.setitem(sys.modules, "llm_scripting_kit.completion", completion)
     monkeypatch.setitem(sys.modules, "llm_scripting_kit.models", models)
+    # A transport lane pre-flights the `openai` SDK, which is an OPTIONAL
+    # dependency of the kit and is not installed for this suite. It belongs to
+    # the same faked environment as the seam above: a transport endpoint that
+    # can serve a lane at all is one whose SDK is present, so the default here
+    # is present. The pre-flight's own tests override this entry.
+    monkeypatch.setitem(sys.modules, "openai", types.ModuleType("openai"))
     return control
 
 
@@ -363,3 +369,46 @@ class TestCli:
         ])
         assert code == lr.EXIT_USAGE
         assert "cannot read chunk" in capsys.readouterr().err
+
+
+class TestTransportSdkPreflight:
+    """The `openai` SDK is optional, so its absence must be a config error.
+
+    Without the pre-flight the seam raises a bare ImportError from inside the
+    backend on the first request -- past every other guard, once the prompt is
+    built. `openai` absence is available here by putting ``None`` in
+    sys.modules, which is what the import machinery reads as "this module does
+    not import".
+    """
+
+    def test_a_transport_without_openai_is_a_config_error(
+        self, seam, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "openai", None)
+        seam.selection = _transport([FakeResponse(ONE_ISSUE)])
+        with pytest.raises(lr.LaneConfigError, match="endpoint-dispatch") as excinfo:
+            lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+        message = str(excinfo.value)
+        assert "'openai' package" in message
+        assert "transport entry" in message
+        # The refusal happens BEFORE the request, which is the whole point.
+        assert seam.selection.backend.calls == []
+
+    def test_a_transport_with_openai_proceeds(
+        self, seam, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "openai", types.ModuleType("openai"))
+        seam.selection = _transport([FakeResponse(ONE_ISSUE)])
+        result = lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+        assert result["attempts"] == 1
+        assert len(seam.selection.backend.calls) == 1
+
+    def test_a_harness_selection_is_unaffected_by_a_missing_openai(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A harness shells out to a CLI carrying its own client."""
+        monkeypatch.setitem(sys.modules, "openai", None)
+        selection = FakeSelection(
+            endpoint="e", kind="harness", backend=FakeBackend([]), model="m"
+        )
+        lr._check_transport_sdk(selection)

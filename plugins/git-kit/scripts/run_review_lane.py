@@ -187,6 +187,40 @@ def _check_selection(lane: str, selection: Any) -> None:
         )
 
 
+def _check_transport_sdk(selection: Any) -> None:
+    """Refuse a transport selection when the ``openai`` SDK is not importable.
+
+    A transport entry is a plain OpenAI-compatible completion, and the seam
+    builds its client lazily -- on the first request, inside the backend. So a
+    missing SDK surfaces as a bare ImportError raised past every guard this
+    runner has, after the prompt is built and the budget checked, which reads
+    as a crash rather than as the configuration gap it is.
+
+    `openai` is DELIBERATELY not a hard dependency of this kit: only a profile
+    that names a non-Agent transport `model` ever reaches this code path, so
+    its absence is the default state and has to be reported by name.
+
+    A harness entry shells out to a CLI that carries its own client, so it is
+    exempt -- checking it would refuse a lane that would have run.
+    """
+    if selection.kind != "transport":
+        return
+    try:
+        import openai  # noqa: F401, PLC0415
+    except ImportError as exc:
+        raise LaneConfigError(
+            f"endpoint {selection.endpoint!r} is a transport entry (a plain "
+            "OpenAI-compatible completion) and needs the 'openai' package, "
+            "which this plugin declares in the OPTIONAL 'endpoint-dispatch' "
+            "dependency group rather than as a requirement. Declare that group "
+            'in the plugin\'s bootstrap.json ("venv": {"extras": '
+            '["endpoint-dispatch"]}) and let the bootstrap engine reprovision '
+            "the venv, or configure a harness endpoint (which shells out to a "
+            "CLI and needs no SDK) or an Agent-tool model instead. Underlying "
+            f"error: {exc}"
+        ) from exc
+
+
 def _allowed_tools_for(lane: str) -> Optional[str]:
     """The `allowed_tools` value a lane needs, or None for a pure completion.
 
@@ -249,6 +283,7 @@ def run_lane(
             f"llm-scripting-kit endpoint id: {exc}"
         ) from exc
     _check_selection(lane, selection)
+    _check_transport_sdk(selection)
 
     system = LANE_PROMPTS[lane].system
     user = build_user_message(
