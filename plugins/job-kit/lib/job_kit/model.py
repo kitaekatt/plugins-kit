@@ -24,7 +24,10 @@ start. Isolation defaults to true; set ``isolate: false`` when a job must run
 in its declared directory.
 
 The optional job ``options`` mapping accepts ``allowed_tools``,
-``disallowed_tools``, ``system_prompt_mode`` and ``extras``. The top-level
+``disallowed_tools``, ``effort``, ``system_prompt_mode``, ``max_tokens``,
+``temperature`` and ``extras``. ``max_tokens`` defaults to 4096 and
+``temperature`` to 0.3; ``effort`` is unset by default, which keeps whatever
+the endpoint registry entry carries. The top-level
 ``disallowed_tools`` job-file key sets a deny floor for every job in the run.
 The option defaults are ``None`` for both tool lists, ``"replace"`` for
 ``system_prompt_mode``, and an empty mapping for ``extras``. The floor defaults
@@ -36,8 +39,10 @@ counts. Unknown usage is represented by ``None`` rather than zero.
 
 from __future__ import annotations
 
+import math
 import shlex
 from dataclasses import dataclass, field
+from numbers import Real
 from enum import Enum
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
@@ -47,7 +52,15 @@ PathLike = str | Path
 
 
 _JOB_OPTION_KEYS = frozenset(
-    {"allowed_tools", "disallowed_tools", "effort", "system_prompt_mode", "extras"}
+    {
+        "allowed_tools",
+        "disallowed_tools",
+        "effort",
+        "system_prompt_mode",
+        "extras",
+        "max_tokens",
+        "temperature",
+    }
 )
 
 
@@ -78,6 +91,23 @@ def _normalize_job_options(value: object) -> dict[str, object]:
     effort = options.get("effort")
     if effort is not None and not isinstance(effort, str):
         raise ValueError("job option effort must be a string or null")
+
+    max_tokens = options.get("max_tokens")
+    if "max_tokens" in options and (
+        isinstance(max_tokens, bool)
+        or not isinstance(max_tokens, int)
+        or max_tokens < 1
+    ):
+        raise ValueError("job option max_tokens must be an integer >= 1")
+
+    temperature = options.get("temperature")
+    if "temperature" in options and (
+        isinstance(temperature, bool)
+        or not isinstance(temperature, Real)
+        or not math.isfinite(float(temperature))
+        or not 0 <= temperature <= 2
+    ):
+        raise ValueError("job option temperature must be a number in [0, 2]")
 
     extras = options.get("extras")
     if extras is not None and not isinstance(extras, Mapping):
@@ -202,6 +232,18 @@ class Contract:
         if self.directory is not None:
             result["directory"] = str(self.directory)
         return result
+
+
+@dataclass(frozen=True)
+class ContractContext:
+    """Attempt metadata exported to a contract subprocess."""
+
+    run_id: str
+    job_id: str
+    attempt_no: int
+    endpoint: str
+    backend: str
+    model: str
 
 
 @dataclass(frozen=True)
@@ -623,6 +665,8 @@ class Attempt:
     workspace_reason: Optional[str] = None
     workspace_removed_at: Optional[float] = None
     workspace_removal_forced: bool = False
+    reasoning: Optional[str] = None
+    finish_reason: Optional[str] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "dropped_params", _optional_tuple(self.dropped_params))
@@ -684,6 +728,8 @@ class Attempt:
             ),
             "usage": self.usage.to_mapping() if self.usage is not None else None,
             "response_text": self.response_text,
+            "reasoning": self.reasoning,
+            "finish_reason": self.finish_reason,
             "workspace": str(self.workspace) if self.workspace is not None else None,
             "base_ref": self.base_ref,
             "workspace_status": self.workspace_status,
@@ -834,6 +880,7 @@ __all__ = [
     "RunState",
     "Prompt",
     "Contract",
+    "ContractContext",
     "WorkspaceSpec",
     "Job",
     "JobFile",

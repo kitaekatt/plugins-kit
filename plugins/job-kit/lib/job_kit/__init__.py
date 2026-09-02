@@ -1,11 +1,35 @@
 """job-kit: a durable, sequential runner for heterogeneous agent jobs."""
 
+_TOP_LEVEL_SHARED_LIBS = frozenset({"bootstrap_lib", "llm_scripting_kit"})
+
+try:
+    import bootstrap_lib
+    import llm_scripting_kit.completion
+except ImportError as exc:
+    from bootstrap_guard import is_provisioned, require_bootstrap
+
+    if exc.name in _TOP_LEVEL_SHARED_LIBS:
+        require_bootstrap(
+            "job-kit",
+            feature="job execution",
+            missing=exc.name or "bootstrap_lib or llm_scripting_kit",
+            force=True,
+        )
+    elif not is_provisioned("job-kit"):
+        require_bootstrap(
+            "job-kit",
+            feature="job execution",
+            missing=exc.name or "bootstrap_lib or llm_scripting_kit",
+        )
+    raise
+
 from .model import (
     Acceptance,
     Attempt,
     AttemptError,
     COMPLETED,
     Contract,
+    ContractContext,
     ERROR,
     Job,
     JobFile,
@@ -72,6 +96,7 @@ __all__ = [
     "AttemptError",
     "COMPLETED",
     "Contract",
+    "ContractContext",
     "ERROR",
     "Job",
     "JobFile",

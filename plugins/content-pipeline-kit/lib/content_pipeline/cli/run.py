@@ -116,7 +116,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple
 
 from content_pipeline.cli.scaffold import Command
 from content_pipeline.execution.model import UsageRecord
@@ -125,6 +125,7 @@ from content_pipeline.execution.store import ExecutionStore
 
 if TYPE_CHECKING:  # pragma: no cover -- type-check only; see build_commands' deferred import
     from content_pipeline.execution.adapter import RunAdapter
+    from content_pipeline.execution.protocol import ProtocolHandler
 
 
 def _split_flags(args: List[str]) -> Tuple[List[str], Dict[str, str]]:
@@ -169,6 +170,7 @@ def build_commands(
     store: ExecutionStore,
     *,
     adapter: Optional["RunAdapter"] = None,
+    protocol_handlers: Optional[Mapping[str, "ProtocolHandler"]] = None,
     **protocol_policy: Any,
 ) -> Dict[str, Command]:
     """Build the ``{name: Command}`` registry for ``cli.scaffold.dispatch``.
@@ -364,14 +366,23 @@ def build_commands(
         "status": Command(name="status", handler=status, help="Bounded run-status digest."),
     }
 
-    if adapter is not None:
+    if adapter is not None or protocol_handlers is not None:
         # Deferred import: only the "protocol" command needs `execution.protocol`
         # (and, transitively, `execution.adapter`, `llm.platform`,
         # `pipeline.single_pass`) -- a caller with no adapter (the
         # A-min.1/A-min.2 store-only shape) never pays for that import.
-        from content_pipeline.execution.protocol import build_handlers, dispatch as protocol_dispatch
+        from content_pipeline.execution.protocol import (
+            ProtocolHandler,
+            build_handlers,
+            dispatch as protocol_dispatch,
+        )
 
-        handlers = build_handlers(store, adapter, **protocol_policy)
+        if protocol_handlers is None:
+            if adapter is None:
+                raise ValueError("adapter is required when protocol_handlers is omitted")
+            handlers = build_handlers(store, adapter, **protocol_policy)
+        else:
+            handlers = dict(protocol_handlers)
 
         def protocol(args: List[str]) -> Any:
             positional, flags = _split_flags(args)

@@ -63,7 +63,9 @@ The `read` envelope file is pre-written by the dispatcher (before the worker
 session ever launches, since its content needs no runtime information); the
 `submit`/`fail` envelope files are authored by the WORKER itself, at runtime,
 by writing the library's own template text and substituting only the literal
-`<FENCING_TOKEN>` placeholder with the fencing token its launch prompt names
+`<FENCING_TOKEN>` placeholder with the fencing token its launch prompt names.
+For `fail`, also replace `<FAILURE_DETAIL_JSON>` with one nonempty JSON string
+literal.
 -- see step 3 of the procedure below.
 
 The block below shows those six invocations for one fully worked example
@@ -134,8 +136,9 @@ author yourself, at the points below.
    "give up cleanly" other than step 5.
 5. **On exhaustion, report failure** -- if you cannot produce an answer the
    validators accept, author your failure envelope the same way as step 3
-   (substituting only `<FENCING_TOKEN>`), then run the `fail` invocation, and
-   stop. Never fabricate an answer to close the unit out instead.
+   (substituting only `<FENCING_TOKEN>` and `<FAILURE_DETAIL_JSON>`), then run
+   the `fail` invocation, and stop. Never fabricate an answer to close the unit
+   out instead.
 
 See `agents/pipeline-worker.md` for the full behavioral discipline around this
 procedure (unit-content handling, the revision loop, and why exhaustion means

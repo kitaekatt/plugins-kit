@@ -25,9 +25,11 @@ was staged as a deletion. The index was discarded and the tree went clean. Note 
 limit of that check: the empty-`git diff HEAD` and no-deletion clauses were verified
 across all 37 paths mechanically, but "superseded by HEAD" was confirmed by reading two
 files and generalized to the rest. The clause is only as strong as the sample -- read
-enough of the staged diff to be sure, and say what you actually checked. The deciding question, here and in the
-counterpart incident recorded in the root `CLAUDE.md`, is whether the index held
-information that existed nowhere else. Here it did not; there it did.
+enough of the staged diff to be sure, and say what you actually checked. The deciding question is always whether the
+index holds information that exists nowhere else. Here it did not -- the staged
+content was a stale re-add already in history. Where it does -- a staged deletion
+or untrack, which records an intent no file carries -- the exception does not
+apply and the index must be left alone.
 
 ## Creating or switching a branch
 

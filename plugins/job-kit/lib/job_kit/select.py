@@ -6,6 +6,56 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Optional
 
+from .model import Job
+
+
+class SelectionError(Exception):
+    """Base class for endpoint-selection errors."""
+
+
+_MIN_LLM_SCRIPTING_KIT_VERSION = "0.23.0"
+
+
+class SharedLibTooOldError(SelectionError, ImportError):
+    """The installed llm-scripting-kit shared lib is missing a required symbol.
+
+    Bootstrap's shared-lib linker pins no version, so a job-kit venv can be
+    linked against an llm-scripting-kit older than the one job-kit was
+    written against. Raised at import time of job_kit.select so the failure
+    names the owning plugin and the fix instead of surfacing as a bare
+    ImportError/AttributeError deep in a job run.
+    """
+
+    def __init__(self, symbol: str, module: str) -> None:
+        self.symbol = symbol
+        self.module = module
+        super().__init__(
+            f"job-kit requires llm-scripting-kit >= {_MIN_LLM_SCRIPTING_KIT_VERSION} "
+            f"({module!r} has no {symbol!r}). Update the llm-scripting-kit plugin "
+            "(bootstrap will provision the newer shared lib, or run "
+            "`claude plugin update llm-scripting-kit@plugins-kit`)."
+        )
+
+
+# A missing PACKAGE (unlinked or uninstalled shared lib) propagates as the
+# plain ModuleNotFoundError so the message names the package; only a present
+# module lacking a symbol is diagnosed as "too old".
+import importlib as _importlib
+
+_completion = _importlib.import_module("llm_scripting_kit.completion")
+
+_REQUIRED_COMPLETION_SYMBOLS = (
+    "BackendSelection",
+    "Capabilities",
+    "adapter_capabilities",
+    "create_backend",
+    "match_capabilities",
+)
+for _symbol in _REQUIRED_COMPLETION_SYMBOLS:
+    if not hasattr(_completion, _symbol):
+        raise SharedLibTooOldError(_symbol, "llm_scripting_kit.completion")
+del _symbol
+
 from llm_scripting_kit.completion import (
     BackendSelection,
     Capabilities,
@@ -14,12 +64,6 @@ from llm_scripting_kit.completion import (
     match_capabilities,
 )
 from llm_scripting_kit.models import EndpointResolveError
-
-from .model import Job
-
-
-class SelectionError(Exception):
-    """Base class for endpoint-selection errors."""
 
 
 class NoCompatibleEndpointError(SelectionError):
@@ -125,6 +169,7 @@ def choose_endpoint(
 
 __all__ = [
     "SelectionError",
+    "SharedLibTooOldError",
     "NoCompatibleEndpointError",
     "requirements_match",
     "select_endpoint",

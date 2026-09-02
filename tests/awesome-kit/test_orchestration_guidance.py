@@ -1,6 +1,6 @@
 """Tests for the orchestrate skill's policy renderer.
 
-Covers the three-layer merge, record-list merging by id, backend detection,
+Covers the four-layer merge, record-list merging by id, backend detection,
     capacity reporting (including the snapshot contract with claude-ui-kit), and
     the shape of the rendered guidance.
 
@@ -101,20 +101,23 @@ class TestRecordListMerge:
 
 @pytest.fixture
 def layered(tmp_path, monkeypatch):
-    """Redirect all three layers into tmp_path; returns a writer per layer."""
+    """Redirect all four layers into tmp_path; returns a writer per layer."""
     shipped = tmp_path / "shipped.yaml"
     user = tmp_path / "user.yaml"
     project_root = tmp_path / "project"
+    machine = tmp_path / "machine.yaml"
     (project_root / ".claude").mkdir(parents=True)
 
     monkeypatch.setattr(og, "DEFAULTS_PATH", shipped)
     monkeypatch.setattr(og, "user_config_path", lambda: user)
+    monkeypatch.setattr(og, "machine_config_path", lambda: machine)
 
     def write(layer, data):
         target = {
             "shipped": shipped,
             "user": user,
             "project": project_root / ".claude" / og.CONFIG_NAME,
+            "machine": machine,
         }[layer]
         target.write_text(yaml.safe_dump(data), encoding="utf-8")
 
@@ -123,13 +126,21 @@ def layered(tmp_path, monkeypatch):
 
 
 class TestResolveConfig:
-    def test_precedence_is_shipped_then_user_then_project(self, layered):
+    def test_precedence_is_shipped_then_machine_then_user_then_project(self, layered):
         layered("shipped", {"default_tier": "workhorse", "default_backend": "agent"})
+        layered("machine", {"default_tier": "machine-local"})
         layered("user", {"default_tier": "high-reasoning"})
         layered("project", {"default_tier": "top"})
         config, _ = og.resolve_config(layered.project_root)
         assert config["default_tier"] == "top"
         assert config["default_backend"] == "agent"  # untouched keys survive
+
+    def test_project_overrides_machine_layer(self, layered):
+        layered("shipped", {"resolution": "shipped"})
+        layered("machine", {"resolution": "machine-local"})
+        layered("project", {"resolution": "project"})
+        config, _ = og.resolve_config(layered.project_root)
+        assert config["resolution"] == "project"
 
     def test_user_layer_applies_when_project_absent(self, layered):
         layered("shipped", {"default_tier": "workhorse"})
@@ -143,7 +154,12 @@ class TestResolveConfig:
         layered("user", {})
         config, provenance = og.resolve_config(layered.project_root)
         status = {layer: state for layer, _, state in provenance}
-        assert status == {"shipped": "applied", "user": "empty", "project": "absent"}
+        assert status == {
+            "shipped": "applied",
+            "user": "empty",
+            "project": "absent",
+            "machine": "absent",
+        }
 
     def test_comment_only_override_is_empty_not_an_error(self, tmp_path, layered):
         layered("shipped", {"default_tier": "workhorse"})
@@ -226,7 +242,8 @@ class TestShippedDefaults:
         for section in ("Shape the unit", "Routing", "Agent type", "Effort", "Announce", "Dispatch backends", "Capacity"):
             assert section in text
         assert "parallel-development razor" in text
-        assert "At least two leaves must be runnable now" in text
+        assert "At least two leaves must be runnable on the same dependency frontier" in text
+        assert "Review overlap (`premise-safe`)" in text
 
     def test_lexicon_and_routing_shape_terms_stay_in_sync(self):
         data = shipped()
@@ -562,6 +579,17 @@ class TestRender:
         assert og.CONFIG_NAME in text
 
 
+class TestReviewOverlap:
+    def test_project_override_selects_the_strict_posture(self, layered):
+        layered("shipped", yaml.safe_load(_shipped_path().read_text(encoding="utf-8")))
+        layered("project", {"review_overlap": {"mode": "strict"}})
+        config, provenance = og.resolve_config(layered.project_root)
+        text = og.render(config, provenance)
+        assert "**Review overlap (`strict`).**" in text
+        assert "implementation units. They wait for its verdict." in text
+        assert "not a lock on unrelated work" not in text
+
+
 def _shipped_path():
     """The real shipped defaults, for the end-to-end render test."""
     from pathlib import Path
@@ -682,10 +710,15 @@ class TestCommandTextProvider:
 
 
 class TestCli:
-    def test_paths_lists_three_layers(self, capsys, layered):
+    def test_paths_lists_four_layers(self, capsys, layered):
         assert og.main(["--paths", "--project-root", str(layered.project_root)]) == 0
         lines = capsys.readouterr().out.strip().splitlines()
-        assert [line.split("\t")[0] for line in lines] == ["shipped", "user", "project"]
+        assert [line.split("\t")[0] for line in lines] == [
+            "shipped",
+            "machine",
+            "user",
+            "project",
+        ]
 
     def test_explain_prints_provenance_then_resolved_config(self, capsys, layered):
         layered("shipped", {"default_tier": "workhorse"})
@@ -1043,6 +1076,128 @@ class TestCodexAbsentVariant:
         assert "no second-family child -- dispatch the primary review alone" in without
 
 
+class TestRegistryOnlyHarnessIsNotRoutable:
+    """A harness known only through the model registry (no backends[] record)
+    renders as an identity-only section but never routes -- a model a row
+    prefers with no launch mechanics is worse than an absent one."""
+
+    @pytest.fixture
+    def rendered(self, monkeypatch, layered):
+        layered("shipped", cfg(routing=[
+            {"shape": ["novel"], "models": ["dawn", "agent:fable"]},
+            {"shape": [], "models": ["agent:sonnet"]},
+        ]))
+        monkeypatch.setattr(
+            og,
+            "discover_model_definitions",
+            lambda _root: ({
+                "dawn": {"id": "dawn", "harness": "opencode", "model": "some/model"},
+            }, []),
+        )
+        real = og.detect_backend
+        monkeypatch.setattr(og, "detect_backend", lambda backend: (
+            (True, "stubbed opencode")
+            if backend.get("id") == "opencode"
+            else real(backend)
+        ))
+        config, provenance = og.resolve_config(layered.project_root)
+        return og.render(config, provenance)
+
+    def test_registry_only_model_does_not_route(self, rendered):
+        body = rendered.split("\n---\n")[0]
+        assert "opencode/dawn" not in body
+
+    def test_the_row_survives_on_its_next_model(self, rendered):
+        assert "try **fable**" in rendered
+
+    def test_identity_section_is_marked_not_dispatchable(self, rendered):
+        assert "### Opencode (`opencode`)" in rendered
+        assert "**Not dispatchable.**" in rendered
+        assert "`dawn`" in rendered
+
+    def test_skip_note_names_the_missing_record(self, layered):
+        layered("shipped", cfg(routing=[{"shape": ["novel"], "models": ["dawn"]}]))
+        config, _ = og.resolve_config(layered.project_root)
+        entries = {"dawn": {"id": "dawn", "harness": "opencode", "model": "some/model"}}
+        routes, notes = og.resolve_routing_models(
+            config, entries, {"opencode": (True, "stubbed")}
+        )
+        assert routes == []
+        assert any("no backends[] record" in note for note in notes)
+
+    def test_a_backends_record_makes_the_harness_routable(self, layered):
+        layered("shipped", cfg(
+            routing=[{"shape": ["novel"], "models": ["dawn"]}],
+            backends=[
+                {"id": "agent", "detect": {"always": True}},
+                {
+                    "id": "opencode",
+                    "detect": {"always": True},
+                    "dispatch": "opencode run --brief <file>",
+                },
+            ],
+        ))
+        config, _ = og.resolve_config(layered.project_root)
+        entries = {"dawn": {"id": "dawn", "harness": "opencode", "model": "some/model"}}
+        routes, _ = og.resolve_routing_models(
+            config, entries, {"opencode": (True, "stubbed")}
+        )
+        assert routes and routes[0]["models"][0]["target"] == "opencode/dawn"
+
+    def test_default_routable_ids_use_adapter_rendered_commands(self, layered, monkeypatch):
+        layered("shipped", cfg(
+            routing=[{"shape": ["novel"], "models": ["dawn"]}],
+            backends=[
+                {"id": "agent", "detect": {"always": True}},
+                {"id": "opencode", "detect": {"always": True}},
+            ],
+        ))
+        entries = {"dawn": {"id": "dawn", "harness": "opencode", "model": "some/model"}}
+        monkeypatch.setattr(og, "adapter_command_text_provider", lambda *_args, **_kwargs: "opencode run")
+
+        config, _ = og.resolve_config(layered.project_root)
+        routes, _ = og.resolve_routing_models(
+            config, entries, {"opencode": (True, "stubbed")}
+        )
+        assert routes and routes[0]["models"][0]["target"] == "opencode/dawn"
+
+    def test_record_without_mechanics_is_not_routable_when_adapter_fails(
+        self, layered, monkeypatch, capsys
+    ):
+        layered("shipped", cfg(
+            shape={
+                "title": "Shape",
+                "tests": [{
+                    "id": "backend-hole",
+                    "text": "Choose a dispatchable backend.",
+                    "without_backend": {"opencode": "Use the fallback route."},
+                }],
+            },
+            routing=[{"shape": ["novel"], "models": ["dawn", "agent:fable"]}],
+            backends=[
+                {"id": "agent", "detect": {"always": True}},
+                {"id": "opencode", "detect": {"always": True}},
+            ],
+        ))
+        entries = {
+            "dawn": {"id": "dawn", "harness": "opencode", "model": "some/model"}
+        }
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: (entries, []))
+        monkeypatch.setattr(og, "detect_backend", lambda _backend: (True, "stubbed"))
+        monkeypatch.setattr(og, "adapter_command_text_provider", lambda *_args, **_kwargs: None)
+
+        config, provenance = og.resolve_config(layered.project_root)
+        rendered = og.render(config, provenance)
+        body = rendered.split("\n---\n")[0]
+        assert "opencode/dawn" not in body
+        assert "try **fable**" in body
+        assert "Use the fallback route." in body
+
+        assert og.main(["--explain", "--project-root", str(layered.project_root)]) == 0
+        explained = capsys.readouterr().out
+        assert "no drivable dispatch mechanics" in explained
+
+
 class TestNoBareCodenames:
     """Registry entry ids are the public routing names."""
 
@@ -1143,6 +1298,19 @@ class TestLayeringOverridesTheTree:
         text = og.render(config, provenance)
         assert "If `open`: try **haiku**." in text
         assert "**fable**" not in text
+
+    def test_a_project_routing_list_wins_over_a_machine_list(self, layered):
+        layered("shipped", cfg())
+        machine_routing = [{"shape": ["open"], "models": ["agent:haiku"]}]
+        project_routing = [{"shape": ["novel"], "models": ["agent:fable"]}]
+        layered("machine", {"routing": machine_routing})
+        layered("project", {"routing": project_routing})
+
+        config, provenance = og.resolve_config(layered.project_root)
+        assert config["routing"] == project_routing
+        text = og.render(config, provenance)
+        assert "try **fable**." in text
+        assert "If `open`: try **haiku**." not in text
 
     def test_a_user_layer_patches_a_lexicon_gloss(self, layered):
         layered("shipped", cfg())
@@ -1419,25 +1587,24 @@ class TestRenderedCodexCommandKeepsItsSilentFailureFlags:
 
 
 class TestUserConfigLocation:
-    """The user layer lives in the tracked config directory.
+    """Portable user and machine-local configuration have separate layers.
 
     ``~/.claude/config/`` is the conventional home for portable user
     configuration; a plugin's data directory is chartered for machine-global
-    values that stay out of version control. The legacy data-dir path is still
-    read so an existing file keeps working, but only when the conventional one
-    is absent.
+    values that stay out of version control.
     """
 
     def test_conventional_path_is_the_tracked_config_dir(self, monkeypatch, tmp_path):
         monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
         assert og.user_config_dir_path() == tmp_path / ".claude" / "config" / og.CONFIG_NAME
 
-    def test_legacy_path_is_the_plugin_data_dir(self, monkeypatch, tmp_path):
+    def test_machine_path_is_the_plugin_data_dir(self, monkeypatch, tmp_path):
         monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
         expected = (
             tmp_path / ".claude" / "plugins" / "data"
             / og.MARKETPLACE / og.PLUGIN / og.CONFIG_NAME
         )
+        assert og.machine_config_path() == expected
         assert og.legacy_user_config_path() == expected
 
     def test_prefers_conventional_when_present(self, monkeypatch, tmp_path):
@@ -1447,62 +1614,77 @@ class TestUserConfigLocation:
         conventional.write_text("resolution: from-config-dir\n", encoding="utf-8")
         assert og.user_config_path() == conventional
 
-    def test_falls_back_to_legacy_when_conventional_absent(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
-        legacy = og.legacy_user_config_path()
-        legacy.parent.mkdir(parents=True)
-        legacy.write_text("resolution: from-data-dir\n", encoding="utf-8")
-        assert og.user_config_path() == legacy
-
-    def test_conventional_wins_and_legacy_is_never_merged(self, monkeypatch, tmp_path):
-        """Only ONE user file is ever read.
-
-        `routing` replaces rather than merges, so two user layers combining
-        would silently drop one table. Ignoring the legacy file is the safe
-        failure; merging it is not.
-        """
+    def test_portable_user_layer_overrides_machine_layer(self, monkeypatch, tmp_path):
         monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
         conventional = og.user_config_dir_path()
         conventional.parent.mkdir(parents=True)
         conventional.write_text("resolution: from-config-dir\n", encoding="utf-8")
-        legacy = og.legacy_user_config_path()
-        legacy.parent.mkdir(parents=True)
-        legacy.write_text("resolution: from-data-dir\n", encoding="utf-8")
+        machine = og.machine_config_path()
+        machine.parent.mkdir(parents=True)
+        machine.write_text("resolution: from-data-dir\n", encoding="utf-8")
 
+        project_root = tmp_path / "project"
+        (project_root / ".claude").mkdir(parents=True)
         assert og.user_config_path() == conventional
-        loaded = og.load_layer(og.user_config_path())
-        assert loaded == {"resolution": "from-config-dir"}
+        config, provenance = og.resolve_config(project_root)
+        assert config["resolution"] == "from-config-dir"
+        assert [layer for layer, _path, status in provenance if og.status_is_applied(status)] == [
+            "shipped", "machine", "user"
+        ]
 
     def test_defaults_to_conventional_when_neither_exists(self, monkeypatch, tmp_path):
-        """An absent layer reports the path a user should create, not the legacy one."""
+        """An absent portable layer reports its own path."""
         monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
         assert og.user_config_path() == og.user_config_dir_path()
 
-    def test_legacy_use_is_flagged_in_provenance(self, monkeypatch, tmp_path):
-        """--explain nudges toward the conventional path instead of failing silently."""
+    def test_machine_use_is_flagged_in_provenance(self, monkeypatch, tmp_path, capsys):
+        """--explain identifies the machine-local layer and portable alternative."""
         monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
         monkeypatch.setattr(og, "DEFAULTS_PATH", tmp_path / "absent-shipped.yaml")
-        legacy = og.legacy_user_config_path()
-        legacy.parent.mkdir(parents=True)
-        legacy.write_text("resolution: from-data-dir\n", encoding="utf-8")
+        machine = og.machine_config_path()
+        machine.parent.mkdir(parents=True)
+        machine.write_text("resolution: from-data-dir\n", encoding="utf-8")
 
         project_root = tmp_path / "project"
         (project_root / ".claude").mkdir(parents=True)
         _config, provenance = og.resolve_config(project_root)
 
-        user_entries = [row for row in provenance if row[0] == "user"]
-        assert len(user_entries) == 1
-        _layer, path, status = user_entries[0]
-        assert path == legacy
-        assert "legacy location" in status
+        machine_entries = [row for row in provenance if row[0] == "machine"]
+        assert len(machine_entries) == 1
+        _layer, path, status = machine_entries[0]
+        assert path == machine
+        assert "machine-local" in status
+        assert "NOTE: decision-half keys found" in status
+        assert "keep portable policy in" in status
         assert str(og.user_config_dir_path()) in status
+
+        assert og.main(["--explain", "--project-root", str(project_root)]) == 0
+        explained = capsys.readouterr().out
+        assert "NOTE: decision-half keys found" in explained
+        assert str(og.user_config_dir_path()) in explained
+
+    def test_machine_only_data_does_not_trigger_portable_policy_note(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr(og, "DEFAULTS_PATH", tmp_path / "absent-shipped.yaml")
+        machine = og.machine_config_path()
+        machine.parent.mkdir(parents=True)
+        machine.write_text("capacity:\n  source: none\n", encoding="utf-8")
+
+        project_root = tmp_path / "project"
+        (project_root / ".claude").mkdir(parents=True)
+        _config, provenance = og.resolve_config(project_root)
+
+        machine_entries = [row for row in provenance if row[0] == "machine"]
+        assert machine_entries[0][2] == "applied (machine-local)"
 
 
 class TestAppliedStatusDecoration:
     """A decorated 'applied' status still counts as applied.
 
     Two provenance statuses carry a suffix -- the project layer's
-    stripped-executable-fields note and the user layer's legacy-location note.
+    stripped-executable-fields note and the machine layer's provenance note.
     An exact match on "applied" reported those layers as NOT applied, so a
     user's in-force policy vanished from the rendered "Layers applied" line.
     """
@@ -1514,22 +1696,22 @@ class TestAppliedStatusDecoration:
         assert not og.status_is_applied("absent")
         assert not og.status_is_applied("empty")
 
-    def test_legacy_location_decoration_counts(self):
-        assert og.status_is_applied("applied (legacy location; move it to /x/y.yaml ...)")
+    def test_machine_provenance_decoration_counts(self):
+        assert og.status_is_applied("applied (machine-local; keep portable policy in /x/y.yaml)")
 
     def test_executable_stripped_decoration_counts(self):
         assert og.status_is_applied("applied (1 executable field(s) ignored: command)")
 
-    def test_legacy_user_layer_is_listed_as_applied(self, monkeypatch, tmp_path, capsys):
-        """End to end: a legacy-path user layer appears in 'Layers applied'."""
+    def test_machine_layer_is_listed_as_applied(self, monkeypatch, tmp_path, capsys):
+        """End to end: the machine-local layer appears in 'Layers applied'."""
         monkeypatch.setattr(og.Path, "home", staticmethod(lambda: tmp_path))
-        legacy = og.legacy_user_config_path()
-        legacy.parent.mkdir(parents=True)
-        legacy.write_text("resolution: from-data-dir\n", encoding="utf-8")
+        machine = og.machine_config_path()
+        machine.parent.mkdir(parents=True)
+        machine.write_text("resolution: from-data-dir\n", encoding="utf-8")
 
         project_root = tmp_path / "project"
         (project_root / ".claude").mkdir(parents=True)
         _config, provenance = og.resolve_config(project_root)
 
         applied = [layer for layer, _p, status in provenance if og.status_is_applied(status)]
-        assert "user" in applied
+        assert "machine" in applied

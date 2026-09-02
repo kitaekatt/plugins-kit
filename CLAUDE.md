@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Published plugins: **awesome-kit** (plugin-ecosystem poster, orchestrate, task tracking), **bootstrap** (dependency management), **bootstrap-stuck-fix** (temporary remediation shim for a wedged bootstrap registry record), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **content-pipeline-kit** (library + skills for LLM-in-the-loop batch content pipelines), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **hue-kit** (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), **llm-scripting-kit** (LLM key resolution, shared model registry, and named OpenAI-compatible endpoints -- OpenRouter is the default endpoint; importable package `llm_scripting_kit`, CLI `llm-scripting-kit`), **p4-kit** (Perforce multi-agent code review), **pdf-kit** (HTML-to-PDF via headless Chromium), **prototypes** (nursery for experimental skills; ships none at present), **secrets-kit** (fleet secrets provisioning), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md, folded into a single domain-skill: /md-domain, plus knowledge-encoding, update-documentation, materialized-output), **unreal-kit** (Unreal Engine Python API automation), and **workflow-kit** (declarative .workflow.yaml compiler and node strategies). Dev-only (not published, `published: false`): **job-kit** (durable sequential agent-job runner) and **yaml-data-editor-kit**.
+**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Published plugins: **awesome-kit** (plugin-ecosystem poster, orchestrate, task tracking), **bootstrap** (dependency management), **bootstrap-stuck-fix** (temporary remediation shim for a wedged bootstrap registry record), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **content-pipeline-kit** (library + skills for LLM-in-the-loop batch content pipelines), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **hue-kit** (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), **llm-scripting-kit** (LLM key resolution, shared model registry, and named OpenAI-compatible endpoints -- OpenRouter is the default endpoint; importable package `llm_scripting_kit`, CLI `llm-scripting-kit`), **p4-kit** (Perforce multi-agent code review), **pdf-kit** (HTML-to-PDF via headless Chromium), **prototypes** (nursery for experimental skills; ships none at present), **secrets-kit** (fleet secrets provisioning), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md, folded into a single domain-skill: /md-domain, plus knowledge-encoding, update-documentation, materialized-output), **unreal-kit** (Unreal Engine Python API automation), **workflow-kit** (declarative .workflow.yaml compiler and node strategies), and **job-kit** (durable sequential agent-job runner). Dev-only (not published, `published: false`): **yaml-data-editor-kit**.
 
 This repo is a **Claude Code plugin marketplace** — it extends Claude Code with skills, commands, and hooks via the `.claude-plugin/marketplace.json` manifest. Plugins are loaded either via `--plugin-dir` (local development) or `enabledPlugins` in settings (production installs from the remote repo).
 
@@ -188,7 +188,6 @@ Some plugins live on `dev` for in-development work and must not reach consumers 
 
 **Dev-only plugins** (the field, not this list, is load-bearing -- this is just a human-readable inventory):
 
-- **job-kit**.
 - **yaml-data-editor-kit**.
 
 Commits for a dev-only plugin in `git log origin/master..origin/dev` need no action: the filtered release leaves them on `dev`. Do NOT branch from master to cherry-pick around them -- creating or switching a branch in this shared tree is its own anti-pattern (see below). The regenerator remains a backstop for the marketplace listing, not a substitute for the per-commit filtering.
@@ -352,7 +351,7 @@ If that list contains anything beyond the commits you intend to publish, **stop*
 2. **Wait for the other dev work to ship first.** If those commits are nearly ready, finish their version bumps and publish them properly (every plugin you're shipping needs its own `plugin.json` + `marketplace.json` bump — without that, fresh installs silently diverge). Then publish your feature on top.
 3. **Escalate to the user.** When the range holds unrelated commits that are NOT dev-only, picking which ship is the user's call, not yours.
 
-**Do NOT branch from master to route around this.** `git checkout -b` in this shared tree silently reparents whatever a concurrent session commits next -- the harm is documented under "Anti-pattern: creating a branch" below and in [docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md). If a genuinely separate checkout is required, use `git worktree add`, which leaves this tree's branch alone. (Earlier revisions of this section recommended `git checkout -b <feature> origin/master` and a squash-merged feature branch; both are retired.)
+**Do NOT branch from master to route around this.** `git checkout -b` in this shared tree silently reparents whatever a concurrent session commits next -- the harm is documented under "Anti-pattern: creating a branch" above and in [docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md). If a genuinely separate checkout is required, use `git worktree add`, which leaves this tree's branch alone. (Earlier revisions of this section recommended `git checkout -b <feature> origin/master` and a squash-merged feature branch; both are retired.)
 
 Fast-forward `dev` → `master` is only safe when `git log origin/master..origin/dev` shows *exactly* the commits you intend to publish.
 
@@ -395,6 +394,22 @@ neither surfaces as a test failure. A Windows session cannot self-check these
 **Plan non-trivial tasks**: Plan when both (a) the task is non-trivial, and (b) the implementation could go several reasonable directions. Share the plan, get a thumbs-up, then implement. Skip planning when the path is obvious or the user has already framed the approach — in those cases extra ceremony reads as procedural friction, not rigor. When you do plan, use plan mode (`EnterPlanMode`) as the sanctioned space to think and propose; don't ritualize the steps. The goal is alignment on intent, not a checklist.
 
 **Skill-based document placement** (package cohesion): when creating a document, ask "what skill does this belong to?" and place it by the CCP/CRP/ADP framework -- `plugins/skills-kit/skills/md-domain/references/cohesion-principles.md` is the SSOT for those principles and the placement algorithm. If no existing skill fits, create a stub skill and let the document live as a progressively-disclosed reference inside it.
+
+**That rule applies to documents a SKILL's readers need. It stops at the plugin
+boundary.** Everything under `plugins/<name>/` is copied into a consumer's plugin
+cache, so placing maintainer-only material in a skill's `references/` publishes it
+-- the OP-1 violation whose stated remedy is the opposite move, "to `docs/`,
+`scripts/`, or a task folder" (`docs/reference/plugin-opinion-razor.md`). Repo
+material -- this repo's git discipline, its test suite, its publish flow, its own
+razor -- therefore belongs in `docs/`, and creating a stub skill to hold it would
+be the defect, not the fix. The test is OP-1's: **who reads this on a machine that
+is not ours?** Nobody -> `docs/`. A consumer of the skill -> that skill's
+`references/`.
+
+This boundary is stated because an md-domain audit will otherwise keep finding it.
+The `ancestor_convention_conformance` criterion reads the paragraph above as an
+ancestor-declared convention and flags every `docs/reference/*.md` as misplaced,
+which is a correct reading of an incomplete rule.
 
 **The plugin-opinion razor.** Every workflow opinion a plugin imposes is
 configurable-with-a-default or registered as a deliberate stance. Criteria,

@@ -401,6 +401,13 @@ for _lever in bootstrap-reset-cooldown env-reset-cooldown; do
         if [ ! -L "$_RESET_DST" ] || [ "$(readlink "$_RESET_DST" 2>/dev/null)" != "$_RESET_SRC" ]; then
             ln -sf "$_RESET_SRC" "$_RESET_DST"
         fi
+        # A symlink onto a non-executable target is not runnable by name, and
+        # a PATH shim nobody can invoke is the same as no shim at all --
+        # bootstrap-reset-cooldown.sh shipped mode 100644 for its whole life,
+        # so the documented bare command only ever worked as `bash <path>`.
+        # The committed mode is the fix; this is the belt-and-braces for a
+        # checkout that loses it (a Windows clone, an archive extraction).
+        [ -x "$_RESET_SRC" ] || chmod +x "$_RESET_SRC" 2>/dev/null || true
     fi
 done
 unset _lever

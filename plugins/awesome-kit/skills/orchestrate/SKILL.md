@@ -36,6 +36,7 @@ technique_skill:
       - small or single-step tasks cheaper to do inline than to delegate
       - the Workflow tool's deterministic multi-agent orchestration (use Workflow when the user opts in)
       - subagent authoring (defining new agent types)
+      - reviewer fan-out internal to an invoked review skill (N reviewers over one artifact) -- that skill's `SKILL.md` owns its reviewer roster and lane arithmetic; orchestrate still owns and routes the plan-checkpoint cross-check as a separate unit
 
   policy:
     keywords: [model choice, model routing, backend, codex, custom orchestrator, usage limit, capacity, rate limit, configurable, override, pool]
@@ -77,7 +78,7 @@ technique_skill:
   asset_dependencies:
     - path: defaults/orchestration.yaml
       consumer: scripts/orchestration_guidance.py
-      purpose: the shipped policy layer the renderer merges under the user and project overrides
+      purpose: the shipped policy layer the renderer merges under the machine, user, and project overrides
       invariant: >-
         Every key under a backend's `capabilities:` is rendered from an allowlist in
         render_backends(); a key added here that is missing there is silently dropped.
@@ -133,7 +134,9 @@ technique_skill:
             Use the launch mechanics the rendered policy gives for the chosen backend; they
             differ materially between backends (a CLI backend has no built-in isolation or
             completion report). Launch every admitted leaf on the current dependency frontier in
-            one message. A leaf whose dependency has not completed waits for the next frontier.
+            one message. A leaf whose dependency has not completed is not admitted. When the
+            runnable frontier changes, re-apply the rendered `parallel-development-razor` from
+            `defaults/orchestration.yaml` before briefing additional leaves.
             The return shape must require disclosure of any critical
             infrastructure the unit created, moved, retired, or changed -- generated
             artifacts and their generators, build/commit-time gates, load-bearing paths other
@@ -145,9 +148,8 @@ technique_skill:
             and label it `established:` (naming the evidence -- a trace, a diff, a prior unit's
             verified report) or `hypothesis:`. A causal mechanism you inferred, a claim that
             existing work functions, and an inherited parameter you did not derive are all
-            hypotheses until evidence is cited. Marking is a classification you perform at
-            authoring time; that act is the point, and it is what the field list never asked
-            for. Do not grade confidence numerically -- the label is binary.
+            hypotheses until evidence is cited. Marking is a classification performed at
+            authoring time -- do not grade confidence numerically; the label is binary.
 
             A HYPOTHESIS MAY FUND AN INVESTIGATION, NEVER A CHANGE OR A DEPLOYMENT. To brief a
             mutation on a premise, promote it with evidence first, or split the unit: establish,
@@ -159,12 +161,11 @@ technique_skill:
             proceeding. This is the half that binds: you will mislabel a guess as a fact, and
             the far side of the dispatch is where that gets caught before it ships.
 
-            Scope a verification unit by what the change under test actually touches -- its
-            behavioral effects plus any named shared dependency -- never by the subject area it
-            lives in. "Verify the device" re-tests everything the device does; "verify the
-            launch path" tests the change. And derive temporal parameters (sampling windows,
-            settle times) from the failure being chased, stating the basis; an interval
-            inherited from other work is a hypothesis wearing a number.
+            Scope a verification unit by what the change under test actually touches (its
+            behavioral effects plus any named shared dependency), never by the subject area it
+            lives in -- "verify the launch path", not "verify the device". Derive temporal
+            parameters (sampling windows, settle times) from the failure being chased, stating
+            the basis; an interval inherited from other work is a hypothesis wearing a number.
         - n: 6
           action: While units run, do orchestrator-level work only (plan synthesis, inline units, or wait) -- and keep running units current.
           detail: >-
@@ -173,13 +174,22 @@ technique_skill:
             channel (SendMessage for the Agent tool); a unit with no such channel is cancelled
             and relaunched, or its result treated as pre-change and re-verified. Say which you
             did. Silently letting a unit finish against a superseded constraint spends it twice.
+            Apply the rendered Review overlap policy from `defaults/orchestration.yaml` when a
+            review overlaps candidate units.
         - n: 7
           action: Synthesize completed results; cross-check units that disagree before accepting either.
           detail: |
             Synthesize from the reports; pull raw output into this context only for the items
             you must verify or that units disagreed on. A report describes what the unit
             intended, not necessarily what it did -- verify file-writing units against the
-            actual diff before treating the work as done. A disclosed critical-infrastructure
+            actual diff before treating the work as done. If output fails verification while
+            CONFORMING to its brief, the defect is in the brief OR in the check: validate the
+            failing check before changing either. If the check is sound and the brief is
+            defective, correct the specification and route that correction as its own unit (the
+            plan-checkpoint tests in `defaults/orchestration.yaml` apply), rather than
+            relaunching the worker. A wrong decision
+            MAY affect sibling briefs cut from the same decomposition, so re-check them after
+            confirming the brief is defective. A disclosed critical-infrastructure
             change gets recorded in the appropriate CLAUDE.md as part of this synthesis --
             it must not be left sitting only in the agent's report, which the user never sees.
             Reverting a recorded change later is the responsibility of whichever agent

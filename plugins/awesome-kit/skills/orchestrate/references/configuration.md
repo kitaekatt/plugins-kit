@@ -2,13 +2,13 @@
 
 The `orchestrate` skill renders its variable policy from configuration. The shipped values
 live in [../defaults/orchestration.yaml](../defaults/orchestration.yaml), which is a worked
-example. User and project files are sparse overrides.
+example. Machine, user, and project files are sparse overrides.
 
 ## Two halves
 
 | Half | Keys | What it is |
 |---|---|---|
-| decision | `resolution`, `lexicon`, `shape`, `routing`, `agent_types`, `effort`, `announce` | per-unit policy and its ordered routing rows |
+| decision | `resolution`, `lexicon`, `shape`, `routing`, `agent_types`, `effort`, `announce`, `review_overlap` | per-unit policy and its ordered routing rows |
 | machine | `backends`, `capacity` | detected tools, launch mechanics, and account-wide usage data |
 
 The decision half renders as numbered blocks in this order: shape, routing, Agent type, effort,
@@ -22,11 +22,12 @@ is driven.
 
 ## Layers
 
-Three layers are merged from lowest to highest precedence:
+Four layers are merged from lowest to highest precedence:
 
 | Layer | Path | Use for |
 |---|---|---|
 | shipped | `<plugin>/skills/orchestrate/defaults/orchestration.yaml` | defaults bundled with the plugin |
+| machine | `~/.claude/plugins/data/plugins-kit/awesome-kit/orchestration.yaml` | machine-global values, such as observed resource limits |
 | user | `~/.claude/config/orchestration.yaml` | this user's policy, across every project |
 | project | `<project_root>/.claude/orchestration.yaml` | policy for one repository |
 
@@ -38,18 +39,15 @@ Other lists and scalar values replace outright. Project-layer executable fields 
 the project file cannot select a program for the renderer to execute.
 
 The user layer lives in `~/.claude/config/`, the conventional home for portable user
-configuration, so it travels with a config repo rather than sitting in a plugin data
-directory that is machine-local by charter. Bootstrap's `manifest-reference.md` describes
-the split between the two locations.
-
-As a fallback, `~/.claude/plugins/data/plugins-kit/awesome-kit/orchestration.yaml` is read
-when the conventional path holds no file. Exactly one of the two is ever used --
-they are never merged, because `routing` replaces rather than merges and a silent
-combination would drop one table without saying so. `--explain` marks the legacy path when
-it is in use.
+configuration, so it travels with a config repo. The machine layer lives in the plugin data
+directory, which is machine-local by charter. Bootstrap's `manifest-reference.md` describes
+the split between the two locations. Use the machine layer for machine-local observations and
+machine-specific policy. User and project layers override it when they define the same key. Keep
+portable decision-half policy in the user layer; `--explain` notes when the machine file contains
+decision-half keys.
 
 Use `--explain` to print layer provenance, detection results, model-discovery notes, routing
-notes, and the resolved configuration. Use `--paths` to print the three layer paths.
+notes, and the resolved configuration. Use `--paths` to print the four layer paths.
 
 ## Top-level keys
 
@@ -65,6 +63,7 @@ notes, and the resolved configuration. Use `--paths` to print the three layer pa
 | `announce` | map | Dispatch announcement form, rule, and examples. |
 | `backends` | list | Machine records for detected dispatch tools. |
 | `capacity` | map | Account-wide usage reporting. |
+| `review_overlap` | map | Review overlap posture; `mode` defaults to `premise-safe`. |
 
 ## `routing[]`
 
@@ -98,10 +97,15 @@ There are exactly two model namespaces:
   name. A registry entry named `sol` is announced as `codex/sol` when its harness is Codex.
 
 An unknown model, an unknown `agent:` member, or a model whose harness is unavailable is
-skipped within its row. A row with no surviving models is skipped. If the shared library is
-absent, all registry rows disappear and Agent-tool rows remain. A harness section appears only
-when its CLI resolves through the command detector; model-server liveness is not used as a
-presence test.
+skipped within its row. A registry model whose harness has no active `backends[]` record is
+also skipped: CLI presence proves the tool exists, not that the policy can drive it. A
+configured record is routable only when it yields a rendered command, a record `command`, or
+dispatch prose. If adapter rendering fails and the record has neither `command` nor `dispatch`,
+the model is skipped. Such a harness renders as an identity-only section marked **Not
+dispatchable**; add a `backends[]` record with drivable mechanics to make it a routing target.
+A row with no surviving models is skipped. If the shared library is absent, all registry rows
+disappear and Agent-tool rows remain. A harness section appears only when its CLI resolves
+through the command detector; model-server liveness is not used as a presence test.
 
 Do not add a `command` field to routing. The machine record's existing `command` text is read
 through the renderer's command-text provider, so harness-specific command construction has one
@@ -133,6 +137,13 @@ implementation worker, replace the complete `routing` list and put its discovere
 llm-scripting-kit model-entry id first in that row; keep a fallback model for machines where
 the entry or harness is absent.
 
+## `review_overlap`
+
+`review_overlap.mode` controls whether implementation units may overlap an in-flight review.
+The default is `premise-safe`, which preserves the premise-based overlap behavior. Set it to
+`strict` when the workflow needs a review gate before implementation units. Both modes still
+permit investigation units when their brief meets the selected rule in the rendered policy.
+
 ## `agent_types`, `effort`, and `announce`
 
 `agent_types.items[]` contains `{id, name, text}` records rendered as role bullets.
@@ -157,13 +168,16 @@ a registry member. The empty shape uses `(default)`. A fallback appends
 Backend records describe detected tools. An available record renders its name, detection note,
 capabilities, model entries for its harness, existing command text, dispatch prose, and
 gotchas. A record that fails detection is omitted from the artifact; `--explain` reports its
-reason. Request-only records can carry `selection`, which tells the reader to use that backend
+reason. A `backends[]` record is a routing target only when it yields drivable mechanics: an
+adapter-rendered command, a record `command`, or dispatch prose. Registry models resolve in
+routing rows only when their active harness record meets that condition (see `routing[]`
+above). Request-only records can carry `selection`, which tells the reader to use that backend
 only when the stated condition holds. A request-only record is not a routing target; it is
 documented for an explicitly named backend.
 
 Recognized capability keys, in display order, are:
 
-`isolation`, `effort`, `network`, and `returns`.
+`isolation`, `effort`, `network`, `concurrency`, and `returns`.
 
 Quote `yes` and `no` in YAML when a string is intended. `command` is existing machine-half
 text. The routing configuration does not author or duplicate it.

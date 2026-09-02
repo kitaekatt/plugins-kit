@@ -6,7 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from job_kit.model import Acceptance, Contract, Job, Prompt, WorkspaceSpec, load_job_file
+from job_kit.model import (
+    Acceptance,
+    Contract,
+    Job,
+    Prompt,
+    WorkspaceSpec,
+    load_job_file,
+)
 
 
 def test_load_job_file_resolves_relative_job_paths(tmp_path: Path) -> None:
@@ -69,6 +76,8 @@ jobs:
       allowed_tools: Read
       disallowed_tools: Edit
       system_prompt_mode: append
+      max_tokens: 40
+      temperature: 0
       extras:
         sandbox: read-only
     contract:
@@ -84,6 +93,8 @@ jobs:
         "allowed_tools": "Read",
         "disallowed_tools": "Edit",
         "system_prompt_mode": "append",
+        "max_tokens": 40,
+        "temperature": 0,
         "extras": {"sandbox": "read-only"},
     }
     assert job_file.to_mapping()["disallowed_tools"] == "Bash"
@@ -100,6 +111,34 @@ def test_job_options_reject_unknown_keys(tmp_path: Path) -> None:
             directory=tmp_path,
             contract=Contract(command=("true",), directory=tmp_path),
             options={"unexpected": True},
+        )
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"max_tokens": 0},
+        {"max_tokens": True},
+        {"max_tokens": 2.5},
+        {"max_tokens": None},
+        {"temperature": -0.1},
+        {"temperature": 2.1},
+        {"temperature": True},
+        {"temperature": None},
+    ],
+)
+def test_job_options_reject_invalid_completion_controls(
+    tmp_path: Path, options: dict[str, object]
+) -> None:
+    """Completion controls enforce the seam's supported value ranges."""
+    with pytest.raises(ValueError, match="max_tokens|temperature"):
+        Job(
+            id="invalid-completion-options",
+            prompt=Prompt(user="run"),
+            endpoint_preference=("fake",),
+            directory=tmp_path,
+            contract=Contract(command=("true",), directory=tmp_path),
+            options=options,
         )
 
 

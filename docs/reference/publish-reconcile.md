@@ -119,11 +119,22 @@ one guard that prevents silently dropping a master-only fix:
   the current set from the field rather than from memory; the field is the
   load-bearing record and this list has gone stale before.
 
-Mechanics: `git checkout master && git merge --no-commit --no-ff dev`, resolve
-each conflict per the rules above (`git checkout --theirs <file>` takes dev
-while on master; `git rm` honors a dev-side delete), then
+Mechanics, in a **master worktree** -- never `git checkout master` in the shared
+dev tree, which silently redirects whatever a concurrent session commits next
+(root CLAUDE.md, "Anti-pattern: creating a branch"; the worked incident is
+`shared-tree-git-discipline.md`):
+
+```bash
+git worktree add ../plugins-kit-master origin/master
+cd ../plugins-kit-master
+git merge --no-commit --no-ff origin/dev
+```
+
+Resolve each conflict per the rules above (`git checkout --theirs <file>` takes
+dev while on master; `git rm` honors a dev-side delete), then
 `python scripts/regen_marketplace.py`, run `pytest tests/bootstrap` +
-`regen_marketplace.py --check`, commit the merge, and push master. The
+`regen_marketplace.py --check`, commit the merge, and push master. Remove the
+worktree when done (`git worktree remove ../plugins-kit-master`). The
 back-port-then-clobber rule is what makes the wholesale "dev wins" resolution
 safe rather than blind.
 

@@ -65,6 +65,35 @@ unconfigurable opinion whose test passes is a finding.
   should either accept that or drive submission themselves; there is no half-working git
   path to be surprised by.
 
+- **job-kit selects deterministically from the caller's stated preference order.** No
+  scoring, no endpoint aliases, no learned or adaptive routing: a job names an ordered
+  endpoint preference, requirements filter it against llm-scripting-kit's advertisement,
+  and the first surviving entry runs. A user who wants "pick whichever is cheapest or
+  fastest right now" has no way to express it, and that is the point -- an UNATTENDED run
+  must be explainable from its inputs alone, because nobody is watching to notice that the
+  runner chose differently than last time. Judgment-driven routing is a session concern:
+  that user wants `awesome-kit:orchestrate`, whose whole job is deciding, not a runner
+  whose job is executing a decision already made. Within a run, job-kit only ever NARROWS
+  the stated order -- an endpoint that returned a persistent halt is excluded from later
+  jobs -- and the ledger records every exclusion.
+
+- **A run-level deny floor is a selection REQUIREMENT, not a best-effort request.** When a
+  run declares tools an endpoint must not be able to use, an endpoint whose advertisement
+  says it would silently drop that control is not selected at all. A team could reasonably
+  prefer best-effort -- run on the endpoint anyway and accept the floor was not applied --
+  and their only remedy today is to drop the floor from the job file entirely, which is
+  exactly the outcome we refuse to make easy. A floor that is sometimes not applied is not
+  a floor, and an unattended run is the case where nobody is present to notice the
+  difference. The alternative for that team is to state the narrower endpoint preference
+  they actually mean.
+
+- **job-kit privileges git as the only workspace-isolation VCS.** Worktree-per-attempt
+  isolation is git-only, for the same reason as awesome-kit:task's entry: a second VCS
+  backend would ship untested and fail first on a consumer's machine. The degradation is
+  bounded and recorded, never silent -- a job whose directory is not a git repo runs with
+  cwd set to that directory and the attempt row says `workspace: none`. A Perforce team
+  gets a working runner whose isolation is manual, not a half-working git path.
+
 - **Code review renders to chat and is never persisted.** git-kit and p4-kit scope
   themselves to a conversational review; a team needing PR/Swarm comments or a CI artifact
   wants a different tool, and both SKILL.md scope blocks say so rather than assuming it
@@ -161,6 +190,25 @@ reaches all of them at once.
 Publish ordering: bootstrap must ship before or with llm-scripting-kit, or
 CodexCliBackend raises ModuleNotFoundError on every consumer -- shared libs
 resolve to the INSTALLED copy via .pth, not the dev tree.
+
+The `.pth` linker pins no version, so an owner's change reaches every
+consumer's venv on its next bootstrap pass, whether or not that consumer asked
+for it. A consumer that needs a symbol only a particular owner version added
+must not assume it is there: probe for it at import (a guarded `getattr` /
+`try`/`except ImportError`) and fail with a message naming the owning plugin
+and the version the symbol first shipped in, rather than crash on a raw
+`AttributeError` deep in a call path. job-kit's `select.py` is the worked
+example of this guard against `llm_scripting_kit.completion`.
+
+#### Who talks to an LLM, and through what
+
+| Plugin | Imports from llm-scripting-kit | Owns above the seam | Published |
+|---|---|---|---|
+| content-pipeline-kit | `llm_scripting_kit.completion` (lazy/optional, via `content_pipeline.llm.platform` and `.llm.backends`) | Batch-run policy: retry, cost accounting, budgeting, concurrency, caching | Yes |
+| job-kit | `llm_scripting_kit.completion` (`BackendSelection`, `Capabilities`, `adapter_capabilities`, `create_backend`, `match_capabilities`) | Deterministic endpoint selection from a job's preference order and requirements | Yes |
+| workflow-kit | `llm_scripting_kit.completion.OpenRouterBackend` (via `scripts/openrouter_run.py`) | The `openrouter` node strategy: one non-Claude model call per workflow node | Yes |
+| awesome-kit (orchestrate) | `llm_scripting_kit` (harness-model discovery, lazy/optional, via `orchestration_guidance.py`) | Backend/model advisory text for the orchestrate skill's routing decisions | Yes |
+| yaml-data-editor-kit | none directly -- reaches it via content-pipeline-kit's `content_pipeline` (the dispatch binding in `dispatch/`) | The editor's dispatch planner, not the completion transport | No (`published: false`) |
 
 `bootstrap_lib/codex.py` is stdlib-only because `bootstrap_lib` is imported from
 contexts where no third-party dependency is guaranteed to exist (SessionStart
@@ -403,6 +451,36 @@ that never fired and no error anywhere. content-pipeline-kit's type is
 `PipelineHaltError` (`HaltError` remains there as a compatibility alias). When
 adding a duplicated type to a seam, name it distinctly or document which side
 a caller must import from.
+
+## A caller that sets the deadline owns the timeout
+
+A plugin above `llm_scripting_kit.completion` passes its own budget down as
+`BackendOptions.timeout_s`. When that budget expires, the exception coming back
+is evidence about the CALLER's deadline and says nothing about the endpoint --
+so classifying it as a provider halt makes the consumer exclude a perfectly
+healthy endpoint, and (where the halt is persistent) collapse a retry budget it
+believes it still has.
+
+job-kit hit this twice, with two different transports and the same reasoning:
+
+- CLI backends -- llm-scripting-kit maps `AgentTimeoutError` to
+  `HALT_RATE_LIMIT`, which is correct for a caller that did NOT set the
+  timeout ("CLI-layer backoff is functionally a rate limit"). job-kit did, so
+  `max_attempts: 3` silently became one attempt.
+- HTTP backends -- `OpenRouterBackend` began honoring `timeout_s` as the
+  OpenAI client timeout, and `openai.APITimeoutError` is a SUBCLASS of
+  `APIConnectionError`, so a consumer treating connection errors as
+  "endpoint unreachable" excluded a merely slow endpoint for the whole run.
+
+Two rules. Classify the caller's own deadline BEFORE any transport-error test,
+because the timeout type is frequently a subclass of the broader one. And when a
+transport starts honoring `timeout_s`, re-check every consumer's exception
+classification -- the change is invisible from below and looks like a bug in the
+consumer's retry policy from above.
+
+The fix belongs on the CONSUMER side in both cases; plugin boundaries are hard
+boundaries, and llm-scripting-kit's mapping is right for the callers that did
+not set the deadline.
 
 ## Describing a plugin
 

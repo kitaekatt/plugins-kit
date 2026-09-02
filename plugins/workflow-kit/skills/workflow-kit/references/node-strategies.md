@@ -55,6 +55,11 @@ third-party dep the call needs, `openai`, IS declared by workflow-kit (its own
 `pyproject.toml`) -- the seam uses it internally; workflow-kit shares the source,
 not the SDK.
 
+When `--temperature` and `--max-tokens` are omitted, the node sends the
+completion seam's own defaults (`llm_scripting_kit.completion.BackendOptions`:
+`temperature = 0.3`, `max_tokens = 4096`) rather than leaving them unset for
+the provider to pick. Pass the flags to override either one.
+
 Run the runner with **workflow-kit's own venv python** -- bootstrap provisions it
 with `openai` (declared) and links `llm_scripting_kit` onto it (declared via
 `shared_lib_imports`). The API key is resolved the llm-scripting-kit way; run

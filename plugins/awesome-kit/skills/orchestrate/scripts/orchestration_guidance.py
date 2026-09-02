@@ -8,11 +8,12 @@ an ordered routing policy plus machine data:
     machine  which dispatch backends exist here and how to drive them, and how
              much usage capacity is left
 
-Configuration resolves over three layers, later winning:
+Configuration resolves over four layers, later winning:
 
     1. shipped   <plugin>/skills/orchestrate/defaults/orchestration.yaml
-    2. user      ~/.claude/config/orchestration.yaml
-    3. project   <project_root>/.claude/orchestration.yaml
+    2. machine   ~/.claude/plugins/data/plugins-kit/awesome-kit/orchestration.yaml
+    3. user      ~/.claude/config/orchestration.yaml
+    4. project   <project_root>/.claude/orchestration.yaml
 
 Override files are sparse. Mappings deep-merge; the record lists in
 RECORD_LISTS merge by record `id` (patch a known id, append a new one, drop one
@@ -84,11 +85,24 @@ RECORD_LISTS = (
     "backend_notes",
 )
 
+DECISION_KEYS = frozenset(
+    (
+        "resolution",
+        "lexicon",
+        "shape",
+        "routing",
+        "agent_types",
+        "effort",
+        "announce",
+        "review_overlap",
+    )
+)
+
 # Capability keys rendered for each backend's `capabilities:` block, in
 # display order. A key present in the shipped defaults but absent from this
 # tuple is silently dropped from the rendered output -- see the render site
 # below and TestCapabilityRendering in tests/awesome-kit/test_orchestration_guidance.py.
-CAPABILITY_KEYS = ("isolation", "effort", "network", "returns")
+CAPABILITY_KEYS = ("isolation", "effort", "network", "concurrency", "returns")
 
 
 # --------------------------------------------------------------------------
@@ -101,8 +115,8 @@ def user_config_dir_path() -> Path:
     return Path.home() / ".claude" / "config" / CONFIG_NAME
 
 
-def legacy_user_config_path() -> Path:
-    """Where this layer used to live, inside the plugin's data directory."""
+def machine_config_path() -> Path:
+    """The machine-local configuration path in the plugin data directory."""
     return (
         Path.home()
         / ".claude"
@@ -114,28 +128,31 @@ def legacy_user_config_path() -> Path:
     )
 
 
+def legacy_user_config_path() -> Path:
+    """Compatibility alias for the former plugin-data user-layer path."""
+    return machine_config_path()
+
+
 def user_config_path() -> Path:
-    """The user layer, preferring the conventional path over the legacy one.
+    """The portable user configuration path.
 
     ``~/.claude/config/`` is the established home for portable user
-    configuration; a plugin's data directory holds machine-global values that
+    configuration. A plugin's data directory holds machine-global values that
     deliberately stay out of version control (bootstrap's manifest-reference
-    calls out that split). This layer is hand-authored policy that should
-    travel with the user, so it belongs in the former.
-
-    The legacy path is still honoured so an existing file keeps working, but
-    only when the conventional one is absent -- never merged with it. Two
-    resolved routing tables silently combining is worse than one of them being
-    ignored, because `routing` REPLACES rather than merges and the loser would
-    vanish without a word.
+    calls out that split), so it is resolved as the separate machine layer.
     """
-    conventional = user_config_dir_path()
-    if conventional.is_file():
-        return conventional
-    legacy = legacy_user_config_path()
-    if legacy.is_file():
-        return legacy
-    return conventional
+    return user_config_dir_path()
+
+
+def machine_layer_status(data: Mapping[str, Any]) -> str:
+    """Describe an applied machine layer and flag portable policy content."""
+    status = "applied (machine-local)"
+    if DECISION_KEYS.intersection(data):
+        return (
+            "applied (machine-local; NOTE: decision-half keys found; keep portable "
+            f"policy in {user_config_dir_path()})"
+        )
+    return status
 
 
 def project_config_path(project_root: Path) -> Path:
@@ -143,9 +160,10 @@ def project_config_path(project_root: Path) -> Path:
 
 
 def layer_paths(project_root: Path) -> List[Tuple[str, Path]]:
-    """The three layers in precedence order (lowest first)."""
+    """The four layers in precedence order (lowest first)."""
     return [
         ("shipped", DEFAULTS_PATH),
+        ("machine", machine_config_path()),
         ("user", user_config_path()),
         ("project", project_config_path(project_root)),
     ]
@@ -202,7 +220,7 @@ def strip_executable_fields(data: Dict[str, Any]) -> Tuple[Dict[str, Any], List[
     repository happens to be the cwd, so honoring `detect.command` or
     `capacity.command` from it would mean that merely rendering the policy
     inside a cloned repo runs programs that repo chose. Machine-level trust
-    (the shipped and user layers) is a different question from repo-level
+    (the shipped, machine, and user layers) is a different question from repo-level
     trust, and only the former gets to name an executable.
     """
     removed: List[str] = []
@@ -229,7 +247,7 @@ def status_is_applied(status: str) -> bool:
     """True when a provenance status means the layer WAS merged.
 
     An applied layer may carry a decorated status -- the project layer's
-    stripped-executable-fields note, or the user layer's legacy-location note.
+    stripped-executable-fields note, or the machine layer's provenance note.
     Matching the bare string "applied" reports a decorated layer as not
     applied, which is how a user's in-force policy came to be omitted from the
     "Layers applied" line. Every decoration must keep the "applied" prefix.
@@ -240,7 +258,8 @@ def status_is_applied(status: str) -> bool:
 def resolve_config(project_root: Path) -> Tuple[Dict[str, Any], List[Tuple[str, Path, str]]]:
     """Merge the layers. Returns (config, provenance) where provenance is
     (layer, path, status) with status in {applied, empty, absent}, or
-    ('project', path, 'applied (N executable field(s) ignored)')."""
+    ('project', path, 'applied (N executable field(s) ignored)') or
+    ('machine', path, 'applied (machine-local; ...)')."""
     config: Dict[str, Any] = {}
     provenance: List[Tuple[str, Path, str]] = []
     for layer, path in layer_paths(project_root):
@@ -252,11 +271,8 @@ def resolve_config(project_root: Path) -> Tuple[Dict[str, Any], List[Tuple[str, 
             provenance.append((layer, path, "empty"))
             continue
         status = "applied"
-        if layer == "user" and path == legacy_user_config_path():
-            status = (
-                "applied (legacy location; move it to "
-                f"{user_config_dir_path()} so it travels with your config repo)"
-            )
+        if layer == "machine":
+            status = machine_layer_status(data)
         if layer == "project":
             data, removed = strip_executable_fields(data)
             if removed:
@@ -487,6 +503,21 @@ AGENT_MODEL_PREFIX = "agent:"
 HARNESS_NAMES = frozenset(("codex", "opencode"))
 
 
+def _backend_id(backend: Mapping[str, Any]) -> str:
+    """Return the display and routing id used for a backend record."""
+    return str(backend.get("id", "?"))
+
+
+def _backend_has_dispatch_mechanics(
+    backend: Mapping[str, Any], rendered_command: Optional[str] = None
+) -> bool:
+    """Whether a backend record or its rendered output can drive a unit."""
+    return any(
+        fold(value)
+        for value in (rendered_command, backend.get("command"), backend.get("dispatch"))
+    )
+
+
 def _record_value(record: Any, key: str, default: Any = None) -> Any:
     """Read a model definition from either a dataclass or a mapping."""
     if isinstance(record, Mapping):
@@ -575,11 +606,14 @@ def detect_harnesses(
 ) -> Dict[str, Tuple[bool, str]]:
     """Detect each harness named by the discovered model definitions.
 
-    A configured backend record wins when one exists. A harness model can also
-    be used with a minimal configuration that has no corresponding machine
-    record, in which case the existing fail-closed command detector is reused
-    with the CLI's version command. This checks presence only; it never probes
-    a model server.
+    A configured backend record wins when one exists. A harness known only
+    through the model registry (no corresponding machine record) is still
+    probed, reusing the existing fail-closed command detector with the CLI's
+    version command -- but presence alone renders an identity-only backend
+    section, and resolve_routing_models does not route to it: dispatch
+    mechanics live in a `backends[]` record, and a model a row prefers with
+    no way to drive it is worse than an absent one. This checks presence
+    only; it never probes a model server.
     """
     by_id = {str(backend.get("id")): (ok, reason) for backend, ok, reason in detected}
     records = {
@@ -611,14 +645,38 @@ def resolve_routing_models(
     config: Dict[str, Any],
     model_entries: Mapping[str, Mapping[str, str]],
     harness_status: Mapping[str, Tuple[bool, str]],
+    routable_ids: Optional[set] = None,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
     """Resolve routing rows, retaining order and model priority.
 
     Agent-tool names are a reserved namespace. Every other name is looked up
     in the shared model registry and must resolve to a harness entry whose CLI
-    is present. Invalid model members are skipped individually; a row with no
-    surviving models is omitted.
+    is present AND whose active backend yields drivable mechanics: a rendered
+    command, a record `command`, or dispatch prose. Invalid model members are
+    skipped individually; a row with no surviving models is omitted. When
+    `routable_ids` is omitted, this function derives it with the same detection
+    statuses and adapter-rendered commands used by `render()`.
     """
+    configured_backend_ids = {
+        _backend_id(backend) for backend in active(config.get("backends") or [])
+    }
+    if routable_ids is None:
+        detected: List[Tuple[Dict[str, Any], bool, str]] = []
+        for backend in active(config.get("backends") or []):
+            backend_id = _backend_id(backend)
+            available, reason = harness_status.get(
+                backend_id,
+                (False, f"harness `{backend_id}` is not detected"),
+            )
+            detected.append((backend, available, reason))
+        command_text_provider = partial(
+            adapter_command_text_provider,
+            model_entries=model_entries,
+        )
+        rendered_commands = _rendered_backend_command_texts(
+            detected, command_text_provider
+        )
+        routable_ids = _routable_backend_ids(detected, rendered_commands)
     terms = Terms(config.get("lexicon"))
     routes: List[Dict[str, Any]] = []
     notes: List[str] = []
@@ -683,6 +741,20 @@ def resolve_routing_models(
             if not available:
                 notes.append(
                     f"routing row {row_number}: `{raw_model}` skipped; {reason}"
+                )
+                continue
+            if harness not in configured_backend_ids:
+                notes.append(
+                    f"routing row {row_number}: `{raw_model}` skipped; harness "
+                    f"`{harness}` has no backends[] record, so no dispatch "
+                    "mechanics render for it (see references/configuration.md)"
+                )
+                continue
+            if harness not in routable_ids:
+                notes.append(
+                    f"routing row {row_number}: `{raw_model}` skipped; harness "
+                    f"`{harness}` has no drivable dispatch mechanics: no rendered "
+                    "command, `command`, or dispatch prose"
                 )
                 continue
             models.append(
@@ -1023,6 +1095,27 @@ def render_announce(
         out.append("")
 
 
+def render_review_overlap(config: Dict[str, Any], out: List[str]) -> None:
+    """Render the configured posture for units overlapping a review."""
+    block = config.get("review_overlap") or {}
+    if not isinstance(block, dict):
+        return
+    modes = block.get("modes") or {}
+    if not isinstance(modes, dict):
+        return
+    mode = block.get("mode")
+    if not isinstance(mode, str) or not mode:
+        mode = "premise-safe"
+    guidance = modes.get(mode)
+    if not isinstance(guidance, str) or not guidance:
+        mode = "premise-safe"
+        guidance = modes.get(mode)
+    if not isinstance(guidance, str) or not guidance:
+        return
+    out.append(f"**Review overlap (`{mode}`).** {fold(guidance)}")
+    out.append("")
+
+
 def render_decision_tree(
     config: Dict[str, Any],
     available_backends: set,
@@ -1031,7 +1124,7 @@ def render_decision_tree(
     routes: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Render the policy in document order: shape -> routing -> agent type ->
-    effort -> announcement.
+    effort -> announcement -> review overlap.
 
     Rendered strictly in document order because glossing is first-occurrence
     and therefore stateful.
@@ -1046,6 +1139,7 @@ def render_decision_tree(
     render_agent_types(config, terms, blocks, out)
     render_effort(config, terms, available_backends, blocks, out, routes)
     render_announce(config, terms, available_backends, blocks, out, routes)
+    render_review_overlap(config, out)
 
 
 def detect_all(config: Dict[str, Any]) -> List[Tuple[Dict[str, Any], bool, str]]:
@@ -1061,6 +1155,33 @@ def default_command_text_provider(backend: Dict[str, Any]) -> Optional[str]:
     """Return the hand-authored command used when adapter rendering is unavailable."""
     command = backend.get("command")
     return str(command) if command else None
+
+
+def _rendered_backend_command_texts(
+    detected: List[Tuple[Dict[str, Any], bool, str]],
+    command_text_provider: Callable[[Dict[str, Any]], Optional[str]],
+) -> Dict[str, Optional[str]]:
+    """Render each available backend command once for routing and output."""
+    return {
+        _backend_id(backend): command_text_provider(backend)
+        for backend, available, _reason in detected
+        if available
+    }
+
+
+def _routable_backend_ids(
+    detected: List[Tuple[Dict[str, Any], bool, str]],
+    rendered_commands: Mapping[str, Optional[str]],
+) -> set:
+    """Return available backends with a command or dispatch prose."""
+    return {
+        _backend_id(backend)
+        for backend, available, _reason in detected
+        if available
+        and _backend_has_dispatch_mechanics(
+            backend, rendered_commands.get(_backend_id(backend))
+        )
+    }
 
 
 def _placeholder_path(label: str) -> str:
@@ -1312,10 +1433,10 @@ def render_backends(
                 out.append("")
 
     # A registry may name a supported harness for which the machine half has
-    # no hand-authored record. Show one mechanics section for that harness,
+    # no hand-authored record. Show an identity-only section for that harness,
     # using the same command detector as configured records. No dispatch
-    # command is invented here; the model definition only supplies its model
-    # identity and harness.
+    # command is invented here, and routing resolution skips its models: a
+    # backend a row prefers but nobody can drive is worse than an absent one.
     for harness, (ok, reason) in harness_status.items():
         if not ok or harness in rendered_ids:
             continue
@@ -1325,6 +1446,13 @@ def render_backends(
         out.append(f"*Detected: {reason}.*")
         out.append("")
         _render_model_entries(model_entries, harness, out)
+        out.append(
+            "**Not dispatchable.** This harness appears in the model registry but "
+            "has no `backends[]` record, so no launch mechanics exist here and "
+            "routing rows do not resolve its models. Add a `backends[]` record "
+            "(see references/configuration.md) to make it a dispatch target."
+        )
+        out.append("")
 
 
 def render_capacity(config: Dict[str, Any], out: List[str]) -> None:
@@ -1393,26 +1521,32 @@ def legacy_schema_keys(config: Dict[str, Any]) -> List[str]:
 def render(config: Dict[str, Any], provenance: List[Tuple[str, Path, str]]) -> str:
     out: List[str] = ["# Orchestration policy", ""]
     detected = detect_all(config)
-    available_backends = {str(b.get("id")) for b, ok, _ in detected if ok}
     backend_names = {
         str(b.get("id")): str(b.get("name") or b.get("id")) for b, _, _ in detected
     }
     project_root = _project_root_from_provenance(provenance)
     model_entries, _model_notes = discover_model_definitions(project_root)
     harness_status = detect_harnesses(config, detected, model_entries)
-    routes, _routing_notes = resolve_routing_models(config, model_entries, harness_status)
-    render_decision_tree(config, available_backends, backend_names, out, routes)
     command_text_provider = partial(
         adapter_command_text_provider,
         model_entries=model_entries,
     )
+    rendered_commands = _rendered_backend_command_texts(detected, command_text_provider)
+    routable_backend_ids = _routable_backend_ids(detected, rendered_commands)
+    routes, _routing_notes = resolve_routing_models(
+        config,
+        model_entries,
+        harness_status,
+        routable_backend_ids,
+    )
+    render_decision_tree(config, routable_backend_ids, backend_names, out, routes)
     render_backends(
         config,
         detected,
         out,
         model_entries=model_entries,
         harness_status=harness_status,
-        command_text_provider=command_text_provider,
+        command_text_provider=lambda backend: rendered_commands.get(_backend_id(backend)),
     )
     render_capacity(config, out)
     out.append("---")
@@ -1474,7 +1608,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--paths",
         action="store_true",
-        help="Print the three layer paths and exit",
+        help="Print the four layer paths and exit",
     )
     args = parser.parse_args(argv)
     project_root = Path(args.project_root).resolve()
@@ -1503,22 +1637,23 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"backend  {'available' if ok else 'MISSING':9} {backend.get('id')}: {reason}")
         model_entries, model_notes = discover_model_definitions(project_root)
         harness_status = detect_harnesses(config, detected, model_entries)
-        routes, routing_notes = resolve_routing_models(
-            config, model_entries, harness_status
-        )
-        for harness, (ok, reason) in harness_status.items():
-            print(f"harness  {'available' if ok else 'MISSING':9} {harness}: {reason}")
-        for note in model_notes:
-            print(f"model    note      {note}")
         command_notes: List[str] = []
         command_text_provider = partial(
             adapter_command_text_provider,
             model_entries=model_entries,
             notes=command_notes,
         )
-        for backend, ok, _reason in detected:
-            if ok:
-                command_text_provider(backend)
+        rendered_commands = _rendered_backend_command_texts(detected, command_text_provider)
+        routes, routing_notes = resolve_routing_models(
+            config,
+            model_entries,
+            harness_status,
+            _routable_backend_ids(detected, rendered_commands),
+        )
+        for harness, (ok, reason) in harness_status.items():
+            print(f"harness  {'available' if ok else 'MISSING':9} {harness}: {reason}")
+        for note in model_notes:
+            print(f"model    note      {note}")
         for note in command_notes:
             print(f"command  note      {note}")
         for note in routing_notes:

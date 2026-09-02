@@ -1358,6 +1358,34 @@ class ExecutionStore:
                 (now, outcome, new_session_id, row["id"]),
             )
 
+    def attach_dispatch_session(self, run_id: str, unit_id: str, session_id: str) -> None:
+        """Attach the confirmed session id to the open dispatch row.
+
+        An empty session id can be filled once. Repeating the same attachment
+        is idempotent. A different id is rejected to preserve launch identity.
+        """
+        if not session_id:
+            raise ValueError("session_id must be non-empty")
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            self._require_unit(conn, run_id, unit_id)
+            row = conn.execute(
+                "SELECT id, session_id FROM dispatches WHERE run_id = ? AND unit_id = ? "
+                "AND settled_at IS NULL ORDER BY id DESC LIMIT 1",
+                (run_id, unit_id),
+            ).fetchone()
+            if row is None:
+                raise NoOpenDispatchError(run_id, unit_id)
+            if row["session_id"] not in (None, session_id):
+                raise ValueError(
+                    f"dispatch {run_id!r}/{unit_id!r} already has session "
+                    f"{row['session_id']!r}"
+                )
+            conn.execute(
+                "UPDATE dispatches SET session_id = ? WHERE id = ?",
+                (session_id, row["id"]),
+            )
+
     def open_dispatches(self, run_id: str) -> List[DispatchRecord]:
         """Every currently OPEN (``settled_at IS NULL``) dispatch for
         ``run_id``, ordinal by insertion order."""
