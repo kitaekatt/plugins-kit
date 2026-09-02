@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -259,3 +260,47 @@ class TestLimit:
             limit=1,
         )
         assert len(doc["jobs"]) == 1
+
+
+class TestAsciiGuardActuallyFires:
+    """Regression: the guard used to scan the RENDERED json, where
+    ensure_ascii=True had already escaped every non-ASCII character, so it
+    could never fire. It must inspect the source strings instead."""
+
+    def test_rendered_json_hides_non_ascii(self) -> None:
+        # The reason the old guard was vacuous, pinned so it cannot regress.
+        rendered = json.dumps({"a": "café"}, indent=2)
+        assert not any(ord(ch) > 127 for ch in rendered)
+
+    def test_guard_finds_non_ascii_in_a_nested_string(self) -> None:
+        doc = {"jobs": [{"prompt": {"user": "café", "system": "ok"}}]}
+        hits = emit._non_ascii_strings(doc)
+        assert hits == ["jobs[0].prompt.user"]
+
+    def test_guard_is_quiet_on_a_clean_document(self) -> None:
+        doc = {"jobs": [{"prompt": {"user": "plain", "system": "ok"}}]}
+        assert emit._non_ascii_strings(doc) == []
+
+
+class TestEmptySubjectSkipped:
+    """Regression: a zero-line document admits no acceptable finding, because
+    the checker requires 1 <= line <= subject_lines."""
+
+    def test_empty_document_is_not_emitted(self, tmp_path: Path) -> None:
+        repo = tmp_path
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        docs = repo / "docs"
+        docs.mkdir()
+        (docs / "empty.md").write_text("", encoding="utf-8")
+        (docs / "real.md").write_text("# Title\n\nBody text.\n", encoding="utf-8")
+
+        document = emit.build_job_file(
+            subject_dir=docs,
+            repo_root=repo,
+            standards=checker.DEFAULT_STANDARDS,
+            endpoints=["sonnet"],
+            max_parallel=1,
+            limit=None,
+        )
+        emitted = {job["id"] for job in document["jobs"]}
+        assert not any("empty" in job_id for job_id in emitted), emitted

@@ -287,6 +287,23 @@ def build_job_file(
 ) -> dict:
     records = discover_project_docs(subject_dir)
     records.sort(key=lambda r: r["path"])
+
+    # A zero-line subject admits no acceptable finding: the checker requires
+    # 1 <= line <= subject_lines, which is unsatisfiable at 0, so every job
+    # emitted for one could only ever be rejected. Drop it here rather than
+    # emit a job that cannot pass its own contract.
+    kept = []
+    for record in records:
+        subject_abs = (repo_root / record["path"]).resolve()
+        if subject_line_count(subject_abs) < 1:
+            print(
+                f"skipping {record['path']}: empty document admits no finding",
+                file=sys.stderr,
+            )
+            continue
+        kept.append(record)
+    records = kept
+
     if limit is not None:
         records = records[:limit]
 
@@ -319,6 +336,28 @@ def build_job_file(
 
 def _has_non_ascii(text: str) -> bool:
     return any(ord(ch) > 127 for ch in text)
+
+
+def _non_ascii_strings(value: object, path: str = "") -> list[str]:
+    """Report every string in a nested structure that carries non-ASCII text.
+
+    json.dumps escapes non-ASCII to \\uXXXX by default, so scanning the
+    RENDERED document can never observe it. The source strings are the only
+    place the check is meaningful.
+    """
+    hits: list[str] = []
+    if isinstance(value, str):
+        if _has_non_ascii(value):
+            hits.append(path or "<root>")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str) and _has_non_ascii(key):
+                hits.append(f"{path}.{key} (key)" if path else f"{key} (key)")
+            hits.extend(_non_ascii_strings(item, f"{path}.{key}" if path else str(key)))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            hits.extend(_non_ascii_strings(item, f"{path}[{index}]"))
+    return hits
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -363,10 +402,16 @@ def main(argv: list[str] | None = None) -> int:
         limit=args.limit,
     )
 
-    rendered = json.dumps(document, indent=2)
-    if _has_non_ascii(rendered):
-        print("emitted document contains non-ASCII text", file=sys.stderr)
+    non_ascii = _non_ascii_strings(document)
+    if non_ascii:
+        print(
+            "emitted document contains non-ASCII text at: "
+            + ", ".join(non_ascii[:5]),
+            file=sys.stderr,
+        )
         return 3
+
+    rendered = json.dumps(document, indent=2)
 
     if args.out in ("-", None):
         print(rendered)
