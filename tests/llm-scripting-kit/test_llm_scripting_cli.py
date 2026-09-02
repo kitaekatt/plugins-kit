@@ -7,6 +7,12 @@ import pytest
 from llm_scripting_kit import cli
 from llm_scripting_kit.completion.factory import BackendSelection
 from llm_scripting_kit.completion.types import LLMResponse
+from llm_scripting_kit.reachability import (
+    STATUS_REACHABLE,
+    STATUS_UNKNOWN,
+    STATUS_UNREACHABLE,
+    Reachability,
+)
 
 
 class FakeBackend:
@@ -368,6 +374,164 @@ def test_no_call_flag_is_silently_discarded_beside_a_request(
         argv.append("")
     assert cli.main(argv) == cli.EXIT_PROTOCOL
     assert flag in _protocol_error(capsys)["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# `endpoints --verify` and `probe` -- reachability, never a completion
+# ---------------------------------------------------------------------------
+
+
+def _fake_entries(_project_root):
+    """Stand-in for cli._collect_endpoint_entries, isolated from real config."""
+    config = {"default_endpoint": "openrouter"}
+    discovery = type("D", (), {"notes": []})()
+    values = {
+        "openrouter": {"kind": "transport", "base_url": "http://a/v1", "key_env": "K"},
+        "sol": {"kind": "harness", "harness": "codex", "model": "gpt-5-codex"},
+    }
+    return config, discovery, values
+
+
+def test_endpoints_without_verify_makes_no_reachability_call(monkeypatch, capsys):
+    """Plain `endpoints` must stay instant and offline -- no network, no subprocess."""
+    monkeypatch.setattr(cli, "_collect_endpoint_entries", _fake_entries)
+
+    def _fail_if_called(*_a, **_kw):
+        pytest.fail("check_many must not run without --verify")
+
+    monkeypatch.setattr(cli, "check_many", _fail_if_called)
+
+    assert cli.main(["endpoints"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert "reachability" not in payload["endpoints"]["openrouter"]
+    assert "reachability" not in payload["endpoints"]["sol"]
+
+
+def test_endpoints_verify_adds_a_reachability_field_per_entry(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_collect_endpoint_entries", _fake_entries)
+    calls = []
+
+    def _fake_check_many(values, *, timeout, project_root):
+        calls.append((set(values), timeout, project_root))
+        return {
+            "openrouter": Reachability(status=STATUS_REACHABLE, checked="models-endpoint", detail="ok"),
+            "sol": Reachability(status=STATUS_UNREACHABLE, checked="cli-version", detail="`codex` not found on PATH"),
+        }
+
+    monkeypatch.setattr(cli, "check_many", _fake_check_many)
+
+    assert cli.main(["endpoints", "--verify", "--timeout", "3"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["endpoints"]["openrouter"]["reachability"] == {
+        "status": "reachable", "checked": "models-endpoint", "detail": "ok",
+    }
+    assert payload["endpoints"]["sol"]["reachability"]["status"] == "unreachable"
+    # the existing shape (kind, base_url, harness, ...) is untouched
+    assert payload["endpoints"]["openrouter"]["base_url"] == "http://a/v1"
+    assert payload["endpoints"]["sol"]["harness"] == "codex"
+    assert calls == [({"openrouter", "sol"}, 3.0, None)]
+
+
+def test_probe_exit_code_is_the_answer_when_reachable(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_collect_endpoint_entries", _fake_entries)
+    monkeypatch.setattr(
+        cli, "check_entry",
+        lambda entry, name, *, timeout, project_root: Reachability(
+            status=STATUS_REACHABLE, checked="models-endpoint", detail="ok"
+        ),
+    )
+
+    assert cli.main(["probe", "--endpoint", "openrouter"]) == cli.EXIT_OK
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["endpoint"] == "openrouter"
+    assert payload["reachability"] == {"status": "reachable", "checked": "models-endpoint", "detail": "ok"}
+    assert captured.err == ""
+
+
+def test_probe_exit_code_is_failure_when_unreachable(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_collect_endpoint_entries", _fake_entries)
+    monkeypatch.setattr(
+        cli, "check_entry",
+        lambda entry, name, *, timeout, project_root: Reachability(
+            status=STATUS_UNREACHABLE, checked="cli-version", detail="`codex` not found on PATH"
+        ),
+    )
+
+    assert cli.main(["probe", "--endpoint", "sol"]) == cli.EXIT_FAILURE
+    captured = capsys.readouterr()
+    assert "codex` not found on PATH" in captured.err
+    payload = json.loads(captured.out)
+    assert payload["reachability"]["status"] == "unreachable"
+
+
+def test_probe_exit_code_is_indeterminate_when_the_check_could_not_run(monkeypatch, capsys):
+    """DEFECT 1 regression coverage at the CLI surface: a check that could not
+    run must exit a THIRD, distinguishable code -- never EXIT_OK (0) and never
+    EXIT_FAILURE (1), the code an "unreachable" verdict returns. A caller
+    branching only on `== 0` is safe either way, but one branching on
+    `!= 0 -> down` must be able to tell 1 and 5 apart, which is the entire
+    point of this exit code.
+    """
+    monkeypatch.setattr(cli, "_collect_endpoint_entries", _fake_entries)
+    monkeypatch.setattr(
+        cli, "check_entry",
+        lambda entry, name, *, timeout, project_root: Reachability(
+            status=STATUS_UNKNOWN, checked="cli-version",
+            detail="no reachability check registered for harness 'bogus'",
+        ),
+    )
+
+    exit_code = cli.main(["probe", "--endpoint", "sol"])
+    assert exit_code == cli.EXIT_INDETERMINATE
+    assert exit_code not in (cli.EXIT_OK, cli.EXIT_FAILURE, cli.EXIT_USAGE)
+    captured = capsys.readouterr()
+    assert "no reachability check registered" in captured.err
+    payload = json.loads(captured.out)
+    assert payload["reachability"]["status"] == "unknown"
+
+
+def test_probe_defaults_to_the_default_endpoint(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_collect_endpoint_entries", _fake_entries)
+    seen = []
+    monkeypatch.setattr(
+        cli, "check_entry",
+        lambda entry, name, *, timeout, project_root: (
+            seen.append(name),
+            Reachability(status=STATUS_REACHABLE, checked="models-endpoint", detail="ok"),
+        )[1],
+    )
+
+    assert cli.main(["probe"]) == cli.EXIT_OK
+    assert seen == ["openrouter"]
+
+
+def test_probe_unknown_endpoint_name_is_still_exit_usage_not_indeterminate(monkeypatch, capsys):
+    """A NAME that does not resolve to configuration (EXIT_USAGE, 2) must stay
+    distinct from a resolved endpoint whose CHECK could not run
+    (EXIT_INDETERMINATE, 5) -- two different failure axes, decided at two
+    different points (before vs. after a check is even attempted).
+    """
+    monkeypatch.setattr(cli, "_collect_endpoint_entries", _fake_entries)
+
+    assert cli.main(["probe", "--endpoint", "no-such-endpoint"]) == cli.EXIT_USAGE
+    envelope = json.loads(capsys.readouterr().err)
+    assert envelope["error"]["kind"] == "configuration"
+    assert "no-such-endpoint" in envelope["error"]["message"]
+
+
+def test_probe_never_makes_a_completion_call(monkeypatch, capsys):
+    """The exit-code answer must come from reachability, never `create_backend`."""
+    monkeypatch.setattr(cli, "_collect_endpoint_entries", _fake_entries)
+    monkeypatch.setattr(
+        cli, "check_entry",
+        lambda entry, name, *, timeout, project_root: Reachability(
+            status=STATUS_REACHABLE, checked="models-endpoint", detail="ok"
+        ),
+    )
+    monkeypatch.setattr(cli, "create_backend", lambda *_a, **_kw: pytest.fail("no completion call"))
+
+    assert cli.main(["probe", "--endpoint", "openrouter"]) == cli.EXIT_OK
 
 
 def test_the_flag_surface_keeps_its_defaults(monkeypatch, capsys):

@@ -29,6 +29,13 @@ from .completion import (
 from .constants import USER_ENV_FILE
 from .env_file import read_env_file, write_env_file
 from .model_endpoints import EndpointRegistryError
+from .reachability import (
+    DEFAULT_VERIFY_TIMEOUT_S,
+    STATUS_UNKNOWN,
+    STATUS_UNREACHABLE,
+    check_entry,
+    check_many,
+)
 from .request_protocol import (
     PROTOCOL_VERSION,
     ProtocolError,
@@ -61,6 +68,22 @@ from EXIT_FAILURE (1) for the reason the protocol exists at all: 1 means a call
 ran and failed, and retrying it may work; 4 means nothing ran and retrying the
 same bytes cannot.
 """
+EXIT_INDETERMINATE = 5
+"""`probe` could not determine reachability -- the check itself did not run to
+a verdict (e.g. an optional dependency such as `bootstrap_lib` was
+unavailable), as opposed to running and finding the target down.
+
+Distinct from EXIT_USAGE (2) on a DIFFERENT axis than EXIT_PROTOCOL is from
+EXIT_FAILURE: EXIT_USAGE there means the endpoint NAME does not resolve to
+anything configured -- a config problem, decided before any check runs.
+EXIT_INDETERMINATE means the name resolved fine and a check was attempted, but
+that check itself could not complete. A caller gating on `probe`'s exit code
+must be able to tell "not configured" (2), "checked, and it is down" (1), and
+"could not check" (5) apart, and must not treat 5 as though it were 1 --
+skipping a possibly-live endpoint on the strength of an unrun check is exactly
+the false negative this code exists to prevent. See DEFAULT_VERIFY_TIMEOUT_S
+and reachability.STATUS_UNKNOWN for the full mapping and its rationale.
+"""
 
 
 def _json(value: Any, *, stream: Any = None) -> None:
@@ -89,6 +112,33 @@ def _parser() -> argparse.ArgumentParser:
 
     endpoints = sub.add_parser("endpoints", help="List configured transports and harnesses.")
     _add_project_arg(endpoints)
+    endpoints.add_argument(
+        "--verify",
+        action="store_true",
+        help=(
+            "Check each endpoint's reachability now and add a 'reachability' "
+            "field to it. Off by default: plain `endpoints` stays instant, "
+            "offline config listing -- this makes network/subprocess calls."
+        ),
+    )
+    endpoints.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_VERIFY_TIMEOUT_S,
+        help=f"Per-endpoint --verify timeout in seconds (default {DEFAULT_VERIFY_TIMEOUT_S:g}).",
+    )
+    probe = sub.add_parser(
+        "probe",
+        help="Exit-code check: is one configured endpoint reachable right now?",
+    )
+    _add_endpoint_arg(probe)
+    _add_project_arg(probe)
+    probe.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_VERIFY_TIMEOUT_S,
+        help=f"Reachability check timeout in seconds (default {DEFAULT_VERIFY_TIMEOUT_S:g}).",
+    )
     models = sub.add_parser("models", help="List models for an endpoint.")
     _add_endpoint_arg(models)
     _add_project_arg(models)
@@ -143,7 +193,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         return _cmd_which(args.endpoint)
     try:
         if args.cmd == "endpoints":
-            return _cmd_endpoints(args.project_root)
+            return _cmd_endpoints(args.project_root, verify=args.verify, timeout_s=args.timeout)
+        if args.cmd == "probe":
+            return _cmd_probe(args.endpoint, args.project_root, args.timeout)
         if args.cmd == "models":
             return _cmd_models(args.endpoint, args.project_root)
         if args.cmd == "resolve":
@@ -159,7 +211,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     return EXIT_USAGE
 
 
-def _cmd_endpoints(project_root: Optional[str]) -> int:
+def _collect_endpoint_entries(
+    project_root: Optional[str],
+) -> "tuple[dict, Any, dict[str, dict[str, Any]]]":
+    """Build the ``endpoints`` verb's entry map. Pure config, no I/O beyond disk reads.
+
+    Shared by ``_cmd_endpoints`` and ``_cmd_probe`` so there is exactly one
+    place that turns configuration into the JSON shape a reachability check
+    dispatches on.
+    """
     config = load_model_config(project_root=project_root)
     discovery = discover_model_entries(config=config, project_root=project_root)
     values: dict[str, dict[str, Any]] = {}
@@ -180,6 +240,18 @@ def _cmd_endpoints(project_root: Optional[str]) -> int:
         }
     for name, entry in discovery.items():
         values.setdefault(name, _entry_json(entry))
+    return config, discovery, values
+
+
+def _cmd_endpoints(project_root: Optional[str], *, verify: bool = False, timeout_s: float = DEFAULT_VERIFY_TIMEOUT_S) -> int:
+    config, discovery, values = _collect_endpoint_entries(project_root)
+    if verify:
+        # Opt-in only: a plain `endpoints` call must never make a network or
+        # subprocess call, since callers enumerate configuration with it and
+        # must not start paying for round trips silently.
+        checks = check_many(values, timeout=timeout_s, project_root=project_root)
+        for name, result in checks.items():
+            values[name]["reachability"] = result.to_json()
     _json({
         "default": default_endpoint_name(config),
         "endpoints": values,
@@ -191,6 +263,39 @@ def _cmd_endpoints(project_root: Optional[str]) -> int:
         },
         "notes": discovery.notes,
     })
+    return EXIT_OK
+
+
+def _cmd_probe(endpoint: Optional[str], project_root: Optional[str], timeout_s: float) -> int:
+    """Exit-code check: is one configured endpoint reachable right now?
+
+    A thin wrapper over the same :mod:`.reachability` code path `endpoints
+    --verify` uses -- one implementation, two surfaces. Exit code is the
+    primary interface: THREE distinguishable outcomes, not a plain
+    success/failure pair -- see EXIT_INDETERMINATE for why "could not check"
+    must not collapse into "checked and it is down". A short reason also goes
+    to stderr on any non-zero exit, and the same reachability record rides on
+    stdout as JSON for a caller that wants the detail either way.
+    """
+    config, _discovery, values = _collect_endpoint_entries(project_root)
+    name = endpoint or default_endpoint_name(config)
+    entry_json = values.get(name)
+    if entry_json is None:
+        raise EndpointResolveError(f"no configured endpoint named '{name}'")
+    result = check_entry(entry_json, name, timeout=timeout_s, project_root=project_root)
+    _json({"endpoint": name, **entry_json, "reachability": result.to_json()})
+    # Exit code mapping (see EXIT_INDETERMINATE for the full rationale):
+    #   0 (EXIT_OK)           reachability.STATUS_REACHABLE   -- checked, answered
+    #   1 (EXIT_FAILURE)      reachability.STATUS_UNREACHABLE -- checked, did not answer
+    #   5 (EXIT_INDETERMINATE) reachability.STATUS_UNKNOWN     -- could not check at all
+    # 2 (EXIT_USAGE) is reserved for an endpoint NAME that does not resolve to
+    # configuration at all -- raised above, before a check is ever attempted.
+    if result.status == STATUS_UNREACHABLE:
+        print(result.detail, file=sys.stderr)
+        return EXIT_FAILURE
+    if result.status == STATUS_UNKNOWN:
+        print(result.detail, file=sys.stderr)
+        return EXIT_INDETERMINATE
     return EXIT_OK
 
 
