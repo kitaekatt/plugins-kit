@@ -452,6 +452,36 @@ that never fired and no error anywhere. content-pipeline-kit's type is
 adding a duplicated type to a seam, name it distinctly or document which side
 a caller must import from.
 
+## A caller that sets the deadline owns the timeout
+
+A plugin above `llm_scripting_kit.completion` passes its own budget down as
+`BackendOptions.timeout_s`. When that budget expires, the exception coming back
+is evidence about the CALLER's deadline and says nothing about the endpoint --
+so classifying it as a provider halt makes the consumer exclude a perfectly
+healthy endpoint, and (where the halt is persistent) collapse a retry budget it
+believes it still has.
+
+job-kit hit this twice, with two different transports and the same reasoning:
+
+- CLI backends -- llm-scripting-kit maps `AgentTimeoutError` to
+  `HALT_RATE_LIMIT`, which is correct for a caller that did NOT set the
+  timeout ("CLI-layer backoff is functionally a rate limit"). job-kit did, so
+  `max_attempts: 3` silently became one attempt.
+- HTTP backends -- `OpenRouterBackend` began honoring `timeout_s` as the
+  OpenAI client timeout, and `openai.APITimeoutError` is a SUBCLASS of
+  `APIConnectionError`, so a consumer treating connection errors as
+  "endpoint unreachable" excluded a merely slow endpoint for the whole run.
+
+Two rules. Classify the caller's own deadline BEFORE any transport-error test,
+because the timeout type is frequently a subclass of the broader one. And when a
+transport starts honoring `timeout_s`, re-check every consumer's exception
+classification -- the change is invisible from below and looks like a bug in the
+consumer's retry policy from above.
+
+The fix belongs on the CONSUMER side in both cases; plugin boundaries are hard
+boundaries, and llm-scripting-kit's mapping is right for the callers that did
+not set the deadline.
+
 ## Describing a plugin
 
 Describe a plugin by the question it answers and the altitude it holds, in one
