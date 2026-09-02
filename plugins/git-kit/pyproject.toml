@@ -1,6 +1,6 @@
 [project]
 name = "git-kit"
-version = "0.16.0"
+version = "0.17.0"
 description = "Host-side dependencies for git-kit plugin"
 requires-python = ">=3.12,!=3.14.*"
 
@@ -9,9 +9,15 @@ requires-python = ">=3.12,!=3.14.*"
 # PyYAML is needed because the review pipeline resolves a project's declared
 # plugin-write paths through bootstrap_lib.config_resolve, which reads the
 # project's config layer to honour a plugin_data_dir relocation.
-# openai is needed because a review lane may be routed to a configured
-# llm-scripting-kit endpoint (a non-Agent `model` in a review profile), and the
-# transport backend imports the SDK lazily. llm_scripting_kit itself arrives via
-# the shared-libs .pth, declared in bootstrap.json -- the SDK is the one piece it
-# does not bring with it.
-dependencies = ["pyyaml", "openai"]
+dependencies = ["pyyaml"]
+
+# OPTIONAL, and deliberately not a hard dependency. A review lane reaches an
+# llm-scripting-kit endpoint only when the user configures a non-Agent `model`
+# in a review profile, and only a TRANSPORT entry needs the SDK at all (a
+# harness entry shells out to a CLI). Everyone else -- which is everyone, by
+# default -- would be installing an SDK for a code path they never run.
+# Absence degrades rather than breaks: scripts/run_review_lane.py reports the
+# missing dependency by name and exits as a configuration error, and the
+# default Agent dispatch is untouched.
+[project.optional-dependencies]
+endpoint-dispatch = ["openai"]

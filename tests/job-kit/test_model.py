@@ -13,6 +13,7 @@ from job_kit.model import (
     Prompt,
     WorkspaceSpec,
     load_job_file,
+    validate_max_parallel,
 )
 
 
@@ -211,3 +212,64 @@ def test_acceptance_outcome_is_validated_and_accepted_comes_from_exit_code(
             accepted=True,
             outcome="unknown",
         )
+
+
+def test_job_file_accepts_a_positive_max_parallel_and_defaults_to_one(
+    tmp_path: Path,
+) -> None:
+    """A worker-pool bound above one is loaded; the default stays sequential."""
+    document = """jobs:
+  - id: lint
+    prompt:
+      user: fix lint
+    endpoint_preference: [fake]
+    contract:
+      command: [true]
+"""
+    sequential = tmp_path / "sequential.yaml"
+    sequential.write_text(document, encoding="utf-8")
+    parallel = tmp_path / "parallel.yaml"
+    parallel.write_text(f"max_parallel: 4\n{document}", encoding="utf-8")
+
+    assert load_job_file(sequential).max_parallel == 1
+    assert load_job_file(parallel).max_parallel == 4
+
+
+@pytest.mark.parametrize(
+    "value", ["0", "-1", "true", "1.5", "'3'", "null"]
+)
+def test_job_file_rejects_a_non_positive_integer_max_parallel(
+    tmp_path: Path, value: str
+) -> None:
+    """Zero, negatives, booleans, floats, strings and null are refused."""
+    jobs_path = tmp_path / "jobs.yaml"
+    jobs_path.write_text(
+        f"""max_parallel: {value}
+jobs:
+  - id: lint
+    prompt:
+      user: fix lint
+    endpoint_preference: [fake]
+    contract:
+      command: [true]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="max_parallel must be a positive integer"):
+        load_job_file(jobs_path)
+
+
+@pytest.mark.parametrize("value", [0, -3, True, False, 1.0, "2", None])
+def test_validate_max_parallel_rejects_every_non_positive_integer(
+    value: object,
+) -> None:
+    """The shared validator is the single gate both the file and store use."""
+    with pytest.raises(ValueError, match="max_parallel must be a positive integer"):
+        validate_max_parallel(value)
+
+
+def test_validate_max_parallel_accepts_positive_integers() -> None:
+    """A positive integer is returned unchanged."""
+    assert validate_max_parallel(1) == 1
+    assert validate_max_parallel(12) == 12

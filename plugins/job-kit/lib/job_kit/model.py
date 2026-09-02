@@ -474,6 +474,21 @@ class Job:
         return result
 
 
+def validate_max_parallel(value: object) -> int:
+    """Return a positive worker-pool bound or raise a typed value error.
+
+    ``bool`` is an ``int`` subclass and a YAML ``max_parallel: true`` would
+    otherwise become a pool of one, so it is rejected explicitly. Floats and
+    numeric strings are rejected rather than coerced: a jobs file that says
+    ``"3"`` is a mistake worth reporting, not a bound worth guessing.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("max_parallel must be a positive integer")
+    if value < 1:
+        raise ValueError("max_parallel must be a positive integer")
+    return int(value)
+
+
 @dataclass(frozen=True)
 class JobFile:
     """A loaded YAML document and run-level options."""
@@ -484,8 +499,9 @@ class JobFile:
     disallowed_tools: Optional[str] = None
 
     def __post_init__(self) -> None:
-        if self.max_parallel != 1:
-            raise ValueError("job-kit job-core supports max_parallel=1 only")
+        object.__setattr__(
+            self, "max_parallel", validate_max_parallel(self.max_parallel)
+        )
         ids = [job.id for job in self.jobs]
         if len(ids) != len(set(ids)):
             raise ValueError("job ids must be unique within a run")
@@ -544,7 +560,7 @@ def load_job_file(path: PathLike) -> JobFile:
     workspace_root = _resolve_directory(document.get("workspace_root"), base_dir)
     return JobFile(
         jobs=jobs,
-        max_parallel=int(document.get("max_parallel", 1)),
+        max_parallel=validate_max_parallel(document.get("max_parallel", 1)),
         workspace_root=workspace_root,
         disallowed_tools=document.get("disallowed_tools"),
     )
@@ -885,6 +901,7 @@ __all__ = [
     "Job",
     "JobFile",
     "load_job_file",
+    "validate_max_parallel",
     "Usage",
     "AttemptError",
     "Acceptance",

@@ -36,6 +36,16 @@ default_endpoint: openrouter
 # not the same thing and still raises, so a dropped line cannot silently turn
 # auth off.
 #
+# key_file: an endpoint may also set `key_file: <path>` to read a credential
+# that already exists as a bare-value file -- the whole file content, with
+# surrounding whitespace/newline stripped, is used as the key. `~` expands to
+# the home directory. This is the LOWEST-precedence layer: the key_env
+# environment variable and every .env layer (project, then user) all win over
+# key_file, so setting it cannot change what a machine that already resolves a
+# key resolves. A missing, unreadable, or empty file silently yields no key
+# from this layer -- a keyless endpoint stays a supported configuration. No
+# default path is shipped here; where the file lives is the user's business.
+#
 # Endpoints may also come from the model-endpoints REGISTRY: entries in
 # ~/.claude/config/model-endpoints.yaml (or the file MODEL_ENDPOINTS_REGISTRY
 # names when set) resolve as endpoints by their entry id, without appearing

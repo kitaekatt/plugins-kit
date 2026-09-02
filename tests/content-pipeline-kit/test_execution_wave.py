@@ -192,6 +192,19 @@ def test_graph_readiness_withholds_successor_after_peer_accepts_without_applying
     assert second == []
 
 
+def test_graph_readiness_withholds_successor_after_apply_rejection(tmp_path):
+    store = _seeded_store(tmp_path)
+    claim = store.claim_unit("run-1", "u0", "worker-1")
+    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
+    store.record_apply_rejected("run-1", "u0", "stale anchored slice")
+
+    assert ready_wave(store, "run-1", GRAPH_STRATEGY) == []
+    reason = graph_block_reason(store, "run-1", GRAPH_STRATEGY)
+    assert reason is not None
+    assert "apply was refused" in reason
+    assert "plan another run" in reason
+
+
 def test_graph_readiness_re_withholds_after_apply_started_follows_apply_succeeded(tmp_path):
     """Attempts ordered [claim, accept, apply_succeeded, apply_started] --
     a LATER APPLY_STARTED after an APPLY_SUCCEEDED must RE-withhold the

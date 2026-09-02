@@ -1,7 +1,7 @@
 [project]
 name = "job-kit"
-version = "0.2.4"
-description = "Durable sequential execution for heterogeneous agent jobs."
+version = "0.3.0"
+description = "Durable execution for heterogeneous agent jobs through a bounded worker pool."
 requires-python = ">=3.12"
 dependencies = [
     "pyyaml>=6.0",

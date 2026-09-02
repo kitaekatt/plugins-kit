@@ -1,4 +1,4 @@
-"""job-kit: a durable, sequential runner for heterogeneous agent jobs."""
+"""job-kit: a durable runner for heterogeneous agent jobs."""
 
 _TOP_LEVEL_SHARED_LIBS = frozenset({"bootstrap_lib", "llm_scripting_kit"})
 

@@ -14,6 +14,7 @@ import pytest
 
 from content_pipeline.execution.controller import (
     ApplyUnknownError,
+    ApplyRejectedPredecessorError,
     GraphOrderMismatchError,
     MissingAcceptedTextError,
     RunAdapter,
@@ -24,7 +25,7 @@ from content_pipeline.execution.controller import (
     resume_run,
     unfinished_units,
 )
-from content_pipeline.execution.model import UnitState
+from content_pipeline.execution.model import ApplyRejected, AttemptKind, UnitState
 from content_pipeline.execution.store import ExecutionStore
 from content_pipeline.execution.wave import ready_wave
 from content_pipeline.pipeline.single_pass import Gate
@@ -243,6 +244,7 @@ def test_prepare_run_second_call_raises_on_accepted_but_unapplied_predecessor(tm
 
     assert exc_info.value.run_id == "run-1"
     assert exc_info.value.unit_id == "u0"
+    assert "finalize has not run" in str(exc_info.value)
 
 
 def test_prepare_run_proceeds_when_predecessor_was_finalized_between_waves(tmp_path):
@@ -406,6 +408,107 @@ def test_finalize_run_is_idempotent_never_replays_a_successful_apply(tmp_path):
     second = finalize_run(store, "run-1", adapter)
     assert second == []
     assert apply_calls == ["u0", "u1"]  # not replayed
+
+
+def test_finalize_run_records_apply_rejection_and_skips_it_on_repeat(tmp_path):
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    claim = store.claim_unit("run-1", "u0", "w")
+    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
+    apply_calls = []
+
+    def refuse(unit_id, payload):
+        apply_calls.append(unit_id)
+        raise ApplyRejected("stale anchored slice")
+
+    adapter = RunAdapter(parse_fn=lambda text: text, apply=refuse)
+
+    assert finalize_run(store, "run-1", adapter) == []
+    assert finalize_run(store, "run-1", adapter) == []
+    assert apply_calls == ["u0"]
+    unit = store.get_unit("run-1", "u0")
+    assert unit.state is UnitState.ACCEPTED
+    apply_attempts = [
+        attempt
+        for attempt in store.list_attempts("run-1", "u0")
+        if attempt.kind in {
+            AttemptKind.APPLY_STARTED,
+            AttemptKind.APPLY_REJECTED,
+        }
+    ]
+    assert [attempt.kind for attempt in apply_attempts] == [
+        AttemptKind.APPLY_STARTED,
+        AttemptKind.APPLY_REJECTED,
+    ]
+    assert apply_attempts[-1].error == "stale anchored slice"
+
+
+def test_apply_rejected_reason_is_bounded(tmp_path):
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    claim = store.claim_unit("run-1", "u0", "w")
+    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
+    reason = "r" * 700
+
+    def refuse(unit_id, payload):
+        raise ApplyRejected(reason)
+
+    adapter = RunAdapter(parse_fn=lambda text: text, apply=refuse)
+
+    finalize_run(store, "run-1", adapter)
+    recorded = store.list_attempts("run-1", "u0")[-1].error
+    assert recorded == "r" * 500
+
+
+def test_finalize_run_applies_healthy_unit_alongside_rejected_unit(tmp_path):
+    store = _seeded_store(tmp_path, unit_ids=("u0", "u1"))
+    for unit_id in ("u0", "u1"):
+        claim = store.claim_unit("run-1", unit_id, "w")
+        store.accept_unit("run-1", unit_id, claim.fencing_token, text=unit_id)
+    apply_calls = []
+
+    def apply(unit_id, payload):
+        apply_calls.append(unit_id)
+        if unit_id == "u0":
+            raise ApplyRejected("not applicable")
+
+    adapter = RunAdapter(parse_fn=lambda text: text, apply=apply)
+
+    assert finalize_run(store, "run-1", adapter) == ["u1"]
+    assert apply_calls == ["u0", "u1"]
+    assert store.list_attempts("run-1", "u0")[-1].kind is AttemptKind.APPLY_REJECTED
+    assert store.list_attempts("run-1", "u1")[-1].kind is AttemptKind.APPLY_SUCCEEDED
+
+
+def test_finalize_run_preserves_d6_for_non_rejection_apply_error(tmp_path):
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    claim = store.claim_unit("run-1", "u0", "w")
+    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
+
+    def fail_apply(unit_id, payload):
+        raise RuntimeError("side effect status is unknown")
+
+    adapter = RunAdapter(parse_fn=lambda text: text, apply=fail_apply)
+    with pytest.raises(RuntimeError, match="side effect status"):
+        finalize_run(store, "run-1", adapter)
+    assert store.list_attempts("run-1", "u0")[-1].kind is AttemptKind.APPLY_STARTED
+    assert all(
+        attempt.kind is not AttemptKind.APPLY_REJECTED
+        for attempt in store.list_attempts("run-1", "u0")
+    )
+
+
+def test_prepare_run_distinguishes_rejected_graph_predecessor(tmp_path):
+    store = _seeded_store(tmp_path, unit_ids=("u0", "u1"))
+    claim = store.claim_unit("run-1", "u0", "w")
+    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
+    store.record_apply_rejected("run-1", "u0", "stale anchored slice")
+    strategy = GraphWalkStrategy(order=lambda source: ["u0", "u1"])
+
+    with pytest.raises(ApplyRejectedPredecessorError) as raised:
+        prepare_run(store, "run-1", strategy, [WorkUnit(id="u0"), WorkUnit(id="u1")])
+
+    assert isinstance(raised.value, UnappliedPredecessorError)
+    assert "apply was refused" in str(raised.value)
+    assert "plan another run" in str(raised.value)
 
 
 def test_finalize_run_refuses_on_apply_unknown_absent_reconciliation(tmp_path):

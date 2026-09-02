@@ -532,7 +532,10 @@ class RunAdapter:
       evaluated the response under -- not a second, independently-supplied
       copy (D1's re-parse requirement).
     - ``apply`` -- ``(unit_id, payload) -> None``. The consumer's delivery
-      side effect (e.g. a ``deliver.*`` write).
+      side effect (e.g. a ``deliver.*`` write). It may raise
+      ``execution.model.ApplyRejected`` only when it guarantees that no
+      side effect occurred; any uncertain outcome must remain D6
+      ``apply_unknown``.
     - ``reconcile`` -- optional ``unit_id -> bool``. Answers "did this
       unit's apply already land" for a unit found ``apply_unknown``. Absent
       means finalize refuses to proceed past any ``apply_unknown`` unit

@@ -110,6 +110,123 @@ class TestPreflightRefusals:
         with pytest.raises(publish.PublishError, match="working tree is dirty"):
             publish.preflight()
 
+
+class TestRangeBaseSurvivesNonReleaseCommits:
+    """Master carries commits that are not releases; the boundary must survive.
+
+    An infra-drift sync or a reconcile records no Published-From trailer
+    because neither is a release. Reading only master's tip loses the boundary
+    the moment one lands, and the loss is silent: range_base falls back to the
+    ancient merge base, against which everything the last release shipped looks
+    like master-side content, so a routine publish is refused as a reconcile.
+    """
+
+    @staticmethod
+    def _project(repo: Path, published_from: str, subject: str = "publish") -> None:
+        """Put a projection commit carrying the trailer on master."""
+        _git(repo, "checkout", "-q", "master")
+        (repo / "shipped.txt").write_text(f"from {published_from}\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm",
+             f"{subject}\n\n{publish.PUBLISHED_FROM} {published_from}")
+        _git(repo, "push", "-q", "origin", "master")
+        _git(repo, "checkout", "-q", "dev")
+
+    def test_trailer_on_the_tip_is_found(self, repo):
+        head = _git(repo, "rev-parse", "dev")
+        self._project(repo, head)
+        _git(repo, "fetch", "-q", "origin")
+        assert publish.range_base() == head
+
+    def test_trailer_below_a_non_release_commit_is_still_found(self, repo):
+        head = _git(repo, "rev-parse", "dev")
+        self._project(repo, head)
+        _git(repo, "checkout", "-q", "master")
+        (repo / "infra.txt").write_text("infra sync, not a release\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "infra sync: carry policy to master")
+        _git(repo, "push", "-q", "origin", "master")
+        _git(repo, "checkout", "-q", "dev")
+        _git(repo, "fetch", "-q", "origin")
+        assert publish.range_base() == head
+
+    def test_no_trailer_anywhere_falls_back_to_master(self, repo):
+        assert publish.range_base() == f"{publish.REMOTE}/{publish.MASTER_BRANCH}"
+
+    def test_a_trailer_naming_a_non_ancestor_falls_back(self, repo):
+        """A rewritten dev must not silently narrow the range."""
+        self._project(repo, "0" * 40)
+        _git(repo, "fetch", "-q", "origin")
+        assert publish.range_base() == f"{publish.REMOTE}/{publish.MASTER_BRANCH}"
+
+
+class TestDirtyGateIgnoresDevOnlyPlugins:
+    """A dev-only plugin's uncommitted work must not block a publish.
+
+    It reaches no consumer on two independent counts -- the plugin is absent
+    from marketplace.json, and the change is uncommitted -- so refusing on it
+    makes a shared tree unpublishable for a reason the operator cannot act on
+    without committing another session's half-finished work.
+    """
+
+    @staticmethod
+    def _bump_only_pub_kit(repo: Path) -> None:
+        """Bump pub-kit WITHOUT `git add -A`.
+
+        The shared _bump helper stages everything, which would sweep this
+        class's deliberately-dirty dev-only file into the commit and trip the
+        mixed-commit refusal -- a different gate than the one under test.
+        """
+        manifest = repo / "plugins" / "pub-kit" / ".claude-plugin" / "plugin.json"
+        data = json.loads(manifest.read_text())
+        data["version"] = "1.1.0"
+        manifest.write_text(json.dumps(data, indent=2) + "\n")
+        _git(repo, "add", "--", "plugins/pub-kit/.claude-plugin/plugin.json")
+        _git(repo, "commit", "-qm", "pub-kit 1.1.0")
+
+    def test_dirty_dev_only_plugin_does_not_refuse(self, repo):
+        (repo / "plugins" / "dev-kit" / "scratch.py").write_text("wip\n")
+        self._bump_only_pub_kit(repo)
+        bumps, _excluded = publish.preflight()
+        assert any("pub-kit" in bump for bump in bumps)
+
+    def test_dirty_dev_only_tests_do_not_refuse(self, repo):
+        tests = repo / "tests" / "dev-kit"
+        tests.mkdir(parents=True, exist_ok=True)
+        (tests / "test_wip.py").write_text("# wip\n")
+        self._bump_only_pub_kit(repo)
+        bumps, _excluded = publish.preflight()
+        assert any("pub-kit" in bump for bump in bumps)
+
+    def test_dirty_dev_only_paths_are_not_even_reported(self, repo):
+        """The operator is told nothing about work that cannot affect anyone."""
+        (repo / "plugins" / "dev-kit" / "scratch.py").write_text("wip\n")
+        (repo / "scratch.txt").write_text("uncommitted")
+        with pytest.raises(publish.PublishError) as excinfo:
+            publish.preflight()
+        message = str(excinfo.value)
+        assert "scratch.txt" in message
+        assert "dev-kit" not in message
+
+    def test_a_published_plugin_still_refuses(self, repo):
+        """The gate keeps working where it protects someone."""
+        (repo / "plugins" / "pub-kit" / "scratch.py").write_text("wip\n")
+        with pytest.raises(publish.PublishError, match="working tree is dirty"):
+            publish.preflight()
+
+    def test_a_renamed_dev_only_path_is_judged_by_its_destination(self, repo):
+        src = repo / "plugins" / "dev-kit" / "moved.py"
+        src.write_text("x\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "dev-kit file")
+        # Bump BEFORE the rename: `git mv` stages it, and `git commit` with no
+        # pathspec takes the whole index, so a rename staged first rides into
+        # the pub-kit commit and trips the mixed-commit gate instead.
+        self._bump_only_pub_kit(repo)
+        _git(repo, "mv", "plugins/dev-kit/moved.py", "plugins/dev-kit/renamed.py")
+        bumps, _excluded = publish.preflight()
+        assert any("pub-kit" in bump for bump in bumps)
+
     def test_refuses_wrong_branch(self, repo):
         _git(repo, "checkout", "-q", "master")
         with pytest.raises(publish.PublishError, match="not on dev"):
@@ -164,6 +281,110 @@ class TestPreflightRefusals:
         _bump(repo, "pub-kit", "1.2.0", "pub-kit 1.2.0")
 
         publish.preflight()  # must not raise
+
+
+class TestMasterOnlyGuardAsksDevHistory:
+    """Master receiving dev content after the base is not a reconcile.
+
+    An infra sync or a hand reconcile carries dev content to master without
+    recording a publish point, so master's blob differs from the base while
+    being a state dev already holds. Comparing against the base alone reports
+    those paths as master-only and refuses a publish that would discard
+    nothing. The question that separates the two cases is whether master's blob
+    appears anywhere in dev's history at that path.
+    """
+
+    @staticmethod
+    def _base(repo: Path) -> None:
+        """Put a projection on master so range_base has a boundary to find."""
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        _git(repo, "push", "-q", "origin", "dev")
+        shipped = _git(repo, "rev-parse", "dev")
+        _git(repo, "checkout", "-q", "--detach", "origin/master")
+        _git(repo, "read-tree", "--reset", "-u", "dev")
+        _git(repo, "commit", "-qm",
+             f"publish: projected\n\nPublished-From: {shipped}")
+        _git(repo, "push", "-q", "origin", "HEAD:refs/heads/master")
+        _git(repo, "checkout", "-q", "dev")
+
+    @staticmethod
+    def _on_master(repo: Path, path: str, text: str, subject: str) -> None:
+        _git(repo, "checkout", "-q", "master")
+        _git(repo, "reset", "-q", "--hard", "origin/master")
+        (repo / path).write_text(text)
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", subject)
+        _git(repo, "push", "-q", "origin", "master")
+        _git(repo, "checkout", "-q", "dev")
+        _git(repo, "fetch", "-q", "origin")
+
+    def test_content_dev_already_carried_is_not_master_only(self, repo):
+        """The false positive: an infra sync brings dev's content to master
+        AFTER the recorded base, and dev then moves further ahead. Master's
+        blob differs from the base's, but dev has held it, so a publish taking
+        dev's version discards nothing."""
+        self._base(repo)
+        (repo / "shared.txt").write_text("dev wrote this\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "dev wrote this\n",
+                        "infra sync: carry shared.txt to master")
+        (repo / "shared.txt").write_text("dev moved on\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "advance shared.txt")
+
+        assert publish._master_only_paths() == []
+
+    def test_content_dev_never_had_is_still_master_only(self, repo):
+        """The refusal the guard exists for must survive the fix: a hotfix
+        written straight on master has a blob dev's history never held."""
+        self._base(repo)
+        (repo / "shared.txt").write_text("dev wrote this\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "hotfixed straight on master\n",
+                        "hotfix shared.txt")
+
+        assert publish._master_only_paths() == ["shared.txt"]
+
+    def test_a_master_side_deletion_is_still_reported(self, repo):
+        """No blob to look for, and a publish would resurrect the file. The
+        operator judges it, as before the reachability check existed."""
+        self._base(repo)
+        _git(repo, "checkout", "-q", "master")
+        _git(repo, "reset", "-q", "--hard", "origin/master")
+        _git(repo, "rm", "-q", "dev/notes.md")
+        _git(repo, "commit", "-qm", "drop the scratch notes")
+        _git(repo, "push", "-q", "origin", "master")
+        _git(repo, "checkout", "-q", "dev")
+        _git(repo, "fetch", "-q", "origin")
+
+        assert publish._master_only_paths() == ["dev/notes.md"]
+
+    def test_content_dev_took_through_a_merge_counts(self, repo):
+        """Dev can reach a state through a merge rather than a direct commit.
+        The walk must follow the parent the merge actually took its content
+        from, or content dev demonstrably holds reads as master-only."""
+        self._base(repo)
+        _git(repo, "checkout", "-qb", "side")
+        (repo / "shared.txt").write_text("written on the side\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "side: add shared.txt")
+        _git(repo, "checkout", "-q", "dev")
+        _git(repo, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+        _git(repo, "branch", "-q", "-D", "side")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "written on the side\n",
+                        "infra sync: carry shared.txt to master")
+        # Dev must move on, or the path is identical on both sides and never
+        # reaches the guard at all.
+        (repo / "shared.txt").write_text("dev moved on\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "advance shared.txt")
+
+        assert publish._master_only_paths() == []
 
 
 class TestDevOnlyExclusion:

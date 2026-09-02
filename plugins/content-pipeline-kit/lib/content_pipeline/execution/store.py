@@ -1143,6 +1143,39 @@ class ExecutionStore:
                 fencing_token=unit_row["fencing_token"],
             )
 
+    def record_apply_rejected(
+        self,
+        run_id: str,
+        unit_id: str,
+        reason: str,
+        *,
+        at: Optional[float] = None,
+    ) -> None:
+        """Record an apply refusal whose adapter guaranteed no side effect.
+
+        The unit must remain ACCEPTED. This is a terminal disposition on the
+        apply axis, not a unit-state transition, so a later finalize pass can
+        skip it without risking a duplicate apply.
+        """
+        now = time.time() if at is None else at
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            unit_row = self._require_unit(conn, run_id, unit_id)
+            state = UnitState(unit_row["state"])
+            if state is not UnitState.ACCEPTED:
+                raise NotAcceptedError(
+                    f"{run_id!r}/{unit_id!r} is {state.value}, not accepted"
+                )
+            self._record_attempt(
+                conn,
+                run_id,
+                unit_id,
+                AttemptKind.APPLY_REJECTED,
+                at=now,
+                fencing_token=unit_row["fencing_token"],
+                error=reason,
+            )
+
     # -- attempts ----------------------------------------------------------------
 
     def list_attempts(self, run_id: str, unit_id: Optional[str] = None) -> List[AttemptRecord]:

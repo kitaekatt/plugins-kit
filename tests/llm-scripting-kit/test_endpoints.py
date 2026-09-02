@@ -82,6 +82,25 @@ class TestCustomEndpoint:
         assert ep["key_env"] == "MY_VLLM_KEY"
         assert ep["account_check"] == "none"
 
+    def test_key_file_defaults_to_none_when_undeclared(self):
+        ep = resolve_endpoint("local-vllm", config=CUSTOM_CFG)
+        assert ep["key_file"] is None
+
+    def test_key_file_is_passed_through_when_declared(self):
+        cfg = {
+            "default_endpoint": "openrouter",
+            "endpoints": {
+                "openrouter": CUSTOM_CFG["endpoints"]["openrouter"],
+                "filed": {
+                    "base_url": "http://localhost:8001/v1",
+                    "key_env": "FILED_KEY",
+                    "key_file": "~/creds/filed-key",
+                },
+            },
+        }
+        ep = resolve_endpoint("filed", config=cfg)
+        assert ep["key_file"] == "~/creds/filed-key"
+
     def test_resolves_own_models(self):
         assert (
             resolve_model(config=CUSTOM_CFG, endpoint="local-vllm")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -17,6 +18,19 @@ from .store import JobStore, StoreError
 WORKSPACE_STATUSES = frozenset({"isolated", "none", "removing", "removed"})
 WORKSPACE_REASON_NONE = "no git repository detected from the declared directory"
 WORKSPACE_REASON_DECLINED = "workspace isolation declined by the job"
+
+# Git documents no concurrency promise for `worktree add` against one
+# repository, so creations are serialised per repository root. The lock is
+# keyed on the resolved root: two runs over different repositories never wait
+# on each other.
+_WORKTREE_LOCK_REGISTRY_GUARD = threading.Lock()
+_WORKTREE_LOCK_REGISTRY: dict[Path, threading.Lock] = {}
+
+
+def _worktree_lock(repo_root: Path) -> threading.Lock:
+    """Return the process-wide creation lock for one repository root."""
+    with _WORKTREE_LOCK_REGISTRY_GUARD:
+        return _WORKTREE_LOCK_REGISTRY.setdefault(repo_root, threading.Lock())
 
 
 class WorkspaceError(RuntimeError):
@@ -188,12 +202,13 @@ def create_worktree(repo_root: Path, workspace_path: Path, base_ref: str) -> Pat
         raise WorkspaceCreationError(
             f"could not create workspace parent {path.parent}: {exc}"
         ) from exc
-    if path.exists():
-        raise WorkspaceCreationError(f"workspace path already exists: {path}")
-    result = _git_result(
-        ("-C", str(root), "worktree", "add", "--detach", str(path), base_ref),
-        cwd=root,
-    )
+    with _worktree_lock(root):
+        if path.exists():
+            raise WorkspaceCreationError(f"workspace path already exists: {path}")
+        result = _git_result(
+            ("-C", str(root), "worktree", "add", "--detach", str(path), base_ref),
+            cwd=root,
+        )
     if result is None or result.returncode != 0:
         raise WorkspaceCreationError(
             f"git worktree creation failed for {path}: {_git_detail(result)}"

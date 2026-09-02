@@ -201,6 +201,11 @@ def version_at(ref: str, plugin: str) -> str | None:
 
 PUBLISHED_FROM = "Published-From:"
 
+# How far down master to look for the last recorded publish point. Generous
+# enough to see past a run of non-release commits (infra syncs, reconciles),
+# small enough that a master which never carried one falls back promptly.
+_RANGE_BASE_SEARCH_DEPTH = 50
+
 # Derived artifacts, regenerated from the plugin manifests on every publish.
 # master's copy is an OUTPUT of the last release rather than content anyone
 # authored there, so dev wins unconditionally -- the same rule the reconcile
@@ -220,6 +225,35 @@ def blob_at(ref: str, path: str) -> str | None:
                check=False) or None
 
 
+def _blob_reached_by_dev(path: str, blob: str) -> bool:
+    """True when `path` has held `blob` somewhere in dev's history.
+
+    The question `_master_only_paths` actually needs answered. A blob dev has
+    carried at that path is content dev picked up, whatever route it took to
+    master afterwards, so a publish cannot discard it.
+
+    The walk is the SIMPLIFIED one -- no `--full-history` -- and that is a
+    judgement, not an omission. Simplification keeps the commits where the path
+    changed along the history dev's tree actually descends from, which is the
+    set of states dev held. `--full-history` would additionally reach content
+    on a side branch a merge RESOLVED AWAY, and dev rejecting a state is
+    precisely the case where master still carrying it is a real loss the
+    operator should see.
+
+    One `cat-file --batch-check` resolves the whole commit list, so the cost is
+    two processes per path rather than one per commit.
+    """
+    commits = git("rev-list", DEV_BRANCH, "--", path, check=False).split()
+    if not commits:
+        return False
+    probe = subprocess.run(
+        ["git", "cat-file", "--batch-check=%(objectname)"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+        input="".join(f"{sha}:{path}\n" for sha in commits))
+    # Missing entries print "<input> missing", which cannot collide with a sha.
+    return blob in probe.stdout.split()
+
+
 def range_base() -> str:
     """The commit `..dev` should be measured from.
 
@@ -231,22 +265,40 @@ def range_base() -> str:
     therefore records the dev commit it was built from, and that -- not
     ancestry -- is the honest boundary.
 
-    Falls back to `origin/master` when the trailer is absent, names an object
-    this clone lacks, or names a commit that is not an ancestor of dev (a
-    rewritten dev). The fallback over-reports rather than under-reports, which
-    is the safe direction: a wider range costs noise, a narrower one silently
-    drops a commit from the release.
+    The trailer is searched for down master's history, not read off its TIP.
+    Master legitimately carries commits that are not projections -- an
+    infra-drift sync, a reconcile (both are documented operations in
+    docs/reference/publish-reconcile.md) -- and none of them records a boundary
+    because none of them is a release. Reading only the tip therefore loses the
+    boundary the moment anyone lands one, and the loss is silent: the fallback
+    below is the ANCIENT merge base, against which every file the last release
+    shipped looks like a master-side change, so `_master_only_paths` reports a
+    reconcile that does not exist and refuses a routine publish. The walk is
+    bounded because a master that never carried a projection has no boundary to
+    find and should reach the fallback quickly rather than scan its whole
+    history.
+
+    Falls back to `origin/master` when no trailer is found within that window,
+    or when the ones found name objects this clone lacks or commits that are
+    not ancestors of dev (a rewritten dev). The fallback over-reports rather
+    than under-reports, which is the safe direction: a wider range costs noise,
+    a narrower one silently drops a commit from the release.
     """
     master = f"{REMOTE}/{MASTER_BRANCH}"
-    message = git("log", "-1", "--format=%B", master, check=False)
-    for line in reversed(message.splitlines()):
-        line = line.strip()
-        if not line.startswith(PUBLISHED_FROM):
+    log = git("log", f"-{_RANGE_BASE_SEARCH_DEPTH}", "--format=%H%x1e%B%x1f",
+              master, check=False)
+    for entry in log.split("\x1f"):
+        if not entry.strip():
             continue
-        sha = line[len(PUBLISHED_FROM):].strip()
-        if sha and _rc("merge-base", "--is-ancestor", sha, DEV_BRANCH) == 0:
-            return sha
-        break
+        _sha, _sep, message = entry.partition("\x1e")
+        for line in reversed(message.splitlines()):
+            line = line.strip()
+            if not line.startswith(PUBLISHED_FROM):
+                continue
+            sha = line[len(PUBLISHED_FROM):].strip()
+            if sha and _rc("merge-base", "--is-ancestor", sha, DEV_BRANCH) == 0:
+                return sha
+            break
     return master
 
 
@@ -268,6 +320,16 @@ def _master_only_paths() -> list[str]:
     master-side change. Measuring from the recorded publish point instead
     compares master to the dev tree it was actually built from. The merge base
     is only the fallback, for a master that never carried a projection.
+
+    The base comparison is a PREFILTER, not the verdict. Master legitimately
+    receives dev content after the base -- an infra sync, a hand reconcile --
+    and master's blob then differs from the base while being a state dev
+    already holds, so comparing against the base alone reports a path dev is
+    strictly ahead on. What settles it is `_blob_reached_by_dev`: content dev
+    never picked up is content whose blob appears nowhere in dev's history at
+    that path. The prefilter still earns its place because a blob equal to the
+    base's is reachable by construction (the base is an ancestor of dev), so
+    every path master has not touched is answered without a history walk.
     """
     dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
     master = f"{REMOTE}/{MASTER_BRANCH}"
@@ -284,7 +346,14 @@ def _master_only_paths() -> list[str]:
         path = path.strip()
         if not path or path in GENERATED_PATHS or _dev_only_owned(path, dev_only):
             continue
-        if blob_at(master, path) != blob_at(base, path):
+        master_blob = blob_at(master, path)
+        if master_blob == blob_at(base, path):
+            continue
+        # A path master no longer has holds no content to discard by this
+        # test, but master DELETING it since the base is a master-side change
+        # a publish would undo, and there is no blob to look for. Report it and
+        # let the operator judge, which is what the guard did before.
+        if master_blob is None or not _blob_reached_by_dev(path, master_blob):
             stray.append(path)
     return stray
 
@@ -320,7 +389,7 @@ def preflight(allow_dev_only: set[str] | None = None
             f"not on {DEV_BRANCH} (publish releases {DEV_BRANCH} -> "
             f"{MASTER_BRANCH}); checkout {DEV_BRANCH} first")
 
-    dirty = git("status", "--porcelain")
+    dirty = _shippable_dirty_paths()
     if dirty:
         raise PublishError(
             "working tree is dirty -- commit your work before publishing "
@@ -328,7 +397,7 @@ def preflight(allow_dev_only: set[str] | None = None
             "changes may be another session's in-flight work; commit them in "
             "scoped commits rather than stashing or discarding). This script "
             "owns the derived artifacts and the git flow, not your changes.\n"
-            "Dirty files:\n" + dirty)
+            "Dirty files:\n" + "\n".join(dirty))
 
     git("fetch", REMOTE, "--quiet")
 
@@ -491,6 +560,53 @@ def excluded_dev_only_commits(allow: set[str]) -> dict[str, set[str]]:
                 if f.startswith(f"plugins/{plugin}/"):
                     offenders.setdefault(sha, set()).add(plugin)
     return offenders
+
+
+def _shippable_dirty_paths() -> list[str]:
+    """Uncommitted paths that could affect a consumer, in `git status` form.
+
+    A dev-only (`published: false`) plugin's own files are EXCLUDED, and not
+    merely tolerated -- they are not reported either. The dirty gate exists so a
+    publish cannot silently omit work a consumer would otherwise receive, and
+    for these paths that cannot happen twice over: the plugin is absent from
+    `marketplace.json`, so nobody can install it, and the change is uncommitted,
+    so it would not ship even from a published plugin. Reporting them makes the
+    shared tree unpublishable for a reason the operator cannot act on -- another
+    session's in-flight work on a plugin that reaches nobody -- and the only way
+    to clear it is to commit someone else's half-finished work, which is the one
+    thing this repo's git discipline forbids.
+
+    No flag forces a dev-only plugin INTO a release, so there is no case to
+    carve out here: `published: false` is a standing decision and
+    `--exclude-dev-only` only holds such a plugin's SOURCE back further. Should
+    a force-publish flag ever exist, this is the function that has to learn
+    about it -- a plugin being forced into a release makes its uncommitted work
+    shippable again, and therefore the operator's business.
+
+    Deleted paths are read from the status line rather than a diff so a rename
+    or a staged deletion is judged by the same rule as an edit.
+
+    `-uall` is load-bearing, not tidiness: plain porcelain collapses a wholly
+    untracked DIRECTORY into a single entry for the directory itself, so a new
+    folder inside a dev-only plugin arrives as its parent path and matches no
+    plugin. Listing untracked files individually makes every path judgable on
+    its own.
+    """
+    dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
+    kept = []
+    for line in git("status", "--porcelain", "-uall").splitlines():
+        if not line.strip():
+            continue
+        # Porcelain v1: two status columns, a space, then the path. A rename
+        # carries "old -> new"; judge the DESTINATION, which is where the
+        # content lands.
+        path = line[3:].strip().strip('"')
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1].strip().strip('"')
+        if _dev_only_owned(path, dev_only):
+            continue
+        kept.append(line)
+    return kept
 
 
 def _dev_only_owned(path: str, dev_only: set[str]) -> bool:
@@ -989,7 +1105,23 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--allow-dev-only", action="append", default=[], metavar="PLUGIN",
         help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--print-range-base", action="store_true",
+        help="print the commit `..dev` is measured from and exit, making no "
+             "writes and no network calls. scripts/check-staged-version-bump.sh "
+             "asks this so both gates measure a bump from the same publish "
+             "point rather than each deriving one")
     args = parser.parse_args(argv)
+
+    # Answered before anything else, because the caller is a pre-commit hook on
+    # a possibly unprovisioned clone: no preflight, no manifest reads, no writes.
+    if args.print_range_base:
+        try:
+            print(range_base())
+        except PublishError as exc:
+            print(f"range base unavailable: {exc}", file=sys.stderr)
+            return 1
+        return 0
 
     try:
         print("preflight:")

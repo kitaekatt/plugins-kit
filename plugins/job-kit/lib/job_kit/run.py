@@ -1,11 +1,13 @@
-"""Sequential job execution over the llm-scripting-kit completion seam."""
+"""Job execution over the llm-scripting-kit completion seam, through a pool."""
 
 from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Collection, Mapping, Optional, Sequence
@@ -44,9 +46,10 @@ from .model import (
     RunSnapshot,
     Usage,
     load_job_file,
+    validate_max_parallel,
 )
 from .select import SelectionError, select_endpoint
-from .store import JobStore, StoreError, UnknownRunError
+from .store import DuplicateJobError, JobStore, StoreError, UnknownRunError
 from .workspace import WorkspaceError, WorkspaceManager, WorkspaceResolution
 
 
@@ -780,6 +783,88 @@ def _selection_halted_reason(
     )
 
 
+class _HaltedEndpoints:
+    """Union the durable halt record with halts observed in this process.
+
+    The durable read is authoritative for everything a previous process wrote,
+    so it is never replaced -- a resumed run must keep seeing prior-process
+    halts. The in-memory set only adds what workers in THIS process observed,
+    which keeps narrowing monotonic for jobs dispatched afterwards.
+    """
+
+    def __init__(self, store: JobStore, run_id: str) -> None:
+        self._store = store
+        self._run_id = run_id
+        self._lock = threading.Lock()
+        self._observed: set[str] = set()
+
+    def current(self) -> frozenset[str]:
+        """Return the durable halts unioned with this process's observations."""
+        durable = self._store.halted_endpoints(self._run_id)
+        with self._lock:
+            self._observed.update(durable)
+            return frozenset(self._observed)
+
+    def record(self, endpoint: str) -> None:
+        """Note an endpoint whose attempt carried a persistent halt kind."""
+        with self._lock:
+            self._observed.add(endpoint)
+
+
+def _drive_job(
+    store: JobStore,
+    run_id: str,
+    job: Job,
+    *,
+    halts: _HaltedEndpoints,
+    timeout_s: float,
+    run_floor: Optional[str],
+    capabilities_provider: Optional[CapabilitiesProvider],
+    backend_factory: Optional[BackendFactory],
+    workspace_root: Path,
+    workspace_manager: WorkspaceManager,
+) -> None:
+    """Drive one job to a terminal state or to its attempt budget.
+
+    This is the unit the worker pool submits. Attempts within a job stay
+    strictly sequential, which is what keeps the attempt sequence append-only
+    without a lease: parallelism is across jobs only.
+    """
+    while True:
+        current = store.get_job(run_id, job.id)
+        if current is None or current.terminal:
+            return
+        halted_endpoints = halts.current()
+        try:
+            attempt = run_job(
+                store,
+                run_id,
+                job,
+                halted_endpoints=halted_endpoints,
+                timeout_s=timeout_s,
+                disallowed_tools=run_floor,
+                capabilities_provider=capabilities_provider,
+                backend_factory=backend_factory,
+                workspace_root=workspace_root,
+                workspace_manager=workspace_manager,
+            )
+        except SelectionError as exc:
+            attempts = store.list_attempts(run_id, job.id)
+            if attempts:
+                store.mark_halted(
+                    run_id,
+                    job.id,
+                    _selection_halted_reason(job, attempts, halted_endpoints),
+                )
+            else:
+                store.mark_unroutable(run_id, job.id, str(exc))
+            return
+        except WorkspaceError:
+            return
+        if attempt.halt_kind is not None:
+            halts.record(attempt.endpoint)
+
+
 def _run_pending(
     store: JobStore,
     run_id: str,
@@ -789,8 +874,14 @@ def _run_pending(
     capabilities_provider: Optional[CapabilitiesProvider],
     backend_factory: Optional[BackendFactory],
     workspace_manager: Optional[WorkspaceManager] = None,
+    max_parallel: int = 1,
 ) -> RunSnapshot:
-    """Process pending and interrupted jobs in declaration order."""
+    """Process pending and interrupted jobs through a bounded worker pool.
+
+    Jobs are submitted in declaration order. At ``max_parallel`` 1 they are
+    driven inline, in that order, exactly as a sequential run always did.
+    """
+    bound = validate_max_parallel(max_parallel)
     records = store.list_jobs(run_id)
     root = (
         Path(workspace_root).expanduser().resolve()
@@ -808,42 +899,56 @@ def _run_pending(
             tuple(record.job for record in records if not record.terminal),
             base_refs=base_refs,
         )
-    for record in records:
-        if record.terminal:
-            continue
-        while True:
-            current = store.get_job(run_id, record.job.id)
-            if current is None or current.terminal:
+    halts = _HaltedEndpoints(store, run_id)
+    pending = [record.job for record in records if not record.terminal]
+    dispatch: dict[str, object] = dict(
+        halts=halts,
+        timeout_s=timeout_s,
+        run_floor=run_floor,
+        capabilities_provider=capabilities_provider,
+        backend_factory=backend_factory,
+        workspace_root=root,
+        workspace_manager=manager,
+    )
+    if bound == 1 or len(pending) < 2:
+        for job in pending:
+            _drive_job(store, run_id, job, **dispatch)
+        return store.snapshot(run_id)
+
+    # Two workers on one job would break the append-only attempt sequence, and
+    # nothing but this submission loop guards it: every pending job is
+    # submitted exactly once, so the invariant is asserted here rather than
+    # left to a lease column the resume path could not honor.
+    job_ids = [job.id for job in pending]
+    if len(job_ids) != len(set(job_ids)):
+        raise DuplicateJobError(
+            f"run {run_id!r} lists a repeated job id; refusing to dispatch it twice"
+        )
+    store.scale_busy_timeout(bound)
+    executor = ThreadPoolExecutor(max_workers=bound, thread_name_prefix="job-kit")
+    futures: dict[Future[None], str] = {}
+    failure: Optional[BaseException] = None
+    try:
+        for job in pending:
+            futures[executor.submit(_drive_job, store, run_id, job, **dispatch)] = job.id
+        for future in as_completed(futures):
+            # A worker exception that is neither SelectionError nor
+            # WorkspaceError is unexpected: at max_parallel 1 it aborts the run
+            # loudly, and a pool must not turn it into a normal-looking
+            # snapshot with a job stranded non-terminal.
+            error = future.exception()
+            if error is not None:
+                failure = error
                 break
-            halted_endpoints = store.halted_endpoints(run_id)
-            try:
-                run_job(
-                    store,
-                    run_id,
-                    record.job,
-                    halted_endpoints=halted_endpoints,
-                    timeout_s=timeout_s,
-                    disallowed_tools=run_floor,
-                    capabilities_provider=capabilities_provider,
-                    backend_factory=backend_factory,
-                    workspace_root=root,
-                    workspace_manager=manager,
-                )
-            except SelectionError as exc:
-                attempts = store.list_attempts(run_id, record.job.id)
-                if attempts:
-                    store.mark_halted(
-                        run_id,
-                        record.job.id,
-                        _selection_halted_reason(
-                            record.job, attempts, halted_endpoints
-                        ),
-                    )
-                else:
-                    store.mark_unroutable(run_id, record.job.id, str(exc))
-                break
-            except WorkspaceError:
-                break
+    except (KeyboardInterrupt, SystemExit):
+        # In-flight attempts are never cancelled: an aborted invocation cannot
+        # be truthfully recorded. Stop dispatching and join what is running.
+        executor.shutdown(wait=True, cancel_futures=True)
+        raise
+    if failure is not None:
+        executor.shutdown(wait=True, cancel_futures=True)
+        raise failure
+    executor.shutdown(wait=True)
     return store.snapshot(run_id)
 
 
@@ -860,7 +965,7 @@ def run_jobs(
     capabilities_provider: Optional[CapabilitiesProvider] = None,
     backend_factory: Optional[BackendFactory] = None,
 ) -> RunSnapshot:
-    """Create and execute a flat sequential run of jobs."""
+    """Create and execute a flat run of jobs through a bounded pool."""
     store_object = _store_object(store)
     identifier = run_id or uuid.uuid4().hex
     root = (
@@ -869,13 +974,14 @@ def run_jobs(
         else default_workspace_root(identifier)
     )
     job_values = tuple(jobs)
+    bound = validate_max_parallel(max_parallel)
     run_floor = _validate_disallowed_tools(disallowed_tools)
     workspace_manager = WorkspaceManager(root, job_values)
     store_object.create_run(
         identifier,
         job_values,
         jobs_path=jobs_path,
-        max_parallel=max_parallel,
+        max_parallel=bound,
         workspace_root=root,
         workspace_base_refs=workspace_manager.base_refs,
         disallowed_tools=run_floor,
@@ -888,6 +994,7 @@ def run_jobs(
         capabilities_provider=capabilities_provider,
         backend_factory=backend_factory,
         workspace_manager=workspace_manager,
+        max_parallel=bound,
     )
 
 
@@ -897,13 +1004,16 @@ def run_job_file(
     store_path: Optional[str | Path] = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
     run_id: Optional[str] = None,
+    max_parallel: Optional[int] = None,
     capabilities_provider: Optional[CapabilitiesProvider] = None,
     backend_factory: Optional[BackendFactory] = None,
 ) -> RunSnapshot:
     """Load a jobs YAML file, create its ledger, and execute it.
 
     ``run_id`` preassigns the ledger's run id so the caller knows it before
-    the run starts and can resume it after an interruption."""
+    the run starts and can resume it after an interruption. ``max_parallel``
+    overrides the file's own bound, and the override is what the ledger
+    records, so a later resume of this run inherits it."""
     path = Path(jobs_path).expanduser().resolve()
     job_file = load_job_file(path)
     store = JobStore(store_path or default_store_path())
@@ -911,7 +1021,11 @@ def run_job_file(
         job_file.jobs,
         store,
         jobs_path=path,
-        max_parallel=job_file.max_parallel,
+        max_parallel=(
+            job_file.max_parallel
+            if max_parallel is None
+            else validate_max_parallel(max_parallel)
+        ),
         workspace_root=job_file.workspace_root,
         disallowed_tools=job_file.disallowed_tools,
         timeout_s=timeout_s,
@@ -926,15 +1040,26 @@ def resume_run(
     store: JobStore | str | Path,
     *,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    max_parallel: Optional[int] = None,
     capabilities_provider: Optional[CapabilitiesProvider] = None,
     backend_factory: Optional[BackendFactory] = None,
 ) -> RunSnapshot:
-    """Reopen a ledger and execute its non-terminal jobs."""
+    """Reopen a ledger and execute its non-terminal jobs.
+
+    The pool width comes from the ledger's recorded ``max_parallel``. An
+    explicit ``max_parallel`` applies to this pass only and is never written
+    back: the ledger records what the run was created with.
+    """
     store_object = _store_object(store)
     run = store_object.get_run(run_id)
     if run is None:
         raise UnknownRunError(run_id)
     root = run.workspace_root or default_workspace_root(run_id)
+    bound = (
+        run.max_parallel
+        if max_parallel is None
+        else validate_max_parallel(max_parallel)
+    )
     return _run_pending(
         store_object,
         run_id,
@@ -942,6 +1067,7 @@ def resume_run(
         timeout_s=timeout_s,
         capabilities_provider=capabilities_provider,
         backend_factory=backend_factory,
+        max_parallel=bound,
     )
 
 
