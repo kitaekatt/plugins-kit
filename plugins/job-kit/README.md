@@ -104,3 +104,26 @@ carrying `$JOB_KIT_RUN_ID`, so the check observes THIS attempt.
 
 Usage counts are nullable: a transport can complete without reporting tokens,
 and unknown usage is recorded as unknown rather than as zero.
+
+## Making one job depend on an earlier one
+
+A run is a FLAT set: job-kit passes nothing between jobs and gives each its own
+workspace. A later job can still consume an earlier one's output, through two
+facts and no plugin feature:
+
+- the earlier job's contract writes its result somewhere OUTSIDE the workspaces
+  (an absolute path, or a directory named by an environment variable you set
+  before `run`), because a worktree is discarded;
+- jobs run in declaration order, so the earlier job is finished before the later
+  one starts.
+
+**Put the correlation in the contract, not the prompt.** A prompt is an opaque
+string and cannot interpolate the run id, so a prompt can only say "the newest
+file matching this pattern" -- which will happily read a PREVIOUS run's output.
+The downstream contract has `JOB_KIT_RUN_ID`, so it can require the upstream
+artifact of THIS run and reject anything else. Loose prompt, strict contract.
+
+**This holds only at `max_parallel: 1`** (the default). Above that a flat set
+gives no ordering guarantee, so a file-mediated dependency is not safe. A DAG is
+deliberately out of scope; if you need ordering beyond what declaration order
+gives you, run two runs.
