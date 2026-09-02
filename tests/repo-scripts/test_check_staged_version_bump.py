@@ -305,6 +305,35 @@ class TestEndState:
         stage(repo)
         assert run_check(repo).returncode == 0
 
+    def test_unparseable_base_version_blocks(self, published_repo):
+        # The base side must fail in the same direction as the index side. An
+        # empty base_version is ambiguous on its own: it means either "absent at
+        # the base" (new plugin, pass) or "present at the base, version
+        # unreadable" (nothing to compare against, block). Treating emptiness
+        # alone as "differs" collapsed both onto the pass path, so a plugin
+        # whose published manifest stated no readable version was exempt from
+        # the gate for as long as that stayed true.
+        repo = published_repo
+        pj = repo / "plugins" / "foo" / ".claude-plugin" / "plugin.json"
+        pj.write_text("{ \"name\": \"foo\" }\n")  # no version at the base
+        (repo / "plugins" / "foo" / "code.py").write_text("x = 2\n")
+        stage(repo)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "unversioned",
+                        "--no-verify"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "update-ref", "refs/remotes/origin/master",
+             "HEAD"], check=True)
+        # The plugin IS present at the base; only its version is unreadable.
+        assert subprocess.run(
+            ["git", "-C", str(repo), "cat-file", "-e",
+             "origin/master:plugins/foo/.claude-plugin/plugin.json"]).returncode == 0
+        pj.write_text(json.dumps({"name": "foo", "version": "1.0.0"}, indent=2) + "\n")
+        (repo / "plugins" / "foo" / "code.py").write_text("x = 3\n")
+        stage(repo)
+        result = run_check(repo)
+        assert result.returncode == 1, result.stderr
+        assert "foo" in result.stderr
+
     def test_unparseable_index_version_blocks(self, published_repo):
         # Conservative failure direction: a version that will not parse is not
         # evidence of a bump.

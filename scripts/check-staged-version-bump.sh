@@ -46,7 +46,9 @@
 # then says so on stderr and falls back to the per-commit staged-diff question,
 # which needs nothing but git. Every failure direction here blocks rather than
 # passes: an unparseable version, an unresolvable base, a plugin whose index
-# version cannot be read.
+# version cannot be read, and a plugin present at the base whose version there
+# cannot be read. Only ABSENCE at the base is a pass, because a plugin that did
+# not exist at the last publish point has no version to have failed to change.
 #
 # Called by scripts/pre-commit-version-check.sh; POSIX sh, no bashisms.
 
@@ -135,12 +137,27 @@ for name in $names; do
         # base_version stays empty, which an existing version already differs
         # from. An index version that will not parse leaves index_version empty
         # and falls through to blocking, deliberately.
+        #
+        # base_present is what keeps those two directions apart. An empty
+        # base_version means one of two OPPOSITE things: the plugin is absent at
+        # the base (new -- pass), or it is present there and states no version
+        # this can read (unknown -- block). Reading emptiness alone as "differs"
+        # collapsed both onto the pass path, contradicting the header's rule
+        # that every failure direction blocks; base_present separates them, so
+        # the base side now fails in the same direction as the index side.
         index_version=$(staged_plugin_json_version "$name")
         base_version=""
+        base_present=0
         if git cat-file -e "$base:$pj" 2>/dev/null; then
+            base_present=1
             base_version=$(git show "$base:$pj" 2>/dev/null | version_of_stream)
         fi
-        if [ -n "$index_version" ] && [ "$index_version" != "$base_version" ]; then
+        base_readable=1
+        if [ "$base_present" = 1 ] && [ -z "$base_version" ]; then
+            base_readable=0
+        fi
+        if [ "$base_readable" = 1 ] && [ -n "$index_version" ] \
+           && [ "$index_version" != "$base_version" ]; then
             continue
         fi
     else
