@@ -2,8 +2,9 @@
 #
 # This file is the DEFAULT layer. Do not edit it in place: it lives inside the
 # plugin and is replaced on every version update. Override it instead, in
-# either or both of:
+# these layers from lowest to highest:
 #
+#   machine: ~/.claude/plugins/data/plugins-kit/awesome-kit/orchestration.yaml
 #   user:    ~/.claude/config/orchestration.yaml
 #   project: <project_root>/.claude/orchestration.yaml
 #
@@ -26,7 +27,7 @@
 # TWO HALVES.
 #
 # The DECISION half (resolution, lexicon, shape, routing, agent_types, effort,
-# announce) is hand-written configuration. `routing` is the ordered policy;
+# announce, review_overlap) is hand-written configuration. `routing` is the ordered policy;
 # names with the `agent:` prefix use the Agent tool's fixed menu, and every
 # other name resolves against llm-scripting-kit.
 #
@@ -42,6 +43,21 @@ schema_version: 3
 resolution: >-
   Ordered elimination: within a block, tests are evaluated in the order given and the FIRST
   match is the answer. There is no comparison step and no tie-break.
+
+# ---------------------------------------------------------------------------
+# Review overlap
+# ---------------------------------------------------------------------------
+review_overlap:
+  mode: premise-safe
+  modes:
+    premise-safe: >-
+      An in-flight REVIEW is a pending constraint change, not a lock on unrelated work. A unit none
+      of whose marked premises a review finding could refute may overlap the review. A unit
+      premised on the artifact under review waits for the verdict, or dispatches as investigation
+      only.
+    strict: >-
+      An in-flight REVIEW is a strict gate for implementation units. They wait for its verdict.
+      Investigation units may overlap only when they do not mutate the reviewed artifact.
 
 # ---------------------------------------------------------------------------
 # Lexicon
@@ -235,12 +251,15 @@ shape:
       ownership stated in the brief, plus backend isolation when writers share a checkout;
       (c) its standalone brief states what `done`
       looks like without requiring discovery inside the leaf; and (d) it runs a named cheap
-      objective check itself. At least two leaves must be runnable now on the same dependency
-      frontier. One runnable leaf at a time is sequencing, not parallelism. Cut along existing
-      module and test seams. Mark each admitted unit {parallel-leaf}. A weak or cheap implementor
-      takes only a {known} {rule-applying} leaf that is neither {unverifiable} nor {mutating};
-      interface design, cross-cutting decisions, integration, and conflict resolution stay with
-      the orchestrator or the strongest available model.
+      objective check itself. At least two leaves must be runnable on the same dependency
+      frontier. One runnable leaf at a time is sequencing, not parallelism. The razor verdict
+      is local to the frontier on which it was tested and expires when the runnable frontier
+      changes; a completed unit can fix the interface that made leaves inadmissible. A unit
+      shape is never inherited from an earlier frontier or increment. Cut along existing module
+      and test seams. Mark each admitted unit {parallel-leaf}. A weak or cheap implementor takes
+      only a {known} {rule-applying} leaf that is neither {unverifiable} nor {mutating}; interface
+      design, cross-cutting decisions, integration, and conflict resolution stay with the
+      orchestrator or the strongest available model.
   - id: plan-is-a-unit
     principle: P0.6
     text: >-
@@ -455,6 +474,13 @@ backends:
         Only with `-c sandbox_workspace_write.network_access=true`. Without
         it egress fails SILENTLY -- `curl` returns HTTP 000, exit 1, no error
         text.
+      concurrency: >-
+        No concurrency control is documented for `codex exec`. The real bounds --
+        account rate limits and local CPU/RAM -- are not observable from the policy
+        renderer. Do not infer an unbounded allowance. Record a machine-observed
+        limit by overriding `backends[codex].capabilities.concurrency` in the
+        machine-local file `~/.claude/plugins/data/plugins-kit/awesome-kit/orchestration.yaml`;
+        see references/configuration.md.
       returns: >-
         Content per the brief; `--output-schema <FILE>` can force a JSON
         Schema.
