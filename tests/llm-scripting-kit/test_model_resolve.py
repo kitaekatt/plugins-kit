@@ -217,7 +217,7 @@ class TestShippedHarnessEntries:
         found = discover_model_entries(config=DEFAULT_MODEL_CONFIG)
         for entry_id, model, effort in (
             ("sol", "gpt-5.6-sol", "high"),
-            ("luna", "gpt-5.6-luna", "max"),
+            ("luna", "gpt-5.6-luna", "high"),
         ):
             entry = found[entry_id]
             assert entry.kind == HARNESS_KIND
