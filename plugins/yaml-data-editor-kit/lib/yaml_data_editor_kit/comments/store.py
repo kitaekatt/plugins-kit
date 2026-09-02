@@ -20,7 +20,10 @@ from .errors import SelectorError
 from .hashing import slice_hash
 
 _REQUIRED_FIELDS = ('id', 'anchor', 'text', 'state', 'created', 'guard')
-_LEGAL_FIELDS = frozenset((*_REQUIRED_FIELDS, 'annotations'))
+_LEGAL_FIELDS = frozenset((*_REQUIRED_FIELDS, 'annotations', 'kind', 'ruling'))
+INSTRUCTION = 'instruction'
+QUESTION = 'question'
+_KINDS = frozenset((INSTRUCTION, QUESTION))
 _STATES = frozenset(('open', 'resolved'))
 _GUARD_PATTERN = re.compile(r'^sha256:[0-9a-f]{64}$')
 
@@ -36,6 +39,8 @@ class Comment:
     created: str
     guard: str
     annotations: dict[Any, Any]
+    kind: str = INSTRUCTION
+    ruling: str | None = None
 
     @classmethod
     def create(
@@ -62,6 +67,36 @@ class Comment:
             annotations=dict(annotations) if annotations is not None else {},
         )
         problems = _comment_diagnostics(comment, Path('<new comment>'))
+        if problems:
+            raise ValueError('; '.join(str(problem) for problem in problems))
+        return comment
+
+    @classmethod
+    def create_question(
+        cls,
+        profile: Profile,
+        corpus: Corpus,
+        *,
+        id: str,
+        anchor: str,
+        text: str,
+        created: str,
+        annotations: Mapping[Any, Any] | None = None,
+    ) -> Comment:
+        '''Create an open question with a guard over its resolved anchor slice.'''
+        parsed = parse_anchor(anchor)
+        resolved = resolve_anchor(parsed, profile, corpus)
+        comment = cls(
+            id=id,
+            anchor=parsed,
+            text=text,
+            state='open',
+            created=created,
+            guard=slice_hash(resolved.slice_value),
+            annotations=dict(annotations) if annotations is not None else {},
+            kind=QUESTION,
+        )
+        problems = _comment_diagnostics(comment, Path('<new question>'))
         if problems:
             raise ValueError('; '.join(str(problem) for problem in problems))
         return comment
@@ -151,7 +186,21 @@ class CommentStore:
 
     def resolve(self, comment: Comment) -> Comment:
         '''Mark one comment resolved and persist it without changing its guard.'''
+        if comment.kind == QUESTION:
+            raise ValueError('question comments must be resolved with rule()')
         resolved = replace(comment, state='resolved')
+        self.write(resolved)
+        return resolved
+
+    def rule(self, question: Comment, ruling: str) -> Comment:
+        '''Resolve one open question with a non-empty ruling.'''
+        if question.kind != QUESTION:
+            raise ValueError('rule() requires a question comment')
+        if question.state != 'open':
+            raise ValueError('rule() requires an open question')
+        if not isinstance(ruling, str) or not ruling.strip():
+            raise ValueError('rule() requires non-empty ruling text')
+        resolved = replace(question, state='resolved', ruling=ruling)
         self.write(resolved)
         return resolved
 
@@ -268,6 +317,15 @@ def _comment_from_mapping(
 
     if not isinstance(raw['text'], str):
         problems.append(_diagnostic(path, 'field text must be text', 'text'))
+    kind = raw.get('kind', INSTRUCTION)
+    if not isinstance(kind, str) or kind not in _KINDS:
+        problems.append(
+            _diagnostic(
+                path,
+                'field kind must be exactly instruction or question',
+                'kind',
+            )
+        )
     if not isinstance(raw['state'], str) or raw['state'] not in _STATES:
         problems.append(
             _diagnostic(
@@ -295,6 +353,30 @@ def _comment_from_mapping(
         problems.append(
             _diagnostic(path, 'field annotations must be a mapping', 'annotations')
         )
+    ruling = raw.get('ruling')
+    if kind == INSTRUCTION and 'ruling' in raw:
+        problems.append(
+            _diagnostic(path, 'instruction comments cannot have a ruling', 'ruling')
+        )
+    elif kind == QUESTION:
+        if not isinstance(raw['text'], str) or not raw['text'].strip():
+            problems.append(
+                _diagnostic(path, 'question text must contain a non-whitespace character', 'text')
+            )
+        if raw['state'] == 'open' and ruling is not None:
+            problems.append(
+                _diagnostic(path, 'open questions must have ruling: null', 'ruling')
+            )
+        elif raw['state'] == 'resolved' and (
+            not isinstance(ruling, str) or not ruling.strip()
+        ):
+            problems.append(
+                _diagnostic(
+                    path,
+                    'resolved questions must have non-empty ruling text',
+                    'ruling',
+                )
+            )
     if problems or parsed_anchor is None or not isinstance(comment_id, str):
         return None, problems
     return (
@@ -306,6 +388,8 @@ def _comment_from_mapping(
             created=raw['created'],
             guard=raw['guard'],
             annotations=annotations,
+            kind=kind,
+            ruling=ruling,
         ),
         [],
     )
@@ -329,6 +413,14 @@ def _comment_diagnostics(comment: Comment, path: Path) -> list[Diagnostic]:
         )
     if not isinstance(comment.text, str):
         problems.append(_diagnostic(path, 'field text must be text', 'text'))
+    if not isinstance(comment.kind, str) or comment.kind not in _KINDS:
+        problems.append(
+            _diagnostic(
+                path,
+                'field kind must be exactly instruction or question',
+                'kind',
+            )
+        )
     if not isinstance(comment.state, str) or comment.state not in _STATES:
         problems.append(
             _diagnostic(path, 'field state must be exactly open or resolved', 'state')
@@ -350,19 +442,46 @@ def _comment_diagnostics(comment: Comment, path: Path) -> list[Diagnostic]:
         problems.append(
             _diagnostic(path, 'field annotations must be a mapping', 'annotations')
         )
+    if comment.kind == INSTRUCTION and comment.ruling is not None:
+        problems.append(
+            _diagnostic(path, 'instruction comments cannot have a ruling', 'ruling')
+        )
+    elif comment.kind == QUESTION:
+        if not isinstance(comment.text, str) or not comment.text.strip():
+            problems.append(
+                _diagnostic(path, 'question text must contain a non-whitespace character', 'text')
+            )
+        if comment.state == 'open' and comment.ruling is not None:
+            problems.append(
+                _diagnostic(path, 'open questions must have ruling: null', 'ruling')
+            )
+        elif comment.state == 'resolved' and (
+            not isinstance(comment.ruling, str) or not comment.ruling.strip()
+        ):
+            problems.append(
+                _diagnostic(
+                    path,
+                    'resolved questions must have non-empty ruling text',
+                    'ruling',
+                )
+            )
     return problems
 
 
 def _comment_mapping(comment: Comment) -> dict[str, Any]:
-    return {
+    mapping = {
         'id': comment.id,
         'anchor': comment.anchor.canonical(),
         'text': comment.text,
         'state': comment.state,
         'created': comment.created,
         'guard': comment.guard,
+        'kind': comment.kind,
         'annotations': comment.annotations,
     }
+    if comment.kind == QUESTION:
+        mapping['ruling'] = comment.ruling
+    return mapping
 
 
 def _diagnostic(path: Path, message: str, field: str | None = None) -> Diagnostic:

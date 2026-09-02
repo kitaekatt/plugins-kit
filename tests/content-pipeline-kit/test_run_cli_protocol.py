@@ -238,6 +238,37 @@ def test_create_run_echoes_adapter_version(store):
     assert store.get_run("r1").adapter_version == "v1"
 
 
+def test_omitting_protocol_handlers_preserves_store_only_commands(store):
+    """The additive keyword does not change the store-only command registry."""
+    implicit = build_commands(store)
+    explicit = build_commands(store, protocol_handlers=None)
+    assert tuple(implicit) == tuple(explicit)
+    assert {name: command.help for name, command in implicit.items()} == {
+        name: command.help for name, command in explicit.items()
+    }
+    assert "protocol" not in implicit
+
+
+def test_protocol_handlers_mapping_is_used_without_building_default_handlers(store, monkeypatch):
+    seen = []
+
+    def handler(payload):
+        seen.append(dict(payload))
+        return {"handled": True}
+
+    commands = build_commands(store, protocol_handlers={"custom": handler})
+    _set_stdin(monkeypatch, json.dumps({
+        "protocol_version": "1",
+        "verb": "custom",
+        "payload": {"value": "ok"},
+    }))
+
+    result = commands["protocol"].handler([])
+    assert result["ok"] is True
+    assert result["result"] == {"handled": True}
+    assert seen == [{"value": "ok"}]
+
+
 def test_create_run_refuses_mismatched_adapter_version(store):
     adapter = _adapter(adapter_version="some.module/1")
     commands = build_commands(store, adapter=adapter)

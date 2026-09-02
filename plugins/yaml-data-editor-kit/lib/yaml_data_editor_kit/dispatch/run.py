@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+import json
 import os
 from pathlib import Path
 import threading
@@ -41,10 +42,10 @@ from yaml_data_editor_kit.comments import (
 )
 from yaml_data_editor_kit.comments.store import CommentStore
 from yaml_data_editor_kit.schema import errors_only, load_corpus, load_profile
-from yaml_data_editor_kit.schema.corpus import ABSENT
 
-from .planner import CommentPlanStore, CommentPlanner
+from .planner import CommentPlanStore, CommentPlanner, PlannerPolicy
 from .request import DispatchRequest, DispatchRequestSet, load_request
+from .units import plain_value, prompt_for_payload, unit_targets, validation_spec_for_unit
 
 
 @dataclass(frozen=True)
@@ -67,14 +68,21 @@ class RunSummary:
 class StaleSliceError(RuntimeError):
     """A unit's anchored slice changed before its result could be applied."""
 
-    def __init__(self, unit_id: str, expected: str, actual: str | None) -> None:
+    def __init__(
+        self,
+        unit_id: str,
+        expected: str,
+        actual: str | None,
+        target_anchor: str | None = None,
+    ) -> None:
         self.unit_id = unit_id
         self.expected = expected
         self.actual = actual
+        self.target_anchor = target_anchor
         detail = "unresolvable" if actual is None else repr(actual)
         super().__init__(
-            "unit {!r} is stale: expected anchored-slice hash {!r}, got {}".format(
-                unit_id, expected, detail
+            "unit {!r} target {!r} is stale: expected anchored-slice hash {!r}, got {}".format(
+                unit_id, target_anchor, expected, detail
             )
         )
 
@@ -83,6 +91,8 @@ def dispatch(
     request: DispatchRequest | DispatchRequestSet | str | Path,
     *,
     backend: LLMBackend | None = None,
+    planner_backend: LLMBackend | None = None,
+    planner_policy: PlannerPolicy | None = None,
 ) -> RunSummary:
     """Load, plan, and execute one file-backed dispatch request.
 
@@ -91,9 +101,12 @@ def dispatch(
     """
     resolved_request = _request_value(request)
     if resolved_request.driver == "claude_bg":
-        raise NotImplementedError(
-            "dispatch driver 'claude_bg' requires background-session machinery; "
-            "only the 'inline' driver is implemented"
+        from .background import BackgroundStagesRequiredError
+
+        raise BackgroundStagesRequiredError(
+            "background dispatch requires prepare_background_dispatch, "
+            "run_background_wave, get_background_dispatch_status, and "
+            "finalize_background_dispatch"
         )
 
     profile = load_profile(_profile_path(resolved_request.corpus_path))
@@ -110,16 +123,25 @@ def dispatch(
             )
         )
 
+    run_dir = resolved_request.run_dir
+    run_dir.mkdir(parents=True, exist_ok=True)
+    policy = planner_policy
+    if policy is not None and policy.cache_dir is None:
+        from dataclasses import replace
+
+        policy = replace(policy, cache_dir=run_dir / "planner-cache")
+    elif policy is None and planner_backend is not None:
+        policy = PlannerPolicy(cache_dir=run_dir / "planner-cache")
     planning_store = CommentPlanStore(
         profile,
         corpus,
         comments.comments,
         resolved_request.selection,
     )
-    units = CommentPlanner().units(planning_store)
-
-    run_dir = resolved_request.run_dir
-    run_dir.mkdir(parents=True, exist_ok=True)
+    units = CommentPlanner(
+        backend=planner_backend,
+        policy=policy,
+    ).units(planning_store)
     execution_path = run_dir / "execution.sqlite3"
     attributed_path = run_dir / "attributed.yaml"
     _load_attributed(attributed_path)
@@ -148,6 +170,7 @@ def dispatch(
         return unit_by_id[unit_id]
 
     def generate(unit: Any) -> str:
+        validation = adapter.resolve_validation_spec(unit)
         payload = unit.payload
         _assert_fresh(
             unit.id,
@@ -163,8 +186,10 @@ def dispatch(
             ),
             user=_prompt(payload),
             model="",
-            parse_fn=lambda text: text,
-            validators=(),
+            parse_fn=validation.parse_fn,
+            validators=validation.validators,
+            context=validation.context,
+            block_soft=validation.block_soft,
             max_attempts=1,
         )
         if not result.accepted or not result.responses:
@@ -179,19 +204,16 @@ def dispatch(
 
     def apply(unit_id: str, result: Any) -> None:
         unit = unit_by_id[unit_id]
-        _write_machine_result(
-            unit,
-            str(result),
-            attributed_path,
-        )
+        _write_machine_result(unit, result, attributed_path, profile, resolved_request.corpus_path)
         applied_ids.add(unit_id)
 
     adapter = RunAdapter(
         unit_for=unit_for,
-        parse_fn=lambda text: text,
+        validation_spec_for=validation_spec_for_unit,
         apply=apply,
         reconcile=lambda unit_id: False,
     )
+
 
     for unit in units:
         statuses[unit.id] = "running"
@@ -291,34 +313,47 @@ def _assert_fresh(
     profile: Any,
     corpus_path: Path,
 ) -> None:
-    expected = payload.get("content_hash")
-    anchor_text = payload.get("anchor")
-    if not isinstance(expected, str) or not isinstance(anchor_text, str):
-        raise ValueError("planned unit {!r} has an invalid freshness payload".format(unit_id))
-    try:
-        current_corpus = load_corpus(profile, corpus_path)
-        current = resolve_anchor(parse_anchor(anchor_text), profile, current_corpus)
-        actual = content_hash(current.slice_value)
-    except (EvaluationError, SelectorError) as exc:
-        raise StaleSliceError(unit_id, expected, None) from exc
-    if actual != expected:
-        raise StaleSliceError(unit_id, expected, actual)
-    anchors = payload.get("comment_anchors", ())
-    guards = payload.get("comment_guards", ())
-    if len(anchors) != len(guards):
-        raise ValueError("planned unit {!r} has mismatched comment freshness data".format(unit_id))
-    for anchor_text, expected_guard in zip(anchors, guards):
-        if not isinstance(anchor_text, str) or not isinstance(expected_guard, str):
-            raise ValueError("planned unit {!r} has invalid comment freshness data".format(unit_id))
+    current_corpus = load_corpus(profile, corpus_path)
+    for target in unit_targets(payload):
+        expected = target.get("content_hash")
+        anchor_text = target.get("anchor")
+        if not isinstance(expected, str) or not isinstance(anchor_text, str):
+            raise ValueError("planned unit {!r} has an invalid freshness payload".format(unit_id))
         try:
-            comment_slice = resolve_anchor(
-                parse_anchor(anchor_text), profile, current_corpus
-            ).slice_value
-            actual_guard = slice_hash(comment_slice)
+            current = resolve_anchor(parse_anchor(anchor_text), profile, current_corpus)
+            actual = content_hash(current.slice_value)
         except (EvaluationError, SelectorError) as exc:
-            raise StaleSliceError(unit_id, expected, None) from exc
-        if actual_guard != expected_guard:
-            raise StaleSliceError(unit_id, expected, actual_guard)
+            raise StaleSliceError(unit_id, expected, None, anchor_text) from exc
+        if actual != expected:
+            raise StaleSliceError(unit_id, expected, actual, anchor_text)
+        anchors = target.get("comment_anchors", ())
+        guards = target.get("comment_guards", ())
+        if len(anchors) != len(guards):
+            raise ValueError("planned unit {!r} has mismatched comment freshness data".format(unit_id))
+        for comment_anchor, expected_guard in zip(anchors, guards):
+            if not isinstance(comment_anchor, str) or not isinstance(expected_guard, str):
+                raise ValueError("planned unit {!r} has invalid comment freshness data".format(unit_id))
+            try:
+                comment_slice = resolve_anchor(
+                    parse_anchor(comment_anchor), profile, current_corpus
+                ).slice_value
+                actual_guard = slice_hash(comment_slice)
+            except (EvaluationError, SelectorError) as exc:
+                raise StaleSliceError(unit_id, expected, None, anchor_text) from exc
+            if actual_guard != expected_guard:
+                raise StaleSliceError(unit_id, expected, actual_guard, anchor_text)
+        for ruling in target.get("rulings", ()):
+            ruling_anchor = ruling.get("anchor")
+            expected_guard = ruling.get("guard")
+            if isinstance(ruling_anchor, str) and isinstance(expected_guard, str):
+                try:
+                    actual_guard = slice_hash(
+                        resolve_anchor(parse_anchor(ruling_anchor), profile, current_corpus).slice_value
+                    )
+                except (EvaluationError, SelectorError) as exc:
+                    raise StaleSliceError(unit_id, expected, None, anchor_text) from exc
+                if actual_guard != expected_guard:
+                    raise StaleSliceError(unit_id, expected, actual_guard, anchor_text)
 
 
 def _reject_claimed(
@@ -339,16 +374,7 @@ def _reject_claimed(
 
 
 def _prompt(payload: Mapping[str, Any]) -> str:
-    return yaml.safe_dump(
-        {
-            "anchor": payload.get("anchor"),
-            "slice": _plain_value(payload.get("anchored_slice")),
-            "comments": list(payload.get("comments", [])),
-            "content_hash": payload.get("content_hash"),
-        },
-        sort_keys=False,
-        allow_unicode=True,
-    )
+    return prompt_for_payload(payload)
 
 
 def _load_attributed(path: Path) -> dict[str, Any]:
@@ -369,24 +395,32 @@ def _load_attributed(path: Path) -> dict[str, Any]:
 
 def _write_machine_result(
     unit: Any,
-    result: str,
+    result: Any,
     path: Path,
+    profile: Any,
+    corpus_path: Path,
 ) -> None:
     with _attributed_write_lock(path):
+        _assert_fresh(unit.id, unit.payload, profile, corpus_path)
         attributed = _load_attributed(path)
         records = attributed.setdefault("records", {})
-        existing = records.get(unit.id, {})
-        if not isinstance(existing, dict):
-            raise ValueError("attributed record {!r} must be a mapping".format(unit.id))
-        record = dict(existing)
-        payload = unit.payload
-        record.setdefault("anchor", payload["anchor"])
-        record.setdefault("sourced", _plain_value(payload["anchored_slice"]))
-        record["comments"] = list(payload["comments"])
-        record["comment_ids"] = list(payload["comment_ids"])
-        record["content_hash"] = payload["content_hash"]
-        record["machine"] = result
-        records[unit.id] = record
+        targets = unit_targets(unit)
+        results = {unit.id: result} if "targets" not in unit.payload else result["results"]
+        for target in targets:
+            record_id = target.get("id", unit.id)
+            existing = records.get(record_id, {})
+            if not isinstance(existing, dict):
+                raise ValueError("attributed record {!r} must be a mapping".format(record_id))
+            record = dict(existing)
+            record.setdefault("anchor", target["anchor"])
+            record.setdefault("sourced", plain_value(target["anchored_slice"]))
+            record["comments"] = list(target["comments"])
+            record["comment_ids"] = list(target["comment_ids"])
+            record["content_hash"] = target["content_hash"]
+            record["machine"] = results[record_id] if isinstance(results, dict) else next(
+                item["machine"] for item in results if item["anchor"] == target["anchor"]
+            )
+            records[record_id] = record
         _atomic_dump(path, attributed)
 
 
@@ -425,16 +459,6 @@ def _atomic_dump(path: Path, value: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _plain_value(value: Any) -> Any:
-    if value is ABSENT:
-        return {"__absent__": True}
-    if isinstance(value, Mapping):
-        return {key: _plain_value(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_plain_value(item) for item in value]
-    if isinstance(value, tuple):
-        return [_plain_value(item) for item in value]
-    return value
 
 
 __all__ = [

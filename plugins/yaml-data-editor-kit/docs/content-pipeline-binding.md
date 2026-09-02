@@ -29,21 +29,33 @@ Implemented behavior in `dispatch/`:
 
 - `request.py` loads the corpus path, comment-store path, optional selection,
   driver name, and run directory from a YAML file with diagnostics.
-- `planner.py` implements `WorkUnitStrategy`. It groups comments on one
-  anchored record, gives each document-level comment its own unit, and puts
-  the anchored slice, comment text, and CPK content hash in the payload.
+- `planner.py` implements `WorkUnitStrategy`. `MechanicalCommentPlanner`
+  groups comments on one anchored record, gives each document-level comment its
+  own unit, and puts the anchored slice, comment text, and CPK content hash in
+  the payload. `AgenticCommentPlanner` and its default `CommentPlanner`
+  submit a canonical grouping request through CPK when a backend is
+  configured. An unusable response returns the complete mechanical plan.
+- `protocol.py` wraps the CPK `fail` handler. A terminal
+  `question/1:` failure names one target and becomes a guarded open question
+  record. The durable failed attempt is the handoff between the worker and
+  question materialization. Ordinary failures retain CPK behavior.
 - `run.py` executes the `inline` lane through CPK's execution store and inline
   driver, then writes accepted text to `machine` in a file-backed attributed
   store. A hash mismatch at result time is a stale rejection. Human slices
   are preserved and never written by this lane.
+- `background.py` provides a staged `claude_bg` lifecycle: prepare writes an
+  immutable plan and runtime stores, run supervises a background wave, status
+  reads durable state, and finalize applies accepted results. The worker mount
+  in `worker_mount.py` authenticates the saved plan and exposes CPK's
+  `read`/`submit`/`fail` protocol. `dispatch()` remains synchronous and
+  inline-only; a background request raises `BackgroundStagesRequiredError`.
+- Dispatch workers read the corpus and comment store and write only runtime
+  execution artifacts. Finalize writes only the `machine` layer in the
+  attributed store. It preserves `human`, `sourced`, and metadata.
 
 Deferred behavior:
 
-- agentic grouping of comments into larger tasks;
-- conversion of a worker ambiguity into a fail-to-anchored-question record;
-- `claude_bg` execution and its background-session machinery. The request
-  schema recognizes the driver so selection is explicit; dispatch raises a
-  clear `NotImplementedError` for it.
+None.
 
 Deliberately NOT adopted:
 
@@ -51,30 +63,30 @@ Deliberately NOT adopted:
   explicit staleness signal; hashing the whole corpus to rediscover it is
   work for nothing.
 - `roundtrip.questions` in its shipped direction. It is machine-asks-human;
-  comments are human-asks-machine. Both directions do exist in the finished
-  system -- a worker that runs `fail` on a genuine ambiguity becomes an
-  anchored question awaiting a ruling -- but that is a path built on
-  the comment model, not a reuse of `roundtrip`.
+  comments are human-asks-machine. The dispatch system supports both
+  directions: a worker that runs `fail` on a genuine ambiguity becomes an
+  anchored question awaiting a ruling. That path uses the comment model,
+  not `roundtrip`.
 
 Two extension points define the dispatch seam: the planner implements CPK's
 `pipeline.workunit.WorkUnitStrategy` protocol (`.units(store) ->
-list[WorkUnit]`) with mechanical record grouping; agentic
-grouping is deferred. "Do it inline vs spawn an agent" is the driver choice.
-The `inline.py` lane is implemented; `claude_bg.py` selection is wired in the
-request schema and rejected by the runner until its background-session
-machinery is built.
+list[WorkUnit]`) with mechanical grouping and optional agentic grouping.
+"Do it inline vs spawn an agent" is the driver choice. The inline lane is
+synchronous. The `claude_bg` lane uses the staged background API and the
+consumer-owned worker protocol mount.
 
 ## The two extension points
 
 These define the dispatch seam; everything else above is adoption.
 
 - **The planner implements `pipeline.workunit.WorkUnitStrategy`**
-  (`.units(store) -> list[WorkUnit]`) with mechanical record grouping.
-  Comment count is not unit count. Agentic grouping is deferred.
+  (`.units(store) -> list[WorkUnit]`) with mechanical record grouping and
+  optional agentic grouping. Comment count is not unit count.
 - **"Do it inline vs spawn an agent" is driver selection** --
-  `execution/drivers/inline.py` is implemented per unit. The `claude_bg`
-  choice is recognized and reports its deferred machinery through
-  `NotImplementedError`.
+  `execution/drivers/inline.py` handles synchronous work per unit.
+  `background.py` handles `claude_bg` through prepare, run, status, and
+  finalize stages. `worker_mount.py` supplies the consumer-owned protocol
+  mount.
 
 ## Do not build a quota predictor
 

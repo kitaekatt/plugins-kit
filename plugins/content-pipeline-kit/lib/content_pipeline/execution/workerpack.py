@@ -283,8 +283,23 @@ def _envelope_payload_text(verb: str, run_id: str, unit_id: str, worker_id: str)
             "payload": {"run_id": run_id, "unit_id": unit_id, "worker_id": worker_id},
         }
         return json.dumps(envelope, indent=2) + "\n"
-    # submit / fail: JSON-shaped template text, fencing_token a literal
-    # placeholder a worker fills in at runtime -- see docstring above.
+    # submit: JSON-shaped template text, fencing_token a literal placeholder
+    # a worker fills in at runtime -- see docstring above.
+    if verb == "submit":
+        return (
+            "{\n"
+            '  "protocol_version": "1",\n'
+            f"  \"verb\": {json.dumps(verb)},\n"
+            '  "payload": {\n'
+            f"    \"run_id\": {json.dumps(run_id)},\n"
+            f"    \"unit_id\": {json.dumps(unit_id)},\n"
+            f"    \"worker_id\": {json.dumps(worker_id)},\n"
+            '    "fencing_token": <FENCING_TOKEN>\n'
+            "  }\n"
+            "}\n"
+        )
+    # fail: workers replace both placeholders. The detail placeholder is
+    # unquoted so the worker supplies one JSON string literal via json.dumps.
     return (
         "{\n"
         '  "protocol_version": "1",\n'
@@ -293,7 +308,9 @@ def _envelope_payload_text(verb: str, run_id: str, unit_id: str, worker_id: str)
         f"    \"run_id\": {json.dumps(run_id)},\n"
         f"    \"unit_id\": {json.dumps(unit_id)},\n"
         f"    \"worker_id\": {json.dumps(worker_id)},\n"
-        '    "fencing_token": <FENCING_TOKEN>\n'
+        '    "fencing_token": <FENCING_TOKEN>,\n'
+        '    "terminal": true,\n'
+        '    "error": <FAILURE_DETAIL_JSON>\n'
         "  }\n"
         "}\n"
     )

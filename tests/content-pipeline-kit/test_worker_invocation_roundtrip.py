@@ -261,10 +261,13 @@ def test_fail_invocation_and_envelope_also_work(tmp_path):
     fail_path = write_fail[len("Write tool -> ") :]
     fail_template = envelopes["fail"][1]
     Path(fail_path).write_text(
-        fail_template.replace("<FENCING_TOKEN>", str(fencing_token)), encoding="utf-8"
+        fail_template
+        .replace("<FENCING_TOKEN>", str(fencing_token))
+        .replace("<FAILURE_DETAIL_JSON>", '"worker failed"'),
+        encoding="utf-8",
     )
 
     code, result, err = _run_cli(_tail(fail_cmd), commands)
     assert code == 0, f"fail failed: {err}"
     assert result["ok"] is True
-    assert result["result"]["state"] == "pending"
+    assert result["result"]["state"] == "failed"

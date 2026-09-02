@@ -293,3 +293,162 @@ def test_store_load_does_not_require_anchor_to_still_evaluate(
 
     assert loaded.diagnostics == []
     assert [comment.id for comment in loaded.comments] == ['note']
+
+
+def test_0120_record_without_kind_loads_as_instruction(
+    tmp_path: Path, write: Writer
+) -> None:
+    write('comments/note.yaml', yaml.safe_dump(_VALID_RAW, sort_keys=False))
+
+    loaded = CommentStore(tmp_path / 'comments').load()
+
+    assert loaded.diagnostics == []
+    assert loaded.comments[0].kind == 'instruction'
+    assert loaded.comments[0].ruling is None
+
+
+def test_instruction_round_trip_writes_explicit_kind(
+    tmp_path: Path, profile_dir: Path, write: Writer
+) -> None:
+    profile, corpus = _catalogue(tmp_path, profile_dir, write)
+    store = CommentStore.init(tmp_path / 'comments')
+
+    store.write(_comment(profile, corpus))
+
+    persisted = yaml.safe_load((store.root / 'note.yaml').read_text(encoding='utf-8'))
+    assert persisted['kind'] == 'instruction'
+    assert 'ruling' not in persisted
+
+
+def test_create_question_computes_guard_and_open_shape(
+    tmp_path: Path, profile_dir: Path, write: Writer
+) -> None:
+    profile, corpus = _catalogue(tmp_path, profile_dir, write)
+    question = Comment.create_question(
+        profile,
+        corpus,
+        id='question-1',
+        anchor='product/bolt',
+        text='Which value is authoritative?',
+        created='2026-09-01',
+        annotations={'source': {'run': 'run-1'}},
+    )
+
+    resolved = resolve_anchor(question.anchor, profile, corpus)
+    assert question.kind == 'question'
+    assert question.state == 'open'
+    assert question.ruling is None
+    assert question.guard == slice_hash(resolved.slice_value)
+
+
+def test_rule_resolves_question_and_preserves_prompt_guard_and_annotations(
+    tmp_path: Path, profile_dir: Path, write: Writer
+) -> None:
+    profile, corpus = _catalogue(tmp_path, profile_dir, write)
+    question = Comment.create_question(
+        profile,
+        corpus,
+        id='question-1',
+        anchor='product/bolt',
+        text='Which value is authoritative?',
+        created='2026-09-01',
+        annotations={'source': {'run': 'run-1'}},
+    )
+    store = CommentStore.init(tmp_path / 'comments')
+    store.write(question)
+
+    resolved = store.rule(question, 'Use the displayed value.')
+    loaded = store.load().comments[0]
+
+    assert resolved.state == 'resolved'
+    assert resolved.text == question.text
+    assert resolved.anchor == question.anchor
+    assert resolved.guard == question.guard
+    assert resolved.created == question.created
+    assert resolved.annotations == question.annotations
+    assert resolved.ruling == 'Use the displayed value.'
+    assert loaded == resolved
+
+
+def test_resolve_rejects_question_and_names_rule(
+    tmp_path: Path, profile_dir: Path, write: Writer
+) -> None:
+    profile, corpus = _catalogue(tmp_path, profile_dir, write)
+    question = Comment.create_question(
+        profile,
+        corpus,
+        id='question-1',
+        anchor='product/bolt',
+        text='Which value is authoritative?',
+        created='2026-09-01',
+    )
+
+    with pytest.raises(ValueError, match=r'rule\(\)'):
+        CommentStore.init(tmp_path / 'comments').resolve(question)
+
+
+def test_unknown_kind_is_a_named_diagnostic(tmp_path: Path, write: Writer) -> None:
+    write('comments/note.yaml', yaml.safe_dump(dict(_VALID_RAW, kind='other')))
+
+    loaded = CommentStore(tmp_path / 'comments').load()
+
+    assert loaded.comments == []
+    assert any(item.field == 'kind' and 'kind' in item.message for item in loaded.diagnostics)
+
+
+def test_whitespace_only_question_text_is_a_named_diagnostic(
+    tmp_path: Path, write: Writer
+) -> None:
+    write(
+        'comments/note.yaml',
+        yaml.safe_dump(dict(_VALID_RAW, kind='question', text='   ', ruling=None)),
+    )
+
+    loaded = CommentStore(tmp_path / 'comments').load()
+
+    assert loaded.comments == []
+    assert any(
+        item.field == 'text' and 'non-whitespace' in item.message
+        for item in loaded.diagnostics
+    )
+
+
+def test_instruction_with_ruling_is_a_named_diagnostic(
+    tmp_path: Path, write: Writer
+) -> None:
+    write(
+        'comments/note.yaml',
+        yaml.safe_dump(dict(_VALID_RAW, ruling='Not allowed')),
+    )
+
+    loaded = CommentStore(tmp_path / 'comments').load()
+
+    assert loaded.comments == []
+    assert any(item.field == 'ruling' and 'instruction' in item.message for item in loaded.diagnostics)
+
+
+def test_open_question_with_ruling_is_a_named_diagnostic(
+    tmp_path: Path, write: Writer
+) -> None:
+    raw = dict(_VALID_RAW, kind='question', ruling='Already decided')
+    write('comments/note.yaml', yaml.safe_dump(raw))
+
+    loaded = CommentStore(tmp_path / 'comments').load()
+
+    assert loaded.comments == []
+    assert any(item.field == 'ruling' and 'open' in item.message for item in loaded.diagnostics)
+
+
+def test_resolved_question_without_ruling_is_a_named_diagnostic(
+    tmp_path: Path, write: Writer
+) -> None:
+    raw = dict(_VALID_RAW, kind='question', state='resolved', ruling=None)
+    write('comments/note.yaml', yaml.safe_dump(raw))
+
+    loaded = CommentStore(tmp_path / 'comments').load()
+
+    assert loaded.comments == []
+    assert any(
+        item.field == 'ruling' and 'non-empty' in item.message
+        for item in loaded.diagnostics
+    )

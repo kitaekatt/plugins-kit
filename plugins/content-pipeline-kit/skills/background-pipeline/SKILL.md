@@ -30,6 +30,9 @@ outcomes, and status digests, the same invariant the driver itself upholds
    election, launching workers into free slots up to `max_agents`, polling and
    renewing leases each tick, and reclaiming units whose worker died. It
    returns when the wave is exhausted or the run halts.
+   The dispatcher records terminal worker failure as `worker_failed` and
+   preserves its FAIL attempt detail. `DispatchReport.recovered` lists units
+   adopted from durable open dispatch rows without a second launch.
 3. **Status at batch boundaries** -- `dispatch_wave` itself emits a status
    digest (`compute_status`'s dict form) every `batch_size` dispatches, and
    again on exit; read `DispatchReport.status_digests` rather than polling the
@@ -151,6 +154,10 @@ call never started, and launched nothing), or `wave_stalled` (nothing
 progressed for `stall_timeout_seconds`). An abort is not a halt: a halted run
 parks and resumes, while an abort means this call stopped and its reason
 tells you whether to investigate the environment or simply call again.
+
+`worker_failed` means that the worker reported terminal failure detail. The
+unit is terminally `FAILED`, and its FAIL attempt remains available for handoff.
+`DispatchReport.recovered` lists units adopted from durable open dispatch rows.
 
 ## Not configurable, and why
 

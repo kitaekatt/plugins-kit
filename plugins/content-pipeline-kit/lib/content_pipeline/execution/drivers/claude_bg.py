@@ -1093,6 +1093,7 @@ def dispatch_unit(
     # AND holding an open dispatch row -- which `reclaimable_units` excludes,
     # so nothing could ever recover it: `dispatch_wave`'s exit cleanup only
     # settles dispatches it is TRACKING, and this one never got that far.
+    matched: Optional[SessionRecord] = None
     try:
         prompt = build_launch_prompt(
             worker_command, run_id, unit.unit_id, worker_id, claim.fencing_token
@@ -1102,7 +1103,6 @@ def dispatch_unit(
         )
         short_id = _parse_launch_session_id(launch_stdout)
 
-        matched: Optional[SessionRecord] = None
         if short_id is not None:
             deadline = clock_fn() + launch_confirm_seconds
             while True:
@@ -1140,10 +1140,20 @@ def dispatch_unit(
                 except Exception:  # noqa: BLE001 -- best-effort, never masks the error below
                     pass
             raise LaunchMisconfigurationError(run_id, unit.unit_id, worker_id, short_id)
+        store.attach_dispatch_session(run_id, unit.unit_id, matched.session_id)
     except LaunchMisconfigurationError:
         raise  # already released and settled by the branch above
     except BaseException:
-        _release_claim_and_settle(store, run_id, unit.unit_id, claim.fencing_token, at=at)
+        try:
+            if matched is not None:
+                cli.stop(matched.id, env=env)
+                cli.rm(matched.id, env=env)
+        except Exception:  # noqa: BLE001 -- cleanup must not mask attachment error
+            pass
+        _release_claim_and_settle(
+            store, run_id, unit.unit_id, claim.fencing_token,
+            session_id=matched.session_id if matched is not None else None, at=at
+        )
         raise
 
     return OpenDispatch(
@@ -1362,6 +1372,28 @@ def supervise_tick(
     for unit_id, open_dispatch in open_dispatches.items():
         current_unit = store.get_unit(run_id, unit_id)
         if (
+            current_unit is not None
+            and current_unit.fencing_token == open_dispatch.fencing_token
+            and current_unit.state is UnitState.FAILED
+        ):
+            attempts = store.list_attempts(run_id, unit_id)
+            latest_fail = next(
+                (attempt for attempt in reversed(attempts) if attempt.kind is AttemptKind.FAIL),
+                None,
+            )
+            if latest_fail is not None and latest_fail.fencing_token == open_dispatch.fencing_token:
+                try:
+                    cli.stop(open_dispatch.id, env=env)
+                except Exception:  # noqa: BLE001 -- best-effort session cleanup
+                    pass
+                try:
+                    cli.rm(open_dispatch.id, env=env)
+                except Exception:  # noqa: BLE001 -- best-effort session cleanup
+                    pass
+                store.settle_dispatch(run_id, unit_id, outcome="worker_failed", at=now)
+                settled[unit_id] = "worker_failed"
+                continue
+        if (
             current_unit is None
             or current_unit.fencing_token != open_dispatch.fencing_token
             or current_unit.claimed_by != open_dispatch.worker_id
@@ -1572,6 +1604,7 @@ class DispatchReport:
     accepted: Tuple[str, ...] = ()
     settled: Dict[str, str] = field(default_factory=dict)
     failed_exhausted: Tuple[str, ...] = ()
+    recovered: Tuple[str, ...] = ()
     halted: Optional[str] = None
     status_digests: Tuple[Dict[str, Any], ...] = ()
     aborted_reason: Optional[str] = None
@@ -1726,12 +1759,63 @@ def dispatch_wave(
     settled_all: Dict[str, str] = {}
     claim_refused: Set[str] = set()
     failed_exhausted: List[str] = []
+    recovered: List[str] = []
     halted: Optional[str] = None
     status_digests: List[Dict[str, Any]] = []
     aborted_reason: Optional[str] = None
 
     def _now() -> float:
         return clock_fn() if at is None else at
+
+    # Adopt durable launches before selecting candidates. This closes the
+    # process-death gap: an attached session remains supervised by the next
+    # dispatcher instead of being launched a second time.
+    durable_dispatches = store.open_dispatches(run_id)
+    sessions_by_id: Dict[str, SessionRecord] = {}
+    if durable_dispatches:
+        snapshot_stdout, _snapshot_stderr, snapshot_rc = cli.agents_json(all_sessions=True, env=env)
+        if snapshot_rc == 0:
+            try:
+                sessions = parse_agents_json(snapshot_stdout).sessions
+                sessions_by_id = {key: session for session in sessions for key in (session.id, session.session_id)}
+            except AgentsJsonParseError:
+                sessions_by_id = {}
+    for record in durable_dispatches:
+        unit = store.get_unit(run_id, record.unit_id)
+        if unit is None:
+            continue
+        if record.session_id is None:
+            if unit.state is UnitState.CLAIMED and unit.claimed_by == record.worker_id:
+                store.fail_unit(run_id, record.unit_id, unit.fencing_token, at=_now())
+            store.settle_dispatch(run_id, record.unit_id, outcome="orphaned_preconfirmation", at=_now())
+            settled_all[record.unit_id] = "orphaned_preconfirmation"
+            continue
+        session = sessions_by_id.get(record.session_id)
+        if session is None:
+            store.settle_dispatch(run_id, record.unit_id, outcome="missing", at=_now())
+            settled_all[record.unit_id] = "missing"
+            continue
+        if unit.claimed_by != record.worker_id:
+            store.settle_dispatch(run_id, record.unit_id, outcome="superseded", at=_now())
+            settled_all[record.unit_id] = "superseded"
+            continue
+        if unit.state is UnitState.ACCEPTED:
+            store.settle_dispatch(run_id, record.unit_id, outcome="accepted", at=_now())
+            settled_all[record.unit_id] = "accepted"
+            continue
+        if unit.state is UnitState.FAILED:
+            store.settle_dispatch(run_id, record.unit_id, outcome="worker_failed", at=_now())
+            settled_all[record.unit_id] = "worker_failed"
+            continue
+        open_dispatches[record.unit_id] = OpenDispatch(
+            unit_id=record.unit_id,
+            worker_id=record.worker_id,
+            session_id=record.session_id,
+            id=session.id,
+            fencing_token=unit.fencing_token,
+            claimed_by=unit.claimed_by,
+        )
+        recovered.append(record.unit_id)
 
     last_progress_at = clock_fn()
 
@@ -1947,6 +2031,7 @@ def dispatch_wave(
         accepted=tuple(accepted),
         settled=settled_all,
         failed_exhausted=tuple(failed_exhausted),
+        recovered=tuple(recovered),
         halted=halted,
         status_digests=tuple(status_digests),
         aborted_reason=aborted_reason,

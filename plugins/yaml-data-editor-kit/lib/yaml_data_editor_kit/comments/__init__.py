@@ -26,7 +26,7 @@ from .staleness import (
     check_anchors,
     reanchor,
 )
-from .store import Comment, CommentSet, CommentStore
+from .store import INSTRUCTION, QUESTION, Comment, CommentSet, CommentStore
 
 __all__ = [
     'AddressError',
@@ -34,6 +34,8 @@ __all__ = [
     'Comment',
     'CommentSet',
     'CommentStore',
+    'INSTRUCTION',
+    'QUESTION',
     'DOC',
     'Evaluation',
     'EvaluationError',

@@ -64,6 +64,12 @@ from content_pipeline.execution.model import (
     UnitState,
 )
 from content_pipeline.execution.store import ExecutionStore
+from test_support.claude_bg_fakes import (
+    FakeRunner,
+    _advancing_clock_from,
+    _bg_record,
+    _healthy_runner,
+)
 
 LIB_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir,
@@ -87,44 +93,6 @@ def _no_real_claude_subprocess(monkeypatch):
 # ---------------------------------------------------------------------------
 # FakeRunner -- a scriptable claude process, driven per-invocation
 # ---------------------------------------------------------------------------
-
-
-class FakeRunner:
-    """Scripts responses by argv PREFIX match (the longest matching key
-    wins) and logs every call for later assertions. Any unscripted argv
-    raises loudly rather than silently returning something plausible."""
-
-    def __init__(self, scripts=None, *, default=None):
-        self.scripts = dict(scripts or {})
-        self.default = default
-        self.calls = []  # list of (argv, kwargs)
-
-    def script(self, argv_prefix, response):
-        self.scripts[tuple(argv_prefix)] = response
-
-    def __call__(self, argv, **kwargs):
-        argv = list(argv)
-        self.calls.append((argv, kwargs))
-        best_match = None
-        for prefix, response in self.scripts.items():
-            if tuple(argv[: len(prefix)]) == prefix and (
-                best_match is None or len(prefix) > len(best_match[0])
-            ):
-                best_match = (prefix, response)
-        if best_match is not None:
-            response = best_match[1]
-            if isinstance(response, list):
-                # A SEQUENCE of responses for this prefix: advance through it
-                # on each matching call, staying on the last entry once
-                # exhausted (mutates the same list object stored in
-                # self.scripts, so state persists across calls).
-                if len(response) > 1:
-                    return response.pop(0)
-                return response[0]
-            return response
-        if self.default is not None:
-            return self.default
-        raise AssertionError(f"FakeRunner: no script for argv {argv!r}")
 
 
 def _cli(runner) -> ClaudeCli:
@@ -345,21 +313,6 @@ _STOP_HELP_TEXT = "Usage: claude stop <id>\n\nStop a background session"
 _LOGS_HELP_TEXT = "Usage: claude logs <id>\n\nShow logs for a background session"
 _RM_HELP_TEXT = "Usage: claude rm <id>\n\nRemove a background session"
 _RESPAWN_HELP_TEXT = "Usage: claude respawn <id>\n\nRespawn a background session"
-
-
-def _healthy_runner(*, agents_json_body="[]", version=("2.1.233", "", 0)):
-    """A FakeRunner scripted to pass every preflight check."""
-    runner = FakeRunner()
-    runner.script(("claude", "--version"), version)
-    runner.script(("claude", "agents", "--json"), (agents_json_body, "", 0))
-    runner.script(("claude", "agents", "--help"), (_AGENTS_HELP_TEXT, "", 0))
-    runner.script(("claude", "agents", "stop", "--help"), (_AGENTS_HELP_TEXT, "", 0))
-    runner.script(("claude", "stop", "--help"), (_STOP_HELP_TEXT, "", 0))
-    runner.script(("claude", "logs", "--help"), (_LOGS_HELP_TEXT, "", 0))
-    runner.script(("claude", "rm", "--help"), (_RM_HELP_TEXT, "", 0))
-    runner.script(("claude", "respawn", "--help"), (_RESPAWN_HELP_TEXT, "", 0))
-    runner.script(("claude", "--bg", "-p"), ("", "error: option '-p' cannot be used with '--bg'", 1))
-    return runner
 
 
 def test_preflight_happy_path_returns_report():
@@ -1007,12 +960,6 @@ def _worker_command(tmp_path) -> WorkerCommand:
         answer_dir=str(answer_dir),
         envelope_dir=str(envelope_dir),
     )
-
-
-def _bg_record(*, id="a1b2c3d4", session_id="sess-1", state="working", **extra):
-    rec = {"kind": "background", "id": id, "sessionId": session_id, "state": state}
-    rec.update(extra)
-    return rec
 
 
 def _pending_unit(store, run_id, unit_id):
@@ -2704,24 +2651,6 @@ def _exhausted_store_with_refusing_claim(tmp_path, error, *, unit_ids=("u0", "u1
 
     store.claim_unit = _claim  # type: ignore[assignment]
     return store
-
-
-def _advancing_clock_from(start=1000.0, step=1.0):
-    """A clock that MOVES. Every test on this path runs on one, with a short
-    `stall_timeout_seconds`, because the refused unit stays CLAIMED with an
-    expired lease in the store: any mutation that stops excluding it from
-    candidate selection re-attempts it every tick, and on a FROZEN clock that
-    is an unkillable hang -- a mutation that hangs pins nothing. On an
-    advancing clock the same mutation trips the stall bound and the test goes
-    red with `aborted_reason == "wave_stalled"`.
-    """
-    ticks = {"t": start}
-
-    def _clock():
-        ticks["t"] += step
-        return ticks["t"]
-
-    return _clock
 
 
 def test_exhausted_unit_terminal_state_refusal_is_benign_and_not_a_failure(tmp_path):

@@ -40,12 +40,11 @@ The exceptions are the Write tool calls in the procedure's steps 2, 3, and 5
 the ordinary Write tool, writing to the exact path named, and nothing else.
 Step 2 writes the fence line your launch prompt gives you, then your answer
 text verbatim on the following lines. Steps 3 and 5 write a JSON protocol
-envelope from a template your launch prompt gives you VERBATIM, with exactly
-one permitted edit: substituting the literal token `<FENCING_TOKEN>` for the
-fencing token your launch prompt names. Nothing else in either template may
-change -- not a field name, not a value, not whitespace you decide looks
-better. Two Write targets, not one: your answer file, and (separately) your
-submission or failure envelope.
+envelope from a template your launch prompt gives you verbatim. For submission,
+replace only `<FENCING_TOKEN>`. For failure, replace `<FENCING_TOKEN>` and
+`<FAILURE_DETAIL_JSON>` with one nonempty JSON string literal. Nothing else in
+either template may change. Two Write targets, not one: your answer file, and
+(separately) your submission or failure envelope.
 
 ## Unit content discipline
 

@@ -24,12 +24,6 @@ because a construct is easier to judge against real data than against
 shape. What is forbidden is the kit KNOWING that noun -- branching on it,
 defaulting to it, or requiring it to exist.
 
-(Amended 2026-08-23. The rule previously said no project noun could
-appear "anywhere in this plugin's code, schema grammar, or examples",
-which the dialect spec's own worked examples had never satisfied. It was
-restated to what it demonstrably means rather than scrubbing examples
-that cost nothing and explain more.)
-
 A consuming project supplies a **profile**: a document written *in* the
 dialect this plugin defines, naming that project's own types and fields.
 The profile lives in the consuming project, not here. This plugin never
@@ -62,13 +56,21 @@ framework dependency.
 - `dispatch/` -- the planner and the content-pipeline-kit binding. The
   request loader reads the file seam, and `CommentPlanner` groups open
   comments mechanically into work units: comment count is not unit count,
-  and not agent count. The inline lane uses content-pipeline-kit execution
-  and writes accepted results to the `machine` slice of an attributed store;
-  stale anchored slices are rejected. The `claude_bg` name is accepted by the
-  request schema but its driver raises `NotImplementedError`. Agentic
-  grouping and the fail-to-anchored-question path are deferred. This is the
-  only package that imports content-pipeline-kit, and `bootstrap.json` carries
-  the matching plugin and shared-library declarations.
+  and not agent count. `AgenticCommentPlanner` can group complete mechanical
+  units through content-pipeline-kit, with mechanical planning as its fallback.
+  The inline lane uses content-pipeline-kit execution and writes accepted
+  results to the `machine` slice of an attributed store; stale anchored slices
+  are rejected. The `claude_bg` lane uses the staged
+  `prepare_background_dispatch`, `run_background_wave`,
+  `get_background_dispatch_status`, and `finalize_background_dispatch`
+  functions. `worker_mount.py` provides the plan-authenticated `read`,
+  `submit`, and `fail` protocol mount. A terminal `question/1:` failure is
+  handed off as a guarded open question. `dispatch()` remains synchronous and
+  inline-only and raises `BackgroundStagesRequiredError` for background
+  requests. Finalize writes only the `machine` layer and preserves human,
+  sourced, and metadata values. This is the only package that imports
+  content-pipeline-kit, and `bootstrap.json` carries the matching plugin and
+  shared-library declarations.
 - `editor/` -- the web surface, which this kit does NOT build. **Databench**
   owns it: a separate local web workbench that browses and edits a project's
   data files, including the safe-write path that puts bytes on disk. This kit
