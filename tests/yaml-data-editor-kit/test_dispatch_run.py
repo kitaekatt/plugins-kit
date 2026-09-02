@@ -14,7 +14,7 @@ from content_pipeline.pipeline.workunit import WorkUnit
 from yaml_data_editor_kit.comments import Comment, CommentStore
 from yaml_data_editor_kit.dispatch.request import DispatchRequest
 from yaml_data_editor_kit.dispatch.planner import MechanicalCommentPlanner, CommentPlanStore
-from yaml_data_editor_kit.dispatch.run import dispatch
+from yaml_data_editor_kit.dispatch.run import dispatch, effective_result
 import yaml_data_editor_kit.dispatch.run as run_module
 from yaml_data_editor_kit.schema import load_corpus, load_profile
 
@@ -71,6 +71,26 @@ def test_inline_dispatch_writes_machine_slice(tmp_path: Path, write) -> None:
     record = stored["records"]["record:product/bolt"]
     assert record["machine"] == "short fastener"
     assert "human" not in record
+
+
+def test_inline_dispatch_applies_empty_machine_slice(tmp_path: Path, write) -> None:
+    request = _setup(tmp_path, write)
+
+    summary = dispatch(request, backend=MockBackend(responses=[""]))
+
+    assert summary.applied == 1
+    assert summary.statuses == {"record:product/bolt": "applied"}
+    stored = yaml.safe_load(summary.attributed_store.read_text(encoding="utf-8"))
+    record = stored["records"]["record:product/bolt"]
+    assert record["machine"] == ""
+    assert effective_result(record) == ""
+
+
+def test_effective_result_uses_key_presence_for_falsy_machine_slices() -> None:
+    for machine in ("", None, {}, 0):
+        assert effective_result({"sourced": "base", "machine": machine}) == machine
+
+    assert effective_result({"sourced": "base"}) == "base"
 
 
 def test_inline_dispatch_preserves_existing_human_slice(

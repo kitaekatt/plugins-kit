@@ -285,12 +285,21 @@ def dispatch(
 
 
 def effective_result(record: Mapping[str, Any]) -> Any:
-    """Resolve one result record with CPK's human > machine > sourced order."""
+    """Resolve one result record by slice-key presence and attribution order."""
     return effective_value(
         record.get("sourced"),
-        record.get("machine"),
-        record.get("human"),
+        record.get("machine", _ABSENT_SLICE),
+        record.get("human", _ABSENT_SLICE),
+        present=_slice_is_present,
     )
+
+
+_ABSENT_SLICE = object()
+
+
+def _slice_is_present(value: object) -> bool:
+    """Return true when a result record contains the slice key."""
+    return value is not _ABSENT_SLICE
 
 
 def _request_value(
