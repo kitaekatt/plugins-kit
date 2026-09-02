@@ -255,6 +255,40 @@ class TestDevOnlyExclusion:
         assert len(excluded) == 1
         assert set(next(iter(excluded.values()))) == {"dev-kit"}
 
+    def test_shipping_dev_only_commits_is_the_cli_default(self, repo):
+        """`publish.py --check` with no flags ships every dev-only plugin's
+        commits, including a MIXED one that used to be refused outright.
+
+        preflight() still takes an explicit allow-set -- the default lives at
+        the CLI, which is why this drives main() rather than preflight().
+        """
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        # One commit touching a dev-only plugin AND a shippable file: the exact
+        # shape _refuse_mixed_dev_only_commit() exists for.
+        (repo / "plugins" / "dev-kit" / "feature.py").write_text("done\n")
+        (repo / "plugins" / "pub-kit" / "shared.py").write_text("shared\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "cross-plugin slice")
+
+        assert publish.main(["--check"]) == 0
+
+    def test_exclude_dev_only_restores_the_refusal(self, repo):
+        """Asking for an exclusion is asking for a divergent master tree, and a
+        mixed commit is where that cannot be honoured silently."""
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        (repo / "plugins" / "dev-kit" / "feature.py").write_text("done\n")
+        (repo / "plugins" / "pub-kit" / "shared.py").write_text("shared\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "cross-plugin slice")
+
+        assert publish.main(["--check", "--exclude-dev-only", "dev-kit"]) != 0
+
+    def test_exclude_dev_only_rejects_non_dev_only_names(self, repo):
+        """Naming a published (or unknown) plugin is an operator error."""
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+
+        assert publish.main(["--check", "--exclude-dev-only", "pub-kit"]) != 0
+
     def test_allow_dev_only_rejects_non_dev_only_names(self, repo):
         """Naming a published (or unknown) plugin is an operator error, not a
         no-op -- refuse loudly."""

@@ -82,11 +82,23 @@ printing every commit it held back. `dev` is untouched and keeps that work.
 `published: false` records that the plugin does not go to consumers, so the
 script honors that decision per commit.
 
-It still refuses one case: a single commit touching **both** a dev-only plugin
-and files that would otherwise ship. Excluding it withholds released work,
-including it puts dev-only files on `master`, and splitting someone else's
-commit is a judgment call. Split it, or pass `--allow-dev-only <plugin>` to ship
-that plugin's commits deliberately.
+None of that runs by DEFAULT any more. Every dev-only plugin's commits ship, so
+`master`'s tree matches `dev` and `published: false` does its whole job on its
+own -- filtering the plugin out of `marketplace.json`, which is what makes it
+uninstallable. Source on a public `master` that nobody can install is the
+intended end state, and it is where these plugins already sat: an exclusion
+never held for long, because a plugin's files arrive with the first commit that
+touches anything else.
+
+The filtering above is therefore opt-in, per plugin, via
+`--exclude-dev-only <plugin>` -- for a plugin whose SOURCE must not appear on a
+public `master` at all.
+
+With an exclusion in force, one case is still refused: a single commit touching
+**both** that plugin and files that would otherwise ship. Excluding it withholds
+released work, including it defeats the exclusion, and splitting someone else's
+commit is a judgment call. Split it, or drop the plugin from
+`--exclude-dev-only`.
 
 **What the script will NOT do:** decide that a plugin's `published` status has
 changed. That edit is yours.
