@@ -875,10 +875,14 @@ def run_job_file(
     *,
     store_path: Optional[str | Path] = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    run_id: Optional[str] = None,
     capabilities_provider: Optional[CapabilitiesProvider] = None,
     backend_factory: Optional[BackendFactory] = None,
 ) -> RunSnapshot:
-    """Load a jobs YAML file, create its ledger, and execute it."""
+    """Load a jobs YAML file, create its ledger, and execute it.
+
+    ``run_id`` preassigns the ledger's run id so the caller knows it before
+    the run starts and can resume it after an interruption."""
     path = Path(jobs_path).expanduser().resolve()
     job_file = load_job_file(path)
     store = JobStore(store_path or default_store_path())
@@ -890,6 +894,7 @@ def run_job_file(
         workspace_root=job_file.workspace_root,
         disallowed_tools=job_file.disallowed_tools,
         timeout_s=timeout_s,
+        run_id=run_id,
         capabilities_provider=capabilities_provider,
         backend_factory=backend_factory,
     )

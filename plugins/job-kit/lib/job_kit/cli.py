@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import json
 import sys
 from pathlib import Path
@@ -44,6 +45,11 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("jobs", type=Path)
     run.add_argument("--store", type=Path)
     run.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S)
+    run.add_argument(
+        "--run-id",
+        type=_run_id_argument,
+        help="preassign the run id (letters, digits, . _ -) so a caller can resume it later",
+    )
 
     status = subcommands.add_parser("status", help="show a durable run")
     status.add_argument("run")
@@ -60,6 +66,18 @@ def _parser() -> argparse.ArgumentParser:
     gc.add_argument("--accepted-only", action="store_true")
     gc.add_argument("--force", action="store_true")
     return parser
+
+
+_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _run_id_argument(value: str) -> str:
+    """Validate a caller-preassigned run id."""
+    if not _RUN_ID_PATTERN.match(value):
+        raise argparse.ArgumentTypeError(
+            "run id must be non-empty and use only letters, digits, '.', '_' or '-'"
+        )
+    return value
 
 
 def _store_path(explicit: Optional[Path]) -> Path:
@@ -91,6 +109,7 @@ def _run(args: argparse.Namespace) -> int:
         args.jobs,
         store_path=args.store,
         timeout_s=args.timeout,
+        run_id=args.run_id,
     )
     store_path = (
         args.store.expanduser().resolve()

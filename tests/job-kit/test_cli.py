@@ -7,6 +7,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from job_kit import cli
 from job_kit.model import Contract, Job, JobRecord, JobState, Prompt, RunRecord, RunSnapshot, RunState
 from job_kit.store import JobStore
@@ -75,7 +77,7 @@ def test_run_and_resume_cli_delegate_to_runner(
     calls: list[tuple[str, Path]] = []
 
     def fake_run(
-        jobs_path: Path, *, store_path: Path, timeout_s: float
+        jobs_path: Path, *, store_path: Path, timeout_s: float, run_id: str | None
     ) -> RunSnapshot:
         calls.append(("run", store_path))
         return snapshot
@@ -108,7 +110,7 @@ def test_cli_exit_codes_distinguish_job_outcome_from_runner_failure(
     store_path = tmp_path / "exit-codes.sqlite3"
 
     def fake_run(
-        jobs_path: Path, *, store_path: Path, timeout_s: float
+        jobs_path: Path, *, store_path: Path, timeout_s: float, run_id: str | None
     ) -> RunSnapshot:
         return current
 
@@ -121,10 +123,36 @@ def test_cli_exit_codes_distinguish_job_outcome_from_runner_failure(
     capsys.readouterr()
 
     def broken_run(
-        jobs_path: Path, *, store_path: Path, timeout_s: float
+        jobs_path: Path, *, store_path: Path, timeout_s: float, run_id: str | None
     ) -> RunSnapshot:
         raise RuntimeError("runner boom")
 
     monkeypatch.setattr(cli, "run_job_file", broken_run)
     assert cli.main(["run", "jobs.yaml", "--store", str(store_path)]) == cli.EXIT_RUNNER_FAILURE
     assert "runner boom" in capsys.readouterr().err
+
+
+def test_run_cli_preassigns_a_validated_run_id(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    """--run-id reaches the runner verbatim, and a malformed id is refused."""
+    snapshot = _accepted_snapshot(tmp_path)
+    seen: list[str | None] = []
+
+    def fake_run(
+        jobs_path: Path, *, store_path: Path, timeout_s: float, run_id: str | None
+    ) -> RunSnapshot:
+        seen.append(run_id)
+        return snapshot
+
+    monkeypatch.setattr(cli, "run_job_file", fake_run)
+    store = str(tmp_path / "cli.sqlite3")
+    assert cli.main(["run", "jobs.yaml", "--store", store, "--run-id", "refresh-2026.09_01-a1"]) == cli.EXIT_OK
+    assert cli.main(["run", "jobs.yaml", "--store", store]) == cli.EXIT_OK
+    capsys.readouterr()
+    assert seen == ["refresh-2026.09_01-a1", None]
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["run", "jobs.yaml", "--store", store, "--run-id", "bad id/with slash"])
+    assert exit_info.value.code == cli.EXIT_USAGE
+    assert "run id must be" in capsys.readouterr().err
