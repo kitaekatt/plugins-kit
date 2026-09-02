@@ -364,6 +364,7 @@ lanes:
     standards: references/standards/project-doc-standards.md
     procedure: references/lanes/audit-lane.md
     discover_script: scripts/discover_project_doc.py
+    contract_script: scripts/check_project_doc_audit.py
     workflow_detect: workflow/project-doc-detect.js
     workflow_remediate: workflow/project-doc-remediate.js
     verdicts: [COMPLIANT, NON-COMPLIANT, DIFF-CLEAN, NOT-AUDITED]

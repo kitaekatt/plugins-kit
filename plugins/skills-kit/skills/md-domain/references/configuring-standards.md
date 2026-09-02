@@ -250,6 +250,14 @@ degrading to an empty config, and the message names the problem:
 - **pyyaml unavailable.** Resolution degrades to defaults with a note (no config
   or standards applied) rather than crashing -- the same posture as the audit's
   contract-staged state.
+- **Custom standards ignored by an unattended run's acceptance check.** The
+  project-doc audit contract (`scripts/check_project_doc_audit.py`, described in
+  [lanes/audit-lane.md](lanes/audit-lane.md)) parses the valid criterion and
+  taxonomy ids from ONE standards document. It does not run the layer resolver,
+  so it defaults to the shipped
+  `references/standards/project-doc-standards.md`. When a layer supplies your
+  own project-doc standards, pass that resolved path with `--standards` or the
+  check validates findings against the shipped id set.
 
 ## Source of truth
 

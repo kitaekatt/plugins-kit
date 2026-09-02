@@ -38,6 +38,9 @@ lane record in the dispatch table:
   `NOT-AUDITED` for the three per-file lanes.
 - **flags supported** -- `--review` (all three per-file lanes), `--density`
   (`audit_claude_md` only).
+- **contract script** -- the unattended acceptance check (`audit_project_doc`
+  only: `scripts/check_project_doc_audit.py`); see "Unattended runs: the
+  acceptance contract".
 
 ## Model pinning (not negotiable)
 
@@ -487,6 +490,43 @@ per-finding round-trip. Remediation fans out per file via
 `workflow/references-remediate.js`, and the scan is re-run afterwards to verify:
 newly-surfaced findings are common (a backticked literal can reveal another
 broken ref nearby that was previously masked).
+
+## Unattended runs: the acceptance contract
+
+When the lane runs INTERACTIVELY, you read each finding and judge it. When it
+runs UNATTENDED -- dispatched to a job runner with nobody watching -- nothing
+reads the output before it is recorded as an accepted result. A finding that
+cites a criterion id that does not exist, or a line past the end of the audited
+file, is then indistinguishable from a real one.
+
+`scripts/check_project_doc_audit.py` is the acceptance check for that case. It
+reads an `audit_project_doc` report as JSON on stdin and exits 0 only if every
+finding is GROUNDED: the criterion id and taxonomy id appear in the standards
+document, the bucket matches the one that document assigns to that taxonomy id,
+and the line is inside the audited file.
+
+```
+check_project_doc_audit.py <subject-path> <repo-root> [--standards PATH]
+```
+
+It is stdlib-only, so it runs under whatever interpreter the runner has, and it
+reads stdin rather than a file so it cannot pass on an artifact an earlier
+attempt left behind. `--standards` points it at a configured standards document;
+without it, the shipped `references/standards/project-doc-standards.md` is used.
+
+**It checks grounding, not truth.** A grounded finding can still be wrong about
+the document, and deciding that stays the reader's job. The floor it raises is
+that a finding which cannot even cite correctly is rejected mechanically -- a
+failure mode that is invisible in an unattended run, because nothing reads the
+output before it is recorded. It is not the only such failure mode, and passing
+this check is not evidence that an audit was good. Do not extend it into judging
+finding QUALITY: an exit code that depends on a model's opinion is no longer
+falsifiable, which is the property the check exists to preserve.
+
+The valid ids are parsed from the standards document at run time. Do not restate
+them in a caller's own checker -- a frozen copy drifts silently, and the first
+symptom is a CORRECT finding being rejected for citing an id the copy never
+learned about.
 
 ## Gotchas
 
