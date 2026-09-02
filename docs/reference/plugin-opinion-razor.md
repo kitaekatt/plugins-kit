@@ -288,6 +288,9 @@ None outstanding.
 | Plugin | Opinion | Disposition |
 |---|---|---|
 | awesome-kit:task | git is the privileged, automated VCS | Registered as a deliberate stance in `plugins/CLAUDE.md`, with the rationale OP-5 requires and the bounded degradation a Perforce consumer actually gets. Not a seam. |
+| job-kit | selection is deterministic caller preference; no scoring, aliases, or learned routing | Registered in `plugins/CLAUDE.md`. Forecloses adaptive routing on purpose: an unattended run must be explainable from its inputs, and the user who wants judgment wants `awesome-kit:orchestrate`. Within a run job-kit only NARROWS the stated order (halted endpoints excluded), and the ledger records each exclusion. |
+| job-kit | a run-level deny floor is a selection requirement, not best-effort | Registered in `plugins/CLAUDE.md`. A team preferring best-effort application has only the remedy of dropping the floor, which is deliberate: a floor sometimes not applied is not a floor, and unattended is exactly the case where nobody notices. |
+| job-kit | git is the only workspace-isolation VCS | Registered in `plugins/CLAUDE.md`, same reasoning as awesome-kit:task. Bounded and recorded, never silent: a non-git directory runs in place with `workspace: none` on the attempt row. |
 
 ### SEAMS BUILT -- verdict discharged
 
@@ -304,6 +307,7 @@ None outstanding.
 | p4-kit | `-m 20` pending-CL listing limit | One scenario at most (>20 pending CLs), remedied by picking the CL explicitly. If 20 proves low, raise the constant. |
 | awesome-kit:task | document size ceilings (400 hard / 250 soft) | The tool's own house style for a rotation mechanism it owns, like a formatter's line length. Users adopt the mechanism or not. |
 | p4-kit | auto-shelve then fingerprint-matched cleanup | Intrinsic to reviewing an unshelved pending CL in Perforce. Outside the razor. |
+| job-kit | acceptance is command-shaped -- exit 0 accepts | The seam already exists and is the contract command itself: a caller wanting rubric scoring or an LLM judge puts that call INSIDE their command. No remedial action against the default, so no scenario. It is a scope statement, documented in the plugin README, not a config opinion. |
 
 ### BORDERLINE -- re-test if evidence appears
 
@@ -311,6 +315,7 @@ None outstanding.
 |---|---|---|
 | awesome-kit:task | `dev/tasks/<stub>` is durable and must be committed | RE-RUN, verdict downgraded from PASSES. The scenario that made it serious -- this repo gitignoring `dev/` and having to call the resulting blocking warnings noise -- was discharged by DETECTION rather than a seam: `validate.py` classes a git-ignored task root as an advisory note, never a warning, so it cannot gate `work`, and `location_ops.py` carries the matching `vcs_ignored` archive disposition. What remains is one non-serious scenario: a user whose durable root is `docs/tasks` or `.tasks` cannot express it, because the two prefixes are argparse `choices`. One weak scenario is below the bar of one serious or two distinct. Re-test if a second appears. |
 | bootstrap | 3600s cooldown, 24h env-recheck TTL | A plugin developer iterating locally wants a shorter cooldown -- a real audience here, since this marketplace is public and others develop against it. But `bootstrap-reset-cooldown.sh` already gives a one-command remedy, which blunts "repeated manual remediation". Needs one more distinct scenario to pass. Notable that the four-layer manifest that would hold the key **already exists** -- a plugin with a configuration system can still fail the razor by not routing an opinion through it. |
+| job-kit | `CONTRACT_OUTPUT_LIMIT = 2000` hardcoded | The acceptance output tail is the only diagnostic an unattended run leaves behind, so a truncated tail forces a manual re-run -- remedial action against the default, which is what a passing scenario looks like. But no real workload has produced a contract output near 2000 characters, so the scenario is constructed rather than observed. A key defaulting to 2000 is the likely answer the moment one appears. Re-test on the first truncated tail. |
 
 Verdicts are evidence-based, so they expire. A FAILS entry that later acquires a real
 scenario should be re-run and moved, and the scenario recorded -- that is the intended

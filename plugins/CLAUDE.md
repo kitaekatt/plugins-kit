@@ -65,6 +65,35 @@ unconfigurable opinion whose test passes is a finding.
   should either accept that or drive submission themselves; there is no half-working git
   path to be surprised by.
 
+- **job-kit selects deterministically from the caller's stated preference order.** No
+  scoring, no endpoint aliases, no learned or adaptive routing: a job names an ordered
+  endpoint preference, requirements filter it against llm-scripting-kit's advertisement,
+  and the first surviving entry runs. A user who wants "pick whichever is cheapest or
+  fastest right now" has no way to express it, and that is the point -- an UNATTENDED run
+  must be explainable from its inputs alone, because nobody is watching to notice that the
+  runner chose differently than last time. Judgment-driven routing is a session concern:
+  that user wants `awesome-kit:orchestrate`, whose whole job is deciding, not a runner
+  whose job is executing a decision already made. Within a run, job-kit only ever NARROWS
+  the stated order -- an endpoint that returned a persistent halt is excluded from later
+  jobs -- and the ledger records every exclusion.
+
+- **A run-level deny floor is a selection REQUIREMENT, not a best-effort request.** When a
+  run declares tools an endpoint must not be able to use, an endpoint whose advertisement
+  says it would silently drop that control is not selected at all. A team could reasonably
+  prefer best-effort -- run on the endpoint anyway and accept the floor was not applied --
+  and their only remedy today is to drop the floor from the job file entirely, which is
+  exactly the outcome we refuse to make easy. A floor that is sometimes not applied is not
+  a floor, and an unattended run is the case where nobody is present to notice the
+  difference. The alternative for that team is to state the narrower endpoint preference
+  they actually mean.
+
+- **job-kit privileges git as the only workspace-isolation VCS.** Worktree-per-attempt
+  isolation is git-only, for the same reason as awesome-kit:task's entry: a second VCS
+  backend would ship untested and fail first on a consumer's machine. The degradation is
+  bounded and recorded, never silent -- a job whose directory is not a git repo runs with
+  cwd set to that directory and the attempt row says `workspace: none`. A Perforce team
+  gets a working runner whose isolation is manual, not a half-working git path.
+
 - **Code review renders to chat and is never persisted.** git-kit and p4-kit scope
   themselves to a conversational review; a team needing PR/Swarm comments or a CI artifact
   wants a different tool, and both SKILL.md scope blocks say so rather than assuming it
