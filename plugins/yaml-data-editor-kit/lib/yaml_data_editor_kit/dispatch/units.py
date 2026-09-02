@@ -10,6 +10,17 @@ from typing import Any
 
 from yaml_data_editor_kit.schema.corpus import ABSENT
 
+SYSTEM_PROMPT = "Transform the anchored slice according to the comments. Return only the result."
+AGENTIC_SYSTEM_PROMPT = """Transform the anchored slices according to the comments.
+Return exactly one JSON object with this shape:
+{"schema_version":"1","results":[{"anchor":"target-anchor","machine":TRANSFORMED_VALUE}]}
+The results array must contain exactly one result for each target anchor.
+Each anchor must be reproduced verbatim from the prompt.
+Put the transformed value in machine. It takes the same JSON shape as that
+target's slice in the prompt: a string slice yields a string, a mapping slice
+yields a mapping. Do not wrap a string in an object.
+Do not add keys. Do not use a Markdown fence or any extra text."""
+
 
 def unit_targets(unit: Any) -> list[Mapping[str, Any]]:
     """Return the target records carried by either unit shape."""
@@ -47,24 +58,47 @@ def plain_value(value: Any, *, strict: bool = False) -> Any:
 def parse_agentic_result(
     text: str, targets: list[Mapping[str, Any]], unit_id: str
 ) -> dict[str, Any]:
-    payload = json.loads(text, object_pairs_hook=_unique_object)
-    if not isinstance(payload, dict) or set(payload) != {"schema_version", "results"}:
-        raise ValueError("unit {!r} result has the wrong shape".format(unit_id))
+    try:
+        payload = json.loads(text, object_pairs_hook=_unique_object)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "unit {!r} result must be one JSON object with schema_version and results".format(unit_id)
+        ) from exc
+    except ValueError as exc:
+        raise ValueError(
+            "unit {!r} result must not contain duplicate JSON keys".format(unit_id)
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError(
+            "unit {!r} result must be a JSON object, not an array or scalar".format(unit_id)
+        )
+    if set(payload) != {"schema_version", "results"}:
+        raise ValueError(
+            "unit {!r} result must have only schema_version and results keys".format(unit_id)
+        )
     if payload["schema_version"] != "1" or not isinstance(payload["results"], list):
-        raise ValueError("unit {!r} result has an invalid schema".format(unit_id))
+        raise ValueError(
+            "unit {!r} result must use schema_version 1 and a results array".format(unit_id)
+        )
     expected = {target["anchor"] for target in targets}
     seen: set[str] = set()
     results: list[dict[str, Any]] = []
     for item in payload["results"]:
         if not isinstance(item, dict) or set(item) != {"anchor", "machine"}:
-            raise ValueError("unit {!r} result has an invalid target".format(unit_id))
+            raise ValueError(
+                "unit {!r} each result must have only anchor and machine keys".format(unit_id)
+            )
         anchor = item["anchor"]
         if not isinstance(anchor, str) or anchor not in expected or anchor in seen:
-            raise ValueError("unit {!r} result does not partition targets".format(unit_id))
+            raise ValueError(
+                "unit {!r} each anchor must be a unique target anchor".format(unit_id)
+            )
         seen.add(anchor)
         results.append({"anchor": anchor, "machine": item["machine"]})
     if seen != expected:
-        raise ValueError("unit {!r} result does not partition targets".format(unit_id))
+        raise ValueError(
+            "unit {!r} results must contain exactly one entry per target anchor".format(unit_id)
+        )
     results.sort(key=lambda item: item["anchor"])
     return {"schema_version": "1", "results": results}
 
@@ -95,6 +129,13 @@ def validation_spec_for_unit(unit: Any) -> Any:
             validators=(),
         )
     return ValidationSpec(parse_fn=lambda text: text, validators=())
+
+
+def system_prompt_for_unit(unit: Any) -> str:
+    """Return the worker system prompt matching unit response validation."""
+    if "targets" in unit.payload:
+        return AGENTIC_SYSTEM_PROMPT
+    return SYSTEM_PROMPT
 
 
 def prompt_for_payload(payload: Mapping[str, Any]) -> str:
@@ -139,6 +180,7 @@ __all__ = [
     "parse_agentic_result",
     "plain_value",
     "prompt_for_payload",
+    "system_prompt_for_unit",
     "unit_targets",
     "validation_spec_for_unit",
 ]

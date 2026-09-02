@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from yaml_data_editor_kit.dispatch.adapter import SYSTEM_PROMPT, adapter_for, prompt_for
+from yaml_data_editor_kit.dispatch.units import AGENTIC_SYSTEM_PROMPT
 from yaml_data_editor_kit.dispatch.state import write_plan
 
 
@@ -14,3 +15,17 @@ def test_adapter_identity_is_digest_derived(tmp_path: Path) -> None:
 def test_prompt_matches_inline_shape() -> None:
     assert "anchor: a" in prompt_for({"anchor": "a", "anchored_slice": {"x": 1}, "comments": ["Do it"], "content_hash": "h"})
     assert SYSTEM_PROMPT == "Transform the anchored slice according to the comments. Return only the result."
+
+
+def test_adapter_selects_agentic_system_prompt_for_target_units(tmp_path: Path) -> None:
+    plan = write_plan(
+        tmp_path / "plan.yaml",
+        run_id="dispatch-1",
+        corpus_path=tmp_path,
+        comment_store_path=tmp_path / "comments",
+        units=[{"id": "unit-a", "payload": {"targets": []}}],
+    )
+    adapter = adapter_for(plan)
+
+    prepared = adapter.resolve_prepared_request(adapter.unit_for("unit-a"))
+    assert prepared.system == AGENTIC_SYSTEM_PROMPT

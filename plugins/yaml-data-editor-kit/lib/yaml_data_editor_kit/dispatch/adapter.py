@@ -11,9 +11,12 @@ from content_pipeline.execution.adapter import RunAdapter
 from content_pipeline.pipeline.workunit import WorkUnit
 
 from .state import DispatchPlan
-from .units import prompt_for_payload, validation_spec_for_unit
-
-SYSTEM_PROMPT = "Transform the anchored slice according to the comments. Return only the result."
+from .units import (
+    SYSTEM_PROMPT,
+    prompt_for_payload,
+    system_prompt_for_unit,
+    validation_spec_for_unit,
+)
 
 
 def prompt_for(payload: Mapping[str, Any]) -> str:
@@ -30,7 +33,7 @@ def adapter_for(plan: DispatchPlan) -> RunAdapter:
 
     return RunAdapter(
         unit_for=unit_for,
-        system_for=lambda unit: SYSTEM_PROMPT,
+        system_for=system_prompt_for_unit,
         user_for=lambda unit: prompt_for(unit.payload),
         validation_spec_for=validation_spec_for_unit,
         adapter_version=plan.adapter_version,

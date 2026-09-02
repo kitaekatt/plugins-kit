@@ -45,7 +45,13 @@ from yaml_data_editor_kit.schema import errors_only, load_corpus, load_profile
 
 from .planner import CommentPlanStore, CommentPlanner, PlannerPolicy
 from .request import DispatchRequest, DispatchRequestSet, load_request
-from .units import plain_value, prompt_for_payload, unit_targets, validation_spec_for_unit
+from .units import (
+    plain_value,
+    prompt_for_payload,
+    system_prompt_for_unit,
+    unit_targets,
+    validation_spec_for_unit,
+)
 
 
 @dataclass(frozen=True)
@@ -180,10 +186,7 @@ def dispatch(
         )
         result = submit_validated(
             backend=active_backend,
-            system=(
-                "Transform the anchored slice according to the comments. "
-                "Return only the result."
-            ),
+            system=system_prompt_for_unit(unit),
             user=_prompt(payload),
             model="",
             parse_fn=validation.parse_fn,
