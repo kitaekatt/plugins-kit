@@ -110,6 +110,74 @@ class TestPreflightRefusals:
         with pytest.raises(publish.PublishError, match="working tree is dirty"):
             publish.preflight()
 
+
+class TestDirtyGateIgnoresDevOnlyPlugins:
+    """A dev-only plugin's uncommitted work must not block a publish.
+
+    It reaches no consumer on two independent counts -- the plugin is absent
+    from marketplace.json, and the change is uncommitted -- so refusing on it
+    makes a shared tree unpublishable for a reason the operator cannot act on
+    without committing another session's half-finished work.
+    """
+
+    @staticmethod
+    def _bump_only_pub_kit(repo: Path) -> None:
+        """Bump pub-kit WITHOUT `git add -A`.
+
+        The shared _bump helper stages everything, which would sweep this
+        class's deliberately-dirty dev-only file into the commit and trip the
+        mixed-commit refusal -- a different gate than the one under test.
+        """
+        manifest = repo / "plugins" / "pub-kit" / ".claude-plugin" / "plugin.json"
+        data = json.loads(manifest.read_text())
+        data["version"] = "1.1.0"
+        manifest.write_text(json.dumps(data, indent=2) + "\n")
+        _git(repo, "add", "--", "plugins/pub-kit/.claude-plugin/plugin.json")
+        _git(repo, "commit", "-qm", "pub-kit 1.1.0")
+
+    def test_dirty_dev_only_plugin_does_not_refuse(self, repo):
+        (repo / "plugins" / "dev-kit" / "scratch.py").write_text("wip\n")
+        self._bump_only_pub_kit(repo)
+        bumps, _excluded = publish.preflight()
+        assert any("pub-kit" in bump for bump in bumps)
+
+    def test_dirty_dev_only_tests_do_not_refuse(self, repo):
+        tests = repo / "tests" / "dev-kit"
+        tests.mkdir(parents=True, exist_ok=True)
+        (tests / "test_wip.py").write_text("# wip\n")
+        self._bump_only_pub_kit(repo)
+        bumps, _excluded = publish.preflight()
+        assert any("pub-kit" in bump for bump in bumps)
+
+    def test_dirty_dev_only_paths_are_not_even_reported(self, repo):
+        """The operator is told nothing about work that cannot affect anyone."""
+        (repo / "plugins" / "dev-kit" / "scratch.py").write_text("wip\n")
+        (repo / "scratch.txt").write_text("uncommitted")
+        with pytest.raises(publish.PublishError) as excinfo:
+            publish.preflight()
+        message = str(excinfo.value)
+        assert "scratch.txt" in message
+        assert "dev-kit" not in message
+
+    def test_a_published_plugin_still_refuses(self, repo):
+        """The gate keeps working where it protects someone."""
+        (repo / "plugins" / "pub-kit" / "scratch.py").write_text("wip\n")
+        with pytest.raises(publish.PublishError, match="working tree is dirty"):
+            publish.preflight()
+
+    def test_a_renamed_dev_only_path_is_judged_by_its_destination(self, repo):
+        src = repo / "plugins" / "dev-kit" / "moved.py"
+        src.write_text("x\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "dev-kit file")
+        # Bump BEFORE the rename: `git mv` stages it, and `git commit` with no
+        # pathspec takes the whole index, so a rename staged first rides into
+        # the pub-kit commit and trips the mixed-commit gate instead.
+        self._bump_only_pub_kit(repo)
+        _git(repo, "mv", "plugins/dev-kit/moved.py", "plugins/dev-kit/renamed.py")
+        bumps, _excluded = publish.preflight()
+        assert any("pub-kit" in bump for bump in bumps)
+
     def test_refuses_wrong_branch(self, repo):
         _git(repo, "checkout", "-q", "master")
         with pytest.raises(publish.PublishError, match="not on dev"):

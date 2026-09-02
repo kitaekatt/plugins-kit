@@ -320,7 +320,7 @@ def preflight(allow_dev_only: set[str] | None = None
             f"not on {DEV_BRANCH} (publish releases {DEV_BRANCH} -> "
             f"{MASTER_BRANCH}); checkout {DEV_BRANCH} first")
 
-    dirty = git("status", "--porcelain")
+    dirty = _shippable_dirty_paths()
     if dirty:
         raise PublishError(
             "working tree is dirty -- commit your work before publishing "
@@ -328,7 +328,7 @@ def preflight(allow_dev_only: set[str] | None = None
             "changes may be another session's in-flight work; commit them in "
             "scoped commits rather than stashing or discarding). This script "
             "owns the derived artifacts and the git flow, not your changes.\n"
-            "Dirty files:\n" + dirty)
+            "Dirty files:\n" + "\n".join(dirty))
 
     git("fetch", REMOTE, "--quiet")
 
@@ -491,6 +491,53 @@ def excluded_dev_only_commits(allow: set[str]) -> dict[str, set[str]]:
                 if f.startswith(f"plugins/{plugin}/"):
                     offenders.setdefault(sha, set()).add(plugin)
     return offenders
+
+
+def _shippable_dirty_paths() -> list[str]:
+    """Uncommitted paths that could affect a consumer, in `git status` form.
+
+    A dev-only (`published: false`) plugin's own files are EXCLUDED, and not
+    merely tolerated -- they are not reported either. The dirty gate exists so a
+    publish cannot silently omit work a consumer would otherwise receive, and
+    for these paths that cannot happen twice over: the plugin is absent from
+    `marketplace.json`, so nobody can install it, and the change is uncommitted,
+    so it would not ship even from a published plugin. Reporting them makes the
+    shared tree unpublishable for a reason the operator cannot act on -- another
+    session's in-flight work on a plugin that reaches nobody -- and the only way
+    to clear it is to commit someone else's half-finished work, which is the one
+    thing this repo's git discipline forbids.
+
+    No flag forces a dev-only plugin INTO a release, so there is no case to
+    carve out here: `published: false` is a standing decision and
+    `--exclude-dev-only` only holds such a plugin's SOURCE back further. Should
+    a force-publish flag ever exist, this is the function that has to learn
+    about it -- a plugin being forced into a release makes its uncommitted work
+    shippable again, and therefore the operator's business.
+
+    Deleted paths are read from the status line rather than a diff so a rename
+    or a staged deletion is judged by the same rule as an edit.
+
+    `-uall` is load-bearing, not tidiness: plain porcelain collapses a wholly
+    untracked DIRECTORY into a single entry for the directory itself, so a new
+    folder inside a dev-only plugin arrives as its parent path and matches no
+    plugin. Listing untracked files individually makes every path judgable on
+    its own.
+    """
+    dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
+    kept = []
+    for line in git("status", "--porcelain", "-uall").splitlines():
+        if not line.strip():
+            continue
+        # Porcelain v1: two status columns, a space, then the path. A rename
+        # carries "old -> new"; judge the DESTINATION, which is where the
+        # content lands.
+        path = line[3:].strip().strip('"')
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1].strip().strip('"')
+        if _dev_only_owned(path, dev_only):
+            continue
+        kept.append(line)
+    return kept
 
 
 def _dev_only_owned(path: str, dev_only: set[str]) -> bool:
