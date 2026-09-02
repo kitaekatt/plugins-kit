@@ -76,6 +76,67 @@ profiles:
     claude_md: sonnet
 ```
 
+## What a `model` value may name
+
+A `model` -- whether a reviewer's or a `validator_models` reason's -- is one of two things,
+and which one it is decides how that lane is dispatched:
+
+| Value | Dispatch |
+|---|---|
+| `sonnet`, `opus`, `haiku`, `fable` | an Agent subagent (the default) |
+| anything else | an llm-scripting-kit endpoint id, run through `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py` |
+
+The shipped table is entirely Agent aliases, so a review with no user or project override
+dispatches every lane as an Agent subagent. This is the whole override
+mechanism -- there is no separate field to set, because `model` was already a free-form
+string resolved through the three layers above.
+
+An endpoint id is resolved by llm-scripting-kit (`create_backend`), so it may name an
+OpenAI-compatible transport or a CLI harness -- whatever that plugin's configuration and
+your `~/.claude/config/model-endpoints.yaml` declare. Endpoint ids are private to your
+fleet; the example below uses a placeholder.
+
+### Which lanes may take an endpoint id
+
+Only `reviewer_b_diff_only_bugs` -- the set is `ENDPOINT_ELIGIBLE_LANES` in
+`bootstrap_lib.code_review.lane_prompts`. The runner refuses any other lane by name and exits
+2 (a configuration error), for two different reasons:
+
+- `reviewer_a_claude_md_compliance` and the validator are not qualified on a non-Claude
+  model. The validator especially: it is the control that suppresses a weak reviewer's
+  false positives, so replacing it in the same change as a reviewer would remove the
+  instrument the reviewer change has to be measured with.
+- `reviewer_c_introduced_code` reads files beyond its chunk, so it needs an agent loop. Should
+  it become eligible, the runner refuses to bind it to a plain-completion (`transport`)
+  endpoint rather than produce a reviewer that hallucinates context it cannot fetch.
+
+### When an endpoint lane fails
+
+It is reported as a failed lane and the review renders without it, with that lane's coverage
+marked missing in a `## Lane failures` section. There is deliberately no fallback to an Agent:
+a silent fallback would hand back a review you read as having run on the model you configured,
+which is a false claim about what actually reviewed your change. Causes are the endpoint being
+unreachable or halted, a chunk that does not fit its context window, or output that is not a
+valid issue array after one repair attempt -- the stderr line says which.
+
+### Worked endpoint override
+
+To run the diff-only bug reviewer on a local endpoint for every project, add to
+`~/.claude/config/review_profiles.yaml`:
+
+```yaml
+profiles:
+- id: code
+  reviewers:
+  - name: reviewer_b_diff_only_bugs
+    model: my-local-endpoint
+```
+
+`my-local-endpoint` is a placeholder: use an id your llm-scripting-kit configuration or
+`~/.claude/config/model-endpoints.yaml` actually declares. Everything else about the review
+is unchanged -- the other two reviewers and all validators stay on their Agent models, so
+the endpoint reviewer's findings still pass through the same validation.
+
 ## Worked override example
 
 To run the `code` profile's `reviewer_c_introduced_code` on Sonnet instead of Opus for one

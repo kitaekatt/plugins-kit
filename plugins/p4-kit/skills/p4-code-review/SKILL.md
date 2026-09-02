@@ -140,6 +140,27 @@ technique_skill:
             the validator wave to the Workflow tool instead of launching inline. Same
             reviewers, same validators, same output either way -- only the dispatch
             mechanism changes.
+            Model-kind rule (per lane, mechanical -- read the value, do not interpret it):
+            each reviewer's `model` and each `validator_models[reason]` value from the
+            RESOLVED table is EITHER one of the Agent tool's aliases -- `sonnet`, `opus`,
+            `haiku`, `fable` -- OR an llm-scripting-kit endpoint id. An alias launches an
+            Agent subagent (the default path; the shipped table is
+            all aliases, so an unconfigured review behaves identically to before). Any other
+            value is an endpoint id: run that lane as a parallel Bash call to
+            python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead of launching an Agent for it, passing `--lane <reviewer
+            name>`, `--model <the value>`, `--chunk <absolute chunk diff path>`, one
+            `--file` per repo-relative path in that chunk, `--description <the change
+            description>`, and `--project-root <bundle.project_root>` when the bundle has
+            one. Its stdout is a JSON envelope whose `issues` array is that lane's candidate
+            issues, in the same shape an Agent lane returns.
+            Endpoint lanes and Agent lanes go out in the SAME message as one another; mixing
+            the two dispatch mechanisms in one fan-out is normal and expected.
+            A NON-ZERO exit is a FAILED lane, never an empty result: do NOT retry it, do NOT
+            silently substitute an Agent, and do NOT treat its absence as "no issues found".
+            Keep its stderr line, report the lane as failed in step 9, and mark its coverage
+            missing. Only the lanes the runner supports may carry an endpoint id; it refuses
+            the rest by name and exits 2, which is a configuration error for the user to fix,
+            not something to work around.
             Triviality gate (pure-mechanical, decided by prepare_review -- do NOT re-judge it):
             each `bundle.claimed_files` entry carries `trivial` (bool) and `trivial_reasons` (the
             disqualifier codes when false). Partition the claimed files into TRIVIAL (`trivial == true`)
@@ -190,13 +211,17 @@ technique_skill:
             mapping restricted to those files. Reviewers not listed in the selected profile are
             NOT launched. If bundle.diff_chunks is empty (CL has no diff content), skip
             step 6 and jump to step 9 with zero issues.
-          tool: Agent
-          expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) subagent).
+          tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead)
+          expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
           action: |
             Launch one validator subagent per candidate issue, all in parallel via a single message.
             Use the selected profile's `validator_models[reason]` (from the RESOLVED table fetched
-            in step 4) to pick the model per issue.
+            in step 4) to pick the model per issue. The model-kind rule from step 6 applies here
+            too, but no validator lane is endpoint-eligible: the runner refuses one and
+            exits 2, because the validator is the control that suppresses a weak reviewer's noise
+            and must not be replaced in the same change as a reviewer. An endpoint id in
+            `validator_models` is therefore a configuration error to report, not a lane to run.
           tool: Agent
           expected: CONFIRMED or REJECTED per issue.
         - n: 8
@@ -204,6 +229,15 @@ technique_skill:
         - n: 9
           action: |
             Render the markdown review.
+            - When any lane FAILED (an endpoint-dispatched reviewer that exited non-zero in
+              step 6, or a lane refused as a configuration error), prepend a `## Lane failures`
+              section naming each failed lane, the model it was configured with, and the
+              runner's stderr reason. State plainly which files that lane would have covered
+              and that they did NOT receive its review. This section is not decoration: the
+              rest of the review looks identical whether a lane ran or not, so without it a
+              partial review is indistinguishable from a complete one. Never describe a
+              failed lane's files as clean, and never re-run the lane on a different model to
+              paper over the gap -- report it and let the user decide.
             - When `bundle.submit_gates` is non-empty, prepend a `## Submit checklist`
               section, each gate carrying its step-5 verdict and the evidence for it.
             - When `bundle.unresolved` is non-empty, prepend a `## Unresolved merges`
@@ -355,7 +389,9 @@ technique_skill:
         - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed.
         - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
         - The `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
-        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), and the shipped default table.
+        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, and what happens when an endpoint lane fails.
+        - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead (step 6's model-kind rule). The shipped table is all aliases, so a review with no user or project override dispatches every lane as an Agent subagent.
+        - An endpoint lane that fails is a FAILED lane. There is no fallback to an Agent, by design: silently substituting one produces a review the user reads as having run on the model they configured, which is a false claim about the change's coverage. Report it and mark the coverage missing.
   narration:
     note: Reviews involve long silent stretches (batched file reads, parallel subagents that take 30s+). Post one short status line per step using these templates verbatim, filling in the bracketed counts. Do not paraphrase, omit, or add extras.
     templates:
@@ -495,6 +531,58 @@ technique_skill:
       subagent_type: general-purpose
       scope: obvious bugs visible in one chunk's diff alone
       input: "absolute path to ONE chunk .diff file, the depot paths of the files in that chunk, and the CL description"
+      canonical_prompt_note: |
+        This lane can run EITHER as an Agent subagent or, when its resolved `model` is an
+        endpoint id, as a plain completion (see the step-6 model-kind rule). Both paths must
+        review by the same standard, so the prompt below is the single source: it is rendered
+        here from bootstrap_lib.code_review.lane_prompts, which is also what the endpoint
+        runner sends. When launching this lane as an Agent, use it as the subagent's
+        instructions verbatim, then append the chunk path and file list. Do not paraphrase it.
+      canonical_prompt: |
+        You are reviewing one chunk of a code change for obvious bugs that are visible
+        in the diff alone. You are one of several independent reviewers; other files
+        and other concerns belong to other reviewers.
+
+        Scope. Report only won't-compile problems, syntax and type errors, missing
+        imports, unresolved references, and logic that is definitely wrong regardless
+        of inputs. For data and documentation files, report malformed syntax, duplicate
+        keys, schema or column-count violations, and broken cross-file references.
+
+        Restrictions. The diff below is everything you get and everything you may
+        consider. Do not ask for other files, do not reason about code you cannot see,
+        and do not report an issue in a file that does not appear in this diff.
+
+        Only flag an issue when it is one of these:
+        - code that will fail to compile or parse (syntax errors, type errors, missing
+          imports, unresolved references)
+        - code that will definitely produce wrong results regardless of inputs (clear
+          logic errors)
+        - a project-standard rule clearly and unambiguously violated, with the exact
+          rule quotable
+
+        Never flag any of these:
+        - code style or quality concerns
+        - potential issues that depend on specific inputs or state
+        - subjective suggestions or improvements
+        - pre-existing issues (only review the diff)
+        - anything a linter would catch (do not run a linter)
+        - issues that appear in a standards file but are explicitly silenced in the
+          code (for example a lint-ignore comment)
+
+        If you are not certain an issue is real, do not flag it. False positives erode
+        trust: an empty array is a perfectly good answer and is much better than a
+        speculative finding.
+
+        Respond with a JSON array and nothing else. No prose before it, no prose after
+        it, no Markdown code fence. Each element is an object with exactly these keys:
+
+          "file"        the path of the file the issue is in, as it appears in the diff
+          "lines"       the affected line or range, for example "42" or "42-48"
+          "reason"      exactly "bug" or "claude_md"
+          "description" one sentence explaining the problem
+          "citation"    optional, and only for "claude_md": the exact rule text quoted
+
+        Return [] when there is nothing to report.
       restrictions:
         - "Read the assigned chunk diff once. MUST NOT use Read for anything beyond that chunk."
         - "Only flag won't-compile, syntax/type errors, missing imports, unresolved references, definitely-wrong logic regardless of inputs."

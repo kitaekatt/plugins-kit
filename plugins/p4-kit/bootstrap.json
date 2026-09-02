@@ -26,7 +26,7 @@
   "venv": {
     "check_imports": ["p4kit_vcs"]
   },
-  "shared_lib_imports": ["bootstrap_lib"],
+  "shared_lib_imports": ["bootstrap_lib", "llm_scripting_kit"],
   "script": {
     "path": "scripts/cleanup_legacy_config.py",
     "entry_point": "cleanup"

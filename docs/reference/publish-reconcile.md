@@ -189,6 +189,24 @@ are unaffected. Skip the master->dev merge-back when the dev tree is being
 actively edited: the content already matches on both branches, so the history
 merge can wait for a calm moment.
 
+**The sync commit MUST end with a `Published-From:` trailer naming the dev commit
+master's content now matches**, because this commit becomes master's tip and
+`range_base()` in `scripts/publish.py` reads that trailer off the TIP to find the
+dev commit master was built from:
+
+```
+Published-From: <full sha of the origin/dev commit you synced from>
+```
+
+Omit it and `range_base()` falls back to the merge base, against which every file
+the last release shipped looks like a master-side change -- so the next publish is
+refused by `_master_only_paths()` with a list of files whose only "master-only
+content" is an older version string. The trailer is a claim about content, so
+verify it rather than assuming: `git diff --name-only origin/master <sha> --`
+should list nothing outside the dev-only plugins. This is the one respect in which
+a hand-run sync has to imitate `publish.py`, which writes the trailer itself on
+every projection.
+
 ## Landing-page preview (dev-tree regen by hand)
 
 The repo-root **`index.html`** is the marketplace's public landing page (the

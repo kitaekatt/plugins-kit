@@ -94,6 +94,24 @@ unconfigurable opinion whose test passes is a finding.
   cwd set to that directory and the attempt row says `workspace: none`. A Perforce team
   gets a working runner whose isolation is manual, not a half-working git path.
 
+- **Only a qualified reviewer lane may run on a configured endpoint.** A review profile's
+  `model` may name an llm-scripting-kit endpoint instead of an Agent alias, but the runner
+  accepts that for `reviewer_b_diff_only_bugs` only; every other lane is refused by name.
+  A team could reasonably want its validators on a cheap local model, and the only remedy we
+  leave them is to wait for a lane to be qualified -- so this is a stance, not a good default.
+  We refuse to make it a setting because the validator is the CONTROL that suppresses a weak
+  reviewer's false positives: a run with both a weakened reviewer and a weakened validator
+  cannot tell you which one caused a regression, and the config key would make that the
+  cheapest thing to reach for. Widening the set is a plugin change, gated on a measurement
+  against a labeled candidate set, not on a user's willingness to type a line of YAML.
+- **A failed endpoint lane fails the review's coverage; it never falls back to an Agent.**
+  A team could reasonably prefer "finish the review anyway on the default model", and the
+  remedy we leave them is to drop the endpoint override. We refuse the fallback because the
+  rendered review looks identical either way: a silent substitution hands back a review the
+  reader believes ran on the model they configured, which is a false claim about what
+  examined their change rather than a degraded one. The lane is reported failed and its
+  files are marked uncovered, so the reader can re-run deliberately.
+
 - **Code review renders to chat and is never persisted.** git-kit and p4-kit scope
   themselves to a conversational review; a team needing PR/Swarm comments or a CI artifact
   wants a different tool, and both SKILL.md scope blocks say so rather than assuming it
@@ -208,7 +226,20 @@ example of this guard against `llm_scripting_kit.completion`.
 | job-kit | `llm_scripting_kit.completion` (`BackendSelection`, `Capabilities`, `adapter_capabilities`, `create_backend`, `match_capabilities`) | Deterministic endpoint selection from a job's preference order and requirements | Yes |
 | workflow-kit | `llm_scripting_kit.completion.OpenRouterBackend` (via `scripts/openrouter_run.py`) | The `openrouter` node strategy: one non-Claude model call per workflow node | Yes |
 | awesome-kit (orchestrate) | `llm_scripting_kit` (harness-model discovery, lazy/optional, via `orchestration_guidance.py`) | Backend/model advisory text for the orchestrate skill's routing decisions | Yes |
+| git-kit, p4-kit | `llm_scripting_kit.completion` (`create_backend`, `BackendOptions`, `HaltError`) via each kit's vendored `scripts/run_review_lane.py` | One reviewer lane's prompt, output contract, context-window pre-flight, and failure policy | Yes |
 | yaml-data-editor-kit | none directly -- reaches it via content-pipeline-kit's `content_pipeline` (the dispatch binding in `dispatch/`) | The editor's dispatch planner, not the completion transport | No (`published: false`) |
+
+The code-review kits are the one entry whose consumer is a VENDORED SCRIPT rather
+than a library. `bootstrap_lib.code_review` holds the shared review pipeline, so the
+runner "belongs" there by cohesion -- but it calls the seam, and an import in
+`bootstrap_lib` makes `openai` a transitive requirement of BOOTSTRAP, which every
+other plugin depends on (`tests/bootstrap/test_dependency_completeness.py` walks the
+first-party closure and enforces this). The split is therefore by DEPENDENCY, not by
+subject: the LLM-neutral half (prompts, issue schema, dispatch classification) stays
+in `bootstrap_lib.code_review.lane_prompts`, and the seam-calling half is one file
+vendored byte-for-byte into both kits, per the bootstrap_guard discipline below.
+Reach for the same split whenever shared machinery would otherwise drag a transport
+dependency down into a layer that does not need one.
 
 `bootstrap_lib/codex.py` is stdlib-only because `bootstrap_lib` is imported from
 contexts where no third-party dependency is guaranteed to exist (SessionStart
