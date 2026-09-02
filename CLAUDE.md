@@ -184,13 +184,15 @@ After publish:
 
 Some plugins live on `dev` for in-development work and must not reach consumers until they are ready. Each such plugin sets `"published": false` in its `plugins/<name>/.claude-plugin/plugin.json`. The marketplace regenerator (`scripts/regen_marketplace.py`) filters those plugins out of `marketplace.json`, so they are excluded structurally — not by memory — even if their files land on master via a cherry-pick.
 
-`publish.py` **EXCLUDES** such commits rather than refusing: it replays only the shippable commits onto master in a temporary worktree and pushes from there, printing every commit it held back. `dev` is untouched. The preflight refuses exactly one case -- a single commit touching **both** a dev-only plugin and files that would otherwise ship. Split that commit, or pass `--allow-dev-only <plugin>` to ship it deliberately. Filtered-release mechanics: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
+**By default `publish.py` SHIPS a dev-only plugin's commits to master**, and `published: false` alone is what keeps the plugin out of `marketplace.json` and therefore uninstallable. So a dev-only plugin's source sits on the public master with no way to install it, and master's tree matches dev. Nothing about the field's meaning changed -- what changed is that it no longer implies a divergent tree, because the exclusion never held for long anyway (a plugin's files arrive with the first commit that touches anything else).
+
+Pass `--exclude-dev-only <plugin>` when a plugin's SOURCE genuinely must not appear on a public master. That restores the filtered release: only the shippable commits are projected onto master in a temporary worktree, `dev` is untouched, every held-back commit is printed -- and preflight then refuses one case, a single commit touching **both** that plugin and files that would otherwise ship, because an exclusion cannot be honoured silently there. Filtered-release mechanics: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
 
 **Dev-only plugins** (the field, not this list, is load-bearing -- this is just a human-readable inventory):
 
 - **yaml-data-editor-kit**.
 
-Commits for a dev-only plugin in `git log origin/master..origin/dev` need no action: the filtered release leaves them on `dev`. Do NOT branch from master to cherry-pick around them -- creating or switching a branch in this shared tree is its own anti-pattern (see below). The regenerator remains a backstop for the marketplace listing, not a substitute for the per-commit filtering.
+Commits for a dev-only plugin in `git log origin/master..origin/dev` need no action: they ship by default and the plugin stays unlisted. Do NOT branch from master to cherry-pick around them -- creating or switching a branch in this shared tree is its own anti-pattern (see below). The regenerator remains a backstop for the marketplace listing, not a substitute for the per-commit filtering.
 
 ### dev -> master reconcile: conflict-resolution policy
 

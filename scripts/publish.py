@@ -55,10 +55,11 @@ escapable pre-commit hooks):
   - not on dev; a dirty tree; a merge that would not fast-forward; a range with
     nothing to publish.
   - a single commit touching BOTH a dev-only plugin and files that would
-    otherwise ship. Excluding it withholds released work, including it puts
-    dev-only files on master, and splitting someone else's commit is a
-    judgement call. (Commits touching ONLY a dev-only plugin are excluded
-    silently-but-reported, not refused.)
+    otherwise ship -- but ONLY for a plugin named in --exclude-dev-only. By
+    default every dev-only plugin's commits ship, so there is nothing to
+    refuse. See excluded_dev_only_commits() for why that is the default and
+    what it does NOT change (a dev-only plugin still never reaches the
+    marketplace listing, so it stays uninstallable).
   - a plugin that does not declare the bootstrap dependency.
   - no published plugin bumped at all, AND any published plugin whose files
     changed in the range without a bump (the cache keys on version, so those
@@ -452,9 +453,23 @@ def excluded_dev_only_commits(allow: set[str]) -> dict[str, set[str]]:
     Deciding what ships is still not this script's job: the `published` field is
     where that decision was already recorded, and honouring it is not a guess.
 
-    --allow-dev-only overrides per plugin, for finished work master's tree needs
-    (e.g. a cross-plugin refactor). The allowance is printed so it stays visible
-    in the publish log.
+    SHIPPING IS NOW THE DEFAULT, and `allow` normally arrives holding every
+    dev-only plugin (main() builds it that way). The filtering below is opt-in
+    per plugin via --exclude-dev-only.
+
+    The reason: excluding a plugin's commits does not keep it off master for
+    long -- its files are already there from before it was marked dev-only, or
+    they arrive with the first mixed commit -- so the exclusion bought a master
+    tree that only PARTIALLY matched dev, which is the state the projection
+    machinery exists to avoid. What actually keeps a dev-only plugin from
+    consumers is `published: false` filtering it out of `marketplace.json`, and
+    that is untouched here: a shipped-but-unpublished plugin has source on
+    master and no way to install it. So the field still records the decision;
+    it just no longer implies a divergent tree.
+
+    --exclude-dev-only restores the old behaviour for a plugin whose source
+    genuinely must not appear on a public master. Both the allowances and the
+    exclusions are printed so they stay visible in the publish log.
     """
     dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
     unknown = allow - dev_only
@@ -463,8 +478,8 @@ def excluded_dev_only_commits(allow: set[str]) -> dict[str, set[str]]:
             "--allow-dev-only names plugins that are not dev-only here: "
             + ", ".join(sorted(unknown)))
     for plugin in sorted(allow):
-        print(f"  allowing dev-only plugin commits to ship: {plugin} "
-              f"(operator decision via --allow-dev-only)")
+        print(f"  shipping dev-only plugin's commits: {plugin} "
+              f"(default; --exclude-dev-only holds one back)")
     dev_only -= allow
     if not dev_only:
         return {}
@@ -492,8 +507,12 @@ def _refuse_mixed_dev_only_commit(excluded: dict[str, set[str]]) -> None:
     Such a commit cannot be excluded or included without being wrong either way:
     dropping it withholds work that was bumped for release, taking it puts
     dev-only files on master. Splitting someone else's commit is a judgement
-    call, so this stops and names it. Refusing is still right HERE -- what
-    changed above is only the case where the split is unambiguous.
+    call, so this stops and names it.
+
+    This now fires only for a plugin the operator named in --exclude-dev-only,
+    because shipping is otherwise the default and nothing is excluded. Someone
+    who asked for an exclusion is asking for a master tree that diverges, and
+    a mixed commit is exactly where that request cannot be honoured silently.
     """
     dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
     mixed = []
@@ -513,8 +532,8 @@ def _refuse_mixed_dev_only_commit(excluded: dict[str, set[str]]) -> None:
         "refusing: commit(s) touch BOTH a dev-only plugin and files that would "
         "otherwise ship:\n" + "\n".join(lines)
         + "\n\nExcluding them would withhold shippable work; including them "
-          "would put dev-only files on master. Split the commit, or name the "
-          "plugin in --allow-dev-only.")
+          "would put dev-only files on master. Split the commit, or drop the "
+          "plugin from --exclude-dev-only (shipping is the default).")
 
 
 def _require_version_bump() -> list[str]:
@@ -961,16 +980,32 @@ def main(argv: list[str]) -> int:
         "--check", action="store_true",
         help="preflight and verify only; make no writes and no pushes")
     parser.add_argument(
+        "--exclude-dev-only", action="append", default=[], metavar="PLUGIN",
+        help="hold this dev-only (published: false) plugin's commits back from "
+             "master, giving a master tree that diverges from dev "
+             "(repeatable). Shipping every dev-only plugin is the DEFAULT; "
+             "`published: false` is what keeps a plugin out of the marketplace "
+             "listing, and that is unaffected either way")
+    parser.add_argument(
         "--allow-dev-only", action="append", default=[], metavar="PLUGIN",
-        help="ship commits touching this dev-only (published: false) plugin "
-             "anyway -- an explicit operator decision for finished work "
-             "master's tree needs (repeatable; does NOT add the plugin to "
-             "the marketplace listing)")
+        help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     try:
         print("preflight:")
-        bumps, excluded = preflight(set(args.allow_dev_only))
+        # Shipping every dev-only plugin's commits is the default; the
+        # operator opts one OUT, rather than opting each one in.
+        allow = {name for name, m in local_plugins().items() if not is_published(m)}
+        held_back = set(args.exclude_dev_only)
+        unknown = held_back - allow
+        if unknown:
+            raise PublishError(
+                "--exclude-dev-only names plugins that are not dev-only here: "
+                + ", ".join(sorted(unknown)))
+        for plugin in sorted(held_back):
+            print(f"  holding dev-only plugin back from master: {plugin} "
+                  f"(operator decision via --exclude-dev-only)")
+        bumps, excluded = preflight(allow - held_back)
         for bump in bumps:
             print(f"  publishing {bump}")
         if excluded:
