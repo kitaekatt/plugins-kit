@@ -1105,7 +1105,23 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--allow-dev-only", action="append", default=[], metavar="PLUGIN",
         help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--print-range-base", action="store_true",
+        help="print the commit `..dev` is measured from and exit, making no "
+             "writes and no network calls. scripts/check-staged-version-bump.sh "
+             "asks this so both gates measure a bump from the same publish "
+             "point rather than each deriving one")
     args = parser.parse_args(argv)
+
+    # Answered before anything else, because the caller is a pre-commit hook on
+    # a possibly unprovisioned clone: no preflight, no manifest reads, no writes.
+    if args.print_range_base:
+        try:
+            print(range_base())
+        except PublishError as exc:
+            print(f"range base unavailable: {exc}", file=sys.stderr)
+            return 1
+        return 0
 
     try:
         print("preflight:")
