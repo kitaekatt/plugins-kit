@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -429,21 +430,33 @@ def test_workspace_creation_interruption_records_a_pre_seam_failure(
 def test_resume_uses_the_run_workspace_root_for_a_pending_git_job(
     tmp_path: Path,
 ) -> None:
-    """Resume skips accepted work and creates the pending job's worktree."""
+    """Resume keeps the run root and creates a fresh pending-attempt worktree."""
     repository, _ = _git_repository(tmp_path / "repository")
     first = _job(repository, "first", _print_cwd_command())
-    second = _job(repository, "second", _print_cwd_command())
+    second = replace(
+        _job(repository, "second", _print_cwd_command()),
+        max_attempts=2,
+    )
     db_path = tmp_path / "run.sqlite3"
     workspace_root = tmp_path / "workspaces"
     backend = FakeBackend()
-    factory_calls = 0
+    completion_calls = 0
+    original_complete = backend.complete
 
-    def interrupting_factory(endpoint: str, **_: object) -> BackendSelection:
-        nonlocal factory_calls
-        factory_calls += 1
-        if factory_calls == 2:
+    def interrupting_complete(
+        system: str,
+        user: str,
+        *,
+        model: str,
+        options: object = None,
+    ) -> LLMResponse:
+        nonlocal completion_calls
+        completion_calls += 1
+        if completion_calls == 2:
             raise KeyboardInterrupt
-        return BackendSelection(endpoint, "fake", backend, "fake-model")
+        return original_complete(system, user, model=model, options=options)
+
+    backend.complete = interrupting_complete
 
     with pytest.raises(KeyboardInterrupt):
         run_jobs(
@@ -452,12 +465,13 @@ def test_resume_uses_the_run_workspace_root_for_a_pending_git_job(
             run_id="resume-run",
             workspace_root=workspace_root,
             capabilities_provider=_advertisement,
-            backend_factory=interrupting_factory,
+            backend_factory=_factory_for(backend),
         )
 
     interrupted = JobStore(db_path).snapshot("resume-run")
     assert interrupted.jobs[0].state is JobState.ACCEPTED
     assert interrupted.jobs[1].state is JobState.PENDING
+    assert len(interrupted.attempts) == 2
     assert interrupted.attempts[0].workspace is not None
     initial_head = interrupted.attempts[0].base_ref
     assert initial_head is not None
@@ -474,14 +488,15 @@ def test_resume_uses_the_run_workspace_root_for_a_pending_git_job(
         JobState.ACCEPTED,
         JobState.ACCEPTED,
     ]
-    assert len(resumed.attempts) == 2
-    assert resumed.attempts[1].workspace is not None
-    assert resumed.attempts[1].workspace != resumed.attempts[0].workspace
-    assert resumed.attempts[1].base_ref == initial_head
-    assert _git(resumed.attempts[1].workspace, "rev-parse", "HEAD") == initial_head
+    assert len(resumed.attempts) == 3
+    assert resumed.attempts[2].workspace is not None
+    assert resumed.attempts[2].workspace != resumed.attempts[0].workspace
+    assert resumed.attempts[2].workspace != resumed.attempts[1].workspace
+    assert resumed.attempts[2].base_ref == initial_head
+    assert _git(resumed.attempts[2].workspace, "rev-parse", "HEAD") == initial_head
     assert _git(repository, "rev-parse", "HEAD") == advanced_head
-    assert resumed.attempts[1].acceptance is not None
-    assert resumed.attempts[1].acceptance.directory == resumed.attempts[1].workspace
+    assert resumed.attempts[2].acceptance is not None
+    assert resumed.attempts[2].acceptance.directory == resumed.attempts[2].workspace
 
 
 def test_direct_run_job_inherits_the_recorded_custom_workspace_root(

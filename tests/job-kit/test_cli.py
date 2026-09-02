@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import pytest
 
@@ -45,6 +48,191 @@ def test_status_does_not_create_a_missing_store(tmp_path: Path, capsys: Any) -> 
     assert "unknown run" not in captured.err.lower()
     assert not store_path.exists()
     assert not store_path.parent.exists()
+
+
+def test_package_reports_missing_bootstrap_before_cli_import(tmp_path: Path) -> None:
+    """A bare package import gets the canonical provisioning message."""
+    repo_root = Path(__file__).resolve().parents[2]
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "HOME": str(tmp_path / "home"),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONPATH": os.pathsep.join(
+                (
+                    str(repo_root / "plugins" / "job-kit" / "lib"),
+                    str(repo_root / "plugins" / "llm-scripting-kit" / "lib"),
+                )
+            ),
+            "_BOOTSTRAP_GUARD_VENV_REEXEC": "1",
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", "import job_kit"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=environment,
+        check=False,
+    )
+
+    assert result.returncode == 3
+    assert "the 'plugins-kit:bootstrap' plugin has not provisioned" in result.stderr
+    assert "missing: bootstrap_lib" in result.stderr
+    assert "No module named" not in result.stderr
+
+
+def test_importing_package_does_not_reexec_under_an_arbitrary_interpreter(
+    tmp_path: Path,
+) -> None:
+    """Importing the library never invokes the CLI interpreter guard."""
+    repo_root = Path(__file__).resolve().parents[2]
+    marker = tmp_path / "reexec-called"
+    (tmp_path / "bootstrap_guard.py").write_text(
+        "from pathlib import Path\n"
+        "def reexec_under_plugin_venv(plugin: str) -> None:\n"
+        f"    Path({str(marker)!r}).write_text('called', encoding='utf-8')\n"
+        "    raise SystemExit(99)\n",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment.pop("_BOOTSTRAP_GUARD_VENV_REEXEC", None)
+    environment.pop("CLAUDE_BOOTSTRAP_DATA_ROOT", None)
+    environment.update(
+        {
+            "HOME": str(tmp_path / "home"),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONPATH": os.pathsep.join(
+                (
+                    str(tmp_path),
+                    str(repo_root / "plugins" / "job-kit" / "lib"),
+                    str(repo_root / "plugins" / "llm-scripting-kit" / "lib"),
+                    str(repo_root / "plugins" / "bootstrap"),
+                )
+            ),
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", "import job_kit; print('imported')"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=environment,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "imported"
+    assert not marker.exists()
+
+
+def test_python_m_entrypoint_still_runs_the_cli(tmp_path: Path) -> None:
+    """The shim remains usable through Python's module launcher."""
+    repo_root = Path(__file__).resolve().parents[2]
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "HOME": str(tmp_path / "home"),
+            "PYTHONNOUSERSITE": "1",
+            "_BOOTSTRAP_GUARD_VENV_REEXEC": "1",
+            "PYTHONPATH": os.pathsep.join(
+                (
+                    str(repo_root / "plugins" / "job-kit" / "lib"),
+                    str(repo_root / "plugins" / "llm-scripting-kit" / "lib"),
+                    str(repo_root / "plugins" / "bootstrap"),
+                )
+            ),
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-S", "-m", "job_kit_entrypoint", "--help"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=environment,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "usage: job-kit" in result.stdout
+
+
+def test_entrypoint_preserves_explicit_arguments_for_reexec(monkeypatch: Any) -> None:
+    """The shim carries explicit arguments into a replacement interpreter."""
+    import job_kit.cli
+    import job_kit_entrypoint
+
+    observed: list[tuple[str, ...]] = []
+    cli_arguments: list[Sequence[str] | None] = []
+
+    def fake_reexec(plugin: str) -> None:
+        observed.append(tuple(sys.argv))
+
+    def fake_cli_main(argv: Sequence[str] | None = None) -> int:
+        cli_arguments.append(argv)
+        return 0
+
+    monkeypatch.setattr(sys, "argv", ["caller", "unrelated"])
+    monkeypatch.setattr(job_kit_entrypoint, "reexec_under_plugin_venv", fake_reexec)
+    monkeypatch.setattr(job_kit.cli, "main", fake_cli_main)
+
+    assert job_kit_entrypoint.main(["status", "run-id"]) == 0
+    assert observed == [(str(Path(job_kit_entrypoint.__file__).resolve()), "status", "run-id")]
+    assert cli_arguments == [["status", "run-id"]]
+    assert sys.argv == ["caller", "unrelated"]
+
+
+def test_package_reraises_deep_import_error_when_provisioned(
+    tmp_path: Path,
+) -> None:
+    """A provisioned install does not misreport a deep shared-lib defect."""
+    repo_root = Path(__file__).resolve().parents[2]
+    fake_root = tmp_path / "fake-libs"
+    fake_root.mkdir()
+    (fake_root / "bootstrap_lib.py").write_text("", encoding="utf-8")
+    fake_llm = fake_root / "llm_scripting_kit"
+    fake_llm.mkdir()
+    (fake_llm / "__init__.py").write_text("", encoding="utf-8")
+    (fake_llm / "completion.py").write_text(
+        "from nonexistent_third_party import missing_symbol\n",
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+    log = home / ".claude" / "plugins" / "data" / "plugins-kit" / "job-kit"
+    log.mkdir(parents=True)
+    (log / "bootstrap.log").write_text("provisioned\n", encoding="utf-8")
+    environment = os.environ.copy()
+    environment.pop("_BOOTSTRAP_GUARD_VENV_REEXEC", None)
+    environment.pop("CLAUDE_BOOTSTRAP_DATA_ROOT", None)
+    environment.update(
+        {
+            "HOME": str(home),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONPATH": os.pathsep.join(
+                (
+                    str(fake_root),
+                    str(repo_root / "plugins" / "job-kit" / "lib"),
+                )
+            ),
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", "import job_kit"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=environment,
+        check=False,
+    )
+
+    assert result.returncode not in {0, 3}
+    assert "Traceback (most recent call last)" in result.stderr
+    assert "nonexistent_third_party" in result.stderr
+    assert "the 'plugins-kit:bootstrap' plugin has not provisioned" not in result.stderr
 
 
 def _accepted_snapshot(tmp_path: Path) -> RunSnapshot:
