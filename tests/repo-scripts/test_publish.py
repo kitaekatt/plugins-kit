@@ -111,6 +111,55 @@ class TestPreflightRefusals:
             publish.preflight()
 
 
+class TestRangeBaseSurvivesNonReleaseCommits:
+    """Master carries commits that are not releases; the boundary must survive.
+
+    An infra-drift sync or a reconcile records no Published-From trailer
+    because neither is a release. Reading only master's tip loses the boundary
+    the moment one lands, and the loss is silent: range_base falls back to the
+    ancient merge base, against which everything the last release shipped looks
+    like master-side content, so a routine publish is refused as a reconcile.
+    """
+
+    @staticmethod
+    def _project(repo: Path, published_from: str, subject: str = "publish") -> None:
+        """Put a projection commit carrying the trailer on master."""
+        _git(repo, "checkout", "-q", "master")
+        (repo / "shipped.txt").write_text(f"from {published_from}\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm",
+             f"{subject}\n\n{publish.PUBLISHED_FROM} {published_from}")
+        _git(repo, "push", "-q", "origin", "master")
+        _git(repo, "checkout", "-q", "dev")
+
+    def test_trailer_on_the_tip_is_found(self, repo):
+        head = _git(repo, "rev-parse", "dev")
+        self._project(repo, head)
+        _git(repo, "fetch", "-q", "origin")
+        assert publish.range_base() == head
+
+    def test_trailer_below_a_non_release_commit_is_still_found(self, repo):
+        head = _git(repo, "rev-parse", "dev")
+        self._project(repo, head)
+        _git(repo, "checkout", "-q", "master")
+        (repo / "infra.txt").write_text("infra sync, not a release\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "infra sync: carry policy to master")
+        _git(repo, "push", "-q", "origin", "master")
+        _git(repo, "checkout", "-q", "dev")
+        _git(repo, "fetch", "-q", "origin")
+        assert publish.range_base() == head
+
+    def test_no_trailer_anywhere_falls_back_to_master(self, repo):
+        assert publish.range_base() == f"{publish.REMOTE}/{publish.MASTER_BRANCH}"
+
+    def test_a_trailer_naming_a_non_ancestor_falls_back(self, repo):
+        """A rewritten dev must not silently narrow the range."""
+        self._project(repo, "0" * 40)
+        _git(repo, "fetch", "-q", "origin")
+        assert publish.range_base() == f"{publish.REMOTE}/{publish.MASTER_BRANCH}"
+
+
 class TestDirtyGateIgnoresDevOnlyPlugins:
     """A dev-only plugin's uncommitted work must not block a publish.
 

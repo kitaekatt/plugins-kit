@@ -201,6 +201,11 @@ def version_at(ref: str, plugin: str) -> str | None:
 
 PUBLISHED_FROM = "Published-From:"
 
+# How far down master to look for the last recorded publish point. Generous
+# enough to see past a run of non-release commits (infra syncs, reconciles),
+# small enough that a master which never carried one falls back promptly.
+_RANGE_BASE_SEARCH_DEPTH = 50
+
 # Derived artifacts, regenerated from the plugin manifests on every publish.
 # master's copy is an OUTPUT of the last release rather than content anyone
 # authored there, so dev wins unconditionally -- the same rule the reconcile
@@ -231,22 +236,40 @@ def range_base() -> str:
     therefore records the dev commit it was built from, and that -- not
     ancestry -- is the honest boundary.
 
-    Falls back to `origin/master` when the trailer is absent, names an object
-    this clone lacks, or names a commit that is not an ancestor of dev (a
-    rewritten dev). The fallback over-reports rather than under-reports, which
-    is the safe direction: a wider range costs noise, a narrower one silently
-    drops a commit from the release.
+    The trailer is searched for down master's history, not read off its TIP.
+    Master legitimately carries commits that are not projections -- an
+    infra-drift sync, a reconcile (both are documented operations in
+    docs/reference/publish-reconcile.md) -- and none of them records a boundary
+    because none of them is a release. Reading only the tip therefore loses the
+    boundary the moment anyone lands one, and the loss is silent: the fallback
+    below is the ANCIENT merge base, against which every file the last release
+    shipped looks like a master-side change, so `_master_only_paths` reports a
+    reconcile that does not exist and refuses a routine publish. The walk is
+    bounded because a master that never carried a projection has no boundary to
+    find and should reach the fallback quickly rather than scan its whole
+    history.
+
+    Falls back to `origin/master` when no trailer is found within that window,
+    or when the ones found name objects this clone lacks or commits that are
+    not ancestors of dev (a rewritten dev). The fallback over-reports rather
+    than under-reports, which is the safe direction: a wider range costs noise,
+    a narrower one silently drops a commit from the release.
     """
     master = f"{REMOTE}/{MASTER_BRANCH}"
-    message = git("log", "-1", "--format=%B", master, check=False)
-    for line in reversed(message.splitlines()):
-        line = line.strip()
-        if not line.startswith(PUBLISHED_FROM):
+    log = git("log", f"-{_RANGE_BASE_SEARCH_DEPTH}", "--format=%H%x1e%B%x1f",
+              master, check=False)
+    for entry in log.split("\x1f"):
+        if not entry.strip():
             continue
-        sha = line[len(PUBLISHED_FROM):].strip()
-        if sha and _rc("merge-base", "--is-ancestor", sha, DEV_BRANCH) == 0:
-            return sha
-        break
+        _sha, _sep, message = entry.partition("\x1e")
+        for line in reversed(message.splitlines()):
+            line = line.strip()
+            if not line.startswith(PUBLISHED_FROM):
+                continue
+            sha = line[len(PUBLISHED_FROM):].strip()
+            if sha and _rc("merge-base", "--is-ancestor", sha, DEV_BRANCH) == 0:
+                return sha
+            break
     return master
 
 
