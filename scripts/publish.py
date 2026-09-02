@@ -225,12 +225,34 @@ def blob_at(ref: str, path: str) -> str | None:
                check=False) or None
 
 
-def _blob_reached_by_dev(path: str, blob: str) -> bool:
-    """True when `path` has held `blob` somewhere in dev's history.
+def _blobs_along(path: str, commits: list[str]) -> list[str]:
+    """The blobs `path` held at `commits`, in the order given.
 
-    The question `_master_only_paths` actually needs answered. A blob dev has
-    carried at that path is content dev picked up, whatever route it took to
-    master afterwards, so a publish cannot discard it.
+    One `cat-file --batch-check` resolves the whole list, so the cost is two
+    processes per path rather than one per commit. Commits where the path is
+    absent print "<input> missing" and are dropped -- an absent path is not a
+    state anything can hold.
+    """
+    if not commits:
+        return []
+    probe = subprocess.run(
+        ["git", "cat-file", "--batch-check=%(objectname)"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+        input="".join(f"{sha}:{path}\n" for sha in commits))
+    # A present entry is the object id alone; a missing one is
+    # "<input> missing", two fields, which cannot collide with a sha.
+    return [fields[0] for fields in
+            (line.split() for line in probe.stdout.splitlines())
+            if len(fields) == 1]
+
+
+def _dev_state_ranks(path: str) -> dict[str, int]:
+    """How far back in dev's history each state of `path` sits; 0 is dev's tip.
+
+    The ranking, not mere membership, is what `_master_only_paths` needs: dev
+    holding a blob SOMEWHERE says nothing about whether dev has since moved
+    past it, and a master that sits on a state dev superseded may be sitting
+    there deliberately.
 
     The walk is the SIMPLIFIED one -- no `--full-history` -- and that is a
     judgement, not an omission. Simplification keeps the commits where the path
@@ -239,19 +261,45 @@ def _blob_reached_by_dev(path: str, blob: str) -> bool:
     on a side branch a merge RESOLVED AWAY, and dev rejecting a state is
     precisely the case where master still carrying it is a real loss the
     operator should see.
-
-    One `cat-file --batch-check` resolves the whole commit list, so the cost is
-    two processes per path rather than one per commit.
     """
     commits = git("rev-list", DEV_BRANCH, "--", path, check=False).split()
-    if not commits:
-        return False
-    probe = subprocess.run(
-        ["git", "cat-file", "--batch-check=%(objectname)"],
-        cwd=REPO_ROOT, capture_output=True, text=True,
-        input="".join(f"{sha}:{path}\n" for sha in commits))
-    # Missing entries print "<input> missing", which cannot collide with a sha.
-    return blob in probe.stdout.split()
+    ranks: dict[str, int] = {}
+    for rank, blob in enumerate(_blobs_along(path, commits)):
+        ranks.setdefault(blob, rank)
+    return ranks
+
+
+def _master_holds_discardable_state(path: str, base: str, master: str,
+                                    master_blob: str) -> bool:
+    """True when publishing over master's state at `path` would discard it.
+
+    A publish overwrites master's CURRENT state with dev's, so that is the only
+    state at risk. Two things make overwriting it safe, and both are required.
+
+    Dev must have held that state at all: a blob nowhere in dev's history is
+    content dev never picked up -- a hotfix written straight on master -- and
+    losing it is the loss this guard exists to refuse.
+
+    And master must not have chosen it OVER a newer one. A state dev holds is
+    not automatically a state dev is ahead on: master can arrive at a dev state
+    by moving BACKWARDS to it. Reverting on master is the documented way to
+    retract a bad publish, and it leaves master on an earlier dev state
+    deliberately -- master held the newer one and gave it up. Publishing then
+    restores exactly what the revert withdrew. So master's state must be the
+    NEWEST dev state master has held since the base; anything older is a
+    master-side decision dev does not carry.
+
+    States master held that dev never had are ignored here. Master abandoned
+    them itself, and a publish cannot discard what master no longer holds.
+    """
+    ranks = _dev_state_ranks(path)
+    current = ranks.get(master_blob)
+    if current is None:
+        return True
+    held = git("rev-list", f"{base}..{master}", "--", path, check=False).split()
+    newest = min((ranks[blob] for blob in _blobs_along(path, held)
+                  if blob in ranks), default=current)
+    return current > newest
 
 
 def range_base() -> str:
@@ -325,11 +373,15 @@ def _master_only_paths() -> list[str]:
     receives dev content after the base -- an infra sync, a hand reconcile --
     and master's blob then differs from the base while being a state dev
     already holds, so comparing against the base alone reports a path dev is
-    strictly ahead on. What settles it is `_blob_reached_by_dev`: content dev
-    never picked up is content whose blob appears nowhere in dev's history at
-    that path. The prefilter still earns its place because a blob equal to the
-    base's is reachable by construction (the base is an ancestor of dev), so
-    every path master has not touched is answered without a history walk.
+    strictly ahead on. What settles it is
+    `_master_holds_discardable_state`: master's state must be one dev held AND
+    the newest such state master itself has held.
+
+    The prefilter still earns its place, but it answers only the paths master
+    has left ALONE since the base: a blob equal to the base's is dev's own by
+    construction (the base is an ancestor of dev), so an untouched path needs
+    no history walk. A path master touched and returned to the base's blob is a
+    revert like any other and goes to the full check.
     """
     dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
     master = f"{REMOTE}/{MASTER_BRANCH}"
@@ -339,6 +391,12 @@ def _master_only_paths() -> list[str]:
     if not base:
         return []
     stray = []
+    # Which paths master's own commits touched since the base. One walk
+    # answers it for every path, which is what lets the prefilter below
+    # distinguish "master never moved this" from "master moved it back".
+    master_touched = set(git("log", "--name-only", "--pretty=format:",
+                             f"{base}..{master}", "--",
+                             check=False).split("\n"))
     # The trailing "--" is required, not tidiness: this repo has a `dev/`
     # directory, so `git diff <ref> dev` is ambiguous between a revision and a
     # path and git refuses outright.
@@ -347,13 +405,14 @@ def _master_only_paths() -> list[str]:
         if not path or path in GENERATED_PATHS or _dev_only_owned(path, dev_only):
             continue
         master_blob = blob_at(master, path)
-        if master_blob == blob_at(base, path):
+        if master_blob == blob_at(base, path) and path not in master_touched:
             continue
         # A path master no longer has holds no content to discard by this
         # test, but master DELETING it since the base is a master-side change
         # a publish would undo, and there is no blob to look for. Report it and
         # let the operator judge, which is what the guard did before.
-        if master_blob is None or not _blob_reached_by_dev(path, master_blob):
+        if master_blob is None or _master_holds_discardable_state(
+                path, base, master, master_blob):
             stray.append(path)
     return stray
 

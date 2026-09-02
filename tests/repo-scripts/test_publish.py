@@ -290,14 +290,15 @@ class TestMasterOnlyGuardAsksDevHistory:
     recording a publish point, so master's blob differs from the base while
     being a state dev already holds. Comparing against the base alone reports
     those paths as master-only and refuses a publish that would discard
-    nothing. The question that separates the two cases is whether master's blob
-    appears anywhere in dev's history at that path.
+    nothing. What separates the two cases is whether master's blob is a state
+    dev held AND the newest such state master itself has held -- mere presence
+    in dev's history clears a master-side revert, which sits on an earlier dev
+    state on purpose.
     """
 
     @staticmethod
-    def _base(repo: Path) -> None:
-        """Put a projection on master so range_base has a boundary to find."""
-        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+    def _project(repo: Path) -> None:
+        """Master takes dev's tree and records the dev commit it came from."""
         _git(repo, "push", "-q", "origin", "dev")
         shipped = _git(repo, "rev-parse", "dev")
         _git(repo, "checkout", "-q", "--detach", "origin/master")
@@ -306,6 +307,12 @@ class TestMasterOnlyGuardAsksDevHistory:
              f"publish: projected\n\nPublished-From: {shipped}")
         _git(repo, "push", "-q", "origin", "HEAD:refs/heads/master")
         _git(repo, "checkout", "-q", "dev")
+        _git(repo, "fetch", "-q", "origin")
+
+    def _base(self, repo: Path) -> None:
+        """Put a projection on master so range_base has a boundary to find."""
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        self._project(repo)
 
     @staticmethod
     def _on_master(repo: Path, path: str, text: str, subject: str) -> None:
@@ -385,6 +392,48 @@ class TestMasterOnlyGuardAsksDevHistory:
         _git(repo, "commit", "-qm", "advance shared.txt")
 
         assert publish._master_only_paths() == []
+
+    def test_a_master_side_revert_is_master_only(self, repo):
+        """The retraction path, which the root CLAUDE.md documents as the way
+        to withdraw a bad publish: revert on master. Dev ships v1, an infra
+        sync carries it to master, dev ships a broken v2, that is synced too,
+        and master is then reverted to v1. Master's blob is a state dev's
+        history holds, so mere historical presence clears the path and the next
+        publish silently restores v2 -- undoing the retraction."""
+        self._base(repo)
+        (repo / "shared.txt").write_text("v1\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt v1")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "v1\n", "infra sync: carry v1")
+        (repo / "shared.txt").write_text("v2 broken\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt v2")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "v2 broken\n", "infra sync: carry v2")
+        self._on_master(repo, "shared.txt", "v1\n", "revert shared.txt to v1")
+
+        assert publish._master_only_paths() == ["shared.txt"]
+
+    def test_a_revert_back_to_the_published_state_is_master_only(self, repo):
+        """The cheap base comparison cannot clear a path master MOVED. Dev
+        ships v1 and it is published, so the base itself records v1; dev then
+        ships a broken v2, an infra sync carries it, and master is reverted to
+        v1 -- back to the very blob the base holds. Master's state matches the
+        base's, yet master gave up v2 deliberately and a publish restores it."""
+        self._base(repo)
+        (repo / "shared.txt").write_text("v1\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt v1")
+        self._project(repo)
+        (repo / "shared.txt").write_text("v2 broken\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt v2")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "v2 broken\n", "infra sync: carry v2")
+        self._on_master(repo, "shared.txt", "v1\n", "revert shared.txt to v1")
+
+        assert publish._master_only_paths() == ["shared.txt"]
 
 
 class TestDevOnlyExclusion:
