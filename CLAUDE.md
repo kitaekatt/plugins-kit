@@ -924,11 +924,28 @@ claude_md:
       added: "2026-08-08"
       updated: "2026-08-26"
     - id: codex_dispatch_is_silent_on_failure
-      keywords: [codex, codex exec, sandbox, workspace-write, windows.sandbox, absolute -C, add-dir, exit 0, no approval channel, permission spam, danger-full-access, reads unrestricted, bootstrap_lib.codex, CodexCliBackend, run_cli_streaming]
-      summary: Every way a codex dispatch can be misconfigured fails SILENTLY at exit 0, so codex machinery is built to refuse bad input rather than trust it. bootstrap_lib.codex is the single source of truth for detection and argv; orchestrate deliberately does NOT consume it.
+      keywords: [codex, codex exec, sandbox, workspace-write, windows.sandbox, absolute -C, add-dir, exit 0, no approval channel, permission spam, danger-full-access, reads unrestricted, bootstrap_lib.codex, CodexCliBackend, run_cli_streaming, discovery vs execution, does orchestrate use llm-scripting-kit, who invokes codex, two paths to codex]
+      summary: Every way a codex dispatch can be misconfigured fails SILENTLY at exit 0, so codex machinery is built to refuse bad input rather than trust it. There are TWO paths to codex -- the completion seam (CodexCliBackend) and orchestrate rendering a `codex exec` argv for the agent to run -- and orchestrate does not call the seam, but it DOES reach bootstrap_lib.codex through llm-scripting-kit's CodexAdapter.
       detail: |
         A codex dispatch can fail silently at exit 0 -- judge it by its `-o` file, never `$?`.
         Dispatch reference: plugins/awesome-kit/skills/orchestrate/references/codex-dispatch.md.
+        ORCHESTRATE'S RELATIONSHIP TO llm-scripting-kit, which is easy to get backwards
+        because it differs by AXIS rather than being all-or-nothing. DISCOVERY: orchestrate
+        DOES consume llm-scripting-kit -- orchestration_guidance.py imports it and calls
+        discover_model_entries, and orchestration.yaml states that every routing name
+        without the `agent:` prefix resolves against it. EXECUTION: orchestrate does NOT
+        go through the completion seam (CodexCliBackend), but it is NOT independent of
+        bootstrap_lib.codex -- orchestration_guidance.py's adapter_command_text_provider
+        resolves a harness adapter via llm_scripting_kit.resolve_harness_adapter and calls
+        CodexAdapter.build_argv, which calls bootstrap_lib.codex.build_codex_exec_argv.
+        The literal `command:` string in orchestration.yaml's backends record is the
+        DISCLOSED FALLBACK (_command_fallback), reached only when llm_scripting_kit is
+        unavailable, version-skewed, or the adapter raises, and it appends a note saying
+        so. Do not mistake that degradation path for the mechanism.
+        So "orchestrate does not use llm-scripting-kit" is FALSE on both axes. What stays
+        true is narrower: a codex dispatch from orchestrate does not exercise the
+        COMPLETION SEAM, so a failure there implicates the argv, the sandbox, or the
+        caller's process handling -- not CodexCliBackend.
       origin: "2026-08-10 -- empirical probing of codex-cli 0.146.0 while adding codex as a work backend; the shipped policy had hardcoded network-on, no windows.sandbox, and framed the missing approval flag as a mere gotcha."
       added: "2026-08-10"
     - id: stale_editable_self_install
