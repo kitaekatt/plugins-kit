@@ -395,6 +395,22 @@ neither surfaces as a test failure. A Windows session cannot self-check these
 
 **Skill-based document placement** (package cohesion): when creating a document, ask "what skill does this belong to?" and place it by the CCP/CRP/ADP framework -- `plugins/skills-kit/skills/md-domain/references/cohesion-principles.md` is the SSOT for those principles and the placement algorithm. If no existing skill fits, create a stub skill and let the document live as a progressively-disclosed reference inside it.
 
+**That rule applies to documents a SKILL's readers need. It stops at the plugin
+boundary.** Everything under `plugins/<name>/` is copied into a consumer's plugin
+cache, so placing maintainer-only material in a skill's `references/` publishes it
+-- the OP-1 violation whose stated remedy is the opposite move, "to `docs/`,
+`scripts/`, or a task folder" (`docs/reference/plugin-opinion-razor.md`). Repo
+material -- this repo's git discipline, its test suite, its publish flow, its own
+razor -- therefore belongs in `docs/`, and creating a stub skill to hold it would
+be the defect, not the fix. The test is OP-1's: **who reads this on a machine that
+is not ours?** Nobody -> `docs/`. A consumer of the skill -> that skill's
+`references/`.
+
+This boundary is stated because an md-domain audit will otherwise keep finding it.
+The `ancestor_convention_conformance` criterion reads the paragraph above as an
+ancestor-declared convention and flags every `docs/reference/*.md` as misplaced,
+which is a correct reading of an incomplete rule.
+
 **The plugin-opinion razor.** Every workflow opinion a plugin imposes is
 configurable-with-a-default or registered as a deliberate stance. Criteria,
 register and submit gate: `plugins/CLAUDE.md` and

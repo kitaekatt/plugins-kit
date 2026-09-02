@@ -26,12 +26,10 @@ root is a missing link, not a missing task.
 
 ## Task CLI contract and durable outputs
 
-The `awesome-kit:task` `dev/tasks` contract, "version control is the record",
-applies to the linked task root. It was not in effect while the task root was
-ignored. The `durable_outputs` rule still applies to anything that must outlive
-the task. A specification belongs in the repository it describes at authoring
-time. The task folder is not a reason to make a document hard to find. A
-document nobody can find is not durable.
+The `awesome-kit:task` skill owns the `dev/tasks` contract and the
+`durable_outputs` rule; read it there rather than here. Only the
+repository-specific consequence belongs in this document: the contract applies
+to the LINKED task root, and it was not in effect while that root was ignored.
 
 The root `.gitignore` carries `dev/tasks/`, and that entry is load-bearing: it
 stops this repository's git from traversing the link and staging private task
