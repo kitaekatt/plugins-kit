@@ -230,7 +230,7 @@ claude_md:
         the registration/go-live pairing above.
       added: "2026-08-08"
     - id: hierarchy_is_the_resolution_phase_over_a_tree
-      keywords: [hierarchy verb, claude_md_tree, placement resolution, tree unit, report only, INPUTS-INCOMPLETE, computed verdict, sibling blindness, depth invisible per leaf, one home per fact, opt-in phase, RETIRED, lane deleted, shallowest_true_depth re-homed, provenance only]
+      keywords: [hierarchy verb, claude_md_tree, placement resolution, tree unit, report only, INPUTS-INCOMPLETE, computed verdict, sibling blindness, depth invisible per leaf, one home per fact, opt-in phase, RETIRED, lane deleted, shallowest_true_depth re-homed, provenance only, name collision, audit skill hierarchy, hierarchy selector survives, skill_hierarchy_report.py, not the retired one]
       summary: "RETIRED 2026-08-17 -- the lane, its two reference documents, its discover script, its workflow and its contract test are deleted; this record is provenance only. Both justifications for a tree-scale unit are supplied by parent composition in generation-lane.md. `shallowest-true-depth` survived the delete, re-homed into cohesion-principles.md."
       detail: |
         WHY A NEW UNIT RATHER THAN A WIDER SELECTOR. Two properties of the
@@ -339,6 +339,18 @@ claude_md:
         discover_composition.py still consumes it; only discover_hierarchy.py's
         consumption went away. The two test classes that exercised it through the
         hierarchy module were re-pointed at discover_coverage.py rather than dropped.
+        NOT THIS, and the name collision is a trap: `audit skill hierarchy` is a
+        DIFFERENT capability that survives untouched. It is a selector on the
+        audit_skill lane that renders an HTML report of the SKILL.md corpus,
+        backed by scripts/skill_hierarchy_report.py and dispatched through
+        scripts/report.py's `hierarchy` subcommand (REPORT_TYPES), documented in
+        references/skill-domain/report-usage.md and scripts.md. What retired here
+        is the `hierarchy` VERB over a claude_md_tree -- placement resolution
+        across a CLAUDE.md tree. The two share only a word. SKILL.md's Selector
+        bullet advertising `roster` / `hierarchy` under `audit skill` is therefore
+        CORRECT, not a dangling reference to this retirement; deleting it would
+        remove the only advertisement of a working feature. Check scripts/ before
+        concluding otherwise.
       origin: |
         Surface: tree-scale CLAUDE.md work was being done by hand-rolled merge
         plans, with the depth and de-duplication judgments living in a
