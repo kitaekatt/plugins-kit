@@ -183,9 +183,10 @@ class OpenRouterBackend:
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": user_content},
             ],
-            "temperature": opts.temperature,
             "max_tokens": opts.max_tokens,
         }
+        if opts.temperature is not None:
+            create_kwargs["temperature"] = opts.temperature
         if opts.timeout_s is not None:
             create_kwargs["timeout"] = opts.timeout_s
         if opts.extras:

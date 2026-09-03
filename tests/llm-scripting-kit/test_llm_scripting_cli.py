@@ -534,14 +534,14 @@ def test_probe_never_makes_a_completion_call(monkeypatch, capsys):
     assert cli.main(["probe", "--endpoint", "openrouter"]) == cli.EXIT_OK
 
 
-def test_the_flag_surface_keeps_its_defaults(monkeypatch, capsys):
-    """Moving the defaults off argparse must not change what a bare call sends."""
+def test_the_flag_surface_leaves_temperature_unset(monkeypatch, capsys):
+    """A bare call inherits the server/model temperature default."""
     backend = FakeBackend(LLMResponse(text="ok", model="model-id"))
     monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
 
     assert cli.main(["complete", "--prompt", "hi"]) == cli.EXIT_OK
     options = backend.call[3]
     assert options.max_tokens == 4096
-    assert options.temperature == 0.3
+    assert options.temperature is None
     assert backend.call[0] == ""
     json.loads(capsys.readouterr().out)

@@ -116,6 +116,17 @@ template-vs-additional; the consistent eight `##` shape is the contract.
   that are simply *true* of the project as of this hand-off. Includes a
   `### Environment` subsection with cwd, platform, key tool versions, env
   quirks.
+
+  **A version, branch or publish claim written here is a SNAPSHOT, not a
+  fact.** It was true when written and nothing updates it. In a workspace
+  where other sessions commit, publish, or bump concurrently, it can go stale
+  within the hour. Re-read the source -- the manifest, the remote ref, the
+  installed artifact -- before relying on one, and especially before passing
+  one to a delegated agent as an established premise, where a stale claim is
+  laundered into a fact the agent will not re-check. Prefer writing the CHECK
+  next to the claim ("skills-kit was 0.66.0 at hand-off; confirm with
+  `git show origin/master:<manifest>`") so a reader inherits the way to
+  falsify it rather than only the value.
 - **`## Where we want to get to`** -- the goal the work is converging on.
   State it falsifiably so the next agent can tell when it's done.
 - **`## Immediate Priorities`** -- decisions and actions queued *against* the
