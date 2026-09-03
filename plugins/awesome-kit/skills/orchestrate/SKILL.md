@@ -143,6 +143,13 @@ technique_skill:
             code or docs resolve against, or the only remaining link/reference to something
             the unit just removed.
 
+            RETURN BUDGET, NAMED. The default report is at most about 1,000 tokens and
+            contains only the disposition, files changed, premise outcomes, named checks,
+            and blockers. Put logs, inventories, source excerpts, and other bulky evidence
+            in an artifact. Return its path and the exact parts the join must inspect.
+            If the join needs named detail that cannot remain in an artifact, raise the
+            budget in the brief. Otherwise, keep the default.
+
             PREMISES, MARKED. The other four fields ask only whether a brief is executable, so
             a confidently wrong brief satisfies all of them. State every load-bearing premise
             and label it `established:` (naming the evidence -- a trace, a diff, a prior unit's
@@ -150,6 +157,19 @@ technique_skill:
             existing work functions, and an inherited parameter you did not derive are all
             hypotheses until evidence is cited. Marking is a classification performed at
             authoring time -- do not grade confidence numerically; the label is binary.
+
+            EXCLUSIONS HAVE TWO PARTS. A prohibition imposed by the user, repository policy,
+            or an authorization boundary is a constraint. The unit never crosses it. A claim
+            that an excluded path, component, or artifact does not depend on the change is a
+            causal premise. Mark it like any other premise.
+
+            When a mutation removes, moves, or renames an interface, path, or generated
+            artifact, establish each causal scope boundary. Name the dependency check before
+            dispatch. Run the check inbound: grep the excluded area for references to what is
+            being changed. If the check has not run, mark the boundary `hypothesis:`
+            and require the unit to check it before its first mutation. A dependency that
+            crosses a protected boundary halts the unit and reports the conflict. It does not
+            grant authority to edit the excluded area.
 
             A HYPOTHESIS MAY FUND AN INVESTIGATION, NEVER A CHANGE OR A DEPLOYMENT. To brief a
             mutation on a premise, promote it with evidence first, or split the unit: establish,
@@ -167,8 +187,13 @@ technique_skill:
             parameters (sampling windows, settle times) from the failure being chased, stating
             the basis; an interval inherited from other work is a hypothesis wearing a number.
         - n: 6
-          action: While units run, do orchestrator-level work only (plan synthesis, inline units, or wait) -- and keep running units current.
+          action: While units run, do orchestrator-level work only -- plan synthesis, inline units, or nothing -- and keep running units current.
           detail: >-
+            Waiting is passive. A background task re-invokes the session when it exits. If no
+            useful unblocked work remains, end the turn. Waiting is correct in that state. Do
+            not invent work to avoid being idle. Never sleep, poll, or re-read an `-o` file
+            before completion.
+
             A constraint that changes while units run does not reach them by itself. Enumerate
             the affected running units and push the delta through the backend's follow-up
             channel (SendMessage for the Agent tool); a unit with no such channel is cancelled
@@ -194,10 +219,27 @@ technique_skill:
             it must not be left sitting only in the agent's report, which the user never sees.
             Reverting a recorded change later is the responsibility of whichever agent
             decides to reverse it; the record is a signal of intent, not a prohibition.
+
+            Record one machine-readable join line for every completed unit:
+
+            `join <unit-id>: disposition=<accepted|corrected|rejected>; cause=<worker|brief|changed-constraint|integration|unknown>; verified=<named check>`
+
+            `accepted` means the returned artifact passed the named check without a lead-side
+            correction. `corrected` means the lead changed it before acceptance. `rejected`
+            means none of the returned work was accepted. Disposition and cause are separate.
+            Do not use a correction caused by a bad brief as evidence against the worker.
+
+            The dispatch announcement and brief must use the same `<unit-id>` and record the
+            target, routing terms, and effort. If an active task folder exists, copy only a
+            corrected or rejected outcome whose reason could re-bite a fresh agent into
+            `log.md`. Accepted outcomes remain transcript telemetry.
         - n: 8
           action: Relay the substance -- findings, decisions, verified-vs-reported -- in your final message.
       gotchas:
-        - Delegating then redoing the work inline pays both costs; once dispatched, wait for the result.
+        - >-
+          Delegating and then re-doing the same unit inline pays both costs. Once
+          dispatched, do not re-do that unit here. Independent work is not blocked
+          by it. Waiting for it is passive (step 6).
         - Parallel units editing the same files clobber each other -- but a shared-file conflict is a PARTITIONING problem before it is a scheduling one. Re-split the work by file ownership first (one owner per file, stated in each brief), then use isolation appropriate to the backend, and sequence only what genuinely remains. Reaching for sequencing first serialises work that had no real dependency.
         - A unit that correctly removes or relocates something can silently destroy the only signpost pointing at it -- a green result and a clean diff will not surface that; only the unit's own disclosure does.
 ```

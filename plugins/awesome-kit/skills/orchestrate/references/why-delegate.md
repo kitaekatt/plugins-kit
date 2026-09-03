@@ -39,6 +39,21 @@ anti_patterns:
     why_it_seems_right: Reading all the raw output yourself feels more thorough than trusting summaries.
     why_it_is_wrong: It defeats the entire point -- the main context fills with generation-cost material whose value was already captured in the agents' conclusions.
     alternative: Ask agents for structured conclusions; pull raw detail only for the specific items you must verify or that agents disagreed on.
+  - id: active_waiting
+    name: Polling, sleeping, or narrating while units run
+    keywords: [still running, poll result file, sleep, standing by, idle turn, cat result]
+    why_it_seems_right: >-
+      Checking the result file or reporting "still waiting" feels attentive, and the
+      gotcha says to wait for a dispatched result.
+    why_it_is_wrong: >-
+      A background unit re-invokes the orchestrator when it completes. Every poll,
+      sleep, or status-only turn before that is a full context read that returns
+      nothing, and in the measured corpus they cluster: one empty check begets the
+      next.
+    alternative: >-
+      End the turn when nothing is unblocked. If useful work might be unblocked, name
+      the marked premise that the pending result could refute. If there is none,
+      proceed.
   - id: inline_footprint_work
     name: Doing reads-a-lot / emits-a-lot work inline in the orchestrating context
     keywords: [inline work, context footprint, quick edit, difficulty axis]
