@@ -718,6 +718,7 @@ def resolve_routing_models(
             notes.append(f"routing row {row_number} skipped: models must be a list")
             continue
         models: List[Dict[str, str]] = []
+        inline_notes: List[str] = []
         for raw_model in raw_models:
             if not isinstance(raw_model, str) or not raw_model:
                 notes.append(f"routing row {row_number}: invalid model name skipped")
@@ -752,11 +753,15 @@ def resolve_routing_models(
                 )
                 continue
             if harness not in configured_backend_ids:
-                notes.append(
-                    f"routing row {row_number}: `{raw_model}` skipped; harness "
-                    f"`{harness}` has no backends[] record, so no dispatch "
-                    "mechanics render for it (see references/configuration.md)"
+                note = (
+                    f"`{raw_model}` skipped; harness `{harness}` has no "
+                    "backends[] record, so no dispatch mechanics render for it "
+                    "(see references/configuration.md)"
                 )
+                notes.append(
+                    f"routing row {row_number}: {note}"
+                )
+                inline_notes.append(note)
                 continue
             if harness not in routable_ids:
                 notes.append(
@@ -784,6 +789,7 @@ def resolve_routing_models(
                 "models": models,
                 "gate": raw_row.get("gate"),
                 "guards": list(raw_row.get("guards") or []),
+                "inline_notes": inline_notes,
             }
         )
     return routes, notes
@@ -941,7 +947,9 @@ def render_routing(
     blocks.heading("Routing")
     out.append(
         "Evaluate rows in order; the first matching shape wins. Within a row, "
-        "try models in the order shown and fall through on a launch or transport error."
+        "try models in the order shown. On a launch or transport error, continue "
+        "to the next model; the fallback announcement names the model immediately "
+        "before the fallback."
     )
     out.append("")
     for index, route in enumerate(routes, 1):
@@ -954,13 +962,8 @@ def render_routing(
         else:
             dispatch = ", then ".join(targets)
         out.append(f"{index}. If {shape_text}: try {dispatch}.")
-        if len(models) > 1:
-            for model_index in range(1, len(models)):
-                previous = models[model_index - 1]["id"]
-                out.append(
-                    "   - On a launch or transport error, continue to the next model; "
-                    f"a fallback announcement names the failed model from `{previous}`."
-                )
+        for note in route.get("inline_notes") or []:
+            out.append(f"   - {note}")
         if route.get("gate"):
             out.append(f"   - Gate: {terms.fill(route['gate'])}")
         for guard in route.get("guards") or []:
@@ -1081,24 +1084,6 @@ def render_announce(
         out.append("```")
         for example in examples:
             out.append(fold(example.get("text")))
-        out.append("```")
-        out.append("")
-    if routes:
-        out.append("Use the matched row's shape terms in the parenthetical:")
-        out.append("```")
-        for route in routes:
-            models = route.get("models") or []
-            shape = route.get("shape") or []
-            for model_index, model in enumerate(models):
-                previous = models[model_index - 1]["id"] if model_index else None
-                out.append(
-                    announcement_text(
-                        "<what>",
-                        model["target"],
-                        shape,
-                        fell_through_from=previous,
-                    )
-                )
         out.append("```")
         out.append("")
 

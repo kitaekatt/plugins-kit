@@ -105,14 +105,16 @@ The broader route below would plausibly get this wrong.
 ## Unit class
 
 ### `plan-checkpoint` `[skill]` `render: glossed`
-The unit's output is a plan or decomposition that later units will execute
-against.
+The unit's output is a plan, decomposition, or decision that later units will
+execute against.
 **Test:** will other units be briefed from this output before anything
 re-derives it?
-**Gloss:** "a plan later units will execute against"
+**Gloss:** "a plan or decision later units will execute against"
 
 *Consequence:* a `plan-checkpoint` is routed through the tree like any unit --
-being a plan makes nothing `open` or `novel` by itself. An `open`
+being a plan makes nothing `open` or `novel` by itself. A decision the
+orchestrator would otherwise put to the user is one: make the call, then route
+the call. An `open`
 `plan-checkpoint` is treated as `load-bearing` unless the downstream check that
 would catch a wrong shared decision can be named: that is a rebuttable
 presumption stated in the tree, not a property of planhood.
@@ -209,6 +211,13 @@ Words that feel like criteria and are not. Each has been reached for in practice
 - **`simple`** -- ambiguous between `mechanical` (execution) and `sufficient`
   (brief). Independent axes: "summarize last week's commits" is `sufficient` and
   not `mechanical`. Say which.
+- **`consequence`** (low, medium, high) -- names the shape of a call, not a test.
+  Say `load-bearing` if a wrong answer propagates, `unverifiable` if no cheap check
+  would catch it, `novel` if no pattern applies; the rows do the rest. A tier is
+  never chosen first and matched second.
+- **`the user's call`** -- almost never. A call inside sanctioned work routes like
+  any unit, however product-flavoured. The user is reached only at an autonomy
+  edge, and because no row can reach that seat, not because the call is important.
 
 ---
 

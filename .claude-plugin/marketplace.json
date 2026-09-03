@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Provides plugin-ecosystem, task, orchestrate, recap, and verbose-updates skills for plugin browsing, task tracking, delegated work, response distillation, and progress communication.",
-      "version": "0.47.0",
+      "version": "0.48.0",
       "author": {
         "name": "Christina"
       },
@@ -124,7 +124,7 @@
     {
       "name": "llm-scripting-kit",
       "description": "LLM access for scripts and pipelines: credentials, endpoint/model resolution, local Qwen server profiles, and one completion seam over HTTP, Claude, Codex, and OpenCode.",
-      "version": "0.26.0",
+      "version": "0.27.0",
       "author": {
         "name": "Christina"
       },
@@ -163,7 +163,7 @@
     {
       "name": "content-pipeline-kit",
       "description": "Library + skills for LLM-in-the-loop batch content pipelines.",
-      "version": "0.22.1",
+      "version": "0.23.0",
       "author": {
         "name": "Christina"
       },
