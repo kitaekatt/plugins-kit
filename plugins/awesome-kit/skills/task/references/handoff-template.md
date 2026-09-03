@@ -529,8 +529,12 @@ Read CLAUDE.md and plan.md as if you were the next agent. Verify:
   path in `## Relevant files`, would the path's literal name match the prose
   name? If not, `## Project vocabulary` is missing the decoder.
 
-When the folder is being packaged for a fresh session, end the turn with the
-`hand-off baton` (see framework). For a task folder the baton is a two-line
+This self-verify, and the baton below, belong to a hand-off turn ONLY -- one
+the user opened with `/task hand-off <ref>` (the task skill's `hand_off`
+capability). Do not run them, or offer to, on your own initiative: a stopping
+point that looks like a session boundary is not a hand-off, and the user
+decides when a session ends. In that turn, end with the `hand-off baton` (see
+framework). For a task folder the baton is a two-line
 block giving the current working directory and the resume command:
 
 ```

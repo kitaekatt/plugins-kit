@@ -77,7 +77,7 @@ capability_skill:
       - "The data model in one breath (folder = SoT, items in plan.md's task_items block, refs inert, id = path, explicit task refs, durability = location)"
       - "The canonical venv-python invocation and CLI conventions"
       - "The 13-verb capability surface with per-verb contracts"
-      - "The agent-side behaviors the scripts leave open (work's initialization block -- invoke every emitted skill, then dispatch -- status background summary, update rotation, and the required end-of-turn hand-off baton the update/hand-off packaging must emit)"
+      - "The agent-side behaviors the scripts leave open (work's initialization block -- invoke every emitted skill, then dispatch -- status background summary, update rotation, and the hand-off packaging plus baton, which run only when the user invokes /task hand-off)"
     references:
       - "handoff-template.md -- how to fill in and rotate a scaffolded folder's CLAUDE.md / plan.md / log.md"
       - "example-claude-md.md -- worked example of a fully-populated task-folder CLAUDE.md"
@@ -136,8 +136,28 @@ capability_skill:
         - "Contract: requires an explicit ref; inits when absent (upsert). Applies the field edits, appends one dated entry to log.md, re-validates, prints the classification; exit 0 iff no findings -- but the write persists regardless (fix-forward). List-valued flags are repeatable and REPLACE the stored list."
         - "AGENT BEHAVIOR: the script's only document write is the dated log.md line -- it never rewrites plan.md. The real rotation discipline (completed-step detail plan -> log, REMOVING done items from the task_items block, promoting stray open items into it, stale-state pass, vocabulary pass, the document size budgets) is YOUR work, per references/handoff-template.md, whenever the update represents substantive session progress. Rotation is the standing discipline, applied by default on every such update -- not a cleanup that fires only once a doc crosses its budget. The budgets are ENFORCED at the re-validate: a doc over its ceiling (CLAUDE.md/plan.md 400 lines, other docs 800; log.md exempt) is a warning that makes update exit non-zero and blocks work; past the healthy target (CLAUDE.md 250, plan.md 300) it is an advisory note. Both name the largest sections to rotate (handoff-template.md 'Document size budgets')."
         - "DURABLE-OUTPUTS PASS (agent work, part of the rotation): for every non-scaffold doc in the folder (beyond CLAUDE.md/plan.md/log.md) apply the one-breath test -- 'if this folder were deleted today, would someone still need this document? If yes, its home is the repo it describes; the folder references it, never owns it.' Move such a document to its home in the OWNING repo now and declare it with --durable-output <repo-relative path> (repeatable; REPLACES the stored list). Do this at AUTHORING time, not at archive: a spec that only reaches its durable home when the task ends was undiscoverable for the whole life of the task. archive's check is a backstop, not the mechanism. Declaring nothing is a valid result -- if the content is already absorbed into as-built docs elsewhere, relocating it would create a second source of truth. Full rule: references/handoff-template.md 'Durable outputs'."
-        - "HAND-OFF BATON (required end-of-turn output): when the update PACKAGES the folder for a fresh session -- an explicit hand-off, or any session-boundary update -- FIRST run the self-verify read (handoff-template.md 'Self-verify'): read CLAUDE.md + plan.md cold, as the next agent, and confirm the goal is legible without other docs, the concrete next step is known, the opening response is known, cwd + non-obvious operational rules are stated, nothing references conversation context a cold reader cannot resolve, and Project vocabulary decodes any renamed paths. THEN end the turn with the hand-off baton: a two-line block `CWD: <project root>` then `Continue: /task work <CWD-relative task-folder path>` (communication-framework.md 'hand-off baton'). Both are REQUIRED, not optional; the script emits neither, so both are the AGENT's job. Skipping the baton is the top hand-off miss -- it is what lets the next session resume with one paste."
+        - "update never packages the folder for a fresh session and never emits the hand-off baton. That is the hand_off capability below, and it is entered ONLY when the user invokes /task hand-off. An update that looks like the session's last, or a stopping point you judge natural, is not an invocation -- finish the turn normally."
         - "PRE-CONTRACT FOLDER (validate warns 'no task_items block'): the update/hand-off pass STARTS with the one-time conversion -- sweep all three docs for open work, dedupe into items, map triage states, rewrite Immediate Priorities as id references, retire the superseded GOAL/checkbox/banner forms, validate until clean. The full procedure is handoff-template.md 'Converting a pre-contract folder'; the block must end as the ONLY carrier of open-work state (a half-conversion recreates the drift)."
+    - id: hand_off
+      keywords: [hand-off, hand off, package for a fresh session, resume in a new session, baton, continue in a new session]
+      user_objective: "Package the folder so a fresh session resumes with one paste -- ONLY when the user invokes /task hand-off."
+      operation: >-
+        /task hand-off <ref>  (user-invoked; there is no hand-off CLI verb -- it
+        dispatches onto the update verb plus the agent-side packaging below)
+        ~/.claude/plugins/data/plugins-kit/awesome-kit/.venv/bin/python
+        "${CLAUDE_PLUGIN_ROOT}/skills/task/scripts/task.py"
+        update <ref> [--root PATH]
+      steps:
+        - n: 1
+          action: "GATE: proceed only if the user's own message invoked /task hand-off <ref>, or said in plain words to hand off / package the task for a new session. Nothing else qualifies: not an update that looks like the session's last, not a stopping point you judge natural, not the end of a long turn, and not the template's 'end the turn with the baton' (that instruction is scoped to THIS capability). Without the invocation there is no hand-off -- finish the turn normally and do not raise the idea yourself."
+        - n: 2
+          action: "Run the update rotation (the update capability's AGENT BEHAVIOR: rotation, stale-state, durable-outputs, vocabulary passes; the pre-contract conversion first if validate warns 'no task_items block'), then the update verb to record the dated log entry and re-validate. Findings block: fix forward until clean."
+        - n: 3
+          action: "Self-verify per handoff-template.md 'Self-verify': read CLAUDE.md + plan.md cold, as the next agent, and fix what a cold reader could not resolve."
+        - n: 4
+          action: "End the turn with the hand-off baton -- exactly two lines, `CWD: <project root>` then `Continue: /task work <CWD-relative task-folder path>` (communication-framework.md 'hand-off baton'). The script emits neither line; both are your job, and they belong to this turn only."
+      gotchas:
+        - "Do not pass hand-off to task.py as a verb -- the CLI has no such verb, and hand-off is also the task TYPE name (--type flag). The dispatch is skill-level: the step-2 update call is the only script invocation."
     - id: close
       keywords: [close task, finish task, mark done, keep folder]
       user_objective: "Mark an active task's work done while keeping the folder reopenable."
@@ -232,7 +252,7 @@ capability_skill:
       gotchas:
         - "Summarizing inline defeats the verb's reason for existing (context preservation). The script even prints a reminder note to this effect."
   gotchas:
-    - "hand-off is the task TYPE name (task.yaml type: field, --type flag), not the skill name -- the skill was renamed hand-off -> task; the v1 type keeps the old name. Do not 'fix' type: hand-off to type: task."
+    - "hand-off names two things and neither is a CLI verb: the task TYPE (task.yaml type: field, --type flag; the skill was renamed hand-off -> task and the v1 type keeps the old name -- do not 'fix' type: hand-off to type: task) and the user-invoked packaging capability (/task hand-off <ref>, the hand_off record above)."
     - "Use the explicit plugin-venv python shown above. The CLI self-repairs (it re-execs under the provisioned venv via its vendored bootstrap_guard), but the venv path is the canonical, cwd-independent invocation."
     - "validate gates work with BOTH errors and warnings -- a dev/tasks folder git can see is uncommitted (a warning) blocks work until committed. This is deliberate: durable work that exists only in the working tree is one rm away from gone. The check is git-scoped but the posture is VCS-neutral: outside a git repo it is an advisory note, not a warning (the workspace may use Perforce or another VCS the scripts cannot check -- keeping the folder submitted is then the agent's job). A git-IGNORED folder is deliberately a note too, for the opposite reason -- git CAN see it and will never carry it -- so it likewise cannot gate work: a project that keeps task folders as local scratch would otherwise have every task blocked. Same posture for the doc size budgets: a CLAUDE.md or plan.md over its 400-line ceiling blocks work until rotated (decompose per handoff-template.md -- history to log.md, detail to referenced docs -- do not just trim)."
     - "References never carry status. To answer 'is X done?' resolve the folder (show/validate/list) -- do not infer from the presence or wording of a task_list entry."
@@ -251,6 +271,12 @@ capability_skill:
       why_it_seems_right: "Claude Code has built-in task tools, and the request says 'task'."
       why_it_is_wrong: "Native tasks are session-scoped harness state; this system is durable on-disk folders with references, validation, and a lifecycle. They do not interoperate."
       alternative: "Route task-folder vocabulary (folders, task.yaml, task_list refs, tmp vs dev/tasks) here; use native task tools only for in-session step tracking."
+    - id: unprompted_hand_off
+      name: Handing off without being asked
+      keywords: [unprompted baton, self-initiated hand-off, session boundary guess, end-of-turn baton, packaging without invocation, offering to hand off]
+      why_it_seems_right: "The work reached a natural stopping point, this update looks like the session's last, and the template says the baton is required at the end of a hand-off turn -- emitting it now, or offering to, reads as diligence."
+      why_it_is_wrong: "Whether a session ends is the USER's decision, and /task hand-off is how they make it. A baton the user did not ask for reads as the agent downing tools mid-task; a self-verify pass they did not ask for spends main context re-reading documents for a hand-off that is not happening. 'Required' in the template describes the hand-off turn, not every turn."
+      alternative: "Finish the turn normally. Package and emit the baton only in the turn where the user invoked /task hand-off (the hand_off capability's gate)."
     - id: skipping_work_dispatch
       name: Treating work's output as informational
       keywords: [skill lines ignored, agent_hint ignored, work output, dispatch skipped]
