@@ -73,9 +73,28 @@ names the auditor that should read the file.
 
 ### PD-2. Content earns its place as a project doc (maturation)
 
-**Rule:** if the doc's content has stabilized past the nursery stage, route it
-to its trigger-appropriate mature home. Match the home to the natural TRIGGER
-SHAPE (not "always a skill"):
+**Rule:** apply these exclusions before testing maturity or choosing a home. If
+one applies, the document is not a maturation candidate, and PD-2 returns PASS:
+
+- **Static reference text.** Content that reads the same whenever it is loaded
+  is not a maturation candidate. Examples are a platform fact table, a format
+  specification, and a lookup. It stays a project doc and never becomes a
+  skill. Provenance: `cohesion-principles.md` line 609
+  (`skill_packaging_razor`).
+- **Maintainer-only material at a published-plugin boundary.** Everything under
+  a published plugin directory is copied into a consumer's plugin cache. Ask,
+  "Who reads this on a machine that is not ours?" If the answer is nobody, keep
+  it as a project doc. Branch D cannot move it into a published skill's
+  `references/`. Provenance: the plugin-cache publication boundary, which a
+  repo that publishes plugins declares in an ancestor CLAUDE.md.
+- **Dated historical evidence.** A document can date its observations or state
+  that its `path:line` claims describe a tree at a given time. Such a document
+  is complete provenance with a different change cadence, not nursery content.
+  Moving or rewriting it as standing guidance can falsify the record.
+
+For all other documents, if the content has stabilized past the nursery stage,
+route it to its trigger-appropriate mature home. Match the home to the natural
+TRIGGER SHAPE (not "always a skill"):
 
 1. **Graduate to a skill** (taxonomy B_graduate_to_skill) -- ONLY when the
    trigger is **task-shaped**: a VERB the session performs (authoring an X,
@@ -106,11 +125,14 @@ directory-scoped knowledge where it costs nothing and loads exactly, and
 reserves skills for activity-triggered knowledge. Skills-kit is NOT of the view
 that all mature documentation graduates to a skill.
 
-**Test:** read the doc; ask "what is the natural trigger for needing this?" A
-verb -> task-shaped (skill, B). Working under a directory -> location-shaped
-(directory CLAUDE.md, C). Do NOT recommend skill-graduation for location-scoped
-knowledge. If the content is still genuinely unstructured / emerging, no signal
-fires and the doc is correctly a project doc (PASS).
+**Test:** apply the three exclusions first. If one matches, return PASS without
+selecting B, C, or D. For the remaining document, ask "what is the natural
+trigger for needing this?" A document that opens by naming the ACTIVITY it
+precedes is task-shaped, regardless of the directory that contains its subject
+matter. A verb -> task-shaped (skill, B). Working under a directory ->
+location-shaped (directory CLAUDE.md, C). Do NOT recommend skill-graduation for
+location-scoped knowledge. If the content is still genuinely unstructured /
+emerging, no signal fires and the doc is correctly a project doc (PASS).
 
 **Severity:** JUDGMENT (INFO-level). A project doc doing useful work where it
 sits is COMPLIANT -- reaching the mature home is an opportunity, never a defect.
@@ -192,9 +214,20 @@ may name the CLAUDE.md as an orientation surface.
 **Why ADP:** citing back into an upstream surface reverses the load direction;
 the reference runs after CLAUDE.md and cannot depend on having re-read it.
 
-**Test:** scan for `CLAUDE.md` mentions that cite specific section content as
-required reading. Pure orientation mentions ("see the root CLAUDE.md for project
-setup") are permitted.
+**Test:** for each `CLAUDE.md` mention, ask "must the reader read that section to
+act on this passage?" If yes, the passage is incomplete and fails. If the
+passage states the rule and its reason inline, the section name is provenance
+and passes. This is true even when the phrasing sounds dependent, such as "Per
+the root CLAUDE.md submit gate..." or "See the anti-pattern in CLAUDE.md."
+
+PASS shapes -- both name a CLAUDE.md section and both pass, because the reader
+never has to go and read it:
+
+- A passage that states a working rule and the reason behind it in full, then
+  names the CLAUDE.md section the rule came from. The name is attribution.
+- A passage that opens "Per the root CLAUDE.md <named> gate ..." and then sets
+  out that gate's criteria inline. Dependent-sounding phrasing followed by a
+  complete statement is still a complete statement.
 
 **Severity:** FAIL (taxonomy G_claude_md_back_reference) on dependency
 back-citations.

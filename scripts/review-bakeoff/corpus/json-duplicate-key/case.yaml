@@ -1,0 +1,10 @@
+id: json-duplicate-key
+kind: positive
+files: [config/timeouts.json]
+planted:
+  - file: config/timeouts.json
+    lines: "3"
+    summary: "The JSON object defines timeout twice"
+rationale: |
+  For data files the prompt requires reporting "duplicate keys." Added line 3
+  duplicates the timeout key already present in the same visible object.

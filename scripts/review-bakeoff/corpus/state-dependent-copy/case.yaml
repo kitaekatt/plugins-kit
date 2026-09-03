@@ -1,0 +1,9 @@
+id: state-dependent-copy
+kind: decoy
+files: [scripts/copy-artifact.sh]
+planted: []
+rationale: |
+  The copy can fail when a supplied path is absent or inaccessible, but that
+  depends on runtime inputs and filesystem state. The prompt forbids "potential
+  issues that depend on specific inputs or state," so a correct reviewer
+  returns nothing.

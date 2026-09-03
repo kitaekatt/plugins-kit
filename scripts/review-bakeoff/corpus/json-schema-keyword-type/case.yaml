@@ -1,0 +1,11 @@
+id: json-schema-keyword-type
+kind: positive
+files: [config/count.schema.json]
+planted:
+  - file: config/count.schema.json
+    lines: "4"
+    summary: "The minimum keyword requires a number but receives a string"
+rationale: |
+  For data files the prompt requires reporting "schema ... violations."
+  Draft 2020-12 requires the minimum keyword value to be a number, while added
+  line 4 assigns the string zero.

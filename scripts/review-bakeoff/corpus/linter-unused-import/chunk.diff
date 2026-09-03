@@ -1,0 +1,10 @@
+diff --git a/src/greeting.py b/src/greeting.py
+new file mode 100644
+--- /dev/null
++++ b/src/greeting.py
+@@ -0,0 +1,5 @@
++import pathlib
++
++
++def greeting(name: str) -> str:
++    return f"Hello, {name}"

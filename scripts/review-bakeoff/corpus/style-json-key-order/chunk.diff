@@ -1,0 +1,9 @@
+diff --git a/config/labels.json b/config/labels.json
+new file mode 100644
+--- /dev/null
++++ b/config/labels.json
+@@ -0,0 +1,4 @@
++{
++  "zeta": "last",
++  "alpha": "first"
++}

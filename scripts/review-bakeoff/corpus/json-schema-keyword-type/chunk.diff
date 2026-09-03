@@ -1,0 +1,10 @@
+diff --git a/config/count.schema.json b/config/count.schema.json
+new file mode 100644
+--- /dev/null
++++ b/config/count.schema.json
+@@ -0,0 +1,5 @@
++{
++  "$schema": "https://json-schema.org/draft/2020-12/schema",
++  "type": "integer",
++  "minimum": "zero"
++}

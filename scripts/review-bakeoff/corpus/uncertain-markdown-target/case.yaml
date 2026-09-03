@@ -1,0 +1,9 @@
+id: uncertain-markdown-target
+kind: decoy
+files: [docs/start.md]
+planted: []
+rationale: |
+  The target is not shown as deleted or malformed, and the prompt says the diff
+  is everything the reviewer may consider. Treating the target as absent would
+  fall under "potential issues that depend on specific inputs or state," so a
+  correct reviewer returns nothing.

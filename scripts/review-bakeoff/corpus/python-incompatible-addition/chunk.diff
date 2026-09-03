@@ -1,0 +1,9 @@
+diff --git a/src/labels.py b/src/labels.py
+new file mode 100644
+--- /dev/null
++++ b/src/labels.py
+@@ -0,0 +1,4 @@
++def build_label() -> str:
++    prefix = "item-"
++    sequence = 7
++    return prefix + sequence

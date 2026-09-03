@@ -1,0 +1,10 @@
+id: python-missing-import
+kind: positive
+files: [src/encode.py]
+planted:
+  - file: src/encode.py
+    lines: "2"
+    summary: "json is used without being imported"
+rationale: |
+  A correct reviewer must report this under "missing imports." The complete
+  added module contains a json reference and no import for that module.

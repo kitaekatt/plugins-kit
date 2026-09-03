@@ -1,0 +1,7 @@
+diff --git a/src/parity.py b/src/parity.py
+new file mode 100644
+--- /dev/null
++++ b/src/parity.py
+@@ -0,0 +1,2 @@
++def is_even(value: int) -> bool:
++    return value % 2 == 1

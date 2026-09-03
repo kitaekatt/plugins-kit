@@ -1,0 +1,7 @@
+diff --git a/src/readiness.py b/src/readiness.py
+--- a/src/readiness.py
++++ b/src/readiness.py
+@@ -1,2 +1,2 @@
+ def should_wait(enabled: bool, ready: bool) -> bool:
+-    return not (enabled and ready)
++    return not enabled or not ready

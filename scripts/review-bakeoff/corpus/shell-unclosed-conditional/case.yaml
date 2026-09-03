@@ -1,0 +1,11 @@
+id: shell-unclosed-conditional
+kind: positive
+files: [scripts/print-argument.sh]
+planted:
+  - file: scripts/print-argument.sh
+    lines: "3-4"
+    summary: "The if block has no closing fi and the shell cannot parse it"
+rationale: |
+  A correct reviewer must report this under "code that will fail to compile
+  or parse (syntax errors...)." The complete added script ends without the fi
+  required by the conditional that begins on added line 3.

@@ -1,0 +1,8 @@
+id: linter-unused-import
+kind: decoy
+files: [src/greeting.py]
+planted: []
+rationale: |
+  The unused pathlib import is "anything a linter would catch (do not run a
+  linter)." It does not prevent parsing or execution, so a correct reviewer
+  returns nothing.

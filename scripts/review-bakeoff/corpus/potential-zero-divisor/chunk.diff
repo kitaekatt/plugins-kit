@@ -1,0 +1,7 @@
+diff --git a/src/metrics.py b/src/metrics.py
+new file mode 100644
+--- /dev/null
++++ b/src/metrics.py
+@@ -0,0 +1,2 @@
++def average(total: float, count: int) -> float:
++    return total / count

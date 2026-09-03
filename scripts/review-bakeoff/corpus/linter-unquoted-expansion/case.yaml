@@ -1,0 +1,8 @@
+id: linter-unquoted-expansion
+kind: decoy
+files: [scripts/show-message.sh]
+planted: []
+rationale: |
+  A shell linter warns about the unquoted expansion, but the prompt forbids
+  "anything a linter would catch (do not run a linter)." Behavioral differences
+  also depend on the supplied message, so a correct reviewer returns nothing.

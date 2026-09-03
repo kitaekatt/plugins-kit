@@ -1,0 +1,8 @@
+id: refactor-loop-to-sum
+kind: decoy
+files: [src/totals.py]
+planted: []
+rationale: |
+  For the declared list of integers, sum uses the same zero identity and
+  addition as the removed loop. Preferring either form falls under "subjective
+  suggestions or improvements," so a correct reviewer returns nothing.

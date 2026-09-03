@@ -195,6 +195,18 @@ Criteria AD-1..AD-5, detection methods, the findings table with per-site verdict
 the audit procedure:
 [docs/reference/agent-directive-standards.md](../docs/reference/agent-directive-standards.md).
 
+### Optional use of another plugin
+
+A plugin that imports another plugin's shared library when it is installed, and does without it when it is not, answers two questions before it ships. Can it do its job without the library at all? If not, the library is REQUIRED and is declared `install: "auto"`. If so, can the action still hand the user an artifact that is true as read when the library is missing? If the artifact would be read as if the library had participated, the unit that needs it REFUSES with a diagnosis; if the gap can be stated inside the artifact, the unit is omitted and the artifact DISCLOSES it. Neither branch substitutes silently. A shared-lib link pins no version (the mechanism is described under "The bootstrap-provisioned venv and shared libs" below), so "absent", "too old" and "stale after uninstall" are three states an `import` cannot distinguish: probe the newest symbol you use and diagnose them apart, following the probe-failure message rule stated with that mechanism.
+
+**Submit gate:** For every cross-plugin import this change adds or edits, state REQUIRED / REFUSE / DEGRADE and the reason the artifact stays true without the library; confirm the probe targets the newest symbol used and that the absent and too-old messages differ.
+Applies to:
+- plugins/
+
+The decision rule, the mechanics each branch requires, the three runtime states, and the
+reviewer checklist:
+[docs/reference/optional-plugin-dependencies.md](../docs/reference/optional-plugin-dependencies.md).
+
 ### Published-plugin boundaries
 
 **A published plugin ships to other developers -- keep this repo's build machinery out of it.** Everything under `plugins/<name>/` is copied into a consumer's plugin cache, so a file that only makes sense inside plugins-kit is noise at best and misleading at worst: a generated fingerprint or baseline whose header names a `scripts/` tool the consumer does not have, a design doc recording our derivation rounds and remaining work, or generator plumbing embedded in a reference a consumer reads for guidance. Before adding content to a shipped plugin, ask **who reads this on a machine that is not ours** -- if the honest answer is "nobody", it belongs in the repo (`docs/`, `scripts/`, or a task folder), not in the plugin. The trap is incremental: maintainer material rarely arrives as its own file, it accretes inside a reference that already ships, so a file can double in size without anyone deciding to publish the additions. Watch for it particularly when a build step colocates its inputs with the artifact for convenience -- that convenience is a publishing decision.
@@ -242,10 +254,13 @@ The `.pth` linker pins no version, so an owner's change reaches every
 consumer's venv on its next bootstrap pass, whether or not that consumer asked
 for it. A consumer that needs a symbol only a particular owner version added
 must not assume it is there: probe for it at import (a guarded `getattr` /
-`try`/`except ImportError`) and fail with a message naming the owning plugin
-and the version the symbol first shipped in, rather than crash on a raw
-`AttributeError` deep in a call path. job-kit's `select.py` is the worked
-example of this guard against `llm_scripting_kit.completion`.
+`try`/`except ImportError`) and fail with a message naming the owning plugin,
+the version the symbol first shipped in, and the `claude plugin install` or
+`update` command that fixes it -- never a manifest the consumer cannot edit --
+rather than crash on a raw `AttributeError` deep in a call path. job-kit's
+`select.py` is the worked example of this guard against
+`llm_scripting_kit.completion`. This is the one statement of that rule; the
+optional-dependency section above defers to it.
 
 #### Who talks to an LLM, and through what
 

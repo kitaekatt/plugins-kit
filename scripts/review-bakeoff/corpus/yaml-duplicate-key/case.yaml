@@ -1,0 +1,10 @@
+id: yaml-duplicate-key
+kind: positive
+files: [config/retry.yaml]
+planted:
+  - file: config/retry.yaml
+    lines: "3"
+    summary: "The service mapping defines retries twice"
+rationale: |
+  For data files the prompt requires reporting "duplicate keys." Added line 3
+  duplicates the retries key already present in the same visible mapping.

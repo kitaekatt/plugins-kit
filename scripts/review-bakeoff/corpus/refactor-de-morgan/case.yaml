@@ -1,0 +1,8 @@
+id: refactor-de-morgan
+kind: decoy
+files: [src/readiness.py]
+planted: []
+rationale: |
+  De Morgan's law makes the added expression equivalent to the removed one for
+  every pair of booleans. Any preference between the forms falls under "code
+  style or quality concerns," so a correct reviewer returns nothing.

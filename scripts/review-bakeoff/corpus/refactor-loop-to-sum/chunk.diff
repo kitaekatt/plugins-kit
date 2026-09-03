@@ -1,0 +1,10 @@
+diff --git a/src/totals.py b/src/totals.py
+--- a/src/totals.py
++++ b/src/totals.py
+@@ -1,5 +1,2 @@
+ def total(values: list[int]) -> int:
+-    result = 0
+-    for value in values:
+-        result += value
+-    return result
++    return sum(values)

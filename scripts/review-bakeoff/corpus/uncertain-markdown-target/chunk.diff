@@ -1,0 +1,8 @@
+diff --git a/docs/start.md b/docs/start.md
+new file mode 100644
+--- /dev/null
++++ b/docs/start.md
+@@ -0,0 +1,3 @@
++# Start
++
++Follow the [installation guide](../guides/install.md).
