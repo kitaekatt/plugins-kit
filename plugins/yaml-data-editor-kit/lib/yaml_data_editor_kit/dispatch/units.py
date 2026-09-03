@@ -55,11 +55,29 @@ def plain_value(value: Any, *, strict: bool = False) -> Any:
         return [plain_value(item, strict=strict) for item in value]
     return value
 
+def strip_code_fence(text: str) -> str:
+    """Strip one leading/trailing Markdown code fence line, if present.
+
+    Both response contracts forbid a fence, and a live model observed to
+    produce otherwise-valid responses wrapped them in one anyway across
+    repeated prompt-wording attempts. Rejecting a valid payload over
+    formatting costs a retry and can silently drop a correct grouping, so
+    both parsers tolerate exactly one fence and nothing else.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if len(lines) >= 2 and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1])
+    return stripped
+
+
 def parse_agentic_result(
     text: str, targets: list[Mapping[str, Any]], unit_id: str
 ) -> dict[str, Any]:
     try:
-        payload = json.loads(text, object_pairs_hook=_unique_object)
+        payload = json.loads(strip_code_fence(text), object_pairs_hook=_unique_object)
     except json.JSONDecodeError as exc:
         raise ValueError(
             "unit {!r} result must be one JSON object with schema_version and results".format(unit_id)

@@ -62,7 +62,7 @@ Corollary: if a system-reminder describes resumed state ("queued next concrete a
 
 ### hand-off baton
 
-The explicit transfer signal at the end of a hand-off reply (the turn that packages a task folder for a fresh session) -- a two-line block ending the response. For a task folder it names the working directory and the resume command:
+The explicit transfer signal at the end of a hand-off reply -- the turn in which the USER invoked `/task hand-off <ref>`; the agent never opens one on its own initiative -- a two-line block ending the response. For a task folder it names the working directory and the resume command:
 
 ```
 CWD: <project root directory>

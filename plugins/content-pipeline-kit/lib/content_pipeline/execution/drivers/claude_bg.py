@@ -75,6 +75,29 @@ observation). A later halt-classification path for a SETTLED unit must read
 the session transcript or per-job state instead, never ``claude logs`` --
 and the cheapest way to guarantee that later code never takes the wrong
 shortcut is for the method not to exist at all.
+
+Real-session verification record
+---------------------------------
+A single authorized ``claude --bg`` session proved the following against
+Claude Code CLI version ``2.1.258``:
+
+* the session launched, was polled, was confirmed through an observed state
+  transition, and settled on the happy path;
+* the four worker invocations exercised by that path matched
+  :func:`enumerate_worker_invocations` byte-for-byte.
+
+The checks are version-sensitive to the CLI named above. The run did not
+prove:
+
+* the ``fail`` path, including ``fail_cmd`` and ``write_fail_cmd``;
+* reclaim, lease expiry, stale-fence behavior, or dispatches racing for one
+  unit;
+* the non-happy ``supervise_tick`` branches: ``blocked``, ``failed``,
+  ``stopped``, ``session_lingering``, and dispatcher-lease contention;
+* multi-unit concurrency or ``max_agents > 1``;
+* composition of ``extra_launch_args`` with ``--bg``;
+* that the same behavior holds for a different ``claude`` CLI version,
+  including banner parsing and lifecycle-verb preflight checks.
 """
 
 from __future__ import annotations
