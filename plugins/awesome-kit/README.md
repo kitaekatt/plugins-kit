@@ -25,6 +25,9 @@ Also in the box, one line each:
   per-project override. See
   [skills/orchestrate/references/configuration.md](skills/orchestrate/references/configuration.md).
 - `verbose-updates` -- a smaller supporting skill.
+- `debug-context` -- when a present user asks why the agent did something,
+  answer from context immediately with premises marked, then verify in the
+  background and reconcile.
 
 ## Poster personalization
 

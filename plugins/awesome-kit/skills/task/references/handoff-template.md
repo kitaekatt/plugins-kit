@@ -201,11 +201,17 @@ template-vs-additional; the consistent eight `##` shape is the contract.
   regardless of which protocol is firing. **Test**: if it has no trigger --
   it constrains *how* you act between/within protocol firings -- it is a
   Behavior. Subsections:
-  - **`### Autonomy status`** -- whether the user is reading every turn or
-    returning cold; how aggressive to be; what the standing posture is.
+  - **`### Autonomy status`** -- what the user has CLAIMED: the classes of
+    decision they want put to them, plus the presence pattern to expect
+    (reading every turn, or returning cold). Everything not claimed follows
+    the grant the user's own CLAUDE.md declares -- typically that the user is
+    product and the agent is a trusted implementor who consults an
+    independent seat when a wrong answer would propagate.
   - **`### Authorizations`** -- explicit, named pre-authorized actions. The
     point is to enumerate the standing yes-list so the next agent does not
-    round-trip for already-authorized work.
+    round-trip for already-authorized work. Distinct from Autonomy status:
+    Authorizations pre-approves ACTIONS; Autonomy status names claimed
+    DECISIONS.
   - **`### Rules to follow`** -- project-specific operational rules
     ("background long-running work, never inline"; "ASCII-only in source
     files"; concurrency settings; tool wrappers).

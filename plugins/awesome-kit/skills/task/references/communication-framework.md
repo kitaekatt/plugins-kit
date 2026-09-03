@@ -71,6 +71,14 @@ Continue: /task work <CWD-relative task-folder path>
 
 The user copies the `Continue:` line, opens a new session, and pastes it as the first user message; `/task work <CWD-relative task-folder path>` works the explicitly named folder and loads its context. The `CWD:` line names the directory the path is relative to (paths stay CWD-relative, never absolute, so the baton works across machines). Without the baton, the user has to compose the instruction themselves.
 
+### decision line
+
+One line per decision the agent took on the user's behalf after a `consult`, logged where the work is already being recorded. `<id>` names the decision or task item; `seat` is the independent model that ruled (or `user` when the user was the seat); `reason` is one clause, not a paragraph. It is a telemetry line, not prose -- the sibling of the hand-off baton above and of orchestrate's join line (defined in `skills/orchestrate/SKILL.md`). A decision line is never withheld from a present user: it appears in the reply, not only in the durable log. Where `consult`, `user-present`, and `user-afk` are defined is the consumer's own CLAUDE.md, not this framework.
+
+```
+decision <id>: seat=<model>; chose=<option>; reason=<one clause>
+```
+
 ### provenance triad
 
 When recording a decision in a durable artifact (project plan, decision log, audit log), three fields suffice:
