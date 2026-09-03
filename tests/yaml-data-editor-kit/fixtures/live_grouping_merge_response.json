@@ -1,0 +1,6 @@
+{
+  "backend": "claude-cli",
+  "grouping_response_text": "```json\n{\"schema_version\":\"1\",\"work_units\":[{\"comment_ids\":[\"bolt-note\",\"nut-note\"],\"instruction\":\"Rename the summary field to 'small fastener' for both product/bolt and product/nut.\"}]}\n```",
+  "model": "claude-haiku-4-5",
+  "worker_response_text": "{\"schema_version\":\"1\",\"results\":[{\"anchor\":\"product/bolt\",\"machine\":{\"id\":\"bolt\",\"name\":\"Bolt\",\"summary\":\"small fastener\"}},{\"anchor\":\"product/nut\",\"machine\":{\"id\":\"nut\",\"name\":\"Nut\",\"summary\":\"small fastener\"}}]}"
+}
