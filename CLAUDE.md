@@ -356,14 +356,9 @@ Use that range, NOT `origin/master..origin/dev`. A release is a tree projection,
 If the list contains anything beyond the commits you intend to publish, **stop**. Pick a safe path instead:
 
 1. **Let the hold-back do its job.** A `published: false` plugin's FILES never move onto master, whatever its commits do -- `_publish_projection` reads the dev-only set from the manifests, not from a flag. Nothing to do by hand.
-<<<<<<< Updated upstream
 2. **Wait for the other dev work to ship first.** If those commits are nearly ready, finish their version bumps and publish them properly (every plugin you're shipping needs its own `plugin.json` + `marketplace.json` bump -- without that, fresh installs silently diverge). Then publish your feature on top.
-3. **Escalate to the user.** When the range holds unrelated commits that are NOT dev-only, picking which ship is the user's call, not yours.
-=======
-2. **Wait for the other dev work to ship first.** If those commits are nearly ready, finish their version bumps and publish them properly (every plugin you're shipping needs its own `plugin.json` + `marketplace.json` bump — without that, fresh installs silently diverge). Then publish your feature on top.
 3. **Ship yours alone with `--only`.** `uv run python scripts/publish.py --only <plugin>` projects ONLY that plugin's files onto master and holds every other published plugin at master's content; the publish range does not advance, so the held-back work ships whole at the next bare publish. It does not check cross-plugin coupling, so use it when your change is self-contained -- a plugin that needs a shared-lib change sitting in another plugin must ship with it. Mechanics: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md), "Partial release".
 4. **Escalate to the user.** When the range holds unrelated commits that are NOT dev-only and `--only` does not fit, picking which ship is the user's call, not yours.
->>>>>>> Stashed changes
 
 **Do NOT branch from master to route around this.** `git checkout -b` in this shared tree silently reparents whatever a concurrent session commits next -- the harm is documented under "Anti-pattern: creating a branch" above and in [docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md). If a genuinely separate checkout is required, use `git worktree add`, which leaves this tree's branch alone. (Earlier revisions of this section recommended `git checkout -b <feature> origin/master` and a squash-merged feature branch; both are retired.)
 
