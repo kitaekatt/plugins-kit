@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import random
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -570,6 +571,384 @@ class TestMasterOnlyGuardAsksDevHistory:
         _git(repo, "commit", "-qm", "shared.txt C")
 
         assert publish._master_only_paths() == []
+
+
+# --- the master-only guard, judged against an independent model ------------
+
+# A small alphabet on purpose. The guard's defects all lived where two states
+# COLLIDE -- master arriving at a blob dev also holds, dev returning to content
+# it published before -- and a generator drawing paths and contents from a wide
+# space produces those shapes almost never.
+_PROP_PATHS = ("alpha.txt", "beta.txt")
+_PROP_CONTENTS = ("A", "B", "C")
+# Content master writes that dev's history never holds: the hotfix.
+_PROP_HOTFIX = "H"
+_PUB_MANIFEST = "plugins/pub-kit/.claude-plugin/plugin.json"
+# Bounded on purpose: each case builds a real repo. These two numbers are the
+# whole runtime knob, and `test_the_corpus_covers_every_shape` is what stops a
+# tweak to either from quietly dropping the cases that matter.
+_PROP_SEEDS = 12
+_PROP_LENGTH = 14
+
+
+class _BranchModel:
+    """What each branch holds, tracked by DECIDING it rather than reading git.
+
+    This is the oracle, and it is only worth having because it knows something
+    the implementation must INFER. The generator below decides which branch
+    writes which content, so the model records authorship directly; publish.py
+    has to recover the same picture from rev-list ranges, blob identity and a
+    trailer. Every defect this guard has shipped lived in that inference layer,
+    which is exactly what comparing the two layers tests.
+
+    The bookkeeping per path is: the order in which DEV INTRODUCED each content
+    (its first appearance on dev, which is what makes a dev-side revert a
+    return to old content rather than new content), master's current content,
+    the content master was handed at the last publish point, and every content
+    master has written since.
+    """
+
+    def __init__(self) -> None:
+        self.dev: dict[str, str] = {}
+        self.master: dict[str, str | None] = {}
+        self.intro: dict[str, list[str]] = {}
+        self.boundary: dict[str, str | None] = {}
+        self.since: dict[str, list[str | None]] = {}
+        # Every state master has ever held, across publish points. Not part of
+        # the rule -- only `sensitivities` uses it, to notice when the guard's
+        # answer DEPENDS on the window ending where it does.
+        self.ever: dict[str, list[str | None]] = {}
+
+    def seed(self) -> None:
+        """The fixture's initial commit, which both branches start from."""
+        self.dev_write(_PUB_MANIFEST, "1.0.0")
+        self.master[_PUB_MANIFEST] = "1.0.0"
+
+    def dev_write(self, path: str, content: str) -> None:
+        self.dev[path] = content
+        order = self.intro.setdefault(path, [])
+        if content not in order:
+            order.append(content)
+
+    def project(self) -> None:
+        """Master takes dev's whole tree; this is the recorded publish point."""
+        for path in self.intro:
+            self.master[path] = self.dev.get(path)
+            self.boundary[path] = self.dev.get(path)
+            self.since[path] = []
+            self.ever.setdefault(path, []).append(self.dev.get(path))
+
+    def master_write(self, path: str, content: str | None) -> None:
+        self.master[path] = content
+        self.since.setdefault(path, []).append(content)
+        self.ever.setdefault(path, []).append(content)
+
+    def master_only(self) -> list[str]:
+        """The paths the rule calls master-only, computed from the bookkeeping.
+
+        The rule, in one sentence: master's current content is master-only iff
+        master itself gave up content that DEV INTRODUCED LATER than the
+        content master holds.
+
+        Three consequences, none of them special cases:
+
+        * Content dev never introduced (a hotfix) is master-only outright --
+          there is nothing later for master to have given up, and losing it is
+          the loss the guard exists to refuse.
+        * A path master gave up entirely (a deletion) is master-only, because
+          master abandoned content it held. A path master NEVER held -- one dev
+          added after the publish point -- is not: master gave up nothing.
+        * A dev-side revert clears. Master was handed each state in turn and
+          gave up none of them, so the newest content master held is the one it
+          still holds, and nothing master decided is at risk.
+
+        The known limit falls straight out of the same sentence and is asserted
+        rather than excluded: when dev reverts and an infra sync carries that
+        revert to master, master's own move is backwards too, so master DID
+        give up content dev introduced later and the verdict is a refusal. No
+        signal in either history separates that from a master-side retraction,
+        and refusing is the safe direction.
+        """
+        return sorted(p for p, shape in self.shapes().items()
+                      if not shape.startswith("cleared"))
+
+    def shapes(self) -> dict[str, str]:
+        """The verdict per path, LABELLED by which clause of the rule decided.
+
+        The labels are what `test_the_corpus_covers_every_shape` checks, so a
+        generator that stops producing master-side retractions fails loudly
+        instead of passing on easy sequences.
+        """
+        verdict = {}
+        for path in sorted(set(self.intro) | set(self.master)):
+            held_now = self.master.get(path)
+            if held_now == self.dev.get(path):
+                continue  # the branches agree; git diff never offers the path
+            order = self.intro.get(path, [])
+            ever_held = [c for c in
+                         [self.boundary.get(path), *self.since.get(path, [])]
+                         if c is not None]
+            if held_now is None:
+                # Master gave the path up only if master ever had it to give.
+                # A path dev added after the publish point is master's to lose
+                # only once master has held it.
+                verdict[path] = "deletion" if ever_held else "cleared-never-held"
+            elif held_now not in order:
+                verdict[path] = "hotfix"
+            else:
+                current = order.index(held_now)
+                ranks = [order.index(c) for c in ever_held if c in order]
+                if max(ranks, default=current) > current:
+                    verdict[path] = "master-gave-up-later"
+                elif current > order.index(self.dev[path]):
+                    verdict[path] = "cleared-dev-side-revert"
+                else:
+                    verdict[path] = "cleared-dev-ahead"
+        return verdict
+
+    def sensitivities(self) -> set[str]:
+        """Which of the guard's two range decisions the verdict DEPENDS on.
+
+        Two of the four historical defects were range errors, and neither
+        changes any verdict unless the sequence reaches a state where the
+        window's edges matter. A corpus can hold every shape in `shapes` and
+        still never reach one, so these are tracked separately and asserted.
+
+        The publish-point state matters when master's only move since the
+        release is a retraction OF what the release placed -- drop that state
+        and master looks like it gave up nothing. The window's start matters
+        when sweeping in master's history from BEFORE the release would find
+        content master has since been handed again, which is how a back-ported
+        retraction gets refused forever.
+        """
+        out = set()
+        for path, order in self.intro.items():
+            held_now = self.master.get(path)
+            if held_now == self.dev.get(path) or held_now not in order:
+                continue
+            current = order.index(held_now)
+
+            def refuses(states, _order=order, _current=current):
+                ranks = [_order.index(c) for c in states if c in _order]
+                return max(ranks, default=_current) > _current
+
+            window = [c for c in [self.boundary.get(path),
+                                  *self.since.get(path, [])] if c]
+            if refuses(window) != refuses(
+                    [c for c in self.since.get(path, []) if c]):
+                out.add("publish-point-state-decides")
+            if refuses(window) != refuses(
+                    [c for c in self.ever.get(path, []) if c]):
+                out.add("publish-window-start-decides")
+        return out
+
+
+def _plan(seed: int, length: int) -> list[tuple]:
+    """A random but legal interleaving of the operations the harness supports.
+
+    Legality is what the shadow model is for: git refuses an empty commit, so a
+    write must actually change the branch it is written to, a deletion needs a
+    file to delete, and master may only touch a path dev has created.
+
+    An operation KIND is drawn first and its argument second, rather than
+    drawing from one pooled list of candidates. Pooling looks equivalent and is
+    not: master's candidate list grows as its history does, so the pooled draw
+    slides toward all-master sequences that never publish and never let dev
+    move -- exactly the sequences with nothing interesting in them. Fixing the
+    kind weights holds the mix steady however long the sequence runs.
+
+    Master's content is drawn by FLAVOUR for the same reason. The four
+    master-side moves the guard has to tell apart are named -- an infra sync
+    carrying dev's content, a retraction to content dev introduced earlier, a
+    return to content master itself held before, and a hotfix dev never had --
+    so each stays common instead of depending on a lucky collision in a
+    three-letter alphabet.
+    """
+    rng = random.Random(seed)
+    shadow = _BranchModel()
+    shadow.seed()
+    ops: list[tuple] = [("project",)]
+    shadow.dev_write(_PUB_MANIFEST, "1.1.0")
+    shadow.project()
+    minor = 1
+    kinds = ["dev", "project", "mwrite", "mdel"]
+    kind_weights = [4, 3, 4, 1]
+    flavours = ["sync", "retract", "revert", "hotfix", "any"]
+    flavour_weights = [3, 3, 2, 1, 2]
+    while len(ops) < length:
+        op: tuple | None = None
+        while op is None:
+            kind = rng.choices(kinds, kind_weights)[0]
+            if kind == "dev":
+                path = rng.choice(_PROP_PATHS)
+                op = ("dev", path, rng.choice(
+                    [c for c in _PROP_CONTENTS if c != shadow.dev.get(path)]))
+            elif kind == "project":
+                op = ("project",)
+            elif kind == "mwrite":
+                live = [p for p in _PROP_PATHS if p in shadow.dev]
+                if not live:
+                    continue
+                path = rng.choice(live)
+                here = shadow.master.get(path)
+                order = shadow.intro.get(path, [])
+                pools = {
+                    "sync": [shadow.dev[path]],
+                    "retract": order[:order.index(here)] if here in order else [],
+                    "revert": [c for c in [shadow.boundary.get(path),
+                                           *shadow.since.get(path, [])] if c],
+                    "hotfix": [_PROP_HOTFIX],
+                    "any": [*_PROP_CONTENTS, _PROP_HOTFIX],
+                }
+                flavour = rng.choices(flavours, flavour_weights)[0]
+                cands = ([c for c in pools[flavour] if c != here]
+                         or [c for c in pools["any"] if c != here])
+                op = ("mwrite", path, rng.choice(cands))
+            else:
+                live = [p for p in _PROP_PATHS
+                        if shadow.master.get(p) is not None]
+                if not live:
+                    continue
+                op = ("mdel", rng.choice(live))
+        ops.append(op)
+        if op[0] == "dev":
+            shadow.dev_write(op[1], op[2])
+        elif op[0] == "project":
+            minor += 1
+            shadow.dev_write(_PUB_MANIFEST, f"1.{minor}.0")
+            shadow.project()
+        elif op[0] == "mwrite":
+            shadow.master_write(op[1], op[2])
+        else:
+            shadow.master_write(op[1], None)
+    return ops
+
+
+class TestMasterOnlyGuardAgainstAModel:
+    """A property test over random operation sequences.
+
+    The scenario tests above each pin one hand-written story, so the guard is
+    checked on exactly the stories somebody thought of -- and all four defects
+    this function has shipped lived in the gaps between them, every one found
+    by building a fixture rather than by reading the code. This closes the gaps
+    by generating the stories instead.
+
+    The oracle is `_BranchModel`, which computes the expected verdict from
+    bookkeeping the GENERATOR filled in. It is emphatically not the
+    implementation: the model is told who wrote what, publish.py has to work it
+    out from git. A property test whose expected value came from the code under
+    test would prove nothing at all.
+
+    Bounded on purpose. Each case builds a real repo and runs tens of git
+    commands, so the sequences are short and few enough to keep this class's
+    contribution to the suite in the tens of seconds.
+    """
+
+    _harness = TestMasterOnlyGuardAsksDevHistory
+
+    def _apply(self, repo: Path, op: tuple, minor: list[int]) -> None:
+        """Drive one operation through the existing harness helpers."""
+        if op[0] == "dev":
+            _, path, content = op
+            (repo / path).write_text(f"{content}\n")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", f"dev: {path} = {content}")
+            _git(repo, "push", "-q", "origin", "dev")
+        elif op[0] == "project":
+            minor[0] += 1
+            _bump(repo, "pub-kit", f"1.{minor[0]}.0", f"pub-kit 1.{minor[0]}.0")
+            self._harness._project(repo)
+        elif op[0] == "mwrite":
+            _, path, content = op
+            self._harness._on_master(repo, path, f"{content}\n",
+                                     f"master: {path} = {content}")
+        else:
+            _, path = op
+            _git(repo, "checkout", "-q", "master")
+            _git(repo, "reset", "-q", "--hard", "origin/master")
+            _git(repo, "rm", "-q", path)
+            _git(repo, "commit", "-qm", f"master: drop {path}")
+            _git(repo, "push", "-q", "origin", "master")
+            _git(repo, "checkout", "-q", "dev")
+            _git(repo, "fetch", "-q", "origin")
+
+    @pytest.mark.parametrize("seed", range(_PROP_SEEDS))
+    def test_the_guard_agrees_with_the_model(self, repo, seed):
+        ops = _plan(seed, _PROP_LENGTH)
+        model = _BranchModel()
+        model.seed()
+        minor = [0]
+        for step, op in enumerate(ops):
+            self._apply(repo, op, minor)
+            if op[0] == "dev":
+                model.dev_write(op[1], op[2])
+            elif op[0] == "project":
+                model.dev_write(_PUB_MANIFEST, f"1.{minor[0]}.0")
+                model.project()
+            elif op[0] == "mwrite":
+                model.master_write(op[1], op[2])
+            else:
+                model.master_write(op[1], None)
+            expected = model.master_only()
+            actual = sorted(publish._master_only_paths())
+            # Print the whole sequence, not just the failing step: the state a
+            # disagreement needs is built by everything before it, and a seed
+            # nobody can replay by eye is a mystery rather than a bug report.
+            story = "\n".join(
+                f"  {'>>' if i == step else '  '} {o}" for i, o in
+                enumerate(ops[:step + 1]))
+            assert actual == expected, (
+                f"seed {seed}, step {step}\n{story}\n"
+                f"  model    : {expected}\n  publish.py: {actual}")
+
+    def test_the_corpus_covers_every_shape(self):
+        """The generator's own guard, and it runs on the model alone.
+
+        A property test is worth only what its corpus contains, and the shapes
+        that matter here are rare: a master-side retraction needs master to
+        write a path twice within one publish window while dev advances in
+        between, which a small alphabet produces only every few sequences. If a
+        change to the weights, the seed count or the length stops producing
+        one, the sequences above would still all pass -- on stories that never
+        reach the clause four defects lived in. This fails instead, without
+        touching git.
+        """
+        seen = set()
+        sensitive = set()
+        for seed in range(_PROP_SEEDS):
+            model = _BranchModel()
+            model.seed()
+            minor = 0
+            for op in _plan(seed, _PROP_LENGTH):
+                if op[0] == "dev":
+                    model.dev_write(op[1], op[2])
+                elif op[0] == "project":
+                    minor += 1
+                    model.dev_write(_PUB_MANIFEST, f"1.{minor}.0")
+                    model.project()
+                elif op[0] == "mwrite":
+                    model.master_write(op[1], op[2])
+                else:
+                    model.master_write(op[1], None)
+                seen.update(model.shapes().values())
+                sensitive.update(model.sensitivities())
+        assert seen >= {
+            # Master wrote content dev's history never held.
+            "hotfix",
+            # Master dropped a file it held.
+            "deletion",
+            # Master gave up content dev introduced later -- the retraction,
+            # and the same shape the known limit produces when an infra sync
+            # carries a dev-side revert to master.
+            "master-gave-up-later",
+            # Dev went back to content it published before, master still holds
+            # the later state it was handed, and nothing is at risk.
+            "cleared-dev-side-revert",
+            # Master holds a state dev has simply moved on from.
+            "cleared-dev-ahead",
+        }, sorted(seen)
+        assert sensitive == {"publish-point-state-decides",
+                             "publish-window-start-decides"}, sorted(sensitive)
 
 
 class TestDevOnlyExclusion:
