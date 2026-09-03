@@ -85,6 +85,37 @@ detail. Cost includes added tokens and extra calls. The admission record must
 show the result against both control runs and preserve the cost of the
 intervention.
 
+### First concrete content: the md-audit EVIDENCE PACK
+
+The first adapter is the `md-audit` EVIDENCE PACK. It is deterministic,
+produced by a prepass, and inserted after the audited file and before the
+response schema for the local model only. It adds zero model calls. Each row
+carries the exact criterion ids it serves: `placement_not_in_skill_dir`,
+`placement_maturation`, `adp_discoverability`, `crp_unitary_reading_task`,
+`adp_one_hop_deep`, `adp_no_claude_md_back_reference`,
+`ccp_no_skill_content_duplication`, `readme_role`,
+`machine_emitted_artifact_provenance`, `hygiene_thresholds`,
+`mechanical_convention_hygiene`, or `ancestor_convention_conformance`.
+
+The pack contains identity (artifact routed by PATH, role, direct code files,
+and whether the code-directory dimension applies); measurements (lines, bytes,
+heading tree, and largest-section share); references (every link, backticked
+path, and path:line citation resolved as exists, missing, or directory, with
+the actual target line quoted); ancestors (the CLAUDE.md chain, duplicate
+candidates at >= 0.85 similarity quoted with both line numbers, and
+ancestor-declared conventions quoted verbatim); claim evidence (identifiers
+named next to verbs such as "lives", "defines", "exports", or "reads"
+grepped in the named file, with NOT FOUND stated plainly); and mechanical
+checks (non-ASCII characters, machine-specific absolute paths, temporal
+deixis, dead line citations, and the mechanical contract-check verdicts).
+It closes with: "Evidence rows are facts, not findings. A row with no rule
+violation is not a finding."
+
+The pack is roughly 0.8-6k tokens per file. Across the 59-file motivating
+corpus, its minimum, median, and maximum sizes were 3.3k, 11.6k, and 24k
+characters, and it was built in under 5 s. Each audit row records the pack's
+sha256 and size so a result is reproducible.
+
 ## Anti-patterns
 
 - Leak adapter text into the strong model's prompt. That changes the control and
@@ -95,7 +126,35 @@ intervention.
 
 ## Status and first build
 
-This record remains DRAFT while the first `md-audit` adapter is built and
-measured. The first build must report its model selector, task id, insertion
-position, added token and call cost, metric, n, and two control runs before the
-adapter is treated as admitted.
+The first adapter is the `md-audit` EVIDENCE PACK. It was motivated by the
+diagnosis of a 59-file audit: local-model misses concentrated in facts absent
+from a single-shot prompt. Only 1 of 25 ancestor-duplication cases was found,
+0 of 23 code claims were confirmed, cited paths and line anchors needed
+resolution, and 30 of 38 mechanical-hygiene cases were missed. Cloud auditors
+ran in a read-only filesystem, while their outputs cited repository facts
+absent from their brief. The pack pre-computes, deterministically, the facts a
+filesystem would have yielded and supplies them to the local model only.
+
+The pack is routed by PATH and records the artifact identity, role, direct code
+files, and whether the code-directory dimension applies. Its sections are
+identity, measurements, references, ancestors, claim evidence, and mechanical
+checks, as specified in the contract above. It costs zero extra model calls
+and roughly 0.8-6k tokens per file. In the 59-file corpus it was built in under
+5 s; measured pack sizes ranged from 3.3k to 24k characters, with a median of
+11.6k.
+
+The measurement instrument canonicalizes rule ids, credits aliases, and
+rejects section-number citations. Ground truth is reviewer-confirmed with
+locations. The frozen paired corpus has 53 files. The control run was repeated
+twice without the adapter: recall was 0.237 and 0.217, a 2-point noise band.
+The adapter run was also repeated twice. The ship rule is recall +15 points
+with confirmed precision no more than 3 points lower. Results are PENDING at
+the time of writing; this paragraph is intentionally shaped so the result can
+be replaced by one line when measurement finishes.
+
+The seam decision remains deferred. Because the pack is produced by a
+deterministic prepass, the current evidence favours attaching it at the
+task skill (`md-domain`), keyed by model tier. That is not the decision: it
+waits on the measurement. Until then, this record remains DRAFT and the
+adapter is not admitted. The pack's sha256 and size are recorded on every
+audit row to make each result reproducible.
