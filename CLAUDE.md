@@ -505,14 +505,32 @@ Link model, the task-CLI contract, and the 0.35.0 misreporting bug:
   IS, cite a source, and use absolute dates when a date matters. Now-relative
   claims rot silently and are unverifiable.
 - **ASCII only in tracked files.** Every tracked file in this repo -- source,
-  manifests, skills, and the prose under `docs/` alike -- must be ASCII. Write `--`
-  rather than an em-dash, `'` rather than a typographic quote, and `->` rather
-  than an arrow. The rule is declared HERE, and not only in a contributor's
-  personal configuration, because an audit's ancestor-convention check walks
-  this repo's CLAUDE.md chain: a convention stated only outside the repo binds
-  nothing inside it, and non-ASCII then passes or fails according to who is
-  auditing. Ancestor conventions are quoted verbatim by that check, so the
-  wording above is the rule as applied.
+  manifests, skills, and the prose under `docs/` alike -- must be ASCII. Write
+  `--` rather than an em-dash, `'` rather than a typographic quote, and `->`
+  rather than an arrow.
+
+  **Scoped exception: box-drawing characters in diagrams.** In any tracked file,
+  the Unicode Box Drawing block (U+2500 to U+257F) is permitted where the
+  characters are drawing a diagram -- a tree, a table frame, a flow. Do not flag
+  those. The exception is content-kind-scoped and no wider: a box-drawing
+  character used as ordinary punctuation is still a violation, and no other
+  non-ASCII character is covered, including status glyphs such as a check mark
+  or a ballot X. ASCII substitutes exist for every character this rule names,
+  but not for line art -- replacing it mangles the drawing rather than
+  transliterating it, which is why this one carve-out is worth its cost.
+
+  The rule is declared HERE, and not only in a contributor's personal
+  configuration, because an audit's ancestor-convention check walks this repo's
+  CLAUDE.md chain: a convention stated only outside the repo binds nothing
+  inside it, and non-ASCII then passes or fails according to who is auditing.
+  Ancestor conventions are quoted verbatim by that check, so the wording above
+  is the rule as applied, and the exception is honoured by the same mechanism.
+
+  Files predating this rule are NOT swept. They surface one at a time through
+  the normal review cycle, where each violation is judged in the change that
+  touches it. Do not open a repo-wide transliteration pass: it would rewrite
+  files that other sessions are editing, for a benefit the review cycle
+  delivers anyway.
 - **Never use the memory system** (`~/.claude/projects/*/memory/`). Always update `CLAUDE.md` instead -- it is machine-independent and checked into the repo, so all machines and sessions share the same context.
 
 ## Insights
