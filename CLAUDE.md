@@ -196,6 +196,17 @@ The consequence to plan around: a dev-only plugin's copy on master is re-checked
 
 Commits for a dev-only plugin need no action -- the file hold-back handles them. Do NOT branch from master to cherry-pick around them; creating or switching a branch in this shared tree is its own anti-pattern (see below).
 
+**`git branch --contains <sha>` cannot tell you whether your work shipped.**
+Because a release is a tree PROJECTION rather than a merge, a dev commit's SHA
+never appears on `master` even once its content is published. Asking git which
+branches contain the commit therefore answers "only dev" for work that shipped
+hours ago, which reads as proof the publish did not happen. Check CONTENT
+instead -- `git show origin/master:<path>` for the change you made, or the
+plugin's version in `origin/master:plugins/<name>/.claude-plugin/plugin.json`.
+The same trap runs the other way through the plugin cache: a version present
+under `~/.claude/plugins/cache/` was fetched from master, so its presence is
+evidence of a publish that this repo's git graph will not show you.
+
 **`git log origin/master..origin/dev` is not a meaningful range here.** A release is a tree PROJECTION, so master's commits are not counterparts of dev's and master is not an ancestor of dev; that range counts every commit since the branches last shared a tip and grows without bound. The honest range is `uv run python scripts/publish.py --print-range-base`..dev, read from the `Published-From:` trailer that `range_base()` searches for down master's history.
 
 ### dev -> master reconcile: conflict-resolution policy
