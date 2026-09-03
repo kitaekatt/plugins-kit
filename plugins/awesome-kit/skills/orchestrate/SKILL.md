@@ -9,6 +9,20 @@ skill-type: technique-skill
 Take on the orchestrator role: accomplish significant work by delegating it to background
 agents, keeping the main agent's context reserved for coordination, judgment, and synthesis.
 
+**Autonomy is high, and there is one level.** What authorizes the orchestrator is the task the
+user set and the authorizations their instructions record -- the CLAUDE.md files on the path,
+which it can open. Inside that scope it decides, dispatches, verifies, commits, and reports,
+and it does not end a turn proposing work it could do or confirming a call it could make. Four
+edges stop it and nothing else does: a `mutating` effect no instruction authorizes -- a push, a
+deploy, a message to a third party; an action the user has gated, such as a publish; a
+directional question -- what the product is for, what it becomes, whether a thing gets built at
+all; and a standing prohibition in those same instructions. A call inside sanctioned work is
+not direction, however product-flavoured it is. Everything short of an edge is a decision, and
+a decision is a unit: step 3 routes it, step 7 binds its ruling, and the routing is itself a
+call with no edge -- make it without stalling. The user adjusts the default in conversation or,
+durably, by writing a gate into their instructions; do not re-derive a level, and do not invent
+intermediate ones.
+
 See [references/why-delegate.md](references/why-delegate.md) for the economics behind this
 procedure and the anti-pattern catalogue.
 
@@ -32,6 +46,7 @@ technique_skill:
       - decomposing significant work into delegable units and running them via background agents
       - rendering the machine's orchestration policy (routing, backends, capacity) and dispatching by it
       - keeping the main context clean while agents run, and synthesizing results on completion
+      - routing a decision the orchestrator would otherwise put to the user, and the autonomy edges that decide when the user is asked at all
     excludes:
       - small or single-step tasks cheaper to do inline than to delegate
       - the Workflow tool's deterministic multi-agent orchestration (use Workflow when the user opts in)
@@ -112,7 +127,7 @@ technique_skill:
             review, never route the plan's creation. Keep the output in view for steps 3-5;
             it is the source of truth for routing, backends and capacity on this machine.
         - n: 3
-          action: Decompose into self-contained units, apply the rendered parallel-development razor, and classify each -- the plan itself is the first candidate unit.
+          action: Decompose into self-contained units, apply the rendered parallel-development razor, and classify each -- the plan itself is the first candidate unit, and every decision you would otherwise put to the user is another.
           detail: |
             The decomposition you are about to author is a unit (the policy's plan-checkpoint
             shaping tests): route it through the rendered tree before briefing anything from
@@ -122,6 +137,11 @@ technique_skill:
             note (a) dependencies; (b) whether the razor admits it as a parallel leaf; and (c)
             compression profile -- does the result compress to a small conclusion?
             High-generation-cost / small-conclusion units are the ideal footprint delegations.
+
+            A decision you would otherwise put to the user is a unit of the same kind: work is
+            briefed from it, so it is a plan-checkpoint. Make the call first, then route the
+            call -- not the question -- through the rendered tree by its own terms, exactly as
+            the plan; a ruling that comes back stands (step 7).
         - n: 4
           action: Match the unit to the rendered routing rows and choose the first available model.
           detail: >-
@@ -223,6 +243,14 @@ technique_skill:
             it must not be left sitting only in the agent's report, which the user never sees.
             Reverting a recorded change later is the responsibility of whichever agent
             decides to reverse it; the record is a signal of intent, not a prohibition.
+
+            A ruling belongs to the seat that made it. A review verdict or cross-check finding
+            you disagree with is neither set aside here nor re-asked of another seat: put the
+            counter-argument to the seat that ruled -- the backend's follow-up channel (step
+            6), or a relaunch of the same seat with the counter-argument in the brief -- and
+            take what comes back. Two seats that disagree each see the other's argument once;
+            the primary, the seat the matched row named first, then rules. Accepting a risk a
+            reviewer rated against is a ruling, and the reviewer's to make.
 
             Record one machine-readable join line for every completed unit:
 

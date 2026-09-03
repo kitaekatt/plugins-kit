@@ -125,7 +125,7 @@ lexicon:
   kind: skill
   render: glossed
   test: Will other units be briefed from this output before anything re-derives it?
-  gloss: a plan later units will execute against
+  gloss: a plan or decision later units will execute against
 - id: authored-here
   kind: skill
   render: glossed
@@ -191,7 +191,9 @@ lexicon:
 # cannot put a question to the user and wait for an answer -- it can only end
 # with the work not done and a question in its report, which the orchestrator
 # relays. So no routing row can arrange for an irreversible action to be
-# confirmed first. This term marks such a dispatch; it does not gate one.
+# confirmed first. This term marks such a dispatch; it does not gate one. The
+# gate is the orchestrator's, before dispatch: an unsanctioned mutating effect
+# is one of the autonomy edges SKILL.md names.
 - id: mutating
   kind: skill
   render: glossed
@@ -264,7 +266,10 @@ shape:
     principle: P0.6
     text: >-
       Route the plan itself through this tree as its own unit -- a {plan-checkpoint} -- before
-      briefing anything from it. Planhood decides no shape: a settled checklist is {known},
+      briefing anything from it. A decision you would otherwise put to the user is a
+      {plan-checkpoint} too: make the call, then route the call -- your call is the artifact,
+      so a {load-bearing} call that is not {novel} takes one {cross-check}, whose ruling stands,
+      and a call that is neither stays with you. Planhood decides no shape: a settled checklist is {known},
       an architecture decision is {open}. Treat an {open} {plan-checkpoint} as {load-bearing}
       unless you can NAME the downstream check that would catch a wrong shared decision. Do
       not launch units briefed from a plan still in flight; a materially revised plan repeats
