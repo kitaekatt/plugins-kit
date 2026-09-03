@@ -345,12 +345,14 @@ def _backend_options(
     # registry value, so an existing job file emits the same argv.
     effort = _string_option(job.options, "effort", None)
     max_tokens_value = job.options.get("max_tokens", 4096)
-    temperature_value = job.options.get("temperature", 0.3)
+    temperature_value = job.options.get("temperature")
     return BackendOptions(
         timeout_s=float(timeout_s),
         cwd=working_directory,
         max_tokens=int(max_tokens_value),
-        temperature=float(temperature_value),
+        temperature=(
+            float(temperature_value) if temperature_value is not None else None
+        ),
         effort=effort if effort is not None else selection.effort,
         allowed_tools=allowed_tools,
         disallowed_tools=_merge_disallowed_tools(run_floor, job_disallowed),
