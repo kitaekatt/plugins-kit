@@ -184,15 +184,19 @@ After publish:
 
 Some plugins live on `dev` for in-development work and must not reach consumers until they are ready. Each such plugin sets `"published": false` in its `plugins/<name>/.claude-plugin/plugin.json`. The marketplace regenerator (`scripts/regen_marketplace.py`) filters those plugins out of `marketplace.json`, so they are excluded structurally — not by memory — even if their files land on master via a cherry-pick.
 
-**By default `publish.py` SHIPS a dev-only plugin's commits to master**, and `published: false` alone is what keeps the plugin out of `marketplace.json` and therefore uninstallable. So a dev-only plugin's source sits on the public master with no way to install it, and master's tree matches dev. Nothing about the field's meaning changed -- what changed is that it no longer implies a divergent tree, because the exclusion never held for long anyway (a plugin's files arrive with the first commit that touches anything else).
+**`published: false` governs the marketplace LISTING, not the source sync -- and the two are separately enforced.** The regenerator keeps the plugin out of `marketplace.json`, which is what makes it uninstallable. Separately, `_publish_projection` derives its dev-only set from the MANIFESTS rather than from any exclusion flag, so a dev-only plugin's FILES are held back on every projection: a path master already carries is restored to master's content, a path only dev has is removed. Its COMMITS still appear in the shipping list; only its files stand still.
 
-Pass `--exclude-dev-only <plugin>` when a plugin's SOURCE genuinely must not appear on a public master. That restores the filtered release: only the shippable commits are projected onto master in a temporary worktree, `dev` is untouched, every held-back commit is printed -- and preflight then refuses one case, a single commit touching **both** that plugin and files that would otherwise ship, because an exclusion cannot be honoured silently there. Filtered-release mechanics: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
+The consequence to plan around: a dev-only plugin's copy on master is re-checked-out every release and can only go stale, never advance. Removing it from master once flips the hold-back into deleting it instead, permanently and with no flag. Verify a claim about this against `plugin.json` on both branches -- the field alone does not tell you whether source is on master.
+
+`--exclude-dev-only <plugin>` does NOT control that file hold-back and cannot remove anything from master. It governs commit bookkeeping only: which commits land in `excluded`, the "Held back on dev" line in the projection commit message, and eligibility for the fast-forward shortcut. With an exclusion in force, preflight refuses one case -- a single commit touching **both** that plugin and files that would otherwise ship -- because an exclusion cannot be honoured silently there. Mechanics: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
 
 **Dev-only plugins** (the field, not this list, is load-bearing -- this is just a human-readable inventory):
 
-- **yaml-data-editor-kit**.
+- **yaml-data-editor-kit** (source removed from master in `37fb94f6`; the hold-back keeps it off).
 
-Commits for a dev-only plugin in `git log origin/master..origin/dev` need no action: they ship by default and the plugin stays unlisted. Do NOT branch from master to cherry-pick around them -- creating or switching a branch in this shared tree is its own anti-pattern (see below). The regenerator remains a backstop for the marketplace listing, not a substitute for the per-commit filtering.
+Commits for a dev-only plugin need no action -- the file hold-back handles them. Do NOT branch from master to cherry-pick around them; creating or switching a branch in this shared tree is its own anti-pattern (see below).
+
+**`git log origin/master..origin/dev` is not a meaningful range here.** A release is a tree PROJECTION, so master's commits are not counterparts of dev's and master is not an ancestor of dev; that range counts every commit since the branches last shared a tip and grows without bound. The honest range is `uv run python scripts/publish.py --print-range-base`..dev, read from the `Published-From:` trailer that `range_base()` searches for down master's history.
 
 ### dev -> master reconcile: conflict-resolution policy
 
@@ -340,22 +344,24 @@ test.
 
 Publishing is the riskiest moment in this repo because it broadcasts to every consumer. Two failure modes have happened, both recoverable but visible (the retraction commits in `git log master` are the scars). Avoid them with these checks.
 
-**Gotcha 1: fast-forwarding dev → master sweeps unrelated commits.** `dev` typically contains in-flight work from other plugins. A fast-forward merge ships *everything* between `master` and `dev`, not just your feature. **Mandatory check before any dev → master merge:**
+**Gotcha 1: a release ships everything in the range, not just your feature.** `dev` typically contains in-flight work from other plugins. **Mandatory check before any publish:**
 
 ```bash
 git fetch origin
-git log --oneline origin/master..origin/dev
+git log --oneline $(uv run python scripts/publish.py --print-range-base)..dev
 ```
 
-If that list contains anything beyond the commits you intend to publish, **stop** — do not fast-forward. Pick a safe path instead:
+Use that range, NOT `origin/master..origin/dev`. A release is a tree projection, so master is not an ancestor of dev and the plain range grows without bound -- it reports commits published long ago and tells you nothing.
 
-1. **Let `publish.py` filter.** Commits touching only a `published: false` plugin are EXCLUDED automatically -- replayed onto master in a temporary worktree, `dev` untouched, every held-back commit printed. Nothing to do by hand.
+If the list contains anything beyond the commits you intend to publish, **stop**. Pick a safe path instead:
+
+1. **Let the hold-back do its job.** A `published: false` plugin's FILES never move onto master, whatever its commits do -- `_publish_projection` reads the dev-only set from the manifests, not from a flag. Nothing to do by hand.
 2. **Wait for the other dev work to ship first.** If those commits are nearly ready, finish their version bumps and publish them properly (every plugin you're shipping needs its own `plugin.json` + `marketplace.json` bump — without that, fresh installs silently diverge). Then publish your feature on top.
 3. **Escalate to the user.** When the range holds unrelated commits that are NOT dev-only, picking which ship is the user's call, not yours.
 
 **Do NOT branch from master to route around this.** `git checkout -b` in this shared tree silently reparents whatever a concurrent session commits next -- the harm is documented under "Anti-pattern: creating a branch" above and in [docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md). If a genuinely separate checkout is required, use `git worktree add`, which leaves this tree's branch alone. (Earlier revisions of this section recommended `git checkout -b <feature> origin/master` and a squash-merged feature branch; both are retired.)
 
-Fast-forward `dev` → `master` is only safe when `git log origin/master..origin/dev` shows *exactly* the commits you intend to publish.
+A release is safe to run only when that range shows *exactly* the commits you intend to publish. `publish.py` still has a fast-forward shortcut for the case where master is an ancestor of dev, but it is gated on `_fast_forward_is_safe()` -- refused outright while any dev-only plugin exists, because a fast-forward moves dev's tree wholesale and would bypass the hold-back.
 
 **Gotcha 2: `git add <file>` sweeps pre-existing working-tree modifications.** If a tracked file already had uncommitted local edits and you touch it for your feature, `git add <file>` stages *all* the changes in that file, not just yours. The feature commit then ships unrelated WIP. **Mandatory check before any publish commit:**
 
@@ -924,11 +930,28 @@ claude_md:
       added: "2026-08-08"
       updated: "2026-08-26"
     - id: codex_dispatch_is_silent_on_failure
-      keywords: [codex, codex exec, sandbox, workspace-write, windows.sandbox, absolute -C, add-dir, exit 0, no approval channel, permission spam, danger-full-access, reads unrestricted, bootstrap_lib.codex, CodexCliBackend, run_cli_streaming]
-      summary: Every way a codex dispatch can be misconfigured fails SILENTLY at exit 0, so codex machinery is built to refuse bad input rather than trust it. bootstrap_lib.codex is the single source of truth for detection and argv; orchestrate deliberately does NOT consume it.
+      keywords: [codex, codex exec, sandbox, workspace-write, windows.sandbox, absolute -C, add-dir, exit 0, no approval channel, permission spam, danger-full-access, reads unrestricted, bootstrap_lib.codex, CodexCliBackend, run_cli_streaming, discovery vs execution, does orchestrate use llm-scripting-kit, who invokes codex, two paths to codex]
+      summary: Every way a codex dispatch can be misconfigured fails SILENTLY at exit 0, so codex machinery is built to refuse bad input rather than trust it. There are TWO paths to codex -- the completion seam (CodexCliBackend) and orchestrate rendering a `codex exec` argv for the agent to run -- and orchestrate does not call the seam, but it DOES reach bootstrap_lib.codex through llm-scripting-kit's CodexAdapter.
       detail: |
         A codex dispatch can fail silently at exit 0 -- judge it by its `-o` file, never `$?`.
         Dispatch reference: plugins/awesome-kit/skills/orchestrate/references/codex-dispatch.md.
+        ORCHESTRATE'S RELATIONSHIP TO llm-scripting-kit, which is easy to get backwards
+        because it differs by AXIS rather than being all-or-nothing. DISCOVERY: orchestrate
+        DOES consume llm-scripting-kit -- orchestration_guidance.py imports it and calls
+        discover_model_entries, and orchestration.yaml states that every routing name
+        without the `agent:` prefix resolves against it. EXECUTION: orchestrate does NOT
+        go through the completion seam (CodexCliBackend), but it is NOT independent of
+        bootstrap_lib.codex -- orchestration_guidance.py's adapter_command_text_provider
+        resolves a harness adapter via llm_scripting_kit.resolve_harness_adapter and calls
+        CodexAdapter.build_argv, which calls bootstrap_lib.codex.build_codex_exec_argv.
+        The literal `command:` string in orchestration.yaml's backends record is the
+        DISCLOSED FALLBACK (_command_fallback), reached only when llm_scripting_kit is
+        unavailable, version-skewed, or the adapter raises, and it appends a note saying
+        so. Do not mistake that degradation path for the mechanism.
+        So "orchestrate does not use llm-scripting-kit" is FALSE on both axes. What stays
+        true is narrower: a codex dispatch from orchestrate does not exercise the
+        COMPLETION SEAM, so a failure there implicates the argv, the sandbox, or the
+        caller's process handling -- not CodexCliBackend.
       origin: "2026-08-10 -- empirical probing of codex-cli 0.146.0 while adding codex as a work backend; the shipped policy had hardcoded network-on, no windows.sandbox, and framed the missing approval flag as a mere gotcha."
       added: "2026-08-10"
     - id: stale_editable_self_install

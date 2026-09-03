@@ -6,7 +6,7 @@ skill-type: domain-skill
 description: Use when auditing, authoring, generating, or analyzing markdown -- SKILL.md, CLAUDE.md, docs. Do NOT use for knowledge-encoding or update-documentation.
 disable-model-invocation: false
 user-invocable: true
-argument-hint: "[audit|author|generate|analyze] [skill|claude-md|project-doc|references|<directory>] [<path>|--diff] [--coverage <dir>] [--review] [--density] [--json] [--advanced] [fast]"
+argument-hint: "[audit|author|generate|analyze] [skill|claude-md|project-doc|references|<directory>] [<path>|--diff|jobs <dir>] [--coverage <dir>] [--review] [--density] [--json] [--advanced] [fast]"
 ---
 
 # md-domain
@@ -365,6 +365,7 @@ lanes:
     procedure: references/lanes/audit-lane.md
     discover_script: scripts/discover_project_doc.py
     contract_script: scripts/check_project_doc_audit.py
+    jobs_script: scripts/emit_audit_jobs.py
     workflow_detect: workflow/project-doc-detect.js
     workflow_remediate: workflow/project-doc-remediate.js
     verdicts: [COMPLIANT, NON-COMPLIANT, DIFF-CLEAN, NOT-AUDITED]
@@ -374,6 +375,7 @@ lanes:
       - "should this design doc graduate to a skill"
       - "is this project document an orphan"
       - "audit my README"
+      - "emit an unattended audit run for these docs"
     change_driver: >-
       Changes when the project-doc standards change -- PD-1..PD-11, the
       maturation pipeline, or a named-role definition (readme, generated).
@@ -502,9 +504,12 @@ ambiguous, ask rather than guessing.
   `list` emits a numbered list from the lane's discover script and stops;
   `<path>` targets a file or directory; `<numbers>` selects by index from the
   last `list` output. `audit skill` also accepts `roster` / `hierarchy` (with an
-  optional output path or `-` for stdout) for corpus inventory. The grammar puts
-  them under `audit skill` because they share its subject; an inventory renders
-  no verdict, so it is NOT an audit -- announce it as its own operation.
+  optional output path or `-` for stdout) for corpus inventory. `audit
+  project-doc` accepts `jobs <directory>` to emit an unattended job-kit run
+  over that directory's docs instead of auditing inline -- procedure and CLI
+  flags: `references/lanes/audit-lane.md`. The grammar puts each of these
+  under its audit lane because it shares that lane's subject; none of them
+  renders a verdict, so none is an audit -- announce it as its own operation.
 - **Analyze subject** -- a named directory or `--diff`. There is NO whole-repo
   default: if neither is present, say so and stop rather than choosing the cwd.
 - **`--diff` / `--json`** -- both analyze-only. `--diff` resolves changed code

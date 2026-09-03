@@ -50,6 +50,17 @@ from .model_endpoints import (
     load_endpoint_registry,
     resolve_registry_entry,
 )
+from .reachability import (
+    DEFAULT_VERIFY_TIMEOUT_S,
+    STATUS_REACHABLE,
+    STATUS_UNKNOWN,
+    STATUS_UNREACHABLE,
+    Reachability,
+    check_entry,
+    check_harness,
+    check_many,
+    check_transport,
+)
 from .harness_adapters import (
     CODEX_EFFORT_MENU,
     CodexAdapter,
@@ -110,6 +121,16 @@ __all__ = [
     "AccountStatus",
     "AccountCheckError",
     "EndpointProbe",
+    # reachability (verification, distinct from configuration -- never an LLM call)
+    "DEFAULT_VERIFY_TIMEOUT_S",
+    "STATUS_REACHABLE",
+    "STATUS_UNREACHABLE",
+    "STATUS_UNKNOWN",
+    "Reachability",
+    "check_entry",
+    "check_harness",
+    "check_many",
+    "check_transport",
     "make_openai_client",
     "KEYLESS_API_KEY",
     "read_env_file",

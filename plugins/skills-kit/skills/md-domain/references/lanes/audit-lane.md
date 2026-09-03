@@ -528,6 +528,48 @@ them in a caller's own checker -- a frozen copy drifts silently, and the first
 symptom is a CORRECT finding being rejected for citing an id the copy never
 learned about.
 
+### Batch-emitting unattended runs with emit_audit_jobs.py
+
+`scripts/emit_audit_jobs.py` turns the acceptance contract above into a job-kit
+job file, one job per doc:
+
+```
+emit_audit_jobs.py <subject-dir> [--repo-root PATH] [--standards PATH]
+    [--endpoint NAME ...] [--report-dir PATH] [--max-parallel N]
+    [--limit N] [--out PATH|-]
+```
+
+`subject_dir` is a directory, not a single file -- the script discovers every
+`project_doc` under it (via `discover_project_doc.py`) and emits one job per
+doc, each wired to `check_project_doc_audit.py` as its acceptance command.
+
+Run the emitted file with job-kit exactly as the script's own stderr line
+prints it, `JOB_KIT_REPORT_DIR` included:
+
+```
+JOB_KIT_REPORT_DIR=<repo-root>/reports job-kit run <job-file>
+```
+
+`JOB_KIT_REPORT_DIR` is not optional. The contract script writes each accepted
+report to `$JOB_KIT_REPORT_DIR/<job>.<run>.<attempt>.json`, defaulting to `.` --
+the process's own working directory -- when the variable is unset, which
+scatters report files wherever job-kit happened to be invoked from.
+
+Every emitted job sets `workspace.isolate: false`. job-kit passes the attempt
+workspace as the contract's cwd, so a `contract.directory` is dead once a
+workspace resolves. Isolating into a worktree would also hand the audit a
+committed snapshot instead of the working tree it exists to check -- the wrong
+subject when the point is auditing uncommitted state.
+
+The emitted job file is a machine-emitted artifact, not authored content, so it
+belongs under `tmp/` and is not committed alongside this reference. Committing
+it would trip md-domain's own project-doc standards criterion PD-10
+(`machine_emitted_artifact_provenance`) against md-domain's own output.
+
+The report shape each job must produce is not restated here -- see "Unattended
+runs: the acceptance contract" above; `check_project_doc_audit.py` is its
+single source of truth.
+
 ## Gotchas
 
 - The mechanical validator is canonical for what it covers. Do not re-implement

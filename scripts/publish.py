@@ -225,12 +225,44 @@ def blob_at(ref: str, path: str) -> str | None:
                check=False) or None
 
 
-def _blob_reached_by_dev(path: str, blob: str) -> bool:
-    """True when `path` has held `blob` somewhere in dev's history.
+def _blobs_along(path: str, commits: list[str]) -> list[str]:
+    """The blobs `path` held at `commits`, in the order given.
 
-    The question `_master_only_paths` actually needs answered. A blob dev has
-    carried at that path is content dev picked up, whatever route it took to
-    master afterwards, so a publish cannot discard it.
+    One `cat-file --batch-check` resolves the whole list, so the cost is two
+    processes per path rather than one per commit. Commits where the path is
+    absent print "<input> missing" and are dropped -- an absent path is not a
+    state anything can hold.
+    """
+    if not commits:
+        return []
+    probe = subprocess.run(
+        ["git", "cat-file", "--batch-check=%(objectname)"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+        input="".join(f"{sha}:{path}\n" for sha in commits))
+    # A present entry is the object id alone; a missing one is
+    # "<input> missing", two fields, which cannot collide with a sha.
+    return [fields[0] for fields in
+            (line.split() for line in probe.stdout.splitlines())
+            if len(fields) == 1]
+
+
+def _dev_introduction_order(path: str) -> dict[str, int]:
+    """When dev first INTRODUCED each state of `path`; 0 is the oldest.
+
+    An ordering, not mere membership, is what `_master_only_paths` needs: dev
+    holding a blob SOMEWHERE says nothing about which of two blobs came later,
+    and a master that sits on content dev wrote EARLIER may be sitting there
+    deliberately.
+
+    The order is by INTRODUCTION -- dev's oldest commit holding the blob -- and
+    that choice is the load-bearing one. Dev can return to content it published
+    before (a revert on dev), and it then holds that old content at its TIP;
+    ordering by most recent appearance would call that content dev's newest
+    state and every state written between the two the older one, inverting the
+    real development sequence. Introducing content happens once: a later
+    re-appearance is dev going back to old content, not writing new content. So
+    "master's blob was introduced before this other one" stays well defined
+    however often either branch moves back and forth.
 
     The walk is the SIMPLIFIED one -- no `--full-history` -- and that is a
     judgement, not an omission. Simplification keeps the commits where the path
@@ -239,19 +271,81 @@ def _blob_reached_by_dev(path: str, blob: str) -> bool:
     on a side branch a merge RESOLVED AWAY, and dev rejecting a state is
     precisely the case where master still carrying it is a real loss the
     operator should see.
-
-    One `cat-file --batch-check` resolves the whole commit list, so the cost is
-    two processes per path rather than one per commit.
     """
     commits = git("rev-list", DEV_BRANCH, "--", path, check=False).split()
-    if not commits:
-        return False
-    probe = subprocess.run(
-        ["git", "cat-file", "--batch-check=%(objectname)"],
-        cwd=REPO_ROOT, capture_output=True, text=True,
-        input="".join(f"{sha}:{path}\n" for sha in commits))
-    # Missing entries print "<input> missing", which cannot collide with a sha.
-    return blob in probe.stdout.split()
+    order: dict[str, int] = {}
+    # rev-list is newest-first, so walk it backwards to number introductions
+    # from dev's oldest commit forward.
+    for rank, blob in enumerate(reversed(_blobs_along(path, commits))):
+        order.setdefault(blob, rank)
+    return order
+
+
+def _master_holds_discardable_state(path: str, master_base: str, master: str,
+                                    master_blob: str) -> bool:
+    """True when publishing over master's state at `path` would discard it.
+
+    A publish overwrites master's CURRENT state with dev's, so that is the only
+    state at risk. Two things make overwriting it safe, and both are required.
+
+    Dev must have held that state at all: a blob nowhere in dev's history is
+    content dev never picked up -- a hotfix written straight on master -- and
+    losing it is the loss this guard exists to refuse.
+
+    And master must not have chosen it OVER content dev wrote LATER. That is
+    the whole question, because the two cases that reach here look identical by
+    content: in both, master sits on a state dev's tip has moved past. What
+    separates them is WHICH BRANCH MOVED, and the observable difference is
+    whether master itself gave up newer content:
+
+      * MASTER moved -- master held content dev introduced later and left it.
+        Reverting on master is the documented way to retract a bad publish, so
+        master is sitting on the earlier content deliberately, and a publish
+        restores exactly what the revert withdrew. REFUSE.
+      * DEV moved -- dev published one state, then another, then went back to
+        the first. Master was handed each in turn and never gave one up; the
+        state it holds is the newest content it was ever given. Dev superseded
+        that content itself, so a publish discards nothing master decided.
+        CLEAR.
+
+    So the test is: has master held, since the publish point, content dev
+    introduced later than what master holds now? States master held that dev
+    never had are ignored -- master abandoned those itself, and a publish
+    cannot discard what master no longer holds.
+
+    `master_base` must be a MASTER-side commit. A range measured from the dev
+    sha `range_base()` returns spans master's whole post-divergence history,
+    including projections older than the last publish point, which is a wider
+    claim than "what master has done since it was last given dev's tree".
+
+    The state master held AT `master_base` counts and has to be added by hand,
+    because `<master_base>..<master>` EXCLUDES that commit. It is the state the
+    release itself handed master, so a retraction of a just-published state is
+    a master-side move whose entire evidence sits on the boundary commit: the
+    revert is the only commit in the range, master's blob after it is the
+    earlier content, and without the boundary the guard would see master
+    holding old content having apparently given up nothing.
+
+    Known limit, stated because the guard has no way to see past it: if dev
+    reverts and an infra sync then carries that revert to master, master's own
+    move is backwards too and this refuses. That direction is the safe one --
+    the operator is shown a path both branches moved backwards on -- and no
+    signal in either history distinguishes it from a master-side retraction of
+    the same content.
+    """
+    order = _dev_introduction_order(path)
+    current = order.get(master_blob)
+    if current is None:
+        return True
+    commits = git("rev-list", f"{master_base}..{master}", "--", path,
+                  check=False).split()
+    held = _blobs_along(path, commits)
+    boundary = blob_at(master_base, path)
+    if boundary is not None:
+        held.append(boundary)
+    newest = max((order[blob] for blob in held if blob in order),
+                 default=current)
+    return newest > current
 
 
 def range_base() -> str:
@@ -284,22 +378,41 @@ def range_base() -> str:
     than under-reports, which is the safe direction: a wider range costs noise,
     a narrower one silently drops a commit from the release.
     """
+    point = _recorded_publish_point()
+    return point[1] if point else f"{REMOTE}/{MASTER_BRANCH}"
+
+
+def _recorded_publish_point() -> tuple[str, str] | None:
+    """The last release master carries: (its own commit, the dev sha it shipped).
+
+    Both halves are needed and they are not interchangeable. The dev sha is the
+    boundary for `..dev` questions -- what has been written since the release.
+    The master commit is the boundary for master-side questions -- what master
+    has done since the release -- and only a MASTER commit can bound those: the
+    dev sha is not an ancestor of master, so `<dev sha>..<master>` reaches every
+    master commit back to the divergence, older projections included.
+
+    None when no usable trailer is found within the search window, or when the
+    ones found name objects this clone lacks or commits that are not ancestors
+    of dev (a rewritten dev). Callers then fall back to the merge base, which
+    over-reports rather than under-reports.
+    """
     master = f"{REMOTE}/{MASTER_BRANCH}"
     log = git("log", f"-{_RANGE_BASE_SEARCH_DEPTH}", "--format=%H%x1e%B%x1f",
               master, check=False)
     for entry in log.split("\x1f"):
         if not entry.strip():
             continue
-        _sha, _sep, message = entry.partition("\x1e")
+        commit, _sep, message = entry.partition("\x1e")
         for line in reversed(message.splitlines()):
             line = line.strip()
             if not line.startswith(PUBLISHED_FROM):
                 continue
             sha = line[len(PUBLISHED_FROM):].strip()
             if sha and _rc("merge-base", "--is-ancestor", sha, DEV_BRANCH) == 0:
-                return sha
+                return commit.strip(), sha
             break
-    return master
+    return None
 
 
 def _master_only_paths() -> list[str]:
@@ -325,20 +438,41 @@ def _master_only_paths() -> list[str]:
     receives dev content after the base -- an infra sync, a hand reconcile --
     and master's blob then differs from the base while being a state dev
     already holds, so comparing against the base alone reports a path dev is
-    strictly ahead on. What settles it is `_blob_reached_by_dev`: content dev
-    never picked up is content whose blob appears nowhere in dev's history at
-    that path. The prefilter still earns its place because a blob equal to the
-    base's is reachable by construction (the base is an ancestor of dev), so
-    every path master has not touched is answered without a history walk.
+    strictly ahead on. What settles it is
+    `_master_holds_discardable_state`: master's state must be one dev held, and
+    master must not have given up content dev introduced later.
+
+    The prefilter still earns its place, but it answers only the paths master
+    has left ALONE since the base: a blob equal to the base's is dev's own by
+    construction (the base is an ancestor of dev), so an untouched path needs
+    no history walk. A path master touched and returned to the base's blob is a
+    revert like any other and goes to the full check.
+
+    The two boundaries are DIFFERENT COMMITS and must not be conflated. `base`
+    is a dev sha, which is what the base-blob comparison needs. Every question
+    about what MASTER has done is bounded by `master_base`, the projection
+    commit that shipped that dev sha: `<dev sha>..<master>` is not "master since
+    the release" at all, because the dev sha is not an ancestor of master, so
+    the range walks back to the divergence and sweeps in earlier projections --
+    which is exactly how a path master has not touched since the release reads
+    as one master moved.
     """
     dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
     master = f"{REMOTE}/{MASTER_BRANCH}"
-    base = range_base()
-    if base == master:
-        base = git("merge-base", master, DEV_BRANCH, check=False)
+    point = _recorded_publish_point()
+    if point:
+        master_base, base = point
+    else:
+        master_base = base = git("merge-base", master, DEV_BRANCH, check=False)
     if not base:
         return []
     stray = []
+    # Which paths master's own commits touched since the publish point. One
+    # walk answers it for every path, which is what lets the prefilter below
+    # distinguish "master never moved this" from "master moved it back".
+    master_touched = set(git("log", "--name-only", "--pretty=format:",
+                             f"{master_base}..{master}", "--",
+                             check=False).split("\n"))
     # The trailing "--" is required, not tidiness: this repo has a `dev/`
     # directory, so `git diff <ref> dev` is ambiguous between a revision and a
     # path and git refuses outright.
@@ -347,13 +481,14 @@ def _master_only_paths() -> list[str]:
         if not path or path in GENERATED_PATHS or _dev_only_owned(path, dev_only):
             continue
         master_blob = blob_at(master, path)
-        if master_blob == blob_at(base, path):
+        if master_blob == blob_at(base, path) and path not in master_touched:
             continue
         # A path master no longer has holds no content to discard by this
         # test, but master DELETING it since the base is a master-side change
         # a publish would undo, and there is no blob to look for. Report it and
         # let the operator judge, which is what the guard did before.
-        if master_blob is None or not _blob_reached_by_dev(path, master_blob):
+        if master_blob is None or _master_holds_discardable_state(
+                path, master_base, master, master_blob):
             stray.append(path)
     return stray
 
@@ -843,6 +978,33 @@ def _master_is_ancestor_of_dev() -> bool:
                f"{REMOTE}/{MASTER_BRANCH}", DEV_BRANCH) == 0
 
 
+def _fast_forward_is_safe() -> bool:
+    """True when a fast-forward cannot carry dev-only work onto master.
+
+    A fast-forward moves dev's TREE wholesale, so it bypasses the hold-back
+    _publish_projection applies. The exclusion set does not guard that: it is
+    populated per COMMIT from the publish range, so a range touching no
+    dev-only plugin leaves it empty while the dev-only files sit in dev's tree
+    ready to ship. What a fast-forward moves is the tree, so the question has
+    to be asked of the manifests, not of the range.
+
+    Deliberately asks whether a dev-only plugin EXISTS rather than whether
+    _held_back_paths finds files for it. The two agree in every real case -- a
+    declared plugin always has at least its own manifest on disk -- but
+    _held_back_paths lists trees with check=False, so a failing ls-tree
+    returns empty and would be indistinguishable from "nothing to hold back".
+    This guard protects a push to a public master, so it must not have a
+    branch on which a git failure reads as safe.
+
+    Unreachable while master is not an ancestor of dev, which a projection
+    release guarantees. It becomes reachable the moment anyone merges master
+    back into dev -- a move publish-reconcile.md explicitly contemplates --
+    and it is exactly then that the empty exclusion set stops meaning what it
+    appears to mean.
+    """
+    return not any(not is_published(m) for m in local_plugins().values())
+
+
 def _held_back_paths(dev_only: set[str]) -> tuple[list[str], list[str]]:
     """The dev-only files to hold at master's content: (on master, dev-only new).
 
@@ -951,9 +1113,12 @@ def _rc_in(workdir, *args: str) -> int:
 def push_and_merge(excluded: dict[str, set[str]] | None = None) -> None:
     """Push dev, then land the release on master.
 
-    Fast-forward when nothing is excluded AND master is still an ancestor of
-    dev. Otherwise project (see _publish_projection): master gets dev's tree
-    with the dev-only plugins held back, and dev is untouched.
+    Fast-forward only when nothing is excluded, master is still an ancestor
+    of dev, AND no dev-only file exists on either tree (_fast_forward_is_safe).
+    All three are needed: a fast-forward moves dev's tree wholesale, so an
+    empty exclusion set alone would ship every dev-only plugin the range
+    happened not to touch. Otherwise project (see _publish_projection): master
+    gets dev's tree with the dev-only plugins held back, and dev is untouched.
 
     The worktree in the projection path is not a stylistic choice. The
     fast-forward path checks master out in THIS tree, which is shared with
@@ -965,7 +1130,8 @@ def push_and_merge(excluded: dict[str, set[str]] | None = None) -> None:
     git("push", REMOTE, DEV_BRANCH)
     print(f"  pushed {DEV_BRANCH}")
 
-    if not excluded and _master_is_ancestor_of_dev():
+    if (not excluded and _master_is_ancestor_of_dev()
+            and _fast_forward_is_safe()):
         git("checkout", MASTER_BRANCH)
         try:
             git("merge", "--ff-only", DEV_BRANCH)

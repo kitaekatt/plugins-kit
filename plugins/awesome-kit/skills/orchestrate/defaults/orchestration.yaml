@@ -505,8 +505,19 @@ backends:
       `--add-dir` voids the ENTIRE writable set -- writes inside the root
       fail too.
 
-      Launch backgrounded, tail the log ONCE, and judge the run by the `-o`
-      file only.
+      Launch backgrounded THROUGH THE HARNESS's own background mechanism
+      (Claude Code: the Bash tool's `run_in_background`), and add NO shell
+      backgrounding of your own -- no `nohup`, no trailing `&`. Doing both
+      forks a process the harness is not tracking: the shell it watches exits
+      at once, the call is reported as a success in seconds, and the orphaned
+      codex is torn down with the process group, leaving no `-o` file. That
+      reads exactly like the silent exit-0 failure this record warns about,
+      so it gets misdiagnosed as a codex or sandbox fault. Measured on
+      codex-cli 0.150.1: three `nohup ... &` launches under `run_in_background`
+      each died after their first tool call with no output file, while the
+      same argv under `run_in_background` alone completed and wrote its file.
+
+      Then tail the log ONCE, and judge the run by the `-o` file only.
 
       Flag catalog, and the `-s danger-full-access` escape hatch:
       references/codex-dispatch.md.

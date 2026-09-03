@@ -5,6 +5,8 @@ shared endpoint registry and completion backends:
 
 ```bash
 llm-scripting-kit endpoints
+llm-scripting-kit endpoints --verify
+llm-scripting-kit probe --endpoint sol
 llm-scripting-kit models --endpoint openrouter
 llm-scripting-kit resolve --endpoint sol
 printf 'Review this design' | llm-scripting-kit complete --endpoint sol
@@ -18,6 +20,89 @@ runtime failure, `2` for invalid input/configuration, and `3` for a classified
 persistent halt such as authentication, credit, or rate limiting. The existing
 `status`, `set-key`, and `which` account commands retain their human-readable
 output.
+
+### `endpoints --verify` / `probe` -- configured vs. usable right now
+
+`endpoints` lists what is CONFIGURED (adapter, base_url, model, name): pure
+static data, always instant, never touches the network. It carries no
+liveness information on its own -- two locally hosted endpoints can be listed
+identically while only one actually answers.
+
+`--verify` (opt-in, default off so plain `endpoints` never starts paying for
+network calls silently) adds a `reachability` object to every endpoint in the
+same JSON, checked concurrently so a full-list verify is not the sum of every
+individual timeout:
+
+```bash
+llm-scripting-kit endpoints --verify --timeout 5
+```
+
+```json
+{"endpoints": {"local": {"kind": "transport", "base_url": "...",
+  "reachability": {"status": "reachable", "checked": "models-endpoint", "detail": "ok"}}}}
+```
+
+`probe --endpoint NAME` is a thin exit-code wrapper over the *same*
+reachability check for one endpoint -- for a caller that wants a yes/no answer
+before queueing work rather than a listing:
+
+```bash
+llm-scripting-kit probe --endpoint local; echo $?
+```
+
+Both share one code path (`llm_scripting_kit.reachability`) and **never issue
+a completion, ever** -- verification costs zero LLM tokens:
+
+- **transport** endpoints (the `openrouter` adapter, including a self-hosted
+  OpenAI-compatible server): a `GET {base_url}/models` metadata request. This
+  proves the server is up and answering HTTP -- it does **not** prove a
+  completion would succeed. A model can be unloaded or a worker wedged behind
+  a perfectly healthy `/models` response, which is why a passing verdict is
+  `"status": "reachable"`, never `available` or `healthy` -- those would claim
+  more than a metadata probe can support.
+- **harness** endpoints (`claude-cli`, `codex-cli`, `opencode-cli`): the
+  underlying CLI resolves on PATH and answers `--version` within the timeout.
+  This establishes the harness is *invocable*, not that a completion would
+  succeed -- a real completion would spawn an agent and cost real time (and,
+  for a subscription CLI, real quota), so it is never attempted. `codex-cli`
+  prefers `bootstrap_lib`'s cached detector when that optional shared lib is
+  importable, and falls back to the identical PATH + `--version` check the
+  other two harnesses use when it is not -- the absence of an optional
+  dependency of *this plugin's own* is not evidence about whether codex
+  itself is installed and working.
+
+#### Three-state status, not a bool
+
+`reachability.status` is one of three strings, never a bare `true`/`false`:
+
+| `status` | Meaning | `endpoints --verify` | `probe` exit code |
+|---|---|---|---|
+| `reachable` | The check ran and the target answered. | field present, `status: "reachable"` | `0` |
+| `unreachable` | The check ran and the target did **not** answer (dead host, missing CLI, nonzero exit, timeout, ...). | field present, `status: "unreachable"` | `1` |
+| `unknown` | The check itself could **not** be run to a verdict (an optional dependency was unavailable, or the check machinery raised unexpectedly). | field present, `status: "unknown"` | `5` |
+
+A bare `reachable: bool` cannot distinguish "I checked and it is down" from "I
+could not check" -- collapsing the second into `false` is a false negative a
+caller cannot see: gating on `reachable is False` would skip a perfectly
+usable endpoint whose check merely failed to run. `unknown` exists so that
+misreading is structurally impossible -- the same honesty rule that produced
+the `reachable`/`available` distinction above, applied one level down.
+
+`probe`'s exit codes, stated fully:
+
+| Exit | Meaning |
+|---|---|
+| `0` | `status: "reachable"`. |
+| `1` | `status: "unreachable"`. |
+| `2` | The `--endpoint` NAME does not resolve to any configured endpoint at all -- a configuration error, decided *before* any check is attempted (same code the other verbs use for a bad endpoint name). |
+| `5` | `status: "unknown"` -- the check was attempted against a real, configured endpoint, but could not run to completion. **Never conflate this with `1`**: a caller branching on "nonzero means down" must special-case `5` rather than treating it as a failure verdict about the endpoint. |
+
+`--timeout` defaults to 5 seconds (`reachability.DEFAULT_VERIFY_TIMEOUT_S`):
+short on purpose, because a caller reaching for either of these is asking
+precisely because it does not want to block a queued unit of work on a dead
+target. A live `/models` endpoint or a present CLI's `--version` answers in
+well under a second; 5s is headroom for a slow hop while still failing a
+genuinely dead target fast.
 
 LLM access for scripts and pipelines: key resolution, a shared model registry,
 and named OpenAI-compatible endpoints. **OpenRouter is the default endpoint**,

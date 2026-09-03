@@ -85,6 +85,8 @@ PATH_KEYS = (
     "procedure",
     "discover_script",
     "scanner_script",
+    "contract_script",
+    "jobs_script",
     "taxonomy_doc",
     "workflow_detect",
     "workflow_classify",

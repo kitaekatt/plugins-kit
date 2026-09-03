@@ -109,6 +109,19 @@ DEFAULT_MAX_OUTPUT_TOKENS = 4096
 # an unreproducible result.
 REVIEW_TEMPERATURE = 0.0
 
+# A review lane is a long single generation over a whole diff chunk, so it is
+# pinned rather than left to the seam. Two backend defaults sit behind that
+# choice and they answer different questions: the transport backends bound a
+# GENERATION at 900s, while the opencode harness bounds LIVENESS at 120s -- a
+# figure chosen to exceed that CLI's roughly 66-second connection-refused
+# retry window and to cap the never-exiting unreachable-host case, not to size
+# a reviewer's answer. Inheriting the liveness bound killed a three-file chunk
+# mid-generation while two-file chunks finished in 45-83s, and the lane is
+# judged by its JSON envelope, so a timeout costs the whole lane rather than
+# degrading it. 900s matches the generation-shaped default and still bounds a
+# hung endpoint; --timeout overrides it per call.
+DEFAULT_TIMEOUT_S = 900.0
+
 _REPAIR_SUFFIX = (
     "\n\nYour previous response did not parse as the required JSON array. "
     "Respond again with ONLY the JSON array, starting with [ and ending with "
@@ -187,6 +200,26 @@ def _check_selection(lane: str, selection: Any) -> None:
         )
 
 
+def _timeout_errors() -> tuple[type[BaseException], ...]:
+    """The exception types that mean THIS lane's deadline expired.
+
+    Probed rather than imported. The shared lib is linked by a `.pth` that
+    pins no version, so an owner's release reaches a consumer venv without the
+    consumer asking; a hard import of a symbol added in some particular
+    llm-scripting-kit version would turn "your endpoint timed out" into
+    "run_review_lane will not start" on any venv linked to an older copy
+    (plugins/CLAUDE.md, shared-lib version probing). An empty tuple is a valid
+    answer -- `except ()` matches nothing, so the timeout simply falls through
+    to the generic handler as it did before this distinction existed.
+    """
+    try:
+        from llm_scripting_kit import completion  # noqa: PLC0415
+    except ImportError:  # pragma: no cover - the caller already reported this
+        return ()
+    found = getattr(completion, "AgentTimeoutError", None)
+    return (found,) if isinstance(found, type) else ()
+
+
 def _check_transport_sdk(selection: Any) -> None:
     """Refuse a transport selection when the ``openai`` SDK is not importable.
 
@@ -249,7 +282,7 @@ def run_lane(
     description: str = "",
     project_root: Optional[str] = None,
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
-    timeout_s: Optional[float] = None,
+    timeout_s: Optional[float] = DEFAULT_TIMEOUT_S,
 ) -> dict[str, Any]:
     """Run one reviewer lane and return its result envelope.
 
@@ -325,6 +358,21 @@ def run_lane(
             response = selection.backend.complete(
                 system, message, model=selection.model, options=options
             )
+        except _timeout_errors() as exc:
+            # OUR deadline, not the endpoint's health. This lane sets
+            # timeout_s, so a timeout is evidence about the budget chosen here
+            # and says nothing about whether the endpoint is serving -- report
+            # it as the configuration fact it is, and name the knob. Caught
+            # before HaltError deliberately: llm-scripting-kit maps a CLI
+            # timeout to a rate-limit halt, which is the right reading for a
+            # caller that did NOT set the deadline and the wrong one for this
+            # lane (plugins/CLAUDE.md, "A caller that sets the deadline owns
+            # the timeout").
+            raise LaneRunError(
+                f"lane {lane} exceeded its own {options.timeout_s:g}s budget on "
+                f"endpoint {selection.endpoint!r} ({exc}). The endpoint is not "
+                "implicated -- raise --timeout, or review a smaller chunk"
+            ) from exc
         except HaltError as exc:
             raise LaneRunError(
                 f"endpoint {selection.endpoint!r} halted ({exc}); it is not "
@@ -403,7 +451,9 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS
     )
-    parser.add_argument("--timeout", type=float, default=None, dest="timeout_s")
+    parser.add_argument(
+        "--timeout", type=float, default=DEFAULT_TIMEOUT_S, dest="timeout_s"
+    )
     return parser.parse_args(list(argv))
 
 

@@ -32,7 +32,7 @@ plugins from the working copy; a merge that publishes a dev-only plugin; an
 
 **Definition.** "Publish" means **all** of: version bump + regenerated
 `marketplace.json`, regenerated `index.html` inside the release commit, `dev`
-pushed, and `master` fast-forwarded and pushed. Anything less is not a publish
+pushed, and the release landed on `master`. Anything less is not a publish
 -- a bump without the master merge, a bare `git push`, or a master merge without
 a bump each leaves consumers on the release in their cache. `publish.py` refuses
 each of these rather than half-shipping.
@@ -74,25 +74,26 @@ Two facts are worth not rediscovering:
   staging things to prove a hook works is how another session's work gets
   committed.
 
-**Dev-only commits are EXCLUDED, not a reason to refuse.** When
-`origin/master..dev` holds commits touching a dev-only (`published: false`)
-plugin, the script publishes a **filtered release**: it replays only the
-shippable commits onto `master` in a temporary worktree and pushes from there,
-printing every commit it held back. `dev` is untouched and keeps that work.
-`published: false` records that the plugin does not go to consumers, so the
-script honors that decision per commit.
+**A dev-only plugin's FILES are held back unconditionally.** `_publish_projection`
+derives the dev-only set from the MANIFESTS (`local_plugins()` + `is_published`),
+not from the exclusion set, so the hold-back runs on every projection whether or
+not `--exclude-dev-only` was passed. `_held_back_paths` then treats the two
+halves oppositely: a path `master` already carries is restored to master's
+content, and a path only `dev` has is removed from the projected tree. Both
+halves of a plugin count -- `plugins/<name>/` and `tests/<name>/`.
 
-None of that runs by DEFAULT any more. Every dev-only plugin's commits ship, so
-`master`'s tree matches `dev` and `published: false` does its whole job on its
-own -- filtering the plugin out of `marketplace.json`, which is what makes it
-uninstallable. Source on a public `master` that nobody can install is the
-intended end state, and it is where these plugins already sat: an exclusion
-never held for long, because a plugin's files arrive with the first commit that
-touches anything else.
+Read that consequence carefully, because it is the opposite of what "ships by
+default" suggests. A dev-only plugin's COMMITS are not excluded from the release
+(they appear in the shipping list), but its FILES do not move. So `master`'s tree
+does NOT match `dev` for such a plugin, and a copy already on `master` is
+re-checked-out on every release -- it can only go stale, never forward. Removing
+it from `master` once is what makes the hold-back start deleting it instead,
+because `_held_back_paths` then sorts its paths into the removal half.
 
-The filtering above is therefore opt-in, per plugin, via
-`--exclude-dev-only <plugin>` -- for a plugin whose SOURCE must not appear on a
-public `master` at all.
+`--exclude-dev-only <plugin>` therefore does NOT control the file hold-back. It
+governs commit bookkeeping only: which commits land in `excluded` (hence the
+mixed-commit refusal below), the "Held back on dev" line in the projection commit
+message, and eligibility for the fast-forward shortcut.
 
 With an exclusion in force, one case is still refused: a single commit touching
 **both** that plugin and files that would otherwise ship. Excluding it withholds
@@ -144,7 +145,7 @@ git merge --no-commit --no-ff origin/dev
 
 Resolve each conflict per the rules above (`git checkout --theirs <file>` takes
 dev while on master; `git rm` honors a dev-side delete), then
-`python scripts/regen_marketplace.py`, run `pytest tests/bootstrap` +
+`uv run python scripts/regen_marketplace.py`, run `pytest tests/bootstrap` +
 `regen_marketplace.py --check`, commit the merge, and push master. Remove the
 worktree when done (`git worktree remove ../plugins-kit-master`). The
 back-port-then-clobber rule is what makes the wholesale "dev wins" resolution
@@ -152,10 +153,10 @@ safe rather than blind.
 
 ## Master infra-drift sync (periodic, no version bumps)
 
-The publish flow cherry-picks feature commits (plugin code + version bumps) to
-master; it never carries not-tied-to-a-feature changes -- a CLAUDE.md gotcha, a
-test file, a `.gitignore` tweak, dev tooling. Master silently falls behind
-dev on repo infrastructure. This is expected (per-publish scoping causes it),
+A release projects dev's tree onto master, but the publish flow is SCOPED to
+feature work (plugin code + version bumps); it never carries not-tied-to-a-feature
+changes -- a CLAUDE.md gotcha, a test file, a `.gitignore` tweak, dev tooling.
+Master silently falls behind dev on repo infrastructure. This is expected (per-publish scoping causes it),
 not a bug -- reconcile it from time to time. Do it in a **master worktree** (`git worktree add <dir> origin/master` -- never
 `git checkout` in the shared dev tree, which redirects concurrent sessions' commits),
 against `origin/dev`'s committed state (never the live dev working tree),
@@ -170,7 +171,7 @@ keeping dev-only plugins back:
 DEVONLY=$(git ls-tree -r --name-only origin/dev \
   | grep 'plugins/.*/\.claude-plugin/plugin\.json' \
   | while read -r f; do
-      git show "origin/dev:$f" | python3 -c "
+      git show "origin/dev:$f" | uv run python -c "
 import json,sys
 d = json.load(sys.stdin)
 print('$f'.split('/')[1] if d.get('published', True) is False else '')"
@@ -189,16 +190,19 @@ are unaffected. Skip the master->dev merge-back when the dev tree is being
 actively edited: the content already matches on both branches, so the history
 merge can wait for a calm moment.
 
-**The sync commit MUST end with a `Published-From:` trailer naming the dev commit
-master's content now matches**, because this commit becomes master's tip and
-`range_base()` in `scripts/publish.py` reads that trailer off the TIP to find the
-dev commit master was built from:
+**The sync commit SHOULD end with a `Published-From:` trailer naming the dev commit
+master's content now matches.** `range_base()` in `scripts/publish.py` SEARCHES
+DOWN master's history for that trailer (bounded by `_RANGE_BASE_SEARCH_DEPTH`)
+rather than reading master's tip, precisely so a non-release commit like this sync
+does not hide the boundary. Landing one untrailered commit is therefore survivable;
+landing more than the search depth is not, and the failure is silent:
 
 ```
 Published-From: <full sha of the origin/dev commit you synced from>
 ```
 
-Omit it and `range_base()` falls back to the merge base, against which every file
+Once the boundary is out of range, `range_base()` falls back to the merge base,
+against which every file
 the last release shipped looks like a master-side change -- so the next publish is
 refused by `_master_only_paths()` with a list of files whose only "master-only
 content" is an older version string. The trailer is a claim about content, so

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import random
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -290,14 +291,22 @@ class TestMasterOnlyGuardAsksDevHistory:
     recording a publish point, so master's blob differs from the base while
     being a state dev already holds. Comparing against the base alone reports
     those paths as master-only and refuses a publish that would discard
-    nothing. The question that separates the two cases is whether master's blob
-    appears anywhere in dev's history at that path.
+    nothing. What separates the two cases is whether master's blob is a state
+    dev held AND one master did not choose over content dev wrote later -- mere
+    presence in dev's history clears a master-side revert, which sits on
+    earlier dev content on purpose.
+
+    The last pair of tests is the hard one, because by content the two are the
+    same picture: master sits on a state dev's tip has moved past. What
+    separates them is which branch moved. Master giving up later dev content is
+    a master-side decision a publish would undo; dev going back to content it
+    published before is dev superseding its own work, and master still holding
+    the later content it was handed loses nothing.
     """
 
     @staticmethod
-    def _base(repo: Path) -> None:
-        """Put a projection on master so range_base has a boundary to find."""
-        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+    def _project(repo: Path) -> None:
+        """Master takes dev's tree and records the dev commit it came from."""
         _git(repo, "push", "-q", "origin", "dev")
         shipped = _git(repo, "rev-parse", "dev")
         _git(repo, "checkout", "-q", "--detach", "origin/master")
@@ -306,6 +315,12 @@ class TestMasterOnlyGuardAsksDevHistory:
              f"publish: projected\n\nPublished-From: {shipped}")
         _git(repo, "push", "-q", "origin", "HEAD:refs/heads/master")
         _git(repo, "checkout", "-q", "dev")
+        _git(repo, "fetch", "-q", "origin")
+
+    def _base(self, repo: Path) -> None:
+        """Put a projection on master so range_base has a boundary to find."""
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        self._project(repo)
 
     @staticmethod
     def _on_master(repo: Path, path: str, text: str, subject: str) -> None:
@@ -385,6 +400,555 @@ class TestMasterOnlyGuardAsksDevHistory:
         _git(repo, "commit", "-qm", "advance shared.txt")
 
         assert publish._master_only_paths() == []
+
+    def test_a_master_side_revert_is_master_only(self, repo):
+        """The retraction path, which the root CLAUDE.md documents as the way
+        to withdraw a bad publish: revert on master. Dev ships v1, an infra
+        sync carries it to master, dev ships a broken v2, that is synced too,
+        and master is then reverted to v1. Master's blob is a state dev's
+        history holds, so mere historical presence clears the path and the next
+        publish silently restores v2 -- undoing the retraction."""
+        self._base(repo)
+        (repo / "shared.txt").write_text("v1\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt v1")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "v1\n", "infra sync: carry v1")
+        (repo / "shared.txt").write_text("v2 broken\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt v2")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "v2 broken\n", "infra sync: carry v2")
+        self._on_master(repo, "shared.txt", "v1\n", "revert shared.txt to v1")
+
+        assert publish._master_only_paths() == ["shared.txt"]
+
+    def test_a_revert_back_to_the_published_state_is_master_only(self, repo):
+        """The cheap base comparison cannot clear a path master MOVED. Dev
+        ships v1 and it is published, so the base itself records v1; dev then
+        ships a broken v2, an infra sync carries it, and master is reverted to
+        v1 -- back to the very blob the base holds. Master's state matches the
+        base's, yet master gave up v2 deliberately and a publish restores it."""
+        self._base(repo)
+        (repo / "shared.txt").write_text("v1\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt v1")
+        self._project(repo)
+        (repo / "shared.txt").write_text("v2 broken\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt v2")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "v2 broken\n", "infra sync: carry v2")
+        self._on_master(repo, "shared.txt", "v1\n", "revert shared.txt to v1")
+
+        assert publish._master_only_paths() == ["shared.txt"]
+
+    def test_a_retraction_of_a_just_published_state_is_master_only(self, repo):
+        """The retraction whose whole evidence sits on the publish point. Dev
+        ships A, ships B, and master is reverted to A with no infra sync in
+        between -- so the only master commit after the release is the revert
+        itself, and the state master gave up (B) is the one the release put
+        there.
+
+        A range measured from the projection EXCLUDES that commit, which would
+        leave master looking like it holds earlier content having given nothing
+        up, and clear a publish that restores exactly what the retraction
+        withdrew. The state master held at the publish point has to be counted
+        explicitly.
+        """
+        self._base(repo)
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt A")
+        self._project(repo)
+        (repo / "shared.txt").write_text("B\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt B")
+        self._project(repo)
+        self._on_master(repo, "shared.txt", "A\n", "revert shared.txt to A")
+
+        assert publish._master_only_paths() == ["shared.txt"]
+
+    def test_a_dev_side_revert_to_published_content_is_not_master_only(self, repo):
+        """The mirror image of the two tests above, and it must come out the
+        other way. Dev publishes A, publishes B, then reverts itself back to A.
+        Master's blob is B -- content dev's tip has moved past, exactly as in a
+        master-side revert -- but master never gave anything up: it was handed A
+        and then B, and B is the newest content it ever received. Dev superseded
+        B itself, so a publish discards no master-side decision.
+
+        This is the projection flavour, so it also pins the range boundary:
+        every master-side question must be measured from the projection commit.
+        Measured from the dev sha the trailer names, the range reaches back past
+        the divergence and sweeps in the earlier projection that carried A,
+        making a path master has not touched since the release read as one
+        master moved.
+        """
+        self._base(repo)
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt A")
+        self._project(repo)
+        (repo / "shared.txt").write_text("B\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt B")
+        self._project(repo)
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "revert shared.txt to A")
+        _git(repo, "push", "-q", "origin", "dev")
+
+        assert publish._master_only_paths() == []
+
+    def test_a_dev_side_revert_over_synced_content_is_not_master_only(self, repo):
+        """The same dev-side revert, with master receiving A and then B by infra
+        sync rather than by projection, so master has demonstrably TOUCHED the
+        path since the publish point and the full check has to settle it.
+
+        This pins the ordering: dev's states must be ranked by when dev
+        INTRODUCED them, not by where they last appear. Dev's revert puts A back
+        at dev's tip, so ranking by most recent appearance calls A dev's newest
+        content and B older than it -- and master holding B then reads as master
+        sitting on superseded content it chose, which is the master-side revert
+        verdict applied to the wrong branch's move.
+        """
+        self._base(repo)
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt A")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "A\n", "infra sync: carry A")
+        (repo / "shared.txt").write_text("B\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt B")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "B\n", "infra sync: carry B")
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "revert shared.txt to A")
+        _git(repo, "push", "-q", "origin", "dev")
+
+        assert publish._master_only_paths() == []
+
+    def test_a_retraction_stops_refusing_once_it_is_published(self, repo):
+        """A master-side revert is master-only until dev carries it, and no
+        longer. Dev ships A, an infra sync carries B, master is reverted to A --
+        the retraction the guard refuses on -- and the retraction is then
+        back-ported to dev and PUBLISHED, so master's A is what the release
+        itself put there. Dev moves on to C.
+
+        Master has done nothing since that release, so there is nothing left to
+        refuse. This pins the boundary for every master-side question: it is the
+        projection commit, not the dev sha the projection names. The dev sha is
+        not an ancestor of master, so a range starting there walks back past the
+        release and finds the withdrawn B again -- refusing the same retraction
+        forever, after it was resolved exactly as the documented procedure says.
+        """
+        self._base(repo)
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt A")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "A\n", "infra sync: carry A")
+        (repo / "shared.txt").write_text("B\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt B")
+        _git(repo, "push", "-q", "origin", "dev")
+        self._on_master(repo, "shared.txt", "B\n", "infra sync: carry B")
+        self._on_master(repo, "shared.txt", "A\n", "revert shared.txt to A")
+        # The retraction is back-ported to dev and published, which makes
+        # master's state the release's own output.
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "back-port the retraction to dev")
+        # The retraction ships as a release, which is what the recovery
+        # procedure prescribes; the bump is what gives that release a tree
+        # master does not already have.
+        _bump(repo, "pub-kit", "1.2.0", "pub-kit 1.2.0")
+        self._project(repo)
+        (repo / "shared.txt").write_text("C\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt C")
+
+        assert publish._master_only_paths() == []
+
+
+# --- the master-only guard, judged against an independent model ------------
+
+# A small alphabet on purpose. The guard's defects all lived where two states
+# COLLIDE -- master arriving at a blob dev also holds, dev returning to content
+# it published before -- and a generator drawing paths and contents from a wide
+# space produces those shapes almost never.
+_PROP_PATHS = ("alpha.txt", "beta.txt")
+_PROP_CONTENTS = ("A", "B", "C")
+# Content master writes that dev's history never holds: the hotfix.
+_PROP_HOTFIX = "H"
+_PUB_MANIFEST = "plugins/pub-kit/.claude-plugin/plugin.json"
+# Bounded on purpose: each case builds a real repo. These two numbers are the
+# whole runtime knob, and `test_the_corpus_covers_every_shape` is what stops a
+# tweak to either from quietly dropping the cases that matter.
+_PROP_SEEDS = 12
+_PROP_LENGTH = 14
+
+
+class _BranchModel:
+    """What each branch holds, tracked by DECIDING it rather than reading git.
+
+    This is the oracle, and it is only worth having because it knows something
+    the implementation must INFER. The generator below decides which branch
+    writes which content, so the model records authorship directly; publish.py
+    has to recover the same picture from rev-list ranges, blob identity and a
+    trailer. Every defect this guard has shipped lived in that inference layer,
+    which is exactly what comparing the two layers tests.
+
+    The bookkeeping per path is: the order in which DEV INTRODUCED each content
+    (its first appearance on dev, which is what makes a dev-side revert a
+    return to old content rather than new content), master's current content,
+    the content master was handed at the last publish point, and every content
+    master has written since.
+    """
+
+    def __init__(self) -> None:
+        self.dev: dict[str, str] = {}
+        self.master: dict[str, str | None] = {}
+        self.intro: dict[str, list[str]] = {}
+        self.boundary: dict[str, str | None] = {}
+        self.since: dict[str, list[str | None]] = {}
+        # Every state master has ever held, across publish points. Not part of
+        # the rule -- only `sensitivities` uses it, to notice when the guard's
+        # answer DEPENDS on the window ending where it does.
+        self.ever: dict[str, list[str | None]] = {}
+
+    def seed(self) -> None:
+        """The fixture's initial commit, which both branches start from."""
+        self.dev_write(_PUB_MANIFEST, "1.0.0")
+        self.master[_PUB_MANIFEST] = "1.0.0"
+
+    def dev_write(self, path: str, content: str) -> None:
+        self.dev[path] = content
+        order = self.intro.setdefault(path, [])
+        if content not in order:
+            order.append(content)
+
+    def project(self) -> None:
+        """Master takes dev's whole tree; this is the recorded publish point."""
+        for path in self.intro:
+            self.master[path] = self.dev.get(path)
+            self.boundary[path] = self.dev.get(path)
+            self.since[path] = []
+            self.ever.setdefault(path, []).append(self.dev.get(path))
+
+    def master_write(self, path: str, content: str | None) -> None:
+        self.master[path] = content
+        self.since.setdefault(path, []).append(content)
+        self.ever.setdefault(path, []).append(content)
+
+    def master_only(self) -> list[str]:
+        """The paths the rule calls master-only, computed from the bookkeeping.
+
+        The rule, in one sentence: master's current content is master-only iff
+        master itself gave up content that DEV INTRODUCED LATER than the
+        content master holds.
+
+        Three consequences, none of them special cases:
+
+        * Content dev never introduced (a hotfix) is master-only outright --
+          there is nothing later for master to have given up, and losing it is
+          the loss the guard exists to refuse.
+        * A path master gave up entirely (a deletion) is master-only, because
+          master abandoned content it held. A path master NEVER held -- one dev
+          added after the publish point -- is not: master gave up nothing.
+        * A dev-side revert clears. Master was handed each state in turn and
+          gave up none of them, so the newest content master held is the one it
+          still holds, and nothing master decided is at risk.
+
+        The known limit falls straight out of the same sentence and is asserted
+        rather than excluded: when dev reverts and an infra sync carries that
+        revert to master, master's own move is backwards too, so master DID
+        give up content dev introduced later and the verdict is a refusal. No
+        signal in either history separates that from a master-side retraction,
+        and refusing is the safe direction.
+        """
+        return sorted(p for p, shape in self.shapes().items()
+                      if not shape.startswith("cleared"))
+
+    def shapes(self) -> dict[str, str]:
+        """The verdict per path, LABELLED by which clause of the rule decided.
+
+        The labels are what `test_the_corpus_covers_every_shape` checks, so a
+        generator that stops producing master-side retractions fails loudly
+        instead of passing on easy sequences.
+        """
+        verdict = {}
+        for path in sorted(set(self.intro) | set(self.master)):
+            held_now = self.master.get(path)
+            if held_now == self.dev.get(path):
+                continue  # the branches agree; git diff never offers the path
+            order = self.intro.get(path, [])
+            ever_held = [c for c in
+                         [self.boundary.get(path), *self.since.get(path, [])]
+                         if c is not None]
+            if held_now is None:
+                # Master gave the path up only if master ever had it to give.
+                # A path dev added after the publish point is master's to lose
+                # only once master has held it.
+                verdict[path] = "deletion" if ever_held else "cleared-never-held"
+            elif held_now not in order:
+                verdict[path] = "hotfix"
+            else:
+                current = order.index(held_now)
+                ranks = [order.index(c) for c in ever_held if c in order]
+                if max(ranks, default=current) > current:
+                    verdict[path] = "master-gave-up-later"
+                elif current > order.index(self.dev[path]):
+                    verdict[path] = "cleared-dev-side-revert"
+                else:
+                    verdict[path] = "cleared-dev-ahead"
+        return verdict
+
+    def sensitivities(self) -> set[str]:
+        """Which of the guard's two range decisions the verdict DEPENDS on.
+
+        Two of the four historical defects were range errors, and neither
+        changes any verdict unless the sequence reaches a state where the
+        window's edges matter. A corpus can hold every shape in `shapes` and
+        still never reach one, so these are tracked separately and asserted.
+
+        The publish-point state matters when master's only move since the
+        release is a retraction OF what the release placed -- drop that state
+        and master looks like it gave up nothing. The window's start matters
+        when sweeping in master's history from BEFORE the release would find
+        content master has since been handed again, which is how a back-ported
+        retraction gets refused forever.
+        """
+        out = set()
+        for path, order in self.intro.items():
+            held_now = self.master.get(path)
+            if held_now == self.dev.get(path) or held_now not in order:
+                continue
+            current = order.index(held_now)
+
+            def refuses(states, _order=order, _current=current):
+                ranks = [_order.index(c) for c in states if c in _order]
+                return max(ranks, default=_current) > _current
+
+            window = [c for c in [self.boundary.get(path),
+                                  *self.since.get(path, [])] if c]
+            if refuses(window) != refuses(
+                    [c for c in self.since.get(path, []) if c]):
+                out.add("publish-point-state-decides")
+            if refuses(window) != refuses(
+                    [c for c in self.ever.get(path, []) if c]):
+                out.add("publish-window-start-decides")
+        return out
+
+
+def _plan(seed: int, length: int) -> list[tuple]:
+    """A random but legal interleaving of the operations the harness supports.
+
+    Legality is what the shadow model is for: git refuses an empty commit, so a
+    write must actually change the branch it is written to, a deletion needs a
+    file to delete, and master may only touch a path dev has created.
+
+    An operation KIND is drawn first and its argument second, rather than
+    drawing from one pooled list of candidates. Pooling looks equivalent and is
+    not: master's candidate list grows as its history does, so the pooled draw
+    slides toward all-master sequences that never publish and never let dev
+    move -- exactly the sequences with nothing interesting in them. Fixing the
+    kind weights holds the mix steady however long the sequence runs.
+
+    Master's content is drawn by FLAVOUR for the same reason. The four
+    master-side moves the guard has to tell apart are named -- an infra sync
+    carrying dev's content, a retraction to content dev introduced earlier, a
+    return to content master itself held before, and a hotfix dev never had --
+    so each stays common instead of depending on a lucky collision in a
+    three-letter alphabet.
+    """
+    rng = random.Random(seed)
+    shadow = _BranchModel()
+    shadow.seed()
+    ops: list[tuple] = [("project",)]
+    shadow.dev_write(_PUB_MANIFEST, "1.1.0")
+    shadow.project()
+    minor = 1
+    kinds = ["dev", "project", "mwrite", "mdel"]
+    kind_weights = [4, 3, 4, 1]
+    flavours = ["sync", "retract", "revert", "hotfix", "any"]
+    flavour_weights = [3, 3, 2, 1, 2]
+    while len(ops) < length:
+        op: tuple | None = None
+        while op is None:
+            kind = rng.choices(kinds, kind_weights)[0]
+            if kind == "dev":
+                path = rng.choice(_PROP_PATHS)
+                op = ("dev", path, rng.choice(
+                    [c for c in _PROP_CONTENTS if c != shadow.dev.get(path)]))
+            elif kind == "project":
+                op = ("project",)
+            elif kind == "mwrite":
+                live = [p for p in _PROP_PATHS if p in shadow.dev]
+                if not live:
+                    continue
+                path = rng.choice(live)
+                here = shadow.master.get(path)
+                order = shadow.intro.get(path, [])
+                pools = {
+                    "sync": [shadow.dev[path]],
+                    "retract": order[:order.index(here)] if here in order else [],
+                    "revert": [c for c in [shadow.boundary.get(path),
+                                           *shadow.since.get(path, [])] if c],
+                    "hotfix": [_PROP_HOTFIX],
+                    "any": [*_PROP_CONTENTS, _PROP_HOTFIX],
+                }
+                flavour = rng.choices(flavours, flavour_weights)[0]
+                cands = ([c for c in pools[flavour] if c != here]
+                         or [c for c in pools["any"] if c != here])
+                op = ("mwrite", path, rng.choice(cands))
+            else:
+                live = [p for p in _PROP_PATHS
+                        if shadow.master.get(p) is not None]
+                if not live:
+                    continue
+                op = ("mdel", rng.choice(live))
+        ops.append(op)
+        if op[0] == "dev":
+            shadow.dev_write(op[1], op[2])
+        elif op[0] == "project":
+            minor += 1
+            shadow.dev_write(_PUB_MANIFEST, f"1.{minor}.0")
+            shadow.project()
+        elif op[0] == "mwrite":
+            shadow.master_write(op[1], op[2])
+        else:
+            shadow.master_write(op[1], None)
+    return ops
+
+
+class TestMasterOnlyGuardAgainstAModel:
+    """A property test over random operation sequences.
+
+    The scenario tests above each pin one hand-written story, so the guard is
+    checked on exactly the stories somebody thought of -- and all four defects
+    this function has shipped lived in the gaps between them, every one found
+    by building a fixture rather than by reading the code. This closes the gaps
+    by generating the stories instead.
+
+    The oracle is `_BranchModel`, which computes the expected verdict from
+    bookkeeping the GENERATOR filled in. It is emphatically not the
+    implementation: the model is told who wrote what, publish.py has to work it
+    out from git. A property test whose expected value came from the code under
+    test would prove nothing at all.
+
+    Bounded on purpose. Each case builds a real repo and runs tens of git
+    commands, so the sequences are short and few enough to keep this class's
+    contribution to the suite in the tens of seconds.
+    """
+
+    _harness = TestMasterOnlyGuardAsksDevHistory
+
+    def _apply(self, repo: Path, op: tuple, minor: list[int]) -> None:
+        """Drive one operation through the existing harness helpers."""
+        if op[0] == "dev":
+            _, path, content = op
+            (repo / path).write_text(f"{content}\n")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", f"dev: {path} = {content}")
+            _git(repo, "push", "-q", "origin", "dev")
+        elif op[0] == "project":
+            minor[0] += 1
+            _bump(repo, "pub-kit", f"1.{minor[0]}.0", f"pub-kit 1.{minor[0]}.0")
+            self._harness._project(repo)
+        elif op[0] == "mwrite":
+            _, path, content = op
+            self._harness._on_master(repo, path, f"{content}\n",
+                                     f"master: {path} = {content}")
+        else:
+            _, path = op
+            _git(repo, "checkout", "-q", "master")
+            _git(repo, "reset", "-q", "--hard", "origin/master")
+            _git(repo, "rm", "-q", path)
+            _git(repo, "commit", "-qm", f"master: drop {path}")
+            _git(repo, "push", "-q", "origin", "master")
+            _git(repo, "checkout", "-q", "dev")
+            _git(repo, "fetch", "-q", "origin")
+
+    @pytest.mark.parametrize("seed", range(_PROP_SEEDS))
+    def test_the_guard_agrees_with_the_model(self, repo, seed):
+        ops = _plan(seed, _PROP_LENGTH)
+        model = _BranchModel()
+        model.seed()
+        minor = [0]
+        for step, op in enumerate(ops):
+            self._apply(repo, op, minor)
+            if op[0] == "dev":
+                model.dev_write(op[1], op[2])
+            elif op[0] == "project":
+                model.dev_write(_PUB_MANIFEST, f"1.{minor[0]}.0")
+                model.project()
+            elif op[0] == "mwrite":
+                model.master_write(op[1], op[2])
+            else:
+                model.master_write(op[1], None)
+            expected = model.master_only()
+            actual = sorted(publish._master_only_paths())
+            # Print the whole sequence, not just the failing step: the state a
+            # disagreement needs is built by everything before it, and a seed
+            # nobody can replay by eye is a mystery rather than a bug report.
+            story = "\n".join(
+                f"  {'>>' if i == step else '  '} {o}" for i, o in
+                enumerate(ops[:step + 1]))
+            assert actual == expected, (
+                f"seed {seed}, step {step}\n{story}\n"
+                f"  model    : {expected}\n  publish.py: {actual}")
+
+    def test_the_corpus_covers_every_shape(self):
+        """The generator's own guard, and it runs on the model alone.
+
+        A property test is worth only what its corpus contains, and the shapes
+        that matter here are rare: a master-side retraction needs master to
+        write a path twice within one publish window while dev advances in
+        between, which a small alphabet produces only every few sequences. If a
+        change to the weights, the seed count or the length stops producing
+        one, the sequences above would still all pass -- on stories that never
+        reach the clause four defects lived in. This fails instead, without
+        touching git.
+        """
+        seen = set()
+        sensitive = set()
+        for seed in range(_PROP_SEEDS):
+            model = _BranchModel()
+            model.seed()
+            minor = 0
+            for op in _plan(seed, _PROP_LENGTH):
+                if op[0] == "dev":
+                    model.dev_write(op[1], op[2])
+                elif op[0] == "project":
+                    minor += 1
+                    model.dev_write(_PUB_MANIFEST, f"1.{minor}.0")
+                    model.project()
+                elif op[0] == "mwrite":
+                    model.master_write(op[1], op[2])
+                else:
+                    model.master_write(op[1], None)
+                seen.update(model.shapes().values())
+                sensitive.update(model.sensitivities())
+        assert seen >= {
+            # Master wrote content dev's history never held.
+            "hotfix",
+            # Master dropped a file it held.
+            "deletion",
+            # Master gave up content dev introduced later -- the retraction,
+            # and the same shape the known limit produces when an infra sync
+            # carries a dev-side revert to master.
+            "master-gave-up-later",
+            # Dev went back to content it published before, master still holds
+            # the later state it was handed, and nothing is at risk.
+            "cleared-dev-side-revert",
+            # Master holds a state dev has simply moved on from.
+            "cleared-dev-ahead",
+        }, sorted(seen)
+        assert sensitive == {"publish-point-state-decides",
+                             "publish-window-start-decides"}, sorted(sensitive)
 
 
 class TestDevOnlyExclusion:
@@ -633,6 +1197,65 @@ class TestHeldBackPaths:
 
     def test_no_dev_only_plugins_holds_nothing_back(self, repo):
         assert publish._held_back_paths(set()) == ([], [])
+
+
+class TestFastForwardSafety:
+    """A fast-forward moves dev's TREE wholesale, so it bypasses the hold-back.
+
+    The exclusion set cannot guard it: `excluded` is populated per COMMIT from
+    the publish range, so a range touching no dev-only plugin leaves it empty
+    while the dev-only files still sit in dev's tree. Guarding on the tree is
+    the only thing that closes it.
+    """
+
+    def test_refuses_fast_forward_while_a_dev_only_plugin_exists(self, repo):
+        assert publish._fast_forward_is_safe() is False
+
+    def test_does_not_read_git_so_a_failing_ls_tree_cannot_read_as_safe(
+            self, repo, monkeypatch):
+        """The guard protects a push to a PUBLIC master, so it must have no
+        branch on which a git failure looks like an all-clear."""
+        def _boom(*a, **k):
+            raise AssertionError("_fast_forward_is_safe consulted git")
+        monkeypatch.setattr(publish, "git", _boom)
+
+        assert publish._fast_forward_is_safe() is False
+
+    def test_allows_fast_forward_when_no_plugin_is_dev_only(self, repo, monkeypatch):
+        monkeypatch.setattr(publish, "local_plugins",
+                            lambda: {"pub-kit": {"name": "pub-kit",
+                                                 "published": True}})
+        assert publish._fast_forward_is_safe() is True
+
+    def _wire(self, monkeypatch, safe):
+        calls = []
+        monkeypatch.setattr(publish, "git", lambda *a, **k: calls.append(a) or "")
+        monkeypatch.setattr(publish, "_master_is_ancestor_of_dev", lambda: True)
+        monkeypatch.setattr(publish, "_fast_forward_is_safe", lambda: safe)
+        monkeypatch.setattr(publish, "_publish_projection",
+                            lambda excluded: calls.append(("PROJECTED",)))
+        return calls
+
+    def test_push_and_merge_projects_when_the_tree_is_unsafe(self, monkeypatch):
+        """The regression this guard exists for: master an ancestor of dev and
+        nothing excluded -- precisely the state a master -> dev merge-back
+        produces -- while dev-only files still sit in dev's tree."""
+        calls = self._wire(monkeypatch, safe=False)
+
+        publish.push_and_merge({})
+
+        assert ("PROJECTED",) in calls
+        assert not any(a[:1] == ("checkout",) for a in calls), \
+            "fast-forward path was taken -- it would ship dev-only files"
+
+    def test_push_and_merge_still_fast_forwards_when_the_tree_is_safe(self, monkeypatch):
+        """The guard must not cost the fast-forward in the case it was for."""
+        calls = self._wire(monkeypatch, safe=True)
+
+        publish.push_and_merge({})
+
+        assert ("PROJECTED",) not in calls
+        assert ("merge", "--ff-only", publish.DEV_BRANCH) in calls
 
 
 class TestRepoInvariantGates:
