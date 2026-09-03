@@ -550,6 +550,80 @@ backends:
         A `cd` in a backgrounded Bash call does not persist -- always pass an
         absolute `-C`.
 
+  - id: opencode
+    name: OpenCode CLI
+    detect:
+      command: [opencode, --version]
+    capabilities:
+      isolation: >-
+        NONE. `--auto` bypasses permission prompts by auto-approving anything
+        not explicitly denied. It adds no sandbox or write scope, and `--dir`
+        does not confine reads or writes. Start from a clean tree. Inspect the
+        diff on return. Give each parallel writer its own worktree.
+      effort: >-
+        Model via `-m`, fully qualified. Provider-specific effort via
+        `--variant <VALUE>` when the selected model exposes one. OpenCode has
+        no backend-wide effort menu, so effort is not dialable otherwise.
+      network: >-
+        Available to the local process. No enablement flag is needed.
+      concurrency: >-
+        No harness-wide limit is documented. A locally hosted model entry can
+        use a hand-started server that SERIALIZES concurrent requests. Obey
+        its routing guard. A dead server is a transport error that
+        intentionally falls through to the next model.
+      returns: >-
+        No `-o` flag: the answer is stdout. Capture it in `result.md`. Capture
+        stderr in `log.txt`. Judge the run by the result file.
+    command: >-
+      opencode run --pure --dir <ABSOLUTE root> -m <MODEL> --agent build
+      --auto
+    dispatch: |
+      Brief via stdin from a file, never a shell argument. Complete the
+      command above with `< <ABSOLUTE brief file> > <ABSOLUTE result.md>
+      2> <ABSOLUTE log.txt>`. There is no `-o` flag. `--pure` suppresses
+      external plugins. `--auto` is required for a non-interactive run and
+      bypasses permission prompts by auto-approving anything not explicitly
+      denied. User-configured denies still apply. It is a security decision,
+      not a convenience.
+
+      The rendered command uses one discovered entry as an example. Before
+      every launch, take `<entry-id>` from the chosen
+      `opencode/<entry-id>` target and run `llm-scripting-kit resolve
+      --endpoint <entry-id> --project-root <ABSOLUTE root>`. Replace the
+      displayed `-m` value with the returned `model`. Remove any displayed
+      `--variant`, then add `--variant <effort>` only when the returned
+      `effort` is non-null. Never reuse the example model for another target.
+
+      Verify that the brief's reads, writes, commands, and external effects
+      are already within the user's authorization. If not, obtain approval
+      before dispatch; `--auto` removes the child harness's approval prompt
+      for anything not explicitly denied.
+
+      Launch backgrounded THROUGH THE HARNESS's own background mechanism
+      (Claude Code: the Bash tool's `run_in_background`), and add NO shell
+      backgrounding of your own -- no `nohup`, no trailing `&`.
+
+      Then end the turn. The harness re-invokes you when the launch exits.
+      Read `result.md` once on completion and judge the run by that file and
+      the actual diff. Never poll for it and never sleep.
+
+      Flag catalog and full launch mechanics:
+      references/opencode-dispatch.md.
+    gotchas:
+      - >-
+        OpenCode adds NO SANDBOX OR WRITE SCOPE under `--auto`. Explicit
+        user-configured denies can still refuse tools. Otherwise, workspace
+        edits are controlled by REVIEW AT THE JOIN. Require a clean tree at
+        dispatch. Read the diff on return. Isolate concurrent writers in
+        separate worktrees.
+      - >-
+        A missing or empty `result.md` is a failed return regardless of the
+        process exit code. The log is diagnostic evidence, not the answer.
+      - >-
+        A locally hosted model entry can be backed by a serializing server
+        started by hand. Respect its declared concurrency. A dead server
+        falling through to the next model is intended behaviour.
+
 # ---------------------------------------------------------------------------
 # Capacity -- best-effort awareness of remaining usage.
 #
