@@ -4,7 +4,7 @@
 
 **plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Published plugins: **awesome-kit** (plugin-ecosystem poster, orchestrate, task tracking), **bootstrap** (dependency management), **bootstrap-stuck-fix** (temporary remediation shim for a wedged bootstrap registry record), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **content-pipeline-kit** (library + skills for LLM-in-the-loop batch content pipelines), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **hue-kit** (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), **llm-scripting-kit** (LLM key resolution, shared model registry, and named OpenAI-compatible endpoints -- OpenRouter is the default endpoint; importable package `llm_scripting_kit`, CLI `llm-scripting-kit`), **p4-kit** (Perforce multi-agent code review), **pdf-kit** (HTML-to-PDF via headless Chromium), **prototypes** (nursery for experimental skills; ships none at present), **secrets-kit** (fleet secrets provisioning), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md, folded into a single domain-skill: /md-domain, plus knowledge-encoding, update-documentation, materialized-output), **unreal-kit** (Unreal Engine Python API automation), **workflow-kit** (declarative .workflow.yaml compiler and node strategies), and **job-kit** (durable sequential agent-job runner). Dev-only (not published, `published: false`): **yaml-data-editor-kit**.
 
-This repo is a **Claude Code plugin marketplace** — it extends Claude Code with skills, commands, and hooks via the `.claude-plugin/marketplace.json` manifest. Plugins are loaded either via `--plugin-dir` (local development) or `enabledPlugins` in settings (production installs from the remote repo).
+This repo is a **Claude Code plugin marketplace** -- it extends Claude Code with skills, commands, and hooks via the `.claude-plugin/marketplace.json` manifest. Plugins are loaded either via `--plugin-dir` (local development) or `enabledPlugins` in settings (production installs from the remote repo).
 
 ## Harness ownership
 
@@ -22,7 +22,7 @@ plugins-kit/                          # Marketplace root
       .claude-plugin/plugin.json      # Plugin manifest
       bootstrap.json                  # Bootstrap plugin's own manifest
       engine/                         # Bootstrap engine + config
-      bootstrap_lib/                  # Shared libraries (tool_check, venv_check, etc.) — installable Python package
+      bootstrap_lib/                  # Shared libraries (tool_check, venv_check, etc.) -- installable Python package
       hooks/sessionstart/             # SessionStart hook (bash wrapper)
       defaults/                       # Default config files
     p4-kit/                           # P4 multi-agent code review plugin (Claude subagents)
@@ -45,7 +45,7 @@ plugins-kit/                          # Marketplace root
 
 | File | Purpose |
 |------|---------|
-| `plugins/bootstrap/engine/bootstrap_engine.py` | Main engine — processes manifests, runs checks, emits hook JSON |
+| `plugins/bootstrap/engine/bootstrap_engine.py` | Main engine -- processes manifests, runs checks, emits hook JSON |
 | `plugins/bootstrap/bootstrap_lib/tool_check.py` | System tool availability checks |
 | `plugins/bootstrap/bootstrap_lib/platform_detect.py` | OS detection |
 | `plugins/bootstrap/bootstrap_lib/log.py` | File-based bootstrap logging |
@@ -64,7 +64,7 @@ plugins-kit/                          # Marketplace root
 
 ### Key Design Decisions
 
-- **Bootstrapping**: Two-layer system — session bootstrap (bash SessionStart hook, manifest-driven) ensures system tools, venv, and git deps; script bootstrap (Python, runs inside UE Editor) handles UE-side packages at runtime. See [engine-internals.md](plugins/bootstrap/skills/bootstrap/references/engine-internals.md) for engine details and [script-bootstrap.md](plugins/unreal-kit/skills/ue-python-api/references/script-bootstrap.md) for UE-side bootstrapping.
+- **Bootstrapping**: Two-layer system -- session bootstrap (bash SessionStart hook, manifest-driven) ensures system tools, venv, and git deps; script bootstrap (Python, runs inside UE Editor) handles UE-side packages at runtime. See [engine-internals.md](plugins/bootstrap/skills/bootstrap/references/engine-internals.md) for engine details and [script-bootstrap.md](plugins/unreal-kit/skills/ue-python-api/references/script-bootstrap.md) for UE-side bootstrapping.
 - **Config resolution order**: CLI args > per-project config (`<project_root>/.claude/unreal-kit.yaml`) > global config (`~/.claude/plugins/data/plugins-kit/unreal-kit/config.yaml`, legacy fallback) > skill config (`ue_runner_config.yaml`) > hardcoded defaults
 - **Auto-detection execution**: `ue_runner.py` tries remote execution (UDP via upyrc) first, falls back to headless commandlet if editor isn't running
 
@@ -135,9 +135,9 @@ For deeper material -- manifest schema, condition categories, fix-all flow, engi
 
 ## Development Workflow
 
-**Automated tests required** — every new module or integration point must have corresponding tests in `tests/` before the work is considered complete. Test directories mirror the plugin structure (e.g. `tests/bootstrap/` for the bootstrap plugin). This standard was established with the bootstrap plugin's M1 test suite and applies to all subsequent development.
+**Automated tests required** -- every new module or integration point must have corresponding tests in `tests/` before the work is considered complete. Test directories mirror the plugin structure (e.g. `tests/bootstrap/` for the bootstrap plugin). This standard was established with the bootstrap plugin's M1 test suite and applies to all subsequent development.
 
-**Targeted test runs** — the full test suite is too slow for routine use. Always run only the specific test file(s) relevant to your changes:
+**Targeted test runs** -- the full test suite is too slow for routine use. Always run only the specific test file(s) relevant to your changes:
 
 ```bash
 # Run a specific test file
@@ -156,33 +156,33 @@ uv run --extra dev pytest -n 12 -q      # full suite, ~3 min
 
 `-n` is deliberately not in `addopts`: worker startup is a fixed toll that is free on the full run and ruinous on a targeted one. Full suite: `-n 12`, ~3 min. Leak guards are only complete in a SERIAL run. **A test that fails only under `-n` is usually load, not your change -- and never write a bare `time.sleep` sized for an idle machine; poll for a causal observable instead.** Measurements, the worker-count table, the timing-sensitivity trap and the leak-guard explanation: [docs/reference/testing.md](docs/reference/testing.md).
 
-**Interpreter: the repo is pinned to Python 3.12** via a repo-root `.python-version`, so bare `uv run` / `uv venv` select 3.12 everywhere — no `-p 3.12` needed. Nothing needs 3.14 (four plugins exclude it: `requires-python ">=3.12,!=3.14.*"`); it used to leak in only as uv's global default when no pin was present.
+**Interpreter: the repo is pinned to Python 3.12** via a repo-root `.python-version`, so bare `uv run` / `uv venv` select 3.12 everywhere -- no `-p 3.12` needed. Nothing needs 3.14 (four plugins exclude it: `requires-python ">=3.12,!=3.14.*"`); it used to leak in only as uv's global default when no pin was present.
 
-The two formerly-documented "pre-existing failure" clusters (the `tests/skills-kit/` collection errors and the bootstrap `engine`/`venv` `CalledProcessError`s) were **fixed**, not version quirks — both were test-only issues: skills-kit imported the pre-extraction `schemas`/`_shared` modules, and the bootstrap tests spawned WSL `bash` to `source` a Windows env file and didn't isolate `HOME`. **The suite is not unconditionally green, and "green" is host-dependent.** On an arm64 machine (Apple Silicon) five `tests/bootstrap/test_manifest_normalization.py` scoop tests failed for months while passing on every amd64 box, because they fake `current_os` but not `detect_arch()`, which reads the real CPU -- see the `suite_green_is_host_dependent` insight below. Establish a baseline on YOUR machine (run the suite at the merge-base in a `git worktree`) before calling a failure your regression.
+The two formerly-documented "pre-existing failure" clusters (the `tests/skills-kit/` collection errors and the bootstrap `engine`/`venv` `CalledProcessError`s) were **fixed**, not version quirks -- both were test-only issues: skills-kit imported the pre-extraction `schemas`/`_shared` modules, and the bootstrap tests spawned WSL `bash` to `source` a Windows env file and didn't isolate `HOME`. **The suite is not unconditionally green, and "green" is host-dependent.** On an arm64 machine (Apple Silicon) five `tests/bootstrap/test_manifest_normalization.py` scoop tests failed for months while passing on every amd64 box, because they fake `current_os` but not `detect_arch()`, which reads the real CPU -- see the `suite_green_is_host_dependent` insight below. Establish a baseline on YOUR machine (run the suite at the merge-base in a `git worktree`) before calling a failure your regression.
 
-**Local development** — use `--plugin-dir` to test plugins from the working copy:
+**Local development** -- use `--plugin-dir` to test plugins from the working copy:
 
 ```bash
 claude --plugin-dir ~/Dev/plugins-kit/plugins/my-plugin
 ```
 
-`--plugin-dir` loads the plugin directly from disk (no cache copy) and makes no persistent changes — it doesn't modify `installed_plugins.json`, the cache, or `known_marketplaces.json`. Ending the session reverts to the marketplace-installed version.
+`--plugin-dir` loads the plugin directly from disk (no cache copy) and makes no persistent changes -- it doesn't modify `installed_plugins.json`, the cache, or `known_marketplaces.json`. Ending the session reverts to the marketplace-installed version.
 
-**Reload vs restart (measured — see [plugin-reload-lifecycle.md](plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md)).** Three layers, not one rule: (1) a hook/engine/skill's **script content** is read fresh from disk on every invocation, so editing it is live with no reload/restart; (2) **registration** (`hooks.json` command map, which skills/commands exist) is reloaded **in-session by `/reload-plugins`** — including a changed hook command (the old "hooks require a full restart" claim is wrong as a blanket rule); (3) a **`SessionStart`** hook's registration reloads but it only **re-fires on a new session**, so re-running bootstrap's pass needs a restart. For a **real version update** (cache version dir moves), restart Claude / your IDE — it re-resolves install paths and re-fires SessionStart reliably.
+**Reload vs restart (measured -- see [plugin-reload-lifecycle.md](plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md)).** Three layers, not one rule: (1) a hook/engine/skill's **script content** is read fresh from disk on every invocation, so editing it is live with no reload/restart; (2) **registration** (`hooks.json` command map, which skills/commands exist) is reloaded **in-session by `/reload-plugins`** -- including a changed hook command (the old "hooks require a full restart" claim is wrong as a blanket rule); (3) a **`SessionStart`** hook's registration reloads but it only **re-fires on a new session**, so re-running bootstrap's pass needs a restart. For a **real version update** (cache version dir moves), restart Claude / your IDE -- it re-resolves install paths and re-fires SessionStart reliably.
 
 **Publishing** is `uv run python scripts/publish.py` -- the only user-gated action in this repo, and the source of truth for the flow; do not hand-run its steps. Definition of a publish, `marketplace.json` as derived data, the commit-scoped pre-commit check, dev-only filtering, and `index.html` regeneration:
 [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
 
-Publishing is reversible-but-visible: nothing is destroyed, but it goes out to other machines. The bar is "user has expressed publish intent for this work," not "user has reconfirmed each git command." Treat unambiguous go-signals — `go`, `ship it`, `publish`, `do it`, `close the loop`, `push` — as authorizing the whole flow; run `publish.py` and let its preflight be the safety net. Confirm only when intent is genuinely ambiguous (partial work, no version bump in sight, unrelated WIP staged, or the user is mid-thought).
+Publishing is reversible-but-visible: nothing is destroyed, but it goes out to other machines. The bar is "user has expressed publish intent for this work," not "user has reconfirmed each git command." Treat unambiguous go-signals -- `go`, `ship it`, `publish`, `do it`, `close the loop`, `push` -- as authorizing the whole flow; run `publish.py` and let its preflight be the safety net. Confirm only when intent is genuinely ambiguous (partial work, no version bump in sight, unrelated WIP staged, or the user is mid-thought).
 
 After publish:
 
 - Users with `autoUpdate: true` receive the update on next session start.
 - Users without auto-update run `/plugin marketplace update` then `/plugin update`.
 
-### Dev-only plugins — do not publish to master
+### Dev-only plugins -- do not publish to master
 
-Some plugins live on `dev` for in-development work and must not reach consumers until they are ready. Each such plugin sets `"published": false` in its `plugins/<name>/.claude-plugin/plugin.json`. The marketplace regenerator (`scripts/regen_marketplace.py`) filters those plugins out of `marketplace.json`, so they are excluded structurally — not by memory — even if their files land on master via a cherry-pick.
+Some plugins live on `dev` for in-development work and must not reach consumers until they are ready. Each such plugin sets `"published": false` in its `plugins/<name>/.claude-plugin/plugin.json`. The marketplace regenerator (`scripts/regen_marketplace.py`) filters those plugins out of `marketplace.json`, so they are excluded structurally -- not by memory -- even if their files land on master via a cherry-pick.
 
 **`published: false` governs the marketplace LISTING, not the source sync -- and the two are separately enforced.** The regenerator keeps the plugin out of `marketplace.json`, which is what makes it uninstallable. Separately, `_publish_projection` derives its dev-only set from the MANIFESTS rather than from any exclusion flag, so a dev-only plugin's FILES are held back on every projection: a path master already carries is restored to master's content, a path only dev has is removed. Its COMMITS still appear in the shipping list; only its files stand still.
 
@@ -204,27 +204,27 @@ For a full `dev`/`master` reconcile, resolve **toward dev** (master's divergent 
 
 ### Pre-publish validation (default)
 
-**Default gate: before any publish, smoke-test the dev working copy with `claudx`.** `claudx` (defined in `~/.bashrc`) launches a `claude` session loading every `plugins/<name>` dir via one `--plugin-dir` each, so the session runs each plugin's skills/hooks/engine **code** straight from disk — no cache, no `installed_plugins.json` change, reverts on exit. Run it, exercise the changed surface (invoke the skill, trigger the hook, run the command), confirm it behaves, then publish.
+**Default gate: before any publish, smoke-test the dev working copy with `claudx`.** `claudx` (defined in `~/.bashrc`) launches a `claude` session loading every `plugins/<name>` dir via one `--plugin-dir` each, so the session runs each plugin's skills/hooks/engine **code** straight from disk -- no cache, no `installed_plugins.json` change, reverts on exit. Run it, exercise the changed surface (invoke the skill, trigger the hook, run the command), confirm it behaves, then publish.
 
 ```bash
 claudx        # claude + --plugin-dir for every plugins-kit plugin (see ~/.bashrc)
 ```
 
-**Known blind spot — manifest content.** Under `--plugin-dir`, the bootstrap engine still reads each plugin's `bootstrap.json` from its **cached** `installPath`, not from disk (insight `plugin_dir_doesnt_test_cross_plugin`). So `claudx` validates code paths but **not** new `bootstrap.json` content (added tools, `download:` recipes, `venv.check_imports`). When your change touches manifest content, escalate to **`claude-dev`** (also in `~/.bashrc`) — it uses `scripts/dev-tree.py` to repoint installPaths at the dev tree, so the engine loads `bootstrap.json` from disk too, then auto-restores normal cache mode on exit.
+**Known blind spot -- manifest content.** Under `--plugin-dir`, the bootstrap engine still reads each plugin's `bootstrap.json` from its **cached** `installPath`, not from disk (insight `plugin_dir_doesnt_test_cross_plugin`). So `claudx` validates code paths but **not** new `bootstrap.json` content (added tools, `download:` recipes, `venv.check_imports`). When your change touches manifest content, escalate to **`claude-dev`** (also in `~/.bashrc`) -- it uses `scripts/dev-tree.py` to repoint installPaths at the dev tree, so the engine loads `bootstrap.json` from disk too, then auto-restores normal cache mode on exit.
 
-| Change touches… | Default validator |
+| Change touches ... | Default validator |
 |---|---|
 | skills / hooks / commands / engine code | `claudx` |
 | `bootstrap.json` / manifest content | `claude-dev` (dev-tree mode) |
 
-**Bypassable at your discretion.** This is a default, not a hard gate. Trivial changes — a version-only bump, a doc/CLAUDE.md edit, a single-file mechanical fix — don't need a smoke session; skip it and say so. An unambiguous publish go-signal does not silently waive validation, but you may explicitly bypass when the change can't plausibly break a runtime surface.
+**Bypassable at your discretion.** This is a default, not a hard gate. Trivial changes -- a version-only bump, a doc/CLAUDE.md edit, a single-file mechanical fix -- don't need a smoke session; skip it and say so. An unambiguous publish go-signal does not silently waive validation, but you may explicitly bypass when the change can't plausibly break a runtime surface.
 
 ### Anti-pattern: creating a branch, or switching the one that is checked out
 
 **Stay on `dev`. Do not create branches, and never run `git checkout` / `git switch`
 to move the working tree onto another branch.** Work here happens in ONE shared
 working tree that more than one agent session may be using at the same time, and the
-checked-out branch is global to that tree. Moving it is not a local decision — it
+checked-out branch is global to that tree. Moving it is not a local decision -- it
 silently reaches into every other session running in this directory.
 
 The failure is not that a branch is untidy; it is that **another session's commits
@@ -240,14 +240,14 @@ A worked incident where this stranded another session's commits:
 **Scope a review or a diff with a range, never with a branch.** `git log`, `git diff`,
 and `prepare_review.py` all take `<a>..<b>` / `<a>...<b>` and read history without
 touching the tree. Path scoping (`-- plugins/foo/`) narrows further. If commits are
-non-contiguous, review each one individually (`<sha>^..<sha>`) — several small reviews
+non-contiguous, review each one individually (`<sha>^..<sha>`) -- several small reviews
 beat one branch switch. When isolation genuinely requires a separate checkout, use
 `git worktree add` (a second directory, the shared tree untouched), never a branch
 switch in this one.
 
 **Publishing does not need a branch either.** `publish.py` owns the `dev` -> `master`
-flow. The one case that historically wanted a feature branch — gotcha 1, cherry-picking
-past unrelated `dev` commits — is a decision to escalate to the user, not to solve by
+flow. The one case that historically wanted a feature branch -- gotcha 1, cherry-picking
+past unrelated `dev` commits -- is a decision to escalate to the user, not to solve by
 creating a branch yourself.
 
 ### Committing and pushing to `dev` is unrestricted -- only PUBLISHES are gated
@@ -356,7 +356,7 @@ Use that range, NOT `origin/master..origin/dev`. A release is a tree projection,
 If the list contains anything beyond the commits you intend to publish, **stop**. Pick a safe path instead:
 
 1. **Let the hold-back do its job.** A `published: false` plugin's FILES never move onto master, whatever its commits do -- `_publish_projection` reads the dev-only set from the manifests, not from a flag. Nothing to do by hand.
-2. **Wait for the other dev work to ship first.** If those commits are nearly ready, finish their version bumps and publish them properly (every plugin you're shipping needs its own `plugin.json` + `marketplace.json` bump — without that, fresh installs silently diverge). Then publish your feature on top.
+2. **Wait for the other dev work to ship first.** If those commits are nearly ready, finish their version bumps and publish them properly (every plugin you're shipping needs its own `plugin.json` + `marketplace.json` bump -- without that, fresh installs silently diverge). Then publish your feature on top.
 3. **Escalate to the user.** When the range holds unrelated commits that are NOT dev-only, picking which ship is the user's call, not yours.
 
 **Do NOT branch from master to route around this.** `git checkout -b` in this shared tree silently reparents whatever a concurrent session commits next -- the harm is documented under "Anti-pattern: creating a branch" above and in [docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md). If a genuinely separate checkout is required, use `git worktree add`, which leaves this tree's branch alone. (Earlier revisions of this section recommended `git checkout -b <feature> origin/master` and a squash-merged feature branch; both are retired.)
@@ -369,25 +369,25 @@ A release is safe to run only when that range shows *exactly* the commits you in
 git diff --staged
 ```
 
-Read every line. If anything is unrelated to the feature, `git restore --staged <file>` and use `git add -p` (or `git stash` the WIP first) to stage only the intended hunks. Same discipline for untracked files — don't `git add .` from a dirty tree.
+Read every line. If anything is unrelated to the feature, `git restore --staged <file>` and use `git add -p` (or `git stash` the WIP first) to stage only the intended hunks. Same discipline for untracked files -- don't `git add .` from a dirty tree.
 
-*Sharpening — the dev tree is a live workspace.* The index may already hold **another session's** (or your own earlier) staged work before you touch it. `git add <your specific files>` followed by `git commit` commits the **entire index**, not just the files you named — so a pre-staged rename or WIP rides along under your commit message. The `git diff --staged` check above is the only guard: run it every time and confirm the staged set is *exactly* your files, even when you used a targeted `git add`. (This is how a `workflow-glue → workflow-kit` rename once landed inside an unrelated test-coverage commit.)
+*Sharpening -- the dev tree is a live workspace.* The index may already hold **another session's** (or your own earlier) staged work before you touch it. `git add <your specific files>` followed by `git commit` commits the **entire index**, not just the files you named -- so a pre-staged rename or WIP rides along under your commit message. The `git diff --staged` check above is the only guard: run it every time and confirm the staged set is *exactly* your files, even when you used a targeted `git add`. (This is how a `workflow-glue -> workflow-kit` rename once landed inside an unrelated test-coverage commit.)
 
-**Gotcha 3: a botched publish burns the version number.** Cache entries on consumer machines key off `(plugin, version)`. If a bad version is pushed to master, retracting it doesn't evict caches that already pulled it — same version = same code, forever, from the cache's view. The fix is a patch-bump *past* the burned number (e.g. 0.11.0 broken → don't ship 0.11.1, jump to 0.12.0) so every consumer's cache invalidates cleanly. The 0.11.1 / `patch-bump 4 plugins to force-refresh post-retraction caches` commits on master are an example of this recovery pattern.
+**Gotcha 3: a botched publish burns the version number.** Cache entries on consumer machines key off `(plugin, version)`. If a bad version is pushed to master, retracting it doesn't evict caches that already pulled it -- same version = same code, forever, from the cache's view. The fix is a patch-bump *past* the burned number (e.g. 0.11.0 broken -> don't ship 0.11.1, jump to 0.12.0) so every consumer's cache invalidates cleanly. The 0.11.1 / `patch-bump 4 plugins to force-refresh post-retraction caches` commits on master are an example of this recovery pattern.
 
 **Gotcha 4: unauthorized publish.** The go-signal rule above scopes authorization to the work the user actually approved -- it does **not** authorize sweeping in adjacent unrelated work that happens to be staged or sitting on `dev`. A clean feature commit next to unrelated dev commits is gotcha 1 territory: let `publish.py` filter, or escalate the decision -- never branch from master.
 
-**Recovery: how to retract.** A bad publish on master is fixed forward, never with `push --force` to master. Push a follow-up commit that either (a) reverts the bad commit and patch-bumps the affected plugins past the burned version, or (b) re-implements correctly under a new version. Consumers with `autoUpdate: true` then refresh on their next session start. Never rewrite master history — other machines have already fetched it.
+**Recovery: how to retract.** A bad publish on master is fixed forward, never with `push --force` to master. Push a follow-up commit that either (a) reverts the bad commit and patch-bumps the affected plugins past the burned version, or (b) re-implements correctly under a new version. Consumers with `autoUpdate: true` then refresh on their next session start. Never rewrite master history -- other machines have already fetched it.
 
-**Master drifts behind dev on non-plugin infra — reconcile periodically.** The publish flow carries feature commits only, so master silently falls behind dev on repo infrastructure (gotchas, tests, tooling). Expected, not a bug; sync it from time to time with the infra-drift procedure in [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md) (no version bumps, consumers unaffected).
+**Master drifts behind dev on non-plugin infra -- reconcile periodically.** The publish flow carries feature commits only, so master silently falls behind dev on repo infrastructure (gotchas, tests, tooling). Expected, not a bug; sync it from time to time with the infra-drift procedure in [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md) (no version bumps, consumers unaffected).
 
-**The cache keys on version** — same version = same code; the cache never refreshes without a bump, and fresh installs between releases copy HEAD code under the old version string (**silent divergence**). Consequences: `plugin.json` and `marketplace.json` versions must move together (the regenerator + `scripts/pre-commit-version-check.sh` enforce this); **manifest edits count as code edits** (a `bootstrap.json` change without a bump is structurally invisible to consumers -- see the `manifest_changes_need_version_bump` insight below); never copy files directly into the plugin cache; and don't omit the version field hoping for rolling updates (Claude Code substitutes a git SHA that becomes a static cache key anyway).
+**The cache keys on version** -- same version = same code; the cache never refreshes without a bump, and fresh installs between releases copy HEAD code under the old version string (**silent divergence**). Consequences: `plugin.json` and `marketplace.json` versions must move together (the regenerator + `scripts/pre-commit-version-check.sh` enforce this); **manifest edits count as code edits** (a `bootstrap.json` change without a bump is structurally invisible to consumers -- see the `manifest_changes_need_version_bump` insight below); never copy files directly into the plugin cache; and don't omit the version field hoping for rolling updates (Claude Code substitutes a git SHA that becomes a static cache key anyway).
 
-**Keep architecture docs current** — when modifying bootstrap behavior, update the bootstrap skill references (`plugins/bootstrap/skills/bootstrap/references/`) to reflect the changes. These are the source of truth for how the system works.
+**Keep architecture docs current** -- when modifying bootstrap behavior, update the bootstrap skill references (`plugins/bootstrap/skills/bootstrap/references/`) to reflect the changes. These are the source of truth for how the system works.
 
-**Anti-pattern: silent bootstrap operations.** Every bootstrap check must log its outcome — `ok_entries` when passing (verbose-only), `action_entries` when remediating (always visible). Adding a check that creates files, clones repos, or writes config without emitting a log entry is a bug. See the "Every check must log its outcome" principle in [engine-internals.md](plugins/bootstrap/skills/bootstrap/references/engine-internals.md).
+**Anti-pattern: silent bootstrap operations.** Every bootstrap check must log its outcome -- `ok_entries` when passing (verbose-only), `action_entries` when remediating (always visible). Adding a check that creates files, clones repos, or writes config without emitting a log entry is a bug. See the "Every check must log its outcome" principle in [engine-internals.md](plugins/bootstrap/skills/bootstrap/references/engine-internals.md).
 
-**Always use `uv run python` in shell scripts** — never bare `python` or `python3`. On Windows, the system PATH contains Microsoft Store stubs (`WindowsApps/python.exe`) that take precedence over any user PATH entry, causing bare `python`/`python3` to fail with "Permission denied" (exit 126) in Git Bash. On macOS, bare `python` often doesn't exist. Since bootstrap guarantees `uv` is available, `uv run python` is the standard way to invoke Python from any shell script in this project. It resolves the correct Python, activates the venv (giving access to installed packages), and works on all platforms.
+**Always use `uv run python` in shell scripts** -- never bare `python` or `python3`. On Windows, the system PATH contains Microsoft Store stubs (`WindowsApps/python.exe`) that take precedence over any user PATH entry, causing bare `python`/`python3` to fail with "Permission denied" (exit 126) in Git Bash. On macOS, bare `python` often doesn't exist. Since bootstrap guarantees `uv` is available, `uv run python` is the standard way to invoke Python from any shell script in this project. It resolves the correct Python, activates the venv (giving access to installed packages), and works on all platforms.
 
 **Shell scripts must survive bash 3.2 and zsh.** `/bin/bash` on macOS is bash
 3.2 (no bash 4+ since the licence change, and none at all without Homebrew),
@@ -399,7 +399,7 @@ apply to this repo's own `scripts/*.sh` as much as to shipped plugin code, and
 neither surfaces as a test failure. A Windows session cannot self-check these
 -- verify on a Mac, or assert POSIX-only constructs in a test.
 
-**Plan non-trivial tasks**: Plan when both (a) the task is non-trivial, and (b) the implementation could go several reasonable directions. Share the plan, get a thumbs-up, then implement. Skip planning when the path is obvious or the user has already framed the approach — in those cases extra ceremony reads as procedural friction, not rigor. When you do plan, use plan mode (`EnterPlanMode`) as the sanctioned space to think and propose; don't ritualize the steps. The goal is alignment on intent, not a checklist.
+**Plan non-trivial tasks**: Plan when both (a) the task is non-trivial, and (b) the implementation could go several reasonable directions. Share the plan, get a thumbs-up, then implement. Skip planning when the path is obvious or the user has already framed the approach -- in those cases extra ceremony reads as procedural friction, not rigor. When you do plan, use plan mode (`EnterPlanMode`) as the sanctioned space to think and propose; don't ritualize the steps. The goal is alignment on intent, not a checklist.
 
 **Skill-based document placement** (package cohesion): when creating a document, ask "what skill does this belong to?" and place it by the CCP/CRP/ADP framework -- `plugins/skills-kit/skills/md-domain/references/cohesion-principles.md` is the SSOT for those principles and the placement algorithm. If no existing skill fits, create a stub skill and let the document live as a progressively-disclosed reference inside it.
 
@@ -466,14 +466,14 @@ Corollary for verification, and the part most often skipped: **a plugin change i
 
 ### Hook JSON Format & Plugin Cache Layout
 
-The Claude Code hook-JSON output contract (exit-code semantics, universal fields, the per-event decision table, the `hookSpecificOutput` rule) and the on-disk plugin cache/registry layout (`~/.claude/plugins/` paths) are static CC platform reference — see [docs/reference/claude-code-plugin-platform.md](docs/reference/claude-code-plugin-platform.md). Canonical upstream: https://code.claude.com/docs/en/hooks.
+The Claude Code hook-JSON output contract (exit-code semantics, universal fields, the per-event decision table, the `hookSpecificOutput` rule) and the on-disk plugin cache/registry layout (`~/.claude/plugins/` paths) are static CC platform reference -- see [docs/reference/claude-code-plugin-platform.md](docs/reference/claude-code-plugin-platform.md). Canonical upstream: https://code.claude.com/docs/en/hooks.
 
-The one plugins-kit-specific wrinkle to keep in mind: bootstrap runs in a **background mode** — the engine writes output to a pending file that the UserPromptSubmit hook re-emits as its own stdout, because Stop hooks don't support `hookSpecificOutput` (so UserPromptSubmit carries the `additionalContext` for Claude).
+The one plugins-kit-specific wrinkle to keep in mind: bootstrap runs in a **background mode** -- the engine writes output to a pending file that the UserPromptSubmit hook re-emits as its own stdout, because Stop hooks don't support `hookSpecificOutput` (so UserPromptSubmit carries the `additionalContext` for Claude).
 
 ### Debugging
 
 ```bash
-# Version report — shows local, marketplace, installed, and cached versions for all plugins
+# Version report -- shows local, marketplace, installed, and cached versions for all plugins
 bash scripts/plugin-versions.sh
 
 # Run bootstrap engine in console mode (plain text, no JSON, no log writes)
@@ -505,7 +505,7 @@ Link model, the task-CLI contract, and the 0.35.0 misreporting bug:
   IS, cite a source, and use absolute dates when a date matters. Now-relative
   claims rot silently and are unverifiable.
 - **ASCII only in tracked files.** Every tracked file in this repo -- source,
-  manifests, skills, and the prose under `docs/` alike -- is ASCII. Write `--`
+  manifests, skills, and the prose under `docs/` alike -- must be ASCII. Write `--`
   rather than an em-dash, `'` rather than a typographic quote, and `->` rather
   than an arrow. The rule is declared HERE, and not only in a contributor's
   personal configuration, because an audit's ancestor-convention check walks
@@ -513,7 +513,7 @@ Link model, the task-CLI contract, and the 0.35.0 misreporting bug:
   nothing inside it, and non-ASCII then passes or fails according to who is
   auditing. Ancestor conventions are quoted verbatim by that check, so the
   wording above is the rule as applied.
-- **Never use the memory system** (`~/.claude/projects/*/memory/`). Always update `CLAUDE.md` instead — it is machine-independent and checked into the repo, so all machines and sessions share the same context.
+- **Never use the memory system** (`~/.claude/projects/*/memory/`). Always update `CLAUDE.md` instead -- it is machine-independent and checked into the repo, so all machines and sessions share the same context.
 
 ## Insights
 
@@ -725,7 +725,7 @@ claude_md:
         (1) the members are in separate plugins (git-kit, p4-kit) and a domain router cannot
         span plugins without relocating a member or spawning a new home plugin -- both barred by
         "Plugin boundaries are hard boundaries for cohesion work" in `plugins/CLAUDE.md`; (2) routing value is low
-        -- git-vs-p4 is unambiguous from the workspace, so a natural-language front door adds
+       -- git-vs-p4 is unambiguous from the workspace, so a natural-language front door adds
         little over the two already-auto-triggering skills. Correct cross-plugin sharing is the
         library both depend on (bootstrap_lib.code_review), which already exists. Do not
         re-investigate a code-review domain; the answer is "surface, don't merge."
