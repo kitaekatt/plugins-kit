@@ -1,0 +1,10 @@
+id: python-incompatible-addition
+kind: positive
+files: [src/labels.py]
+planted:
+  - file: src/labels.py
+    lines: "4"
+    summary: "String-plus-integer addition always raises TypeError"
+rationale: |
+  A correct reviewer must report this under "type errors." Both operand types
+  are fixed by added lines 2 and 3, so added line 4 always raises TypeError.

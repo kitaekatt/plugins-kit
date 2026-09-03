@@ -547,15 +547,23 @@ def discover_model_definitions(project_root: Path) -> Tuple[Dict[str, Dict[str, 
     try:
         import llm_scripting_kit as model_kit  # noqa: PLC0415
     except ImportError as exc:
-        return {}, [f"llm_scripting_kit unavailable; harness model rows skipped ({type(exc).__name__})"]
+        return {}, [
+            "llm_scripting_kit unavailable; harness model rows skipped "
+            f"({type(exc).__name__}). Install the owning plugin with "
+            "`claude plugin install llm-scripting-kit@plugins-kit` and start a "
+            "new session to restore those rows."
+        ]
 
     discover = getattr(model_kit, "discover_model_entries", None)
     harness_kind = getattr(model_kit, "HARNESS_KIND", None)
     entry_type = getattr(model_kit, "EndpointEntry", None)
     if not callable(discover) or harness_kind != "harness" or entry_type is None:
         return {}, [
-            "llm_scripting_kit is importable but lacks the harness-model discovery feature; "
-            "harness model rows skipped"
+            "llm_scripting_kit is importable but lacks the harness-model discovery "
+            "feature, so the linked shared library is older than this policy "
+            "renderer requires; harness model rows skipped. Update it with "
+            "`claude plugin update llm-scripting-kit@plugins-kit` and start a new "
+            "session."
         ]
 
     try:
@@ -1525,11 +1533,18 @@ def render(config: Dict[str, Any], provenance: List[Tuple[str, Path, str]]) -> s
         str(b.get("id")): str(b.get("name") or b.get("id")) for b, _, _ in detected
     }
     project_root = _project_root_from_provenance(provenance)
-    model_entries, _model_notes = discover_model_definitions(project_root)
+    model_entries, degradation_notes = discover_model_definitions(project_root)
     harness_status = detect_harnesses(config, detected, model_entries)
+    # The notes are rendered into the policy, not merely into --explain. A
+    # degraded render is INDISTINGUISHABLE from a healthy one -- rows simply
+    # vanish -- while this document tells the reader that the models listed are
+    # the only ones that exist. Silence therefore turns a missing or
+    # version-skewed shared lib into a false claim about the machine
+    # (plugins/CLAUDE.md, "Optional use of another plugin").
     command_text_provider = partial(
         adapter_command_text_provider,
         model_entries=model_entries,
+        notes=degradation_notes,
     )
     rendered_commands = _rendered_backend_command_texts(detected, command_text_provider)
     routable_backend_ids = _routable_backend_ids(detected, rendered_commands)
@@ -1551,6 +1566,14 @@ def render(config: Dict[str, Any], provenance: List[Tuple[str, Path, str]]) -> s
     render_capacity(config, out)
     out.append("---")
     out.append("")
+    if degradation_notes:
+        out.append("**Degraded render.** Some rows could not be resolved, so this")
+        out.append("policy is INCOMPLETE -- treat a missing model or backend as unknown")
+        out.append("rather than as absent from this machine:")
+        out.append("")
+        for note in degradation_notes:
+            out.append(f"- {note}")
+        out.append("")
     applied = [layer for layer, _, status in provenance if status_is_applied(status)]
     out.append("Layers applied: " + (", ".join(applied) if applied else "none") + ".")
     absent = [

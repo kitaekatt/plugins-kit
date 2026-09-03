@@ -1,0 +1,8 @@
+id: preexisting-yaml-duplicate
+kind: decoy
+files: [config/service.yaml]
+planted: []
+rationale: |
+  The duplicate timeout key appears only as unchanged context; the sole added
+  line is valid. The prompt says "pre-existing issues (only review the diff)"
+  must never be flagged, so a correct reviewer returns nothing.

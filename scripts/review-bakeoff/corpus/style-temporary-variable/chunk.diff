@@ -1,0 +1,12 @@
+diff --git a/src/status.py b/src/status.py
+new file mode 100644
+--- /dev/null
++++ b/src/status.py
+@@ -0,0 +1,7 @@
++def status_label(active: bool) -> str:
++    label = "inactive"
++    if active:
++        label = "active"
++    else:
++        label = "inactive"
++    return label

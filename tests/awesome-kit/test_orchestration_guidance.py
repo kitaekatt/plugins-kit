@@ -686,6 +686,37 @@ class TestCommandTextProvider:
             in explained
         )
 
+    def test_degraded_render_discloses_in_the_artifact_not_only_in_explain(
+        self, monkeypatch, tmp_path
+    ):
+        """A degraded render must say so in the POLICY the agent reads.
+
+        A missing or version-skewed shared lib removes rows silently: the
+        rendered document looks identical to a healthy one, while instructing
+        the reader that the models listed are the only ones that exist. That
+        turns a degradation into a false claim about the machine, so the
+        disclosure has to reach the artifact and not stop at --explain.
+        """
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+        config, provenance = self._codex_setup(monkeypatch, tmp_path, {})
+        rendered = og.render(config, provenance)
+        assert "Degraded render" in rendered
+        assert "llm_scripting_kit unavailable" in rendered
+
+    def test_healthy_render_carries_no_degradation_notice(self, monkeypatch, tmp_path):
+        """The notice is absent when nothing degraded -- it must not cry wolf."""
+        _install_repo_harness_library(monkeypatch)
+        entries = {
+            "sol": {
+                "id": "sol",
+                "harness": "codex",
+                "model": "gpt-5.6-sol",
+                "effort": "high",
+            }
+        }
+        config, provenance = self._codex_setup(monkeypatch, tmp_path, entries)
+        assert "Degraded render" not in og.render(config, provenance)
+
     def test_adapter_command_contains_only_absolute_sentinels(self, monkeypatch, tmp_path):
         _install_repo_harness_library(monkeypatch)
         entries = {

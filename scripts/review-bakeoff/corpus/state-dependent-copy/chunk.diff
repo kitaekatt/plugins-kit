@@ -1,0 +1,11 @@
+diff --git a/scripts/copy-artifact.sh b/scripts/copy-artifact.sh
+new file mode 100644
+--- /dev/null
++++ b/scripts/copy-artifact.sh
+@@ -0,0 +1,6 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++source_path=$1
++destination=$2
++cp "$source_path" "$destination"

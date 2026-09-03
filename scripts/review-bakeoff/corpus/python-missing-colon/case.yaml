@@ -1,0 +1,11 @@
+id: python-missing-colon
+kind: positive
+files: [src/clamp.py]
+planted:
+  - file: src/clamp.py
+    lines: "2"
+    summary: "The if statement lacks its required colon and cannot parse"
+rationale: |
+  A correct reviewer must report this under "code that will fail to compile
+  or parse (syntax errors, type errors, missing imports, unresolved
+  references)." The missing colon is visible on added line 2.

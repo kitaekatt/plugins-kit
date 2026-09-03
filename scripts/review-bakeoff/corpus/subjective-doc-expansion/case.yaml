@@ -1,0 +1,8 @@
+id: subjective-doc-expansion
+kind: decoy
+files: [docs/deploy.md]
+planted: []
+rationale: |
+  Requests for examples, troubleshooting detail, or different wording would
+  be "subjective suggestions or improvements." The visible instructions are
+  coherent and contain no definitely broken reference.

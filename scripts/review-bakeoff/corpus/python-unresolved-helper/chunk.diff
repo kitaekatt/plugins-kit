@@ -1,0 +1,10 @@
+diff --git a/src/geometry.py b/src/geometry.py
+new file mode 100644
+--- /dev/null
++++ b/src/geometry.py
+@@ -0,0 +1,5 @@
++from math import sqrt
++
++
++def hypotenuse(x: float, y: float) -> float:
++    return square_root(x * x + y * y)

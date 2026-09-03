@@ -1,0 +1,11 @@
+id: python-inverted-parity
+kind: positive
+files: [src/parity.py]
+planted:
+  - file: src/parity.py
+    lines: "2"
+    summary: "is_even returns true for odd integers and false for even integers"
+rationale: |
+  A correct reviewer must report this as "code that will definitely produce
+  wrong results regardless of inputs (clear logic errors)." Added line 2
+  implements the exact opposite of the function contract for every integer.

@@ -1,0 +1,10 @@
+diff --git a/src/identifier.py b/src/identifier.py
+new file mode 100644
+--- /dev/null
++++ b/src/identifier.py
+@@ -0,0 +1,5 @@
++import json  # noqa: F401
++
++
++def identifier(value: int) -> str:
++    return f"item-{value}"

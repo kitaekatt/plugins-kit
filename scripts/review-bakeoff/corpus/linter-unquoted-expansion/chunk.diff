@@ -1,0 +1,10 @@
+diff --git a/scripts/show-message.sh b/scripts/show-message.sh
+new file mode 100644
+--- /dev/null
++++ b/scripts/show-message.sh
+@@ -0,0 +1,5 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++message=${1:-ready}
++printf '%s\n' $message

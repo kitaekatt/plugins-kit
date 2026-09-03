@@ -1,0 +1,7 @@
+id: style-json-key-order
+kind: decoy
+files: [config/labels.json]
+planted: []
+rationale: |
+  The JSON is valid and its keys are distinct. Alphabetizing them falls under
+  "code style or quality concerns," so a correct reviewer returns nothing.

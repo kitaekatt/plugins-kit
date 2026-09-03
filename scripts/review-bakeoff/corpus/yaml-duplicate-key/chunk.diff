@@ -1,0 +1,8 @@
+diff --git a/config/retry.yaml b/config/retry.yaml
+new file mode 100644
+--- /dev/null
++++ b/config/retry.yaml
+@@ -0,0 +1,3 @@
++service:
++  retries: 3
++  retries: 5

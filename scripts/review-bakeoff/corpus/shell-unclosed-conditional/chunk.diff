@@ -1,0 +1,9 @@
+diff --git a/scripts/print-argument.sh b/scripts/print-argument.sh
+new file mode 100644
+--- /dev/null
++++ b/scripts/print-argument.sh
+@@ -0,0 +1,4 @@
++#!/usr/bin/env bash
++set -euo pipefail
++if [[ -n "${1:-}" ]]; then
++  printf '%s\n' "$1"
