@@ -75,6 +75,15 @@ reasons. Three things differ from a bare publish, each on purpose:
   does not block, for the same reason dev-only work never did. Uncommitted
   work anywhere else still refuses.
 
+Trying it: `--check --only <plugin>` is the dry run (preflight only, no
+writes). After a real run, the script's own `verifying:` step is the
+acceptance test -- it reads master's `marketplace.json` and `index.html`
+back and checks every published plugin against the version master's
+`plugin.json` carries, and it confirms the dev-tree flip the worktree regen
+performed was restored (`dev-tree.py status` must report no installPaths at
+dev). A run that prints `published.` passed both; nothing needs checking by
+hand.
+
 What it deliberately does not do: check cross-plugin coupling. A plugin that
 consumes a shared library another plugin owns (`shared_lib_imports`, or a
 `dependencies` edge) can be shipped ahead of that library's change, and the

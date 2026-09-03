@@ -18,6 +18,8 @@ submission loop).
 Public surface:
 
 - :class:`LLMResponse` -- the normalized completion result.
+- :class:`EmptyCompletionError` -- an empty completion after its retry budget
+  is exhausted.
 - :class:`BackendOptions` -- per-call knobs (some understood by only one
   transport, documented on the field).
 - :class:`LLMBackend` -- the completion protocol.
@@ -56,6 +58,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field, replace
@@ -133,6 +136,9 @@ class LLMResponse:
       it, otherwise ``None``.
     - ``started_at`` / ``ended_at`` -- ISO-8601 UTC timestamps for a live call;
       both are ``None`` on a cache hit.
+    - ``reasoning`` / ``finish_reason`` -- optional transport diagnostics,
+      retained so empty responses can be logged without reaching through the
+      adapter boundary.
     """
 
     text: str
@@ -153,6 +159,59 @@ class LLMResponse:
     structured: Optional[Any] = None
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
+    # Trailing fields preserve existing positional construction sites.
+    reasoning: str = ""
+    finish_reason: Optional[str] = None
+
+
+class EmptyCompletionError(RuntimeError):
+    """A priced completion attempt produced no visible assistant text.
+
+    ``llm_scripting_kit`` classifies ordinary empty responses and leaves the
+    halt decision to this run-level consumer. This local type keeps the
+    pipeline import-safe when that shared library is absent, while carrying
+    the diagnostic data operators see in the stderr record.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        model: str,
+        finish_reason: Optional[str],
+        input_tokens: int,
+        output_tokens: int,
+        attempt: int,
+        max_attempts: int,
+        likely_reasoning_exhausted: bool,
+        reasoning: str = "",
+        reasoning_tail: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.model = model
+        self.finish_reason = finish_reason
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.attempt = attempt
+        self.max_attempts = max_attempts
+        self.likely_reasoning_exhausted = likely_reasoning_exhausted
+        self.reasoning = reasoning
+        self.reasoning_tail = reasoning_tail
+
+    def response(self) -> LLMResponse:
+        """Return the failed attempt as an audit response for validation."""
+        return LLMResponse(
+            text="",
+            model=self.model,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            attempts=self.attempt,
+            likely_reasoning_exhausted=self.likely_reasoning_exhausted,
+            status="error",
+            error={"code": "empty_completion", "message": str(self)},
+            reasoning=self.reasoning,
+            finish_reason=self.finish_reason,
+        )
 
 
 @dataclass(frozen=True)
@@ -163,6 +222,8 @@ class BackendOptions:
     The remaining fields are transport-specific and documented as ignored by
     transports that do not honor them (documented, not silent):
 
+    - ``temperature`` -- optional sampling control. ``None`` lets the
+      server/model choose its mode-aware default; an explicit value is sent.
     - ``timeout_s`` -- per-call wall-clock cap. ``None`` uses the backend
       default.
     - ``cache_salt`` -- per-attempt salt for malformed-response retry loops so
@@ -182,7 +243,7 @@ class BackendOptions:
     """
 
     max_tokens: int = 4096
-    temperature: float = 0.3
+    temperature: Optional[float] = None
     timeout_s: Optional[float] = None
     cache_salt: int = 0
     user_cache_prefix: str = ""
@@ -423,6 +484,29 @@ def describe_likely_reasoning_exhaustion(response: "LLMResponse") -> Optional[st
     )
 
 
+def _reasoning_tail(reasoning: Any, *, limit: int = 200) -> str:
+    """Flatten and cap reasoning for a single-line operator diagnostic."""
+    flattened = str(reasoning or "").replace("\r", " ").replace("\n", " ")
+    return flattened[-limit:].replace("'", "\\'")
+
+
+def _empty_completion_line(
+    response: LLMResponse, *, attempt: int, max_attempts: int
+) -> str:
+    """Render the stable one-line diagnostic for an empty attempt."""
+    tail = _reasoning_tail(response.reasoning)
+    return (
+        "empty_completion "
+        f"model={response.model} "
+        f"finish_reason={response.finish_reason} "
+        f"output_tokens={response.output_tokens} "
+        f"input_tokens={response.input_tokens} "
+        f"attempt={attempt}/{max_attempts} "
+        f"likely_reasoning_exhausted={response.likely_reasoning_exhausted} "
+        f"reasoning_tail='{tail}'"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Cost accounting
 # ---------------------------------------------------------------------------
@@ -502,6 +586,31 @@ def response_cost(
         response.cache_hit_tokens,
         pricing=pricing,
     )
+
+
+def _charge_exception(
+    exc: BaseException,
+    *,
+    model: str,
+    pricing: Optional[Mapping[str, Any]],
+    cost_budget: Optional[CostBudget],
+    identifier: str,
+) -> None:
+    """Charge a transport exception when it reports token usage."""
+    output_tokens = getattr(exc, "output_tokens", None)
+    if pricing is None or output_tokens is None:
+        return
+    input_tokens = int(getattr(exc, "input_tokens", 0) or 0)
+    exception_model = str(getattr(exc, "model", None) or model)
+    cost = estimate_cost(
+        exception_model,
+        input_tokens,
+        int(output_tokens or 0),
+        int(getattr(exc, "cache_hit_tokens", 0) or 0),
+        pricing=pricing,
+    )
+    if cost_budget is not None:
+        cost_budget.charge(cost, identifier=identifier or model)
 
 
 def model_alias(model: str, *, pricing: Optional[Mapping[str, Any]] = None) -> str:
@@ -641,7 +750,9 @@ def build_cache_key(
 
     Byte-identical requests collapse to one digest regardless of dict
     ordering at the call site (``freshness.hashing.content_hash`` canonicalizes
-    via sorted-key ASCII JSON). ``cache_salt`` and ``user_cache_prefix``
+    via sorted-key ASCII JSON). ``temperature`` is included even when ``None``
+    because inheriting the server/model default is a distinct request from
+    explicitly selecting a value. ``cache_salt`` and ``user_cache_prefix``
     participate only when set, so the no-salt / no-prefix key stays stable.
     Whitespace inside the prompts is significant (a trailing-newline
     difference is a real input difference the provider would see).
@@ -714,6 +825,8 @@ class ResponseCache:
             # These timestamps bracket a live call, not a cache lookup.
             started_at=None,
             ended_at=None,
+            reasoning=data.get("reasoning", ""),
+            finish_reason=data.get("finish_reason"),
         )
 
     def store(self, key: str, response: LLMResponse) -> bool:
@@ -765,6 +878,8 @@ class ResponseCache:
             "structured": response.structured,
             "started_at": response.started_at,
             "ended_at": response.ended_at,
+            "reasoning": response.reasoning,
+            "finish_reason": response.finish_reason,
         }
         target = self._path(key)
         fd, tmp_name = tempfile.mkstemp(
@@ -836,13 +951,17 @@ def call_llm(
     2. **Cache lookup** -- when ``cache_dir`` is bound, a hit returns
        immediately with ``from_cache=True``.
     3. **Backend call + retry** -- ``backend.complete`` is attempted up to
-       ``retries + 1`` times. A failure the backend classifies as a halt is
-       re-raised as :class:`PipelineHaltError` and NOT retried; any other failure is
+       ``retries + 1`` times. A returned empty/whitespace response is a
+       failed, priced attempt: it is logged, retried within this budget, and
+       raises :class:`EmptyCompletionError` when exhausted. A failure the
+       backend classifies as a halt is re-raised as
+       :class:`PipelineHaltError` and NOT retried; any other failure is
        retried (sleeping ``retry_sleep`` between attempts) and, once the
        budget is exhausted, propagates as its original type.
-    4. **Cost accounting** -- when ``pricing`` is bound the response is
-       priced and charged to ``cost_budget`` (which may raise
-       :class:`BudgetExceededError`).
+    4. **Cost accounting** -- when ``pricing`` is bound each live response,
+       including an empty response, is priced and charged to ``cost_budget``
+       (which may raise :class:`BudgetExceededError`). Transport exceptions
+       carrying token counts are charged before retry/classification too.
     5. **Cache write** -- a non-empty live response is stored under its key.
 
     Before step 4, a live response's ``likely_reasoning_exhausted`` is
@@ -885,11 +1004,17 @@ def call_llm(
     last_exc: Optional[BaseException] = None
     for attempt in range(retries + 1):
         try:
-            response = backend.complete(system, user, model=model, options=opts)
-            break
+            candidate = backend.complete(system, user, model=model, options=opts)
         except PipelineHaltError:
             raise
         except BaseException as exc:  # noqa: BLE001 -- classify then re-raise
+            _charge_exception(
+                exc,
+                model=model,
+                pricing=pricing,
+                cost_budget=cost_budget,
+                identifier=identifier,
+            )
             halt = backend.classify_halt(exc)
             if halt is not None:
                 raise PipelineHaltError(halt, str(exc)) from exc
@@ -899,14 +1024,45 @@ def call_llm(
                     time.sleep(retry_sleep)
                 continue
             raise
+        candidate = replace(
+            candidate,
+            likely_reasoning_exhausted=is_likely_reasoning_exhaustion(
+                candidate.text, candidate.output_tokens
+            ),
+        )
+        if not candidate.text.strip():
+            try:
+                if pricing is not None:
+                    cost = response_cost(candidate.model, candidate, pricing=pricing)
+                    if cost_budget is not None:
+                        cost_budget.charge(cost, identifier=identifier or model)
+            finally:
+                print(
+                    _empty_completion_line(
+                        candidate, attempt=attempt + 1, max_attempts=retries + 1
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
+            if attempt < retries:
+                if retry_sleep:
+                    time.sleep(retry_sleep)
+                continue
+            raise EmptyCompletionError(
+                "empty completion exhausted retry budget",
+                model=candidate.model,
+                finish_reason=candidate.finish_reason,
+                input_tokens=candidate.input_tokens,
+                output_tokens=candidate.output_tokens,
+                attempt=attempt + 1,
+                max_attempts=retries + 1,
+                likely_reasoning_exhausted=candidate.likely_reasoning_exhausted,
+                reasoning=candidate.reasoning,
+                reasoning_tail=_reasoning_tail(candidate.reasoning),
+            )
+        response = candidate
+        break
     assert response is not None, last_exc  # loop either breaks or raises
-
-    response = replace(
-        response,
-        likely_reasoning_exhausted=is_likely_reasoning_exhaustion(
-            response.text, response.output_tokens
-        ),
-    )
 
     if pricing is not None:
         cost = response_cost(response.model, response, pricing=pricing)
@@ -1102,15 +1258,22 @@ def submit_validated(
             if attempt == 0
             else replace(base_options, cache_salt=attempt)
         )
-        resp = call_llm(
-            backend,
-            system,
-            current_user,
-            model=model,
-            options=attempt_options,
-            cache_dir=cache_dir,
-            **call_kwargs,
-        )
+        try:
+            resp = call_llm(
+                backend,
+                system,
+                current_user,
+                model=model,
+                options=attempt_options,
+                cache_dir=cache_dir,
+                **call_kwargs,
+            )
+        except EmptyCompletionError as exc:
+            # call_llm owns per-call retries; this loop owns validation
+            # retries. Treat its exhausted empty attempt as the same parse
+            # input the old successful-empty path supplied, without adding a
+            # second retry inside one validation attempt.
+            resp = exc.response()
         responses.append(resp)
 
         evaluation = evaluate_submission(resp.text, spec)
@@ -1136,6 +1299,7 @@ def submit_validated(
 
 __all__ = [
     "LLMResponse",
+    "EmptyCompletionError",
     "BackendOptions",
     "LLMBackend",
     "HALT_AUTH",

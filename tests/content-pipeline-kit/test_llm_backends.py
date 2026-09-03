@@ -117,6 +117,48 @@ def test_claude_cli_backend_defaults_to_run_once() -> None:
     assert ClaudeCliBackend().retry_max_attempts == 1
 
 
+def test_openrouter_adapter_passes_unset_temperature_to_shared_seam(monkeypatch):
+    """The pipeline adapter preserves None for the transport to omit."""
+    import sys
+    import types
+
+    captured = {}
+
+    class _Delegate:
+        def __init__(self, **_kwargs):
+            pass
+
+        def complete(self, _system, _user, *, model, options):
+            captured["temperature"] = options.temperature
+            return types.SimpleNamespace(
+                text="ok",
+                model=model,
+                input_tokens=0,
+                output_tokens=0,
+                cache_hit_tokens=0,
+                wall_ms=0,
+                attempts=1,
+                from_cache=False,
+            )
+
+    class _CompletionOptions:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    package = types.ModuleType("llm_scripting_kit")
+    completion = types.ModuleType("llm_scripting_kit.completion")
+    completion.BackendOptions = _CompletionOptions
+    completion.OpenRouterBackend = _Delegate
+    package.completion = completion
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.completion", completion)
+
+    response = OpenRouterBackend().complete("s", "u", model="m")
+
+    assert response.text == "ok"
+    assert captured["temperature"] is None
+
+
 # --- lazy-delegate build under concurrency -----------------------------------
 
 

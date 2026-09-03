@@ -18,6 +18,11 @@ how the contract dies quietly:
 - Suppressing a flag is not a control.
 - A protocol error is not an endpoint error.
 
+The OpenAI-compatible transport omits ``temperature`` when its value is
+``None``, allowing the server/model to select its mode-aware default. A caller
+that supplies a numeric value gets that value in the request body. The
+content-pipeline adapter preserves this optional value across the seam.
+
 **The one rule the advertisement obeys: a capability describes what the adapter
 EMITS, never what the provider or CLI does with it.** `ExecutionControl.emits`
 names the exact argv element, environment key path, or request field produced,

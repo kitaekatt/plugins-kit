@@ -189,6 +189,8 @@ def _from_completion_response(resp: Any) -> LLMResponse:
         attempts=resp.attempts,
         from_cache=resp.from_cache,
         total_tokens=getattr(resp, "total_tokens", 0),
+        reasoning=getattr(resp, "reasoning", ""),
+        finish_reason=getattr(resp, "finish_reason", None),
         status=getattr(resp, "status", "completed"),
         # normalized to its JSON form AT THE BOUNDARY, so this field is one type
         # everywhere. The seam hands back a ResponseError object; the response
@@ -718,8 +720,9 @@ class MockBackend:
 
     - ``responses`` -- a FIFO queue drained one per call. Each entry is a
       ``str`` (the response text), a ``dict`` (``{text, model?, input_tokens?,
-      ...}``), an :class:`LLMResponse` (served verbatim), or an ``Exception``
-      instance (raised, to exercise retry / halt paths).
+      ...}`` including optional ``finish_reason`` and ``reasoning``), an
+      :class:`LLMResponse` (served verbatim), or an ``Exception`` instance
+      (raised, to exercise retry / halt paths).
     - ``keyed_responses`` -- a ``{substring: entry}`` map: the first key found
       in the user prompt wins (order-independent concurrency tests).
     - both empty -- every call raises ``RuntimeError("MockBackend exhausted")``.
@@ -766,6 +769,8 @@ class MockBackend:
                 output_tokens=int(entry.get("output_tokens", 0)),
                 cache_hit_tokens=int(entry.get("cache_hit_tokens", 0)),
                 wall_ms=int(entry.get("wall_ms", 0)),
+                reasoning=str(entry.get("reasoning", "")),
+                finish_reason=entry.get("finish_reason"),
             )
         raise TypeError(
             f"MockBackend: unsupported response entry {type(entry).__name__}"

@@ -379,10 +379,9 @@ _COMPLETE_CALL_FLAGS = (
 )
 
 #: The flag surface's own defaults, applied in _request_from_flags rather than by
-#: argparse. They are the values argparse used to carry and match BackendOptions'
-#: declared defaults, so moving them changes no behaviour -- it only makes
-#: "unset" observable, which is what the conflict check above needs.
-_FLAG_DEFAULTS = {"max_tokens": 4096, "temperature": 0.3, "system": "", "cheap": False}
+#: argparse. Keeping them here makes "unset" observable, which is what the
+#: conflict check above needs. ``None`` means no temperature field is sent.
+_FLAG_DEFAULTS = {"max_tokens": 4096, "temperature": None, "system": "", "cheap": False}
 
 
 def _request_from_flags(args: argparse.Namespace) -> "tuple[str, str, Any, BackendOptions]":

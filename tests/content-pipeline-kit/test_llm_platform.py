@@ -18,6 +18,7 @@ from content_pipeline.llm.platform import (
     BackendOptions,
     BudgetExceededError,
     CostBudget,
+    EmptyCompletionError,
     EvaluationResult,
     HaltError,
     LLMResponse,
@@ -58,6 +59,18 @@ def test_cache_key_differs_per_field():
     assert base != build_cache_key(backend="mock", model="m", system="s2", user="u")
     assert base != build_cache_key(backend="mock", model="m", system="s", user="u2")
     assert base != build_cache_key(backend="other", model="m", system="s", user="u")
+
+
+def test_cache_key_differs_for_inherited_and_explicit_temperature():
+    inherited = build_cache_key(backend="mock", model="m", system="s", user="u")
+    explicit = build_cache_key(
+        backend="mock",
+        model="m",
+        system="s",
+        user="u",
+        options=BackendOptions(temperature=0.3),
+    )
+    assert inherited != explicit
 
 
 def test_cache_key_user_prefix_participates():
@@ -184,8 +197,8 @@ def test_call_llm_mock_without_cache_dir_skips_cache(tmp_path):
 
 def test_call_llm_empty_response_reaches_live_path_again(tmp_path):
     backend = MockBackend(responses=["", "recovered"])
-    r1 = call_llm(backend, "s", "u", model="test/model", cache_dir=tmp_path)
-    assert r1.text == ""
+    with pytest.raises(EmptyCompletionError):
+        call_llm(backend, "s", "u", model="test/model", cache_dir=tmp_path)
     r2 = call_llm(backend, "s", "u", model="test/model", cache_dir=tmp_path)
     assert r2.text == "recovered"  # empty was not cached
 
@@ -198,31 +211,85 @@ def test_call_llm_empty_response_reaches_live_path_again(tmp_path):
 # and the normal case so the distinction, not just one side of it, is pinned.
 
 
-def test_call_llm_empty_text_with_output_tokens_flags_reasoning_exhaustion():
-    backend = MockBackend(responses=[{"text": "", "output_tokens": 201}])
-    r = call_llm(backend, "s", "u", model="test/model")
-    assert r.text == ""
-    assert r.output_tokens == 201
-    assert r.likely_reasoning_exhausted is True
-    hint = describe_likely_reasoning_exhaustion(r)
-    assert hint is not None
-    assert "max_tokens" in hint
-    assert "output_tokens=201" in hint
+def test_call_llm_empty_then_non_empty_is_priced_logged_and_retried(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr(platform.time, "sleep", lambda *_: None)
+    backend = MockBackend(
+        responses=[
+            {
+                "text": "",
+                "input_tokens": 100,
+                "output_tokens": 201,
+                "finish_reason": "stop",
+                "reasoning": "hidden\nreasoning tail",
+            },
+            {"text": "recovered", "input_tokens": 100, "output_tokens": 10},
+        ]
+    )
+    budget = CostBudget(limit=1.0)
+    response = call_llm(
+        backend,
+        "s",
+        "u",
+        model="test/model",
+        pricing=PRICING,
+        cost_budget=budget,
+        retries=1,
+        retry_sleep=0.01,
+    )
+
+    assert response.text == "recovered"
+    assert len(backend.calls) == 2
+    expected = (100 * 0.30 + 201 * 1.20 + 100 * 0.30 + 10 * 1.20) / 1_000_000
+    assert budget.spent == pytest.approx(expected)
+    assert capsys.readouterr().err.splitlines() == [
+        "empty_completion model=test/model finish_reason=stop "
+        "output_tokens=201 input_tokens=100 attempt=1/2 "
+        "likely_reasoning_exhausted=True reasoning_tail='hidden reasoning tail'"
+    ]
 
 
-def test_call_llm_empty_text_with_zero_output_tokens_is_not_flagged():
+def test_call_llm_empty_exhaustion_is_typed_and_every_attempt_is_priced(
+    capsys,
+):
+    backend = MockBackend(
+        responses=[
+            {"text": "", "input_tokens": 100, "output_tokens": 201},
+            {"text": "   ", "input_tokens": 100, "output_tokens": 202},
+        ]
+    )
+    budget = CostBudget(limit=1.0)
+    with pytest.raises(EmptyCompletionError) as exc_info:
+        call_llm(
+            backend,
+            "s",
+            "u",
+            model="test/model",
+            pricing=PRICING,
+            cost_budget=budget,
+            retries=1,
+        )
+
+    exc = exc_info.value
+    assert len(backend.calls) == 2
+    expected = (100 * 0.30 + 201 * 1.20 + 100 * 0.30 + 202 * 1.20) / 1_000_000
+    assert budget.spent == pytest.approx(expected)
+    assert exc.model == "test/model"
+    assert exc.output_tokens == 202
+    assert exc.input_tokens == 100
+    assert exc.attempt == 2
+    assert exc.max_attempts == 2
+    assert exc.likely_reasoning_exhausted is True
+    assert len(capsys.readouterr().err.splitlines()) == 2
+
+
+def test_call_llm_empty_zero_tokens_still_fails(capsys):
     backend = MockBackend(responses=[{"text": "", "output_tokens": 0}])
-    r = call_llm(backend, "s", "u", model="test/model")
-    assert r.text == ""
-    assert r.output_tokens == 0
-    assert r.likely_reasoning_exhausted is False
-    assert describe_likely_reasoning_exhaustion(r) is None
-
-
-def test_call_llm_whitespace_only_text_with_output_tokens_flags_reasoning_exhaustion():
-    backend = MockBackend(responses=[{"text": "   \n\t  ", "output_tokens": 50}])
-    r = call_llm(backend, "s", "u", model="test/model")
-    assert r.likely_reasoning_exhausted is True
+    with pytest.raises(EmptyCompletionError) as exc_info:
+        call_llm(backend, "s", "u", model="test/model")
+    assert exc_info.value.likely_reasoning_exhausted is False
+    assert len(capsys.readouterr().err.splitlines()) == 1
 
 
 def test_call_llm_normal_response_is_not_flagged():
@@ -230,6 +297,33 @@ def test_call_llm_normal_response_is_not_flagged():
     r = call_llm(backend, "s", "u", model="test/model")
     assert r.likely_reasoning_exhausted is False
     assert describe_likely_reasoning_exhaustion(r) is None
+
+
+def test_submit_validated_empty_attempt_is_not_double_retried():
+    def parse(text):
+        if not text.strip():
+            raise ValueError("empty response")
+        return text
+
+    backend = MockBackend(responses=["", "good"])
+    result = submit_validated(
+        backend=backend,
+        system="s",
+        user="u",
+        model="test/model",
+        parse_fn=parse,
+        validators=[_accept_validator],
+        max_attempts=2,
+    )
+    assert result.accepted
+    assert result.payload == "good"
+    assert result.attempts == 2
+    assert len(backend.calls) == 2
+    assert result.responses[0].status == "error"
+    assert result.responses[0].error == {
+        "code": "empty_completion",
+        "message": "empty completion exhausted retry budget",
+    }
 
 
 def test_is_likely_reasoning_exhaustion_predicate_directly():
@@ -348,6 +442,25 @@ def test_call_llm_retries_non_halt_then_succeeds(monkeypatch):
     backend = MockBackend(responses=[ValueError("transient blip"), "recovered"])
     resp = call_llm(backend, "s", "u", model="test/model", retries=1, retry_sleep=0.01)
     assert resp.text == "recovered"
+
+
+def test_call_llm_prices_tokenized_transport_exception_before_retry():
+    class TokenizedError(RuntimeError):
+        output_tokens = 7
+
+    backend = MockBackend(responses=[TokenizedError("empty at transport"), "ok"])
+    budget = CostBudget(limit=1.0)
+    response = call_llm(
+        backend,
+        "s",
+        "u",
+        model="test/model",
+        pricing=PRICING,
+        cost_budget=budget,
+        retries=1,
+    )
+    assert response.text == "ok"
+    assert budget.spent == pytest.approx(7 * 1.20 / 1_000_000)
 
 
 def test_call_llm_gives_up_after_retries(monkeypatch):

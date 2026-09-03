@@ -210,6 +210,8 @@ class BackendOptions:
 
     - ``timeout_s`` -- per-call wall-clock cap. ``None`` uses the backend
       default.
+    - ``temperature`` -- optional sampling control. ``None`` omits it so the
+      server/model default can follow its mode; an explicit value is sent.
     - ``cache_salt`` -- per-attempt salt for malformed-response retry loops so a
       retry does not replay a cached bad response. 0 (default) keeps a caller's
       cache key stable. The claude-cli transport has no response cache and
@@ -247,7 +249,7 @@ class BackendOptions:
     """
 
     max_tokens: int = 4096
-    temperature: float = 0.3
+    temperature: Optional[float] = None
     timeout_s: Optional[float] = None
     cache_salt: int = 0
     user_cache_prefix: str = ""

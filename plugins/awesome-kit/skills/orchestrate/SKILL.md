@@ -9,6 +9,20 @@ skill-type: technique-skill
 Take on the orchestrator role: accomplish significant work by delegating it to background
 agents, keeping the main agent's context reserved for coordination, judgment, and synthesis.
 
+**Autonomy is high, and there is one level.** What authorizes the orchestrator is the task the
+user set and the authorizations their instructions record -- the CLAUDE.md files on the path,
+which it can open. Inside that scope it decides, dispatches, verifies, commits, and reports,
+and it does not end a turn proposing work it could do or confirming a call it could make. Four
+edges stop it and nothing else does: a `mutating` effect no instruction authorizes -- a push, a
+deploy, a message to a third party; an action the user has gated, such as a publish; a
+directional question -- what the product is for, what it becomes, whether a thing gets built at
+all; and a standing prohibition in those same instructions. A call inside sanctioned work is
+not direction, however product-flavoured it is. Everything short of an edge is a decision, and
+a decision is a unit: step 3 routes it, step 7 binds its ruling, and the routing is itself a
+call with no edge -- make it without stalling. The user adjusts the default in conversation or,
+durably, by writing a gate into their instructions; do not re-derive a level, and do not invent
+intermediate ones.
+
 See [references/why-delegate.md](references/why-delegate.md) for the economics behind this
 procedure and the anti-pattern catalogue.
 
@@ -32,6 +46,7 @@ technique_skill:
       - decomposing significant work into delegable units and running them via background agents
       - rendering the machine's orchestration policy (routing, backends, capacity) and dispatching by it
       - keeping the main context clean while agents run, and synthesizing results on completion
+      - routing a decision the orchestrator would otherwise put to the user, and the autonomy edges that decide when the user is asked at all
     excludes:
       - small or single-step tasks cheaper to do inline than to delegate
       - the Workflow tool's deterministic multi-agent orchestration (use Workflow when the user opts in)
@@ -86,6 +101,10 @@ technique_skill:
       consumer: defaults/orchestration.yaml (backends[codex].dispatch)
       purpose: the flag catalog and launch mechanics the rendered summary points at
       invariant: The one-line `command:` in the backend record matches the worked example here.
+    - path: references/opencode-dispatch.md
+      consumer: defaults/orchestration.yaml (backends[opencode].dispatch)
+      purpose: the flag catalog and launch mechanics the rendered summary points at
+      invariant: The one-line `command:` in the backend record matches the worked example here.
   techniques:
     - id: orchestrate
       name: Orchestrate work through background agents
@@ -108,7 +127,7 @@ technique_skill:
             review, never route the plan's creation. Keep the output in view for steps 3-5;
             it is the source of truth for routing, backends and capacity on this machine.
         - n: 3
-          action: Decompose into self-contained units, apply the rendered parallel-development razor, and classify each -- the plan itself is the first candidate unit.
+          action: Decompose into self-contained units, apply the rendered parallel-development razor, and classify each -- the plan itself is the first candidate unit, and every decision you would otherwise put to the user is another.
           detail: |
             The decomposition you are about to author is a unit (the policy's plan-checkpoint
             shaping tests): route it through the rendered tree before briefing anything from
@@ -118,6 +137,11 @@ technique_skill:
             note (a) dependencies; (b) whether the razor admits it as a parallel leaf; and (c)
             compression profile -- does the result compress to a small conclusion?
             High-generation-cost / small-conclusion units are the ideal footprint delegations.
+
+            A decision you would otherwise put to the user is a unit of the same kind: work is
+            briefed from it, so it is a plan-checkpoint. Make the call first, then route the
+            call -- not the question -- through the rendered tree by its own terms, exactly as
+            the plan; a ruling that comes back stands (step 7).
         - n: 4
           action: Match the unit to the rendered routing rows and choose the first available model.
           detail: >-
@@ -143,6 +167,13 @@ technique_skill:
             code or docs resolve against, or the only remaining link/reference to something
             the unit just removed.
 
+            RETURN BUDGET, NAMED. The default report is at most about 1,000 tokens and
+            contains only the disposition, files changed, premise outcomes, named checks,
+            and blockers. Put logs, inventories, source excerpts, and other bulky evidence
+            in an artifact. Return its path and the exact parts the join must inspect.
+            If the join needs named detail that cannot remain in an artifact, raise the
+            budget in the brief. Otherwise, keep the default.
+
             PREMISES, MARKED. The other four fields ask only whether a brief is executable, so
             a confidently wrong brief satisfies all of them. State every load-bearing premise
             and label it `established:` (naming the evidence -- a trace, a diff, a prior unit's
@@ -150,6 +181,19 @@ technique_skill:
             existing work functions, and an inherited parameter you did not derive are all
             hypotheses until evidence is cited. Marking is a classification performed at
             authoring time -- do not grade confidence numerically; the label is binary.
+
+            EXCLUSIONS HAVE TWO PARTS. A prohibition imposed by the user, repository policy,
+            or an authorization boundary is a constraint. The unit never crosses it. A claim
+            that an excluded path, component, or artifact does not depend on the change is a
+            causal premise. Mark it like any other premise.
+
+            When a mutation removes, moves, or renames an interface, path, or generated
+            artifact, establish each causal scope boundary. Name the dependency check before
+            dispatch. Run the check inbound: grep the excluded area for references to what is
+            being changed. If the check has not run, mark the boundary `hypothesis:`
+            and require the unit to check it before its first mutation. A dependency that
+            crosses a protected boundary halts the unit and reports the conflict. It does not
+            grant authority to edit the excluded area.
 
             A HYPOTHESIS MAY FUND AN INVESTIGATION, NEVER A CHANGE OR A DEPLOYMENT. To brief a
             mutation on a premise, promote it with evidence first, or split the unit: establish,
@@ -167,8 +211,13 @@ technique_skill:
             parameters (sampling windows, settle times) from the failure being chased, stating
             the basis; an interval inherited from other work is a hypothesis wearing a number.
         - n: 6
-          action: While units run, do orchestrator-level work only (plan synthesis, inline units, or wait) -- and keep running units current.
+          action: While units run, do orchestrator-level work only -- plan synthesis, inline units, or nothing -- and keep running units current.
           detail: >-
+            Waiting is passive. A background task re-invokes the session when it exits. If no
+            useful unblocked work remains, end the turn. Waiting is correct in that state. Do
+            not invent work to avoid being idle. Never sleep, poll, or re-read an `-o` file
+            before completion.
+
             A constraint that changes while units run does not reach them by itself. Enumerate
             the affected running units and push the delta through the backend's follow-up
             channel (SendMessage for the Agent tool); a unit with no such channel is cancelled
@@ -194,10 +243,35 @@ technique_skill:
             it must not be left sitting only in the agent's report, which the user never sees.
             Reverting a recorded change later is the responsibility of whichever agent
             decides to reverse it; the record is a signal of intent, not a prohibition.
+
+            A ruling belongs to the seat that made it. A review verdict or cross-check finding
+            you disagree with is neither set aside here nor re-asked of another seat: put the
+            counter-argument to the seat that ruled -- the backend's follow-up channel (step
+            6), or a relaunch of the same seat with the counter-argument in the brief -- and
+            take what comes back. Two seats that disagree each see the other's argument once;
+            the primary, the seat the matched row named first, then rules. Accepting a risk a
+            reviewer rated against is a ruling, and the reviewer's to make.
+
+            Record one machine-readable join line for every completed unit:
+
+            `join <unit-id>: disposition=<accepted|corrected|rejected>; cause=<worker|brief|changed-constraint|integration|unknown>; verified=<named check>`
+
+            `accepted` means the returned artifact passed the named check without a lead-side
+            correction. `corrected` means the lead changed it before acceptance. `rejected`
+            means none of the returned work was accepted. Disposition and cause are separate.
+            Do not use a correction caused by a bad brief as evidence against the worker.
+
+            The dispatch announcement and brief must use the same `<unit-id>` and record the
+            target, routing terms, and effort. If an active task folder exists, copy only a
+            corrected or rejected outcome whose reason could re-bite a fresh agent into
+            `log.md`. Accepted outcomes remain transcript telemetry.
         - n: 8
           action: Relay the substance -- findings, decisions, verified-vs-reported -- in your final message.
       gotchas:
-        - Delegating then redoing the work inline pays both costs; once dispatched, wait for the result.
+        - >-
+          Delegating and then re-doing the same unit inline pays both costs. Once
+          dispatched, do not re-do that unit here. Independent work is not blocked
+          by it. Waiting for it is passive (step 6).
         - Parallel units editing the same files clobber each other -- but a shared-file conflict is a PARTITIONING problem before it is a scheduling one. Re-split the work by file ownership first (one owner per file, stated in each brief), then use isolation appropriate to the backend, and sequence only what genuinely remains. Reaching for sequencing first serialises work that had no real dependency.
         - A unit that correctly removes or relocates something can silently destroy the only signpost pointing at it -- a green result and a clean diff will not surface that; only the unit's own disclosure does.
 ```
