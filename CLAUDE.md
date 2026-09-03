@@ -504,6 +504,15 @@ Link model, the task-CLI contract, and the 0.35.0 misreporting bug:
   agent-facing internal documents such as this `CLAUDE.md` -- state what a thing
   IS, cite a source, and use absolute dates when a date matters. Now-relative
   claims rot silently and are unverifiable.
+- **ASCII only in tracked files.** Every tracked file in this repo -- source,
+  manifests, skills, and the prose under `docs/` alike -- is ASCII. Write `--`
+  rather than an em-dash, `'` rather than a typographic quote, and `->` rather
+  than an arrow. The rule is declared HERE, and not only in a contributor's
+  personal configuration, because an audit's ancestor-convention check walks
+  this repo's CLAUDE.md chain: a convention stated only outside the repo binds
+  nothing inside it, and non-ASCII then passes or fails according to who is
+  auditing. Ancestor conventions are quoted verbatim by that check, so the
+  wording above is the rule as applied.
 - **Never use the memory system** (`~/.claude/projects/*/memory/`). Always update `CLAUDE.md` instead — it is machine-independent and checked into the repo, so all machines and sessions share the same context.
 
 ## Insights

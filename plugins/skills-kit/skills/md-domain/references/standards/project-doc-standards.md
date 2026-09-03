@@ -87,10 +87,8 @@ one applies, the document is not a maturation candidate, and PD-2 returns PASS:
   it as a project doc. Branch D cannot move it into a published skill's
   `references/`. Provenance: the plugin-cache publication boundary, which a
   repo that publishes plugins declares in an ancestor CLAUDE.md.
-- **Dated historical evidence.** A document can date its observations or state
-  that its `path:line` claims describe a tree at a given time. Such a document
-  is complete provenance with a different change cadence, not nursery content.
-  Moving or rewriting it as standing guidance can falsify the record.
+- **Dated record role.** A document that qualifies for PD-12's `record` role is
+  not a maturation candidate; return PASS before choosing B, C, or D.
 
 For all other documents, if the content has stabilized past the nursery stage,
 route it to its trigger-appropriate mature home. Match the home to the natural
@@ -255,11 +253,12 @@ INFO when the project ref predates the skill and graduation is in progress.
 opt-in -- because the loss-free precondition below is a judgment no auto-apply
 pass can satisfy.)
 
-## Named roles (README, generated artifacts)
+## Named roles (README, generated artifacts, dated records)
 
-Two per-artifact roles from cohesion-principles override the generic
-project-doc criteria. `discover.py` computes both signals mechanically
-(`role_hint`, `generated` / `generation_record`).
+Three per-artifact roles override the generic project-doc criteria.
+`discover.py` computes the README and generated-artifact signals mechanically
+(`role_hint`, `generated` / `generation_record`); the audit lane identifies the
+`record` role from the opening marker defined by PD-12.
 
 ### PD-9. README is the derived human brief (readme_md role)
 
@@ -321,6 +320,44 @@ does not end the check.
 M_generated_missing_provenance) on claimed-generated without a signal, including
 a signal that fails the minimum-content bar.
 
+### PD-12. Dated records: observation provenance (record role)
+
+**Rule:** an authored document whose opening (first ~20 lines) declares that it
+records observations against a state at a stated time has the `record` role. A
+dated audit, measurement, incident record, or survey can qualify. The role is
+exempt only from criteria that assume live guidance: PD-2 maturation, PD-8
+duplication, PD-H1 link resolution, and the mechanical
+`N_broken_link_identified_target` and `R_stale_anchor` checks. Repointing or
+replacing historical evidence can falsify the record. All other criteria still
+apply, including PD-3 / PD-7 size signals, PD-4 discoverability, PD-11 ancestor
+conventions, and the ASCII (`O_non_ascii_lookalike`) and absolute-path
+(`P_foreign_absolute_path`) checks.
+
+**Minimum marker content:** an opening marker qualifies ONLY if it declares the
+document to be a record rather than standing guidance, names WHAT state or
+subject was observed, and gives WHEN it was observed as an absolute date,
+timestamp, or bounded date range. The combination must let a reader identify
+which state the claims describe. A date by itself or a narrative about past
+events does NOT qualify.
+
+**The FAIL case:** a doc that *claims* the `record` role (its title/header calls
+it a record or historical evidence, or the user asserts the role) but its
+opening marker omits WHAT was observed or WHEN -- unverifiable observation
+provenance (taxonomy `T_dated_record_missing_provenance`). This includes a bare,
+undated assertion of historicalness. Remediation: add an opening marker that
+names both the observed subject/state and its absolute observation time.
+
+**Test:** read the first ~20 lines before applying PD-2, PD-8, PD-H1, N, or R.
+A qualifying marker assigns the `record` role: skip only those exempt criteria
+and apply the rest. A claimed role with an incomplete marker fails. A document
+that merely mentions a date or describes past events claims no role and remains
+subject to every generic project-doc criterion.
+
+**Severity:** PASS with a qualifying marker; FAIL (taxonomy
+`T_dated_record_missing_provenance`) on a claimed `record` role without one.
+Bucket IMPROVE, matching PD-10, because missing provenance requires author
+knowledge and cannot be inferred safely for an automatic edit.
+
 ## Hygiene (universal)
 
 ### PD-H1. Outbound file links resolve
@@ -379,8 +416,8 @@ exception is declared, the built-in checks behave exactly as before.
 
 - Any FAIL finding (PD-5 chain, PD-6 back-reference, PD-8 live duplication, PD-9
   stranded agent facts in README, PD-10 unverifiable generation provenance,
-  PD-H1 broken link, PD-11 ancestor-convention violation) -> file is
-  NON-COMPLIANT.
+  PD-12 unverifiable observation provenance, PD-H1 broken link, PD-11
+  ancestor-convention violation) -> file is NON-COMPLIANT.
 - Only PASS / INFO / JUDGMENT findings -> file is COMPLIANT.
 - JUDGMENT findings (PD-2 maturation, PD-3 split candidacy, PD-4 orphan) and
   INFO findings are advisory; they do not escalate to FAIL on subsequent runs
@@ -405,6 +442,7 @@ goldens all key on them, so they are carried verbatim.
 | `ccp_no_skill_content_duplication` | FAIL | PD-8 |
 | `readme_role` | FAIL | PD-9 |
 | `machine_emitted_artifact_provenance` | FAIL | PD-10 |
+| `dated_record_role` | FAIL | PD-12 |
 | `hygiene_thresholds` | FAIL | PD-7, PD-H1 |
 | `mechanical_convention_hygiene` | INFO | taxonomy N-R |
 | `ancestor_convention_conformance` | FAIL | PD-11 |
@@ -431,6 +469,7 @@ goldens all key on them, so they are carried verbatim.
 | `Q_line_drift` | FIX |
 | `R_stale_anchor` | FIX |
 | `S_ancestor_convention_violation` | FIX |
+| `T_dated_record_missing_provenance` | IMPROVE |
 | `K_unclassified` | SPECIAL |
 | `N_user_standard_violation` | SERIOUS |
 
@@ -450,4 +489,4 @@ trigger shape before writing (PD-2), keep the doc to one reading task (PD-3),
 give it an inbound citation from the owning CLAUDE.md or skill (PD-4), point at
 skill-owned content instead of restating it (PD-8), and honor the named-role
 rules when the artifact is a README (PD-9) or a committed generated output
-(PD-10).
+(PD-10), or when it declares a dated record (PD-12).
