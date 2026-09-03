@@ -377,8 +377,8 @@ lanes:
       - "audit my README"
       - "emit an unattended audit run for these docs"
     change_driver: >-
-      Changes when the project-doc standards change -- PD-1..PD-11, the
-      maturation pipeline, or a named-role definition (readme, generated).
+      Changes when the project-doc standards change -- PD-1..PD-12, the
+      maturation pipeline, or a named-role definition (readme, generated, record).
   - id: audit_references
     verb: audit
     artifact: references
@@ -633,7 +633,7 @@ domain_skill:
       - id: project_doc_standards
         path: references/standards/project-doc-standards.md
         keywords: [project document standards, PD-1, maturation, graduate to skill, orphan, discoverability, one hop, readme role, generated artifact, ancestor convention]
-        summary: What a good project document looks like -- PD-1..PD-11 (placement, maturation, CRP unitary reading task, ADP discoverability and one-hop, CCP no-skill-duplication, named roles, hygiene). Read by both the audit_project_doc and generate_project_doc lanes.
+        summary: What a good project document looks like -- PD-1..PD-12 (placement, maturation, CRP unitary reading task, ADP discoverability and one-hop, CCP no-skill-duplication, named roles, hygiene). Read by both the audit_project_doc and generate_project_doc lanes.
       - id: references_standards
         path: references/standards/references-standards.md
         keywords: [cross-reference standards, hard dep, soft ref, name mismatch, shadowing, documentation convention, example prefix, proposed prefix, allow-stale, code fence masking]
