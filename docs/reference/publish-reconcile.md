@@ -42,6 +42,46 @@ plugin's `plugin.json`, filtered by `"published"` (missing = `true`; `false` =
 excluded). Never hand-edit its plugin entries; the pre-commit hook rejects
 drift.
 
+### Partial release: `--only <plugin>`
+
+`uv run python scripts/publish.py --only <plugin>` (repeatable) ships one
+published plugin and holds every other published plugin at master's content.
+It is the same projection as the dev-only hold-back with a larger hold-back
+set -- `_held_back_paths` receives the dev-only plugins plus every published
+plugin not named -- so it cannot conflict and is idempotent for the same
+reasons. Three things differ from a bare publish, each on purpose:
+
+- **The derived artifacts are regenerated inside the projection worktree**,
+  by the worktree's own copies of `regen_marketplace.py`, `dev-tree.py` and the
+  poster generator, so master's `marketplace.json` and `index.html` describe
+  the tree master is about to hold: the named plugins at their new versions,
+  the held-back ones at the versions master still carries. Nothing on dev is
+  regenerated or committed -- the dirty gate admits uncommitted work inside
+  held-back plugins, and a dev-side regen would read those working-tree
+  manifests while `commit_derived` would sweep another session's staged work
+  into the publish commit. `verify()` therefore judges master's artifacts
+  against master's manifests rather than dev's; dev's `index.html` catches up
+  at the next bare publish.
+- **The publish range does not advance.** The projection commit carries
+  `Published-Only:` and `Built-From:` trailers, not `Published-From:`, so
+  `range_base()` ignores it and the held-back plugins' commits stay in the
+  range. The next bare publish sees them as the bumps they are, and the
+  per-plugin bump gate still judges their files. (Stamping `Published-From:`
+  would drop them from the range and let an unbumped change ship later under
+  a version consumers already hold -- gotcha 3.)
+- **The gates judge only what ships.** A bump is required on a named plugin
+  (a bump elsewhere is not this release's bump); a held-back plugin changed
+  without a bump does not block; uncommitted work INSIDE a held-back plugin
+  does not block, for the same reason dev-only work never did. Uncommitted
+  work anywhere else still refuses.
+
+What it deliberately does not do: check cross-plugin coupling. A plugin that
+consumes a shared library another plugin owns (`shared_lib_imports`, or a
+`dependencies` edge) can be shipped ahead of that library's change, and the
+consumer's venv would then resolve the older library. The bare publish is the
+one that cannot do that. Use `--only` for a self-contained change, and read
+the range first as gotcha 1 requires.
+
 ### Commit-scoped generated-data checks
 
 The pre-commit check is **index-aware and scoped to the commit**

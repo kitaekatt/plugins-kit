@@ -1233,7 +1233,7 @@ class TestFastForwardSafety:
         monkeypatch.setattr(publish, "_master_is_ancestor_of_dev", lambda: True)
         monkeypatch.setattr(publish, "_fast_forward_is_safe", lambda: safe)
         monkeypatch.setattr(publish, "_publish_projection",
-                            lambda excluded: calls.append(("PROJECTED",)))
+                            lambda excluded, only=None: calls.append(("PROJECTED",)))
         return calls
 
     def test_push_and_merge_projects_when_the_tree_is_unsafe(self, monkeypatch):
@@ -1476,3 +1476,190 @@ class TestChangedPluginsUsesNetDiff:
         monkeypatch.setattr(publish.subprocess, "run",
                             lambda *a, **k: SimpleNamespace(returncode=1))
         assert publish._changed_plugins() == {"alpha"}
+
+
+class TestPartialRelease:
+    """`--only <plugin>`: the projection with a larger hold-back set.
+
+    Every published plugin NOT named stays at master's content, master's
+    listing is regenerated from the projected tree, and the publish range
+    does not move -- so the held-back work is still whole at the next bare
+    publish. Two published plugins are needed to show the split: `pub-kit`
+    ships, `other-kit` is held back.
+    """
+
+    @staticmethod
+    def _second_published_plugin(repo: Path) -> None:
+        """Land other-kit 1.0.0 on BOTH branches so the hold-back has a
+        master-side state to restore."""
+        _write_manifest(repo, "other-kit", "1.0.0")
+        (repo / "plugins" / "other-kit" / "lib.py").write_text("v1\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add other-kit 1.0.0")
+        _git(repo, "push", "-q", "origin", "dev")
+        _git(repo, "checkout", "-q", "master")
+        _git(repo, "merge", "-q", "--ff-only", "dev")
+        _git(repo, "push", "-q", "origin", "master")
+        _git(repo, "checkout", "-q", "dev")
+
+    @staticmethod
+    def _stub_regen(monkeypatch):
+        """The fixture has no generator; describe the projected tree the way
+        regen_marketplace.py would -- one entry per published plugin at the
+        version its plugin.json holds in THAT tree."""
+        def fake(workdir: Path) -> None:
+            plugins = []
+            for manifest in sorted((workdir / "plugins").glob("*/.claude-plugin/plugin.json")):
+                data = json.loads(manifest.read_text())
+                if data.get("published", True):
+                    plugins.append({"name": data["name"], "version": data["version"]})
+            (workdir / ".claude-plugin" / "marketplace.json").write_text(
+                json.dumps({"plugins": plugins}, indent=2) + "\n")
+            page = [dict(p, marketplace=publish.MARKETPLACE_NAME) for p in plugins]
+            (workdir / "index.html").write_text(
+                "const data = " + json.dumps(
+                    {"plugins": page, "marketplace_order": [publish.MARKETPLACE_NAME]})
+                + ";\n")
+            publish._in_worktree(workdir, "add", "--",
+                                 ".claude-plugin/marketplace.json", "index.html")
+        monkeypatch.setattr(publish, "_regenerate_derived_in", fake)
+
+    def _bump_both(self, repo: Path) -> None:
+        self._second_published_plugin(repo)
+        (repo / "plugins" / "other-kit" / "lib.py").write_text("v2\n")
+        (repo / "plugins" / "other-kit" / "new.py").write_text("only on dev\n")
+        _bump(repo, "other-kit", "1.1.0", "other-kit 1.1.0")
+        (repo / "plugins" / "pub-kit" / "engine.py").write_text("new\n")
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+
+    def test_rejects_a_name_that_is_not_a_published_plugin(self, repo):
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        assert publish.main(["--check", "--only", "dev-kit"]) != 0
+        assert publish.main(["--check", "--only", "no-such-kit"]) != 0
+
+    def test_ships_the_named_plugin_and_holds_the_rest_at_master(self, repo, monkeypatch):
+        self._bump_both(repo)
+        self._stub_regen(monkeypatch)
+        _, excluded = publish.preflight(only={"pub-kit"})
+
+        publish.push_and_merge(excluded, only={"pub-kit"})
+
+        assert publish.version_at("origin/master", "pub-kit") == "1.1.0"
+        assert publish.version_at("origin/master", "other-kit") == "1.0.0"
+        assert publish.blob_at("origin/master", "plugins/pub-kit/engine.py")
+        lib = publish.git("show", "origin/master:plugins/other-kit/lib.py")
+        assert lib == "v1"
+        # The unshipped-on-dev half: a file other-kit only has on dev is
+        # removed from the projection, not carried over.
+        assert publish.blob_at("origin/master", "plugins/other-kit/new.py") is None
+
+    def test_masters_listing_describes_masters_tree(self, repo, monkeypatch):
+        self._bump_both(repo)
+        self._stub_regen(monkeypatch)
+        _, excluded = publish.preflight(only={"pub-kit"})
+        publish.push_and_merge(excluded, only={"pub-kit"})
+
+        listing = json.loads(publish.git(
+            "show", "origin/master:.claude-plugin/marketplace.json"))
+        versions = {p["name"]: p["version"] for p in listing["plugins"]}
+        assert versions == {"other-kit": "1.0.0", "pub-kit": "1.1.0"}
+
+        problems = publish.verify(only={"pub-kit"})
+        assert not [p for p in problems if "dev-tree" not in p], problems
+
+    def test_a_stale_master_listing_is_a_verify_failure(self, repo, monkeypatch):
+        """The seam exists so the listing can be wrong; verify must notice."""
+        self._bump_both(repo)
+        monkeypatch.setattr(publish, "_regenerate_derived_in", lambda workdir: None)
+        _, excluded = publish.preflight(only={"pub-kit"})
+        publish.push_and_merge(excluded, only={"pub-kit"})
+
+        problems = publish.verify(only={"pub-kit"})
+        assert any("origin/master marketplace.json has pub-kit=1.0.0" in p
+                   for p in problems)
+
+    def test_does_not_advance_the_publish_range(self, repo, monkeypatch):
+        """The held-back plugin's commits must survive into the next bare
+        publish, or its changes ship later under the bump gate's radar."""
+        self._bump_both(repo)
+        self._stub_regen(monkeypatch)
+        base_before = publish.range_base()
+        _, excluded = publish.preflight(only={"pub-kit"})
+        publish.push_and_merge(excluded, only={"pub-kit"})
+        _git(repo, "fetch", "-q", "origin")
+
+        message = _git(repo, "log", "-1", "--format=%B", "origin/master")
+        assert "Published-Only: pub-kit" in message
+        assert "Built-From:" in message
+        assert "Published-From:" not in message
+        assert "Held back on dev (published, not selected): other-kit" in message
+        assert publish.range_base() == base_before
+
+        # The next bare publish sees exactly the held-back work as its bump.
+        bumps, _ = publish.preflight()
+        assert bumps == ["other-kit: 1.0.0 -> 1.1.0"]
+
+    def test_requires_a_bump_on_the_named_plugin_itself(self, repo):
+        self._second_published_plugin(repo)
+        _bump(repo, "other-kit", "1.1.0", "other-kit 1.1.0")
+
+        with pytest.raises(publish.PublishError, match="none of the --only plugins"):
+            publish.preflight(only={"pub-kit"})
+
+    def test_a_held_back_plugin_changed_without_a_bump_does_not_block(self, repo):
+        """Its files do not ship, so nothing strands; the bare publish that
+        would ship them still refuses."""
+        self._second_published_plugin(repo)
+        (repo / "plugins" / "other-kit" / "lib.py").write_text("v2, unbumped\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "other-kit: change without bump")
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+
+        assert publish.preflight(only={"pub-kit"})[0] == ["pub-kit: 1.0.0 -> 1.1.0"]
+        with pytest.raises(publish.PublishError, match="other-kit: files changed"):
+            publish.preflight()
+
+    def test_uncommitted_work_in_a_held_back_plugin_does_not_block(self, repo):
+        """The situation --only exists for: another session mid-way through a
+        plugin this release does not touch."""
+        self._second_published_plugin(repo)
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        (repo / "plugins" / "other-kit" / "wip.py").write_text("half done\n")
+
+        assert publish.preflight(only={"pub-kit"})[0] == ["pub-kit: 1.0.0 -> 1.1.0"]
+        with pytest.raises(publish.PublishError, match="working tree is dirty"):
+            publish.preflight()
+
+    def test_leaves_dev_untouched_when_a_held_back_plugin_is_dirty(self, repo, monkeypatch):
+        """The confirmed review finding: with the dirty gate relaxed, a
+        dev-side regenerate would bake the held-back plugin's uncommitted
+        manifest into dev's listing and commit_derived would sweep another
+        session's staged work into the publish commit. main() must not run
+        either under --only."""
+        self._bump_both(repo)
+        self._stub_regen(monkeypatch)
+        _git(repo, "push", "-q", "origin", "dev")
+        # Another session's in-flight work: an uncommitted bump, staged.
+        manifest = repo / "plugins" / "other-kit" / ".claude-plugin" / "plugin.json"
+        manifest.write_text(json.dumps({"name": "other-kit", "version": "9.9.9"}) + "\n")
+        _git(repo, "add", str(manifest))
+        monkeypatch.setattr(publish, "regenerate",
+                            lambda root=None: pytest.fail("regenerate ran on dev"))
+        monkeypatch.setattr(publish, "commit_derived",
+                            lambda bumps: pytest.fail("commit_derived ran on dev"))
+        dev_before = _git(repo, "rev-parse", "dev")
+
+        assert publish.main(["--only", "pub-kit"]) == 0
+
+        assert _git(repo, "rev-parse", "dev") == dev_before
+        assert "plugin.json" in _git(repo, "diff", "--cached", "--name-only")
+        assert publish.version_at("origin/master", "other-kit") == "1.0.0"
+        assert publish.version_at("origin/master", "pub-kit") == "1.1.0"
+
+    def test_uncommitted_work_outside_any_held_back_plugin_still_blocks(self, repo):
+        self._second_published_plugin(repo)
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        (repo / "scripts.txt").write_text("shared infra edit\n")
+
+        with pytest.raises(publish.PublishError, match="working tree is dirty"):
+            publish.preflight(only={"pub-kit"})
