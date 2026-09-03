@@ -1,0 +1,8 @@
+id: style-temporary-variable
+kind: decoy
+files: [src/status.py]
+planted: []
+rationale: |
+  A shorter conditional expression could improve this code, but that is a
+  "code style or quality concerns." The function returns the correct label
+  for both boolean inputs, so a correct reviewer returns nothing.

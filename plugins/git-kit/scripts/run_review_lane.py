@@ -245,11 +245,11 @@ def _check_transport_sdk(selection: Any) -> None:
             f"endpoint {selection.endpoint!r} is a transport entry (a plain "
             "OpenAI-compatible completion) and needs the 'openai' package, "
             "which this plugin declares in the OPTIONAL 'endpoint-dispatch' "
-            "dependency group rather than as a requirement. Declare that group "
-            'in the plugin\'s bootstrap.json ("venv": {"extras": '
-            '["endpoint-dispatch"]}) and let the bootstrap engine reprovision '
-            "the venv, or configure a harness endpoint (which shells out to a "
-            "CLI and needs no SDK) or an Agent-tool model instead. Underlying "
+            "dependency group rather than as a requirement, so it is absent "
+            "from the provisioned venv. Configure a HARNESS endpoint instead "
+            "-- one carrying `harness:` rather than `base_url:`, which shells "
+            "out to a CLI and needs no SDK -- or set this lane's `model` back "
+            "to an Agent-tool alias (sonnet, opus, haiku, fable). Underlying "
             f"error: {exc}"
         ) from exc
 
@@ -291,20 +291,43 @@ def run_lane(
     """
     check_lane_dispatchable(lane, model)
 
+    # ABSENT and TOO OLD are different problems with different remedies, and a
+    # bare `except ImportError` cannot tell them apart: a `from ... import`
+    # raises ImportError both when the module is missing and when the module is
+    # present but lacks the name. The shared lib is linked by a `.pth` pinning
+    # no version, so a consumer venv can be linked to an owner that predates
+    # `create_backend` -- reporting that as "not installed" sends the user to
+    # install a plugin they already have. Diagnose the module first, then the
+    # frontier symbol (plugins/CLAUDE.md, "Optional use of another plugin").
     try:
-        from llm_scripting_kit.completion import (  # noqa: PLC0415
-            BackendOptions,
-            HaltError,
-            create_backend,
-        )
-    except ImportError as exc:  # pragma: no cover - exercised by venv wiring
+        import llm_scripting_kit.completion as _seam  # noqa: PLC0415
+    except ModuleNotFoundError as exc:  # pragma: no cover - exercised by venv wiring
         raise LaneConfigError(
-            "llm_scripting_kit is not available in this plugin's venv. The "
-            "plugin must declare it in bootstrap.json "
-            '("shared_lib_imports": ["bootstrap_lib", "llm_scripting_kit"]) '
-            "and declare 'openai' in pyproject.toml, then be reprovisioned by "
-            f"the bootstrap engine. Underlying error: {exc}"
+            "the llm-scripting-kit plugin is not installed, so this lane "
+            "cannot reach a configured endpoint. Install it with "
+            "`claude plugin install llm-scripting-kit@plugins-kit` and start a "
+            "new session so the bootstrap engine links its shared library, or "
+            "set this lane's `model` back to an Agent-tool alias (sonnet, "
+            f"opus, haiku, fable). Underlying error: {exc}"
         ) from exc
+
+    _missing = [
+        name
+        for name in ("BackendOptions", "HaltError", "create_backend")
+        if not hasattr(_seam, name)
+    ]
+    if _missing:  # pragma: no cover - exercised by venv wiring
+        raise LaneConfigError(
+            "the installed llm-scripting-kit is too old for this lane: "
+            f"llm_scripting_kit.completion has no {', '.join(sorted(_missing))}. "
+            "Update it with `claude plugin update llm-scripting-kit@plugins-kit` "
+            "and start a new session so the bootstrap engine re-syncs its "
+            "shared library."
+        )
+
+    BackendOptions = _seam.BackendOptions
+    HaltError = _seam.HaltError
+    create_backend = _seam.create_backend
 
     from llm_scripting_kit.models import EndpointResolveError  # noqa: PLC0415
 

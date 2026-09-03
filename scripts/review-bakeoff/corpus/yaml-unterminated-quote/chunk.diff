@@ -1,0 +1,7 @@
+diff --git a/config/service.yaml b/config/service.yaml
+new file mode 100644
+--- /dev/null
++++ b/config/service.yaml
+@@ -0,0 +1,2 @@
++service:
++  name: "api

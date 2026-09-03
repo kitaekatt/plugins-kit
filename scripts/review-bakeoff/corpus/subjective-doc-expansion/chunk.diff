@@ -1,0 +1,10 @@
+diff --git a/docs/deploy.md b/docs/deploy.md
+new file mode 100644
+--- /dev/null
++++ b/docs/deploy.md
+@@ -0,0 +1,5 @@
++# Deploy
++
++Run `./scripts/deploy.sh VERSION` from the repository root.
++
++The command exits with a nonzero status if deployment fails.

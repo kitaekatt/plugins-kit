@@ -1,0 +1,8 @@
+diff --git a/data/users.csv b/data/users.csv
+new file mode 100644
+--- /dev/null
++++ b/data/users.csv
+@@ -0,0 +1,3 @@
++id,name,active
++1,Ada,true
++2,Linus,true,admin

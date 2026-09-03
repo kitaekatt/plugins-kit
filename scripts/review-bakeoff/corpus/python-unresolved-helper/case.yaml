@@ -1,0 +1,10 @@
+id: python-unresolved-helper
+kind: positive
+files: [src/geometry.py]
+planted:
+  - file: src/geometry.py
+    lines: "5"
+    summary: "square_root is unresolved; the imported function is sqrt"
+rationale: |
+  A correct reviewer must report this under "unresolved references." The
+  complete module imports sqrt but added line 5 calls square_root instead.

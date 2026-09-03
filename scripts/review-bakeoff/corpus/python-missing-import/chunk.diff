@@ -1,0 +1,7 @@
+diff --git a/src/encode.py b/src/encode.py
+new file mode 100644
+--- /dev/null
++++ b/src/encode.py
+@@ -0,0 +1,2 @@
++def encode_record(record: dict[str, object]) -> str:
++    return json.dumps(record, sort_keys=True)

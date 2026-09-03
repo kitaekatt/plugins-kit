@@ -1,0 +1,10 @@
+id: yaml-unterminated-quote
+kind: positive
+files: [config/service.yaml]
+planted:
+  - file: config/service.yaml
+    lines: "2"
+    summary: "The double-quoted YAML scalar is unterminated"
+rationale: |
+  For data files the prompt requires reporting "malformed syntax." The opening
+  double quote on added line 2 has no closing quote, so the YAML cannot parse.

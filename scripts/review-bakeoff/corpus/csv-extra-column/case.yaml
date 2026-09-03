@@ -1,0 +1,10 @@
+id: csv-extra-column
+kind: positive
+files: [data/users.csv]
+planted:
+  - file: data/users.csv
+    lines: "3"
+    summary: "The third row has four columns but the header defines three"
+rationale: |
+  For data files the prompt requires reporting "column-count violations."
+  Added line 3 has four fields, unlike the three-field header and valid row.

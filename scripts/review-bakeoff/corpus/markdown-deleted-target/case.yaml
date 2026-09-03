@@ -1,0 +1,11 @@
+id: markdown-deleted-target
+kind: positive
+files: [docs/overview.md, docs/deployment.md]
+planted:
+  - file: docs/overview.md
+    lines: "3"
+    summary: "The added Markdown link targets a file deleted in the same diff"
+rationale: |
+  For documentation files the prompt requires reporting "broken cross-file
+  references." The target of the link on added line 3 is visibly deleted by
+  the same self-contained diff.

@@ -1,0 +1,9 @@
+id: silenced-unused-import
+kind: decoy
+files: [src/identifier.py]
+planted: []
+rationale: |
+  The only temptation is an unused import, and its standards check is silenced
+  by `# noqa: F401`. The prompt forbids "issues that appear in a standards file
+  but are explicitly silenced in the code," so a correct reviewer returns
+  nothing.
