@@ -1138,6 +1138,11 @@ class TestRegistryOnlyHarnessIsNotRoutable:
         body = rendered.split("\n---\n")[0]
         assert "opencode/dawn" not in body
 
+    def test_registry_only_skip_is_reported_inline_in_the_surviving_row(self, rendered):
+        routing = re.split(r"^## \d+\. Routing\n", rendered, maxsplit=1, flags=re.M)[1]
+        routing = routing.split("\n## ", 1)[0]
+        assert "`dawn` skipped; harness `opencode` has no backends[] record" in routing
+
     def test_the_row_survives_on_its_next_model(self, rendered):
         assert "try **fable**" in rendered
 
@@ -1251,7 +1256,17 @@ class TestRoutingRendering:
         assert "try **fable**, then **sonnet**" in text
         assert "continue to the next model" in text
 
-    def test_fallthrough_attribution_uses_each_immediately_preceding_model(self, layered):
+    def test_fallthrough_rule_is_rendered_once_in_the_routing_header(self, layered):
+        layered(
+            "shipped",
+            cfg(routing=[{"shape": ["novel"], "models": ["agent:fable", "agent:sonnet"]}]),
+        )
+        config, provenance = og.resolve_config(layered.project_root)
+        text = og.render(config, provenance)
+        assert text.count("On a launch or transport error") == 1
+        assert "names the model immediately before the fallback" in text
+
+    def test_per_model_fallthrough_attribution_lines_are_not_rendered(self, layered):
         layered(
             "shipped",
             cfg(
@@ -1265,8 +1280,8 @@ class TestRoutingRendering:
         )
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "failed model from `fable`." in text
-        assert "failed model from `sonnet`." in text
+        assert "failed model from `fable`." not in text
+        assert "failed model from `sonnet`." not in text
 
     def test_empty_shape_is_the_default_route(self, layered):
         layered("shipped", cfg(routing=[{"shape": [], "models": ["agent:haiku"]}]))
@@ -1300,6 +1315,11 @@ class TestAgentTypesAndAnnouncement:
         text = self._shipped_text(layered, monkeypatch)
         assert "delegating <what> to <target> (<the matched row's shape terms>)" in text
         assert "delegating rename across 30 files to sonnet (default)" in text
+
+    def test_announcement_does_not_enumerate_derived_route_examples(self, layered, monkeypatch):
+        text = self._shipped_text(layered, monkeypatch)
+        assert "Use the matched row's shape terms in the parenthetical:" not in text
+        assert "delegating <what> to agent/" not in text
 
     def test_announcement_examples_use_only_skill_terms(self):
         data = shipped()
