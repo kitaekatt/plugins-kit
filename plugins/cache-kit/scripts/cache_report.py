@@ -89,7 +89,7 @@ def find_transcript(session_id: str | None, project_dir: Path) -> Path | None:
 
 def _has_usage_data(transcript_path: Path) -> bool:
     """Return True if the transcript contains at least one assistant usage entry."""
-    with open(transcript_path, encoding="utf_8") as f:
+    with open(transcript_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -113,7 +113,7 @@ def find_all_transcripts(project_dir: Path) -> list[Path]:
 def parse_transcript(transcript_path: Path) -> list[dict]:
     """Extract usage data from each assistant message in the transcript."""
     entries = []
-    with open(transcript_path, encoding="utf_8") as f:
+    with open(transcript_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
