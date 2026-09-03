@@ -86,6 +86,10 @@ technique_skill:
       consumer: defaults/orchestration.yaml (backends[codex].dispatch)
       purpose: the flag catalog and launch mechanics the rendered summary points at
       invariant: The one-line `command:` in the backend record matches the worked example here.
+    - path: references/opencode-dispatch.md
+      consumer: defaults/orchestration.yaml (backends[opencode].dispatch)
+      purpose: the flag catalog and launch mechanics the rendered summary points at
+      invariant: The one-line `command:` in the backend record matches the worked example here.
   techniques:
     - id: orchestrate
       name: Orchestrate work through background agents

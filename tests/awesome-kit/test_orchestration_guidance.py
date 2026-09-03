@@ -188,7 +188,7 @@ class TestShippedDefaults:
         assert "ladders" not in data
         assert isinstance(data["routing"], list)
         backend_ids = [b["id"] for b in data["backends"]]
-        assert backend_ids == ["agent", "codex"]
+        assert backend_ids == ["agent", "codex", "opencode"]
         assert data["resolution"]
 
     def test_routing_rows_have_shapes_and_models_in_priority_order(self):
@@ -286,6 +286,30 @@ class TestShippedDefaults:
         assert "sol" not in text.split()
         assert "terra" not in text
         assert "## dispatch backends" in text  # the agent backend still renders
+
+    def test_shipped_policy_mentions_no_opencode_when_opencode_is_absent(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(og.shutil, "which", lambda name: None)
+        monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
+        monkeypatch.setattr(
+            og,
+            "discover_model_definitions",
+            lambda _root: (
+                {
+                    "dawn": {
+                        "id": "dawn",
+                        "harness": "opencode",
+                        "model": "some/model",
+                    }
+                },
+                [],
+            ),
+        )
+        config, provenance = og.resolve_config(tmp_path / "no-project")
+        text = og.render(config, provenance).lower()
+        assert "opencode" not in text
+        assert "dawn" not in text
 
     def test_shipped_capability_flags_are_strings_not_yaml_booleans(self):
         """`network: yes` parses as True and renders as "network: True"."""
@@ -627,11 +651,92 @@ def _codex_command(rendered):
     return match.group(1)
 
 
+def _opencode_command(rendered):
+    match = re.search(
+        r"### OpenCode CLI \(`opencode`\).*?```\n(.*?)\n```", rendered, re.DOTALL
+    )
+    assert match, rendered
+    return match.group(1)
+
+
+class TestShippedOpencodeBackend:
+    @pytest.fixture
+    def rendered(self, monkeypatch, layered):
+        _install_repo_harness_library(monkeypatch)
+        layered(
+            "shipped",
+            yaml.safe_load(_shipped_path().read_text(encoding="utf-8")),
+        )
+        layered(
+            "user",
+            {"routing": [{"shape": ["known"], "models": ["dusk", "agent:sonnet"]}]},
+        )
+        monkeypatch.setattr(
+            og,
+            "discover_model_definitions",
+            lambda _root: (
+                {
+                    "dawn": {
+                        "id": "dawn",
+                        "harness": "opencode",
+                        "model": "example/model",
+                    },
+                    "dusk": {
+                        "id": "dusk",
+                        "harness": "opencode",
+                        "model": "chosen/model",
+                        "effort": "chosen-effort",
+                    },
+                },
+                [],
+            ),
+        )
+        real = og.detect_backend
+
+        def detect(backend):
+            if backend.get("id") == "opencode":
+                return True, "stubbed opencode"
+            if backend.get("id") == "codex":
+                return False, "stubbed absent"
+            return real(backend)
+
+        monkeypatch.setattr(og, "detect_backend", detect)
+        config, provenance = og.resolve_config(layered.project_root)
+        return og.render(config, provenance)
+
+    def test_record_renders_with_the_adapter_command(self, rendered):
+        assert "### OpenCode CLI (`opencode`)" in rendered
+        command = _opencode_command(rendered)
+        assert command == (
+            f"opencode run --pure --dir {og._placeholder_path('root')} "
+            "-m example/model --agent build --auto"
+        )
+        assert re.search(
+            r"llm-scripting-kit resolve\s+--endpoint <entry-id> "
+            r"--project-root <ABSOLUTE root>",
+            rendered,
+        )
+        assert "**Not dispatchable.**" not in rendered
+
+    def test_opencode_harness_model_survives_in_a_routing_row(self, rendered):
+        routing = re.split(r"^## \d+\. Routing\n", rendered, maxsplit=1, flags=re.M)[1]
+        routing = routing.split("\n## ", 1)[0]
+        assert "try **opencode/dusk**, then **sonnet**" in routing
+
+
 class TestCommandTextProvider:
     def _codex_setup(self, monkeypatch, tmp_path, entries):
         monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
         monkeypatch.setattr(og, "discover_model_definitions", lambda _root: (entries, []))
-        monkeypatch.setattr(og, "detect_backend", lambda _backend: (True, "stubbed"))
+        monkeypatch.setattr(
+            og,
+            "detect_backend",
+            lambda backend: (
+                (False, "stubbed absent")
+                if backend.get("id") == "opencode"
+                else (True, "stubbed")
+            ),
+        )
         config, provenance = og.resolve_config(tmp_path / "no-project")
         return config, provenance
 
@@ -1114,6 +1219,7 @@ class TestRegistryOnlyHarnessIsNotRoutable:
 
     @pytest.fixture
     def rendered(self, monkeypatch, layered):
+        monkeypatch.setattr(og, "HARNESS_NAMES", og.HARNESS_NAMES | {"nova"})
         layered("shipped", cfg(routing=[
             {"shape": ["novel"], "models": ["dawn", "agent:fable"]},
             {"shape": [], "models": ["agent:sonnet"]},
@@ -1122,13 +1228,13 @@ class TestRegistryOnlyHarnessIsNotRoutable:
             og,
             "discover_model_definitions",
             lambda _root: ({
-                "dawn": {"id": "dawn", "harness": "opencode", "model": "some/model"},
+                "dawn": {"id": "dawn", "harness": "nova", "model": "some/model"},
             }, []),
         )
         real = og.detect_backend
         monkeypatch.setattr(og, "detect_backend", lambda backend: (
-            (True, "stubbed opencode")
-            if backend.get("id") == "opencode"
+            (True, "stubbed nova")
+            if backend.get("id") == "nova"
             else real(backend)
         ))
         config, provenance = og.resolve_config(layered.project_root)
@@ -1136,27 +1242,27 @@ class TestRegistryOnlyHarnessIsNotRoutable:
 
     def test_registry_only_model_does_not_route(self, rendered):
         body = rendered.split("\n---\n")[0]
-        assert "opencode/dawn" not in body
+        assert "nova/dawn" not in body
 
     def test_registry_only_skip_is_reported_inline_in_the_surviving_row(self, rendered):
         routing = re.split(r"^## \d+\. Routing\n", rendered, maxsplit=1, flags=re.M)[1]
         routing = routing.split("\n## ", 1)[0]
-        assert "`dawn` skipped; harness `opencode` has no backends[] record" in routing
+        assert "`dawn` skipped; harness `nova` has no backends[] record" in routing
 
     def test_the_row_survives_on_its_next_model(self, rendered):
         assert "try **fable**" in rendered
 
     def test_identity_section_is_marked_not_dispatchable(self, rendered):
-        assert "### Opencode (`opencode`)" in rendered
+        assert "### Nova (`nova`)" in rendered
         assert "**Not dispatchable.**" in rendered
         assert "`dawn`" in rendered
 
     def test_skip_note_names_the_missing_record(self, layered):
         layered("shipped", cfg(routing=[{"shape": ["novel"], "models": ["dawn"]}]))
         config, _ = og.resolve_config(layered.project_root)
-        entries = {"dawn": {"id": "dawn", "harness": "opencode", "model": "some/model"}}
+        entries = {"dawn": {"id": "dawn", "harness": "nova", "model": "some/model"}}
         routes, notes = og.resolve_routing_models(
-            config, entries, {"opencode": (True, "stubbed")}
+            config, entries, {"nova": (True, "stubbed")}
         )
         assert routes == []
         assert any("no backends[] record" in note for note in notes)
