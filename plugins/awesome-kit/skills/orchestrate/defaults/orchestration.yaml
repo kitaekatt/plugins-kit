@@ -517,7 +517,9 @@ backends:
       each died after their first tool call with no output file, while the
       same argv under `run_in_background` alone completed and wrote its file.
 
-      Then tail the log ONCE, and judge the run by the `-o` file only.
+      Then end the turn. The harness re-invokes you when the launch exits.
+      Read the `-o` file once on completion and judge the run by it only.
+      Never poll for it and never sleep.
 
       Flag catalog, and the `-s danger-full-access` escape hatch:
       references/codex-dispatch.md.
