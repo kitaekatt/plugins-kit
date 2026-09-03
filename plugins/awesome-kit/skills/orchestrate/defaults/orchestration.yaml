@@ -201,6 +201,17 @@ lexicon:
     Would any effect of this unit survive a git checkout -- a push, a deploy, a service
     call, state outside the tree?
   gloss: takes effects no sandbox confines and no checkout reverts
+- id: user-present
+  kind: concept
+  test: Would a foreground tool call now be time the user spends waiting?
+- id: user-afk
+  kind: concept
+  test: Does anyone read the reply before the work is done?
+- id: consult
+  kind: concept
+  test: >-
+    Would a wrong answer propagate (`load-bearing`), and is the seat a different model from
+    the one deciding?
 
 # ---------------------------------------------------------------------------
 # Shape the unit

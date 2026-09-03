@@ -118,7 +118,7 @@ technique_skill:
             its conclusion -- or parallelism -- the rendered razor yields at least two leaves
             runnable now. Neither means do it inline. One small self-contained unit whose result
             feeds the next decision stays inline; an agent round-trip costs as much context as the
-            work. Difficulty and indecision are not reasons to delegate.
+            work. Difficulty and indecision are not reasons to delegate. In `user-present` (the user is watching the prompt) footprint bites harder: prefer the background for anything past one cheap foreground call.
         - n: 2
           action: Render the orchestration policy by running the script in the policy block above.
           detail: >-

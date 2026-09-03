@@ -265,10 +265,45 @@ to the user, not to solve by creating a branch yourself.
 
 **Standing policy. Commit and push to `dev` freely, without asking.** Do not hold
 finished work back for a confirmation, do not present a commit as a proposal, and do
-not ask whether to push. `dev` is a working branch: nothing on it reaches a consumer,
-because `master` is the cache source. The only gated action in this repo is a
-PUBLISH (`dev` -> `master` via `publish.py`), which broadcasts to every machine and
-needs the user's intent per the go-signal rule above.
+not ask whether to push. `dev` is a working branch: nothing on it reaches a consumer
+BY YOUR HAND, because `master` is the cache source. The only gated action in this
+repo is a PUBLISH (`dev` -> `master` via `publish.py`), which broadcasts to every
+machine and needs the user's intent per the go-signal rule above.
+
+**The implied contract: pushing to `dev` consents to someone else publishing your
+work.** The gate is on the ACT of publishing, not on your commits, and a publish
+ships the whole range rather than one session's slice. So the next publish by
+anyone -- another agent session, the user, a session you never spoke to -- carries
+whatever you pushed, without asking you and usually without knowing you exist. Read
+the "nothing reaches a consumer" line above precisely: it says you will not be the
+one who ships it, not that it will not ship.
+
+Two consequences, and the first is the one that bites:
+
+- **Push at consumer quality, not at working-branch quality.** A commit you meant
+  to refine tomorrow can be on every machine tonight. If work genuinely must not
+  ship yet, pushing it to `dev` is the wrong place to hold it -- the mechanisms
+  that actually hold work back are a `published: false` plugin (whose FILES the
+  projection holds back on every release) or simply not pushing.
+- **Work incrementally; do not hold files open across a long stretch.** The
+  corollary of the rule above is NOT to hoard changes until they are perfect.
+  A long-lived pile of uncommitted edits blocks the sessions sharing this tree,
+  loses everything if the session dies, and grows into a change too large to
+  review or revert cleanly. Land small complete pieces, each shippable on its
+  own, and push them. Both halves are the pusher's responsibility: what you push
+  must be fit to ship, and you must keep pushing rather than sitting on it.
+- **Your work shipping is not evidence you shipped it.** A version can advance,
+  and your content can reach `master`, with no action from your session at all.
+  When checking whether something published, check CONTENT rather than assuming
+  the absence of your own publish means the absence of a publish.
+
+**The other half of the contract: as the publisher, ship what is pushed.** Given
+the user's go-signal, do NOT stop because the range holds commits from sessions
+you did not talk to, and do not go asking whether their work is ready. Pushing to
+`dev` was their declaration that it is publishable, and the responsibility for
+what is on `dev` sits with whoever put it there. A publisher who tries to
+adjudicate other sessions' readiness is guessing at intent they cannot see, and
+stalling a release the user asked for.
 
 **Do not coordinate around other agent sessions.** The tree is shared and other
 sessions commit, stage, and push concurrently. That is normal and is not your problem
@@ -364,16 +399,21 @@ git log --oneline $(uv run python scripts/publish.py --print-range-base)..dev
 
 Use that range, NOT `origin/master..origin/dev`. A release is a tree projection, so master is not an ancestor of dev and the plain range grows without bound -- it reports commits published long ago and tells you nothing.
 
-If the list contains anything beyond the commits you intend to publish, **stop**. Pick a safe path instead:
+Read the range to know WHAT you are shipping, not to decide WHETHER to. Other sessions' commits in it are not a reason to stop: pushing to `dev` is their declaration that the work is publishable, and the responsibility for what sits on `dev` is theirs (see "The implied contract" above). Given a go-signal, ship the range.
 
-1. **Let the hold-back do its job.** A `published: false` plugin's FILES never move onto master, whatever its commits do -- `_publish_projection` reads the dev-only set from the manifests, not from a flag. Nothing to do by hand.
-2. **Wait for the other dev work to ship first.** If those commits are nearly ready, finish their version bumps and publish them properly (every plugin you're shipping needs its own `plugin.json` + `marketplace.json` bump -- without that, fresh installs silently diverge). Then publish your feature on top.
-3. **Ship yours alone with `--only`.** `uv run python scripts/publish.py --only <plugin>` projects ONLY that plugin's files onto master and holds every other published plugin at master's content; the publish range does not advance, so the held-back work ships whole at the next bare publish. It does not check cross-plugin coupling, so use it when your change is self-contained -- a plugin that needs a shared-lib change sitting in another plugin must ship with it. Mechanics: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md), "Partial release".
-4. **Escalate to the user.** When the range holds unrelated commits that are NOT dev-only and `--only` does not fit, picking which ship is the user's call, not yours.
+What the check is actually for:
+
+1. **Knowing what went out**, so you can say so afterwards and so a bad release can be traced. This is the main reason, and it is enough on its own.
+2. **Catching a plugin that changed without a version bump.** Every plugin shipping needs its own `plugin.json` + `marketplace.json` bump; without one, fresh installs silently diverge from the cache. Preflight catches this, but seeing it in the range first is cheaper than reading a refusal.
+3. **Confirming the hold-back covers what it should.** A `published: false` plugin's FILES never move onto master whatever its commits do -- `_publish_projection` reads the dev-only set from the manifests, not from a flag. Nothing to do by hand; just know it applies.
+
+The one case that still warrants a narrower release is a **self-contained** change you have a specific reason to ship alone: `uv run python scripts/publish.py --only <plugin>` projects only that plugin's files and holds every other published plugin at master's content, leaving the publish range unadvanced so the rest ships whole at the next bare publish. It does not check cross-plugin coupling, so a plugin needing a shared-lib change that sits in another plugin must ship with it. Mechanics: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md), "Partial release".
+
+(Earlier revisions told you to **stop** when the range held anything beyond your own commits, and to escalate the choice to the user. Both are retired: they made every release wait on a quiet tree, which a shared tree never is, and they asked the user to adjudicate readiness that the pushing session had already declared.)
 
 **Do NOT branch from master to route around this.** `git checkout -b` in this shared tree silently reparents whatever a concurrent session commits next -- the harm is documented under "Anti-pattern: creating a branch" above and in [docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md). If a genuinely separate checkout is required, use `git worktree add`, which leaves this tree's branch alone. (Earlier revisions of this section recommended `git checkout -b <feature> origin/master` and a squash-merged feature branch; both are retired.)
 
-A release is safe to run only when that range shows *exactly* the commits you intend to publish. `publish.py` still has a fast-forward shortcut for the case where master is an ancestor of dev, but it is gated on `_fast_forward_is_safe()` -- refused outright while any dev-only plugin exists, because a fast-forward moves dev's tree wholesale and would bypass the hold-back.
+`publish.py` still has a fast-forward shortcut for the case where master is an ancestor of dev, but it is gated on `_fast_forward_is_safe()` -- refused outright while any dev-only plugin exists, because a fast-forward moves dev's tree wholesale and would bypass the hold-back.
 
 **Gotcha 2: `git add <file>` sweeps pre-existing working-tree modifications.** If a tracked file already had uncommitted local edits and you touch it for your feature, `git add <file>` stages *all* the changes in that file, not just yours. The feature commit then ships unrelated WIP. **Mandatory check before any publish commit:**
 
@@ -387,7 +427,7 @@ Read every line. If anything is unrelated to the feature, `git restore --staged 
 
 **Gotcha 3: a botched publish burns the version number.** Cache entries on consumer machines key off `(plugin, version)`. If a bad version is pushed to master, retracting it doesn't evict caches that already pulled it -- same version = same code, forever, from the cache's view. The fix is a patch-bump *past* the burned number (e.g. 0.11.0 broken -> don't ship 0.11.1, jump to 0.12.0) so every consumer's cache invalidates cleanly. The 0.11.1 / `patch-bump 4 plugins to force-refresh post-retraction caches` commits on master are an example of this recovery pattern.
 
-**Gotcha 4: unauthorized publish.** The go-signal rule above scopes authorization to the work the user actually approved -- it does **not** authorize sweeping in adjacent unrelated work that happens to be staged or sitting on `dev`. A clean feature commit next to unrelated dev commits is gotcha 1 territory: let `publish.py` filter, or escalate the decision -- never branch from master.
+**Gotcha 4: unauthorized publish.** What needs the user's intent is the ACT of publishing, not the contents of the range. Running `publish.py` without a go-signal is the defect -- not shipping other sessions' commits alongside your own, which is the intended behaviour and is covered by the implied contract above. Never branch from master to separate them.
 
 **Recovery: how to retract.** A bad publish on master is fixed forward, never with `push --force` to master. Push a follow-up commit that either (a) reverts the bad commit and patch-bumps the affected plugins past the burned version, or (b) re-implements correctly under a new version. Consumers with `autoUpdate: true` then refresh on their next session start. Never rewrite master history -- other machines have already fetched it.
 
@@ -1040,7 +1080,7 @@ claude_md:
   conventions:
     - rule: Commit and push to dev freely without asking; only a PUBLISH (dev -> master) needs the user. Do not coordinate around other agent sessions' concurrent work.
       keywords: [commit freely, push freely, no permission, dev branch, only publishes gated, other agents, concurrent sessions, shared tree, git commit -- paths]
-      why: Nothing on dev reaches a consumer -- master is the cache source -- so a commit or push is reversible working-branch state, while a publish broadcasts to every machine. Scope commits by path for readability, and use `git commit -F <msg> -- <paths>` when the index holds another session's staged work. See "Committing and pushing to dev is unrestricted" in Development Workflow.
+      why: A commit or push is reversible working-branch state and a publish broadcasts to every machine, so only the publish is gated. Note the implied contract, stated in that section: pushing to dev consents to ANOTHER session's next publish carrying your work, since a publish ships the whole range. Scope commits by path for readability, and use `git commit -F <msg> -- <paths>` when the index holds another session's staged work. See "Committing and pushing to dev is unrestricted" in Development Workflow.
     - rule: Stay on dev -- never create a branch or run git checkout/switch in this working tree; scope reviews with a commit range, and use git worktree if a separate checkout is truly needed.
       keywords: [branch, git checkout, git switch, shared working tree, concurrent session, scope a review, range, worktree]
       why: The tree is shared with other agent sessions and the checked-out branch is global to it, so a switch silently redirects their commits onto your branch. See the never_create_or_switch_branches insight and the anti-pattern section in Development Workflow.

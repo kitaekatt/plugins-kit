@@ -164,8 +164,8 @@ BEFORE any tool use, end the first turn with:
 
 ### Autonomy status
 
-- <fill: the user's current attention pattern and what it implies for
-  posture>
+- <fill: decisions the user has CLAIMED and the presence pattern to expect;
+  all else is granted where the user's CLAUDE.md says so>
 
 ### Authorizations
 

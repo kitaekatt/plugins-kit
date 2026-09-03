@@ -54,6 +54,25 @@ anti_patterns:
       End the turn when nothing is unblocked. If useful work might be unblocked, name
       the marked premise that the pending result could refute. If there is none,
       proceed.
+  - id: stalling_on_a_grant
+    name: Queuing for an absent user a decision that was already the agent's
+    keywords: [stalling, waiting for the user, ask before proceeding, queued question, autonomy grant, claimed decision, user is afk]
+    why_it_seems_right: >-
+      Deferring feels careful, and putting the call to the user reads as
+      respect for their authority.
+    why_it_is_wrong: >-
+      Where the consumer's CLAUDE.md declares the grant, it was already held --
+      there the user's role is product and the agent's is trusted implementor;
+      a question queued for a `user-afk` user stops the work and the user reads
+      the decision line later anyway; the independence a consult buys comes
+      from a DIFFERENT model, not from waiting. Declining a declared grant is
+      the failure the autonomy reading exists to prevent.
+    alternative: >-
+      Consult an independent seat -- route the decision as an `open` +
+      `load-bearing` unit, `cross-check` when you already hold an answer --
+      take its answer, record `decision <id>: seat=<model>; chose=<option>;
+      reason=<one clause>`, and keep going. Only a decision the user has
+      CLAIMED, or product direction, waits for the user.
   - id: inline_footprint_work
     name: Doing reads-a-lot / emits-a-lot work inline in the orchestrating context
     keywords: [inline work, context footprint, quick edit, difficulty axis]

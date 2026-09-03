@@ -196,6 +196,22 @@ service call, or state outside the tree?
 
 ---
 
+## Operating context
+
+### `user-present` `[concept]`
+The user sent a message this turn or recently and has not dismissed the agent.
+**Test:** would a foreground tool call now be time the user spends waiting?
+
+### `user-afk` `[concept]`
+The user dismissed the agent ("go", "get it done", a loop) or has gone quiet since their last message.
+**Test:** does anyone read the reply before the work is done?
+
+### `consult` `[concept]`
+A decision put to an independent seat -- a different model from the one deciding -- before the agent takes it.
+**Test:** would a wrong answer propagate (`load-bearing`), and is the seat a different model from the one deciding?
+
+*Consequence:* Presence prices foreground work and is not a routing axis: it changes the cost of doing a unit inline, not which model does it. A `consult` routes as an `open` + `load-bearing` unit on the existing rows, adding `cross-check` when the agent already holds an answer -- no new row; the concepts belong to the consumer's own instructions where those define them, and this lexicon carries the tests either way.
+
 ## Anti-terms `[concept]`
 
 Words that feel like criteria and are not. Each has been reached for in practice.
