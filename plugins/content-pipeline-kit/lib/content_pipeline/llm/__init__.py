@@ -73,9 +73,11 @@ but several details differ deliberately.
    ``BackendOptions``. This library folds all per-call knobs onto
    ``BackendOptions`` so the ``LLMBackend`` protocol signature is uniform; the
    behavioral effect (temperature / max-tokens flow to the provider and into the
-   cache key) is unchanged. The ``llm_scripting_kit.completion`` seam this layer now
-   delegates its transport to shares this folded shape, so the adapter passes
-   options across the boundary field-for-field.
+   cache key) is unchanged. Temperature is optional: ``None`` inherits the
+   server/model default and an explicit value is sent. The
+   ``llm_scripting_kit.completion`` seam this layer now delegates its transport
+   to shares this folded shape, so the adapter passes options across the
+   boundary field-for-field.
 
 5. **Convergence over an explicit ``Round`` history, not substrate/log
    scans.** loc's ``trial_status`` derives its verdict by inspecting the

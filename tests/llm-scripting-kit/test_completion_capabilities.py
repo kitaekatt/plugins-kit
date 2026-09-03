@@ -147,9 +147,9 @@ def _openrouter_call(**opts):
 
 
 def test_openrouter_emits_every_advertised_param():
-    kwargs = _openrouter_call(max_tokens=99, temperature=0.7, timeout_s=12.0)
+    kwargs = _openrouter_call(max_tokens=99, temperature=0.2, timeout_s=12.0)
     assert kwargs["max_tokens"] == 99
-    assert kwargs["temperature"] == 0.7
+    assert kwargs["temperature"] == 0.2
     assert kwargs["timeout"] == 12.0
 
 
@@ -170,6 +170,12 @@ def test_openrouter_extras_ride_as_passthrough_extra_body():
 
 def test_openrouter_omits_timeout_when_unset():
     assert "timeout" not in _openrouter_call()
+
+
+def test_openrouter_omits_temperature_when_unset():
+    assert "temperature" not in _openrouter_call()
+    assert OPENROUTER_CAPABILITIES.params["temperature"].default is None
+    assert "server/model default" in OPENROUTER_CAPABILITIES.params["temperature"].note
 
 
 @pytest.mark.parametrize("dropped", sorted(OPENROUTER_CAPABILITIES.dropped_params))

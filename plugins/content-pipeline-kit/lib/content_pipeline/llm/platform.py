@@ -222,6 +222,8 @@ class BackendOptions:
     The remaining fields are transport-specific and documented as ignored by
     transports that do not honor them (documented, not silent):
 
+    - ``temperature`` -- optional sampling control. ``None`` lets the
+      server/model choose its mode-aware default; an explicit value is sent.
     - ``timeout_s`` -- per-call wall-clock cap. ``None`` uses the backend
       default.
     - ``cache_salt`` -- per-attempt salt for malformed-response retry loops so
@@ -241,7 +243,7 @@ class BackendOptions:
     """
 
     max_tokens: int = 4096
-    temperature: float = 0.3
+    temperature: Optional[float] = None
     timeout_s: Optional[float] = None
     cache_salt: int = 0
     user_cache_prefix: str = ""
@@ -748,7 +750,9 @@ def build_cache_key(
 
     Byte-identical requests collapse to one digest regardless of dict
     ordering at the call site (``freshness.hashing.content_hash`` canonicalizes
-    via sorted-key ASCII JSON). ``cache_salt`` and ``user_cache_prefix``
+    via sorted-key ASCII JSON). ``temperature`` is included even when ``None``
+    because inheriting the server/model default is a distinct request from
+    explicitly selecting a value. ``cache_salt`` and ``user_cache_prefix``
     participate only when set, so the no-salt / no-prefix key stays stable.
     Whitespace inside the prompts is significant (a trailing-newline
     difference is a real input difference the provider would see).

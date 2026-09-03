@@ -67,7 +67,10 @@ _OPENROUTER_PARAMS = {
         type="integer", default=4096, emits="max_tokens"
     ),
     "temperature": ParamCapability(
-        type="number", default=0.3, emits="temperature"
+        type="number",
+        default=None,
+        emits="temperature",
+        note="server/model default when unset; omitted from the request",
     ),
     "timeout_s": ParamCapability(
         type="number",

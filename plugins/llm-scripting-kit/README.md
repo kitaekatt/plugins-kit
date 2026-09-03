@@ -197,7 +197,9 @@ print(resp.text, resp.input_tokens, resp.output_tokens)
 
 `BackendOptions` carries per-call knobs (`max_tokens`, `temperature`,
 `timeout_s`, `effort`, `allowed_tools`, `user_cache_prefix`, ...); transports
-ignore the ones they do not understand. The CLI backends use a shared,
+ignore the ones they do not understand. An unset `temperature` is omitted from
+OpenAI-compatible requests so the server/model can choose its mode-aware
+default; an explicit value is sent. The CLI backends use a shared,
 battle-tested runner (UTF-8 pipes, daemon stdout/stderr drains, and a bounded
 per-call timeout raising `AgentTimeoutError`). `OpencodeCliBackend` returns
 default-format stdout, reports zero usage because that format supplies no

@@ -61,6 +61,18 @@ def test_cache_key_differs_per_field():
     assert base != build_cache_key(backend="other", model="m", system="s", user="u")
 
 
+def test_cache_key_differs_for_inherited_and_explicit_temperature():
+    inherited = build_cache_key(backend="mock", model="m", system="s", user="u")
+    explicit = build_cache_key(
+        backend="mock",
+        model="m",
+        system="s",
+        user="u",
+        options=BackendOptions(temperature=0.3),
+    )
+    assert inherited != explicit
+
+
 def test_cache_key_user_prefix_participates():
     plain = build_cache_key(backend="mock", model="m", system="s", user="u")
     with_prefix = build_cache_key(
