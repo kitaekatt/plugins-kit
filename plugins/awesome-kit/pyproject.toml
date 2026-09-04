@@ -1,6 +1,6 @@
 [project]
 name = "awesome-kit"
-version = "0.51.1"
+version = "0.52.0"
 description = "Runtime dependencies for awesome-kit skills, including YAML support."
 requires-python = ">=3.10"
 dependencies = [

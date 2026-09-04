@@ -279,3 +279,24 @@ explicit `-c` path is the sanctioned route to any other server.
   MCP servers are reported broken against llama.cpp (codex#36942, codex#26977)
   and are unverified. Codex's built-in shell, file-edit and apply_patch tools
   work against it.
+
+## Dispatch cache
+
+`skills/orchestrate/scripts/dispatch.py` stores each request and response in a
+cache entry. Run it with the plugin venv's Python; for example, on macOS/Linux:
+
+```sh
+~/.claude/plugins/data/plugins-kit/awesome-kit/.venv/bin/python \
+  ${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/scripts/dispatch.py --list
+```
+
+Windows uses `.venv/Scripts/python.exe`. Its first printed line is the entry
+directory handle, prefixed
+`CACHE HIT ` when served from cache; the finished run then prints the
+`result.md` path. A matching brief, model, effort, sandbox, absolute cwd, and
+sorted absolute add-dirs reuses a non-empty result; `--no-cache` forces a new
+run. A hit is judged by `result.md` alone; the recorded exit code is
+informational. Entries are swept after the configured TTL, which defaults to
+seven days. After a restart, `--list` prints one line per entry containing its
+timestamp, label, model, exit code, result size, absolute entry directory, and
+absolute `result.md` path, so either handle can be recovered from the listing.

@@ -60,6 +60,7 @@ plugins-kit/                          # Marketplace root
 | `plugins/bootstrap/bootstrap.json` | Bootstrap plugin's own manifest |
 | `plugins/bootstrap/skills/bootstrap/references/engine-internals.md` | Bootstrap engine internals |
 | `docs/planning/bootstrap/MILESTONES.md` | Development milestones and progress |
+| `docs/planning/adapters/adapter-design.md` | Adapter concept: task-specific context attached for one model only (design record, DRAFT) |
 | `tests/bootstrap/` | All bootstrap tests (mirrors bootstrap_lib/ structure) |
 
 ### Key Design Decisions
