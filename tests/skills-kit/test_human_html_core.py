@@ -377,7 +377,6 @@ SEED_VALUES = [
     "#5789f4",
     "#7ea3ff",
     "#4f82f7",
-    "78ch",
     "15px",
     "1.72",
     "Inter, ui-sans-serif, system-ui, sans-serif",

@@ -22,7 +22,6 @@
   --hh-link-hover: #7ea3ff;
   --hh-accent: #4f82f7;
 
-  --hh-measure: 78ch;
   --hh-font-size: 15px;
   --hh-line-height: 1.72;
   --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
@@ -49,14 +48,6 @@ body {
   font-size: var(--hh-font-size);
   line-height: var(--hh-line-height);
   -webkit-text-size-adjust: 100%;
-}
-
-main,
-header,
-footer,
-[data-human-html-chrome] {
-  max-width: var(--hh-measure);
-  margin-inline: auto;
 }
 
 h1,
