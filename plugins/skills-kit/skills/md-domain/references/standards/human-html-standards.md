@@ -358,8 +358,9 @@ it accepts data-backed references.
 - **Level:** REQUIRED
 - **Rule:** Ship `skills_kit_lib/assets/human-html.css` as package data. The
 asset defines dark-only values for background, text, headings, muted text,
-surface, border, link, link hover, and accent. It also defines prose measure,
-body font stack, and monospace font stack. Seed it from the host viewer's established dark theme.
+surface, border, link, link hover, and accent. It also defines the body
+font stack and the monospace font stack; it sets no page width, so a page
+fills its viewport. Seed it from the host viewer's established dark theme.
 Keep every concrete value in the asset. The asset is ASCII. Expose the asset through
 `skills_kit_lib.human_html` for the generator and the host viewer.
 - **Rationale:** One packaged asset prevents visual drift. Values copied into this document or the host viewer were rejected as duplicate sources of truth.

@@ -165,10 +165,71 @@ class TestBuildUserMessage:
             lp.build_user_message("reviewer_z", diff_text="d")
 
 
+class TestLaneEligibility:
+    """Which lanes may carry an endpoint id, and what a backend must be."""
+
+    @pytest.mark.parametrize(
+        "lane",
+        [
+            "reviewer_a_claude_md_compliance",
+            "reviewer_b_diff_only_bugs",
+            "reviewer_c_introduced_code",
+        ],
+    )
+    def test_every_reviewer_is_eligible(self, lane: str) -> None:
+        assert lane in lp.ENDPOINT_ELIGIBLE_LANES
+
+    def test_the_validator_is_not_eligible(self) -> None:
+        """The control that suppresses a weak reviewer's noise stays native.
+
+        Weakening the reviewer and the instrument that measures it in the same
+        run makes a regression unattributable.
+        """
+        assert "validator" in lp.KNOWN_LANES
+        assert "validator" not in lp.ENDPOINT_ELIGIBLE_LANES
+
+    def test_eligibility_is_bounded_by_the_known_lanes(self) -> None:
+        assert lp.ENDPOINT_ELIGIBLE_LANES <= lp.KNOWN_LANES
+
+    def test_the_repo_reading_lanes_need_an_agent_loop(self) -> None:
+        """A lane whose prompt sends it to open files cannot be a completion.
+
+        Reviewer A reads the governing CLAUDE.md files and reviewer C reads the
+        changed files; neither text is inlined into the user message, so a
+        transport-kind endpoint would review a context it cannot fetch.
+        """
+        assert lp.LANES_REQUIRING_AGENT_LOOP == {
+            "reviewer_a_claude_md_compliance",
+            "reviewer_c_introduced_code",
+        }
+
+    def test_the_diff_only_lane_does_not_need_an_agent_loop(self) -> None:
+        assert "reviewer_b_diff_only_bugs" not in lp.LANES_REQUIRING_AGENT_LOOP
+
+    def test_agent_loop_lanes_are_eligible(self) -> None:
+        """Otherwise the backend-kind guard guards a lane nothing can reach."""
+        assert lp.LANES_REQUIRING_AGENT_LOOP <= lp.ENDPOINT_ELIGIBLE_LANES
+
+
 class TestPromptContent:
     def test_reviewer_b_prompt_carries_the_guardrails(self) -> None:
         assert lp.GUARDRAILS in lp.REVIEWER_B_SYSTEM
         assert lp.OUTPUT_INSTRUCTION in lp.REVIEWER_B_SYSTEM
+
+    @pytest.mark.parametrize("lane", sorted(lp.ENDPOINT_ELIGIBLE_LANES))
+    def test_every_eligible_prompt_carries_the_shared_contract(self, lane: str) -> None:
+        """One guardrail set and one output contract, whoever serves the lane."""
+        system = lp.LANE_PROMPTS[lane].system
+        assert lp.GUARDRAILS in system
+        assert lp.OUTPUT_INSTRUCTION in system
+
+    def test_the_diff_only_prompt_forbids_reading_anything(self) -> None:
+        """It is the one lane a plain completion may serve, so it must not ask."""
+        assert "everything you get" in lp.REVIEWER_B_SYSTEM
+
+    @pytest.mark.parametrize("lane", sorted(lp.LANES_REQUIRING_AGENT_LOOP))
+    def test_an_agent_loop_prompt_says_what_to_read(self, lane: str) -> None:
+        assert "read" in lp.LANE_PROMPTS[lane].system.lower()
 
     def test_every_prompt_is_ascii(self) -> None:
         """Rendered into two tracked SKILL.md files, which are ASCII-only."""
@@ -176,7 +237,14 @@ class TestPromptContent:
             prompt.system.encode("ascii"), lane
 
     def test_endpoint_eligible_lanes_all_have_prompts(self) -> None:
+        """The "eligible but has no canonical prompt" guard must stay unreachable."""
         assert lp.ENDPOINT_ELIGIBLE_LANES <= set(lp.LANE_PROMPTS)
+
+    @pytest.mark.parametrize("lane", sorted(lp.ENDPOINT_ELIGIBLE_LANES))
+    def test_every_eligible_lane_builds_a_user_message(self, lane: str) -> None:
+        message = lp.build_user_message(lane, diff_text="UNIQUE-DIFF", files=["a.py"])
+        assert "UNIQUE-DIFF" in message
+        assert "a.py" in message
 
     def test_rendered_prompt_survives_yaml_round_trip(self) -> None:
         """It is emitted into SKILL.md as a block scalar; it must read back."""

@@ -40,6 +40,9 @@ technique_skill:
           action: |
             Resolve the diff range.
             - If the user passed an explicit argument (`<ref>`, `<a>..<b>`, `<a>...<b>`, `--staged`, `--working`), use it verbatim.
+            - `--working` diffs the worktree against HEAD, so it sees MODIFIED tracked files only: a brand-new
+              (untracked) file is not in the diff and the review of it is silently empty. To review new files,
+              `git add` them and use `--staged`.
             - Otherwise let prepare_review.py auto-detect from workspace state. The detection order is:
               1. mid-merge (MERGE_HEAD present) -> review the in-progress merge
               2. mid-rebase -> review the in-progress rebase
@@ -104,6 +107,13 @@ technique_skill:
             `---` separator and layer provenance; parse only the YAML above the separator. Keep
             the resolved `profiles` list for steps 6 and 7. See references/configuration.md for
             the full layer/merge/override contract.
+            The renderer may also print `peer_when_available:` lines on STDERR. Each one names a
+            lane whose resolved `model` was replaced by a peer endpoint, and it is the only
+            record that the lane did not run on the model the shipped table states. Keep every
+            such line and repeat it verbatim in the step-9 review header, under
+            `## Peer-seat substitutions`. Never drop it, and never edit the resolved table to
+            undo it. Silence on stderr means no substitution happened; there is nothing to
+            report and nothing to install.
           tool: Read + python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py
         - n: 5
           action: |
@@ -248,6 +258,13 @@ technique_skill:
               partial review is indistinguishable from a complete one. Never describe a
               failed lane's files as clean, and never re-run the lane on a different model to
               paper over the gap -- report it and let the user decide.
+            - When the step-4 renderer printed any `peer_when_available:` line on stderr,
+              prepend a `## Peer-seat substitutions` section carrying each line verbatim. A
+              substituted lane ran on a DIFFERENT model from the one the review-profile table
+              ships, and the rendered review looks identical either way, so omitting this
+              would let the reader believe a model reviewed their change that never saw it.
+              This is a disclosure, not a warning: the substitution is the configured
+              behaviour and nothing needs fixing.
             - When `bundle.submit_gates` is non-empty, prepend a `## Submit checklist`
               section, each gate carrying its step-5 verdict and the evidence for it.
             - When `bundle.merge_conflicts` is non-empty, prepend a `## Unresolved merge conflicts`
@@ -380,8 +397,9 @@ technique_skill:
         - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed.
         - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
         - The `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
-        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, and what happens when an endpoint lane fails.
+        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, what happens when an endpoint lane fails, and how a reviewer record's `peer_when_available` resolves a peer seat (plus the `--explain-peer-seats` diagnostic).
         - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead (step 6's model-kind rule). The shipped table is all aliases, so a review with no user or project override dispatches every lane as an Agent subagent.
+        - A reviewer record may set `peer_when_available` true, asking the renderer to run that lane on a reachable PEER endpoint -- same tier as the stated model, different model family -- when llm-scripting-kit is installed and current. The renderer resolves it, so the table you read already carries the substituted endpoint id as that lane's `model`, and the lane dispatches through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a substituted value as an override the user forgot to make.
         - An endpoint lane that fails is a FAILED lane. There is no fallback to an Agent, by design: silently substituting one produces a review the user reads as having run on the model they configured, which is a false claim about the change's coverage. Report it and mark the coverage missing.
   narration:
     note: Reviews involve long silent stretches (batched file reads, parallel subagents that take 30s+). Post one short status line per step using these templates verbatim, filling in the bracketed counts. Do not paraphrase, omit, or add extras.
@@ -509,9 +527,75 @@ technique_skill:
       subagent_type: general-purpose
       scope: CLAUDE.md compliance only, restricted to the files in one chunk
       input: "absolute path to ONE chunk .diff file, the repo-relative paths of the files in that chunk, the per-file CLAUDE.md mapping restricted to those files, and the full text of each relevant CLAUDE.md (read in step 4)"
+      canonical_prompt_note: |
+        This lane can run EITHER as an Agent subagent or, when its resolved `model` is an
+        endpoint id, as a plain completion (see the step-6 model-kind rule). Both paths must
+        review by the same standard, so the prompt below is the single source: it is rendered
+        here from bootstrap_lib.code_review.lane_prompts, which is also what the endpoint
+        runner sends. When launching this lane as an Agent, use it as the subagent's
+        instructions verbatim, then append the chunk path, file list, and (per step 4) the
+        per-file CLAUDE.md mapping and text. Do not paraphrase it.
+      canonical_prompt: |
+        You are reviewing one chunk of a code change for violations of the project's own
+        written standards. You are one of several independent reviewers; other concerns
+        belong to other reviewers.
+
+        Scope. Project-standard compliance only. Every issue you report uses the reason
+        "claude_md" and carries the exact rule text in "citation"; if you cannot quote
+        the rule, you do not have a finding.
+
+        Governing standards. The standards live in CLAUDE.md files inside this
+        repository. For each file in the diff, the governing CLAUDE.md files are the
+        one in that file's own directory and every CLAUDE.md in a parent directory up
+        to the repository root. A CLAUDE.md that does not share a path with the file
+        being reviewed does not govern it -- never cross-apply a rule between
+        directories.
+
+        Context you must gather yourself, unless it is supplied with the chunk. If a
+        per-file CLAUDE.md mapping and/or the text of the relevant CLAUDE.md files is
+        supplied to you alongside the chunk, use exactly those and do not go looking
+        for more. Otherwise, for each file in the diff, read the CLAUDE.md in that
+        file's own directory and every CLAUDE.md in a parent directory up to the
+        repository root yourself. Either way, read only CLAUDE.md files: no source
+        files, no documentation, no history.
+
+        Restrictions. Only report issues in files that appear in this diff, and only for
+        what this change introduces -- a pre-existing violation is not yours to report.
+
+        Only flag an issue when it is one of these:
+        - code that will fail to compile or parse (syntax errors, type errors, missing
+          imports, unresolved references)
+        - code that will definitely produce wrong results regardless of inputs (clear
+          logic errors)
+        - a project-standard rule clearly and unambiguously violated, with the exact
+          rule quotable
+
+        Never flag any of these:
+        - code style or quality concerns
+        - potential issues that depend on specific inputs or state
+        - subjective suggestions or improvements
+        - pre-existing issues (only review the diff)
+        - anything a linter would catch (do not run a linter)
+        - issues that appear in a standards file but are explicitly silenced in the
+          code (for example a lint-ignore comment)
+
+        If you are not certain an issue is real, do not flag it. False positives erode
+        trust: an empty array is a perfectly good answer and is much better than a
+        speculative finding.
+
+        Respond with a JSON array and nothing else. No prose before it, no prose after
+        it, no Markdown code fence. Each element is an object with exactly these keys:
+
+          "file"        the path of the file the issue is in, as it appears in the diff
+          "lines"       the affected line or range, for example "42" or "42-48"
+          "reason"      exactly "bug" or "claude_md"
+          "description" one sentence explaining the problem
+          "citation"    optional, and only for "claude_md": the exact rule text quoted
+
+        Return [] when there is nothing to report.
       restrictions:
         - "Read the assigned chunk diff once (single Read call). Do not Read other chunks."
-        - "Only consider CLAUDE.md files that share a path with the file being reviewed (use the per-file mapping; do not cross-apply)."
+        - "Only consider CLAUDE.md files that share a path with the file being reviewed (use the per-file mapping when supplied; do not cross-apply)."
         - "Only flag issues in files present in your chunk -- files in other chunks are someone else's responsibility."
     - name: reviewer_b_diff_only_bugs
       subagent_type: general-purpose
@@ -578,6 +662,64 @@ technique_skill:
       subagent_type: general-purpose
       scope: bugs/security/logic problems in the introduced code that need broader context, restricted to one chunk's files
       input: "absolute path to ONE chunk .diff file, the repo-relative paths of the files in that chunk, local paths for those files, and the diff description"
+      canonical_prompt_note: |
+        This lane can run EITHER as an Agent subagent or, when its resolved `model` is an
+        endpoint id, as a plain completion (see the step-6 model-kind rule). Both paths must
+        review by the same standard, so the prompt below is the single source: it is rendered
+        here from bootstrap_lib.code_review.lane_prompts, which is also what the endpoint
+        runner sends. When launching this lane as an Agent, use it as the subagent's
+        instructions verbatim, then append the chunk path, file list, local paths, and change
+        description. Do not paraphrase it.
+      canonical_prompt: |
+        You are reviewing one chunk of a code change for bugs in the code it
+        INTRODUCES -- the ones the diff alone cannot settle because they turn on the
+        code around the change. You are one of several independent reviewers; other
+        files and other concerns belong to other reviewers.
+
+        Scope. Logic errors, concurrency and lifetime bugs, resource leaks, and security
+        holes in the introduced code. Report only what this change introduces, never a
+        pre-existing problem.
+
+        Context you must gather yourself. You may read the files listed below, at the
+        paths as given, to see the code surrounding the change. Read only those files.
+        Do not modify anything, do not run anything, and do not go browsing the rest of
+        the repository.
+
+        Restrictions. Only report issues in files that appear in this diff. When the
+        context you would need to settle an issue is not in one of those files, you
+        cannot settle it -- do not report it.
+
+        Only flag an issue when it is one of these:
+        - code that will fail to compile or parse (syntax errors, type errors, missing
+          imports, unresolved references)
+        - code that will definitely produce wrong results regardless of inputs (clear
+          logic errors)
+        - a project-standard rule clearly and unambiguously violated, with the exact
+          rule quotable
+
+        Never flag any of these:
+        - code style or quality concerns
+        - potential issues that depend on specific inputs or state
+        - subjective suggestions or improvements
+        - pre-existing issues (only review the diff)
+        - anything a linter would catch (do not run a linter)
+        - issues that appear in a standards file but are explicitly silenced in the
+          code (for example a lint-ignore comment)
+
+        If you are not certain an issue is real, do not flag it. False positives erode
+        trust: an empty array is a perfectly good answer and is much better than a
+        speculative finding.
+
+        Respond with a JSON array and nothing else. No prose before it, no prose after
+        it, no Markdown code fence. Each element is an object with exactly these keys:
+
+          "file"        the path of the file the issue is in, as it appears in the diff
+          "lines"       the affected line or range, for example "42" or "42-48"
+          "reason"      exactly "bug" or "claude_md"
+          "description" one sentence explaining the problem
+          "citation"    optional, and only for "claude_md": the exact rule text quoted
+
+        Return [] when there is nothing to report.
       restrictions:
         - "Read the assigned chunk diff first."
         - "MAY use Read to look at surrounding context in the changed files (the LOCAL paths you were given) when needed."

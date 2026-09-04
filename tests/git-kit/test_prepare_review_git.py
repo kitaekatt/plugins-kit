@@ -872,7 +872,8 @@ class TestMain:
         assert rc == 0
         stdout_bundle = json.loads(capsys.readouterr().out)
         assert stdout_bundle["range"] == "main..HEAD"
-        bundle_dir = bundle_root / "main..HEAD"
+        bundle_dir = bundle_root / pr._repo_dir_name(git_repo.path) / "main..HEAD"
+        assert Path(stdout_bundle["bundle_dir"]) == bundle_dir
         on_disk = json.loads((bundle_dir / "bundle.json").read_text(encoding="utf-8"))
         assert on_disk == stdout_bundle
         chunk = bundle_dir / stdout_bundle["diff_chunks"][0]["path"]
@@ -890,6 +891,30 @@ class TestMain:
         bundle = json.loads(capsys.readouterr().out)
         assert bundle["range"] == "__staged__"
         assert bundle["description"] == "(staged-but-uncommitted changes)"
+
+
+class TestRepoDirName:
+    def test_two_repos_get_distinct_working_tree_bundles(self, tmp_path):
+        # The regression: `__working_tree__` is the same range string in every
+        # repo, so without a per-repo level the second prepare overwrote the
+        # first repo's chunks and pre-images.
+        a = tmp_path / "alpha"
+        b = tmp_path / "beta"
+        a.mkdir()
+        b.mkdir()
+        assert pr._repo_dir_name(a) != pr._repo_dir_name(b)
+        assert pr._repo_dir_name(a) == pr._repo_dir_name(a)  # deterministic
+
+    def test_same_basename_different_path_still_distinct(self, tmp_path):
+        a = tmp_path / "one" / "repo"
+        b = tmp_path / "two" / "repo"
+        a.mkdir(parents=True)
+        b.mkdir(parents=True)
+        assert pr._repo_dir_name(a).startswith("repo-")
+        assert pr._repo_dir_name(a) != pr._repo_dir_name(b)
+
+    def test_outside_a_repo_uses_sentinel(self):
+        assert pr._repo_dir_name(None) == "_no-repo"
 
 
 # ---------------------------------------------------------------------------

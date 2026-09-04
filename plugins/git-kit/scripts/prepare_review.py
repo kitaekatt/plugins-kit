@@ -35,7 +35,12 @@ Auto-detect resolution order:
 
 Outputs a JSON bundle on stdout AND persists `bundle.json` next to the
 per-file chunk fragments at:
-    ~/.claude/plugins/data/plugins-kit/git-kit/reviews/<safe-range-name>/
+    ~/.claude/plugins/data/plugins-kit/git-kit/reviews/<repo-name>-<hash>/<safe-range-name>/
+
+The `<repo-name>-<hash>` level is one subtree per repository (basename of the
+git toplevel plus a short hash of its resolved path). Without it two repos'
+`--working` bundles share one `__working_tree__` directory, and preparing
+the second silently overwrites the first's chunks and pre-images.
 
 The diff is partitioned into chunks <=MAX_CHUNK_BYTES at file boundaries
 (directory transitions preferred) so reviewer subagents can Read one
@@ -614,6 +619,23 @@ def _safe_dir_name(range_spec: str) -> str:
     return f"{safe}-{digest}" if safe else digest
 
 
+def _repo_dir_name(repo_root: Optional[Path]) -> str:
+    """Per-repository bundle subtree name: `<basename>-<sha1(resolved)[:8]>`.
+
+    Range sentinels (`__working_tree__`, `__staged__`, the merge/rebase
+    markers) are the same string in every repo, so keying the bundle dir on
+    the range alone made back-to-back reviews of two repos clobber each other.
+    The hash keeps two checkouts with the same basename apart; the basename
+    keeps the tree browsable. Outside a repo the sentinel `_no-repo` is used.
+    """
+    if repo_root is None:
+        return "_no-repo"
+    resolved = str(repo_root.resolve())
+    digest = hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:8]
+    base = _safe_dir_name(repo_root.name) or "repo"
+    return f"{base}-{digest}"
+
+
 def parse_range_arg(arg: str) -> str:
     """Normalize a user-provided range argument.
 
@@ -876,7 +898,9 @@ def main(argv: list[str]) -> int:
         )
         return 2
 
-    bundle_dir = DEFAULT_BUNDLE_ROOT / _safe_dir_name(range_spec)
+    bundle_dir = (
+        DEFAULT_BUNDLE_ROOT / _repo_dir_name(get_repo_root()) / _safe_dir_name(range_spec)
+    )
     bundle_dir.mkdir(parents=True, exist_ok=True)
     try:
         bundle = build_bundle(

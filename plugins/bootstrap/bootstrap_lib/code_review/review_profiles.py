@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+import importlib
 import sys
 from pathlib import Path
 from typing import Any, Mapping, NoReturn, Sequence
@@ -35,8 +36,36 @@ PROFILE_FIELDS = frozenset(
     {"id", "selection", "reviewers", "validator_models", "disabled"}
 )
 SELECTION_FIELDS = frozenset({"data_only_extensions"})
-REVIEWER_FIELDS = frozenset({"name", "model", "disabled"})
+REVIEWER_FIELDS = frozenset({"name", "model", "disabled", "peer_when_available"})
 REQUIRED_PROFILE_FIELDS = frozenset({"selection", "reviewers", "validator_models"})
+
+# --------------------------------------------------------------------------
+# peer_when_available: the optional llm-scripting-kit seats edge
+# --------------------------------------------------------------------------
+#
+# A reviewer record may carry `peer_when_available: true`. When it does, and
+# llm-scripting-kit is installed AND current enough to expose the frontier
+# symbol below, this module asks it for a reachable BESIDE seat -- an endpoint
+# in the same tier as the reviewer's stated model but a different model family
+# -- and substitutes that seat's endpoint id for the lane's `model`. A reviewer
+# reading the same change on a different family is the point; a second lane on
+# the same family would agree with itself.
+#
+# The edge is OPTIONAL (plugin-dev enabling.md). Without the owner the lane
+# keeps its stated model, which is exactly what the table says it will run on,
+# so the rendered table stays true as read and absence is silent. A
+# substitution is never silent: it is disclosed on stderr, one line per lane.
+PEER_SEATS_OWNER = "llm-scripting-kit"
+PEER_SEATS_MARKETPLACE = "plugins-kit"
+PEER_SEATS_MODULE = "llm_scripting_kit.seats"
+PEER_SEATS_FRONTIER = "llm_scripting_kit.seats.discover_seats"
+# The owner version that first shipped the frontier symbol. Named in the
+# too-old diagnosis so the remedy is a version rather than a guess.
+PEER_SEATS_FRONTIER_VERSION = "0.28.0"
+# Per-seat reachability probe budget, stated here rather than inherited: a
+# review must not stall behind seat discovery.
+PEER_SEATS_TIMEOUT_S = 5.0
+PEER_SEATS_RELATION = "BESIDE"
 
 
 class ConfigError(ValueError):
@@ -212,6 +241,10 @@ def _validate_reviewer(
 
     if "model" in value:
         _validate_nonempty_string(value["model"], source, f"{location}.model")
+    if "peer_when_available" in value and not isinstance(
+        value["peer_when_available"], bool
+    ):
+        _fail(source, f"{location}.peer_when_available", "must be a boolean")
     needs_model = (complete and not parent_disabled) or (existing is None and not parent_disabled)
     if needs_model and not disabled and "model" not in value:
         _fail(source, location, "required field missing: model")
@@ -484,6 +517,175 @@ def resolve_config(
     return config, provenance
 
 
+def _peer_seats_absent_diagnosis(reason: str) -> str:
+    """Diagnose state 1: the owner plugin was never installed."""
+    return (
+        f"absent: the {PEER_SEATS_OWNER} plugin is not installed, so no peer "
+        f"seat can be discovered. Install it with `claude plugin install "
+        f"{PEER_SEATS_OWNER}@{PEER_SEATS_MARKETPLACE}` and start a new session "
+        f"so bootstrap links its shared library. Underlying error: {reason}"
+    )
+
+
+def _peer_seats_too_old_diagnosis(reason: str) -> str:
+    """Diagnose states 2 and 3: installed, but not current enough (or stale)."""
+    return (
+        f"too old or stale: {PEER_SEATS_OWNER} is importable but does not "
+        f"expose {PEER_SEATS_FRONTIER}, which first shipped in "
+        f"{PEER_SEATS_OWNER} {PEER_SEATS_FRONTIER_VERSION}. Update it with "
+        f"`claude plugin update {PEER_SEATS_OWNER}@{PEER_SEATS_MARKETPLACE}` "
+        f"and start a new session so bootstrap re-syncs its shared library. "
+        f"Underlying error: {reason}"
+    )
+
+
+def _probe_discover_seats() -> tuple[Any | None, str | None]:
+    """Return the frontier callable, or ``None`` and a diagnosis.
+
+    Three runtime states have to be told apart and an ``import`` cannot do it
+    (plugin-dev optional-plugin-dependencies.md): absent, too old, and stale
+    after an uninstall. The package import answers "absent"; everything past it
+    is diagnosed by probing the frontier symbol, never by module presence.
+
+    The import is guarded with ``ImportError`` only. A broader handler here
+    would swallow a syntax error in a half-synced copy and report it as an
+    absent plugin.
+    """
+    try:
+        importlib.import_module("llm_scripting_kit")
+    except ImportError as exc:
+        return None, _peer_seats_absent_diagnosis(str(exc))
+
+    try:
+        module = importlib.import_module(PEER_SEATS_MODULE)
+    except ImportError as exc:
+        return None, _peer_seats_too_old_diagnosis(str(exc))
+
+    found = getattr(module, "discover_seats", None)
+    if not callable(found):
+        return None, _peer_seats_too_old_diagnosis(
+            f"{PEER_SEATS_FRONTIER} is missing"
+        )
+    return found, None
+
+
+def _opted_in_reviewers(
+    config: Mapping[str, Any],
+) -> list[tuple[str, dict[str, Any]]]:
+    """Return (profile id, reviewer record) for every opted-in reviewer."""
+    opted: list[tuple[str, dict[str, Any]]] = []
+    for profile in config.get("profiles", []):
+        if not isinstance(profile, dict):
+            continue
+        for reviewer in profile.get("reviewers", []):
+            if not isinstance(reviewer, dict):
+                continue
+            if reviewer.get("peer_when_available") is True:
+                opted.append((str(profile.get("id")), reviewer))
+    return opted
+
+
+def _first_beside_endpoint(result: Any) -> str | None:
+    """Return the first reachable BESIDE seat's endpoint id, if any.
+
+    Attributes are read defensively: the shared lib is linked by a ``.pth``
+    that pins no version, so a shape change reaches this venv without the
+    consumer asking for it. An unexpected shape degrades to "no seat", which
+    leaves the stated model in place.
+    """
+    for seat in getattr(result, "seats", ()) or ():
+        if getattr(seat, "relation", None) != PEER_SEATS_RELATION:
+            continue
+        endpoint = getattr(seat, "endpoint", None)
+        if isinstance(endpoint, str) and endpoint.strip():
+            return endpoint
+    return None
+
+
+def apply_peer_seats(
+    config: Mapping[str, Any],
+    *,
+    project_root: PathLike | None = None,
+    timeout: float | None = None,
+    discover: Any | None = None,
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    """Substitute a reachable peer seat for every opted-in reviewer's model.
+
+    Returns the (possibly rewritten) table, the disclosure lines a caller MUST
+    surface, and diagnostic lines that stay out of the disclosure channel.
+
+    Nothing raised by the probe or the owner escapes: a review that cannot
+    discover a seat runs on the model the table already states, which is the
+    outcome a reader of that table expects. Every substitution is disclosed by
+    lane, so the table is never quietly different from what ran.
+
+    ``discover`` injects the frontier callable for tests and for a caller that
+    already holds one; when omitted the callable is probed for on every call.
+    Probe results are deliberately not cached across calls -- consent to this
+    disclosure ends with the skill invocation that produced it.
+    """
+    opted = _opted_in_reviewers(config)
+    if not opted:
+        return dict(deepcopy(dict(config))), [], []
+
+    diagnostics: list[str] = []
+    if discover is None:
+        discover, diagnosis = _probe_discover_seats()
+        if discover is None:
+            diagnostics.append(str(diagnosis))
+            return dict(deepcopy(dict(config))), [], diagnostics
+
+    resolved = deepcopy(dict(config))
+    disclosures: list[str] = []
+    # One probe per distinct stated model within this call. This is not a cache
+    # across invocations, which the enabling contract forbids.
+    seen: dict[str, str | None] = {}
+    unresolved = 0
+
+    for profile_id, reviewer in _opted_in_reviewers(resolved):
+        model = reviewer.get("model")
+        if not isinstance(model, str) or not model.strip():
+            continue
+        model = model.strip()
+        if model in seen:
+            endpoint = seen[model]
+        else:
+            try:
+                result = discover(
+                    model,
+                    project_root=(
+                        None if project_root is None else str(project_root)
+                    ),
+                    timeout=PEER_SEATS_TIMEOUT_S if timeout is None else timeout,
+                )
+                endpoint = _first_beside_endpoint(result)
+            except Exception as exc:  # noqa: BLE001 - degrade, never fail a review
+                endpoint = None
+                diagnostics.append(
+                    f"seat discovery for model {model!r} failed, so every lane "
+                    f"stating it keeps that model: {type(exc).__name__}: {exc}"
+                )
+            seen[model] = endpoint
+        if endpoint is None:
+            unresolved += 1
+            continue
+        reviewer["model"] = endpoint
+        disclosures.append(
+            f"peer_when_available: profile {profile_id!r} lane "
+            f"{str(reviewer.get('name'))!r} runs on {PEER_SEATS_OWNER} "
+            f"endpoint {endpoint!r} instead of its stated model {model!r} "
+            f"-- a reachable {PEER_SEATS_RELATION} seat (same tier, different "
+            f"model family) reported by {PEER_SEATS_FRONTIER}."
+        )
+
+    if unresolved and not disclosures:
+        disclosures.append(
+            f"peer_when_available: no reachable {PEER_SEATS_RELATION} seat was "
+            f"found, so every opted-in lane runs on its stated model."
+        )
+    return resolved, disclosures, diagnostics
+
+
 def canonical_projection(value: Mapping[str, Any]) -> dict[str, Any]:
     """Return only executable fields in deterministic key order."""
     active = _without_disabled(value)
@@ -557,6 +759,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--home",
         help="Override the home root used for the user layer (for isolated callers/tests)",
     )
+    parser.add_argument(
+        "--explain-peer-seats",
+        action="store_true",
+        help=(
+            "Print why no peer seat was substituted for a reviewer carrying "
+            "peer_when_available (absent vs too old or stale owner). "
+            "Diagnostics only -- never part of the rendered table."
+        ),
+    )
     args = parser.parse_args(argv)
     project_root = Path(args.project_root).expanduser().resolve()
     home = Path(args.home).expanduser().resolve() if args.home else None
@@ -566,6 +777,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"review profiles config error: {exc}", file=sys.stderr)
         return 1
+
+    config, disclosures, diagnostics = apply_peer_seats(
+        config, project_root=project_root
+    )
+    # Disclosures always reach stderr: a substituted model that nobody was told
+    # about would make the rendered table a false claim about what ran.
+    # Diagnostics stay behind the flag -- an absent or too-old owner is silent,
+    # because the table then states exactly the model the lane will use.
+    for line in disclosures:
+        print(line, file=sys.stderr)
+    if args.explain_peer_seats:
+        for line in diagnostics:
+            print(f"peer_when_available: {line}", file=sys.stderr)
 
     sys.stdout.write(render(config, provenance))
     return 0
