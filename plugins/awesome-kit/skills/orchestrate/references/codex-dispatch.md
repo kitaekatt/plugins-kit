@@ -258,6 +258,16 @@ launching environment.
 `--oss` and `--local-provider` accept only `lmstudio` and `ollama`, so the
 explicit `-c` path is the sanctioned route to any other server.
 
+## Dispatch cache
+
+`skills/orchestrate/scripts/dispatch.py` stores each request and response in a
+cache entry. The first line it prints is the entry directory handle, followed
+by the result path when the run finishes. Keep that handle: after a session
+restart, run `dispatch.py --list` to recover recent entries and read the
+`result.md` path. A matching brief, model, effort, and sandbox reuses a
+successful non-empty result; `--no-cache` forces a new run. Entries are swept
+after the configured TTL, which defaults to seven days.
+
 ### Operational notes
 
   Two stderr lines per run against a llama.cpp server. `failed to refresh
