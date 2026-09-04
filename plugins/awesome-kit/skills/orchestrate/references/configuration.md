@@ -204,6 +204,8 @@ Consult seats use a separate degradation ladder: no `llm-scripting-kit` -> no se
 or family are listed as `unclassified`, never `BESIDE`; nothing reachable ->
 `none reachable -- decide and say so`. The section makes no claim when the optional library
 is absent, so its absence is not a degraded answer; `--explain` reports why it was skipped.
+The backends list claims to be complete, so a missing registry is disclosed, while an absent
+seats section claims nothing.
 
 ## `capacity`
 
