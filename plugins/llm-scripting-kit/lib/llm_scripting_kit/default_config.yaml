@@ -1,11 +1,18 @@
 # Model registry, selection defaults, and named endpoints (shipped baseline).
 #
-# This is the lowest-precedence layer. Bootstrap seeds an editable copy at
-#   ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/config.yaml
-# and a project may override at
+# This is the lowest-precedence layer. Above it, lowest first:
+#   ~/.claude/config/llm-scripting-kit.yaml                        (fleet)
+#   ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/config.yaml (machine)
 #   <project_root>/.local-data/plugins-kit/llm-scripting-kit/config.yaml
 # Higher layers are deep-merged over this one (project wins); new model or
 # endpoint entries union in, so an override file only states what it changes.
+#
+# The FLEET layer is the one to reach for by default: ~/.claude/config is the
+# conventional home for machine-neutral configuration and is typically tracked
+# in a profile repo, so a preference placed there reaches every machine. The
+# machine layer is bootstrap-seeded plugin DATA -- local to the box, and
+# outranking the fleet layer for the same reason a .local settings file
+# outranks the tracked one.
 #
 # Consumed by any plugin that makes LLM calls via llm_scripting_kit.resolve_model()
 # / make_openai_client() (e.g. workflow-kit, content-pipeline-kit).
@@ -58,7 +65,8 @@ default_endpoint: openrouter
 # stays usable. It is OFF for every shipped entry:
 # whether to pace a model is the user's policy, not this plugin's, and a
 # shipped default would impose one fleet's habits on every consumer. Turn it on
-# in a user or project override, which deep-merges over the shipped entry:
+# in the fleet layer above (or a machine/project override), which deep-merges
+# over the shipped entry:
 #
 #   endpoints:
 #     fable:

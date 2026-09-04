@@ -520,3 +520,55 @@ class TestDirectModelEntryPredicate:
         assert resolve_model(config=self.DIRECT_CFG, endpoint="direct") == (
             "vendor/direct-slug"
         )
+
+
+class TestFleetConfigLayer:
+    """The tracked ~/.claude/config layer, below every machine-local one."""
+
+    def test_the_fleet_layer_is_read(self, tmp_path, monkeypatch):
+        from pathlib import Path
+
+        from llm_scripting_kit.models import fleet_config_path, load_model_config
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        fleet = fleet_config_path()
+        fleet.parent.mkdir(parents=True, exist_ok=True)
+        fleet.write_text(
+            "endpoints:\n  fable:\n    conserve_usage:\n      pool: seven_day\n"
+        )
+        cfg = load_model_config()
+        # Deep-merged onto the shipped entry: the opt-in arrives, and the
+        # shipped harness/model are still there rather than replaced.
+        assert cfg["endpoints"]["fable"]["conserve_usage"] == {"pool": "seven_day"}
+        assert cfg["endpoints"]["fable"]["harness"] == "claude"
+        assert cfg["endpoints"]["fable"]["model"] == "claude-fable-5"
+
+    def test_the_machine_layer_outranks_the_fleet_layer(self, tmp_path, monkeypatch):
+        # Same reasoning as settings.local.json over settings.json: a
+        # machine-specific answer beats the fleet-wide one.
+        from pathlib import Path
+
+        from llm_scripting_kit.models import fleet_config_path, load_model_config
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        fleet = fleet_config_path()
+        fleet.parent.mkdir(parents=True, exist_ok=True)
+        fleet.write_text("endpoints:\n  fable:\n    conserve_usage:\n      pool: seven_day\n")
+        machine = (
+            tmp_path / ".claude" / "plugins" / "data" / "plugins-kit"
+            / "llm-scripting-kit" / "config.yaml"
+        )
+        machine.parent.mkdir(parents=True, exist_ok=True)
+        machine.write_text("endpoints:\n  fable:\n    conserve_usage: false\n")
+        cfg = load_model_config()
+        assert cfg["endpoints"]["fable"]["conserve_usage"] is False
+
+    def test_an_absent_fleet_layer_is_the_normal_state(self, tmp_path, monkeypatch):
+        from pathlib import Path
+
+        from llm_scripting_kit.models import load_model_config
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        cfg = load_model_config()
+        assert "conserve_usage" not in cfg["endpoints"]["fable"]

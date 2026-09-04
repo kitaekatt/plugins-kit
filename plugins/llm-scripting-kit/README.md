@@ -115,6 +115,8 @@ merely **being spent faster than the clock** is de-prioritized -- still usable,
 but it loses to an equally-suitable endpoint that is not behind pace.
 
 ```yaml
+# ~/.claude/config/llm-scripting-kit.yaml -- the fleet layer, so this reaches
+# every machine that clones your profile.
 endpoints:
   fable:
     conserve_usage: {pool: model_scoped, display_name: Fable}  # its own weekly bucket

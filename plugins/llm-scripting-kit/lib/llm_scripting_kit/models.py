@@ -170,9 +170,26 @@ class ModelDiscovery(dict[str, EndpointEntry]):
         return self
 
 
+def fleet_config_path() -> Path:
+    """The tracked, fleet-wide config layer: ``~/.claude/config/<plugin>.yaml``.
+
+    Named for what distinguishes it rather than for its scope: every layer
+    below a project is "user" in some sense, and the useful distinction here is
+    that this one PROPAGATES. It is the conventional home for machine-neutral
+    profile configuration, so an opt-in placed here reaches every machine that
+    clones the profile, while the plugin data directory's copy stays local to
+    the box it was seeded on.
+    """
+    return Path.home() / ".claude" / "config" / f"{CONFIG_PLUGIN}.yaml"
+
+
 def load_model_config(*, project_root: Optional[str] = None) -> dict:
     """Resolve the effective model config: shipped baseline deep-merged with the
-    user and (optional) project ``config.yaml`` layers.
+    fleet, machine, and (optional) project layers.
+
+    Precedence, lowest first: the shipped baseline, the tracked fleet layer at
+    ``~/.claude/config/llm-scripting-kit.yaml``, the machine-local
+    ``config.yaml`` in the plugin data directory, then the project layers.
 
     Falls back to the shipped baseline alone if the layers cannot be read --
     either because bootstrap_lib is unavailable, or because reading them raised
@@ -204,6 +221,15 @@ def load_model_config(*, project_root: Optional[str] = None) -> dict:
         marketplace=CONFIG_MARKETPLACE,
         project_root=project_root,
     )
+    # The FLEET layer, inserted below every machine-local one. The layer
+    # standard_config_layers calls "user" lives in the plugin DATA directory,
+    # which is machine-local state a fleet does not track -- so a preference a
+    # user wants on every machine has nowhere to live, and the only home the
+    # convention offers (~/.claude/config, tracked in the profile repo) is not
+    # read at all. This path closes that: tracked and fleet-wide, and it sits
+    # BELOW the data-dir layer for the same reason settings.local.json outranks
+    # settings.json -- a machine-specific answer beats the fleet-wide one.
+    layers.insert(0, fleet_config_path())
     if project_root is not None:
         # Symmetry with the API key's superseded project location: a config.yaml
         # placed at <project>/.local-data/llm-scripting-kit/ (no marketplace
