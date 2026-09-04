@@ -1,9 +1,11 @@
 # Adapter concept -- design record
 
-Status: DRAFT. The first adapter is under construction for the `md-audit` task.
-Observation record: this document records the adapter concept and its measured
-`md-audit` state as of 2026-09-04. It does not choose an attachment seam or
-claim that an adapter has been admitted.
+Status: ADMITTED for one model-task pair. The `md-audit` EVIDENCE PACK, in its
+compact form at a single call, is the standard configuration for the local
+qwen3.8-27b endpoint auditing markdown. The owner made that call on 2026-09-04
+against the measurement in "Outcome" below. Everything else here remains a
+record rather than a decision: no attachment seam is chosen, and no adapter is
+admitted for any other model or task.
 
 ## Definition
 
@@ -198,5 +200,62 @@ The next measurements, if the loop continues, are v4c on corpus B; a harness
 check of the pack's no-tool-calls guarantee; and a per-family decomposition
 (multi-call) compared with sampling at equal request count. Then the generation
 lane (analyze plus generate claude-md) may begin, gated on accepted audit
-quality. The seam decision remains deferred. Until audit quality is accepted,
-this record remains DRAFT and the adapter is not admitted.
+quality. The seam decision remains deferred; admission covers only the
+measured qwen3.8-27b / md-audit pair, and the generation lane is not admitted
+by it.
+
+## Outcome
+
+The owner adopted the compact evidence pack at a SINGLE call as the standard
+configuration for this model-task pair. Recorded here so the reasoning survives
+the experiment.
+
+The deciding view was a single-number one. F1 over exact pairs, on a 21-file
+screen with 106 ground-truth pairs, alongside the token cost of producing it.
+Cost is stated in tokens rather than wall clock because two of the arms ran
+concurrently against one server, which makes their elapsed times meaningless.
+
+| Arm | Recall | Precision | F1 | Tokens | vs control |
+|---|---|---|---|---|---|
+| Bare control | 0.227 | 0.841 | 0.36 | 759k | 1.0x |
+| Compact pack, one call | 0.344 | 0.974 | 0.51 | 815k | 1.1x |
+| Compact pack, union of two samples | 0.425 | 0.978 | 0.59 | 1.63M | 2.1x |
+| Tool-using harness, no pack | 0.387 | 0.759 | 0.51 | 1.79M | 2.4x |
+| Tool-using harness plus pack | 0.382 | 0.827 | 0.52 | 1.67M | 2.2x |
+| Tool-using harness plus pack, two samples | 0.491 | 0.825 | 0.62 | 3.34M | 4.4x |
+
+The adopted row is the second. It buys 15 points of F1 over the bare control
+for 7 percent more tokens, and it is the only row whose precision stays near
+0.97. Every higher-scoring row costs at least twice the control and gives up
+15 precision points or more.
+
+Three findings behind the table are worth keeping.
+
+**Sampling beats prompt content, and it is not free.** Two arms of one condition
+agree on roughly half their true pairs, so the union of two samples is the
+largest single gain available. It was NOT built into the driver. Re-auditing is
+already possible whenever a caller wants that recall, so a k-loop would spend
+double on every audit to serve the minority of cases that want it. The default
+is one call; a second audit is the caller's decision, taken per run.
+
+**Tools are where the strong models get their lead, and the pack recovers only
+part of it.** Cloud auditors given a read-only filesystem reach recall 0.68 to
+0.81. The local model given the same tool loop reaches 0.387, and its precision
+falls to 0.759 because a tool loop invents findings the pack does not. Adding
+the pack to the tool loop raises precision to 0.825 and CUTS its tool calls
+from about 300 to 215 over 21 files, because the model stops hunting for context
+it was already given. The pack makes the tool path cheaper; it does not make it
+worth 2.2x.
+
+**One family resists the pack.** Code-directory findings fall from 11 exact in
+the tool loop to 5 with the pack present, the only family where a tool loop
+beats the pack outright. That is the standing candidate for the next pack
+version under the completeness rule above.
+
+A separate hypothesis was closed against this table: mining the strong models'
+actual tool calls and precomputing those lookups into the pack. Two variants
+were built, one carrying path contexts and topic owners and one carrying paths
+alone. The first lost on both screen arms and the second was neutral. The bound
+was visible in the mining itself, which found only 11 of 18 residual misses
+addressable by any new lookup, and 3 already carried by the pack and unused.
+Precomputing more context does not raise single-call recall.
