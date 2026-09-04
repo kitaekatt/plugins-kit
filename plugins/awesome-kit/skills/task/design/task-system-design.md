@@ -487,7 +487,9 @@ Two crawl modes, both script-driven:
 4. **Classify each** via `validate`: `active`/`blocked`/`closed`/`archived` (read from `task.yaml`), or
    computed `remote` (tmp + host mismatch — opaque, not read) / `orphaned` (tmp ref, local, no folder).
 5. **Project + filter:** emit `id`(path) · `title` · `status` · `priority`; apply `--status`/`--priority`
-   filters. Archived-with-surviving-folder are included; folderless-non-tmp refs read as `archived`.
+   filters. Folderless-non-tmp refs read as `archived`. With no `--status`, every classification
+   **except `archived`** is emitted -- the default listing is the working set; `--status archived`
+   lists the archived ones (either shape: folderless ref or parked folder).
 
 **Dedupe:** a task referenced from multiple documents appears **once**, keyed by canonical folder path.
 References carry no metadata to merge — the folder's `task.yaml` is the single record.

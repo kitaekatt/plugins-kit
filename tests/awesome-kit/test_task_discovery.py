@@ -104,7 +104,8 @@ class TestProjectScope:
             tmp_path / "tmp" / "notes.md",
             fenced_task_list([{"path": "dev/tasks/shipped"}]),
         )
-        records = d("project", tmp_path)
+        assert d("project", tmp_path) == []  # archived: off the default list
+        records = d("project", tmp_path, status="archived")
         assert ids(records) == {"dev/tasks/shipped"}
         assert records[0].classification == "archived"
 
@@ -124,9 +125,12 @@ class TestProjectScope:
             tmp_path / "skills" / "foo" / "SKILL.md",
             fenced_task_list([{"path": "dev/tasks/from-skill"}]),
         )
-        assert "dev/tasks/from-skill" not in ids(d("project", tmp_path))
+        # (a folderless dev/tasks ref reads as archived, so opt in to see it)
+        assert "dev/tasks/from-skill" not in ids(
+            d("project", tmp_path, status="archived")
+        )
         assert "dev/tasks/from-skill" in ids(
-            d("skill", tmp_path, target="foo")
+            d("skill", tmp_path, target="foo", status="archived")
         )
 
     def test_a_documented_example_block_is_not_read_as_live_tasks(self, tmp_path):
@@ -197,7 +201,11 @@ class TestUserScope:
             fenced_task_list([{"path": "dev/tasks/user-ref"}]),
         )
         records = d("user", project_root, user_root=user_root)
-        assert ids(records) == {"tmp/user-task", "dev/tasks/user-ref"}
+        assert ids(records) == {"tmp/user-task"}
+        # The folderless ref reads as archived: off the default list, but
+        # reached through the user root's documents when asked for.
+        records = d("user", project_root, user_root=user_root, status="archived")
+        assert ids(records) == {"dev/tasks/user-ref"}
 
     def test_user_refs_canonicalize_against_user_root(self, tmp_path):
         user_root = tmp_path / "userhome"
@@ -228,20 +236,25 @@ class TestSkillScope:
         return tmp_path
 
     def test_skill_name_picks_up_skill_md_and_references(self, skill_project):
-        records = d("skill", skill_project, target="alpha")
+        # The fixture refs are folderless (archived): opt in to list them.
+        records = d("skill", skill_project, target="alpha", status="archived")
         assert ids(records) == {"dev/tasks/a-ref", "dev/tasks/a-ref2"}
 
     def test_sibling_skill_docs_not_picked_up(self, skill_project):
         assert "dev/tasks/b-ref" not in ids(
-            d("skill", skill_project, target="alpha")
+            d("skill", skill_project, target="alpha", status="archived")
         )
 
     def test_skill_target_as_directory_path(self, skill_project):
-        records = d("skill", skill_project, target="skills/alpha")
+        records = d(
+            "skill", skill_project, target="skills/alpha", status="archived"
+        )
         assert ids(records) == {"dev/tasks/a-ref", "dev/tasks/a-ref2"}
 
     def test_skill_target_as_skill_md_path(self, skill_project):
-        records = d("skill", skill_project, target="skills/alpha/SKILL.md")
+        records = d(
+            "skill", skill_project, target="skills/alpha/SKILL.md", status="archived"
+        )
         assert "dev/tasks/a-ref" in ids(records)
 
     def test_folder_tasks_appear_in_skill_scope(self, skill_project):
@@ -268,7 +281,7 @@ class TestFileScope:
         write_doc(
             tmp_path / "two.md", fenced_task_list([{"path": "dev/tasks/two"}])
         )
-        records = d("file", tmp_path, target="one.md")
+        records = d("file", tmp_path, target="one.md", status="archived")
         assert ids(records) == {"dev/tasks/one"}
 
     def test_missing_file_errors(self, tmp_path):
@@ -349,7 +362,8 @@ class TestTriStateProjection:
             tmp_path / "tmp" / "notes.md",
             fenced_task_list([{"path": "dev/tasks/long-done"}]),
         )
-        (rec,) = d("project", tmp_path)
+        assert d("project", tmp_path) == []
+        (rec,) = d("project", tmp_path, status="archived")
         assert rec.classification == "archived"
 
 
@@ -544,6 +558,8 @@ class TestListCLI:
                 "file",
                 "--target",
                 "one.md",
+                "--status",
+                "archived",
                 "--root",
                 str(tmp_path),
             ],
