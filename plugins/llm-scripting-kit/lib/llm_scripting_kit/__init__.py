@@ -41,6 +41,7 @@ from .client import KEYLESS_API_KEY, make_openai_client
 from .env_file import read_env_file, write_env_file
 from .model_endpoints import (
     EndpointEntry,
+    EndpointMetadataError,
     EndpointRegistry,
     EndpointRegistryError,
     HARNESS_KIND,
@@ -49,6 +50,14 @@ from .model_endpoints import (
     default_registry_path,
     load_endpoint_registry,
     resolve_registry_entry,
+)
+from .seats import (
+    Seat,
+    SeatResolutionError,
+    SeatSelf,
+    SeatsResult,
+    UnclassifiedEntry,
+    discover_seats,
 )
 from .reachability import (
     DEFAULT_VERIFY_TIMEOUT_S,
@@ -150,11 +159,19 @@ __all__ = [
     "TRANSPORT_KIND",
     "HARNESS_KIND",
     "EndpointEntry",
+    "EndpointMetadataError",
     "EndpointRegistry",
     "EndpointRegistryError",
     "default_registry_path",
     "load_endpoint_registry",
     "resolve_registry_entry",
+    # frontier seat discovery
+    "Seat",
+    "SeatResolutionError",
+    "SeatSelf",
+    "SeatsResult",
+    "UnclassifiedEntry",
+    "discover_seats",
     # harness adapters
     "CODEX_EFFORT_MENU",
     "HarnessAdapter",

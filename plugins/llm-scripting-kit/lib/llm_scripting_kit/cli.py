@@ -36,6 +36,7 @@ from .reachability import (
     check_entry,
     check_many,
 )
+from .seats import discover_seats
 from .request_protocol import (
     PROTOCOL_VERSION,
     ProtocolError,
@@ -139,6 +140,11 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_VERIFY_TIMEOUT_S,
         help=f"Reachability check timeout in seconds (default {DEFAULT_VERIFY_TIMEOUT_S:g}).",
     )
+    seats = sub.add_parser("seats", help="List reachable UP and BESIDE harness seats.")
+    seats.add_argument("--self", dest="self_ref", required=True, help="Self endpoint or exact model id.")
+    seats.add_argument("--json", action="store_true", help="Emit the structured result as JSON.")
+    _add_project_arg(seats)
+    seats.add_argument("--timeout", type=float, default=None, help="Per-seat probe timeout in seconds.")
     models = sub.add_parser("models", help="List models for an endpoint.")
     _add_endpoint_arg(models)
     _add_project_arg(models)
@@ -196,6 +202,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return _cmd_endpoints(args.project_root, verify=args.verify, timeout_s=args.timeout)
         if args.cmd == "probe":
             return _cmd_probe(args.endpoint, args.project_root, args.timeout)
+        if args.cmd == "seats":
+            return _cmd_seats(args.self_ref, args.json, args.project_root, args.timeout)
         if args.cmd == "models":
             return _cmd_models(args.endpoint, args.project_root)
         if args.cmd == "resolve":
@@ -295,6 +303,30 @@ def _cmd_probe(endpoint: Optional[str], project_root: Optional[str], timeout_s: 
         return EXIT_FAILURE
     if result.status == STATUS_UNKNOWN:
         print(result.detail, file=sys.stderr)
+        return EXIT_INDETERMINATE
+    return EXIT_OK
+
+
+def _cmd_seats(
+    self_ref: str,
+    as_json: bool,
+    project_root: Optional[str],
+    timeout_s: Optional[float],
+) -> int:
+    """Print reachable frontier seats and preserve indeterminate probes."""
+    result = discover_seats(
+        self_ref, project_root=project_root, timeout=timeout_s
+    )
+    if as_json:
+        _json(result.to_json())
+    else:
+        for seat in result.seats:
+            print(f"{seat.relation} {seat.endpoint} ({seat.band}, {seat.harness})")
+    if result.probe_unknown:
+        for seat in result.probe_unknown:
+            print(
+                f"{seat.endpoint}: {seat.reachability.detail}", file=sys.stderr
+            )
         return EXIT_INDETERMINATE
     return EXIT_OK
 

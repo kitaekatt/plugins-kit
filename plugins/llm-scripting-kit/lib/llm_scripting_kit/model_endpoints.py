@@ -84,6 +84,10 @@ class EndpointRegistryError(Exception):
     """The registry exists but could not be read, or a requested entry is absent."""
 
 
+class EndpointMetadataError(EndpointRegistryError):
+    """An entry has invalid frontier classification metadata."""
+
+
 @dataclass(frozen=True)
 class EndpointEntry:
     """One declared model entry. ``key_env`` None means keyless.
@@ -103,6 +107,8 @@ class EndpointEntry:
     kind: str = TRANSPORT_KIND
     harness: Optional[str] = None
     effort: Optional[str] = None
+    tier: Optional[int] = None
+    family: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -170,6 +176,32 @@ def _optional_str(value: object, *, path: Path, entry_id: str, key: str) -> Opti
             f"non-string '{key}' ({value!r})"
         )
     return value.strip()
+
+
+def parse_classification_fields(
+    raw: Mapping[str, object], *, source: str, entry_id: str
+) -> "tuple[Optional[int], Optional[str]]":
+    """Validate and return the optional frontier classification fields."""
+    tier: Optional[int] = None
+    if "tier" in raw:
+        value = raw["tier"]
+        if isinstance(value, bool) or not isinstance(value, int) or value not in range(1, 5):
+            raise EndpointMetadataError(
+                f"{source}: entry '{entry_id}' has invalid 'tier' ({value!r}); "
+                "expected an integer from 1 to 4"
+            )
+        tier = value
+
+    family: Optional[str] = None
+    if "family" in raw:
+        value = raw["family"]
+        if not isinstance(value, str) or not value.strip():
+            raise EndpointMetadataError(
+                f"{source}: entry '{entry_id}' has invalid 'family' ({value!r}); "
+                "expected a non-empty string"
+            )
+        family = value.strip()
+    return tier, family
 
 
 def _resolve_registry_path(env: Mapping[str, str]) -> "tuple[Path, bool]":
@@ -254,6 +286,9 @@ def load_endpoint_registry(
 
         if has_harness:
             try:
+                tier, family = parse_classification_fields(
+                    raw, source=f"model-endpoints registry '{path}'", entry_id=key
+                )
                 entries[key] = EndpointEntry(
                     id=key,
                     base_url=None,
@@ -270,12 +305,19 @@ def load_endpoint_registry(
                     effort=_optional_str(
                         raw.get("effort"), path=path, entry_id=key, key="effort"
                     ),
+                    tier=tier,
+                    family=family,
                 )
+            except EndpointMetadataError:
+                raise
             except EndpointRegistryError as exc:
                 notes.append(f"{exc}; entry skipped")
             continue
 
         try:
+            tier, family = parse_classification_fields(
+                raw, source=f"model-endpoints registry '{path}'", entry_id=key
+            )
             entries[key] = EndpointEntry(
                 id=key,
                 base_url=_require_str(
@@ -300,7 +342,11 @@ def load_endpoint_registry(
                     raw.get("key_env"), path=path, entry_id=key, key="key_env"
                 ),
                 kind=TRANSPORT_KIND,
+                tier=tier,
+                family=family,
             )
+        except EndpointMetadataError:
+            raise
         except EndpointRegistryError as exc:
             notes.append(f"{exc}; entry skipped")
 
@@ -378,6 +424,8 @@ __all__ = [
     "EndpointEntry",
     "EndpointRegistry",
     "EndpointRegistryError",
+    "EndpointMetadataError",
+    "parse_classification_fields",
     "load_endpoint_registry",
     "resolve_registry_entry",
 ]
