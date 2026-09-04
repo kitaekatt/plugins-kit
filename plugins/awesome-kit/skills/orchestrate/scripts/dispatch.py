@@ -227,9 +227,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error("--list accepts --cache-dir and --ttl-days only")
         cwd = Path.cwd().resolve()
         cache_dir, _ = _cache_location(cwd, args.cache_dir)
-        _ensure_cache(cache_dir)
-        swept, skipped = _sweep(cache_dir, args.ttl_days)
-        print(f"SWEPT {swept} entries; skipped {skipped} (not an entry)", file=sys.stderr)
+        # --list is read-only: it never sweeps. Deletion happens only on a dispatch.
         _list_entries(cache_dir)
         return 0
 
