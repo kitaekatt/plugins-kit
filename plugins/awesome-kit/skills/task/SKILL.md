@@ -44,13 +44,10 @@ off their tracked paths with no commit.
 ## Invoking the CLI
 
 Run from the project root (refs are project-relative; `--root` defaults to
-cwd). When `dev/tasks` is a link into another repository, the project root is
-still the PROJECT, never the link target: a `cd` into the task folder or the
-repo behind the link makes every verb fail with "matches no task folder under
-tmp/ or dev/tasks/" -- the refs no longer resolve from there. Pass `--root
-<project>` if the shell must sit elsewhere. Use the plugin venv's Python
-explicitly -- not `uv run python`, which resolves the wrong environment from a
-foreign cwd:
+cwd) -- when `dev/tasks` is a link into another repository, the project root is
+still the PROJECT, never the link target (see gotchas). Use the plugin venv's
+Python explicitly -- not `uv run python`, which resolves the wrong environment
+from a foreign cwd:
 
 ```bash
 # macOS/Linux (Windows: .venv/Scripts/python.exe instead of .venv/bin/python)
@@ -214,6 +211,7 @@ capability_skill:
         - "Summarizing inline defeats the verb's reason for existing (context preservation). The script even prints a reminder note to this effect."
   gotchas:
     - "hand-off names two things and neither is a CLI verb: the task TYPE (task.yaml type: field, --type flag; the skill was renamed hand-off -> task and the v1 type keeps the old name -- do not 'fix' type: hand-off to type: task) and the user-invoked packaging capability (/task hand-off <ref>, the hand_off record above)."
+    - "Refs resolve against `--root`, which defaults to cwd -- so a `cd` into the task folder, or into the repository behind a `dev/tasks` link, breaks every ref-taking verb: a bare stub fails with 'matches no task folder under tmp/ or dev/tasks/', a path ref with 'not a known task location'. Run from the project root, or pass `--root <project>` when the shell must sit elsewhere."
     - "Use the explicit plugin-venv python shown under Invoking the CLI. The CLI self-repairs (re-execs under the provisioned venv via its vendored bootstrap_guard), but that path is the canonical, cwd-independent invocation."
     - "validate gates work with BOTH errors and warnings -- an uncommitted dev/tasks folder blocks work until committed, because durable work that exists only in the working tree is one rm away from gone. The check is git-scoped but the posture is VCS-neutral: outside a git repo, or where the folder is git-ignored, it is an advisory note (the scripts cannot check other VCS; a project keeping task folders as local scratch would otherwise have every task blocked). Same posture for the doc size budgets: over the ceiling blocks work until rotated (decompose per handoff-template.md, do not just trim)."
     - "References never carry status. To answer 'is X done?' resolve the folder (show/validate/list) -- do not infer from the presence or wording of a task_list entry."
