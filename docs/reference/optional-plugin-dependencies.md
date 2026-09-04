@@ -267,3 +267,7 @@ duplicated: library-consumption.md's "version declaration is unsupported
 everywhere" section (name the three states and the two message forms) and
 action-triggered-install.md's preflight section (an import that succeeds does
 not prove the library is current).
+
+The skill-embedded, silence-on-absence sub-case of DEGRADE is defined in
+[skill-embedded enabling](enabling.md). It applies only when the artifact stays
+true without the owner and a consuming skill provides the consented probe host.

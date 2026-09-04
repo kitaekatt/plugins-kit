@@ -199,6 +199,12 @@ version-skewed copy is insufficient: the renderer requires the model-discovery c
 the harness entry-kind markers. A missing feature causes registry rows and their model section
 to disappear while Agent-tool rows continue to work.
 
+Consult seats use a separate degradation ladder: no `llm-scripting-kit` -> no section;
+`llm-scripting-kit` without `discover_seats` (< 0.28.0) -> no section; entries without tier
+or family are listed as `unclassified`, never `BESIDE`; nothing reachable ->
+`none reachable -- decide and say so`. The section makes no claim when the optional library
+is absent, so its absence is not a degraded answer; `--explain` reports why it was skipped.
+
 ## `capacity`
 
 | Field | Meaning |
