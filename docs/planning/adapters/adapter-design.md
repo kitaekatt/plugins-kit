@@ -134,6 +134,15 @@ Each audit row records the pack's sha256 and size so a result is reproducible.
 
 ## Measurement results
 
+Why an evidence pack: the diagnosis of the motivating 59-file audit showed the
+local model's misses concentrated in facts absent from a single-shot prompt.
+It found 1 of 25 ancestor-duplication cases, confirmed 0 of 23 code claims,
+missed 30 of 38 mechanical-hygiene cases, and cited paths and line anchors it
+could not resolve. The cloud auditors ran with a read-only filesystem, and
+their outputs cited repository facts absent from their brief. The pack
+pre-computes those facts deterministically and supplies them to the local
+model only, at zero extra model calls.
+
 The instrument matches pairs exactly by `(file, canonical rule)` against
 reviewer-confirmed proxy ground truth, and reports recall and precision. Corpus
 A has 53 files and 198 ground-truth pairs. Each condition has two independent
