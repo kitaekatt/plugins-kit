@@ -92,13 +92,22 @@ DEFAULT_MODEL_CONFIG = {
             "harness": "codex", "model": "gpt-5.6-luna", "effort": "high",
             "tier": 2, "family": "openai",
         },
-        # Astra is OpenAI's frontier tier, a peer of fable, so tier 4. Its
-        # rollout is staged and it needs codex-cli 0.153.1 or newer; until both
-        # hold on a machine it probes unreachable and routing falls through.
-        "astra": {
-            "harness": "codex", "model": "gpt-6-astra", "effort": "high",
-            "tier": 4, "family": "openai",
-        },
+        # Astra (gpt-6-astra) is OpenAI's frontier tier, a peer of fable, so
+        # tier 4. COMMENTED OUT 2026-09-04. The entry was shipped on the premise
+        # that a machine without access "probes unreachable and routing falls
+        # through past it". That premise is false: reachability.check_harness is
+        # a CLI-PRESENCE check, so wherever the codex CLI exists astra probes
+        # reachable regardless of whether the account may call it. On a ChatGPT
+        # plan every dispatch to it fails with
+        #   400 invalid_request_error: The 'gpt-6-astra' model is not supported
+        #   when using Codex with a ChatGPT account.
+        # so the entry only supplies a frontier seat that cannot run. Restore it
+        # when either the rollout reaches ChatGPT plans or a per-model
+        # reachability probe exists to make the fall-through real.
+        # "astra": {
+        #     "harness": "codex", "model": "gpt-6-astra", "effort": "high",
+        #     "tier": 4, "family": "openai",
+        # },
         # Claude subscription models, shipped for the same reason: the
         # claude-cli adapter had no endpoint pointing at it. Effort is a
         # per-call mapped param on this adapter, so none is set here.
