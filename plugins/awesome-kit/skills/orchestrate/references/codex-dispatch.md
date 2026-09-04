@@ -283,7 +283,15 @@ explicit `-c` path is the sanctioned route to any other server.
 ## Dispatch cache
 
 `skills/orchestrate/scripts/dispatch.py` stores each request and response in a
-cache entry. Its first printed line is the entry directory handle, prefixed
+cache entry. Run it with the plugin venv's Python; for example, on macOS/Linux:
+
+```sh
+~/.claude/plugins/data/plugins-kit/awesome-kit/.venv/bin/python \
+  ${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/scripts/dispatch.py --list
+```
+
+Windows uses `.venv/Scripts/python.exe`. Its first printed line is the entry
+directory handle, prefixed
 `CACHE HIT ` when served from cache; the finished run then prints the
 `result.md` path. A matching brief, model, effort, sandbox, absolute cwd, and
 sorted absolute add-dirs reuses a non-empty result; `--no-cache` forces a new
