@@ -197,6 +197,8 @@ def _validate_run_args(parser: argparse.ArgumentParser, args: argparse.Namespace
 
 
 def _list_entries(cache_dir: Path) -> None:
+    if not cache_dir.is_dir():
+        return
     for entry in sorted(cache_dir.iterdir(), reverse=True):
         if not entry.is_dir() or entry.is_symlink():
             continue

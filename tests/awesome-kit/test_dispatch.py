@@ -203,6 +203,14 @@ def test_list_output_has_one_line_per_valid_entry(tmp_path, monkeypatch, capsys)
     assert meta["cache_source"] == "explicit"
 
 
+def test_list_missing_cache_is_empty_and_read_only(tmp_path, capsys):
+    cache = tmp_path / "missing-cache"
+
+    assert dispatch.main(["--list", "--cache-dir", str(cache)]) == 0
+    assert capsys.readouterr().out == ""
+    assert not cache.exists()
+
+
 def test_corrupt_object_meta_is_skipped_by_hit_and_list(tmp_path, capsys):
     cache = tmp_path / "cache"
     entry = cache / "20260101-010101-null-meta"
