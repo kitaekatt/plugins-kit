@@ -147,10 +147,28 @@ The measurement instrument canonicalizes rule ids, credits aliases, and
 rejects section-number citations. Ground truth is reviewer-confirmed with
 locations. The frozen paired corpus has 53 files. The control run was repeated
 twice without the adapter: recall was 0.237 and 0.217, a 2-point noise band.
-The adapter run was also repeated twice. The ship rule is recall +15 points
-with confirmed precision no more than 3 points lower. Results are PENDING at
-the time of writing; this paragraph is intentionally shaped so the result can
-be replaced by one line when measurement finishes.
+The adapter run was also repeated twice. The ship rule was recall +15 points
+with confirmed precision no more than 3 points lower. Result: four adapter arms
+(two verbose, two compact) scored recall 0.323, 0.318, 0.328 and 0.298 against
+the controls' 0.237 and 0.217, with precision 0.84-0.88 against 0.84 -- a
+replicated gain of about 9 recall points with precision kept, below the +15
+bar. The compact form costs 36 percent fewer characters for the same gain.
+Two variants lost: a stricter pack whose budgets dropped the size measurements
+that fed the largest family of wins, and a pack carrying "do not report"
+rules, which suppressed reporting across every family on a model that was
+already too conservative. Prohibitions do not belong in an adapter for a
+recall-limited model; positive evidence does.
+
+Completeness is the adapter's responsibility. A miss caused by a fact the
+pack did not carry is a pack defect, not a model limit: the pack must remove
+the need for tool calls. The check is a harness run with read-only tools over
+the same brief -- anything the tool loop looks up that the pack did not carry
+gets compiled into the next pack version.
+
+A further seam candidate: a job specification (job-kit) that declares the
+files and generators a unit needs, materialized into the query by the runner
+per endpoint kind -- inlined for a transport endpoint, listed as readable for a
+harness endpoint. The completeness guarantee then lives in the job file.
 
 The seam decision remains deferred. Because the pack is produced by a
 deterministic prepass, the current evidence favours attaching it at the
